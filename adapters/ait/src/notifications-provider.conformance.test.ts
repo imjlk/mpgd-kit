@@ -48,33 +48,7 @@ const vectors: readonly NotificationConformanceVector[] = readdirSync(vectorsDir
     JSON.parse(readFileSync(join(vectorsDir, file), 'utf8')) as unknown,
   ));
 
-/**
- * Why the Apps in Toss provider cannot serve a vector its capabilities
- * satisfy, or `undefined` when it can: a vector written for another host's
- * mapping (a topic without `templateSetCode` and `agreement`, such as
- * Devvit's approved copy or an Android channel) or for a device endpoint the
- * host would issue. Those scenarios are the other hosts' to prove.
- */
-export function aitNotificationVectorIncompatibility(
-  vector: NotificationConformanceVector,
-): string | undefined {
-  if (vector.steps.some((step) => step.actor === 'host' && step.action === 'issueEndpoint')) {
-    return 'host.issueEndpoint: Apps in Toss recipients are platform users, never device endpoints';
-  }
-  const foreign = vector.catalog.find((topic) =>
-    typeof topic.mapping?.['templateSetCode'] !== 'string'
-    || (topic.mapping['agreement'] !== 'required' && topic.mapping['agreement'] !== 'none'));
-  return foreign === undefined
-    ? undefined
-    : `topic ${foreign.id} is mapped for another host, not with templateSetCode and agreement`;
-}
-
-const expectedIncompatible: Readonly<Record<string, RegExp>> = {
-  'local-only-topic': /^host\.issueEndpoint/u,
-  'quiet-hours-player-zone': /^topic match-ready is mapped for another host/u,
-};
-
-/** The vectors the Apps in Toss provider passes; every other compatible vector is skipped by `appliesTo`. */
+/** The vectors the Apps in Toss provider passes; every other vector is skipped by its `appliesTo`. */
 const aitVectors = [
   'advertising-unsupported-by-host',
   'host-agreement-dismissed',
@@ -139,10 +113,21 @@ function createAitHarness(
     });
     const provider = createAitPlatformGateway({ appVersion: '1.0.0', buildId: 'test', bridge })
       .notificationsV2;
-    if (provider === undefined) {
+    if (provider !== undefined) {
+      return provider;
+    }
+    if (
+      Object.keys(topics).length > 0
+      || notificationConformanceSkipReason(context.vector, createAitNotificationCapabilities())
+        === undefined
+    ) {
+      // A vector the profile runs must go through the bridge.
       throw new Error('The Apps in Toss gateway did not expose notificationsV2.');
     }
-    return provider;
+    // A vector that maps no Apps in Toss topic: the host offers no channel, so
+    // the gateway exposes nothing; the provider's own (configuration-required)
+    // capabilities let the runner judge the vector's appliesTo.
+    return createAitNotificationProvider({ sdk: fake.sdk, topics });
   };
   let current = build();
   let subscribed = false;
@@ -234,24 +219,19 @@ function createHostActor(
 }
 
 describe('Apps in Toss notifications provider conformance', () => {
-  it('rules out only the vectors written for another host', () => {
-    const applicable = vectors.filter((vector) =>
-      notificationConformanceSkipReason(vector, createAitNotificationCapabilities()) === undefined);
-    const incompatible = Object.fromEntries(applicable.flatMap((vector) => {
-      const reason = aitNotificationVectorIncompatibility(vector);
-      return reason === undefined ? [] : [[vector.vector, reason]];
-    }));
-    expect(Object.keys(incompatible).sort()).toEqual(Object.keys(expectedIncompatible).sort());
-    for (const [vector, reason] of Object.entries(incompatible)) {
-      expect(reason).toMatch(expectedIncompatible[vector] as RegExp);
-    }
+  it('runs every vector whose appliesTo the Apps in Toss profile satisfies', () => {
+    // No harness filter: a shared vector that does not fit the profile must
+    // say so in its own appliesTo.
+    const applicable = vectors
+      .filter((vector) =>
+        notificationConformanceSkipReason(vector, createAitNotificationCapabilities()) === undefined)
+      .map((vector) => vector.vector);
+    expect(applicable).toEqual(aitVectors);
   });
 
   for (const transport of ['direct', 'bridge'] as const) {
     it(`passes every vector its profile satisfies (${transport})`, async () => {
-      const compatible = vectors.filter((vector) =>
-        aitNotificationVectorIncompatibility(vector) === undefined);
-      const results = await runNotificationConformanceVectors(compatible, {
+      const results = await runNotificationConformanceVectors(vectors, {
         createProvider: (context) => createAitHarness(context, transport),
       });
       const failed = results.filter((result) => result.status === 'failed');
