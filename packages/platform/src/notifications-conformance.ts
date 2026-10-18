@@ -862,8 +862,8 @@ export interface NotificationConformanceBackend extends NotificationConformanceB
 
 /**
  * The fake backend. Its `revokeSession` and `registerInstallation` finish
- * synchronously, so its callers need not await them; its other methods
- * (`deliver`, `runScheduler`, and the client methods) still return promises.
+ * synchronously, so its callers need not await them. `deliver`,
+ * `runScheduler`, and the async client methods still return promises.
  */
 export interface NotificationConformanceFakeBackend extends NotificationConformanceBackend {
   revokeSession(): void;
