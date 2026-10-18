@@ -886,9 +886,10 @@ URL change between the two reads cannot split them. The route is the launch
 URL's path, query, and fragment without the `referrer` parameter, normalized
 by `normalizeRootRelativeRoute`; a route it refuses, or one longer than
 2,048 characters, is left out of the event, which still counts as an open.
-While no topic is mapped for the host, the provider emits no open and the
-launch intent routes such a launch like any other, so a game without
-notifications keeps its launch routes.
+While the host bridge maps no v2 topic (`notificationTopics`), the provider
+emits no open and the launch intent routes such a launch like any other, so a
+game without notifications, or one that maps only v1 template codes and never
+subscribes to v2 events, keeps its launch routes.
 
 The game routes the event like a launch intent. The data is untrusted. The
 route only opens a screen, and only when it passes the same root-relative
@@ -1484,7 +1485,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   `unsupported` on a Toss app older than 5.255.0. A topic mapped with
   `agreement: 'none'` reads `granted`, and an unmapped topic `unsupported`.
   Without any mapped topic the provider is `configuration-required` and
-  `register()` answers `null`.
+  `register()` answers `null`. On a Toss app older than 5.255.0 it stays
+  `available`, because topics mapped with `agreement: 'none'` are still
+  delivered; only the agreement reads and requests answer for the version.
 - **v1.** The host bridge serves the v1 methods from this provider and keeps
   no session copy of an agreement, so a v1 `getStatus` reads
   `not-subscribed` for a topic that needs one until the game reads it through
