@@ -45,6 +45,7 @@ import {
   formatNotificationInstant,
   isNotificationRowAbandoned,
   isNotificationRowDue,
+  notificationAmbiguousReplayHours,
   notificationSendOutcome,
   type NotificationConsentRecordInput,
   type NotificationNoticeChannel,
@@ -232,6 +233,11 @@ export interface NotificationService {
 /** A gate caller error (such as missing template data): the send cannot be made as asked. */
 class NotificationSendInputError extends Error {
   override readonly name = 'NotificationSendInputError';
+}
+
+/** The provider answered but storing its answer failed: the delivery may have happened. */
+class NotificationSettleError extends Error {
+  override readonly name = 'NotificationSettleError';
 }
 
 interface Recipient {
@@ -473,13 +479,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * gate then holds can defer another for a while, which is the price of
    * never letting two through a cap of one.
    */
-  const historyFor = async (
+  const loadHistory = async (
     player: string,
     excluding: string,
-    provider: string,
     at: number,
     self?: { readonly key: string; readonly claimedAt: number },
-  ): Promise<NotificationDeliveryHistoryEntry[]> => {
+  ): Promise<SendHistory> => {
     const bySend = new Map<string, NotificationDeliveryHistoryEntry[]>();
     const add = (sendKey: string, entry: NotificationDeliveryHistoryEntry): void => {
       bySend.set(sendKey, [...(bySend.get(sendKey) ?? []), entry]);
@@ -514,12 +519,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         });
       }
     }
-    return [...bySend.values()]
-      .map((entries) =>
-        entries.find((entry) => entry.provider === provider)
-        ?? [...entries].sort((left, right) => Date.parse(left.at) - Date.parse(right.at))[0])
-      .filter((entry): entry is NotificationDeliveryHistoryEntry => entry !== undefined)
-      .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+    return bySend;
   };
   const readServerPermission = async (
     provider: RegisteredNotificationProvider,
@@ -705,22 +705,21 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       return { rows: [], refusals: [noEndpoint()] };
     }
     const consent = await store.listConsent(request.player);
+    const history = await loadHistory(request.player, request.idempotencyKey, at);
     const permissions = new Map<string, NotificationPermissionState | undefined>();
-    const histories = new Map<string, NotificationDeliveryHistoryEntry[]>();
     const rows: NotificationSendRow[] = [];
     const refusals: NotificationDeliveryRefusal[] = [];
     for (const recipient of recipients) {
       const id = recipient.provider.entry.provider;
       if (!permissions.has(id)) {
         permissions.set(id, await readServerPermission(recipient.provider, request));
-        histories.set(id, await historyFor(request.player, request.idempotencyKey, id, at));
       }
       const { decision } = decide(
         request,
         origin,
         recipient,
         consent,
-        histories.get(id) ?? [],
+        historyOn(history, id),
         permissions.get(id),
         at,
       );
@@ -750,7 +749,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     return { rows, refusals };
   };
 
-  const eligible = (mode: RunMode, send: NotificationStoredSend, row: NotificationSendRow, at: number): boolean => {
+  const eligible = (mode: RunMode, row: NotificationSendRow, at: number): boolean => {
     switch (mode) {
       case 'job':
         // A queued delivery runs once; an attempted one is replayed only after its lease.
@@ -780,7 +779,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   ): Promise<void> => {
     for (let attempt = 0; attempt < maxCompleteAttempts; attempt += 1) {
       if (attempt > 0) {
-        await pause(Math.random() * 10 * attempt);
+        const draw = random();
+        await pause((Number.isFinite(draw) ? Math.min(Math.max(draw, 0), 1) : 0.5) * 10 * attempt);
       }
       const held = await store.getSend(sendKey);
       const row = held?.send.rows.find((candidate) =>
@@ -843,7 +843,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const held = await store.getSend(sendKey);
       const row = held?.send.rows.find((candidate) =>
         candidate.key === rowKey && candidate.provider === provider);
-      if (held === undefined || row === undefined || !eligible(mode, held.send, row, at)) {
+      if (held === undefined || row === undefined || !eligible(mode, row, at)) {
         return {};
       }
       if (
@@ -864,7 +864,6 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const token = newToken();
       const claimedRow: NotificationSendRow = {
         ...row,
-        firstAttemptedAt: row.firstAttemptedAt ?? formatNotificationInstant(at),
         state: {
           status: 'in-flight',
           leaseUntil: formatNotificationInstant(at + leaseMs),
@@ -875,7 +874,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       };
       const next: NotificationStoredSend = {
         ...held.send,
-        // From a due replay on, the scheduler owns the send.
+        // A due replay marks the send as the scheduler's (S2 reads the flag).
         scheduled: held.send.scheduled || mode === 'due',
         rows: rowsWith(held.send, row, { kind: 'set', row: claimedRow }),
         changedAt: formatNotificationInstant(at),
@@ -902,10 +901,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const consent = await store.listConsent(send.request.player);
       const serverPermission = await readServerPermission(registered, send.request);
       at = nowMs();
-      const history = await historyFor(send.request.player, sendKey, row.provider, at, {
-        key: sendKey,
-        claimedAt: claimed.at,
-      });
+      const history = historyOn(
+        await loadHistory(send.request.player, sendKey, at, { key: sendKey, claimedAt: claimed.at }),
+        row.provider,
+      );
       evaluated = decide(send.request, send.origin, recipient, consent, history, serverPermission, at);
     } catch (error) {
       if (error instanceof NotificationSendInputError) {
@@ -974,7 +973,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           (error) =>
             report(error, 'history.add', { sendKey, provider: row.provider, rowKey: row.key }),
         );
-        await complete(
+        await settleAfterCall(
           sendKey,
           row,
           token,
@@ -986,7 +985,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         // The provider may have sent it: the claim is kept for the lease.
         const kept = row.state.status === 'in-flight' ? row.state : undefined;
         const leaseUntil = answeredAt + leaseMs;
-        if (isNotificationRowAbandoned(row, leaseUntil)) {
+        // The replay window starts at the first call the provider could not answer for.
+        const firstAttemptedAt = row.firstAttemptedAt ?? formatNotificationInstant(at);
+        if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
           report(
             new Error(
               'Ambiguous answers for a day: the delivery stays in flight and is not replayed again.',
@@ -995,7 +996,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             { sendKey, provider: row.provider, rowKey: row.key },
           );
         }
-        await complete(
+        await settleAfterCall(
           sendKey,
           row,
           token,
@@ -1004,6 +1005,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             row: {
               ...base,
               ...backoff,
+              firstAttemptedAt,
               state: {
                 status: 'in-flight',
                 leaseUntil: formatNotificationInstant(leaseUntil),
@@ -1026,22 +1028,22 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             at: formatNotificationInstant(answeredAt),
           });
         }
-        await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
+        await settleAfterCall(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'endpoint-invalid' } };
       case 'rejected':
         if (answer.reason === 'agreement') {
           await recordProviderDenial(send.request.player, send.request.topic, answeredAt);
         }
-        await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
+        await settleAfterCall(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'provider-rejected' } };
       case 'rate-limited': {
         // Nothing was sent: the claim is released and the row waits.
         const next = nextRateLimit(row.rateLimit, answer.retryAfterSeconds, answeredAt);
         if (next === undefined) {
-          await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
+          await settleAfterCall(sendKey, row, token, { kind: 'remove' }, answeredAt);
           return { refusal: { status: 'unavailable', reason: 'provider-rate-limited' } };
         }
-        await complete(
+        await settleAfterCall(
           sendKey,
           row,
           token,
@@ -1057,6 +1059,30 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         );
         return {};
       }
+    }
+  };
+
+  /**
+   * `complete` after the provider answered: a failure here leaves a delivery
+   * that may have happened, which is not the same as nothing sent, so it is
+   * marked for `runInline`.
+   */
+  const settleAfterCall = async (
+    sendKey: string,
+    row: NotificationSendRow,
+    token: string,
+    change: RowChange,
+    at: number,
+  ): Promise<void> => {
+    try {
+      await complete(sendKey, row, token, change, at);
+    } catch (error) {
+      throw new NotificationSettleError(
+        'The provider answered, but the answer could not be stored.',
+        {
+          cause: error,
+        },
+      );
     }
   };
 
@@ -1079,7 +1105,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * The host says the recipient has not agreed: a topic that needs an
    * agreement stops until the player agrees again. A denial already latest
    * for the topic is not written again, so repeated refusals of a topic that
-   * needs no agreement do not grow the history.
+   * needs no agreement do not grow the history. Two refusals settled at the
+   * same moment may both write one; the latest record is a denial either way.
    */
   const recordProviderDenial = async (player: string, topic: string, at: number): Promise<void> => {
     const latest = latestNotificationConsent(
@@ -1137,8 +1164,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       }
     }
     const failed = errors.length + (callerError === undefined ? 0 : 1);
-    // When every row failed, the first failure is the call's; the rest are reported.
-    const thrown = callerError ?? (failed === rows.length ? errors[0]?.error : undefined);
+    // When every row failed before its provider call, the first failure is
+    // the call's and the rest are reported. A row whose answer could not be
+    // stored may have been delivered, so the call answers from the ledger.
+    const nothingSent = errors.every(({ error }) => !(error instanceof NotificationSettleError));
+    const thrown = callerError
+      ?? (failed === rows.length && nothingSent ? errors[0]?.error : undefined);
     for (const { error, row } of errors) {
       if (error !== thrown) {
         report(error, 'dispatch', { sendKey, provider: row.provider, rowKey: row.key });
@@ -1383,7 +1414,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             await store.updateSend({ key, version: held.version, send: undefined });
             continue;
           }
-          const expired = send.rows.filter((row) => eligible('retry', send, row, at));
+          const expired = send.rows.filter((row) => eligible('retry', row, at));
           if (expired.length > 0) {
             // A platform row's lease expired: this caller is the next claimer and replays it.
             const wasDelivered = notificationSendOutcome(send)?.status === 'delivered';
@@ -1429,10 +1460,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     },
 
     async dispatchDue(options = {}) {
-      const limit = Math.min(Math.max(Math.floor(options.limit ?? 100), 1), 1000);
-      if (!Number.isFinite(limit)) {
-        throw invalidInput('limit: expected a number from 1 to 1000.');
-      }
+      // The batch size is clamped to 1 to 1000; anything that is not a number is the default, 100.
+      const asked = Number.isFinite(options.limit) ? Math.floor(options.limit ?? 100) : 100;
+      const limit = Math.min(Math.max(asked, 1), 1000);
       const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
       const results: NotificationDueResult[] = [];
       let failed = 0;
@@ -1601,9 +1631,33 @@ function compareText(left: string, right: string): number {
 /** Seconds a row waits after its holder failed before the provider call. */
 const releaseBackoffMs = 60 * secondMs;
 
-/** The row as it was before a claim, due no sooner than a short backoff from `at`. */
+/** Each other send's counted entries, by send key. */
+type SendHistory = ReadonlyMap<string, readonly NotificationDeliveryHistoryEntry[]>;
+
+/**
+ * The gate's history for a recipient on `provider`: each send once, on
+ * `provider` when it reached it there, else at its earliest entry, oldest
+ * first.
+ */
+function historyOn(history: SendHistory, provider: string): NotificationDeliveryHistoryEntry[] {
+  return [...history.values()]
+    .map((entries) =>
+      entries.find((entry) => entry.provider === provider)
+      ?? [...entries].sort((left, right) => Date.parse(left.at) - Date.parse(right.at))[0])
+    .filter((entry): entry is NotificationDeliveryHistoryEntry => entry !== undefined)
+    .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+}
+
+/**
+ * The row as it was before a claim, due no sooner than a short backoff from
+ * `at`, but never so late that an ambiguous row's replay window closes on
+ * the backoff alone.
+ */
 function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
-  const notBefore = at + releaseBackoffMs;
+  const windowEnd = row.firstAttemptedAt === undefined
+    ? Number.POSITIVE_INFINITY
+    : Date.parse(row.firstAttemptedAt) + notificationAmbiguousReplayHours * 3_600_000 - 1;
+  const notBefore = Math.min(at + releaseBackoffMs, windowEnd);
   if (row.state.status === 'deferred') {
     return {
       ...row,
@@ -1625,14 +1679,21 @@ function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
   return row;
 }
 
-/** Runs `write` up to three times; reports each failure and never throws. */
+/** Writes that must not fail a settled delivery are tried this often. */
+const maxSideWriteAttempts = 3;
+
+/** Runs `write` up to `maxSideWriteAttempts` times with a short pause; reports only the last failure and never throws. */
 async function withRetries(write: () => Promise<void>, onFailure: (error: unknown) => void): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < maxSideWriteAttempts; attempt += 1) {
     try {
       await write();
       return;
     } catch (error) {
-      onFailure(error);
+      if (attempt === maxSideWriteAttempts - 1) {
+        onFailure(error);
+      } else {
+        await pause(25 * (attempt + 1));
+      }
     }
   }
 }

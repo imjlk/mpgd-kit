@@ -722,7 +722,11 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   };
   const answers: NotificationRemoteDeliveryAnswer[] = [];
   const fcm = fakeProvider('fcm', answers);
+  const reports: string[] = [];
   const service = createNotificationService({
+    onError: (_error, context) => {
+      reports.push(`${context.operation}:${context.provider ?? ''}:${context.rowKey ?? ''}`);
+    },
     store: contended,
     registry: createNotificationProviderRegistry([
       { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
@@ -779,6 +783,11 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   }
   assert.ok(replays >= 280 && replays <= 288, `replayed for about a day: ${replays}`);
   assert.deepEqual((await service.dispatchDue()).results, []);
+  // The row whose replays end is reported once, with where it is.
+  assert.deepEqual(
+    reports.filter((entry) => entry.startsWith('dispatch.abandoned')),
+    ['dispatch.abandoned:fcm:c-3:install-1'],
+  );
   assert.deepEqual(
     await service.deliver({ idempotencyKey: 'c-3', player: 'p-1', topic: 'friend-challenge' }),
     {
@@ -1104,13 +1113,13 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
       errors.push(`${context.operation}:${context.provider ?? ''}:${context.rowKey ?? ''}`);
     },
   });
-  // Rate-limited first: the row waits 60 s and keeps its first attempt time.
+  // Rate-limited first: the row waits 60 s; nothing was sent, so no replay window starts.
   assert.equal(
     (await service.deliver({ idempotencyKey: 'rf-1', player: 'p-1', topic: 'friend-challenge' })).status,
     'deferred',
   );
   const firstAttempt = inner.inspect().sends[0]?.rows[0]?.firstAttemptedAt;
-  assert.equal(firstAttempt, '2026-10-19T03:00:00Z');
+  assert.equal(firstAttempt, undefined);
   // The replay's host read fails: the send counts as failed, the row is put back for a minute.
   time.advance(60);
   readFails = 1;
@@ -1126,8 +1135,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   historyFails = 3;
   const [delivered] = (await service.dispatchDue()).results;
   assert.deepEqual(delivered?.outcome, { status: 'delivered', alreadyProcessed: false });
-  assert.equal(errors.filter((entry) => entry.startsWith('history.add')).length, 3);
-  assert.equal(inner.inspect().sends[0]?.rows[0]?.firstAttemptedAt, firstAttempt);
+  assert.equal(errors.filter((entry) => entry.startsWith('history.add')).length, 1);
   time.advance(600);
   assert.deepEqual(await service.dispatchDue(), { results: [], failed: 0 });
   assert.equal(platform.calls.length, 2);
@@ -1137,6 +1145,40 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     provider: 'platform',
     rowKey: `rf-1:${'%E4%B8%AD'.repeat(2048)}`,
   });
+}
+
+// The replay window starts at the first ambiguous call and survives a rate-limit deferral.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const fcm = fakeProvider('fcm', [
+    { status: 'ambiguous' },
+    { status: 'rate-limited', retryAfterSeconds: 60 },
+    { status: 'ambiguous' },
+  ]);
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    now: time.now,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await service.deliver({ idempotencyKey: 'w-1', player: 'p-1', topic: 'friend-challenge' });
+  const first = store.inspect().sends[0]?.rows[0]?.firstAttemptedAt;
+  assert.equal(first, '2026-10-19T03:00:00Z');
+  time.advance(300);
+  await service.dispatchDue();
+  assert.equal(store.inspect().sends[0]?.rows[0]?.state.status, 'deferred');
+  time.advance(60);
+  await service.dispatchDue();
+  assert.equal(store.inspect().sends[0]?.rows[0]?.firstAttemptedAt, first);
 }
 
 console.info('Notifications service unit tests passed.');

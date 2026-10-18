@@ -7,6 +7,7 @@ import {
   createFcmAccessTokenSource,
   createFcmDeliveryProvider,
   createFcmProviderRegistration,
+  FcmAccessTokenError,
   fcmMessagingScope,
   fcmTokenEndpoint,
   parseFcmServiceAccount,
@@ -439,10 +440,14 @@ const request: NotificationRemoteDeliveryRequest = {
     fetch: flaky.fetch,
     now,
   });
-  await assert.rejects(broken.get(), {
-    name: 'FcmAccessTokenError',
-    code: 'TOKEN_KEY_UNUSABLE',
-    retryable: false,
+  await assert.rejects(broken.get(), (error: unknown) => {
+    assert.ok(error instanceof FcmAccessTokenError);
+    assert.equal(error.code, 'TOKEN_KEY_UNUSABLE');
+    assert.equal(error.retryable, false);
+    // The cause names the failing step and holds no key material.
+    assert.ok(error.cause instanceof TypeError);
+    assert.ok(!String((error.cause as Error).message).includes('AAAA'));
+    return true;
   });
   assert.throws(
     () => createFcmDeliveryProvider({ serviceAccount, projectId: 'Bad Project' }),
@@ -539,7 +544,14 @@ const request: NotificationRemoteDeliveryRequest = {
       { status: 'rate-limited', retryAfterSeconds: seconds },
     );
   }
-  // Legacy domain-scoped project ids are accepted.
+  // Legacy domain-scoped project ids are accepted; a trailing or doubled separator is not.
+  for (const bad of ['my-project:', 'my-project.', 'example..com:proj', 'my-project-']) {
+    assert.throws(
+      () => createFcmDeliveryProvider({ serviceAccount, projectId: bad }),
+      /project id/u,
+      bad,
+    );
+  }
   assert.equal(
     createFcmDeliveryProvider({ serviceAccount, projectId: 'example.com:my-project' }).id,
     'fcm',

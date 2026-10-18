@@ -111,8 +111,8 @@ export class FcmAccessTokenError extends Error {
   readonly code: string;
   readonly retryAfterSeconds: number | undefined;
 
-  constructor(code: string, retryable: boolean, retryAfterSeconds?: number) {
-    super(`FCM access token request failed: ${code}.`);
+  constructor(code: string, retryable: boolean, retryAfterSeconds?: number, options?: { readonly cause?: unknown }) {
+    super(`FCM access token request failed: ${code}.`, options);
     this.code = code;
     this.retryable = retryable;
     this.retryAfterSeconds = retryAfterSeconds;
@@ -150,7 +150,7 @@ export function createFcmAccessTokenSource(input: {
     return signingKey;
   };
   /** The signed assertion; a key that cannot sign is a configuration error, never retried as a rate limit. */
-  const assertionAt = async (issuedAt: number, claims: object): Promise<string> => {
+  const signedAssertion = async (claims: object): Promise<string> => {
     try {
       return await signJwt(subtle, await key(), {
         header: {
@@ -160,13 +160,14 @@ export function createFcmAccessTokenSource(input: {
         },
         claims,
       });
-    } catch {
-      throw new FcmAccessTokenError('TOKEN_KEY_UNUSABLE', false);
+    } catch (error) {
+      // The cause says which step failed (the PEM, the import, or signing); it never holds the key.
+      throw new FcmAccessTokenError('TOKEN_KEY_UNUSABLE', false, undefined, { cause: error });
     }
   };
   const mint = async (): Promise<string> => {
     const issuedAt = Math.floor(now() / 1000);
-    const assertion = await assertionAt(issuedAt, {
+    const assertion = await signedAssertion({
       iss: serviceAccount.clientEmail,
       scope: fcmMessagingScope,
       aud: fcmTokenEndpoint,
@@ -385,8 +386,8 @@ export function classifyFcmError(input: {
   readonly retryAfterSeconds?: number;
 }): NotificationRemoteDeliveryAnswer {
   const error = isRecord(input.body) && isRecord(input.body.error) ? input.body.error : undefined;
-  const details = Array.isArray(error?.details) ? error.details.filter(isRecord) : [];
-  const raw = fcmErrorCodeOf(input.body) ?? (typeof error?.status === 'string' ? error.status : undefined);
+  const details = errorDetailsOf(input.body);
+  const raw = errorCodeOf(details) ?? (typeof error?.status === 'string' ? error.status : undefined);
   // FCM's own codes are short upper-case words; anything else is cut down before it reaches logs.
   const code = raw === undefined ? undefined : providerCodeOf(raw);
   const rateLimited = (): NotificationRemoteDeliveryAnswer => ({
@@ -438,7 +439,7 @@ export function createFcmDeliveryProvider(
 ): NotificationRemoteDeliveryProvider {
   const projectId = input.projectId ?? input.serviceAccount.projectId;
   // Project ids, including legacy domain-scoped ones (`example.com:my-project`).
-  if (!/^[a-z0-9][a-z0-9.:-]{4,99}$/u.test(projectId)) {
+  if (!/^[a-z0-9](?:[a-z0-9-]|[.:](?=[a-z0-9])){4,99}$/u.test(projectId) || /[.:-]$/u.test(projectId)) {
     throw new TypeError('The FCM project id is not a Firebase project id.');
   }
   const fetcher: FetchLike = input.fetch ?? ((url, init) => globalThis.fetch(url, init));
@@ -547,13 +548,22 @@ function isReservedDataKey(key: string): boolean {
     || lower.startsWith('gcm');
 }
 
-/** The FCM `errorCode` in an error answer's details, if any. */
-function fcmErrorCodeOf(body: unknown): string | undefined {
+/** The `details` of an FCM error answer. */
+function errorDetailsOf(body: unknown): readonly Readonly<Record<string, unknown>>[] {
   const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
-  const details = Array.isArray(error?.details) ? error.details.filter(isRecord) : [];
+  return Array.isArray(error?.details) ? error.details.filter(isRecord) : [];
+}
+
+/** The FCM `errorCode` among an error answer's details, if any. */
+function errorCodeOf(details: readonly Readonly<Record<string, unknown>>[]): string | undefined {
   return details
     .map((detail) => detail.errorCode)
     .find((code): code is string => typeof code === 'string');
+}
+
+/** The FCM `errorCode` in an error answer, if any. */
+function fcmErrorCodeOf(body: unknown): string | undefined {
+  return errorCodeOf(errorDetailsOf(body));
 }
 
 /** An upstream error string as a short provider code: upper case, `[A-Z0-9_]`, at most 64 characters. */
