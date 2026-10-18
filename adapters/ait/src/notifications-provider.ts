@@ -22,8 +22,9 @@ import { hasRouteControlCharacter, normalizeRootRelativeRoute } from '@mpgd/plat
  * imports no Apps in Toss code; `./host` passes the real SDK.
  */
 
-/** Provider id of the Apps in Toss reference registry entry. */
-export const aitNotificationProviderId = 'apps-in-toss';
+import { aitNotificationProviderId } from './notifications-provider-id.js';
+
+export { aitNotificationProviderId };
 
 /** Evidence schema of the agreement answers this provider reports. */
 export const aitNotificationAgreementEvidenceSchema = 'apps-in-toss.notification-agreement.v1';

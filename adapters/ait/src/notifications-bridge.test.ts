@@ -109,8 +109,8 @@ describe('Apps in Toss notifications v2 over the game bridge', () => {
     const events: NotificationEvent[] = [];
     provider.subscribe((event) => events.push(event));
     provider.subscribe((event) => events.push(event));
-    // The bridge client loads on first use; the open the host emitted while
-    // it loaded is kept and delivered once it is validated.
+    // The bridge client loads first; the host keeps its cold open for the
+    // first listener, which attaches once the client has loaded.
     await vi.waitFor(() => expect(events).toHaveLength(1));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(events).toEqual([

@@ -53,6 +53,8 @@ import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
 import { aitCommerceStoreId, createAitCommerceCapabilities } from './commerce-provider.js';
 import { createAitLifecycleAdapter } from './lifecycle.js';
 import { createLazyAitBridgeNotificationProvider } from './notifications-lazy.js';
+import { aitNotificationProviderId } from './notifications-provider-id.js';
+import { unsupportedNotificationCapabilities } from './notifications-unsupported.js';
 import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export interface GamePlatformBridge {
@@ -381,28 +383,6 @@ function toGatewayCapabilities(
     };
   }
   return capabilities as unknown as PlatformCapabilities;
-}
-
-/** The Apps in Toss provider id (`aitNotificationProviderId`), kept here so the gateway loads no provider code. */
-const aitNotificationProviderId = 'apps-in-toss';
-
-/** `createUnsupportedNotificationCapabilities`, without loading `@mpgd/platform/notifications`. */
-function unsupportedNotificationCapabilities(): NotificationCapabilities {
-  return {
-    availability: 'unsupported',
-    permission: {
-      scope: 'app',
-      prompt: 'os',
-      readable: true,
-      serverReadable: false,
-      allowance: 'persistent',
-      userGesture: false,
-      settings: false,
-    },
-    remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
-    local: { supported: false },
-    open: 'none',
-  };
 }
 
 /** Bound on one notifications capability read, as `withTargetAvailability` bounds it. */

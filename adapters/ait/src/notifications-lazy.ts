@@ -1,30 +1,48 @@
 import type { BridgeNotificationsEvent } from '@mpgd/bridge';
 import { PlatformOperationError } from '@mpgd/platform';
-import type { NotificationEvent, NotificationProvider } from '@mpgd/platform/notifications';
+import type { NotificationProvider } from '@mpgd/platform/notifications';
 
 import type { CreateAitBridgeNotificationProviderInput } from './notifications-bridge.js';
 
+type Loaded = typeof import('./notifications-bridge.js');
+
 /**
- * The game side of notifications v2 on Apps in Toss, loaded on first use.
+ * The game side of notifications v2 on Apps in Toss, in a separate chunk.
  * The bridge provider and its validators (`@mpgd/bridge/notifications`,
- * `@mpgd/platform/notifications`) are a separate chunk that only a game whose
- * host offers the notifications channel loads. This module imports no
- * notifications code, so the gateway can create the provider synchronously.
+ * `@mpgd/platform/notifications`) are loaded only by a game whose host offers
+ * the notifications channel, which the host does while a topic is mapped.
+ * This module imports no notifications code, so the gateway can create the
+ * provider synchronously; it starts loading the chunk at once.
  *
- * - Every method loads the chunk, then calls the bridge provider. A chunk
+ * - Every method waits for the chunk, then calls the bridge provider. A chunk
  *   that fails to load rejects with a retryable
- *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the next call tries again.
- * - `subscribe` attaches to the bridge channel at once, so an event the host
- *   emits while the chunk loads (the launch's cold open) is kept, and
- *   delivers the events in order once they are validated.
+ *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the next call loads again.
+ * - `subscribe` attaches to the bridge channel only once the chunk has
+ *   loaded. The host emits the launch's cold open to its first listener when
+ *   that listener attaches, so nothing is missed, and the host claims the
+ *   launch for the event only when the event can be delivered: a game that
+ *   unsubscribes first, or whose chunk never loads, leaves the launch to the
+ *   launch intent. A subscriber waiting for a failed load attaches on the
+ *   next successful one.
  */
 export function createLazyAitBridgeNotificationProvider(
   input: CreateAitBridgeNotificationProviderInput,
 ): NotificationProvider {
-  type Loaded = typeof import('./notifications-bridge.js');
+  let loaded: Loaded | undefined;
   let loading: Promise<Loaded> | undefined;
+  const waiting = new Set<(module: Loaded) => void>();
   const load = (): Promise<Loaded> => {
-    const current = loading ?? import('./notifications-bridge.js');
+    if (loading !== undefined) {
+      return loading;
+    }
+    const current = import('./notifications-bridge.js').then((module) => {
+      loaded = module;
+      for (const attach of [...waiting]) {
+        attach(module);
+      }
+      waiting.clear();
+      return module;
+    });
     loading = current;
     current.catch(() => {
       if (loading === current) {
@@ -50,6 +68,9 @@ export function createLazyAitBridgeNotificationProvider(
     bridged ??= module.createAitBridgeNotificationProvider(input);
     return bridged;
   };
+  // The channel exists, so the chunk is needed: load it now rather than on
+  // the first capability read, which is bounded in time.
+  void load().catch(() => {});
 
   return {
     provider: input.provider,
@@ -59,51 +80,32 @@ export function createLazyAitBridgeNotificationProvider(
     register: async () => (await (await provider()).register?.()) ?? null,
     openSettings: async () => (await (await provider()).openSettings?.()) ?? 'unavailable',
     subscribe(listener) {
-      const pending: BridgeNotificationsEvent[] = [];
-      let read: ((envelope: unknown) => NotificationEvent | undefined) | undefined;
+      let detach: (() => void) | undefined;
       let closed = false;
-      const deliver = (envelope: unknown): void => {
-        const event = read?.(envelope);
-        if (event !== undefined) {
-          listener(event);
+      const attach = (module: Loaded): void => {
+        if (closed) {
+          return;
         }
+        detach = input.subscribe((envelope: BridgeNotificationsEvent) => {
+          const event = module.readAitBridgeNotificationEvent(envelope);
+          if (event !== undefined) {
+            listener(event);
+          }
+        });
       };
-      const detach = input.subscribe((envelope) => {
-        if (read === undefined) {
-          pending.push(envelope);
-        } else {
-          deliver(envelope);
-        }
-      });
-      const attach = (attempt: number): void => {
-        load().then(
-          (module) => {
-            if (closed) {
-              return;
-            }
-            read = module.readAitBridgeNotificationEvent;
-            for (const envelope of pending.splice(0)) {
-              deliver(envelope);
-            }
-          },
-          (error: unknown) => {
-            if (closed) {
-              return;
-            }
-            if (attempt < 2) {
-              attach(attempt + 1);
-              return;
-            }
-            console.warn('AIT notifications bridge client did not load; events are dropped.', error);
-            pending.length = 0;
-          },
-        );
-      };
-      attach(0);
+      if (loaded === undefined) {
+        waiting.add(attach);
+        void load().catch((error: unknown) => {
+          console.warn('AIT notifications bridge client did not load yet.', error);
+        });
+      } else {
+        attach(loaded);
+      }
       return () => {
         closed = true;
-        pending.length = 0;
-        detach();
+        waiting.delete(attach);
+        detach?.();
+        detach = undefined;
       };
     },
   };

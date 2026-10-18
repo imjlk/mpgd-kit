@@ -1501,7 +1501,10 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   `unsupported` on a Toss app older than 5.255.0. A topic mapped with
   `agreement: 'none'` reads `granted`, and an unmapped topic `unsupported`.
   Without any mapped topic the provider is `configuration-required` and
-  `register()` answers `null`. On a Toss app older than 5.255.0 it stays
+  `register()` answers `null`; the host bridge then offers no notifications
+  event channel, so the gateway exposes no `notificationsV2`, carries no
+  `PlatformCapabilities.notifications` block, and the target config's
+  `integrations.notifications` state alone decides the readiness. On a Toss app older than 5.255.0 it stays
   `available`, because topics mapped with `agreement: 'none'` are still
   delivered; only the agreement reads and requests answer for the version.
 - **v1.** The host bridge serves the v1 methods from this provider. A topic
