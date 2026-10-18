@@ -288,8 +288,9 @@ export function createNotificationsFetchHandler(
       let parsed: Awaited<ReturnType<typeof readBody>>;
       try {
         parsed = await readBody(request);
-      } catch {
+      } catch (error) {
         // The body could not be read (the client went away, the stream broke).
+        console.warn('Notifications request body could not be read:', errorName(error));
         parsed = undefined;
       }
       if (parsed === 'too-large') {
@@ -300,8 +301,9 @@ export function createNotificationsFetchHandler(
       }
       body = parsed;
     }
-    // Fields go to the service as sent: it validates each, so a wrong type
-    // is a 400 and never becomes another request.
+    // Fields go to the service as sent: it validates each at run time, so a
+    // wrong type is a 400 and never becomes another request. The casts below
+    // only satisfy the service's declared types; they are not checks.
     try {
       switch (`${method} ${route}`) {
         case 'GET /consent':

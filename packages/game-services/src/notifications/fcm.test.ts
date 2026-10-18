@@ -194,6 +194,8 @@ const request: NotificationRemoteDeliveryRequest = {
     [{ content: { route: '/', source: 'host-template' } }, /title and a body/u],
     [{ data: { route: '/evil' } }, /reserved/u],
     [{ data: { topic: 'other' } }, /reserved/u],
+    [{ data: { aps: '{}' } }, /reserved/u],
+    [{ data: { collapse_key: 'x' } }, /reserved/u],
     [{ data: { 'google.c.a.e': '1' } }, /reserved/u],
     [{ data: { from: 'x' } }, /reserved/u],
     [{ data: { big: 'x'.repeat(5000) } }, /at most 3840/u],

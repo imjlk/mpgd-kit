@@ -101,6 +101,12 @@ export type NotificationRemoteDeliveryAnswer =
     }
   | { readonly status: 'ambiguous'; readonly providerCode?: string };
 
+/**
+ * The provider code of a `rejected` answer for a message that would arrive
+ * after its expiry: nothing was sent, and it is routine, not a setup error.
+ */
+export const notificationExpiredProviderCode = 'MESSAGE_EXPIRED';
+
 /** A server-side remote delivery provider: `{ id, send }`. */
 export interface NotificationRemoteDeliveryProvider {
   /** Equals the registry entry's `provider`. */

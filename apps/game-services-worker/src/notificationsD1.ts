@@ -242,8 +242,8 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     async listDueSends({ at, limit }) {
       const rows = await db.prepare(`SELECT send_key FROM notification_sends
         WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms, send_key LIMIT ?`)
-        // A limit that is not a number reads nothing, as the in-memory store answers.
-        .bind(millisOf(at), Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0)
+        // As the in-memory store slices: Infinity reads every due send (SQLite: a negative LIMIT), NaN none.
+        .bind(millisOf(at), limitOf(limit))
         .all<{ readonly send_key: string }>();
       return rows.results.map((row) => row.send_key);
     },
@@ -308,6 +308,13 @@ interface HistoryRow {
   readonly player_id: string;
   readonly topic: string;
   readonly at_ms: number;
+}
+
+function limitOf(limit: number): number {
+  if (limit === Number.POSITIVE_INFINITY) {
+    return -1;
+  }
+  return Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
 }
 
 /** Epoch milliseconds of a stored time; a time that does not parse is refused rather than bound as NULL. */

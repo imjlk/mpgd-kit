@@ -376,6 +376,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     { idempotencyKey: 'k', player: 'p-1', topic: 'friend-challenge', extra: true },
     { idempotencyKey: 'k', player: 'p-1', topic: 'friend-challenge', data: { n: 1 } },
     { idempotencyKey: 'k', player: 'p-1', topic: 'friend-challenge', data: { route: '/x' } },
+    { idempotencyKey: 'k', player: 'p-1', topic: 'friend-challenge', data: { topic: 'x' } },
     { idempotencyKey: 'k', player: '', topic: 'friend-challenge' },
     { idempotencyKey: 'k', player: 'p-1', topic: 'consent-notice' },
   ]) {
@@ -637,7 +638,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   assert.deepEqual(await service.deliver(only), { status: 'in-flight' });
   assert.deepEqual(errors, ['provider.send']);
   assert.deepEqual(await service.deliver(only), { status: 'in-flight' });
-  time.advance(300);
+  time.advance(600); // the lease after an ambiguous answer doubles
   assert.deepEqual(await service.deliver(only), { status: 'delivered', alreadyProcessed: false });
   assert.deepEqual(
     platform.calls.map((call) => call.idempotencyKey),
@@ -863,7 +864,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   // A redelivered job does not replay an attempted (ambiguous) row; the lease does.
   await service.dispatch(jobs[0] as NotificationDispatchJob);
   assert.equal(platform.calls.length, 1);
-  time.advance(300);
+  time.advance(600); // the lease after an ambiguous answer doubles
   assert.deepEqual((await service.dispatchDue()).results, [
     { sendKey: 'f-1', outcome: { status: 'delivered', alreadyProcessed: false } },
   ]);
@@ -996,7 +997,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   });
   const send = { idempotencyKey: 'mix-1', player: 'p-1', topic: 'friend-challenge' };
   assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: false });
-  time.advance(300);
+  time.advance(600); // the lease after an ambiguous answer doubles
   assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: true });
   assert.deepEqual([fcm.calls.length, platform.calls.length], [1, 2]);
   assert.deepEqual((await service.dispatchDue()).results, []);
@@ -1175,7 +1176,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   await service.deliver({ idempotencyKey: 'w-1', player: 'p-1', topic: 'friend-challenge' });
   const first = store.inspect().sends[0]?.rows[0]?.firstAttemptedAt;
   assert.equal(first, '2026-10-19T03:00:00Z');
-  time.advance(300);
+  time.advance(600); // the lease after an ambiguous answer doubles
   await service.dispatchDue();
   assert.equal(store.inspect().sends[0]?.rows[0]?.state.status, 'deferred');
   time.advance(60);

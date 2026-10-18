@@ -29,9 +29,10 @@ import {
   type NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
 
-import type {
-  NotificationRemoteDeliveryAnswer,
-  NotificationRemoteRecipient,
+import {
+  notificationExpiredProviderCode,
+  type NotificationRemoteDeliveryAnswer,
+  type NotificationRemoteRecipient,
 } from './delivery-provider.js';
 import {
   notificationHistoryRetentionDays,
@@ -277,6 +278,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     : assertNotificationDeployment(input.deployment);
   const rules = deployment?.advertisingRules ?? 'none';
   const leaseMs = (input.claimLeaseSeconds ?? defaultClaimLeaseSeconds) * secondMs;
+  /** The claim lease after `attempts` ambiguous attempts: doubling, up to an hour (or the lease, if longer). */
+  const ambiguousLeaseMs = (attempts: number): number =>
+    Math.min(leaseMs * 2 ** Math.min(attempts, 16), Math.max(leaseMs, maxAmbiguousLeaseMs));
   if (!Number.isInteger(leaseMs) || leaseMs <= 0 || leaseMs > dayMs) {
     throw new TypeError('claimLeaseSeconds must be a whole number of seconds up to one day.');
   }
@@ -718,23 +722,29 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     const consent = await store.listConsent(request.player);
     const history = await loadHistory(request.player, request.idempotencyKey, at);
-    const permissions = new Map<string, NotificationPermissionState | undefined>();
-    const histories = new Map<string, NotificationDeliveryHistoryEntry[]>();
+    const perProvider = new Map<string, {
+      readonly permission: NotificationPermissionState | undefined;
+      readonly history: NotificationDeliveryHistoryEntry[];
+    }>();
     const rows: NotificationSendRow[] = [];
     const refusals: NotificationDeliveryRefusal[] = [];
     for (const recipient of recipients) {
       const id = recipient.provider.entry.provider;
-      if (!permissions.has(id)) {
-        permissions.set(id, await readServerPermission(recipient.provider, request));
-        histories.set(id, historyOn(history, id));
+      let inputs = perProvider.get(id);
+      if (inputs === undefined) {
+        inputs = {
+          permission: await readServerPermission(recipient.provider, request),
+          history: historyOn(history, id),
+        };
+        perProvider.set(id, inputs);
       }
       const { decision } = decide(
         request,
         origin,
         recipient,
         consent,
-        histories.get(id) ?? [],
-        permissions.get(id),
+        inputs.history,
+        inputs.permission,
         at,
       );
       const row = {
@@ -878,12 +888,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const token = newToken();
       // The replay window opens at the first claim that may reach the
       // provider; paths that prove nothing was sent write the earlier value back.
+      // A replay of a row that may have been sent (an ambiguous answer, or a
+      // holder that died mid-call) counts as one more ambiguous attempt, so
+      // its lease grows with each replay either way.
+      const replayed = row.state.status === 'in-flight' && row.state.attempted;
+      const ambiguousAttempts = (row.ambiguousAttempts ?? 0) + (replayed ? 1 : 0);
       const claimedRow: NotificationSendRow = {
         ...row,
         firstAttemptedAt: row.firstAttemptedAt ?? formatNotificationInstant(at),
+        ...(ambiguousAttempts === 0 ? {} : { ambiguousAttempts }),
         state: {
           status: 'in-flight',
-          leaseUntil: formatNotificationInstant(at + leaseMs),
+          leaseUntil: formatNotificationInstant(at + ambiguousLeaseMs(ambiguousAttempts)),
           claim: token,
           attempted: true,
           attemptedAt: formatNotificationInstant(at),
@@ -1004,9 +1020,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         const kept = row.state.status === 'in-flight' ? row.state : undefined;
         // Each ambiguous answer doubles the wait before the next replay, up to
         // an hour: a provider without an idempotency key may show every replay.
-        const ambiguousAttempts = (row.ambiguousAttempts ?? 0) + 1;
-        const leaseUntil = answeredAt
-          + Math.min(leaseMs * 2 ** (ambiguousAttempts - 1), Math.max(leaseMs, maxAmbiguousLeaseMs));
+        // The next claim counts the replay.
+        const ambiguousAttempts = row.ambiguousAttempts ?? 0;
+        const leaseUntil = answeredAt + ambiguousLeaseMs(ambiguousAttempts + 1);
         // The replay window started at the claim that reached the provider (or an earlier one).
         const firstAttemptedAt = row.firstAttemptedAt ?? formatNotificationInstant(at);
         if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
@@ -1028,7 +1044,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
               ...base,
               ...backoff,
               firstAttemptedAt,
-              ambiguousAttempts,
+              ...(ambiguousAttempts === 0 ? {} : { ambiguousAttempts }),
               state: {
                 status: 'in-flight',
                 leaseUntil: formatNotificationInstant(leaseUntil),
@@ -1055,8 +1071,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         return { refusal: { status: 'unavailable', reason: 'endpoint-invalid' } };
       case 'rejected':
         // A configuration rejection fails every send the same way: tell the
-        // operator. A recipient or agreement refusal is the player's, not an alert.
-        if (answer.reason === 'configuration' && answer.providerCode !== 'MESSAGE_EXPIRED') {
+        // operator. A recipient or agreement refusal is the player's, and a
+        // message that would arrive too late is routine; neither is an alert.
+        if (answer.reason === 'configuration' && answer.providerCode !== notificationExpiredProviderCode) {
           report(
             new Error(
               `The provider rejected the delivery (configuration${

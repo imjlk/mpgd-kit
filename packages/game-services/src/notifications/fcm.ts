@@ -1,9 +1,10 @@
 import { referenceNotificationProviders } from '@mpgd/platform/notifications';
 
-import type {
-  NotificationRemoteDeliveryAnswer,
-  NotificationRemoteDeliveryProvider,
-  NotificationRemoteDeliveryRequest,
+import {
+  notificationExpiredProviderCode,
+  type NotificationRemoteDeliveryAnswer,
+  type NotificationRemoteDeliveryProvider,
+  type NotificationRemoteDeliveryRequest,
 } from './delivery-provider.js';
 import type { NotificationProviderRegistration } from './registry.js';
 
@@ -288,8 +289,8 @@ export type FcmMessageBuild =
   | {
       readonly status: 'invalid';
       readonly reason: string;
-      /** `MESSAGE_EXPIRED` for a message that would arrive too late, else `INVALID_MESSAGE`. */
-      readonly code: 'INVALID_MESSAGE' | 'MESSAGE_EXPIRED';
+      /** `MESSAGE_EXPIRED` (`notificationExpiredProviderCode`) for a message that would arrive too late, else `INVALID_MESSAGE`. */
+      readonly code: 'INVALID_MESSAGE' | typeof notificationExpiredProviderCode;
     };
 
 /**
@@ -373,7 +374,7 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
   const payload = {
     notification,
     data: { ...data },
-    ...(Object.keys(android).length === 0 ? {} : { android }),
+    android,
     ...(Object.keys(apns).length === 0 ? {} : { apns }),
   };
   // Everything but the token counts toward the size FCM and APNs carry.
@@ -577,6 +578,10 @@ function isReservedDataKey(key: string): boolean {
     || lower === 'from'
     || lower === 'notification'
     || lower === 'message_type'
+    // Keys the Capacitor provider drops from an open's data.
+    || key === 'collapse_key'
+    || key === 'aps'
+    || key === 'fcm_options'
     || lower.startsWith('google')
     || lower.startsWith('gcm');
 }
