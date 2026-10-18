@@ -24,7 +24,12 @@ import {
   type NotificationDispatchJob,
   type NotificationSession,
 } from './service.js';
-import { createInMemoryNotificationStore, type NotificationStore } from './store.js';
+import {
+  createInMemoryNotificationStore,
+  notificationSendDueAt,
+  type NotificationStore,
+  type NotificationStoredSend,
+} from './store.js';
 
 const fcmEntry: NotificationDeliveryProviderEntry = referenceNotificationProviders.fcm;
 const platformEntry: NotificationDeliveryProviderEntry = {
@@ -901,6 +906,31 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     status: 'unavailable',
     reason: 'no-endpoint',
   });
+  // An unscoped send that FCM delivered while the platform answer was ambiguous: the
+  // platform row stays due though the send counts as delivered, so the due replay (not
+  // only a caller's retry, tested below) sends it once its lease ends.
+  throwNext = true;
+  const both = { idempotencyKey: 'm-4', player: 'p-1', topic: 'friend-challenge' };
+  assert.deepEqual(await service.deliver(both), { status: 'delivered', alreadyProcessed: false });
+  const pending = store.inspect().sends.find((send) => send.key === 'm-4');
+  assert.deepEqual(
+    pending?.rows.map((row) => [row.provider, row.state.status]),
+    [
+      ['fcm', 'delivered'],
+      ['platform', 'in-flight'],
+    ],
+  );
+  assert.equal(notificationSendDueAt(pending as NotificationStoredSend), '2026-10-19T03:20:00Z');
+  time.advance(600);
+  await service.dispatchDue();
+  assert.deepEqual(
+    platform.calls.map((call) => call.idempotencyKey),
+    ['m-1', 'm-2', 'm-4'],
+  );
+  assert.deepEqual(
+    store.inspect().sends.find((send) => send.key === 'm-4')?.rows.map((row) => row.state.status),
+    ['delivered', 'delivered'],
+  );
 }
 
 // Rate limits: the first deferral waits retryAfterSeconds, later ones back off with jitter, and 24 hours ends it.
@@ -1049,6 +1079,105 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
       status: 'in-flight',
     },
   );
+}
+
+// The claim lease is whole seconds: a fraction that is whole milliseconds is still refused.
+for (const claimLeaseSeconds of [0.5, 0.001, 1.5, 0, -1, 86_401, Number.NaN]) {
+  assert.throws(
+    () =>
+      createNotificationService({
+        store: createInMemoryNotificationStore(),
+        registry: createNotificationProviderRegistry([]),
+        catalog: vectorCatalog([]),
+        claimLeaseSeconds,
+      }),
+    /whole number of seconds/u,
+    String(claimLeaseSeconds),
+  );
+}
+for (const claimLeaseSeconds of [1, 86_400]) {
+  createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([]),
+    catalog: vectorCatalog([]),
+    claimLeaseSeconds,
+  });
+}
+
+// The send-time permission read waits for the gate's earlier steps: a host outage
+// does not turn an unknown topic or a missing recipient into a retry.
+{
+  let reads = 0;
+  let recipient: string | undefined = 'u-1';
+  const platform = fakeProvider('platform', [{ status: 'accepted' }]);
+  let readFails = false;
+  const jobs: NotificationDispatchJob[] = [];
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      {
+        entry: {
+          ...platformEntry,
+          permission: { ...platformEntry.permission, serverReadable: true },
+        },
+        delivery: {
+          id: 'platform',
+          send: (request) => platform.send(request),
+          async readPermission() {
+            reads += 1;
+            if (readFails) {
+              throw new Error('host down');
+            }
+            return 'granted';
+          },
+        },
+        targets: ['web'],
+      },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    resolvePlatformRecipient: () => recipient,
+    queue: {
+      async enqueue(batch) {
+        jobs.push(...batch);
+      },
+    },
+  });
+  readFails = true;
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'r-1', player: 'p-1', topic: 'not-in-the-catalog' }),
+    { status: 'suppressed', reason: 'topic-unknown' },
+  );
+  recipient = undefined;
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'r-2', player: 'p-1', topic: 'friend-challenge' }),
+    { status: 'unavailable', reason: 'no-endpoint' },
+  );
+  assert.equal(reads, 0);
+  // Past those steps the read is needed, and its failure is a retry.
+  recipient = 'u-1';
+  await expectCode(
+    service.deliver({ idempotencyKey: 'r-3', player: 'p-1', topic: 'friend-challenge' }),
+    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    'a needed read that fails is a retry',
+  );
+  assert.equal(reads, 1);
+  // The same holds at the provider call: a queued row whose recipient is gone by then is
+  // answered without the host.
+  readFails = false;
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'r-4', player: 'p-1', topic: 'friend-challenge' }),
+    { status: 'in-flight' },
+  );
+  assert.equal(reads, 2);
+  readFails = true;
+  recipient = undefined;
+  await service.dispatch(jobs[0] as NotificationDispatchJob);
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'r-4', player: 'p-1', topic: 'friend-challenge' }),
+    { status: 'unavailable', reason: 'no-endpoint' },
+  );
+  assert.equal(reads, 2);
+  assert.equal(platform.calls.length, 0);
 }
 
 // A failure before the provider call puts the row back; queued jobs run once.

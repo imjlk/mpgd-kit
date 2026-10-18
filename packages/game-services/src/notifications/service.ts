@@ -313,13 +313,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     ? undefined
     : assertNotificationDeployment(input.deployment);
   const rules = deployment?.advertisingRules ?? 'none';
-  const leaseMs = (input.claimLeaseSeconds ?? defaultClaimLeaseSeconds) * secondMs;
+  const leaseSeconds = input.claimLeaseSeconds ?? defaultClaimLeaseSeconds;
+  // Checked in seconds: 0.5 is a whole number of milliseconds but no lease.
+  if (!Number.isInteger(leaseSeconds) || leaseSeconds <= 0 || leaseSeconds * secondMs > dayMs) {
+    throw new TypeError('claimLeaseSeconds must be a whole number of seconds up to one day.');
+  }
+  const leaseMs = leaseSeconds * secondMs;
   /** The claim lease after `attempts` ambiguous attempts: doubling, up to an hour (or the lease, if longer). */
   const ambiguousLeaseMs = (attempts: number): number =>
     Math.min(leaseMs * 2 ** Math.min(attempts, 16), Math.max(leaseMs, maxAmbiguousLeaseMs));
-  if (!Number.isInteger(leaseMs) || leaseMs <= 0 || leaseMs > dayMs) {
-    throw new TypeError('claimLeaseSeconds must be a whole number of seconds up to one day.');
-  }
   const random = input.random ?? Math.random;
   const noticeTopic = catalog.notices?.topic;
   if (catalog.notices !== undefined) {
@@ -597,6 +599,32 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       });
     }
   };
+  /**
+   * For a provider whose permission the server reads, the gate's answer
+   * when a step before the permission step refuses (the topic, the channel,
+   * the purpose, the recipient, the link): that answer needs no host read,
+   * so a host outage cannot turn it into a retry. `evaluate` runs the gate
+   * with a stand-in permission, which only the later steps read; its history
+   * and time do not matter to the earlier ones. Any other answer, or an
+   * error, means the real read decides.
+   */
+  const earlyRefusal = (
+    provider: RegisteredNotificationProvider,
+    evaluate: (standIn: NotificationPermissionState) => ReturnType<typeof decide>,
+  ): ReturnType<typeof decide> | undefined => {
+    if (!provider.entry.permission.serverReadable) {
+      return undefined;
+    }
+    let early: ReturnType<typeof decide>;
+    try {
+      early = evaluate('granted');
+    } catch {
+      return undefined;
+    }
+    return early.decision.status !== 'allowed' && earlyGateReasons.has(early.decision.reason)
+      ? early
+      : undefined;
+  };
   const decide = (
     request: NotificationStoredSendRequest,
     origin: NotificationSendOrigin,
@@ -759,7 +787,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const consent = await store.listConsent(request.player);
     const history = await loadHistory(request.player, request.idempotencyKey, at);
     const perProvider = new Map<string, {
-      readonly permission: NotificationPermissionState | undefined;
+      permission?: Promise<NotificationPermissionState | undefined>;
       readonly history: NotificationDeliveryHistoryEntry[];
     }>();
     const rows: NotificationSendRow[] = [];
@@ -768,21 +796,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const id = recipient.provider.entry.provider;
       let inputs = perProvider.get(id);
       if (inputs === undefined) {
-        inputs = {
-          permission: await readServerPermission(recipient.provider, request),
-          history: historyOn(history, id),
-        };
+        inputs = { history: historyOn(history, id) };
         perProvider.set(id, inputs);
       }
-      const { decision } = decide(
-        request,
-        origin,
-        recipient,
-        consent,
-        inputs.history,
-        inputs.permission,
-        at,
-      );
+      const held = inputs;
+      const evaluate = (permission: NotificationPermissionState | undefined) =>
+        decide(request, origin, recipient, consent, held.history, permission, at);
+      // One read per provider and send, made only once a recipient needs it.
+      const { decision } = earlyRefusal(recipient.provider, evaluate)
+        ?? evaluate(await (held.permission ??= readServerPermission(recipient.provider, request)));
       const row = {
         key: recipient.rowKey,
         provider: id,
@@ -968,13 +990,25 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     try {
       recipient = await recipientOfRow(registered, send.request, row, claimed.at);
       const consent = await store.listConsent(send.request.player);
-      const serverPermission = await readServerPermission(registered, send.request);
-      at = nowMs();
-      const history = historyOn(
-        await loadHistory(send.request.player, sendKey, at, { key: sendKey, claimedAt: claimed.at }),
-        row.provider,
+      const early = earlyRefusal(registered, (standIn) =>
+        decide(send.request, send.origin, recipient, consent, [], standIn, nowMs()),
       );
-      evaluated = decide(send.request, send.origin, recipient, consent, history, serverPermission, at);
+      const serverPermission = early === undefined
+        ? await readServerPermission(registered, send.request)
+        : undefined;
+      at = nowMs();
+      evaluated = early ?? decide(
+        send.request,
+        send.origin,
+        recipient,
+        consent,
+        historyOn(
+          await loadHistory(send.request.player, sendKey, at, { key: sendKey, claimedAt: claimed.at }),
+          row.provider,
+        ),
+        serverPermission,
+        at,
+      );
     } catch (error) {
       if (error instanceof NotificationSendInputError) {
         // A send that cannot be made as asked fails once, not on every replay.
@@ -1821,6 +1855,19 @@ function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
   }
   return row;
 }
+
+/**
+ * The gate's refusals from the steps before the permission step
+ * (`evaluateNotificationDelivery`: topic, channel, purpose, recipient,
+ * link), which a send-time permission read cannot change.
+ */
+const earlyGateReasons: ReadonlySet<string> = new Set([
+  'topic-unknown',
+  'channel-unsupported',
+  'purpose-unsupported',
+  'no-endpoint',
+  'link-missing',
+]);
 
 /** Writes that must not fail a settled delivery are tried this often. */
 const maxSideWriteAttempts = 3;
