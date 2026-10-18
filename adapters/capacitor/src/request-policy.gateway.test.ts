@@ -8,10 +8,10 @@ import type { CapacitorServiceProvider } from './providers.js';
 
 const guardCalls = vi.hoisted(() => [] as { method: string; served: boolean }[]);
 
-// No public gateway method sends a notifications v2 request until P2 exposes
-// `notificationsV2`, so the guard is made to refuse the v1 subscription request
-// the way it refuses an unserved v2 method. That request is an external
-// activity, which shows where the gateway asks the guard.
+// A gateway without a notifications service sends no notifications v2
+// request, so the guard is made to refuse the v1 subscription request the way
+// it refuses an unserved v2 method. That request is an external activity,
+// which shows where the gateway asks the guard.
 vi.mock('./request-policy.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./request-policy.js')>();
   return {
