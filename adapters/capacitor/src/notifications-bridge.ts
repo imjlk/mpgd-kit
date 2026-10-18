@@ -70,15 +70,7 @@ export function createNotificationProviderBridge(
   const events = createBridgeEventSource(bridgeNotificationsEventProtocol, provider);
 
   const serve = async (method: BridgeNotificationsV2Method, payload: unknown): Promise<unknown> => {
-    let checked: unknown;
-    try {
-      checked = assertBridgeNotificationsV2Payload(method, payload);
-    } catch (error) {
-      throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-        message: `${method} payload is invalid: ${error instanceof Error ? error.message : String(error)}`,
-        cause: error,
-      });
-    }
+    const checked = checkedPayload(method, payload);
     switch (method) {
       case 'notifications.v2.getCapabilities':
         return {
@@ -160,6 +152,18 @@ export function createNotificationProviderBridge(
     },
     subscribe: (listener) => events.subscribe(listener),
   };
+}
+
+/** The payload as the contract reads it, or `NOTIFICATIONS_INVALID_INPUT`; both sides of the bridge use it. */
+function checkedPayload(method: BridgeNotificationsV2Method, payload: unknown): unknown {
+  try {
+    return assertBridgeNotificationsV2Payload(method, payload);
+  } catch (error) {
+    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+      message: `${method} payload is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      cause: error,
+    });
+  }
 }
 
 function implemented<TMethod extends (...args: never[]) => unknown>(
@@ -331,14 +335,7 @@ export function createBridgeNotificationProvider(
   ): Promise<BridgeNotificationsV2Result<TMethod>> => {
     // Checked here too, so a payload the contract rejects never pauses the
     // game for a request that cannot succeed.
-    try {
-      assertBridgeNotificationsV2Payload(method, payload);
-    } catch (error) {
-      throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-        message: `${method} payload is invalid: ${error instanceof Error ? error.message : String(error)}`,
-        cause: error,
-      });
-    }
+    checkedPayload(method, payload);
     let data: unknown;
     try {
       data = await input.request<unknown>(method, payload);
@@ -383,8 +380,11 @@ export function createBridgeNotificationProvider(
     ...(input.serves.local
       ? {
           scheduleLocal: (request) => send('notifications.v2.scheduleLocal', request),
-          async cancelLocal({ keys }) {
-            await send('notifications.v2.cancelLocal', { keys });
+          async cancelLocal(request) {
+            // A missing list stays missing, so the payload check rejects it.
+            await send('notifications.v2.cancelLocal', {
+              keys: request?.keys as readonly string[],
+            });
           },
           async listLocal() {
             return (await send('notifications.v2.listLocal', protocol)).pending;

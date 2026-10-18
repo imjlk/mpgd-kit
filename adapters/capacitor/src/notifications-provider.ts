@@ -273,17 +273,27 @@ export function createCapacitorNotificationProvider(
   const getInstallationId = push?.getInstallationId?.bind(push);
   let tokenFailureReported = false;
   let lastObserved: NotificationPermissionState | undefined;
-  /** The `requestPermission` call in flight, whose answer settles `lastObserved`. */
-  let requesting: Promise<unknown> | undefined;
+  /**
+   * The OS dialog in flight, whose answer settles `lastObserved`; a request
+   * made while it is up shares it, so a double tap never asks twice.
+   */
+  let requesting: Promise<{
+    readonly before: NotificationPermissionState;
+    readonly after: NotificationPermissionState;
+  }> | undefined;
+  /** Counts requests, so a read that overlapped one cannot settle `lastObserved` after it. */
+  let requests = 0;
   const readAppState = async (): Promise<NotificationPermissionState> => {
     if (checkPermission === undefined) {
       return 'unsupported';
     }
+    const generation = requests;
     const state = await callSdk(checkPermission);
     const mapped = toPermissionState(state);
-    // During a request only the request's own answer settles it, so a read
-    // that began before the dialog cannot overwrite that answer.
-    if (requesting === undefined) {
+    // Only the request's own answer settles a request, so a read that began
+    // before or during the dialog cannot overwrite that answer, even when it
+    // finishes after the request did.
+    if (requesting === undefined && generation === requests) {
       lastObserved = mapped;
     }
     return mapped;
@@ -309,12 +319,13 @@ export function createCapacitorNotificationProvider(
       return;
     }
     // A push-only provider has no local reminder to retry the setup from.
-    ensureChannels().catch(reportError);
-    ensureActionTypes().catch(reportError);
+    ensureChannels().catch(reportSetupFailure);
+    ensureActionTypes().catch(reportSetupFailure);
     resumeCheck = resumeCheck.then(async () => {
       const before = lastObserved;
-      // A request's own dialog also takes the app out of the foreground on
-      // iOS; the request reports that answer itself.
+      // A request's own dialog also takes the app out of the foreground (the
+      // iOS alert, the Android permission activity); the request reports that
+      // answer itself.
       if (before === undefined || requesting !== undefined) {
         return;
       }
@@ -412,6 +423,7 @@ export function createCapacitorNotificationProvider(
         return;
       }
       const { token } = event;
+      tokenFailureReported = false;
       // A rotated token goes out at once, with the permission this provider
       // last read: a permission changes only in system settings, and the
       // return from there reads it again. During a request (iOS issues the
@@ -460,8 +472,16 @@ export function createCapacitorNotificationProvider(
 
   // Native setup: the Android channels and the opt-out action type. A remote
   // push needs its channel before it arrives, so both start now. Each is kept
-  // only once it succeeded; a failure is reported and tried again on the next
-  // local reminder, which needs the channels and fails until they exist.
+  // only once it succeeded. A failure is tried again on the next local
+  // reminder, which needs the channels and fails until they exist, and on
+  // each return to the foreground; it is reported once until a try succeeds.
+  let setupFailureReported = false;
+  const reportSetupFailure = (error: unknown): void => {
+    if (!setupFailureReported) {
+      setupFailureReported = true;
+      reportError(error);
+    }
+  };
   let channelsReady: Promise<void> | undefined;
   const ensureChannels = (): Promise<void> => {
     channelsReady ??= (async () => {
@@ -477,6 +497,7 @@ export function createCapacitorNotificationProvider(
       for (const channel of channels) {
         await createChannel(channel);
       }
+      setupFailureReported = false;
     })().catch((error: unknown) => {
       channelsReady = undefined;
       throw error;
@@ -484,7 +505,13 @@ export function createCapacitorNotificationProvider(
     return channelsReady;
   };
   let actionTypesReady: Promise<void> | undefined;
+  // The call sets every iOS category at once, so a catalog without
+  // advertising leaves the shell's categories alone.
+  const needsOptOut = topics.some((topic) => topic.purpose === 'advertising');
   const ensureActionTypes = (): Promise<void> => {
+    if (!needsOptOut) {
+      return Promise.resolve();
+    }
     actionTypesReady ??= Promise.resolve()
       .then(() => local?.registerActionTypes({
         types: [{
@@ -503,8 +530,8 @@ export function createCapacitorNotificationProvider(
     return actionTypesReady;
   };
   if (!unsupported) {
-    ensureChannels().catch(reportError);
-    ensureActionTypes().catch(reportError);
+    ensureChannels().catch(reportSetupFailure);
+    ensureActionTypes().catch(reportSetupFailure);
   }
 
   // Local reminder operations run one at a time: each reads the pending list
@@ -580,7 +607,7 @@ export function createCapacitorNotificationProvider(
       return { status: 'permission-required' };
     }
     await callSdk(ensureChannels);
-    ensureActionTypes().catch(reportError);
+    ensureActionTypes().catch(reportSetupFailure);
     const fireAt = normalizeNotificationTimestamp(checked.fireAt);
     const pending = await readPending(sdk);
     const existing = pending.ours.find((entry) => entry.key === checked.key);
@@ -602,7 +629,9 @@ export function createCapacitorNotificationProvider(
         id,
         title: checked.title,
         body: checked.body,
-        schedule: { at: new Date(fireAt) },
+        // Inexact, but allowed to fire in Doze: without it Android posts the
+        // reminder only when the device next wakes for another reason.
+        schedule: { at: new Date(fireAt), allowWhileIdle: true },
         extra: {
           [extraKeys.key]: checked.key,
           [extraKeys.topic]: checked.topic,
@@ -641,35 +670,44 @@ export function createCapacitorNotificationProvider(
       for (const topic of requested) {
         outcomes[topic] = 'unavailable';
       }
-      const before = await readAppState();
       if (askable.length === 0) {
-        return { snapshot: snapshotOf(requested, before), outcomes };
+        return { snapshot: snapshotOf(requested, await readAppState()), outcomes };
       }
-      if (before === 'blocked') {
-        // Only settings can change it; the dialog would not show.
-        for (const topic of askable) {
-          outcomes[topic] = 'blocked';
+      let answer = requesting;
+      if (answer === undefined) {
+        const before = await readAppState();
+        // Another request may have opened the dialog during that read.
+        answer = requesting;
+        if (answer === undefined && before === 'blocked') {
+          // Only settings can change it; the dialog would not show.
+          for (const topic of askable) {
+            outcomes[topic] = 'blocked';
+          }
+          return { snapshot: snapshotOf(requested, before), outcomes };
         }
-        return { snapshot: snapshotOf(requested, before), outcomes };
-      }
-      // The push plugin also registers with APNs on iOS. Its answer is not
-      // read: on Android 12 and lower it is granted whatever the setting is,
-      // so the read after it decides (through the local plugin when present).
-      const asked = (async () => {
-        await callSdk(askPermission);
-        const state = await readAppState();
-        lastObserved = state;
-        return state;
-      })();
-      requesting = asked;
-      let after: NotificationPermissionState;
-      try {
-        after = await asked;
-      } finally {
-        if (requesting === asked) {
-          requesting = undefined;
+        if (answer === undefined) {
+          // The push plugin also registers with APNs on iOS. Its answer is
+          // not read: on Android 12 and lower it is granted whatever the
+          // setting is, so the read after it decides (through the local
+          // plugin when present).
+          requests += 1;
+          const asked = (async () => {
+            await callSdk(askPermission);
+            const after = await readAppState();
+            lastObserved = after;
+            return { before, after };
+          })();
+          requesting = asked;
+          const clear = (): void => {
+            if (requesting === asked) {
+              requesting = undefined;
+            }
+          };
+          asked.then(clear, clear);
+          answer = asked;
         }
       }
+      const { before, after } = await answer;
       let outcome: NotificationPermissionOutcome;
       if (after === 'granted') {
         outcome = before === 'granted' ? 'already-granted' : 'granted';

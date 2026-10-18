@@ -67,7 +67,8 @@ export interface LocalNotificationSdkSchema {
   readonly id: number;
   readonly title: string;
   readonly body: string;
-  readonly schedule: { readonly at: Date };
+  /** `allowWhileIdle` lets an inexact alarm fire in Doze (`setAndAllowWhileIdle`). */
+  readonly schedule: { readonly at: Date; readonly allowWhileIdle: true };
   /** Round-trips through `getPending` and the listeners; the provider stores its key there. */
   readonly extra: Readonly<Record<string, string>>;
   /** Android only. */

@@ -349,6 +349,38 @@ describe('Capacitor gateway with a notifications v2 service', () => {
     },
   );
 
+  it('rejects cancelLocal without keys as invalid input', async () => {
+    const { gateway } = setup();
+    await expect(gateway.notificationsV2?.cancelLocal?.(undefined as never)).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_INVALID_INPUT',
+      retryable: false,
+    });
+  });
+
+  it('keeps its own copy of the v1 topics', async () => {
+    const native = createCapacitorNotificationProvider({ platform: 'android', topics, app: null });
+    const v1Topics: { id: string; targets?: unknown }[] = [{ id: 'friend-challenge' }];
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1',
+      buildId: 'copied-topics',
+      app: createApp(),
+      visibility: null,
+      bridge: baseBridge([]),
+      providers: [createNotificationServiceProvider({
+        id: 'notifications',
+        notifications: native,
+        topics: v1Topics as never,
+      })],
+    });
+    // Changed after the gateway was created: an entry with `targets` would count as outside.
+    v1Topics[0]!.targets = { android: {} };
+    v1Topics.length = 0;
+    // Still declared, so the provider answers (unsupported, without plugins)
+    // instead of the adapter answering configuration-required.
+    expect(await gateway.notifications?.getStatus('friend-challenge')).toBe('unsupported');
+  });
+
   it('releases the pause when the request fails', async () => {
     const { gateway, sdks } = setup();
     const pauses: string[] = [];

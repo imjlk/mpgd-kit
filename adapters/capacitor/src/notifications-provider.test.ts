@@ -278,6 +278,26 @@ describe('Capacitor notifications provider: permission', () => {
     expect(sdks.prompts).toBe(3);
   });
 
+  it('shares one dialog between requests made while it is up', async () => {
+    const { provider, sdks } = setup();
+    sdks.queuePrompt('denied');
+    const [first, second] = await Promise.all([
+      provider.requestPermission({ topics: ['energy-full'] }),
+      provider.requestPermission({ topics: ['friend-challenge', 'unknown'] }),
+    ]);
+    expect(sdks.prompts).toBe(1);
+    expect(first).toEqual({
+      snapshot: { app: 'prompt-with-rationale', topics: { 'energy-full': 'prompt-with-rationale' } },
+      outcomes: { 'energy-full': 'denied' },
+    });
+    expect(second.outcomes).toEqual({ 'friend-challenge': 'denied', unknown: 'unavailable' });
+    // The next request asks again.
+    sdks.queuePrompt('granted');
+    expect((await provider.requestPermission({ topics: ['energy-full'] })).outcomes)
+      .toEqual({ 'energy-full': 'granted' });
+    expect(sdks.prompts).toBe(2);
+  });
+
   it('answers unavailable for a topic outside the resolved catalog without prompting', async () => {
     const { provider, sdks } = setup();
     expect(await provider.requestPermission({ topics: ['unknown', 'unknown'] })).toEqual({
@@ -459,6 +479,72 @@ describe('Capacitor notifications provider: events around a request', () => {
     expect(errors).toEqual([new Error('Firebase is not configured'), new Error('offline')]);
   });
 
+  it('keeps the request answer when an older read finishes after it', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    let hold: ((state: { readonly display: 'prompt' }) => void) | undefined;
+    let calls = 0;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      checkPermissions: async () => {
+        calls += 1;
+        if (calls === 2) {
+          return new Promise((resolve) => {
+            hold = resolve;
+          });
+        }
+        return { display: sdks.osState };
+      },
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android', topics, push: sdks.push!, local, app: null,
+      timeZone: () => undefined, locale: () => undefined,
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.getPermission({ topics: [] });
+    // A read that starts before the dialog and answers after it.
+    const stale = provider.getPermission({ topics: [] });
+    sdks.queuePrompt('granted');
+    await provider.requestPermission({ topics: ['energy-full'] });
+    hold?.({ display: 'prompt' });
+    await stale;
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    expect(events).toEqual([{
+      type: 'endpoint-changed',
+      registration: {
+        provider: 'fcm',
+        address: { kind: 'fcm-token', value: 'tok-1', permission: 'granted' },
+      },
+    }]);
+  });
+
+  it('reports a setup failure once until a try succeeds', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android', local: false });
+    const errors: unknown[] = [];
+    const push: PushSdk = Object.assign(Object.create(sdks.push!) as PushSdk, {
+      createChannel: async () => Promise.reject(new Error('channel')),
+    });
+    createCapacitorNotificationProvider({
+      platform: 'android', topics, push, app: sdks.app, onError: (error) => errors.push(error),
+    });
+    await settle();
+    sdks.app.setActive(true);
+    await settle();
+    sdks.app.setActive(true);
+    await settle();
+    expect(errors).toEqual([new Error('channel')]);
+  });
+
+  it('reports a token failure again after a token arrived from Firebase', async () => {
+    const { provider, sdks, errors } = setup();
+    sdks.failNext('push.getToken', new Error('first'));
+    await provider.register?.();
+    sdks.emitPush('tokenReceived', { token: 'tok-1' });
+    sdks.failNext('push.getToken', new Error('second'));
+    await provider.register?.();
+    expect(errors).toEqual([new Error('first'), new Error('second')]);
+  });
+
   it('stops waiting for a request that failed', async () => {
     const { provider, sdks } = setup({ platform: 'ios' });
     const events: NotificationEvent[] = [];
@@ -500,7 +586,7 @@ describe('Capacitor notifications provider: local reminders', () => {
         id,
         title: 'Energy full',
         body: 'Your energy is full.',
-        schedule: { at: new Date('2026-10-12T06:00:00Z') },
+        schedule: { at: new Date('2026-10-12T06:00:00Z'), allowWhileIdle: true },
         extra: {
           mpgdKey: 'energy',
           mpgdTopic: 'energy-full',
@@ -512,7 +598,7 @@ describe('Capacitor notifications provider: local reminders', () => {
       },
       expect.objectContaining({
         id,
-        schedule: { at: new Date('2026-10-12T07:00:00Z') },
+        schedule: { at: new Date('2026-10-12T07:00:00Z'), allowWhileIdle: true },
         extra: expect.objectContaining({ mpgdFireAt: '2026-10-12T07:00:00Z' }),
       }),
     ]);
@@ -649,6 +735,18 @@ describe('Capacitor notifications provider: native setup', () => {
       id: capacitorAdvertisingActionTypeId,
       actions: [{ id: 'advertising-opt-out', title: '수신거부', foreground: true }],
     }]);
+  });
+
+  it('leaves the iOS categories alone for a catalog without advertising', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'ios' });
+    createCapacitorNotificationProvider({
+      platform: 'ios',
+      topics: topics.filter((topic) => topic.purpose !== 'advertising'),
+      local: sdks.local!,
+      app: null,
+    });
+    await settle();
+    expect(sdks.actionTypes).toEqual([]);
   });
 
   it('creates no channel on iOS but registers the opt-out category', async () => {
