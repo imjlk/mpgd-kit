@@ -54,7 +54,8 @@ installAitHostBridge({
   with `apps-in-toss.notification-agreement.v1` evidence for the backend's
   consent record. The host keeps no session copy, so a v1
   `notifications.getStatus` reads `not-subscribed` for a topic that needs an
-  agreement; read it through the runtime instead.
+  agreement (`unsupported` on Toss older than 5.255.0); read it through the
+  runtime instead.
 - **Templates without agreement.** `agreement: 'none'` topics read `granted`
   and never show a sheet.
 - **Opens.** A launch whose referrer is `push` or `inbox` reaches the game once,

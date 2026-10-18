@@ -34,7 +34,11 @@ capabilities.
 
 ## Current state {#current-state}
 
-| Area | Today |
+The table records the baseline this RFC started from. P1 replaced the Apps in
+Toss row (see [Apps in Toss](#profile-ait)) and added an Apps in Toss
+functional-message delivery provider (see [Delivery providers](#remote-delivery)).
+
+| Area | At the baseline |
 | --- | --- |
 | Client contract | `PlatformGateway.notifications` (`NotificationSubscriptionAdapter`): `getStatus(topic)` and `requestSubscription(topic)` over a closed `NotificationTopic` union of `daily-ready`, `streak-at-risk`, `friend-challenge`. It manages subscription state only and never sends. |
 | Apps in Toss | The host bridge maps topics to template codes and calls the deprecated `requestNotificationAgreement`. Agreements live in a session-only `Set`, so after a restart a user who agreed reads as `not-subscribed`. `TERMS_DISAGREED_MEMBER` and any other error collapse into `unavailable`, and a request that gets no answer settles as `unavailable` after 120 seconds. |
@@ -870,14 +874,14 @@ Every open becomes one `opened` event with a route:
 | Open path | Source of the route |
 | --- | --- |
 | `payload` (Android, iOS) | The push data or local `extra`, delivered through the provider's buffered listener; cold starts are marked `source: 'cold'`. |
-| `landing-url` (Apps in Toss) | The landing URL is set per template in the console. The provider reads `Environment.initialURL` and the `push` or `inbox` referrer at startup. |
+| `landing-url` (Apps in Toss) | The landing URL is set per template in the console. The host bridge reads the launch URL once when it is installed (`Environment.initialURL`, or the page URL where the host gives none) with its `push` or `inbox` referrer. |
 | `host-link` (Devvit) | A notification links to the send's post or comment (`link`). The game routes from that post's data, so routing needs dedicated posts. |
 
 On `landing-url` hosts, a launch whose referrer is `push` or `inbox` routes
 only through the cold `opened` event, and `presentation.getLaunchIntent()`
 answers `home` for that launch. Both come from one parser over one read of
-the launch URL per host bridge (`readAitNotificationLanding` in
-`@mpgd/adapter-ait`), so the game never routes one launch twice, and a page
+the launch URL per host bridge (the adapter's internal
+`readAitNotificationLanding`), so the game never routes one launch twice, and a page
 URL change between the two reads cannot split them. The route is the launch
 URL's path, query, and fragment without the `referrer` parameter, normalized
 by `normalizeRootRelativeRoute`; a route it refuses, or one longer than
@@ -1316,19 +1320,27 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       `configuration`;
     - the partner API documents no recipient-level code, including none for
       a missing agreement (checked 2026-10-19). A deployment names the codes
-      it observes (`agreementErrorCodes`, `recipientErrorCodes`); any other
-      code is `rejected` with reason `recipient` on HTTP 200, and
-      `configuration` on HTTP 400, 401, and 403, where the request itself
-      was refused;
+      it observes (`agreementErrorCodes`, `recipientErrorCodes`, checked
+      before the built-in codes); any other code is `rejected` with reason
+      `recipient` on HTTP 200, `configuration` on HTTP 400, 401, 403, 404,
+      405, 413, 415, and 422, where the request itself was refused, and
+      `ambiguous` on any other status. A `FAIL` without a code is
+      `ambiguous`;
     - `HTTP_TIMEOUT`, `NETWORK_ERROR`, `EXECUTION_FAIL`, `INTERRUPTED`, and
-      `INTERNAL_ERROR` are `ambiguous`, and so are HTTP 5xx answers,
-      transport failures, timeouts, and answers that cannot be read.
+      `INTERNAL_ERROR` are `ambiguous`, and so are HTTP 5xx, 408, and 425
+      answers, transport failures, timeouts, and answers that cannot be
+      read.
+  - **HTTP errors without a business answer.** HTTP 429 is `rate-limited`
+    whatever the body says, with the body's delay or else `Retry-After`;
+    the refusing statuses above are `rejected` with reason `configuration`.
+    A delay is capped at a day.
   - **Partial success.** A `SUCCESS` response maps per channel (push, inbox,
     SMS, Alimtalk, Friendtalk). With one recipient per call, the send is
-    `accepted` when any channel sent it. When none did, the per-channel
-    `fail` lists make it `rejected`: reason `agreement` when a
+    `accepted` when `msgCount` is above 0 or any channel sent it. Otherwise
+    it is `rejected`: reason `agreement` when a `fail` entry's
     `reachedFailReason` is one the deployment names
-    (`agreementFailReasons`), otherwise `recipient`.
+    (`agreementFailReasons`), otherwise `recipient`, also when the `fail`
+    lists are empty.
   - **Limits.** 15,000 per minute per app (the registry's `rate`), and 10 per
     minute per user (a provider limit).
 - **Devvit.** It runs inside the Devvit server, not the game-services Worker,
@@ -1616,7 +1628,8 @@ Other rules the profiles encode:
     [`docs/specs/notifications/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/notifications/schemas).
   - `validate:notifications-alignment`, run in `pnpm check`, keeps the
     constant, the vectors, and the schemas aligned.
-- **What N3 landed.** No transport served v2 yet; P1–P3 add the providers.
+- **What N3 landed.** When N3 landed no transport served v2; P1–P3 add the
+  providers.
   P1 serves it on the Apps in Toss host bridge, and the Apps in Toss gateway
   exposes `notificationsV2` over a host that offers the notifications event
   channel; the sandbox bridges still answer `NOTIFICATIONS_V2_UNAVAILABLE`.
