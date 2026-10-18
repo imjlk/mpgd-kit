@@ -275,6 +275,51 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
   assert.deepEqual(await ait.send(request), { status: 'rate-limited', providerCode: '4095' });
 }
 
+// An undocumented code outside HTTP 200 and the refusing statuses proves nothing.
+{
+  const { provider: ait } = provider([
+    fail('9001', undefined, 409),
+    fail('9001', undefined, 202),
+    fail('9001', undefined, 404),
+    fail('4095', { retryAfterSeconds: 0 }, 200),
+  ]);
+  assert.deepEqual(await ait.send(request), { status: 'ambiguous', providerCode: '9001' });
+  assert.deepEqual(await ait.send(request), { status: 'ambiguous', providerCode: '9001' });
+  assert.deepEqual(await ait.send(request), {
+    status: 'rejected',
+    reason: 'configuration',
+    providerCode: '9001',
+  });
+  assert.deepEqual(await ait.send(request), { status: 'rate-limited', providerCode: '4095' });
+}
+
+// The Retry-After header stands in for a missing or unusable body delay.
+{
+  const { provider: ait } = provider([
+    json(
+      {
+        resultType: 'FAIL',
+        error: { errorCode: '4095', reason: 'x', data: { retryAfterSeconds: 0 } },
+      },
+      429,
+      { 'retry-after': '9' },
+    ),
+    json({ resultType: 'FAIL', error: { errorCode: '4095', reason: 'x' } }, 200, {
+      'retry-after': '11',
+    }),
+  ]);
+  assert.deepEqual(await ait.send(request), {
+    status: 'rate-limited',
+    providerCode: '4095',
+    retryAfterSeconds: 9,
+  });
+  assert.deepEqual(await ait.send(request), {
+    status: 'rate-limited',
+    providerCode: '4095',
+    retryAfterSeconds: 11,
+  });
+}
+
 // HTTP 429 is rate-limited whatever its body; other refusals are configuration.
 {
   const { provider: ait } = provider([
@@ -438,7 +483,7 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
 // Options.
 {
   const { mtls } = fakeMtls([]);
-  for (const timeoutMs of [0, -1, Number.NaN, 60_001]) {
+  for (const timeoutMs of [0, 0.5, -1, Number.NaN, 60_001]) {
     assert.throws(
       () =>
         createAitFunctionalMessageDeliveryProvider({ mtls, recipientKey: 'toss-user', timeoutMs }),

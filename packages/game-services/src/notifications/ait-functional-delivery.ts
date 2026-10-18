@@ -185,10 +185,12 @@ const maximumTimeoutMs = 60_000;
  *   5004, 4034, and 4010 are `rejected` with reason `configuration`; a code
  *   in `agreementErrorCodes` or `recipientErrorCodes` is `rejected` with that
  *   reason. Any other code is `rejected` with reason `recipient` on HTTP 200
- *   and `configuration` when the HTTP status refused the request: a `FAIL`
- *   envelope reports a failed request, and answering `ambiguous` would replay
- *   a send that fails the same way after every lease. A `FAIL` without a code
- *   cannot be classified and is `ambiguous`.
+ *   and `configuration` when the HTTP status refused the request (400, 401,
+ *   403, 404, 405, 413, 415, 422): a `FAIL` envelope reports a failed
+ *   request, and answering `ambiguous` would replay a send that fails the
+ *   same way after every lease. On any other status it is `ambiguous`, and so
+ *   is a `FAIL` without a code. A `rate-limited` delay comes from
+ *   `error.data.retryAfterSeconds`, else the `Retry-After` header.
  * - `HTTP_TIMEOUT`, `NETWORK_ERROR`, `EXECUTION_FAIL`, `INTERRUPTED`, and
  *   `INTERNAL_ERROR`, any HTTP 5xx, 408, or 425, a transport failure, a
  *   timeout, and an answer that cannot be read are `ambiguous`: the claim
@@ -229,10 +231,13 @@ export function createAitFunctionalMessageDeliveryProvider(
     if (recipientErrorCodes.has(code)) {
       return { status: 'rejected', reason: 'recipient', providerCode: code };
     }
-    if (configurationErrorCodes.has(code) || status !== 200) {
+    if (configurationErrorCodes.has(code) || refusedRequestStatuses.has(status)) {
       return { status: 'rejected', reason: 'configuration', providerCode: code };
     }
-    return { status: 'rejected', reason: 'recipient', providerCode: code };
+    // An undocumented code on another status proves nothing either way.
+    return status === 200
+      ? { status: 'rejected', reason: 'recipient', providerCode: code }
+      : { status: 'ambiguous', providerCode: code };
   };
 
   return {
@@ -273,10 +278,7 @@ export function createAitFunctionalMessageDeliveryProvider(
       if (status === 429) {
         // Throttled at the HTTP layer: nothing was sent, whatever the body says.
         const error = isRecord(body) && isRecord(body['error']) ? body['error'] : undefined;
-        const retryAfterSeconds = positiveSeconds(
-          (isRecord(error?.['data']) ? error['data']['retryAfterSeconds'] : undefined)
-            ?? response.retryAfter,
-        );
+        const retryAfterSeconds = retryAfterOf(error, response.retryAfter);
         return {
           status: 'rate-limited',
           ...providerCodeOf(body),
@@ -297,9 +299,7 @@ export function createAitFunctionalMessageDeliveryProvider(
         }
         const answer = classifyFailCode(code, status);
         if (answer.status === 'rate-limited') {
-          const retryAfterSeconds = positiveSeconds(
-            isRecord(error?.['data']) ? error['data']['retryAfterSeconds'] : undefined,
-          );
+          const retryAfterSeconds = retryAfterOf(error, response.retryAfter);
           return retryAfterSeconds === undefined ? answer : { ...answer, retryAfterSeconds };
         }
         return answer;
@@ -526,6 +526,15 @@ function providerCodeOf(body: unknown): { readonly providerCode?: string } {
     : {};
 }
 
+/** The body's `error.data.retryAfterSeconds` when it is a usable delay, else the `Retry-After` header's. */
+function retryAfterOf(
+  error: Readonly<Record<string, unknown>> | undefined,
+  header: string | undefined,
+): number | undefined {
+  const data = isRecord(error?.['data']) ? error['data'] : undefined;
+  return positiveSeconds(data?.['retryAfterSeconds']) ?? positiveSeconds(header);
+}
+
 /** A positive number of seconds, rounded up and capped at a day, from a number or a decimal string. */
 function positiveSeconds(value: unknown): number | undefined {
   const seconds = typeof value === 'string' && /^\d+(?:\.\d+)?$/u.test(value.trim())
@@ -578,7 +587,7 @@ function normalizeTimeout(value: number | undefined): number {
   if (value === undefined) {
     return defaultAitFunctionalMessageTimeoutMs;
   }
-  if (!Number.isFinite(value) || value <= 0 || value > maximumTimeoutMs) {
+  if (!Number.isFinite(value) || value < 1 || value > maximumTimeoutMs) {
     throw new RangeError(
       'The Apps in Toss functional message timeout must be between 1 and 60000 ms.',
     );
