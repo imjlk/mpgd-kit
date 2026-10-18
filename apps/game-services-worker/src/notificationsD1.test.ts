@@ -1,0 +1,170 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+import {
+  createNotificationProviderRegistry,
+  createNotificationService,
+  type NotificationRemoteDeliveryAnswer,
+  type NotificationRemoteDeliveryRequest,
+} from '@mpgd/game-services/notifications';
+import { runNotificationStoreConformance } from '@mpgd/game-services/notifications/store-conformance';
+import { referenceNotificationProviders } from '@mpgd/platform/notifications';
+import { Miniflare } from 'miniflare';
+
+import { createD1NotificationStore } from './notificationsD1.js';
+
+const miniflare = new Miniflare({
+  modules: true,
+  script: `export default { fetch() { return new Response('ok'); } };`,
+  d1Databases: { DB: 'notifications-store' },
+});
+
+async function applyMigration(db: D1Database): Promise<void> {
+  const sql = await readFile(
+    new URL('../migrations/0007_notifications.sql', import.meta.url),
+    'utf8',
+  );
+  // Strip comments, then run each statement.
+  const statements = sql
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0);
+  for (const statement of statements) {
+    await db.prepare(statement).run();
+  }
+}
+
+try {
+  const db = await miniflare.getD1Database('DB') as unknown as D1Database;
+  await applyMigration(db);
+  // Applying the migration twice is harmless.
+  await applyMigration(db);
+
+  let fresh = 0;
+  await runNotificationStoreConformance(async () => {
+    fresh += 1;
+    for (const table of [
+      'notification_consent_records',
+      'notification_endpoints',
+      'notification_platform_registrations',
+      'notification_notices_given',
+      'notification_sends',
+      'notification_delivery_history',
+    ]) {
+      await db.prepare(`DELETE FROM ${table}`).run();
+    }
+    return createD1NotificationStore(db);
+  });
+  assert.equal(fresh, 1);
+
+  // The service over D1: fan-out, a dead token, the key states, and consent dating.
+  for (const table of [
+    'notification_consent_records',
+    'notification_endpoints',
+    'notification_sends',
+    'notification_delivery_history',
+  ]) {
+    await db.prepare(`DELETE FROM ${table}`).run();
+  }
+  let now = Date.parse('2026-10-19T03:00:00Z');
+  const answers: NotificationRemoteDeliveryAnswer[] = [
+    { status: 'accepted' },
+    { status: 'unregistered' },
+  ];
+  const calls: NotificationRemoteDeliveryRequest[] = [];
+  const store = createD1NotificationStore(db);
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      {
+        entry: referenceNotificationProviders.fcm,
+        delivery: {
+          id: 'fcm',
+          async send(request) {
+            calls.push(request);
+            return answers.shift() ?? { status: 'accepted' };
+          },
+        },
+        targets: ['android'],
+      },
+    ]),
+    catalog: {
+      defaultLocale: 'ko',
+      topicsFor: () => [
+        {
+          id: 'friend-challenge',
+          purpose: 'service',
+          channels: ['remote'],
+          route: '/?entry=challenge',
+          copy: { ko: { title: '도전', body: '도전이 왔어요.' } },
+          mapping: { channelId: 'social' },
+        },
+      ],
+    },
+    now: () => new Date(now).toISOString(),
+  });
+  for (const installationId of ['i-1', 'i-2']) {
+    await service.registerEndpoint(
+      { player: 'p-1', sessionId: `s-${installationId}`, installationId },
+      {
+        target: 'android',
+        registration: {
+          provider: 'fcm',
+          address: { kind: 'fcm-token', value: `tok-${installationId}`, permission: 'granted' },
+          locale: 'ko-KR',
+          timeZone: 'Asia/Seoul',
+        },
+      },
+    );
+  }
+  const send = { idempotencyKey: 'd1-1', player: 'p-1', topic: 'friend-challenge' };
+  assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: false });
+  assert.deepEqual(
+    calls.map((call) => [call.idempotencyKey, call.topic.mapping, call.locale]),
+    [
+      ['d1-1:i-1', { channelId: 'social' }, 'ko-KR'],
+      ['d1-1:i-2', { channelId: 'social' }, 'ko-KR'],
+    ],
+  );
+  assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: true });
+  assert.equal(calls.length, 2);
+  await assert.rejects(service.deliver({ ...send, locale: 'en' }), {
+    code: 'NOTIFICATIONS_IDEMPOTENCY_CONFLICT',
+  });
+  assert.equal(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'i-2' }))?.status,
+    'invalid',
+  );
+  const consent = await Promise.all([
+    service.recordConsent(
+      { player: 'p-1', sessionId: 's', installationId: 'i-1' },
+      {
+        kind: 'topic-preference',
+        topic: 'friend-challenge',
+        state: 'withdrawn',
+        source: 'player',
+      },
+    ),
+    service.recordConsent(
+      { player: 'p-1', sessionId: 's', installationId: 'i-1' },
+      {
+        kind: 'topic-preference',
+        topic: 'friend-challenge',
+        state: 'granted',
+        source: 'player',
+      },
+    ),
+  ]);
+  assert.deepEqual(
+    consent.map((record) => record.at).sort((left, right) => Date.parse(left) - Date.parse(right)),
+    ['2026-10-19T03:00:00Z', '2026-10-19T03:00:00.001Z'],
+  );
+  now += 31 * 86_400_000;
+  assert.deepEqual(await service.purge(), { sends: 1, history: 1, endpoints: 1 });
+  console.info('D1 notification store passed.');
+} finally {
+  await miniflare.dispose();
+}

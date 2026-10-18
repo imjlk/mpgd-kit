@@ -65,11 +65,14 @@ import {
   createD1AdMobSsvEvidenceVerifier,
   type AdMobSsvWorkerConfig,
 } from './admobSsvHandler.js';
+import {
+  createNotificationsFetchHandler,
+  type GameServicesNotificationsEnv,
+} from './notificationsHandler.js';
 import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 
-export interface GameServicesWorkerEnv {
-  readonly DB?: D1Database;
-  readonly MPGD_STORE?: 'memory' | 'd1';
+/** `DB` and `MPGD_STORE` come from `GameServicesNotificationsEnv`, which every store here shares. */
+export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv {
   /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   /**
@@ -373,8 +376,13 @@ function buildWorkerFetchHandler(
   const admobFetch = admobConfig === undefined
     ? undefined
     : createAdMobSsvCallbackFetchHandler(admobConfig);
+  const notificationsFetch = createNotificationsFetchHandler(env, corsHeaders);
 
   return async (request) => {
+    const notificationsResponse = await notificationsFetch(request);
+    if (notificationsResponse !== undefined) {
+      return notificationsResponse;
+    }
     const admobResponse = await admobFetch?.(request);
     if (admobResponse !== undefined) {
       return admobResponse;

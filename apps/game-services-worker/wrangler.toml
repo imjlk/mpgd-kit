@@ -161,3 +161,45 @@ head_sampling_rate = 1
 # [[services]]
 # binding = "GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY"
 # service = "game-devvit-payments-authority"
+#
+# Notifications v2 (docs/CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2): set the
+# game's topic catalog and deployment settings as JSON vars, apply migration
+# 0007_notifications.sql, bind the session authenticator, and put the Firebase
+# service-account key in a secret (wrangler secret put FCM_SERVICE_ACCOUNT).
+# Never commit the key.
+#
+# MPGD_NOTIFICATIONS_CATALOG = { version = "...", defaultLocale = "ko", topics = [] }
+# MPGD_NOTIFICATIONS_DEPLOYMENT = { advertisingRules = "kr", advertisingSender = { contact = "..." } }
+#
+# [[services]]
+# binding = "GAME_SERVICES_NOTIFICATIONS_AUTH"
+# service = "game-identity"
+# entrypoint = "NotificationSessions"
+#
+# Apps in Toss functional messages (the ait target): the partner API client
+# certificate, the provider settings (a var, under [vars]), and the identity
+# service that answers a player's Toss user key (any entrypoint with
+# resolveNotificationRecipient; the name below is an example).
+#
+# MPGD_AIT_NOTIFICATIONS = { recipientKey = "toss-user" }
+#
+# [[mtls_certificates]]
+# binding = "AIT_PARTNER_MTLS"
+# certificate_id = "..."
+#
+# [[services]]
+# binding = "GAME_SERVICES_NOTIFICATIONS_IDENTITY"
+# service = "game-identity"
+# entrypoint = "NotificationRecipients"
+#
+# [[queues.producers]]
+# binding = "NOTIFICATIONS_QUEUE"
+# queue = "mpgd-notifications"
+#
+# [[queues.consumers]]
+# queue = "mpgd-notifications"
+# max_retries = 5
+# dead_letter_queue = "mpgd-notifications-dead"
+#
+# [triggers]
+# crons = ["*/5 * * * *"]

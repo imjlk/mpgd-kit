@@ -948,6 +948,16 @@ provider's capabilities with the entry for that provider, and a mismatch
 makes the provider `configuration-required`, as commerce does with
 `CommerceServiceCapabilities`.
 
+- **Targets.** Each entry serves one or more catalog targets, and a target
+  maps to one provider. Two targets may share a provider, as `android` and
+  `ios` share FCM. The gate reads the topic as the recipient's target
+  declares it, with that target's mapping (see the
+  [endpoint registry](#endpoint-registry)). The backend publishes the
+  served targets next to the entries.
+- **Per-send providers.** The S1 backend refuses a `per-send` entry: it
+  does not yet reserve an acceptance in the same atomic step that claims
+  the delivery (see [Deferred sends](#policy-gate)).
+
 ### Endpoint registry {#endpoint-registry}
 
 The server records where a player can be reached, per provider. Registration
@@ -956,13 +966,36 @@ player's account would deliver that player's notifications to the device.
 
 - **Device endpoints.** One is keyed by provider and installation id. The
   installation id is the authenticated game-services session's (the guest
-  session's) installation id, never a value from the request body. An endpoint
+  session's) installation id, never a value from the request body. The
+  identity service must vouch for it (issue it, or bind it to the session
+  it issued): a client that could pick another installation's id could
+  move that installation's endpoint to itself. An endpoint
   holds the current address, the device's permission, and `lastRegisteredAt`.
   - A new address for the same installation replaces the old one.
   - An address is unique per provider.
   - Registering an installation for a new player moves it.
+  - **Target.** A registration on a provider that serves several targets
+    names the catalog target of the device (`android` or `ios` for FCM), and
+    the gate reads that target's mapping for the endpoint, such as its
+    Android `channelId`. The backend refuses a device registration on such
+    a provider without one; the game-services client, which knows its
+    target, adds it to the request (a later PR). A topic the target does not
+    map is `topic-unknown` for that endpoint.
 - **Unbinding.** An authenticated unbind, or the end of the session that
   registered the installation, removes the endpoint from the player.
+  - The identity service ends a session by calling the backend at logout or
+    revocation.
+  - A session that ends on its own carries its `expiresAt`, and its
+    endpoints count as unbound from then. The session id is the session's
+    whole life (its refresh family), not one access token.
+  - Every authenticated call reports the session's current `expiresAt`.
+    When it is later than an endpoint's stored end, the backend moves the
+    end of every endpoint the session registered to it, or clears it when
+    the session no longer ends on its own; a cleared end stays cleared. The
+    extension never moves an end earlier, so a session the identity service
+    extends keeps its devices without a new registration (a registration
+    writes its own request's end). An extension is not a registration for
+    the 60-day stale rule.
 - **Platform-user providers (Apps in Toss, Devvit).** They register no
   address. The backend resolves the recipient from the player's authenticated
   identity for that provider, never from a key the client sends. It keeps the
@@ -974,7 +1007,7 @@ player's account would deliver that player's notifications to the device.
 
 ### Consent records {#consent-records}
 
-The backend stores the [runtime's records](#runtime) as written, dated by
+The backend stores the [runtime's records](#runtime), dated by
 its own clock, so notices and the latest record never depend on a client
 clock:
 
@@ -984,6 +1017,26 @@ clock:
 | `host-agreement` (per topic) | Client report with evidence, for example `apps-in-toss.notification-agreement.v1`; or a provider answer that the recipient has not agreed (`source: 'provider'`) | Hint; the host still enforces on send |
 | `topic-preference` | Authenticated player action, including accepting a host agreement for a `requested` topic | Authoritative |
 | `advertising`, `night` | Authenticated player action with the consent text version | Authoritative |
+
+Every send reads the player's whole history, so client writes are bounded:
+
+- **Repeats.** A `delivery-permission`, `host-agreement`, or
+  `topic-preference` record whose state and source match the player's latest
+  record of the same kind and topic is not written. The backend answers that
+  latest record, which keeps its own date and evidence. An `advertising` or
+  `night` record is always written, since each one is a player's act that
+  may owe a notice: a second refusal, or a consent that
+  restarts the re-confirmation count. A client therefore writes these kinds
+  only on a player's act, never as a re-report of the current state.
+- **Daily cap.** A player may add at most 200 client records in any rolling
+  24 hours. Records from a provider answer do not count. Past the cap the
+  backend answers `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (retryable; HTTP
+  429 on the Worker route) with `Retry-After` set to when the oldest counted
+  record leaves the window. A
+  repeat is still answered, since it writes nothing.
+- **Concurrency.** Both rules read the history before the write, so writes
+  that race may store a repeat or pass the cap by a few records.
+- **Compaction.** Pruning old records is left to S2.
 
 When the deployment enables the Korean rules, each `advertising` or `night`
 record also yields the notices the law requires. The due dates are pure
@@ -1028,7 +1081,9 @@ in, so the game shows the text the scheduler would push:
   consent.
 
 It also records each notice given: the notice's name, the channel
-(`in-game`, `push`, or `other`), and the time.
+(`in-game`, `push`, or `other`), and the time. Only the backend records
+`push`, once it delivered the push; a game records a notice it showed as
+`in-game` or `other`.
 
 The game shows a notice in the game and records it through
 `notices.recordShown` with the notice as `list()` gave it, or with its name:
@@ -1091,7 +1146,9 @@ for Devvit.
 
 - **Bounds and reserved prefixes.** Inputs follow the v1 bounds (see
   [Reminders](#reminders)). Keys that start with `reminder:` or `notice:` are
-  reserved for the scheduler and throw `NOTIFICATIONS_INVALID_INPUT`.
+  reserved for the scheduler and throw `NOTIFICATIONS_INVALID_INPUT`, and so
+  do the routing `data` keys `topic` and `route`, which an open carries for
+  itself.
 - **Binding.** The backend binds each stored key to a fingerprint of the
   request. The resolved address is left out, so a replay after a token
   rotation still matches.
@@ -1252,6 +1309,16 @@ that provider whose latest registration reported `granted`.
 - **Several providers.** A send names an optional `provider`. Without one it
   goes to every provider the player has a recipient on, each evaluated on its
   own.
+- **Queued fan-out.** The backend checks the gate once per recipient when
+  the send arrives and stores a row for each recipient it allows or defers.
+  Each allowed row is then one dispatch job, run inline or through a queue,
+  and the gate runs again when the job makes the provider call. A send
+  dispatched through the queue answers `in-flight` until a row settles.
+- **Limits.** Each other send counts once for the topic's cap, on the gate's
+  provider when it reached it there. An in-flight send counts once a holder
+  claimed it for a provider call. Of two sends claimed at the same moment,
+  the earlier one (then the lower key) is the one the other counts, so a cap
+  of one lets one through.
 
 #### Provider answers {#provider-answers}
 
@@ -1276,6 +1343,10 @@ Every provider answer maps to one of five kinds:
   has not agreed to the template).
   - The claim and any reservation are released, and the send answers
     `unavailable: provider-rejected`, which is not stored.
+  - A `configuration` rejection fails every send the same way, so the
+    backend reports it to the operator; a `recipient` or `agreement`
+    refusal is the player's and is not an alert, and neither is a message
+    FCM would have received too late (`MESSAGE_EXPIRED`).
   - `agreement`, when the host says the recipient has not agreed to the
     template, also appends a `host-agreement` record of `denied` with
     `source: 'provider'`. For a topic that needs an agreement, the gate then
@@ -1283,12 +1354,26 @@ Every provider answer maps to one of five kinds:
     needs no agreement, the record does not stop sends, and the host decides
     on each send.
 - **`ambiguous`**: the provider cannot say whether it sent (a timeout, a 5xx
-  answer, a crash after the claim).
+  answer, a crash after the claim). A remote provider that throws, or
+  answers none of the five kinds, is treated the same way and reported,
+  because it may have sent. This is the server's rule for a remote delivery
+  provider; a broken answer from a client provider is
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED` ([Bridge and
+  versioning](#bridge)).
   - The claim is kept, as the delivery ledger requires, and the send answers
     `in-flight`.
   - A direct caller retries after the lease.
   - A scheduled or deferred row is `in-flight` too. The scheduler, which owns
     it, replays it through `deliverIdempotently` once the lease expires.
+  - The scheduler also replays a direct send's row once its lease expired,
+    so a send whose caller never retries still settles, and so does a row
+    whose holder failed before the provider call.
+  - Each ambiguous answer doubles the lease before the next replay (from
+    the claim lease up to an hour), and so does a replay of a row whose
+    holder never answered, because a provider without an idempotency key
+    may show every replay. Replays stop a day after the
+    first attempt: the row stays `in-flight` until its key's retention
+    ends, and the backend reports it.
   - One rule covers every claimer. `deferred` would also claim that nothing
     was sent, which an `ambiguous` answer cannot prove.
 
@@ -1306,18 +1391,44 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     relays to APNs; direct APNs needs HTTP/2, which Workers `fetch` does not
     document.
   - **Addresses.** They are typed because FCM is moving from registration
-    tokens to Firebase installation ids.
+    tokens to Firebase installation ids (FIDs). The provider sends to
+    registration tokens (`fcm-token`) only. The `fcm-installation` kind is
+    reserved: HTTP v1 has no FID send target, so the backend refuses an FID
+    registration (`NOTIFICATIONS_INVALID_INPUT`, with a message saying the
+    kind is reserved) and the provider refuses an FID send (`rejected`,
+    provider code `INSTALLATION_ID_RESERVED`), until FCM supports FIDs. The
+    [Capacitor provider](#profile-capacitor) registers tokens only, so a
+    shipped client never sends one.
   - **Errors.**
     - `UNREGISTERED` is `unregistered`. `INVALID_ARGUMENT` is too, but only
-      when the payload is known valid.
+      when the payload is known valid: the provider checks the message
+      against the FCM rules it can check before it sends (title and body,
+      data keys and values, expiry, size), and FCM's answer names the token
+      (a `message.token` field violation) and no other field. Any other
+      `INVALID_ARGUMENT` is `rejected` with reason `configuration`, so a
+      payload bug never prunes live tokens.
     - `QUOTA_EXCEEDED` is `rate-limited`.
-    - `UNAVAILABLE` and `INTERNAL` are `ambiguous`.
+    - `UNAVAILABLE` and `INTERNAL` are `ambiguous`, and so are a timeout and
+      a dropped connection.
     - `SENDER_ID_MISMATCH` and `THIRD_PARTY_AUTH_ERROR` are `rejected` with
       reason `configuration`.
+    - **Access tokens.** A key that cannot sign or a refused grant is
+      `rejected` with reason `configuration`; a token endpoint that is down
+      sent nothing and is `rate-limited`.
   - **Expiry and actions.** The expiry is `android.ttl` and the
-    `apns-expiration` header.
-  - **Fan-out.** It goes through a queue, since one Worker invocation has a
-    subrequest limit, and the gate runs when the queued call is made.
+    `apns-expiration` header. A message that would expire within a second
+    is not sent (`rejected`, provider code `MESSAGE_EXPIRED`), because FCM
+    reads a time to live of 0 as "deliver now if the device is reachable".
+  - **Payload.** The gate's title and body are the FCM `notification`, and
+    `data` carries the send's routing data with the topic id in `topic` and
+    its root-relative route in `route`, as the
+    [Capacitor provider](#profile-capacitor) reads them. Android posts to
+    the mapping's `channelId`, else to `mpgd-service`, `mpgd-requested`, or
+    `mpgd-advertising` by purpose. An advertising send names the iOS
+    category `mpgd-advertising` in `apns.payload.aps.category`, whose
+    opt-out action the app registers. An Android FCM notification message
+    cannot carry actions; the shell renders advertising natively (C1). FCM's
+    reserved data keys are refused before the send.
 - **Apps in Toss.**
   `createAitFunctionalMessageDeliveryProvider` in
   `@mpgd/game-services/notifications/ait-functional-delivery`.
@@ -1791,6 +1902,12 @@ How a real provider is judged:
   calls the provider's `scheduleLocal` directly. That call must answer
   `permission-required` without prompting or scheduling, because the runtime
   answers before it reaches the provider.
+- **Backends under test.** `createBackend` replaces the fake backend with
+  another one, such as the production service over an in-memory store. It
+  receives the fake's inputs: the derived registry entry, the vector's
+  catalog, deployment, and notices, the clock, and the host's send-time
+  permission read. The S1 service passes every vector except those that
+  need S2's server reminders or notice pushes, and the per-send vector.
 
 ### Vector format {#vector-format}
 
@@ -1956,6 +2073,31 @@ publishable package carries a Sampo changeset.
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending, Devvit scheduler path | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
+
+**What S1 landed.**
+
+- `@mpgd/game-services/notifications`: the provider registry with served
+  targets, the remote delivery provider contract (`{ id, send }`, built
+  from platform types only), the endpoint registry, consent records and the
+  notices API, sends through the key states, the gate, queued fan-out, and
+  the five answers, due-row replays (deferred rows and expired leases),
+  retention purges, the FCM provider, and a reference in-memory store.
+  `./notifications/store-conformance` pins the store contract.
+- The game-services Worker: migration `0007_notifications.sql` and the D1
+  store, the session-bound client routes (a session already past its
+  `expiresAt` is refused), the `deliverNotification` and
+  `endNotificationSession` service-binding methods, which answer
+  `{ ok, value }` or `{ ok: false, error: { code, message, retryable } }`
+  because an error's fields do not cross RPC, the dispatch queue consumer,
+  and a cron that purges and replays due rows. The Worker refuses a queue
+  next to its memory store, whose state the consumer's isolate cannot see.
+  It serves FCM for `android` and `ios`, and the Apps in Toss provider for
+  `ait` behind its mTLS binding (`AIT_PARTNER_MTLS`), its settings
+  (`MPGD_AIT_NOTIFICATIONS`), and the identity binding that resolves its
+  recipients; half that configuration fails the Worker's notifications.
+- Left to S2: server reminders, notice pushes, and pacing by the
+  registry's `rate`; the replay of deferred rows is in S1 so that rate
+  limits and windows settle.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release

@@ -836,10 +836,13 @@ export type NotificationConformanceProviderResult =
 export interface NotificationConformanceBackend extends NotificationConformanceBackendClient {
   /** Starts a new session for `player` on the fake installation and tells the listeners. */
   authenticate(player: string): NotificationConformanceSession;
-  /** Ends the current session; the endpoints it registered are unbound. */
-  revokeSession(): void;
+  /**
+   * Ends the current session; the endpoints it registered are unbound. A
+   * backend under test may finish asynchronously; the runner awaits it.
+   */
+  revokeSession(): void | Promise<void>;
   /** Binds another installation of the default player (the `backend.registerEndpoint` action). */
-  registerInstallation(input: NotificationConformanceInstallationFixture): void;
+  registerInstallation(input: NotificationConformanceInstallationFixture): void | Promise<void>;
   /** One send through the idempotency ledger, the policy gate, and the delivery provider. */
   deliver(input: NotificationConformanceDeliverInput): Promise<NotificationDeliveryOutcome>;
   queueProviderResult(result: NotificationConformanceProviderResult): void;
@@ -855,6 +858,16 @@ export interface NotificationConformanceBackend extends NotificationConformanceB
   /** Every player's listed notices, ordered by `dueBy` and then `kind`. */
   readonly notices: readonly (NotificationNotice & { readonly player: string })[];
   readonly noticesGiven: readonly NotificationConformanceNoticeRecord[];
+}
+
+/**
+ * The fake backend. Its `revokeSession` and `registerInstallation` finish
+ * synchronously, so its callers need not await them. `deliver`,
+ * `runScheduler`, and the async client methods still return promises.
+ */
+export interface NotificationConformanceFakeBackend extends NotificationConformanceBackend {
+  revokeSession(): void;
+  registerInstallation(input: NotificationConformanceInstallationFixture): void;
 }
 
 export interface CreateNotificationConformanceBackendInput {
@@ -1021,7 +1034,7 @@ function noEndpoint(): NotificationDeliveryRefusal {
  */
 export function createNotificationConformanceBackend(
   input: CreateNotificationConformanceBackendInput,
-): NotificationConformanceBackend {
+): NotificationConformanceFakeBackend {
   const { entry, clock } = input;
   const rules = input.deployment?.advertisingRules ?? 'none';
   const topicOf = (id: string): NotificationTopicDeclaration | undefined =>
@@ -3848,6 +3861,19 @@ export interface NotificationConformanceRunOptions {
     context: NotificationConformanceContext,
   ) => NotificationConformanceHarness | Promise<NotificationConformanceHarness>;
   /**
+   * Supplies the backend under test, such as a production notifications
+   * service over an in-memory store, in place of the fake backend
+   * (`createNotificationConformanceBackend`). It receives the inputs the fake
+   * would: the registry entry derived from the provider's capabilities, the
+   * vector's catalog, deployment, and notices, the clock, and the host's
+   * send-time permission read. A failure to create it fails the vector at
+   * `backend`.
+   */
+  readonly createBackend?: (
+    input: CreateNotificationConformanceBackendInput,
+    context: NotificationConformanceContext,
+  ) => NotificationConformanceBackend | Promise<NotificationConformanceBackend>;
+  /**
    * The backend's and the runtime's default locale;
    * `notificationConformanceDefaultLocale` when absent. A vector's
    * `notices.copy` must include it, or the vector fails at `backend`.
@@ -3971,7 +3997,7 @@ export async function runNotificationConformanceVector(
   });
   let backend: NotificationConformanceBackend;
   try {
-    backend = createNotificationConformanceBackend({
+    const backendInput: CreateNotificationConformanceBackendInput = {
       entry,
       catalog: vector.catalog,
       clock,
@@ -3982,12 +4008,17 @@ export async function runNotificationConformanceVector(
       ...(host === undefined || readServerPermission === undefined
         ? {}
         : { readServerPermission: (request) => readServerPermission.call(host, request) }),
-    });
+    };
+    backend = options.createBackend === undefined
+      ? createNotificationConformanceBackend(backendInput)
+      : await options.createBackend(backendInput, context);
   } catch (error) {
     return failed([
       {
         path: 'backend',
-        expected: 'the deployment and the notices are valid',
+        expected: options.createBackend === undefined
+          ? 'the deployment and the notices are valid'
+          : 'createBackend resolves',
         actual: describeError(error),
       },
     ]);
@@ -4149,10 +4180,10 @@ async function runBackendStep(step: BackendStep, path: string, execution: Execut
       backend.queueProviderResult(providerResultOf(step));
       return;
     case 'registerEndpoint':
-      backend.registerInstallation(step.input);
+      await backend.registerInstallation(step.input);
       return;
     case 'revokeSession':
-      backend.revokeSession();
+      await backend.revokeSession();
       return;
     case 'runScheduler':
       await backend.runScheduler();

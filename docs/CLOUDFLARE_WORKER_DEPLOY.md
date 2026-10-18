@@ -129,6 +129,8 @@ The current service binding methods are:
 - `recordLeaderboardScore(input)`
 - `recordVerifiedAttempt(input)` for trusted attempt coordinators
 - `getSnapshot(input)` for verified leaderboard reads
+- `deliverNotification(input)` and `endNotificationSession(input)` for
+  notifications v2 (see [Notifications v2](#notifications-v2))
 
 The verified-attempt writer is intentionally available only through the
 private service binding. It is not routed through the public JSON or oRPC
@@ -158,6 +160,118 @@ Continue with the opaque `nextCursor` returned by the prior response. Cursors
 are keyset positions bound to the board definition, not credentials or stable
 snapshot locks. The Worker returns private, non-cacheable responses and never
 mounts a public verified-attempt write route.
+
+## Notifications v2
+
+The Worker serves the notifications v2 backend
+([RFC](specs/notifications/notifications-v2-rfc.md#server)) once it has a
+topic catalog. It needs D1 for anything but local development: apply
+`0007_notifications.sql` with the other migrations. The memory store keeps
+consent records and endpoints in one isolate only, and the Worker refuses
+it next to a queue, whose consumer runs in another isolate. The catalog,
+the deployment, and the providers are checked on first use; a broken one
+fails the notifications routes with 500 and is logged once.
+
+```toml
+[vars]
+# The game's notification topic catalog and deployment settings, as JSON vars.
+MPGD_NOTIFICATIONS_CATALOG = { version = "2026-10-19", defaultLocale = "ko", topics = [] }
+MPGD_NOTIFICATIONS_DEPLOYMENT = { advertisingRules = "kr", advertisingSender = { contact = "02-000-0000" } }
+
+# Authenticated game-services sessions for the client routes.
+[[services]]
+binding = "GAME_SERVICES_NOTIFICATIONS_AUTH"
+service = "game-identity"
+entrypoint = "NotificationSessions"
+
+# Fan-out through a queue (optional; without it a send fans out inline).
+[[queues.producers]]
+binding = "NOTIFICATIONS_QUEUE"
+queue = "mpgd-notifications"
+
+[[queues.consumers]]
+queue = "mpgd-notifications"
+max_retries = 5
+dead_letter_queue = "mpgd-notifications-dead"
+
+# Purges and due replays (25 sends per run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise;
+# each send costs several subrequests, so larger batches need the paid plan's limit).
+[triggers]
+crons = ["*/5 * * * *"]
+```
+
+FCM sends for `android` and `ios` once the service-account key is a secret:
+
+```sh
+pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUNT
+```
+
+- **Sessions.** `authenticateNotificationSession({ authorization })` returns
+  `{ playerId, sessionId, installationId, expiresAt? }`. The installation is
+  the session's, never a request field, and the identity service vouches
+  for it (it issued the id, or bound it to the session); a client-chosen id
+  could take over another installation's endpoint. `sessionId` stays the same across
+  refreshes. Call `endNotificationSession({ sessionId })` on the service
+  binding at logout or revocation. `expiresAt` is when the whole session
+  (its refresh family) ends, not when one access token expires: the
+  session's devices are unbound from then. Return the family's current end
+  on every call; when it is later than the stored one, the session's
+  endpoints move to it, so an extended session keeps its devices (until the
+  cron purges an endpoint whose end passed; then the client registers
+  again). Omit `expiresAt` only for a session that never ends on its own:
+  it clears the end of each of the session's endpoints that has one, and no
+  later extension restores it (a new registration writes its own). An
+  extension does not count as a registration, so an endpoint not
+  registered for 60 days still goes stale.
+- **Client routes** under `/game-services/notifications`: `GET /providers`
+  (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
+  (`{ registration, target }`; `target` is `android` or `ios`, whose catalog
+  mapping applies), `POST /endpoints/unregister`, `GET /notices`, and
+  `POST /notices/shown`. The session routes need the
+  `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
+  only `GET /providers` is served, and the Worker logs one warning naming
+  the missing binding the first time a session route is asked for (a
+  send-only Worker, which serves only `deliverNotification`, can ignore
+  it). The
+  identity Worker's side (the `NotificationSessions` entrypoint) is a
+  follow-up and is not in this repository yet.
+- **Sends** are never a client route: a game server calls
+  `deliverNotification(input)` on the service binding. It answers
+  `{ ok: true, value }` with the send's outcome, or `{ ok: false, error: {
+  code, message, retryable } }`, because an error's fields do not cross the
+  RPC boundary. Any Worker bound to this one can send to any player, as
+  with the other service-binding methods.
+- **Queue.** A job that cannot run as asked is logged and acknowledged; any
+  other failure is retried with a growing delay (10 s, doubling, at most
+  5 min). While the notifications configuration is broken (a catalog or
+  secret that does not validate), every job is retried the same way, for
+  the consumer's `max_retries` (about five minutes with the settings
+  above), and then goes to the dead-letter queue. A Worker without
+  `MPGD_NOTIFICATIONS_CATALOG` has notifications off and acknowledges its
+  jobs. Either way the rows stay due, and the cron replays them once the
+  configuration is fixed.
+- **Platform-user providers** resolve recipients through an optional
+  `GAME_SERVICES_NOTIFICATIONS_IDENTITY` binding
+  (`resolveNotificationRecipient({ provider, playerId })`).
+- **Apps in Toss** functional messages serve the `ait` target when the
+  partner API's client certificate is bound as `AIT_PARTNER_MTLS` (a
+  `[[mtls_certificates]]` binding) and `MPGD_AIT_NOTIFICATIONS` names the
+  recipient key: `{ recipientKey = "toss-user" }` (a Toss login user key)
+  or `"anonymous"`, with optional `baseUrl`, `timeoutMs`,
+  `agreementErrorCodes`, `agreementFailReasons`, and
+  `recipientErrorCodes`. It needs the identity binding above, which answers
+  the player's key for provider `apps-in-toss`: a key from an authenticated
+  Toss login or the protected key mapping, never one a client sent (see
+  [Apps in Toss production evidence](APPS_IN_TOSS_PRODUCTION_EVIDENCE.md#functional-messages)).
+  A Worker with only one of the two, without the identity binding, or with
+  an unknown or invalid setting is misconfigured (500 on the routes, logged
+  once with the setting's name), and so are its FCM sends. Each catalog
+  topic maps `targets.ait` to `{ templateSetCode, agreement }`.
+  - Name the partner API's codes for a recipient who has not agreed
+    (`agreementErrorCodes`, `agreementFailReasons`) once you observe them.
+    Without them such an answer is a `recipient` refusal, no denial is
+    recorded, and every later send to that player calls the partner API
+    again, against its limit of 10 calls per minute per user.
 
 ## Production Notes
 

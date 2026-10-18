@@ -310,6 +310,9 @@ importers:
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../../packages/game-services
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.43.0

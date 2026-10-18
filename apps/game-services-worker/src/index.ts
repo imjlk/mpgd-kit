@@ -13,6 +13,13 @@ import {
   createWorkerService,
   type GameServicesWorkerEnv,
 } from './handler.js';
+import {
+  asWorkerNotificationRpcResult,
+  consumeNotificationDispatchBatch,
+  deliverWorkerNotification,
+  endWorkerNotificationSession,
+  runScheduledNotifications,
+} from './notificationsHandler.js';
 
 export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> {
   override async fetch(request: Request): Promise<Response> {
@@ -46,6 +53,31 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
   async getSnapshot(input: GetVerifiedLeaderboardSnapshotRequest) {
     return createWorkerService(this.env).getSnapshot(input);
   }
+
+  /**
+   * One notifications send for a game server (never a client route). Any
+   * Worker with this binding can send to any player, as with the other
+   * service-binding methods; a notifications error comes back as
+   * `{ ok: false, error: { code, message, retryable } }`.
+   */
+  async deliverNotification(input: unknown) {
+    return asWorkerNotificationRpcResult(() => deliverWorkerNotification(this.env, input));
+  }
+
+  /** The identity Worker ends a session: the endpoints it registered are unbound. */
+  async endNotificationSession(input: { readonly sessionId: string }) {
+    return asWorkerNotificationRpcResult(() => endWorkerNotificationSession(this.env, input));
+  }
+
+  /** The notifications dispatch queue's consumer. */
+  override async queue(batch: MessageBatch<unknown>): Promise<void> {
+    await consumeNotificationDispatchBatch(this.env, batch);
+  }
+
+  /** The cron trigger: notification purges and due replays. */
+  override async scheduled(_controller: ScheduledController): Promise<void> {
+    await runScheduledNotifications(this.env);
+  }
 }
 
 export {
@@ -61,4 +93,8 @@ export {
   type VerifiedLeaderboardAuthBinding,
   type VerifiedLeaderboardAuthBindingRequest,
 } from './handler.js';
+export {
+  type GameServicesNotificationsAuthBinding,
+  type GameServicesNotificationsIdentityBinding,
+} from './notificationsHandler.js';
 export default GameServicesWorker;
