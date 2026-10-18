@@ -73,6 +73,18 @@ try {
   }
   const adapterDist = join(consumer, 'node_modules/@mpgd/adapter-capacitor/dist');
   for (const file of readdirSync(adapterDist)) {
+    if (file.endsWith('.js') && !file.startsWith('notifications')) {
+      // Only the notifications subpath loads the optional notification
+      // plugins and the notifications validators.
+      const source = readFileSync(join(adapterDist, file), 'utf8');
+      for (const specifier of [
+        '@capacitor-firebase/messaging', '@capacitor/local-notifications',
+        '@mpgd/platform/notifications', '@mpgd/bridge/notifications', './notifications',
+      ]) {
+        assert.equal(source.includes(`'${specifier}`), false,
+          `Base adapter artifact ${file} must not import ${specifier}.`);
+      }
+    }
     if (file.endsWith('.js') && file !== 'admob.js') {
       assert.equal(readFileSync(join(adapterDist, file), 'utf8')
         .includes('@capacitor-community/admob'), false,

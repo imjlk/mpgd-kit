@@ -392,7 +392,8 @@ Rules every provider follows:
   `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED`, `NOTIFICATIONS_INVALID_INPUT`,
   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and `NOTIFICATIONS_V2_UNAVAILABLE`
   from a bridge without v2. Only `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` is
-  retryable.
+  retryable, and a client that maps a transport failure to it keeps that
+  failure's retryable flag, so callers retry on the flag.
 - **A required player action is a state.** It reaches the game in one of two
   ways, and both carry `requiredAction`:
   - While the host needs a player action before it can prompt at all
@@ -854,8 +855,10 @@ Local reminders use inexact timing:
 - Android 14 denies `SCHEDULE_EXACT_ALARM` by default to new installs, Play
   restricts `USE_EXACT_ALARM` to alarm and calendar apps, and a game reminder
   does not need minute precision.
-- The Capacitor template removes `SCHEDULE_EXACT_ALARM` from the merged
-  manifest and schedules with `isExactNotification: false`.
+- The app removes `SCHEDULE_EXACT_ALARM` from its merged manifest (C1's
+  template is to do it for generated games), and the provider schedules with
+  `isExactNotification: false` and `allowWhileIdle: true`, so a reminder
+  still fires in Android's Doze mode.
 - The provider keeps at most `local.maxPending` reminders, keeping the
   nearest ones.
 
@@ -1431,6 +1434,21 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   plugins live in `@mpgd/adapter-capacitor/notifications`, with the plugins as
   optional peer dependencies, as `./admob` does. The template imports only
   `@mpgd/*` packages and keeps platform SDK imports out of game code.
+  - `loadCapacitorNotificationSdks` imports each plugin dynamically and
+    leaves it out when the app is not native, the shell has no native
+    implementation, or the import fails, so the provider fails closed for
+    that half: no push plugin, no remote delivery; no local plugin, no local
+    reminders; neither, `availability: 'unsupported'`.
+  - Without the local plugin the provider reads the permission through the
+    push plugin, which on Android 12 and lower answers granted whatever the
+    setting is. It also cannot register the opt-out action every advertising
+    push carries (see [Advertising rules](#advertising-rules)), so a catalog
+    that maps an advertising topic makes it `configuration-required`, as a
+    registry mismatch makes a provider.
+  - The messaging plugin's web fallback imports the `firebase` package, so a
+    game that bundles the subpath installs it too.
+  - The base adapter entry loads neither plugin nor the notifications
+    validators; the gateway reaches them through the registered service.
 - **Permission mapping.**
   - **Android.** Capacitor reports `prompt-with-rationale` after the first
     denial and `denied` after the second, which is permanent. The provider maps
@@ -1443,15 +1461,40 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     - Android 12 and below have no runtime permission, and push plugins can
       report `granted` while the player has turned notifications off
       (`@capacitor/push-notifications` does). The provider therefore reads
-      `LocalNotifications.checkPermissions`, which reflects the system setting.
+      `LocalNotifications.checkPermissions`, which reflects the system
+      setting, when the local plugin is present.
   - **iOS.** `denied` is `blocked`, and the iOS provider declares
     `promptLimit: 1`.
 - **Channels.** Android channels come from the catalog
   (`targets.android.channelId`), with separate channels for advertising so a
-  player can turn them off in system settings.
+  player can turn them off in system settings. A topic without a `channelId`
+  posts to `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose,
+  and creating the provider throws when a channel would mix advertising with
+  other topics. It creates the channels at start, because a push needs its
+  channel before it arrives, and tries again after a failure.
 - **Opt-out action.** The provider registers the advertising opt-out action
-  natively: an Android notification action, and an iOS notification category
-  set through Firebase Messaging.
+  natively as the action type `mpgd-advertising` with the action
+  `advertising-opt-out`, through `@capacitor/local-notifications`.
+  - On iOS that sets the app's notification category, which remote
+    notifications share, so an FCM send names it in
+    `apns.payload.aps.category`. Firebase Messaging has no category API.
+  - An Android FCM notification message cannot carry actions. An Android
+    advertising push needs the shell to render it natively with the action;
+    C1 adds that to the template.
+  - Tapping the action opens the declared `optOutRoute` of the advertising
+    topic the push names in its `topic` data key, never a route from the
+    payload.
+- **Opens.** A push carries its topic and its route in the data keys `topic`
+  and `route`; every other string entry except the transport's own keys
+  reaches the game as untrusted `data`.
+  A route is kept only when `isRootRelativeNotificationRoute` accepts it, and
+  a topic only when the catalog declares it.
+- **Settings link.** Neither plugin opens the notification settings, so the
+  shell supplies the opener; without one `permission.settings` is false. The
+  provider resolves `openSettings` once the app is back in the foreground, so
+  the game stays paused while the settings screen is up: on Android the native
+  call returns as soon as the screen launches. It stops waiting after two
+  minutes, or after five seconds when the app never left.
 - **Bridge.**
   - The Capacitor bridge adds `notifications.v2.requestPermission` and
     `.openSettings` to its external-activity methods, as v1
@@ -1459,9 +1502,23 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     so the game pauses under the permission UI.
   - Its provider registry passes `notifications.v2.*` through
     `assertMethodReady`, as it passes `commerce.v2.*`, so states stay answers.
+  - A notifications service registers the nine methods as implied ones, as a
+    commerce provider does; an in-process bridge serves them and validates
+    each payload and answer, and the gateway's client validates again. The
+    gateway serves its v1 `notifications` adapter from the same provider and
+    refuses a v1 push provider next to it.
 - **Cold starts.** Verify cold-start opens on a device: Capacitor 8.5 moved the
   iOS template to the UIScene lifecycle, which sets the notification delegate
-  later than Apple recommends.
+  later than Apple recommends. The provider registers its native listeners
+  when it is created and marks an open `cold` when it arrives before the first
+  subscriber. It also keeps events that arrive while no listener is attached
+  later for the next subscriber (all but receipts), because the gateway's
+  bridge detaches when its last listener leaves.
+- **Unmapped topics.** A topic the catalog does not declare, or declares
+  without a mapping for the target, reads `unsupported` and schedules
+  nothing; an open naming it carries no topic.
+- **Addresses.** The provider registers FCM tokens. `fcm-installation` is
+  reserved: FCM HTTP v1 cannot send to a Firebase installation id.
 
 ### Apps in Toss {#profile-ait}
 
@@ -1598,7 +1655,10 @@ What the kit enforces for `advertising` topics under `kr`:
     the app name) and a phone number or address (pp.43–44).
   - At the end comes a statement that opting out is free (p.19).
   - The message carries an opt-out action that opens the opt-out screen
-    directly; describing a settings path is not enough (p.44).
+    directly; describing a settings path is not enough (p.44). An Android FCM
+    notification message cannot show actions, so an Android advertising push
+    needs the Capacitor shell to render it natively with the action (see
+    [Capacitor](#profile-capacitor)).
 - **Notices.**
   - A result notice is due within 14 days of a consent, refusal, or
     withdrawal. It gives the sender's name, the act and its date, and the
@@ -1647,7 +1707,10 @@ Other rules the profiles encode:
 - **Methods.** `notifications.v2.getCapabilities`, `.getPermission`,
   `.requestPermission`, `.revokePermission`, `.register`, `.scheduleLocal`,
   `.cancelLocal`, `.listLocal`, and `.openSettings`. Transports without v2
-  answer `NOTIFICATIONS_V2_UNAVAILABLE`, which is not retryable.
+  answer `NOTIFICATIONS_V2_UNAVAILABLE`, which is not retryable. Answer data
+  that breaks the method's contract, caught on either side of the bridge,
+  is `NOTIFICATIONS_CONFIGURATION_REQUIRED`, also not retryable, because the
+  provider broke it. A malformed bridge envelope stays a transport failure.
 - **Events.** They share the bridge event channel. `BridgeEvent` becomes a
   union discriminated by `protocol`: the existing `mpgd.commerce.v2` envelope,
   and `{ protocol: 'mpgd.notifications.v2', sequence, event }` with
@@ -1677,15 +1740,19 @@ Other rules the profiles encode:
   - `BridgeEvent` is the union above. `createBridgeEventSource` numbers one
     protocol's events from 0 for each session and attaches to the provider only
     for the first listener, so events the provider buffered reach it.
-  - The Cloudflare Pages host, the Apps in Toss host and sandbox bridges, and
-    the Devvit sandbox and server bridges (the kit's and the CLI template's)
+  - The Cloudflare Pages host, the Apps in Toss sandbox bridge, and the
+    Devvit sandbox and server bridges (the kit's and the CLI template's)
     answer every method with `NOTIFICATIONS_V2_UNAVAILABLE`
-    (`createNotificationsV2UnavailableBridgeError`).
+    (`createNotificationsV2UnavailableBridgeError`). The Apps in Toss host
+    bridge serves v2 since P1.
   - The Capacitor gateway answers the same code for a method no registered
     provider serves, before it pauses the game or reaches the base plugin, and
     its registry refuses the methods as methods a v1 provider declares. For the
-    provider P2 adds, `requestPermission` and `openSettings` pause the game,
+    provider P2 added, `requestPermission` and `openSettings` pause the game,
     and the registry passes the methods through `assertMethodReady`.
+  - P2 added that provider (see [Capacitor](#profile-capacitor)): the
+    Capacitor gateway exposes `notificationsV2` when a notifications service
+    is registered.
   - `withTargetAvailability` exposes `notificationsV2` only while
     `integrations.notifications` lets the game call notifications, as it does
     the v1 adapter. It then adds `PlatformCapabilities.notifications` from one
@@ -1796,7 +1863,9 @@ listed fields of each item asserted:
 | `os-permission-denied-twice` | `promptLimit` 2 on a device-addressed provider: `prompt-with-rationale` then `blocked`; no third dialog; the endpoint holds `blocked`; no consent record |
 | `os-permission-denied-once` | `promptLimit` 1 on a device-addressed provider: the first denial is `blocked`; no second dialog; no consent record |
 | `os-permission-dismissed` | On a device-addressed provider, a dismissed dialog leaves the state and counts no denial; no consent record |
+| `os-permission-revoked-in-settings` | A permission turned off in system settings raises no event: the next read reports `blocked`, registers the endpoint again with permission `blocked`, and cancels the pending local reminder; a new reminder answers `permission-required` without a prompt; the only consent record is the player's topic preference |
 | `local-schedule-never-prompts` | Scheduling without permission returns `permission-required` and shows nothing |
+| `local-capacity-keeps-nearest` | With `local.maxPending` 64, iOS's limit, the nearest reminders stay, whatever order they were set in: a reminder later than every pending one answers `capacity-exceeded`, and each earlier one is scheduled while the farthest pending one is cancelled |
 | `host-agreement-recorded` | Unreadable host: agreement recorded with its evidence and the implied topic preference, read back as granted after a restart; `already-granted` adds no record |
 | `host-agreement-dismissed` | A per-template sheet that closes without an answer is `dismissed`: nothing is recorded, the topic reads `unknown`, and the next request reaches the host again |
 | `host-agreement-rejected` | A rejected sheet records a denied host agreement with its evidence and no topic preference; sends stop until the player accepts again |

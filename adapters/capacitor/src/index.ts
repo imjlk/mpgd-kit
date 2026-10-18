@@ -1,9 +1,11 @@
 import {
   bridgeCommerceEventProtocol,
+  bridgeNotificationsEventProtocol,
   decodeBridgeCredentialLoadData,
   decodeBridgeStorageLoadData,
   type BridgeCommerceEvent,
   type BridgeMethod,
+  type BridgeNotificationsEvent,
 } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
 import {
@@ -28,11 +30,13 @@ import {
   type CapacitorIncomingUrlKind,
   type CapacitorVisibilitySource,
 } from './app-events.js';
+import { namesOtherProtocol } from './bridge-events.js';
 import { createBridgeCommerceProvider } from './commerce-bridge.js';
 import {
   assertProviderResponseData,
   createCapacitorProviderRegistry,
   type CapacitorCommerceServiceProvider,
+  type CapacitorNotificationServiceProvider,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
@@ -42,7 +46,10 @@ import { createCapacitorViewport } from './viewport.js';
 export {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
+  createDegradedNotificationCapabilities,
   type CapacitorCommerceServiceProvider,
+  type CapacitorNotificationServiceProvider,
+  type CapacitorNotificationsV2Service,
   type CapacitorProviderCapabilitySnapshot,
   type CapacitorProviderRegistry,
   type CapacitorServiceProvider,
@@ -180,15 +187,26 @@ export function createCapacitorPlatformGateway(input: {
         // else, a malformed envelope included, reaches the commerce
         // provider's validator.
         subscribe: (listener) => commerceProvider.bridge.subscribe((envelope) => {
-          const protocol: unknown = typeof envelope === 'object' && envelope !== null
-            ? (envelope as { readonly protocol?: unknown }).protocol
-            : undefined;
-          if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
-            return;
+          if (!namesOtherProtocol(envelope, bridgeCommerceEventProtocol)) {
+            listener(envelope as BridgeCommerceEvent);
           }
-          listener(envelope as BridgeCommerceEvent);
         }),
       });
+  const notificationsProvider: CapacitorNotificationServiceProvider | undefined =
+    providers.notifications;
+  // Served through the same request path as every other provider method, as
+  // commerce is, so the game pauses under the permission dialog and the
+  // settings screen, and every answer is validated on the way back.
+  const notificationSurface = notificationsProvider?.notificationsV2.createGatewaySurface({
+    request: (method, payload) => request(method, payload),
+    // Only an envelope that names another protocol is dropped; anything else,
+    // a malformed envelope included, reaches the client's validator.
+    subscribe: (listener) => notificationsProvider.bridge.subscribe((envelope) => {
+      if (!namesOtherProtocol(envelope, bridgeNotificationsEventProtocol)) {
+        listener(envelope as BridgeNotificationsEvent);
+      }
+    }),
+  });
   const lifecycle = createCapacitorAppEvents({
     target: input.target,
     ...(input.app === undefined ? {} : { app: input.app }),
@@ -352,7 +370,7 @@ export function createCapacitorPlatformGateway(input: {
         });
       }
       if (provider !== undefined) {
-        assertProviderResponseData(method, response.data);
+        assertProviderResponseData(method, response.data, provider);
       }
       return response.data as TData;
     }
@@ -378,9 +396,12 @@ export function createCapacitorPlatformGateway(input: {
       const base = await request<PlatformCapabilities>('runtime.getCapabilities', {});
       // A native shell built before the commerce v2 removals may still send the
       // retired boolean flags; the commerce block is the only commerce source.
+      // The notifications block is the registered service's, present exactly
+      // when the gateway exposes `notificationsV2`.
       const {
         nativeIap: _retiredNativeIap,
         subscriptionIap: _retiredSubscriptionIap,
+        notifications: _nativeNotifications,
         ...native
       } = (isRecord(base) ? base : {}) as PlatformCapabilities & {
         readonly nativeIap?: unknown;
@@ -390,8 +411,11 @@ export function createCapacitorPlatformGateway(input: {
       // block, so a stalled or invalid provider degrades the snapshot instead
       // of rejecting it, and a missing or invalid native `commerce` answer is
       // always replaced by the provider's block or the unsupported block.
-      const { availability: states, commerce: commerceCapabilities } =
-        await providers.getCapabilitySnapshot();
+      const {
+        availability: states,
+        commerce: commerceCapabilities,
+        notifications: notificationCapabilities,
+      } = await providers.getCapabilitySnapshot();
       const rewardedAds = states.rewardedAds === 'available';
       const interstitialAds = states.interstitialAds === 'available';
       const bannerAds = states.bannerAds === 'available';
@@ -404,6 +428,9 @@ export function createCapacitorPlatformGateway(input: {
         nativeLeaderboard: states.nativeLeaderboard === 'available',
         providerAvailability: states,
         commerce: commerceCapabilities,
+        ...(notificationSurface === undefined || notificationCapabilities === undefined
+          ? {}
+          : { notifications: notificationCapabilities }),
       };
     },
     ...(commerce === undefined ? {} : { commerce }),
@@ -424,12 +451,17 @@ export function createCapacitorPlatformGateway(input: {
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
     }),
-    notifications: {
+    // With a notifications v2 service, v1 is served from it (RFC
+    // "Capabilities"), so both report the same readiness.
+    notifications: notificationSurface?.notifications ?? {
       getStatus: (topic) =>
         request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
       requestSubscription: (topic) =>
         request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
     },
+    ...(notificationSurface === undefined
+      ? {}
+      : { notificationsV2: notificationSurface.notificationsV2 }),
     ads: {
       ...(adProvider === undefined ? {} : { provider: adProvider }),
       preload: (payload) => request('ads.preload', payload),

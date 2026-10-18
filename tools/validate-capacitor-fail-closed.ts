@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-import { manifest } from './validation/json.js';
+import { manifest, optionalObject, parseObject } from './validation/json.js';
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 // The six commerce v2 bridge methods are the whole commerce bridge (the v1
@@ -250,6 +250,155 @@ for (const [file, factory, packageName] of wiredGateways) {
   );
 }
 
+// Notifications v2 (RFC "Provider profiles", Capacitor): the two plugins are
+// optional peers that only the notifications subpath imports, so a shell
+// without them fails closed; `@capacitor/push-notifications` never joins them,
+// because on iOS it claims the push handler Firebase Messaging needs; and
+// local reminders stay inexact.
+const notificationPlugins = ['@capacitor-firebase/messaging', '@capacitor/local-notifications'];
+const adapterManifestText = read('adapters/capacitor/package.json');
+const adapterManifest = manifest(adapterManifestText, 'Capacitor adapter');
+const adapterPackage = parseObject(adapterManifestText, 'Capacitor adapter');
+assert.ok(
+  optionalObject(adapterPackage, 'exports')['./notifications'] !== undefined,
+  'The Capacitor adapter must export ./notifications',
+);
+const optionalPeers = optionalObject(adapterPackage, 'peerDependenciesMeta');
+for (const name of notificationPlugins) {
+  assert.equal(
+    adapterManifest.dependencies[name],
+    undefined,
+    `${name} must not be a dependency of the Capacitor adapter`,
+  );
+  assert.ok(
+    adapterManifest.peerDependencies[name] !== undefined
+      && optionalObject(optionalPeers, name)['optional'] === true,
+    `${name} must be an optional peer of the Capacitor adapter`,
+  );
+  for (const field of ['dependencies', 'devDependencies'] as const) {
+    assert.equal(
+      referenceShell[field][name],
+      undefined,
+      `The reference shell must not bundle ${name}`,
+    );
+  }
+}
+/**
+ * Source without comments, for the provider's own flag checks only. One pass
+ * that keeps string and template literals whole, so a `/*` or `//` inside one
+ * does not swallow code. A regex literal holding a quote or a backtick would
+ * put it out of step, so it runs only on `notifications-provider.ts`, which
+ * has none; the import scan and the CLI starter check read the raw text.
+ */
+const codeOf = (source: string): string => source.replace(
+  /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/gu,
+  (match, literal: string | undefined) => literal ?? (match.startsWith('/*') ? ' ' : ''),
+);
+const starterManifests = [
+  'packages/cli/templates/phaser-game/package.json',
+  'examples/phaser-starter/package.json',
+];
+const pushNotificationsManifests: [string, ReturnType<typeof manifest>][] = [
+  ['package.json', manifest(read('package.json'), 'root')],
+  ['adapters/capacitor/package.json', adapterManifest],
+  ['apps/mobile-capacitor/package.json', referenceShell],
+  ...[
+    ...starterManifests,
+    ...readdirSync(new URL('../native-plugins/', import.meta.url))
+      .map((name) => `native-plugins/${name}/package.json`)
+      .filter((path) => existsSync(new URL(`../${path}`, import.meta.url))),
+  ].map((path): [string, ReturnType<typeof manifest>] => [path, manifest(read(path), path)]),
+];
+for (const [path, packageManifest] of pushNotificationsManifests) {
+  for (const field of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
+    assert.equal(
+      packageManifest[field]['@capacitor/push-notifications'],
+      undefined,
+      `${path}: @capacitor/push-notifications conflicts with @capacitor-firebase/messaging on iOS`,
+    );
+  }
+}
+assert.doesNotMatch(
+  shellStarter,
+  /@capacitor\/push-notifications/u,
+  'The CLI shell starter must not install @capacitor/push-notifications',
+);
+// The base entry's module graph stays free of the optional peers: no other
+// module imports them (or one of their subpaths), a notifications module, or
+// the package's own notifications subpath. Matched as import syntax on the
+// raw text: `from` or a bare `import` with a quoted specifier, or `import(`
+// and `require(` with a quoted or template specifier, comments allowed before
+// it (`import(/* @vite-ignore */ '…')`). Prose that names a module in
+// backticks after "from" does not trip it.
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\/]/gu, '\\$&');
+const adapterName = adapterPackage['name'];
+assert.ok(
+  typeof adapterName === 'string' && adapterName !== '',
+  'The Capacitor adapter must have a name',
+);
+const forbiddenSpecifier = [
+  `(?:${notificationPlugins.map(escapeRegExp).join('|')})(?:\\/[^"'\`]*)?`,
+  `(?:\\.\\.?\\/)+(?:[^"'\`]*\\/)?notifications[^"'\`]*`,
+  `${escapeRegExp(adapterName)}\\/notifications(?:\\/[^"'\`]*)?`,
+].join('|');
+const commentsThenSpace = '\\s*(?:\\/\\*[\\s\\S]*?\\*\\/\\s*)*';
+const notificationsSpecifier = new RegExp(
+  `(?:\\b(?:from|import)\\s*["'](?:${forbiddenSpecifier})["']`
+    + `|\\b(?:import|require)\\s*\\(${commentsThenSpace}["'\`](?:${forbiddenSpecifier})["'\`])`,
+  'u',
+);
+// The pattern itself is checked, so an escaping slip cannot turn the scan
+// into a silent pass.
+for (const line of [
+  "import { LocalNotifications } from '@capacitor/local-notifications';",
+  'export * from "@capacitor-firebase/messaging/web";',
+  "import './notifications-sdk.js';",
+  'const m = import(/* @vite-ignore */ `../notifications/index.js`);',
+  `type X = typeof import('${adapterName}/notifications');`,
+  "const r = require('@capacitor/local-notifications');",
+]) {
+  assert.match(line, notificationsSpecifier, `The import scan must catch: ${line}`);
+}
+for (const line of [
+  "import { Capacitor } from '@capacitor/core';",
+  "import { createCapacitorAdMobRewardedProvider } from './admob.js';",
+  '// Loaded from `@capacitor/local-notifications` by the notifications subpath.',
+]) {
+  assert.doesNotMatch(line, notificationsSpecifier, `The import scan must not catch: ${line}`);
+}
+const scanned: string[] = [];
+for (const file of readdirSync(new URL('../adapters/capacitor/src/', import.meta.url), {
+  encoding: 'utf8',
+  recursive: true,
+})) {
+  const path = file.replaceAll('\\', '/');
+  if (!path.endsWith('.ts') || path.endsWith('.test.ts')
+    || /^notifications[^/]*\.ts$|^notifications\//u.test(path)) {
+    continue;
+  }
+  scanned.push(path);
+  assert.doesNotMatch(
+    read(`adapters/capacitor/src/${path}`),
+    notificationsSpecifier,
+    `adapters/capacitor/src/${path}: only the notifications subpath may import the notification plugins or modules`,
+  );
+}
+assert.ok(
+  scanned.includes('index.ts') && scanned.includes('providers.ts'),
+  'The base entry modules must be among the scanned Capacitor sources',
+);
+const notificationsProvider = codeOf(read('adapters/capacitor/src/notifications-provider.ts'));
+assert.match(
+  notificationsProvider,
+  /^\s*isExactNotification:\s*false\b/mu,
+  'Capacitor local reminders must be scheduled with inexact alarms',
+);
+assert.doesNotMatch(
+  notificationsProvider,
+  /isExactNotification:\s*true|isExactMandatory/u,
+  'Capacitor local reminders must never ask for exact alarms',
+);
+
 console.info(
-  'Capacitor reference native services fail closed without providers, and store providers stay opt-in.',
+  'Capacitor reference native services fail closed without providers, and store and notification providers stay opt-in.',
 );

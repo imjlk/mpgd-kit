@@ -33,6 +33,7 @@ import {
   type StoreId,
 } from '@mpgd/platform/commerce';
 
+import { namesOtherProtocol } from './bridge-events.js';
 import type { CapacitorCommerceServiceProvider } from './providers.js';
 import { normalizeStoreSdkError } from './store-sdk.js';
 
@@ -312,10 +313,7 @@ export function createBridgeCommerceProvider(
         // Another protocol on a shared event channel is not ours to judge; an
         // envelope without a protocol is malformed and must reach the
         // validator, as in the Apps in Toss provider.
-        const protocol: unknown = typeof envelope === 'object' && envelope !== null
-          ? (envelope as { readonly protocol?: unknown }).protocol
-          : undefined;
-        if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
+        if (namesOtherProtocol(envelope, bridgeCommerceEventProtocol)) {
           return;
         }
         let event: CommerceEventEnvelope;
