@@ -322,6 +322,38 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
   });
 }
 
+// The deployment's codes come before the documented ones, 4095 included.
+{
+  const { provider: asAgreement } = provider(
+    [fail('4095', { retryAfterSeconds: 30 }), fail('5004')],
+    { agreementErrorCodes: ['4095', '5004'] },
+  );
+  assert.deepEqual(await asAgreement.send(request), {
+    status: 'rejected',
+    reason: 'agreement',
+    providerCode: '4095',
+  });
+  assert.deepEqual(await asAgreement.send(request), {
+    status: 'rejected',
+    reason: 'agreement',
+    providerCode: '5004',
+  });
+  const { provider: asRecipient } = provider([fail('4095'), fail(4095)], {
+    recipientErrorCodes: ['4095'],
+  });
+  assert.deepEqual(await asRecipient.send(request), {
+    status: 'rejected',
+    reason: 'recipient',
+    providerCode: '4095',
+  });
+  // A numeric code is read as the same digits.
+  assert.deepEqual(await asRecipient.send(request), {
+    status: 'rejected',
+    reason: 'recipient',
+    providerCode: '4095',
+  });
+}
+
 // HTTP 429 is rate-limited whatever its body; other refusals are configuration.
 {
   const { provider: ait } = provider([

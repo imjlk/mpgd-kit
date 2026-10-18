@@ -181,10 +181,11 @@ const maximumTimeoutMs = 60_000;
  *   With none sent, the per-channel `fail` lists decide: `rejected` with
  *   reason `agreement` when a failure's `reachedFailReason` is one of
  *   `agreementFailReasons`, otherwise `recipient`.
- * - `FAIL` 4095 is `rate-limited` with `retryAfterSeconds` (at most a day);
- *   5004, 4034, and 4010 are `rejected` with reason `configuration`; a code
- *   in `agreementErrorCodes` or `recipientErrorCodes` is `rejected` with that
- *   reason. Any other code is `rejected` with reason `recipient` on HTTP 200
+ * - `FAIL` with a code in `agreementErrorCodes` or `recipientErrorCodes` is
+ *   `rejected` with that reason, before any documented meaning of the code;
+ *   otherwise 4095 is `rate-limited` with `retryAfterSeconds` (at most a
+ *   day), and 5004, 4034, and 4010 are `rejected` with reason
+ *   `configuration`. Any other code is `rejected` with reason `recipient` on HTTP 200
  *   and `configuration` when the HTTP status refused the request (400, 401,
  *   403, 404, 405, 413, 415, 422): a `FAIL` envelope reports a failed
  *   request, and answering `ambiguous` would replay a send that fails the
@@ -223,15 +224,17 @@ export function createAitFunctionalMessageDeliveryProvider(
     (options.agreementFailReasons ?? []).map((reason) => reason.trim()),
   );
 
+  // The deployment's codes come first, then the documented ones (RFC
+  // "Delivery providers -> Apps in Toss").
   const classifyFailCode = (code: string, status: number): AitFunctionalMessageAnswer => {
-    if (code === rateLimitedErrorCode) {
-      return { status: 'rate-limited', providerCode: code };
-    }
     if (agreementErrorCodes.has(code)) {
       return { status: 'rejected', reason: 'agreement', providerCode: code };
     }
     if (recipientErrorCodes.has(code)) {
       return { status: 'rejected', reason: 'recipient', providerCode: code };
+    }
+    if (code === rateLimitedErrorCode) {
+      return { status: 'rate-limited', providerCode: code };
     }
     if (configurationErrorCodes.has(code) || refusedRequestStatuses.has(status)) {
       return { status: 'rejected', reason: 'configuration', providerCode: code };
