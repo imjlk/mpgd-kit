@@ -860,6 +860,12 @@ export interface NotificationConformanceBackend extends NotificationConformanceB
   readonly noticesGiven: readonly NotificationConformanceNoticeRecord[];
 }
 
+/** The fake backend, which finishes every step synchronously. */
+export interface NotificationConformanceFakeBackend extends NotificationConformanceBackend {
+  revokeSession(): void;
+  registerInstallation(input: NotificationConformanceInstallationFixture): void;
+}
+
 export interface CreateNotificationConformanceBackendInput {
   /** The delivery provider's registry entry; `undefined` for a provider without remote delivery. */
   readonly entry: NotificationDeliveryProviderEntry | undefined;
@@ -1024,7 +1030,7 @@ function noEndpoint(): NotificationDeliveryRefusal {
  */
 export function createNotificationConformanceBackend(
   input: CreateNotificationConformanceBackendInput,
-): NotificationConformanceBackend {
+): NotificationConformanceFakeBackend {
   const { entry, clock } = input;
   const rules = input.deployment?.advertisingRules ?? 'none';
   const topicOf = (id: string): NotificationTopicDeclaration | undefined =>
