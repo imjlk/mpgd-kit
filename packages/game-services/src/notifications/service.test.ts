@@ -471,7 +471,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     });
   const first = await report('granted', { evidence: { schema: 'e.v1', payload: { value: 1 } } });
   time.advance(60);
-  // Same kind, topic, state, source, and text version: the stored record answers, unwritten.
+  // Same kind, topic, state, and source: the stored record answers, unwritten.
   assert.deepEqual(
     await report('granted', { evidence: { schema: 'e.v1', payload: { value: 2 } } }),
     first,
@@ -488,26 +488,26 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   await report('granted');
   // Only the latest record is compared: granted again after the denial was written above.
   assert.equal((await service.listConsent(session('p-1'))).length, 4);
-  // A new text version is a new record; the same one again is not.
-  await service.recordConsent(session('p-1'), {
-    kind: 'advertising',
-    state: 'granted',
-    source: 'player',
-    textVersion: 'v1',
-  });
-  await service.recordConsent(session('p-1'), {
-    kind: 'advertising',
-    state: 'granted',
-    source: 'player',
-    textVersion: 'v1',
-  });
-  await service.recordConsent(session('p-1'), {
-    kind: 'advertising',
-    state: 'granted',
-    source: 'player',
-    textVersion: 'v2',
-  });
-  assert.equal((await service.listConsent(session('p-1'))).length, 6);
+  // The topic-less permission kind repeats on its own, apart from topic kinds.
+  const permission = () =>
+    service.recordConsent(session('p-1'), {
+      kind: 'delivery-permission',
+      state: 'granted',
+      source: 'client-report',
+    });
+  await permission();
+  await permission();
+  assert.equal((await service.listConsent(session('p-1'))).length, 5);
+  // Advertising and night records are always written: a second refusal or a renewed consent owes a notice.
+  for (const state of ['withdrawn', 'withdrawn', 'granted', 'granted']) {
+    await service.recordConsent(session('p-1'), {
+      kind: 'advertising',
+      state,
+      source: 'player',
+      textVersion: 'v1',
+    });
+  }
+  assert.equal((await service.listConsent(session('p-1'))).length, 9);
 
   // The cap counts client records over a rolling day; provider records do not count.
   const capped = createInMemoryNotificationStore();

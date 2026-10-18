@@ -207,8 +207,9 @@ export interface NotificationService {
   providers(): NotificationProviderRegistrySnapshot;
   /**
    * Appends a consent record for the session's player, dated by the backend.
-   * A repeat of the player's latest record for the same kind and topic
-   * answers that record unwritten, and a player past
+   * A repeat of the player's latest permission, agreement, or preference
+   * record for the same kind and topic answers that record unwritten, and a
+   * player past
    * `maxClientNotificationConsentRecordsPerDay` gets a
    * `NotificationConsentRateLimitError`.
    */
@@ -1360,16 +1361,16 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         throw invalidInput('A consent record field is out of bounds.');
       }
       const history = await store.listConsent(player);
-      // A repeat of the latest record for the kind and topic is not written
-      // again: a client that resends its report changes nothing. Evidence is
-      // not compared, so the first record keeps its own.
-      const latest = latestNotificationConsent(history, checked.kind, checked.topic);
-      if (
-        latest !== undefined
-        && latest.state === checked.state
-        && latest.source === checked.source
-        && latest.textVersion === checked.textVersion
-      ) {
+      // A repeat of the latest permission, agreement, or preference record
+      // for the kind and topic is not written again: a client that resends
+      // its report changes nothing. Evidence is not compared, so the first
+      // record keeps its own. An `advertising` or `night` record is always
+      // written, since each is a player's act that may owe a notice (a
+      // second refusal, a renewed consent).
+      const latest = checked.kind === 'advertising' || checked.kind === 'night'
+        ? undefined
+        : latestNotificationConsent(history, checked.kind, checked.topic);
+      if (latest !== undefined && latest.state === checked.state && latest.source === checked.source) {
         return latest;
       }
       const windowStart = Date.parse(at) - dayMs;

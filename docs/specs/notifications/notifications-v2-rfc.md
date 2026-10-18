@@ -989,15 +989,18 @@ clock:
 
 Every send reads the player's whole history, so client writes are bounded:
 
-- **Repeats.** A record whose state, source, and text version match the
-  player's latest record of the same kind and topic is not written. The
-  backend answers that latest record, which keeps its own date and evidence.
-  A repeat is not a new consent, so it lists no notice and does not restart
-  the re-confirmation count.
+- **Repeats.** A `delivery-permission`, `host-agreement`, or
+  `topic-preference` record whose state and source match the player's latest
+  record of the same kind and topic is not written. The backend answers that
+  latest record, which keeps its own date and evidence. An `advertising` or
+  `night` record is always written, since each one is a player's act that
+  may owe a notice: a second refusal, or a consent that
+  restarts the re-confirmation count.
 - **Daily cap.** A player may add at most 200 client records in any rolling
   24 hours. Records from a provider answer do not count. Past the cap the
-  backend answers `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (retryable) with
-  `Retry-After` set to when the oldest counted record leaves the window. A
+  backend answers `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (retryable; HTTP
+  429 on the Worker route) with `Retry-After` set to when the oldest counted
+  record leaves the window. A
   repeat is still answered, since it writes nothing.
 - **Concurrency.** Both rules read the history before the write, so writes
   that race may store a repeat or pass the cap by a few records.

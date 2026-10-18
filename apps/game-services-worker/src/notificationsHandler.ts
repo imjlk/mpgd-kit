@@ -565,7 +565,8 @@ async function readBody(
 
 function errorResponse(error: unknown, corsHeaders: Readonly<Record<string, string>>): Response {
   if (error instanceof NotificationError) {
-    const status = statusOf(error.code);
+    // A player's own write cap is a throttle, not an outage.
+    const status = error instanceof NotificationConsentRateLimitError ? 429 : statusOf(error.code);
     return json(
       { error: error.code, ...(status < 500 ? { message: error.message } : {}) },
       status,

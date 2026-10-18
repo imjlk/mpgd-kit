@@ -257,7 +257,7 @@ try {
   const capped = await toggle(200);
   assert.deepEqual(
     [capped.status, capped.body.error],
-    [503, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'],
+    [429, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'],
   );
   assert.ok(
     Number(capped.headers.get('retry-after')) > 86_000,
