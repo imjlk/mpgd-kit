@@ -215,10 +215,14 @@ is created, which is how a cold-start open reaches it.
   both optional peers of this package. Do not also install
   `@capacitor/push-notifications`: on iOS both claim Capacitor's single push
   handler. `loadCapacitorNotificationSdks` imports them dynamically and leaves
-  one out when the app is not native or the shell has no native
-  implementation. Without both the provider is `unsupported`; without the push
-  plugin it declares no remote delivery, without the local plugin no local
-  reminders. iOS remote notifications go through FCM, which relays to APNs.
+  one out when the app is not native, the shell has no native implementation,
+  or the import fails. Without both the provider is `unsupported`; without the
+  push plugin it declares no remote delivery; without the local plugin it
+  declares no local reminders, registers no advertising opt-out category, and
+  reads the permission through the push plugin, which answers `granted` on
+  Android 12 and lower whatever the setting is. A game with advertising topics
+  installs both. iOS remote notifications go through FCM, which relays to
+  APNs.
 - **Gateway.** `createCapacitorNotificationServiceProvider` (or
   `createNotificationServiceProvider` over another provider) registers the
   nine `notifications.v2.*` methods. The gateway then exposes
@@ -239,7 +243,9 @@ is created, which is how a cold-start open reaches it.
   targets SDK 32 or lower). Only `requestPermission` shows the dialog. A change
   made in system settings is read on the next read and announced as
   `permission-changed` when the app returns to the foreground.
-- **Local reminders.** `scheduleLocal` reads the permission first and answers
+- **Local reminders.** `scheduleLocal` answers `unsupported` for a topic
+  outside the resolved catalog and for an advertising topic, which never
+  schedules locally. Otherwise it reads the permission first and answers
   `permission-required` without calling the plugin, whose own `schedule` would
   prompt on Android 13+. Reminders are inexact (`isExactNotification: false`;
   the plugin's default would open the exact-alarm settings screen), keyed by a
@@ -249,20 +255,26 @@ is created, which is how a cold-start open reaches it.
   manifest (`tools:node="remove"`).
 - **Channels.** Each topic posts to its mapping's `channelId`, or to
   `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose
-  (`capacitorNotificationChannelId`). A channel may not mix advertising with
-  other topics, so a player can turn advertising off in system settings. Name
-  the channels with the `channels` option.
+  (`capacitorNotificationChannelId`). Creating the provider throws when a
+  channel would mix advertising with other topics, so a player can always turn
+  advertising off in system settings. Name the channels with the `channels`
+  option.
 - **Opens.** A tap becomes one `opened` event, buffered until the first
   subscriber and marked `cold` before it. A push carries its topic and route in
   the data keys `topic` and `route` (`capacitorNotificationDataKeys`); the
-  other string entries reach the game as untrusted `data`. A route is kept only
+  other string entries, except the transport's own keys (`from`,
+  `collapse_key`, `google.*`, `gcm.*`, and the like), reach the game as
+  untrusted `data`. A route is kept only
   when `isRootRelativeNotificationRoute` accepts it, and a topic only when the
   catalog declares it. Nothing is granted from an open.
 - **Advertising opt-out.** The provider registers the action type
   `mpgd-advertising` (`capacitorAdvertisingActionTypeId`) with the
-  `advertising-opt-out` action. On iOS that sets the notification category an
-  FCM send names in `apns.payload.aps.category`, and the action opens the
-  topic's declared `optOutRoute`. An Android FCM notification message cannot
+  `advertising-opt-out` action (title `advertisingOptOutTitle`, '수신거부' by
+  default) through the local plugin. On iOS that sets the notification
+  category an FCM send names in `apns.payload.aps.category`, and the action
+  opens the `optOutRoute` of the advertising topic the push names in its
+  `topic` data key; without that key it opens nothing. An Android FCM
+  notification message cannot
   carry actions, so an Android advertising push needs the shell to render it
   natively with the action; the template work for that is C1's.
 - **Settings.** Neither plugin opens the notification settings, so the shell

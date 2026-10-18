@@ -387,8 +387,9 @@ Rules every provider follows:
   `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED`, `NOTIFICATIONS_INVALID_INPUT`,
   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and `NOTIFICATIONS_V2_UNAVAILABLE`
   from a bridge without v2. Only `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` is
-  retryable, and not every one: a client that receives an answer the contract
-  rejects reports it with this code but not retryable. Callers retry on the
+  retryable. A client keeps the retryable flag of the failure it maps, and an
+  answer the contract rejects is never retryable, so a
+  `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` can be final. Callers retry on the
   flag, not the code.
 - **A required player action is a state.** It reaches the game in one of two
   ways, and both carry `requiredAction`:
@@ -1376,10 +1377,14 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   optional peer dependencies, as `./admob` does. The template imports only
   `@mpgd/*` packages and keeps platform SDK imports out of game code.
   - `loadCapacitorNotificationSdks` imports each plugin dynamically and
-    leaves it out when the app is not native or the shell has no native
-    implementation, so the provider fails closed for that half: no push
-    plugin, no remote delivery; no local plugin, no local reminders; neither,
-    `availability: 'unsupported'`.
+    leaves it out when the app is not native, the shell has no native
+    implementation, or the import fails, so the provider fails closed for
+    that half: no push plugin, no remote delivery; no local plugin, no local
+    reminders; neither, `availability: 'unsupported'`.
+  - Without the local plugin the provider also registers no opt-out category
+    and reads the permission through the push plugin, which on Android 12 and
+    lower answers granted whatever the setting is. A game with advertising
+    topics installs both.
   - The messaging plugin's web fallback imports the `firebase` package, so a
     game that bundles the subpath installs it too.
   - The base adapter entry loads neither plugin nor the notifications
@@ -1403,23 +1408,24 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   (`targets.android.channelId`), with separate channels for advertising so a
   player can turn them off in system settings. A topic without a `channelId`
   posts to `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose,
-  and the provider refuses a channel that mixes advertising with other
-  topics. It creates the channels at start, because a push needs its channel
+  and creating the provider throws when a channel would mix advertising with
+  other topics. It creates the channels at start, because a push needs its channel
   before it arrives, and tries again after a failure.
 - **Opt-out action.** The provider registers the advertising opt-out action
   natively as the action type `mpgd-advertising` with the action
   `advertising-opt-out`, through `@capacitor/local-notifications`.
   - On iOS that sets the app's notification category, which remote
     notifications share, so an FCM send names it in
-    `apns.payload.aps.category`. Firebase Messaging has no category API, so
-    the category is not set through it as an earlier draft said.
+    `apns.payload.aps.category`. Firebase Messaging has no category API.
   - An Android FCM notification message cannot carry actions. An Android
     advertising push needs the shell to render it natively with the action;
     C1 adds that to the template.
-  - Tapping the action opens the topic's declared `optOutRoute`, never a route
-    from the payload.
+  - Tapping the action opens the declared `optOutRoute` of the advertising
+    topic the push names in its `topic` data key, never a route from the
+    payload.
 - **Opens.** A push carries its topic and its route in the data keys `topic`
-  and `route`; every other string entry reaches the game as untrusted `data`.
+  and `route`; every other string entry except the transport's own keys
+  reaches the game as untrusted `data`.
   A route is kept only when `isRootRelativeNotificationRoute` accepts it, and
   a topic only when the catalog declares it.
 - **Settings link.** Neither plugin opens the notification settings, so the
@@ -1542,7 +1548,9 @@ What the kit enforces for `advertising` topics under `kr`:
     the app name) and a phone number or address (pp.43–44).
   - At the end comes a statement that opting out is free (p.19).
   - The message carries an opt-out action that opens the opt-out screen
-    directly; describing a settings path is not enough (p.44).
+    directly; describing a settings path is not enough (p.44). An Android FCM
+    notification message cannot show actions, so the Capacitor shell renders
+    an Android advertising push itself (see [Capacitor](#profile-capacitor)).
 - **Notices.**
   - A result notice is due within 14 days of a consent, refusal, or
     withdrawal. It gives the sender's name, the act and its date, and the
@@ -1605,7 +1613,7 @@ Other rules the profiles encode:
     [`docs/specs/notifications/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/notifications/schemas).
   - `validate:notifications-alignment`, run in `pnpm check`, keeps the
     constant, the vectors, and the schemas aligned.
-- **What N3 landed.** No transport serves v2 yet; P1–P3 add the providers.
+- **What N3 landed.** No transport served v2 then; P1–P3 add the providers.
   - `@mpgd/bridge` adds the nine methods to `BridgeMethod`
     (`bridgeNotificationsV2Methods`, kept equal to `notificationBridgeMethods`
     by a type check and a test). `@mpgd/bridge/notifications` validates each
@@ -1622,7 +1630,7 @@ Other rules the profiles encode:
   - The Capacitor gateway answers the same code for a method no registered
     provider serves, before it pauses the game or reaches the base plugin, and
     its registry refuses the methods as methods a v1 provider declares. For the
-    provider P2 adds, `requestPermission` and `openSettings` pause the game,
+    provider P2 added, `requestPermission` and `openSettings` pause the game,
     and the registry passes the methods through `assertMethodReady`.
   - P2 added that provider (see [Capacitor](#profile-capacitor)): the
     Capacitor gateway exposes `notificationsV2` when a notifications service

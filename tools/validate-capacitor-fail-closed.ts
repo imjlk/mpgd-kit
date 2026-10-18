@@ -255,14 +255,16 @@ for (const [file, factory, packageName] of wiredGateways) {
 // without them fails closed; `@capacitor/push-notifications` never joins them,
 // because on iOS it claims the push handler Firebase Messaging needs; and
 // local reminders stay inexact.
-const adapterManifest = manifest(read('adapters/capacitor/package.json'), 'Capacitor adapter');
-const adapterPackage = parseObject(read('adapters/capacitor/package.json'), 'Capacitor adapter');
+const notificationPlugins = ['@capacitor-firebase/messaging', '@capacitor/local-notifications'];
+const adapterManifestText = read('adapters/capacitor/package.json');
+const adapterManifest = manifest(adapterManifestText, 'Capacitor adapter');
+const adapterPackage = parseObject(adapterManifestText, 'Capacitor adapter');
 assert.ok(
   optionalObject(adapterPackage, 'exports')['./notifications'] !== undefined,
   'The Capacitor adapter must export ./notifications',
 );
 const optionalPeers = optionalObject(adapterPackage, 'peerDependenciesMeta');
-for (const name of ['@capacitor-firebase/messaging', '@capacitor/local-notifications']) {
+for (const name of notificationPlugins) {
   assert.equal(
     adapterManifest.dependencies[name],
     undefined,
@@ -273,22 +275,26 @@ for (const name of ['@capacitor-firebase/messaging', '@capacitor/local-notificat
       && optionalObject(optionalPeers, name)['optional'] === true,
     `${name} must be an optional peer of the Capacitor adapter`,
   );
-  assert.equal(
-    referenceShell.dependencies?.[name],
-    undefined,
-    `The reference shell must not bundle ${name}`,
-  );
-}
-for (const path of [
-  'adapters/capacitor/package.json',
-  'apps/mobile-capacitor/package.json',
-  'packages/cli/templates/phaser-game/package.json',
-  'examples/phaser-starter/package.json',
-]) {
-  if (!existsSync(new URL(`../${path}`, import.meta.url))) {
-    continue;
+  for (const field of ['dependencies', 'devDependencies'] as const) {
+    assert.equal(
+      referenceShell[field][name],
+      undefined,
+      `The reference shell must not bundle ${name}`,
+    );
   }
-  const packageManifest = manifest(read(path), path);
+}
+const pushNotificationsManifests: [string, ReturnType<typeof manifest>][] = [
+  ['package.json', manifest(read('package.json'), 'root')],
+  ['adapters/capacitor/package.json', adapterManifest],
+  ['apps/mobile-capacitor/package.json', referenceShell],
+  ...['packages/cli/templates/phaser-game/package.json', 'examples/phaser-starter/package.json']
+    .map((path): [string, ReturnType<typeof manifest>] => [path, manifest(read(path), path)]),
+  ...readdirSync(new URL('../native-plugins/', import.meta.url))
+    .map((name) => `native-plugins/${name}/package.json`)
+    .filter((path) => existsSync(new URL(`../${path}`, import.meta.url)))
+    .map((path): [string, ReturnType<typeof manifest>] => [path, manifest(read(path), path)]),
+];
+for (const [path, packageManifest] of pushNotificationsManifests) {
   for (const field of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
     assert.equal(
       packageManifest[field]['@capacitor/push-notifications'],
@@ -297,22 +303,38 @@ for (const path of [
     );
   }
 }
-for (const file of readdirSync(new URL('../adapters/capacitor/src/', import.meta.url))) {
-  if (!file.endsWith('.ts') || file.startsWith('notifications') || file.endsWith('.test.ts')) {
+assert.doesNotMatch(
+  read('packages/cli/src/capacitor-shell-starter.ts'),
+  /@capacitor\/push-notifications/u,
+  'The CLI shell starter must not install @capacitor/push-notifications',
+);
+// The base entry's module graph stays free of the optional peers: no other
+// module imports them, or a notifications module that does.
+const notificationsSpecifier = new RegExp(
+  `["'\`](?:${notificationPlugins.map((name) => name.replace('/', '\\/')).join('|')}|\\./notifications[^"'\`]*)["'\`]`,
+  'u',
+);
+for (const entry of readdirSync(new URL('../adapters/capacitor/src/', import.meta.url), {
+  recursive: true,
+})) {
+  const file = String(entry).replaceAll('\\', '/');
+  const name = file.split('/').at(-1) ?? file;
+  if (!file.endsWith('.ts') || name.startsWith('notifications') || file.endsWith('.test.ts')) {
     continue;
   }
-  const source = read(`adapters/capacitor/src/${file}`);
-  for (const specifier of ['@capacitor-firebase/messaging', '@capacitor/local-notifications']) {
-    assert.ok(
-      !source.includes(`'${specifier}'`),
-      `adapters/capacitor/src/${file}: only the notifications subpath may import ${specifier}`,
-    );
-  }
+  assert.doesNotMatch(
+    read(`adapters/capacitor/src/${file}`),
+    notificationsSpecifier,
+    `adapters/capacitor/src/${file}: only the notifications subpath may import the notification plugins or modules`,
+  );
 }
-const notificationsProvider = read('adapters/capacitor/src/notifications-provider.ts');
+// Code, not comments: the scheduled notification sets the flag itself.
+const notificationsProvider = read('adapters/capacitor/src/notifications-provider.ts')
+  .replace(/\/\*[\s\S]*?\*\//gu, '')
+  .replace(/^\s*\/\/.*$/gmu, '');
 assert.match(
   notificationsProvider,
-  /isExactNotification: false/u,
+  /^\s+isExactNotification: false,$/mu,
   'Capacitor local reminders must be scheduled with inexact alarms',
 );
 assert.doesNotMatch(
