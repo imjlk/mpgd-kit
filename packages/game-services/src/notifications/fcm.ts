@@ -54,7 +54,7 @@ const defaultRetryAfterSeconds = 60;
 export interface FcmServiceAccount {
   readonly projectId: string;
   readonly clientEmail: string;
-  /** PKCS #8 PEM (`-----BEGIN PRIVATE KEY-----`). */
+  /** A PKCS #8 PEM `PRIVATE KEY` block, as a service-account key file holds it. */
   readonly privateKey: string;
   readonly privateKeyId?: string;
 }
@@ -607,7 +607,7 @@ function providerCodeOf(text: string): string {
 
 async function importPrivateKey(subtle: SubtleCrypto, pem: string): Promise<CryptoKey> {
   const body = pem
-    .replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----/gu, '')
+    .replace(/-----(?:BEGIN|END) PRIVATE KEY-----/gu, '')
     .replace(/\\n|\s/gu, '');
   let der: Uint8Array<ArrayBuffer>;
   try {
