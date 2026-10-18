@@ -4006,7 +4006,9 @@ export async function runNotificationConformanceVector(
     return failed([
       {
         path: 'backend',
-        expected: 'the deployment and the notices are valid',
+        expected: options.createBackend === undefined
+          ? 'the deployment and the notices are valid'
+          : 'createBackend resolves',
         actual: describeError(error),
       },
     ]);

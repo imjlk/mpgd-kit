@@ -450,32 +450,76 @@ describe('notifications conformance runner', () => {
   });
 
   it('runs a backend under test through createBackend and awaits its async backend steps', async () => {
-    const vector = vectorNamed('endpoint-unbind-on-session-end');
-    const created: string[] = [];
-    let revoked = false;
-    const result = await runNotificationConformanceVector(vector, {
-      createBackend: async (input, context) => {
-        created.push(`${context.vector.vector}:${input.entry?.provider ?? 'none'}:${input.defaultPlayer}`);
-        const backend = createNotificationConformanceBackend(input);
-        return Object.assign(Object.create(backend) as typeof backend, {
-          async revokeSession() {
-            await Promise.resolve();
-            backend.revokeSession();
-            revoked = true;
-          },
-        });
-      },
+    const macrotask = (): Promise<void> => new Promise((resolve) => {
+      setTimeout(resolve, 0);
     });
-    expect(result).toMatchObject({ status: 'passed', failures: [] });
-    expect(created).toEqual([`endpoint-unbind-on-session-end:${vector.profile.provider}:${vector.context.player}`]);
-    expect(revoked).toBe(true);
-    const failed = await runNotificationConformanceVector(vector, {
+    const order: string[] = [];
+    const wrap = (
+      backend: ReturnType<typeof createNotificationConformanceBackend>,
+    ): ReturnType<typeof createNotificationConformanceBackend> =>
+      Object.assign(Object.create(backend) as typeof backend, {
+        async revokeSession() {
+          await macrotask();
+          backend.revokeSession();
+          order.push('revoked');
+        },
+        async registerInstallation(
+          installation: Parameters<typeof backend.registerInstallation>[0],
+        ) {
+          await macrotask();
+          backend.registerInstallation(installation);
+          order.push(`installed:${installation.installationId}`);
+        },
+        async deliver(input: Parameters<typeof backend.deliver>[0]) {
+          order.push('deliver');
+          return backend.deliver(input);
+        },
+      });
+    const inputs: unknown[] = [];
+    for (const name of ['endpoint-unbind-on-session-end', 'endpoint-fan-out', 'advertising-needs-consent']) {
+      const vector = vectorNamed(name);
+      const result = await runNotificationConformanceVector(vector, {
+        createBackend: async (input, context) => {
+          expect(context.vector).toBe(vector);
+          inputs.push({
+            vector: name,
+            provider: input.entry?.provider,
+            player: input.defaultPlayer,
+            locale: input.defaultLocale,
+            catalog: input.catalog,
+            deployment: input.deployment,
+            notices: input.notices,
+          });
+          return wrap(createNotificationConformanceBackend(input));
+        },
+      });
+      expect(result).toMatchObject({ vector: name, status: 'passed', failures: [] });
+      // Each async step finished before the runner moved on to the next one.
+      if (name === 'endpoint-unbind-on-session-end') {
+        expect(order[order.indexOf('revoked') + 1]).toBe('deliver');
+      }
+      if (name === 'endpoint-fan-out') {
+        expect(order.slice(0, 3)).toEqual(['installed:installation-2', 'installed:installation-3', 'deliver']);
+      }
+      order.length = 0;
+    }
+    const advertising = vectorNamed('advertising-needs-consent');
+    expect(inputs).toContainEqual({
+      vector: 'advertising-needs-consent',
+      provider: advertising.profile.provider,
+      player: advertising.context.player,
+      locale: 'ko',
+      catalog: advertising.catalog,
+      deployment: advertising.deployment,
+      notices: advertising.notices,
+    });
+    const failed = await runNotificationConformanceVector(vectorNamed('endpoint-unbind-on-session-end'), {
       createBackend: () => {
         throw new Error('no store');
       },
     });
     expect(failed.failures).toEqual([
-      { path: 'backend', expected: 'the deployment and the notices are valid', actual: 'Error: no store' },
+      { path: 'backend', expected: 'createBackend resolves', actual: 'Error: no store' },
     ]);
   });
 
