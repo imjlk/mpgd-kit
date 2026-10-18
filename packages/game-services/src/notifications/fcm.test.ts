@@ -191,7 +191,14 @@ const request: NotificationRemoteDeliveryRequest = {
     [{ data: { 'mpgd.route': '/evil' } }, /reserved/u],
     [{ data: { 'google.c.a.e': '1' } }, /reserved/u],
     [{ data: { from: 'x' } }, /reserved/u],
-    [{ data: { big: 'x'.repeat(5000) } }, /4096/u],
+    [{ data: { big: 'x'.repeat(5000) } }, /at most 3840/u],
+    [{ data: { googleFoo: '1' } }, /reserved/u],
+    [{ data: { gcmX: '1' } }, /reserved/u],
+    [{ data: { '': '1' } }, /reserved/u],
+    [{ data: JSON.parse('{"__proto__":"x"}') as Record<string, string> }, /reserved/u],
+    [{ data: { count: 3 } }, /not a string/u],
+    [{ expiresAt: '2026-10-19T03:00:00.500Z' }, /expires before/u],
+    [{ expiresAt: 'soon' }, /not a timestamp/u],
   ] as const) {
     const result = buildFcmMessage({ ...request, ...change } as NotificationRemoteDeliveryRequest);
     assert.equal(result.status, 'invalid');
@@ -215,7 +222,12 @@ const request: NotificationRemoteDeliveryRequest = {
     },
   });
   assert.deepEqual(classifyFcmError(fcmError(404, 'UNREGISTERED')), { status: 'unregistered' });
-  assert.deepEqual(classifyFcmError(fcmError(400, 'INVALID_ARGUMENT')), { status: 'unregistered' });
+  // Without an answer that names the token, an INVALID_ARGUMENT keeps the endpoint.
+  assert.deepEqual(classifyFcmError(fcmError(400, 'INVALID_ARGUMENT')), {
+    status: 'rejected',
+    reason: 'configuration',
+    providerCode: 'INVALID_ARGUMENT',
+  });
   assert.deepEqual(
     classifyFcmError(
       fcmError(400, 'INVALID_ARGUMENT', [
@@ -420,10 +432,110 @@ const request: NotificationRemoteDeliveryRequest = {
     fetch: flaky.fetch,
     now,
   });
-  await assert.rejects(broken.get(), /could not be imported/u);
+  await assert.rejects(broken.get(), {
+    name: 'FcmAccessTokenError',
+    code: 'TOKEN_KEY_UNUSABLE',
+    retryable: false,
+  });
   assert.throws(
     () => createFcmDeliveryProvider({ serviceAccount, projectId: 'Bad Project' }),
     /project id/u,
+  );
+}
+
+// Configuration failures answer at once, without hammering Google.
+{
+  const now = () => Date.parse('2026-10-19T03:00:00Z');
+  // APNs auth is missing: a 401 that names THIRD_PARTY_AUTH_ERROR mints no new token.
+  const apns = fakeGoogle({
+    send: () =>
+      Response.json(
+        {
+          error: {
+            code: 401,
+            status: 'UNAUTHENTICATED',
+            details: [{ errorCode: 'THIRD_PARTY_AUTH_ERROR' }],
+          },
+        },
+        { status: 401 },
+      ),
+  });
+  assert.deepEqual(
+    await createFcmDeliveryProvider({ serviceAccount, fetch: apns.fetch, now }).send(request),
+    { status: 'rejected', reason: 'configuration', providerCode: 'THIRD_PARTY_AUTH_ERROR' },
+  );
+  assert.equal(apns.tokenCount(), 1);
+  // A key that cannot sign is configuration, and the refusal is remembered for a while.
+  const google = fakeGoogle({});
+  const broken = createFcmDeliveryProvider({
+    serviceAccount: {
+      ...serviceAccount,
+      privateKey: '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----',
+    },
+    fetch: google.fetch,
+    now,
+  });
+  for (let send = 0; send < 3; send += 1) {
+    assert.deepEqual(await broken.send(request), {
+      status: 'rejected',
+      reason: 'configuration',
+      providerCode: 'TOKEN_KEY_UNUSABLE',
+    });
+  }
+  assert.equal(google.exchanges.length, 0);
+  // A refused grant is asked again only after 30 seconds, and its code is sanitized.
+  let clock = now();
+  const refusing = fakeGoogle({
+    token: () => Response.json({ error: 'invalid grant: <bad>' }, { status: 400 }),
+  });
+  const refused = createFcmDeliveryProvider({
+    serviceAccount,
+    fetch: refusing.fetch,
+    now: () => clock,
+  });
+  for (let send = 0; send < 3; send += 1) {
+    assert.deepEqual(await refused.send(request), {
+      status: 'rejected',
+      reason: 'configuration',
+      providerCode: 'TOKEN_INVALID_GRANT_BAD_',
+    });
+  }
+  assert.equal(refusing.tokenCount(), 1);
+  clock += 30_001;
+  await refused.send(request);
+  assert.equal(refusing.tokenCount(), 2);
+  // A service-account file whose key keeps its newlines escaped still signs.
+  const escaped = fakeGoogle({});
+  const escapedKey = createFcmDeliveryProvider({
+    serviceAccount: { ...serviceAccount, privateKey: pem.replace(/\n/gu, '\\n') },
+    fetch: escaped.fetch,
+    now,
+  });
+  assert.equal((await escapedKey.send(request)).status, 'accepted');
+  await verifyJwt(
+    new URLSearchParams(String(escaped.exchanges[0]?.init.body)).get('assertion') ?? '',
+  );
+  // Retry-After as an HTTP date reads the provider's clock, and is capped at a day.
+  for (const [header, seconds] of [
+    [new Date(now() + 120_000).toUTCString(), 120],
+    ['9999999', 86_400],
+  ] as const) {
+    const limited = fakeGoogle({
+      send: () =>
+        Response.json(
+          { error: { code: 429, details: [{ errorCode: 'QUOTA_EXCEEDED' }] } },
+          { status: 429, headers: { 'retry-after': header } },
+        ),
+    });
+    assert.deepEqual(
+      await createFcmDeliveryProvider({ serviceAccount, fetch: limited.fetch, now }).send(request),
+      { status: 'rate-limited', retryAfterSeconds: seconds },
+    );
+  }
+  // Legacy domain-scoped project ids are accepted.
+  assert.equal(
+    createFcmDeliveryProvider({ serviceAccount, projectId: 'example.com:my-project' }).id,
+    'fcm',
   );
 }
 

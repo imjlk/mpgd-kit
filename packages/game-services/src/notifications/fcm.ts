@@ -32,8 +32,16 @@ export const fcmTokenEndpoint = 'https://oauth2.googleapis.com/token';
 export const fcmAddressKinds = Object.freeze(['fcm-token'] as const);
 /** Data keys this provider writes; a send's routing data may not use the prefix. */
 export const fcmReservedDataPrefix = 'mpgd.';
-/** FCM's limit on a message's notification and data payload. */
-const maxPayloadBytes = 4096;
+/**
+ * FCM's 4,096-byte limit, less room for what FCM and APNs add on the way
+ * (the `aps` wrapper and FCM's own keys), so a message this check passes is
+ * not refused for its size.
+ */
+const maxPayloadBytes = 3840;
+/** The longest `Retry-After` this provider passes on; the service gives up after a day anyway. */
+const maxRetryAfterSeconds = 86_400;
+/** How long a refused grant or an unusable key answers without asking Google again. */
+const failedTokenCacheMs = 30_000;
 const tokenLifetimeSeconds = 3600;
 /** A cached token is refreshed this long before it expires. */
 const tokenRefreshMarginMs = 5 * 60 * 1000;
@@ -129,6 +137,7 @@ export function createFcmAccessTokenSource(input: {
   const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
   let signingKey: Promise<CryptoKey> | undefined;
   let cached: { readonly token: string; readonly refreshAt: number } | undefined;
+  let failed: { readonly error: FcmAccessTokenError; readonly until: number } | undefined;
   let pending: Promise<string> | undefined;
 
   const key = (): Promise<CryptoKey> => {
@@ -138,21 +147,29 @@ export function createFcmAccessTokenSource(input: {
     });
     return signingKey;
   };
+  /** The signed assertion; a key that cannot sign is a configuration error, never retried as a rate limit. */
+  const assertionAt = async (issuedAt: number, claims: object): Promise<string> => {
+    try {
+      return await signJwt(subtle, await key(), {
+        header: {
+          alg: 'RS256',
+          typ: 'JWT',
+          ...(serviceAccount.privateKeyId === undefined ? {} : { kid: serviceAccount.privateKeyId }),
+        },
+        claims,
+      });
+    } catch {
+      throw new FcmAccessTokenError('TOKEN_KEY_UNUSABLE', false);
+    }
+  };
   const mint = async (): Promise<string> => {
     const issuedAt = Math.floor(now() / 1000);
-    const assertion = await signJwt(subtle, await key(), {
-      header: {
-        alg: 'RS256',
-        typ: 'JWT',
-        ...(serviceAccount.privateKeyId === undefined ? {} : { kid: serviceAccount.privateKeyId }),
-      },
-      claims: {
-        iss: serviceAccount.clientEmail,
-        scope: fcmMessagingScope,
-        aud: fcmTokenEndpoint,
-        iat: issuedAt,
-        exp: issuedAt + tokenLifetimeSeconds,
-      },
+    const assertion = await assertionAt(issuedAt, {
+      iss: serviceAccount.clientEmail,
+      scope: fcmMessagingScope,
+      aud: fcmTokenEndpoint,
+      iat: issuedAt,
+      exp: issuedAt + tokenLifetimeSeconds,
     });
     let response: Response;
     try {
@@ -173,9 +190,9 @@ export function createFcmAccessTokenSource(input: {
       const error = typeof body?.error === 'string' ? body.error : `HTTP_${response.status}`;
       const retryable = response.status === 429 || response.status >= 500;
       throw new FcmAccessTokenError(
-        `TOKEN_${error.toUpperCase()}`,
+        `TOKEN_${providerCodeOf(error)}`,
         retryable,
-        retryable ? retryAfterOf(response) : undefined,
+        retryable ? retryAfterOf(response, now()) : undefined,
       );
     }
     const token = body?.access_token;
@@ -194,9 +211,20 @@ export function createFcmAccessTokenSource(input: {
       if (cached !== undefined && now() < cached.refreshAt) {
         return cached.token;
       }
-      pending ??= mint().finally(() => {
-        pending = undefined;
-      });
+      if (failed !== undefined && now() < failed.until) {
+        // A refused grant fails the same way for a while: a fan-out does not ask Google per send.
+        throw failed.error;
+      }
+      pending ??= mint()
+        .catch((error: unknown) => {
+          if (error instanceof FcmAccessTokenError && !error.retryable) {
+            failed = { error, until: now() + failedTokenCacheMs };
+          }
+          throw error;
+        })
+        .finally(() => {
+          pending = undefined;
+        });
       return pending;
     },
     invalidate(token) {
@@ -230,9 +258,10 @@ export type FcmMessageBuild =
 /**
  * Builds the HTTP v1 `message` for one delivery and checks it against FCM's
  * rules before anything is sent: a registration token address, a title and
- * a body, routing data without FCM's or this provider's reserved keys, and a
- * payload within 4,096 bytes. A message that passes is "known valid", which
- * is what lets an `INVALID_ARGUMENT` answer mean a dead token.
+ * a body, string routing data without FCM's or this provider's reserved
+ * keys, an expiry at least a second away, and a payload within FCM's limit
+ * with room for what APNs adds. A message that passes is "known valid", so an
+ * `INVALID_ARGUMENT` answer that names the token means a dead token.
  */
 export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): FcmMessageBuild {
   const { recipient, content } = request;
@@ -242,10 +271,17 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
   if (content.title === undefined || content.body === undefined) {
     return { status: 'invalid', reason: 'FCM content needs a title and a body' };
   }
-  const data: Record<string, string> = {};
+  // A null-prototype object keeps a `__proto__` key from vanishing silently.
+  const data: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const [key, value] of Object.entries(request.data ?? {})) {
     if (isReservedDataKey(key)) {
       return { status: 'invalid', reason: `the data key ${JSON.stringify(key)} is reserved` };
+    }
+    if (typeof value !== 'string') {
+      return {
+        status: 'invalid',
+        reason: `the data value of ${JSON.stringify(key)} is not a string`,
+      };
     }
     data[key] = value;
   }
@@ -256,21 +292,18 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
     data[`${fcmReservedDataPrefix}actions`] = JSON.stringify(actions);
   }
   const notification = { title: content.title, body: content.body };
-  const payloadBytes = new TextEncoder().encode(JSON.stringify({ notification, data })).length;
-  if (payloadBytes > maxPayloadBytes) {
-    return {
-      status: 'invalid',
-      reason: `the payload is ${payloadBytes} bytes; FCM accepts ${maxPayloadBytes}`,
-    };
-  }
   const channelId = request.topic.mapping?.['channelId'];
   const expiresAt = request.expiresAt === undefined ? undefined : Date.parse(request.expiresAt);
   const at = Date.parse(request.at);
   if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || !Number.isFinite(at))) {
     return { status: 'invalid', reason: 'the expiry or the call time is not a timestamp' };
   }
+  if (expiresAt !== undefined && expiresAt - at < 1000) {
+    // A time to live of 0 means "now, if reachable" to FCM: an expired message is not sent at all.
+    return { status: 'invalid', reason: 'the message expires before it could arrive' };
+  }
   const android: Record<string, unknown> = {
-    ...(expiresAt === undefined ? {} : { ttl: `${Math.max(0, Math.floor((expiresAt - at) / 1000))}s` }),
+    ...(expiresAt === undefined ? {} : { ttl: `${Math.floor((expiresAt - at) / 1000)}s` }),
     ...(typeof channelId === 'string' && channelId !== ''
       ? { notification: { channel_id: channelId } }
       : {}),
@@ -282,23 +315,31 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
       : { headers: { 'apns-expiration': String(Math.floor(expiresAt / 1000)) } }),
     ...(category === undefined ? {} : { payload: { aps: { category } } }),
   };
+  const payload = {
+    notification,
+    data: { ...data },
+    ...(Object.keys(android).length === 0 ? {} : { android }),
+    ...(Object.keys(apns).length === 0 ? {} : { apns }),
+  };
+  // Everything but the token counts toward the size FCM and APNs carry.
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).length;
+  if (payloadBytes > maxPayloadBytes) {
+    return {
+      status: 'invalid',
+      reason: `the payload is ${payloadBytes} bytes; this provider sends at most ${maxPayloadBytes}`,
+    };
+  }
   return {
     status: 'ready',
-    message: {
-      token: recipient.address.value,
-      notification,
-      data,
-      ...(Object.keys(android).length === 0 ? {} : { android }),
-      ...(Object.keys(apns).length === 0 ? {} : { apns }),
-    },
+    message: { token: recipient.address.value, ...payload },
   };
 }
 
 /**
  * Maps an FCM error answer to the provider answer kinds (RFC "Delivery
  * providers"): `UNREGISTERED` is `unregistered`, and so is
- * `INVALID_ARGUMENT` for a message `buildFcmMessage` passed unless the
- * answer names a field other than the token; `QUOTA_EXCEEDED` is
+ * `INVALID_ARGUMENT` for a message `buildFcmMessage` passed when the answer
+ * names the token and no other field; `QUOTA_EXCEEDED` is
  * `rate-limited`; `UNAVAILABLE` and `INTERNAL` are `ambiguous`;
  * `SENDER_ID_MISMATCH`, `THIRD_PARTY_AUTH_ERROR`, and every other refusal are
  * `rejected` with reason `configuration`. An answer without an FCM error code
@@ -311,10 +352,7 @@ export function classifyFcmError(input: {
 }): NotificationRemoteDeliveryAnswer {
   const error = isRecord(input.body) && isRecord(input.body.error) ? input.body.error : undefined;
   const details = Array.isArray(error?.details) ? error.details.filter(isRecord) : [];
-  const fcmCode = details
-    .map((detail) => detail.errorCode)
-    .find((code): code is string => typeof code === 'string');
-  const code = fcmCode ?? (typeof error?.status === 'string' ? error.status : undefined);
+  const code = fcmErrorCodeOf(input.body) ?? (typeof error?.status === 'string' ? error.status : undefined);
   const rateLimited = (): NotificationRemoteDeliveryAnswer => ({
     status: 'rate-limited',
     retryAfterSeconds: input.retryAfterSeconds ?? defaultRetryAfterSeconds,
@@ -327,7 +365,9 @@ export function classifyFcmError(input: {
         .flatMap((detail) => (Array.isArray(detail.fieldViolations) ? detail.fieldViolations : []))
         .filter(isRecord)
         .map((violation) => violation.field);
-      return fields.every((field) => field === 'message.token')
+      // Only an answer that names the token proves the address is dead; any
+      // other refusal of a message that passed buildFcmMessage is the setup's.
+      return fields.length > 0 && fields.every((field) => field === 'message.token')
         ? { status: 'unregistered' }
         : { status: 'rejected', reason: 'configuration', providerCode: code };
     }
@@ -361,7 +401,8 @@ export function createFcmDeliveryProvider(
   input: CreateFcmDeliveryProviderInput,
 ): NotificationRemoteDeliveryProvider {
   const projectId = input.projectId ?? input.serviceAccount.projectId;
-  if (!/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/u.test(projectId)) {
+  // Project ids, including legacy domain-scoped ones (`example.com:my-project`).
+  if (!/^[a-z0-9][a-z0-9.:-]{4,99}$/u.test(projectId)) {
     throw new TypeError('The FCM project id is not a Firebase project id.');
   }
   const fetcher: FetchLike = input.fetch ?? ((url, init) => globalThis.fetch(url, init));
@@ -419,18 +460,21 @@ export function createFcmDeliveryProvider(
             ? { status: 'accepted', providerMessageId: name }
             : { status: 'accepted' };
         }
-        if (response.status === 401 && attempt === 0) {
+        if (response.status === 401 && attempt === 0 && fcmErrorCodeOf(answer) === undefined) {
           // The token was revoked or expired early: mint a new one once.
           tokens.invalidate(token);
           continue;
         }
-        const retryAfterSeconds = retryAfterOf(response);
+        const retryAfterSeconds = retryAfterOf(response, (input.now ?? Date.now)());
         return classifyFcmError({
           status: response.status,
           body: answer,
           ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
         });
       }
+      // Not reached: the second attempt always answers above. The loop's
+      // type needs an answer here, and a fresh token refused again would be
+      // the setup's to fix.
       return { status: 'rejected', reason: 'configuration', providerCode: 'UNAUTHENTICATED' };
     },
   };
@@ -453,14 +497,31 @@ export function createFcmProviderRegistration(
   };
 }
 
+/** FCM's reserved data keys (`from`, `message_type`, and any `google` or `gcm` prefix), this provider's, and keys a plain object cannot hold. */
 function isReservedDataKey(key: string): boolean {
   const lower = key.toLowerCase();
-  return key.startsWith(fcmReservedDataPrefix)
+  return key === ''
+    || key === '__proto__'
+    || key.startsWith(fcmReservedDataPrefix)
     || lower === 'from'
     || lower === 'notification'
     || lower === 'message_type'
-    || lower.startsWith('google.')
-    || lower.startsWith('gcm.');
+    || lower.startsWith('google')
+    || lower.startsWith('gcm');
+}
+
+/** The FCM `errorCode` in an error answer's details, if any. */
+function fcmErrorCodeOf(body: unknown): string | undefined {
+  const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
+  const details = Array.isArray(error?.details) ? error.details.filter(isRecord) : [];
+  return details
+    .map((detail) => detail.errorCode)
+    .find((code): code is string => typeof code === 'string');
+}
+
+/** An upstream error string as a short provider code: upper case, `[A-Z0-9_]`, at most 64 characters. */
+function providerCodeOf(text: string): string {
+  return text.toUpperCase().replace(/[^A-Z0-9_]+/gu, '_').slice(0, 64) || 'UNKNOWN';
 }
 
 async function importPrivateKey(subtle: SubtleCrypto, pem: string): Promise<CryptoKey> {
@@ -517,20 +578,20 @@ async function readJson(response: Response): Promise<Readonly<Record<string, unk
   }
 }
 
-/** `Retry-After` in seconds when it is a positive number of seconds or an HTTP date. */
-function retryAfterOf(response: Response): number | undefined {
+/** `Retry-After` in seconds (a number or an HTTP date), at most a day. */
+function retryAfterOf(response: Response, now: number): number | undefined {
   const header = response.headers.get('retry-after');
   if (header === null || header.trim() === '') {
     return undefined;
   }
   const seconds = Number(header);
   if (Number.isFinite(seconds) && seconds > 0) {
-    return Math.ceil(seconds);
+    return Math.min(Math.ceil(seconds), maxRetryAfterSeconds);
   }
   const date = Date.parse(header);
   if (Number.isFinite(date)) {
-    const delta = Math.ceil((date - Date.now()) / 1000);
-    return delta > 0 ? delta : undefined;
+    const delta = Math.ceil((date - now) / 1000);
+    return delta > 0 ? Math.min(delta, maxRetryAfterSeconds) : undefined;
   }
   return undefined;
 }
