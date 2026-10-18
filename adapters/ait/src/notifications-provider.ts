@@ -165,10 +165,10 @@ type AgreementAnswer =
  *   too-old Toss app throws `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED` before
  *   any sheet, `NOTIFICATION_AGREEMENT_FAILED` (a bad template code) throws
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED` with that `hostCode`, and any other
- *   host error throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A failure after
- *   an earlier topic of the same request was answered does not throw: that
- *   answer and its evidence are returned, and the failed and remaining topics
- *   are `dismissed`. The SDK's cleanup function is always called.
+ *   host error throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. That retryable
+ *   failure, after an earlier topic of the same request was answered, does
+ *   not throw: that answer and its evidence are returned, and the failed and
+ *   remaining topics are `dismissed`. The SDK's cleanup function is always called.
  * - **Evidence.** A request with a decided answer carries an
  *   `apps-in-toss.notification-agreement.v1` envelope with each answered
  *   topic's template set code and SDK event, for the backend's
@@ -262,12 +262,14 @@ export function createAitNotificationProvider(
         try {
           answer = await ask(mapping.templateSetCode);
         } catch (error) {
-          if (decided.size === 0) {
+          // A configuration or host-version failure must surface, whatever was
+          // answered before it. A retryable one after an answered sheet is
+          // absorbed: the host keeps that agreement, so report it rather than
+          // lose its evidence. This topic and the rest were not decided, so
+          // the next request asks again.
+          if (decided.size === 0 || !(error instanceof NotificationError && error.retryable)) {
             throw error;
           }
-          // An earlier sheet in this request was answered, and the host keeps
-          // that agreement: report it rather than lose its evidence. This
-          // topic and the rest were not decided, so the next request asks again.
           console.warn('AIT notification agreement failed after earlier answers.', error);
           outcomes.set(topic, 'dismissed');
           remaining = 'dismissed';

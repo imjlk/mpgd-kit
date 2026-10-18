@@ -240,10 +240,38 @@ describe('Apps in Toss notifications provider', () => {
     expect(maxOpen).toBe(1);
   });
 
-  it('returns earlier answers and their evidence when a later sheet fails', async () => {
+  it('throws a configuration failure on a later sheet, whatever was answered before', async () => {
+    const { host, provider } = setup();
+    host.queue({ kind: 'event', type: 'newAgreement' });
+    host.queue({ kind: 'error', error: { code: 'NOTIFICATION_AGREEMENT_FAILED' } });
+    await expect(codeOf(provider.requestPermission({ topics: ['energy-full', 'friend-challenge'] })))
+      .resolves.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
+  });
+
+  it('reports an earlier answer next to a later terms decline', async () => {
+    const { host, provider } = setup();
+    host.queue({ kind: 'event', type: 'newAgreement' });
+    host.queue({ kind: 'error', error: { code: 'TERMS_DISAGREED_MEMBER' } });
+    await expect(provider.requestPermission({ topics: ['energy-full', 'friend-challenge'] }))
+      .resolves.toEqual({
+        snapshot: { topics: { 'energy-full': 'granted', 'friend-challenge': 'unknown' } },
+        outcomes: { 'energy-full': 'granted', 'friend-challenge': 'action-required' },
+        requiredAction: 'host-settings',
+        evidence: {
+          schema: aitNotificationAgreementEvidenceSchema,
+          payload: {
+            provider: 'apps-in-toss',
+            'templateSetCode:energy-full': 'my-game-energy-full',
+            'result:energy-full': 'newAgreement',
+          },
+        },
+      });
+  });
+
+  it('returns earlier answers and their evidence when a later sheet fails temporarily', async () => {
     const { host, provider } = setup();
     host.queue({ kind: 'event', type: 'agreementRejected' });
-    host.queue({ kind: 'error', error: { code: 'NOTIFICATION_AGREEMENT_FAILED' } });
+    host.queue({ kind: 'error', error: new Error('bridge gone') });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const result = await provider.requestPermission({
