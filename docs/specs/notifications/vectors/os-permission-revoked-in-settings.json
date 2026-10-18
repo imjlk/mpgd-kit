@@ -1,8 +1,12 @@
 {
   "vector": "os-permission-revoked-in-settings",
   "protocol": "2.0.0-draft.1",
-  "summary": "A permission the player turns off in system settings, which raises no event, is read as blocked on the next read: the endpoint is registered again with it, the pending local reminder is cancelled, and a new one answers permission-required without a prompt.",
+  "summary": "A permission the player turns off in system settings, which raises no event, is read as blocked on the next read: the endpoint is registered again with permission blocked, the pending local reminder is cancelled, and a new one answers permission-required without a prompt.",
   "appliesTo": [
+    {
+      "path": "permission.scope",
+      "equals": "app"
+    },
     {
       "path": "permission.prompt",
       "equals": "os"
@@ -175,6 +179,14 @@
   ],
   "expect": {
     "prompts": 1,
+    "consent": [
+      {
+        "kind": "topic-preference",
+        "topic": "energy-full",
+        "state": "granted",
+        "source": "player"
+      }
+    ],
     "endpoints": [
       {
         "provider": "fixture.os-fcm",
