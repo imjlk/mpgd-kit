@@ -1345,6 +1345,47 @@ describe('Capacitor notifications provider: opens and events', () => {
     expect(second).toEqual(['energy-full']);
   });
 
+  it('treats the same function subscribed twice as two subscriptions', () => {
+    const { provider, sdks } = setup();
+    sdks.tap({ channel: 'remote', topic: 'friend-challenge' });
+    const seen: (string | undefined)[] = [];
+    const listener = (event: NotificationEvent): void => {
+      seen.push(event.type === 'opened' ? event.topic : event.type);
+    };
+    const firstStop = provider.subscribe(listener);
+    const secondStop = provider.subscribe(listener);
+    sdks.tap({ channel: 'remote', topic: 'energy-full' });
+    // The backlog once, to the first subscription; the live tap to both.
+    expect(seen).toEqual(['friend-challenge', 'energy-full', 'energy-full']);
+    // Removing one leaves the other.
+    secondStop();
+    sdks.tap({ channel: 'remote', topic: 'weekend-event' });
+    expect(seen.at(-1)).toBe('weekend-event');
+    expect(seen).toHaveLength(4);
+    firstStop();
+  });
+
+  it('keeps the backlog whole when the first subscriber dispatches past the limit while draining', () => {
+    const { provider, sdks } = setup();
+    for (let index = 0; index < 64; index += 1) {
+      sdks.tap({ channel: 'remote', topic: 'friend-challenge', data: { n: String(index) } });
+    }
+    const seen: string[] = [];
+    let tapped = false;
+    provider.subscribe((event) => {
+      if (event.type === 'opened') {
+        seen.push(event.data?.['n'] ?? event.topic ?? '');
+      }
+      if (!tapped) {
+        tapped = true;
+        sdks.tap({ channel: 'remote', topic: 'energy-full' });
+      }
+    });
+    expect(seen).toHaveLength(65);
+    expect(seen.slice(0, 64)).toEqual(Array.from({ length: 64 }, (_, index) => String(index)));
+    expect(seen[64]).toBe('energy-full');
+  });
+
   it('keeps the opens when the buffer overflows before the first subscriber', () => {
     const { provider, sdks } = setup();
     sdks.tap({ channel: 'remote', topic: 'friend-challenge' });

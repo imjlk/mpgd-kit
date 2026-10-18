@@ -199,9 +199,6 @@ export function createCapacitorNotificationProvider(
 ): CapacitorNotificationProvider {
   const { push, local, platform } = input;
   const providerId = input.provider ?? capacitorNotificationProviderId;
-  // The provider registers FCM tokens only. `fcm-installation` addresses are
-  // reserved: FCM HTTP v1 cannot send to a Firebase installation id, so the
-  // game-services sender refuses them.
   const topics = [...input.topics];
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
   /**
@@ -257,6 +254,18 @@ export function createCapacitorNotificationProvider(
   // Events wait whenever no listener is attached, not only before the first:
   // the gateway's bridge detaches when its last listener leaves, so a game
   // that subscribes per scene would otherwise lose an open between scenes.
+  function deliver(
+    event: NotificationEvent,
+    targets: readonly ((event: NotificationEvent) => void)[],
+  ): void {
+    for (const target of targets) {
+      try {
+        target(event);
+      } catch (error) {
+        reportError(error);
+      }
+    }
+  }
   let draining = false;
   const dispatch = (event: NotificationEvent): void => {
     if (listeners.size === 0 || draining) {
@@ -275,18 +284,6 @@ export function createCapacitorNotificationProvider(
     }
     deliver(event, [...listeners]);
   };
-  function deliver(
-    event: NotificationEvent,
-    targets: readonly ((event: NotificationEvent) => void)[],
-  ): void {
-    for (const target of targets) {
-      try {
-        target(event);
-      } catch (error) {
-        reportError(error);
-      }
-    }
-  }
 
   // Permission. It is read from the local plugin, which reflects the system
   // setting on every Android version, and asked through the push plugin,
@@ -391,6 +388,9 @@ export function createCapacitorNotificationProvider(
     const locale = (input.locale ?? defaultLocale)();
     return {
       provider: providerId,
+      // FCM tokens only: `fcm-installation` addresses are reserved, because
+      // FCM HTTP v1 cannot send to a Firebase installation id and the
+      // game-services sender refuses them.
       address: { kind: 'fcm-token', value, permission },
       ...(locale === undefined || locale === '' ? {} : { locale }),
       ...(timeZone === undefined || timeZone === '' ? {} : { timeZone }),
@@ -964,7 +964,10 @@ export function createCapacitorNotificationProvider(
       await returned;
       return 'opened';
     },
-    subscribe(listener) {
+    subscribe(subscriber) {
+      // One entry per call, so the same function subscribed twice is two
+      // subscriptions, and only the handle this call returns removes this one.
+      const listener = (event: NotificationEvent): void => subscriber(event);
       const first = listeners.size === 0;
       listeners.add(listener);
       // `source` reads `cold` only for opens before the first subscriber ever.
@@ -975,9 +978,9 @@ export function createCapacitorNotificationProvider(
         // and then reaches every listener attached by then, as a live one does.
         draining = true;
         // The backlog is taken whole, so an eviction while it drains touches
-        // only events dispatched meanwhile. The listener cannot leave during
-        // the drain: it runs inside this `subscribe` call, before the call
-        // returns its unsubscribe.
+        // only events dispatched meanwhile. This subscription cannot leave
+        // during the drain: it runs inside this `subscribe` call, before the
+        // call returns the only handle that removes it.
         const backlog = buffer.splice(0);
         try {
           for (const event of backlog) {
