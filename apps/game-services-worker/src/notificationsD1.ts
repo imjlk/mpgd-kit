@@ -343,7 +343,7 @@ function sendIndexOf(send: NotificationStoredSend): {
   const due = notificationSendDueAt(send);
   return {
     inFlight: send.rows.some((row) => row.state.status === 'in-flight') ? 1 : 0,
-    dueAtMs: due === undefined ? null : Date.parse(due),
+    dueAtMs: due === undefined ? null : millisOf(due),
     changedAtMs: millisOf(send.changedAt),
   };
 }

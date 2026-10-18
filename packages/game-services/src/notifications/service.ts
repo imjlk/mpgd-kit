@@ -235,7 +235,12 @@ class NotificationSendInputError extends Error {
   override readonly name = 'NotificationSendInputError';
 }
 
-/** The provider accepted or may have sent, but storing its answer failed. */
+/**
+ * The provider accepted or may have sent, but storing its answer failed. It
+ * is retryable for the caller, who answers from the ledger by the same key;
+ * the row itself recovers through the due replay once its lease ends, since
+ * a queue job never replays an attempted row.
+ */
 class NotificationSettleError extends NotificationError {
   constructor(options: { readonly cause: unknown }) {
     super('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
@@ -1039,16 +1044,19 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'endpoint-invalid' } };
       case 'rejected':
-        // A configuration rejection fails every send the same way: tell the operator.
-        report(
-          new Error(
-            `The provider rejected the delivery (${answer.reason}${
-              answer.providerCode === undefined ? '' : `, ${answer.providerCode}`
-            }).`,
-          ),
-          'provider.rejected',
-          { sendKey, provider: row.provider, rowKey: row.key },
-        );
+        // A configuration rejection fails every send the same way: tell the
+        // operator. A recipient or agreement refusal is the player's, not an alert.
+        if (answer.reason === 'configuration') {
+          report(
+            new Error(
+              `The provider rejected the delivery (configuration${
+                answer.providerCode === undefined ? '' : `, ${answer.providerCode}`
+              }).`,
+            ),
+            'provider.rejected',
+            { sendKey, provider: row.provider, rowKey: row.key },
+          );
+        }
         if (answer.reason === 'agreement') {
           await recordProviderDenial(send.request.player, send.request.topic, answeredAt);
         }

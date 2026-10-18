@@ -218,6 +218,10 @@ export function createFcmAccessTokenSource(input: {
       // Inside the refresh margin a token that has not expired still sends
       // while a refresh fails.
       const usable = cached !== undefined && now() < cached.expiresAt ? cached.token : undefined;
+      // A refresh already under way, or one that failed a moment ago, does not hold up a usable token.
+      if (usable !== undefined && pending !== undefined) {
+        return usable;
+      }
       if (failed !== undefined && now() < failed.until) {
         if (usable !== undefined) {
           return usable;
