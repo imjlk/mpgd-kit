@@ -4,7 +4,18 @@ import type { NotificationProvider } from '@mpgd/platform/notifications';
 
 import type { CreateAitBridgeNotificationProviderInput } from './notifications-bridge.js';
 
-type Loaded = typeof import('./notifications-bridge.js');
+/** What the provider uses from the bridge client chunk. */
+export type AitBridgeNotificationClientModule = Pick<
+  typeof import('./notifications-bridge.js'),
+  'createAitBridgeNotificationProvider' | 'readAitBridgeNotificationEvent'
+>;
+
+type Loaded = AitBridgeNotificationClientModule;
+
+export interface CreateLazyAitBridgeNotificationProviderOptions {
+  /** Loads the client chunk; the dynamic import by default. Tests inject it. */
+  readonly load?: () => Promise<AitBridgeNotificationClientModule>;
+}
 
 /** Delays before the client retries a failed load on its own while subscribers wait. */
 const retryDelaysMs = [1_000, 4_000, 15_000];
@@ -31,7 +42,9 @@ const retryDelaysMs = [1_000, 4_000, 15_000];
  */
 export function createLazyAitBridgeNotificationProvider(
   input: CreateAitBridgeNotificationProviderInput,
+  options: CreateLazyAitBridgeNotificationProviderOptions = {},
 ): NotificationProvider {
+  const importClient = options.load ?? (() => import('./notifications-bridge.js'));
   let loaded: Loaded | undefined;
   let loading: Promise<Loaded> | undefined;
   let retries = 0;
@@ -53,7 +66,7 @@ export function createLazyAitBridgeNotificationProvider(
     if (loading !== undefined) {
       return loading;
     }
-    const current = import('./notifications-bridge.js');
+    const current = importClient();
     loading = current;
     current.then(
       (module) => {

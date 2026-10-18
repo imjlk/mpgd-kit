@@ -110,9 +110,10 @@ describe('Apps in Toss notifications v2 over the game bridge', () => {
     provider.subscribe((event) => events.push(event));
     provider.subscribe((event) => events.push(event));
     // The bridge client loads first; the host keeps its cold open for the
-    // first listener, which attaches once the client has loaded.
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // first listener, which attaches once the client has loaded. A call
+    // through the provider resolves only after that load, and the waiting
+    // subscribers attach in the load's own handler, which runs first.
+    await provider.getPermission({ topics: [] });
     expect(events).toEqual([
       { type: 'opened', channel: 'remote', source: 'cold', referrer: 'push', route: '/daily' },
     ]);
