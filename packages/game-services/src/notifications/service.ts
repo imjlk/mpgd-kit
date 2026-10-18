@@ -235,9 +235,14 @@ class NotificationSendInputError extends Error {
   override readonly name = 'NotificationSendInputError';
 }
 
-/** The provider answered but storing its answer failed: the delivery may have happened. */
-class NotificationSettleError extends Error {
-  override readonly name = 'NotificationSettleError';
+/** The provider accepted or may have sent, but storing its answer failed. */
+class NotificationSettleError extends NotificationError {
+  constructor(options: { readonly cause: unknown }) {
+    super('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+      message: 'The provider answered, but the answer could not be stored; the send key answers from the ledger.',
+      cause: options.cause,
+    });
+  }
 }
 
 interface Recipient {
@@ -862,8 +867,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         return {};
       }
       const token = newToken();
+      // The replay window opens at the first claim that may reach the
+      // provider; paths that prove nothing was sent write the earlier value back.
       const claimedRow: NotificationSendRow = {
         ...row,
+        firstAttemptedAt: row.firstAttemptedAt ?? formatNotificationInstant(at),
         state: {
           status: 'in-flight',
           leaseUntil: formatNotificationInstant(at + leaseMs),
@@ -930,7 +938,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       key: row.key,
       provider: row.provider,
       ...(row.installationId === undefined ? {} : { installationId: row.installationId }),
-      ...(row.firstAttemptedAt === undefined ? {} : { firstAttemptedAt: row.firstAttemptedAt }),
+      ...(before.firstAttemptedAt === undefined ? {} : { firstAttemptedAt: before.firstAttemptedAt }),
     };
     if (decision.status === 'deferred') {
       await complete(
@@ -985,7 +993,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         // The provider may have sent it: the claim is kept for the lease.
         const kept = row.state.status === 'in-flight' ? row.state : undefined;
         const leaseUntil = answeredAt + leaseMs;
-        // The replay window starts at the first call the provider could not answer for.
+        // The replay window started at the claim that reached the provider (or an earlier one).
         const firstAttemptedAt = row.firstAttemptedAt ?? formatNotificationInstant(at);
         if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
           report(
@@ -1028,22 +1036,32 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             at: formatNotificationInstant(answeredAt),
           });
         }
-        await settleAfterCall(sendKey, row, token, { kind: 'remove' }, answeredAt);
+        await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'endpoint-invalid' } };
       case 'rejected':
+        // A configuration rejection fails every send the same way: tell the operator.
+        report(
+          new Error(
+            `The provider rejected the delivery (${answer.reason}${
+              answer.providerCode === undefined ? '' : `, ${answer.providerCode}`
+            }).`,
+          ),
+          'provider.rejected',
+          { sendKey, provider: row.provider, rowKey: row.key },
+        );
         if (answer.reason === 'agreement') {
           await recordProviderDenial(send.request.player, send.request.topic, answeredAt);
         }
-        await settleAfterCall(sendKey, row, token, { kind: 'remove' }, answeredAt);
+        await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'provider-rejected' } };
       case 'rate-limited': {
         // Nothing was sent: the claim is released and the row waits.
         const next = nextRateLimit(row.rateLimit, answer.retryAfterSeconds, answeredAt);
         if (next === undefined) {
-          await settleAfterCall(sendKey, row, token, { kind: 'remove' }, answeredAt);
+          await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
           return { refusal: { status: 'unavailable', reason: 'provider-rate-limited' } };
         }
-        await settleAfterCall(
+        await complete(
           sendKey,
           row,
           token,
@@ -1063,9 +1081,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
-   * `complete` after the provider answered: a failure here leaves a delivery
-   * that may have happened, which is not the same as nothing sent, so it is
-   * marked for `runInline`.
+   * `complete` after the provider accepted or answered ambiguously: a
+   * failure here leaves a delivery that may have happened, which is not the
+   * same as nothing sent, so it is marked for `runInline`.
    */
   const settleAfterCall = async (
     sendKey: string,
@@ -1077,12 +1095,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     try {
       await complete(sendKey, row, token, change, at);
     } catch (error) {
-      throw new NotificationSettleError(
-        'The provider answered, but the answer could not be stored.',
-        {
-          cause: error,
-        },
-      );
+      throw new NotificationSettleError({ cause: error });
     }
   };
 
@@ -1654,10 +1667,7 @@ function historyOn(history: SendHistory, provider: string): NotificationDelivery
  * the backoff alone.
  */
 function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
-  const windowEnd = row.firstAttemptedAt === undefined
-    ? Number.POSITIVE_INFINITY
-    : Date.parse(row.firstAttemptedAt) + notificationAmbiguousReplayHours * 3_600_000 - 1;
-  const notBefore = Math.min(at + releaseBackoffMs, windowEnd);
+  const notBefore = at + releaseBackoffMs;
   if (row.state.status === 'deferred') {
     return {
       ...row,
@@ -1668,11 +1678,17 @@ function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
     };
   }
   if (row.state.status === 'in-flight') {
+    // An attempted row's replays end a day after its first attempt; the
+    // backoff does not close that window early, unless it already closed.
+    const windowEnd = row.state.attempted && row.firstAttemptedAt !== undefined
+      ? Date.parse(row.firstAttemptedAt) + notificationAmbiguousReplayHours * 3_600_000 - 1
+      : Number.POSITIVE_INFINITY;
+    const until = windowEnd > at ? Math.min(notBefore, windowEnd) : notBefore;
     return {
       ...row,
       state: {
         ...row.state,
-        leaseUntil: formatNotificationInstant(Math.max(Date.parse(row.state.leaseUntil), notBefore)),
+        leaseUntil: formatNotificationInstant(Math.max(Date.parse(row.state.leaseUntil), until)),
       },
     };
   }
@@ -1721,9 +1737,16 @@ function deliveryAnswerOf(answer: unknown): NotificationRemoteDeliveryAnswer | u
         ? { status: 'rate-limited', retryAfterSeconds: answer.retryAfterSeconds }
         : { status: 'rate-limited' };
     case 'rejected':
-      return answer.reason === 'configuration' || answer.reason === 'recipient' || answer.reason === 'agreement'
-        ? { status: 'rejected', reason: answer.reason }
-        : undefined;
+      if (answer.reason !== 'configuration' && answer.reason !== 'recipient' && answer.reason !== 'agreement') {
+        return undefined;
+      }
+      return typeof answer.providerCode === 'string'
+        ? {
+            status: 'rejected',
+            reason: answer.reason,
+            providerCode: answer.providerCode.slice(0, 64),
+          }
+        : { status: 'rejected', reason: answer.reason };
     case 'ambiguous':
       return { status: 'ambiguous' };
     default:

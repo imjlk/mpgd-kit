@@ -463,12 +463,6 @@ async function runConcurrencyAndEdgeClauses(
     ['invalid', later(5), 'blocked', later(20)],
     'endpoints: a dead address keeps its first invalidation and takes the new registration fields',
   );
-  await store.invalidateEndpoint({
-    provider: 'fcm',
-    installationId: 'other',
-    value: 'tok-dead',
-    at: later(30),
-  });
   // Another installation that reports the dead address takes it, valid.
   const taken = await store.putEndpoint(endpoint('dead-2', 'tok-dead', { player: 'p-edge' }));
   equal(taken.status, 'valid', 'endpoints: another installation takes a dead address as valid');
@@ -477,8 +471,18 @@ async function runConcurrencyAndEdgeClauses(
     undefined,
     'endpoints: the dead copy goes',
   );
+  await store.invalidateEndpoint({
+    provider: 'fcm',
+    installationId: 'dead-2',
+    value: 'tok-dead',
+    at: later(40),
+  });
   const revived = await store.putEndpoint(endpoint('dead-2', 'tok-new', { player: 'p-edge' }));
-  equal(revived.invalidatedAt, undefined, 'endpoints: a revived endpoint has no invalidation time');
+  deepEqual(
+    [revived.status, revived.invalidatedAt],
+    ['valid', undefined],
+    'endpoints: a revived endpoint is valid, without an invalidation time',
+  );
   await store.putEndpoint({
     ...endpoint('multi', 'tok-m1', { player: 'p-edge' }),
     provider: 'fcm',
@@ -489,8 +493,9 @@ async function runConcurrencyAndEdgeClauses(
   });
   await store.removeEndpoints({ installationId: 'multi', player: 'p-edge', provider: 'other' });
   ok(
-    (await store.getEndpoint({ provider: 'fcm', installationId: 'multi' })) !== undefined,
-    'endpoints: an unbind of one provider keeps the other',
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'multi' })) !== undefined
+      && (await store.getEndpoint({ provider: 'other', installationId: 'multi' })) === undefined,
+    'endpoints: an unbind of one provider removes it and keeps the other',
   );
   await store.putEndpoint({
     ...endpoint('multi', 'tok-m2', { player: 'p-edge' }),
@@ -583,6 +588,10 @@ async function runConcurrencyAndEdgeClauses(
     mixed,
     'sends: attempt times round-trip',
   );
+  ok(
+    !(await store.listDueSends({ at: later(299), limit: 100 })).includes('idx-queued'),
+    'sends: a queued row is not due before its lease ends',
+  );
   deepEqual(
     [...await store.listDueSends({ at: later(2 * 86_400_000), limit: 100 })].filter((key) => key.startsWith('idx-')).sort(),
     ['idx-mixed', 'idx-queued'],
@@ -636,6 +645,13 @@ async function runConcurrencyAndEdgeClauses(
     value: 'tok-edge',
     at: later(50),
   });
+  await store.putEndpoint(
+    endpoint('edge-session', 'tok-es', {
+      player: 'p-edge',
+      lastRegisteredAt: later(0),
+      sessionExpiresAt: later(0),
+    }),
+  );
   await store.putPlatformRegistration({
     player: 'p-edge',
     provider: 'ait',
@@ -654,7 +670,11 @@ async function runConcurrencyAndEdgeClauses(
   );
   ok(
     (await store.getEndpoint({ provider: 'fcm', installationId: 'edge-invalid' })) !== undefined,
-    'purge: an endpoint invalidated at the cutoff is kept',
+    'purge: an endpoint invalidated, and last registered, at the cutoffs is kept',
+  );
+  ok(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'edge-session' })) !== undefined,
+    'purge: an endpoint whose session ends at the cutoff is kept',
   );
   equal(
     (await store.listHistory({ player: 'p-edge', since: later(0) })).length,

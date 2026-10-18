@@ -127,7 +127,7 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     async invalidateEndpoint({ provider, installationId, value, at }) {
       await db.prepare(`UPDATE notification_endpoints SET status = 'invalid', invalidated_at_ms = ?
         WHERE provider = ? AND installation_id = ? AND address_value = ? AND status = 'valid'`)
-        .bind(Date.parse(at), provider, installationId, value)
+        .bind(millisOf(at), provider, installationId, value)
         .run();
     },
     async removeEndpoints({ installationId, player, provider }) {
@@ -243,7 +243,7 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
       const rows = await db.prepare(`SELECT send_key FROM notification_sends
         WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms, send_key LIMIT ?`)
         // A limit that is not a number reads every due send (SQLite: a negative LIMIT is none).
-        .bind(Date.parse(at), Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : -1)
+        .bind(millisOf(at), Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : -1)
         .all<{ readonly send_key: string }>();
       return rows.results.map((row) => row.send_key);
     },
@@ -260,7 +260,7 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
       const rows = await db.prepare(`SELECT send_key, provider, player_id, topic, at_ms
         FROM notification_delivery_history
         WHERE player_id = ? AND at_ms >= ? ORDER BY at_ms, send_key, provider`)
-        .bind(player, Date.parse(since))
+        .bind(player, millisOf(since))
         .all<HistoryRow>();
       return rows.results.map((row): NotificationHistoryEntry => ({
         sendKey: row.send_key,
@@ -274,17 +274,17 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     async purge(cutoffs) {
       const [sends, history, endpoints] = await db.batch([
         db.prepare('DELETE FROM notification_sends WHERE changed_at_ms < ?')
-          .bind(Date.parse(cutoffs.sendsChangedBefore)),
+          .bind(millisOf(cutoffs.sendsChangedBefore)),
         db.prepare('DELETE FROM notification_delivery_history WHERE at_ms < ?')
-          .bind(Date.parse(cutoffs.historyBefore)),
+          .bind(millisOf(cutoffs.historyBefore)),
         db.prepare(`DELETE FROM notification_endpoints
           WHERE (status = 'invalid' AND invalidated_at_ms < ?)
             OR last_registered_at_ms < ?
             OR (session_expires_at_ms IS NOT NULL AND session_expires_at_ms < ?)`)
           .bind(
-            Date.parse(cutoffs.invalidEndpointsBefore),
-            Date.parse(cutoffs.staleEndpointsBefore),
-            Date.parse(cutoffs.sessionEndpointsBefore),
+            millisOf(cutoffs.invalidEndpointsBefore),
+            millisOf(cutoffs.staleEndpointsBefore),
+            millisOf(cutoffs.sessionEndpointsBefore),
           ),
       ]);
       return {

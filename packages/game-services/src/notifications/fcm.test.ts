@@ -545,7 +545,15 @@ const request: NotificationRemoteDeliveryRequest = {
     );
   }
   // Legacy domain-scoped project ids are accepted; a trailing or doubled separator is not.
-  for (const bad of ['my-project:', 'my-project.', 'example..com:proj', 'my-project-']) {
+  assert.equal(createFcmDeliveryProvider({ serviceAccount, projectId: 'my-game-12345' }).id, 'fcm');
+  for (const bad of [
+    'my-project:',
+    'my-project.',
+    'example..com:proj',
+    'my-project-',
+    'my-.x',
+    'a-.b:c',
+  ]) {
     assert.throws(
       () => createFcmDeliveryProvider({ serviceAccount, projectId: bad }),
       /project id/u,
@@ -589,6 +597,36 @@ const request: NotificationRemoteDeliveryRequest = {
   clock += 5_001;
   await provider.send(request);
   assert.equal(down.tokenCount(), 2);
+}
+
+// A refresh that fails inside the refresh margin keeps sending with the token that still works.
+{
+  let clock = Date.parse('2026-10-19T03:00:00Z');
+  let down = false;
+  const google = fakeGoogle({
+    token: () => (down
+      ? new Response('slow down', { status: 429, headers: { 'retry-after': '40' } })
+      : Response.json({ access_token: 'first-token', expires_in: 3600 })),
+  });
+  const tokens = createFcmAccessTokenSource({
+    serviceAccount,
+    fetch: google.fetch,
+    now: () => clock,
+  });
+  assert.equal(await tokens.get(), 'first-token');
+  down = true;
+  clock += 56 * 60 * 1000;
+  // Inside the margin the refresh fails, but the token has four minutes left.
+  assert.equal(await tokens.get(), 'first-token');
+  assert.equal(await tokens.get(), 'first-token');
+  assert.equal(google.tokenCount(), 2);
+  // The outage asked for 40 s: nobody asks again before that.
+  clock += 30_000;
+  assert.equal(await tokens.get(), 'first-token');
+  assert.equal(google.tokenCount(), 2);
+  clock += 11_000;
+  await tokens.get();
+  assert.equal(google.tokenCount(), 3);
 }
 
 // The registration wires FCM into the registry for android and ios, registration tokens only.

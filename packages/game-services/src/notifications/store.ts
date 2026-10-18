@@ -140,8 +140,9 @@ export interface NotificationSendRow {
   readonly state: NotificationSendRowState;
   readonly rateLimit?: NotificationRateLimitState;
   /**
-   * When the row was first claimed to call the provider. It survives a
-   * rate-limit deferral, so ambiguous replays stop 24 hours after it.
+   * When a claim that may have reached the provider first took the row. A
+   * deferral or a rate-limit answer, which prove nothing was sent, keep the
+   * earlier value, so ambiguous replays stop 24 hours after a real attempt.
    */
   readonly firstAttemptedAt?: string;
 }

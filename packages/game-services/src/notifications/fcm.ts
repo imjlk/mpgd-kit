@@ -138,7 +138,7 @@ export function createFcmAccessTokenSource(input: {
   const subtle = input.subtle ?? globalThis.crypto.subtle;
   const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
   let signingKey: Promise<CryptoKey> | undefined;
-  let cached: { readonly token: string; readonly refreshAt: number } | undefined;
+  let cached: { readonly token: string; readonly refreshAt: number; readonly expiresAt: number } | undefined;
   let failed: { readonly error: FcmAccessTokenError; readonly until: number } | undefined;
   let pending: Promise<string> | undefined;
 
@@ -205,7 +205,8 @@ export function createFcmAccessTokenSource(input: {
     const expiresIn = typeof body?.expires_in === 'number' && Number.isFinite(body.expires_in) && body.expires_in > 0
       ? Math.min(body.expires_in, tokenLifetimeSeconds)
       : tokenLifetimeSeconds;
-    cached = { token, refreshAt: issuedAt * 1000 + expiresIn * 1000 - tokenRefreshMarginMs };
+    const expiresAt = issuedAt * 1000 + expiresIn * 1000;
+    cached = { token, refreshAt: expiresAt - tokenRefreshMarginMs, expiresAt };
     return token;
   };
 
@@ -214,26 +215,43 @@ export function createFcmAccessTokenSource(input: {
       if (cached !== undefined && now() < cached.refreshAt) {
         return cached.token;
       }
+      // Inside the refresh margin a token that has not expired still sends
+      // while a refresh fails.
+      const usable = cached !== undefined && now() < cached.expiresAt ? cached.token : undefined;
       if (failed !== undefined && now() < failed.until) {
+        if (usable !== undefined) {
+          return usable;
+        }
         // A refused grant fails the same way for a while: a fan-out does not ask Google per send.
         throw failed.error;
       }
       pending ??= mint()
+        .then((token) => {
+          failed = undefined;
+          return token;
+        })
         .catch((error: unknown) => {
           if (error instanceof FcmAccessTokenError) {
-            // A refused grant waits 30 s; an outage waits a few seconds, so a
-            // fan-out during it does not ask Google once per send either.
-            failed = {
-              error,
-              until: now() + (error.retryable ? retryableTokenCacheMs : failedTokenCacheMs),
-            };
+            // A refused grant waits 30 s; an outage waits a few seconds, or
+            // as long as it asked, so a fan-out does not ask once per send.
+            const wait = error.retryable
+              ? Math.max(retryableTokenCacheMs, Math.min((error.retryAfterSeconds ?? 0) * 1000, 60_000))
+              : failedTokenCacheMs;
+            failed = { error, until: now() + wait };
           }
           throw error;
         })
         .finally(() => {
           pending = undefined;
         });
-      return pending;
+      if (usable === undefined) {
+        return pending;
+      }
+      try {
+        return await pending;
+      } catch {
+        return usable;
+      }
     },
     invalidate(token) {
       if (cached?.token === token) {
@@ -439,7 +457,7 @@ export function createFcmDeliveryProvider(
 ): NotificationRemoteDeliveryProvider {
   const projectId = input.projectId ?? input.serviceAccount.projectId;
   // Project ids, including legacy domain-scoped ones (`example.com:my-project`).
-  if (!/^[a-z0-9](?:[a-z0-9-]|[.:](?=[a-z0-9])){4,99}$/u.test(projectId) || /[.:-]$/u.test(projectId)) {
+  if (!isFirebaseProjectId(projectId)) {
     throw new TypeError('The FCM project id is not a Firebase project id.');
   }
   const fetcher: FetchLike = input.fetch ?? ((url, init) => globalThis.fetch(url, init));
@@ -533,6 +551,18 @@ export function createFcmProviderRegistration(
     targets: targets ?? ['android', 'ios'],
     addressKinds: [...fcmAddressKinds],
   };
+}
+
+/**
+ * A Firebase project id (lowercase letters, digits, and hyphens), or a
+ * legacy domain-scoped one (`example.com:my-project`): every label starts
+ * and ends with a letter or digit, 5 to 100 characters in all.
+ */
+function isFirebaseProjectId(id: string): boolean {
+  const label = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?';
+  return id.length >= 5
+    && id.length <= 100
+    && new RegExp(`^(?:${label}(?:\\.${label})*:)?${label}$`, 'u').test(id);
 }
 
 /** FCM's reserved data keys (`from`, `message_type`, and any `google` or `gcm` prefix), this provider's, and keys a plain object cannot hold. */
