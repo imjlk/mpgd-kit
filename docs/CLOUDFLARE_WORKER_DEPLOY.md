@@ -226,7 +226,12 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
   (`{ registration, target }`; `target` is `android` or `ios`, whose catalog
   mapping applies), `POST /endpoints/unregister`, `GET /notices`, and
-  `POST /notices/shown`.
+  `POST /notices/shown`. The session routes need the
+  `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
+  only `GET /providers` is served, and the Worker logs one warning naming
+  the missing binding when it first builds the notifications service. The
+  identity Worker's side (the `NotificationSessions` entrypoint) is a
+  follow-up and is not in this repository yet.
 - **Sends** are never a client route: a game server calls
   `deliverNotification(input)` on the service binding. It answers
   `{ ok: true, value }` with the send's outcome, or `{ ok: false, error: {

@@ -464,15 +464,35 @@ try {
   await assert.rejects(deliverWorkerNotification(broken, {}), {
     code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
   });
-  // Without the session binding, only the public registry is served.
+  // Without the session binding, only the public registry is served, and the Worker says why once.
   const { GAME_SERVICES_NOTIFICATIONS_AUTH: _auth, ...unauthenticated } = env;
-  assert.equal(
-    (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/consent`, { headers: { authorization: 'Bearer player-1' } }))).status,
-    404,
-  );
-  assert.equal(
-    (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/providers`))).status,
-    200,
+  const warnings: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...parts: unknown[]) => {
+    warnings.push(parts.map(String).join(' '));
+  };
+  try {
+    assert.equal(
+      (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/consent`, { headers: { authorization: 'Bearer player-1' } }))).status,
+      404,
+    );
+    assert.equal(
+      (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/providers`))).status,
+      200,
+    );
+    // A Worker with the binding, or without a catalog, says nothing about it.
+    await createWorkerFetchHandler({ ...env })(new Request(`${base}/providers`));
+    const { MPGD_NOTIFICATIONS_CATALOG: _off, ...disabled } = unauthenticated;
+    await createWorkerFetchHandler(disabled)(new Request(`${base}/providers`));
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.deepEqual(
+    warnings.filter((line) => line.includes('GAME_SERVICES_NOTIFICATIONS_AUTH')),
+    [
+      'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
+        + 'the client routes (consent, endpoints, notices) answer 404 until it is bound.',
+    ],
   );
   console.info('Worker notifications routes passed.');
 } finally {
