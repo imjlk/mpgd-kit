@@ -7,6 +7,7 @@ import { assertMiniGameRuntimeAssetOrigins } from './minigame-artifact';
 import {
   assertDevvitInternalEndpoint,
   assertDevvitPaymentsReadiness,
+  assertDevvitRealtimePermission,
   assertMicrosoftStorePwaManifestSourceContract,
   assertWebArtifactInstallability,
 } from './verify-target-artifacts';
@@ -257,4 +258,11 @@ function createMiniGameOriginDeclarationFromDescriptor(descriptor: string): stri
   return 'globalThis.Object.defineProperty(globalThis,'
     + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
     + `${descriptor});`;
+}
+
+for (const realtime of [undefined, false, true]) {
+  assert.doesNotThrow(() => assertDevvitRealtimePermission(realtime, 'realtime'));
+}
+for (const invalid of ['true', 1, {}, null]) {
+  assert.throws(() => assertDevvitRealtimePermission(invalid, 'realtime'), /boolean or omitted/u);
 }

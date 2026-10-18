@@ -869,7 +869,7 @@ function verifyDevvitWebManifest(
   } else {
     assertDisabledDevvitPermission(permissions.payments, `${label} permissions.payments`);
   }
-  assertDisabledDevvitPermission(permissions.realtime, `${label} permissions.realtime`);
+  assertDevvitRealtimePermission(permissions.realtime, `${label} permissions.realtime`);
   assertEnabledRedditPermission(permissions.reddit, `${label} permissions.reddit`);
 
   const menu = manifest.menu;
@@ -1288,6 +1288,13 @@ function assertArray(input: unknown, label: string): asserts input is unknown[] 
 function assertBooleanValue(input: unknown, expected: boolean, label: string): void {
   if (input !== expected) {
     throw new Error(`${label} must be ${String(expected)}.`);
+  }
+}
+
+/** Realtime is a game-owned opt-in; it is not a commerce or reward grant. */
+export function assertDevvitRealtimePermission(input: unknown, label: string): void {
+  if (input !== undefined && typeof input !== 'boolean') {
+    throw new Error(`${label} must be a boolean or omitted.`);
   }
 }
 
