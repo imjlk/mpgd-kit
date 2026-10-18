@@ -203,7 +203,9 @@ describe('Apps in Toss notifications provider', () => {
     });
   });
 
-  it('throws NOTIFICATIONS_HOST_VERSION_UNSUPPORTED before any sheet on a Toss app older than 5.255.0', async () => {
+  it('throws NOTIFICATIONS_HOST_VERSION_UNSUPPORTED for a whole request that needs a sheet on Toss older than 5.255.0, as the RFC says', async () => {
+    // RFC "Apps in Toss": below 5.255.0 the provider answers the error code;
+    // a request mixing agreement-free and agreement topics throws too.
     const { host, provider } = setup({ supported: false });
     await expect(codeOf(provider.requestPermission({ topics: ['receipt', 'energy-full'] })))
       .resolves.toMatchObject({ code: 'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED' });
@@ -294,6 +296,42 @@ describe('Apps in Toss notifications provider', () => {
       warn.mockRestore();
     }
     expect(host.cleanups).toBe(2);
+  });
+
+  it('drops a late answer after the 120-second settle; the next request records it', async () => {
+    vi.useFakeTimers();
+    let latest: Parameters<ReturnType<typeof createFakeAitNotificationHost>['sdk']['requestAgreement']>[0] | undefined;
+    let cleanups = 0;
+    const provider = createAitNotificationProvider({
+      sdk: {
+        requestAgreement: Object.assign(
+          (request: NonNullable<typeof latest>) => {
+            latest = request;
+            return () => {
+              cleanups += 1;
+            };
+          },
+          { isSupported: () => true },
+        ),
+        readInitialUrl: () => undefined,
+      },
+      topics,
+    });
+    const first = provider.requestPermission({ topics: ['energy-full'] });
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(first).resolves.toMatchObject({ outcomes: { 'energy-full': 'dismissed' } });
+    expect(cleanups).toBe(1);
+    // The SDK's cleanup only unsubscribes the callbacks; a sheet the host
+    // keeps open can still be answered, and that answer is dropped.
+    const late = latest;
+    expect(() => late?.onEvent({ type: 'newAgreement' })).not.toThrow();
+    const second = provider.requestPermission({ topics: ['energy-full'] });
+    await vi.waitFor(() => expect(latest).not.toBe(late));
+    latest?.onEvent({ type: 'alreadyAgreed' });
+    await expect(second).resolves.toMatchObject({
+      outcomes: { 'energy-full': 'already-granted' },
+      evidence: { payload: { 'result:energy-full': 'alreadyAgreed' } },
+    });
   });
 
   it('prompts no further topic after an unanswered sheet', async () => {

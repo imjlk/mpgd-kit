@@ -26,7 +26,9 @@ of authentication. Purchase verification and durable grants remain server-owned.
 
 The host bridge serves the `notifications.v2.*` bridge methods from an Apps in
 Toss provider, and the gateway exposes it as `notificationsV2` whenever the host
-offers the notifications event channel. Games reach it through the
+offers the notifications event channel, which it does while a topic is mapped.
+The game side loads the bridge client and its validators on first use, so a
+game without notifications carries none of them. Games reach it through the
 game-services notifications runtime, never directly (see the
 [notifications v2 RFC](../../docs/specs/notifications/notifications-v2-rfc.md#profile-ait)).
 

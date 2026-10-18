@@ -249,7 +249,9 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
       providerCode: code,
     });
   }
-  // An undocumented business code on HTTP 200 is this recipient's failure.
+  // An undocumented business code on HTTP 200 is this recipient's failure,
+  // not ambiguous: ambiguous replays have no attempt cap (RFC "Delivery
+  // providers -> Apps in Toss").
   assert.deepEqual(await ait.send(request), {
     status: 'rejected',
     reason: 'recipient',

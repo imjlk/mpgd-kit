@@ -1331,7 +1331,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       a missing agreement (checked 2026-10-19). A deployment names the codes
       it observes (`agreementErrorCodes`, `recipientErrorCodes`, checked
       before the built-in codes); any other code is `rejected` with reason
-      `recipient` on HTTP 200, `configuration` on HTTP 400, 401, 403, 404,
+      `recipient` on HTTP 200 (not `ambiguous`: an `ambiguous` row is
+      replayed after every lease with no attempt cap, so a code that fails
+      the same way would be sent again for as long as the key is kept), `configuration` on HTTP 400, 401, 403, 404,
       405, 413, 415, and 422, where the request itself was refused, and
       `ambiguous` on any other status. A `FAIL` without a code is
       `ambiguous`;
@@ -1460,7 +1462,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 - **API.** Agreement uses `Notification.requestAgreement({ options: {
   templateCode } })` (Toss app 5.255.0 or later; the provider checks
   `isSupported()` and answers `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED` below
-  it). `templateCode` is the same value as the send API's `templateSetCode`,
+  it, by throwing for the whole request whenever it names a topic that
+  needs an agreement, even next to agreement-free topics; the game asks for
+  those separately). `templateCode` is the same value as the send API's `templateSetCode`,
   so one catalog field serves both.
 - **Event mapping.**
   - `newAgreement` maps to the `granted` outcome, `alreadyAgreed` to
@@ -1475,6 +1479,10 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `NOTIFICATIONS_CONFIGURATION_REQUIRED` with that `hostCode`.
   - A request with no event within 120 seconds answers `dismissed`. v1
     settled the same timeout as `unavailable`, which the v1 wrapper keeps.
+    The provider then calls the SDK's cleanup, which unsubscribes the
+    callbacks but need not close the sheet: an answer the player gives
+    afterwards is lost. The agreement itself stays with Toss, so the next
+    request answers `alreadyAgreed` and records it then.
   - Any other host error throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
   - After a `dismissed` sheet or `TERMS_DISAGREED_MEMBER`, the remaining
     topics of the request answer the same outcome without a sheet, so a
@@ -1648,7 +1656,9 @@ Other rules the profiles encode:
   providers.
   P1 serves it on the Apps in Toss host bridge, and the Apps in Toss gateway
   exposes `notificationsV2` over a host that offers the notifications event
-  channel; the sandbox bridges still answer `NOTIFICATIONS_V2_UNAVAILABLE`.
+  channel, which the host does while a topic is mapped; the game side loads
+  its bridge client and validators on first use. The sandbox bridges still
+  answer `NOTIFICATIONS_V2_UNAVAILABLE`.
   - `@mpgd/bridge` adds the nine methods to `BridgeMethod`
     (`bridgeNotificationsV2Methods`, kept equal to `notificationBridgeMethods`
     by a type check and a test). `@mpgd/bridge/notifications` validates each

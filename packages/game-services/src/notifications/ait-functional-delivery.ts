@@ -188,7 +188,8 @@ const maximumTimeoutMs = 60_000;
  *   and `configuration` when the HTTP status refused the request (400, 401,
  *   403, 404, 405, 413, 415, 422): a `FAIL` envelope reports a failed
  *   request, and answering `ambiguous` would replay a send that fails the
- *   same way after every lease. On any other status it is `ambiguous`, and so
+ *   same way after every lease: the RFC caps no `ambiguous` replays (only
+ *   the lease paces them). On any other status it is `ambiguous`, and so
  *   is a `FAIL` without a code. A `rate-limited` delay comes from
  *   `error.data.retryAfterSeconds`, else the `Retry-After` header.
  * - `HTTP_TIMEOUT`, `NETWORK_ERROR`, `EXECUTION_FAIL`, `INTERRUPTED`, and
