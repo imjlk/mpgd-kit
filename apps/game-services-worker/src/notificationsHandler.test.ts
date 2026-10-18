@@ -491,7 +491,8 @@ try {
     warnings.filter((line) => line.includes('GAME_SERVICES_NOTIFICATIONS_AUTH')),
     [
       'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
-        + 'the client routes (consent, endpoints, notices) answer 404 until it is bound.',
+        + 'the client session routes (consent, endpoints, notices) are off and answer 404. '
+        + 'A send-only Worker can ignore this.',
     ],
   );
   console.info('Worker notifications routes passed.');

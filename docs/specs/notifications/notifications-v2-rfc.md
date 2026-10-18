@@ -997,7 +997,8 @@ Every send reads the player's whole history, so client writes are bounded:
   latest record, which keeps its own date and evidence. An `advertising` or
   `night` record is always written, since each one is a player's act that
   may owe a notice: a second refusal, or a consent that
-  restarts the re-confirmation count.
+  restarts the re-confirmation count. A client therefore writes these kinds
+  only on a player's act, never as a re-report of the current state.
 - **Daily cap.** A player may add at most 200 client records in any rolling
   24 hours. Records from a provider answer do not count. Past the cap the
   backend answers `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (retryable; HTTP
@@ -1360,8 +1361,8 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     registration tokens (`fcm-token`) only. The `fcm-installation` kind is
     reserved: HTTP v1 has no FID send target, so the backend refuses an FID
     registration (`NOTIFICATIONS_INVALID_INPUT`, with a message saying the
-    kind is reserved) and the provider refuses an FID send, until FCM
-    supports FIDs.
+    kind is reserved) and the provider refuses an FID send (`rejected`,
+    provider code `INSTALLATION_ID_RESERVED`), until FCM supports FIDs.
   - **Errors.**
     - `UNREGISTERED` is `unregistered`. `INVALID_ARGUMENT` is too, but only
       when the payload is known valid: the provider checks the message

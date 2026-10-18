@@ -389,6 +389,15 @@ const request: NotificationRemoteDeliveryRequest = {
     { status: 'rejected', reason: 'configuration', providerCode: 'INVALID_MESSAGE' },
   );
   assert.equal(unsent.exchanges.length, 0);
+  // A Firebase installation id is reserved: refused with its own code, and nothing is fetched.
+  assert.deepEqual(
+    await createFcmDeliveryProvider({ serviceAccount, fetch: unsent.fetch, now }).send({
+      ...request,
+      recipient: { kind: 'device', installationId: 'i', address: { kind: 'fcm-installation', value: 'fid' } },
+    }),
+    { status: 'rejected', reason: 'configuration', providerCode: 'INSTALLATION_ID_RESERVED' },
+  );
+  assert.equal(unsent.exchanges.length, 0);
   // A refused grant is configuration; an unavailable token endpoint sent nothing and waits.
   assert.deepEqual(
     await send(fakeGoogle({ token: () => Response.json({ error: 'invalid_grant' }, { status: 400 }) })),

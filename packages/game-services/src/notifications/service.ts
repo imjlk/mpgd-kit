@@ -30,6 +30,7 @@ import {
 } from '@mpgd/platform/notifications';
 
 import {
+  fcmInstallationIdRefusal,
   notificationExpiredProviderCode,
   type NotificationRemoteDeliveryAnswer,
   type NotificationRemoteRecipient,
@@ -209,8 +210,9 @@ export interface NotificationService {
   /**
    * Appends a consent record for the session's player, dated by the backend.
    * A repeat of the player's latest permission, agreement, or preference
-   * record for the same kind and topic answers that record unwritten, and a
-   * player past
+   * record for the same kind and topic answers that record unwritten; an
+   * `advertising` or `night` record is always written, even a repeat, and
+   * counts toward the cap. A player past
    * `maxClientNotificationConsentRecordsPerDay` gets a
    * `NotificationConsentRateLimitError`.
    */
@@ -1319,10 +1321,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * Each authenticated call carries the session's current end, and the
    * endpoints the session registered move to it when it is later, so a
    * session the identity service extended keeps its devices bound without a
-   * new registration. It never fails the call; a failure is reported.
+   * new registration. It never fails the call; a failure is reported. It
+   * runs before a call's own validation on purpose: the session is
+   * authenticated, so even a call refused for its input reports a valid end.
    */
-  // It runs before a call's own validation on purpose: the session is
-  // authenticated, so even a call refused for its input reports a valid end.
   const authenticated = async (session: NotificationSession): Promise<NotificationSession> => {
     const current = sessionOf(session);
     try {
@@ -1431,10 +1433,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (!provider.addressKinds.includes(address.kind)) {
         // No provider sends to a Firebase installation id yet; the kind is
         // reserved for when FCM does (RFC "Delivery providers").
-        const reserved = address.kind === 'fcm-installation'
-          ? ' Firebase installation ids are reserved and refused until FCM can send to them; register the FCM registration token.'
+        const reserved = address.kind === 'fcm-installation' && provider.addressKinds.includes('fcm-token')
+          ? ` ${fcmInstallationIdRefusal}`
           : '';
-        throw invalidInput(`Provider ${provider.entry.provider} cannot send to a ${address.kind} address.${reserved}`);
+        throw invalidInput(`Provider ${provider.entry.provider} cannot send to ${address.kind} addresses.${reserved}`);
       }
       if (address.value.length > maxAddressLength || hasControlCharacter(address.value)) {
         throw invalidInput('The device address is out of bounds.');

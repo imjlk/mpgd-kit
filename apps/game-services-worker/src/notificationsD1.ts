@@ -154,10 +154,10 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
             WHERE session_id = ? AND session_expires_at_ms IS NOT NULL`)
           .bind(sessionId)
         : db.prepare(`UPDATE notification_endpoints SET
-              session_expires_at_ms = ?,
-              endpoint_json = json_set(endpoint_json, '$.sessionExpiresAt', ?)
-            WHERE session_id = ? AND session_expires_at_ms < ?`)
-          .bind(millisOf(expiresAt), expiresAt, sessionId, millisOf(expiresAt))
+              session_expires_at_ms = ?1,
+              endpoint_json = json_set(endpoint_json, '$.sessionExpiresAt', ?2)
+            WHERE session_id = ?3 AND session_expires_at_ms < ?1`)
+          .bind(millisOf(expiresAt), expiresAt, sessionId)
       ).run();
       return result.meta.changes;
     },

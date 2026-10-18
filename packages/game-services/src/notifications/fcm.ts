@@ -1,6 +1,7 @@
 import { referenceNotificationProviders } from '@mpgd/platform/notifications';
 
 import {
+  fcmInstallationIdRefusal,
   notificationExpiredProviderCode,
   type NotificationRemoteDeliveryAnswer,
   type NotificationRemoteDeliveryProvider,
@@ -36,9 +37,6 @@ export const fcmTokenEndpoint = 'https://oauth2.googleapis.com/token';
  * provider refuses one at registration and at send until FCM supports it.
  */
 export const fcmAddressKinds = Object.freeze(['fcm-token'] as const);
-/** Why an FID is refused, for registration and send errors. */
-export const fcmInstallationIdRefusal =
-  'Firebase installation ids (fcm-installation) are reserved and refused until FCM can send to them; register the FCM registration token (fcm-token).';
 /** Data keys this provider writes; a send's routing data may not use them. */
 export const fcmReservedDataKeys = Object.freeze(['topic', 'route'] as const);
 /** The iOS notification category of advertising, which carries the opt-out action. */
@@ -297,8 +295,12 @@ export type FcmMessageBuild =
   | {
       readonly status: 'invalid';
       readonly reason: string;
-      /** `MESSAGE_EXPIRED` (`notificationExpiredProviderCode`) for a message that would arrive too late, else `INVALID_MESSAGE`. */
-      readonly code: 'INVALID_MESSAGE' | typeof notificationExpiredProviderCode;
+      /**
+       * `MESSAGE_EXPIRED` (`notificationExpiredProviderCode`) for a message
+       * that would arrive too late, `INSTALLATION_ID_RESERVED` for an FID
+       * recipient, else `INVALID_MESSAGE`.
+       */
+      readonly code: 'INVALID_MESSAGE' | 'INSTALLATION_ID_RESERVED' | typeof notificationExpiredProviderCode;
     };
 
 /**
@@ -312,7 +314,11 @@ export type FcmMessageBuild =
 export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): FcmMessageBuild {
   const { recipient, content } = request;
   if (recipient.kind === 'device' && recipient.address.kind === 'fcm-installation') {
-    return { status: 'invalid', reason: fcmInstallationIdRefusal, code: 'INVALID_MESSAGE' };
+    return {
+      status: 'invalid',
+      reason: fcmInstallationIdRefusal,
+      code: 'INSTALLATION_ID_RESERVED',
+    };
   }
   if (recipient.kind !== 'device' || recipient.address.kind !== 'fcm-token') {
     return {

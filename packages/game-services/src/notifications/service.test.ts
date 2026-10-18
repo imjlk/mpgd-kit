@@ -567,6 +567,41 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   );
 }
 
+// Under the Korean rules every advertising or night record owes its notice, repeats included.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([]),
+    catalog: vectorCatalog([]),
+    deployment: { advertisingRules: 'kr', advertisingSender: { contact: '02-000-0000' } },
+    now: time.now,
+  });
+  for (const [kind, state] of [
+    ['advertising', 'withdrawn'],
+    ['advertising', 'withdrawn'],
+    ['night', 'granted'],
+    ['night', 'granted'],
+  ]) {
+    await service.recordConsent(session('p-1'), {
+      kind,
+      state,
+      source: 'player',
+      textVersion: 'v1',
+    });
+    time.advance(60);
+  }
+  assert.deepEqual(
+    (await service.listNotices(session('p-1'))).map((notice) => notice.variant),
+    [
+      'consent-result.advertising.refused',
+      'consent-result.advertising.refused',
+      'consent-result.night.granted',
+      'consent-result.night.granted',
+    ],
+  );
+}
+
 // Notices under the Korean rules: recorded only while listed, and named to the millisecond.
 {
   const time = clock('2026-10-19T03:00:00Z');
@@ -639,7 +674,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   // A Firebase installation id is reserved, and the refusal says so.
   await assert.rejects(register(session('p-1'), 'fid', 'fcm-installation'), {
     code: 'NOTIFICATIONS_INVALID_INPUT',
-    message: /cannot send to a fcm-installation address\. Firebase installation ids are reserved and refused until FCM can send to them/u,
+    message: /cannot send to fcm-installation addresses\. Firebase installation ids \(fcm-installation\) are reserved and refused until FCM can send to them/u,
   });
   await expectCode(
     service.registerEndpoint(session('p-1'), {

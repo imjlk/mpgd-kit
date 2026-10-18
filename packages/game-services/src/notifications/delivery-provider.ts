@@ -18,6 +18,14 @@ import type {
  * never decides policy.
  */
 
+/**
+ * Why a Firebase installation id (FID, `fcm-installation`) is refused, at
+ * registration and at send. The kind is reserved: FCM is moving to FIDs, but
+ * HTTP v1 has no FID send target yet.
+ */
+export const fcmInstallationIdRefusal =
+  'Firebase installation ids (fcm-installation) are reserved and refused until FCM can send to them; register the FCM registration token (fcm-token).';
+
 /** A device address as the endpoint registry stores it; FCM keeps the kinds apart. */
 export interface NotificationDeviceAddress {
   readonly kind: 'fcm-token' | 'fcm-installation';

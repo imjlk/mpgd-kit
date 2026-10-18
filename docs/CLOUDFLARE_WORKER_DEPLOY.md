@@ -219,7 +219,8 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   endpoints move to it, so an extended session keeps its devices (until the
   cron purges an endpoint whose end passed; then the client registers
   again). Omit `expiresAt` only for a session that never ends on its own:
-  it clears the session's stored ends, and no later call restores them. An
+  it clears the end of each of the session's endpoints that has one, and no
+  later extension restores it (a new registration writes its own). An
   extension does not count as a registration, so an endpoint not
   registered for 60 days still goes stale.
 - **Client routes** under `/game-services/notifications`: `GET /providers`
@@ -229,7 +230,8 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   `POST /notices/shown`. The session routes need the
   `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
   only `GET /providers` is served, and the Worker logs one warning naming
-  the missing binding when it first builds the notifications service. The
+  the missing binding on its first notifications request (a send-only
+  Worker, which serves only `deliverNotification`, can ignore it). The
   identity Worker's side (the `NotificationSessions` entrypoint) is a
   follow-up and is not in this repository yet.
 - **Sends** are never a client route: a game server calls
