@@ -230,8 +230,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   `POST /notices/shown`. The session routes need the
   `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
   only `GET /providers` is served, and the Worker logs one warning naming
-  the missing binding on its first notifications request (a send-only
-  Worker, which serves only `deliverNotification`, can ignore it). The
+  the missing binding the first time a session route is asked for (a
+  send-only Worker, which serves only `deliverNotification`, can ignore
+  it). The
   identity Worker's side (the `NotificationSessions` entrypoint) is a
   follow-up and is not in this repository yet.
 - **Sends** are never a client route: a game server calls

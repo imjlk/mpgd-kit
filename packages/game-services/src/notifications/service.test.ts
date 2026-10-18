@@ -600,6 +600,24 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
       'consent-result.night.granted',
     ],
   );
+  // Those always-written repeats count toward the daily cap.
+  for (let index = 4; index < maxClientNotificationConsentRecordsPerDay; index += 1) {
+    await service.recordConsent(session('p-1'), {
+      kind: 'night',
+      state: 'granted',
+      source: 'player',
+      textVersion: 'v1',
+    });
+  }
+  await assert.rejects(
+    service.recordConsent(session('p-1'), {
+      kind: 'night',
+      state: 'granted',
+      source: 'player',
+      textVersion: 'v1',
+    }),
+    NotificationConsentRateLimitError,
+  );
 }
 
 // Notices under the Korean rules: recorded only while listed, and named to the millisecond.

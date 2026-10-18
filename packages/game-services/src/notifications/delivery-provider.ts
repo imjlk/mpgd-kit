@@ -21,7 +21,8 @@ import type {
 /**
  * Why a Firebase installation id (FID, `fcm-installation`) is refused, at
  * registration and at send. The kind is reserved: FCM is moving to FIDs, but
- * HTTP v1 has no FID send target yet.
+ * HTTP v1 has no FID send target yet. It lives here, beside the address
+ * kinds, so the service can use it without importing the FCM provider.
  */
 export const fcmInstallationIdRefusal =
   'Firebase installation ids (fcm-installation) are reserved and refused until FCM can send to them; register the FCM registration token (fcm-token).';

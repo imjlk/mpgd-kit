@@ -480,8 +480,19 @@ try {
       (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/providers`))).status,
       200,
     );
-    // A Worker with the binding, or without a catalog, says nothing about it.
-    await createWorkerFetchHandler({ ...env })(new Request(`${base}/providers`));
+    // A Worker with the binding, or without a catalog, says nothing about it, and neither do
+    // the public registry, the cron, or a server send on a Worker without it.
+    await createWorkerFetchHandler({ ...env })(
+      new Request(`${base}/consent`, { headers: { authorization: 'Bearer player-1' } }),
+    );
+    const sendOnly = { ...unauthenticated };
+    await createWorkerFetchHandler(sendOnly)(new Request(`${base}/providers`));
+    await runScheduledNotifications(sendOnly);
+    await deliverWorkerNotification(sendOnly, {
+      idempotencyKey: 'send-only-1',
+      player: 'p-none',
+      topic: 'friend-challenge',
+    });
     const { MPGD_NOTIFICATIONS_CATALOG: _off, ...disabled } = unauthenticated;
     await createWorkerFetchHandler(disabled)(new Request(`${base}/providers`));
   } finally {

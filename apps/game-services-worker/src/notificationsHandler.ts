@@ -225,8 +225,8 @@ function parseJsonVar(value: unknown, name: string): unknown {
  *   `POST /consent`, `POST /endpoints`, `POST /endpoints/unregister`,
  *   `GET /notices`, `POST /notices/shown`. Without the binding they are not
  *   mounted (404): binding a device to a player needs an authenticated
- *   session. A Worker with a catalog but no binding logs that once, on its
- *   first notifications request.
+ *   session. A Worker with a catalog but no binding logs that once, when a
+ *   session route is first asked for.
  *
  * Sends are never a client route; a game server sends through the
  * `deliverNotification` RPC on the service binding.
@@ -250,16 +250,6 @@ export function createNotificationsFetchHandler(
     if (notifications.status === 'misconfigured') {
       return json({ error: 'INTERNAL_ERROR' }, 500, corsHeaders);
     }
-    if (env.GAME_SERVICES_NOTIFICATIONS_AUTH === undefined && !reportedMissingSessionBinding.has(env)) {
-      // Said on the first client request, not from the cron or the queue: a
-      // send-only Worker (deliverNotification alone) needs no session binding.
-      reportedMissingSessionBinding.add(env);
-      console.warn(
-        'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
-          + 'the client session routes (consent, endpoints, notices) are off and answer 404. '
-          + 'A send-only Worker can ignore this.',
-      );
-    }
     const { service } = notifications;
     const route = pathname.slice(notificationsRoutePrefix.length);
     const method = request.method;
@@ -281,6 +271,17 @@ export function createNotificationsFetchHandler(
     };
     const methods = allowed[route];
     const auth = env.GAME_SERVICES_NOTIFICATIONS_AUTH;
+    if (methods !== undefined && auth === undefined && !reportedMissingSessionBinding.has(env)) {
+      // Said when a session route is first asked for, never from the cron or
+      // the queue: a send-only Worker (deliverNotification alone) needs no
+      // session binding.
+      reportedMissingSessionBinding.add(env);
+      console.warn(
+        'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
+          + 'the client session routes (consent, endpoints, notices) are off and answer 404. '
+          + 'A send-only Worker can ignore this.',
+      );
+    }
     if (methods === undefined || auth === undefined) {
       return json({ error: 'UNKNOWN_ENDPOINT' }, 404, corsHeaders);
     }
