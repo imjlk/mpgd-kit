@@ -86,6 +86,7 @@ const maxBodyBytes = 64 * 1024;
 const servicesByEnv = new WeakMap<object, WorkerNotifications>();
 const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
 const reportedMisconfiguration = new WeakSet<object>();
+const reportedIdleConsumer = new WeakSet<object>();
 
 /**
  * The notifications service for this environment, built once per env
@@ -388,19 +389,36 @@ export async function endWorkerNotificationSession(
  * The dispatch queue's consumer: each message is one recipient's delivery.
  * A failure that may pass is retried with a growing delay; a job that cannot
  * run as asked is logged and acknowledged, and its row stays due for the
- * cron. Without a working service every message is acknowledged: the rows
- * stay due in D1, and the cron replays them once the configuration is fixed.
+ * cron. A misconfigured Worker (a bad deploy) retries every message with the
+ * same backoff, so the jobs survive until the configuration is fixed or the
+ * dead-letter queue takes them; a Worker without a catalog has notifications
+ * off, and acknowledges them. Either is logged once.
  */
 export async function consumeNotificationDispatchBatch(
   env: GameServicesNotificationsEnv,
   batch: MessageBatch<unknown>,
 ): Promise<void> {
   const notifications = resolveWorkerNotifications(env);
+  const backoff = (attempts: number) => ({
+    delaySeconds: Math.min(2 ** Math.max(attempts, 1) * 5, 300),
+  });
+  if (notifications.status !== 'ready' && !reportedIdleConsumer.has(env)) {
+    reportedIdleConsumer.add(env);
+    console.error(
+      notifications.status === 'disabled'
+        ? 'Notifications dispatch jobs arrived but this Worker has no MPGD_NOTIFICATIONS_CATALOG; they are acknowledged.'
+        : 'Notifications dispatch jobs are retried until the notifications configuration is fixed.',
+    );
+  }
   // Deliveries are independent: one slow provider call does not hold up the others.
   await Promise.all(
     batch.messages.map(async (message) => {
-      if (notifications.status !== 'ready') {
+      if (notifications.status === 'disabled') {
         message.ack();
+        return;
+      }
+      if (notifications.status === 'misconfigured') {
+        message.retry(backoff(message.attempts));
         return;
       }
       try {
@@ -411,7 +429,7 @@ export async function consumeNotificationDispatchBatch(
           console.error('Notifications dispatch failed:', describeFailure(error));
           message.ack();
         } else {
-          message.retry({ delaySeconds: Math.min(2 ** Math.max(message.attempts, 1) * 5, 300) });
+          message.retry(backoff(message.attempts));
         }
       }
     }),

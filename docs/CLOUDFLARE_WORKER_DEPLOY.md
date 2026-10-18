@@ -227,8 +227,10 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   RPC boundary. Any Worker bound to this one can send to any player, as
   with the other service-binding methods.
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
-  other failure is retried with a growing delay. A row whose job is lost
-  stays due, and the cron replays it.
+  other failure is retried with a growing delay, and so is every job while
+  the notifications configuration is broken, so a bad deploy loses nothing
+  before the dead-letter queue. A row whose job is lost stays due, and the
+  cron replays it.
 - **Platform-user providers** resolve recipients through an optional
   `GAME_SERVICES_NOTIFICATIONS_IDENTITY` binding
   (`resolveNotificationRecipient({ provider, playerId })`).

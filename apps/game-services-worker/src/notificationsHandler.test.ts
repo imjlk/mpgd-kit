@@ -377,11 +377,15 @@ try {
     batch([{ body: queued[1], attempts: 2 }]),
   );
   assert.deepEqual(acks.splice(0), [['retry', { delaySeconds: 20 }]]);
-  // A misconfigured Worker acknowledges: the rows stay due for the cron.
+  // A misconfigured Worker (a bad deploy) retries with the backoff, so the jobs survive it.
   await consumeNotificationDispatchBatch(
     { ...queueEnv, MPGD_NOTIFICATIONS_CATALOG: { version: 'x' } } satisfies GameServicesWorkerEnv,
-    batch([{ body: queued[1] }]),
+    batch([{ body: queued[1], attempts: 3 }]),
   );
+  assert.deepEqual(acks.splice(0), [['retry', { delaySeconds: 40 }]]);
+  // A Worker without a catalog has notifications off and acknowledges.
+  const { MPGD_NOTIFICATIONS_CATALOG: _catalog, ...withoutCatalog } = queueEnv;
+  await consumeNotificationDispatchBatch(withoutCatalog, batch([{ body: queued[1] }]));
   assert.deepEqual(acks.splice(0), ['ack']);
   await consumeNotificationDispatchBatch(queueEnv, batch([{ body: queued[1] }]));
   assert.deepEqual(acks.splice(0), ['ack']);
