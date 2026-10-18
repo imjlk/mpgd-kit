@@ -184,25 +184,98 @@ Games do not call the provider from a scene: `createGameServicesClient` from
 
 ## Notifications v2
 
-The notifications v2 provider arrives in PR P2 of the
-[notifications RFC](../../docs/specs/notifications/notifications-v2-rfc.md),
-together with the registry surface through which a provider serves the
-`notifications.v2.*` methods. Until then the gateway exposes no
-`notificationsV2`, and its request path never forwards a `notifications.v2.*`
-method to the base plugin: it answers `NOTIFICATIONS_V2_UNAVAILABLE`, which is
-not retryable, before it pauses the game. A provider cannot declare those
-methods in `methods`.
+`@mpgd/adapter-capacitor/notifications` is the Android and iOS provider of the
+[notifications RFC](../../docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor).
+Only this subpath loads the notifications validators and the two plugins, so a
+game without notifications bundles neither.
 
-Once P2 lets a provider serve `notifications.v2.*` methods, these rules apply:
+```ts
+import { resolveNotificationTopicsForTarget } from '@mpgd/catalog';
+import {
+  createCapacitorNotificationServiceProvider,
+  loadCapacitorNotificationSdks,
+} from '@mpgd/adapter-capacitor/notifications';
 
-- `notifications.v2.requestPermission` and `notifications.v2.openSettings`
-  pause the game while they run, like `notifications.requestSubscription` and
-  `commerce.v2.requestPurchase`.
-- The provider registry passes `notifications.v2.*` through `assertMethodReady`
-  without a readiness check, as it does `commerce.v2.*`, so the provider's own
-  `unsupported` or `action-required` answers reach the game as answers.
-- The gateway validates each answer before the game sees it. Until P2 adds the
-  notifications v2 answers to that check, it rejects every one of them.
+const sdks = await loadCapacitorNotificationSdks();
+const notifications = createCapacitorNotificationServiceProvider({
+  platform: 'android',
+  topics: resolveNotificationTopicsForTarget(catalog, 'android'),
+  ...sdks,
+  // Optional: opens this app's notification settings (see below).
+  openSettings,
+});
+const gateway = createCapacitorPlatformGateway({ ..., providers: [notifications] });
+```
+
+Create it once, early in startup: it registers its native listeners when it
+is created, which is how a cold-start open reaches it.
+
+- **Plugins.** Install `@capacitor-firebase/messaging` (with the `firebase`
+  package its web fallback imports) and `@capacitor/local-notifications` 8.x,
+  both optional peers of this package. Do not also install
+  `@capacitor/push-notifications`: on iOS both claim Capacitor's single push
+  handler. `loadCapacitorNotificationSdks` imports them dynamically and leaves
+  one out when the app is not native or the shell has no native
+  implementation. Without both the provider is `unsupported`; without the push
+  plugin it declares no remote delivery, without the local plugin no local
+  reminders. iOS remote notifications go through FCM, which relays to APNs.
+- **Gateway.** `createCapacitorNotificationServiceProvider` (or
+  `createNotificationServiceProvider` over another provider) registers the
+  nine `notifications.v2.*` methods. The gateway then exposes
+  `notificationsV2`, validates every payload and answer on both sides of its
+  in-process bridge, pauses the game under `requestPermission` and until the
+  player is back from `openSettings`, and serves the v1 `notifications`
+  adapter from the same provider. `getCapabilities()` carries the provider's
+  `notifications` block, and `providerAvailability.pushNotifications` equals
+  its availability. A v1 `pushNotifications` provider cannot be registered
+  next to it. Without a notifications service the gateway exposes no
+  `notificationsV2` and answers every `notifications.v2.*` request with
+  `NOTIFICATIONS_V2_UNAVAILABLE` before it pauses the game.
+- **Permission.** One OS permission for the app. The provider reads it through
+  the local plugin, which reflects the system setting on Android 12 and lower
+  where the push plugin answers `granted` regardless. The OS `denied` reads
+  `blocked`: after one denial on iOS (`promptLimit` 1) and after the second on
+  Android 13+ (`promptLimit` 2; pass `androidPromptLimit: 1` for an app that
+  targets SDK 32 or lower). Only `requestPermission` shows the dialog. A change
+  made in system settings is read on the next read and announced as
+  `permission-changed` when the app returns to the foreground.
+- **Local reminders.** `scheduleLocal` reads the permission first and answers
+  `permission-required` without calling the plugin, whose own `schedule` would
+  prompt on Android 13+. Reminders are inexact (`isExactNotification: false`;
+  the plugin's default would open the exact-alarm settings screen), keyed by a
+  stable 32-bit native id, replaced by key, posted on the topic's Android
+  channel, and capped at 64 pending on iOS, keeping the nearest. Remove
+  `SCHEDULE_EXACT_ALARM`, which the plugin's manifest adds, from the merged
+  manifest (`tools:node="remove"`).
+- **Channels.** Each topic posts to its mapping's `channelId`, or to
+  `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose
+  (`capacitorNotificationChannelId`). A channel may not mix advertising with
+  other topics, so a player can turn advertising off in system settings. Name
+  the channels with the `channels` option.
+- **Opens.** A tap becomes one `opened` event, buffered until the first
+  subscriber and marked `cold` before it. A push carries its topic and route in
+  the data keys `topic` and `route` (`capacitorNotificationDataKeys`); the
+  other string entries reach the game as untrusted `data`. A route is kept only
+  when `isRootRelativeNotificationRoute` accepts it, and a topic only when the
+  catalog declares it. Nothing is granted from an open.
+- **Advertising opt-out.** The provider registers the action type
+  `mpgd-advertising` (`capacitorAdvertisingActionTypeId`) with the
+  `advertising-opt-out` action. On iOS that sets the notification category an
+  FCM send names in `apns.payload.aps.category`, and the action opens the
+  topic's declared `optOutRoute`. An Android FCM notification message cannot
+  carry actions, so an Android advertising push needs the shell to render it
+  natively with the action; the template work for that is C1's.
+- **Settings.** Neither plugin opens the notification settings, so the shell
+  passes `openSettings` (for example a small native method); without it
+  `permission.settings` is `false` and `openSettings` answers `unavailable`.
+  The provider resolves `openSettings` only once the app is back in the
+  foreground, after at most ten minutes, or after five seconds when the app
+  never left.
+- **Endpoints.** `register()` answers the FCM token with the device
+  permission, locale, and time zone, or `null` while Firebase cannot issue one
+  yet; a token Firebase issues later arrives as `endpoint-changed`. Pass
+  `address: 'fcm-installation'` with a `PushSdk` that adds `getInstallationId`
+  to register Firebase installation ids instead.
 
 ## App Store server-side transaction signatures
 

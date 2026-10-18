@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-import { manifest } from './validation/json.js';
+import { manifest, optionalObject, parseObject } from './validation/json.js';
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 // The six commerce v2 bridge methods are the whole commerce bridge (the v1
@@ -250,6 +250,77 @@ for (const [file, factory, packageName] of wiredGateways) {
   );
 }
 
+// Notifications v2 (RFC "Provider profiles", Capacitor): the two plugins are
+// optional peers that only the notifications subpath imports, so a shell
+// without them fails closed; `@capacitor/push-notifications` never joins them,
+// because on iOS it claims the push handler Firebase Messaging needs; and
+// local reminders stay inexact.
+const adapterManifest = manifest(read('adapters/capacitor/package.json'), 'Capacitor adapter');
+const adapterPackage = parseObject(read('adapters/capacitor/package.json'), 'Capacitor adapter');
+assert.ok(
+  optionalObject(adapterPackage, 'exports')['./notifications'] !== undefined,
+  'The Capacitor adapter must export ./notifications',
+);
+const optionalPeers = optionalObject(adapterPackage, 'peerDependenciesMeta');
+for (const name of ['@capacitor-firebase/messaging', '@capacitor/local-notifications']) {
+  assert.equal(
+    adapterManifest.dependencies[name],
+    undefined,
+    `${name} must not be a dependency of the Capacitor adapter`,
+  );
+  assert.ok(
+    adapterManifest.peerDependencies[name] !== undefined
+      && optionalObject(optionalPeers, name)['optional'] === true,
+    `${name} must be an optional peer of the Capacitor adapter`,
+  );
+  assert.equal(
+    referenceShell.dependencies?.[name],
+    undefined,
+    `The reference shell must not bundle ${name}`,
+  );
+}
+for (const path of [
+  'adapters/capacitor/package.json',
+  'apps/mobile-capacitor/package.json',
+  'packages/cli/templates/phaser-game/package.json',
+  'examples/phaser-starter/package.json',
+]) {
+  if (!existsSync(new URL(`../${path}`, import.meta.url))) {
+    continue;
+  }
+  const packageManifest = manifest(read(path), path);
+  for (const field of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
+    assert.equal(
+      packageManifest[field]['@capacitor/push-notifications'],
+      undefined,
+      `${path}: @capacitor/push-notifications conflicts with @capacitor-firebase/messaging on iOS`,
+    );
+  }
+}
+for (const file of readdirSync(new URL('../adapters/capacitor/src/', import.meta.url))) {
+  if (!file.endsWith('.ts') || file.startsWith('notifications') || file.endsWith('.test.ts')) {
+    continue;
+  }
+  const source = read(`adapters/capacitor/src/${file}`);
+  for (const specifier of ['@capacitor-firebase/messaging', '@capacitor/local-notifications']) {
+    assert.ok(
+      !source.includes(`'${specifier}'`),
+      `adapters/capacitor/src/${file}: only the notifications subpath may import ${specifier}`,
+    );
+  }
+}
+const notificationsProvider = read('adapters/capacitor/src/notifications-provider.ts');
+assert.match(
+  notificationsProvider,
+  /isExactNotification: false/u,
+  'Capacitor local reminders must be scheduled with inexact alarms',
+);
+assert.doesNotMatch(
+  notificationsProvider,
+  /isExactNotification: true|isExactMandatory/u,
+  'Capacitor local reminders must never ask for exact alarms',
+);
+
 console.info(
-  'Capacitor reference native services fail closed without providers, and store providers stay opt-in.',
+  'Capacitor reference native services fail closed without providers, and store and notification providers stay opt-in.',
 );

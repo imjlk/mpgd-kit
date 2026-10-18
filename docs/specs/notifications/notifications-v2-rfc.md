@@ -387,7 +387,9 @@ Rules every provider follows:
   `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED`, `NOTIFICATIONS_INVALID_INPUT`,
   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and `NOTIFICATIONS_V2_UNAVAILABLE`
   from a bridge without v2. Only `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` is
-  retryable.
+  retryable, and not every one: a client that receives an answer the contract
+  rejects reports it with this code but not retryable. Callers retry on the
+  flag, not the code.
 - **A required player action is a state.** It reaches the game in one of two
   ways, and both carry `requiredAction`:
   - While the host needs a player action before it can prompt at all
@@ -1373,6 +1375,15 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   plugins live in `@mpgd/adapter-capacitor/notifications`, with the plugins as
   optional peer dependencies, as `./admob` does. The template imports only
   `@mpgd/*` packages and keeps platform SDK imports out of game code.
+  - `loadCapacitorNotificationSdks` imports each plugin dynamically and
+    leaves it out when the app is not native or the shell has no native
+    implementation, so the provider fails closed for that half: no push
+    plugin, no remote delivery; no local plugin, no local reminders; neither,
+    `availability: 'unsupported'`.
+  - The messaging plugin's web fallback imports the `firebase` package, so a
+    game that bundles the subpath installs it too.
+  - The base adapter entry loads neither plugin nor the notifications
+    validators; the gateway reaches them through the registered service.
 - **Permission mapping.**
   - **Android.** Capacitor reports `prompt-with-rationale` after the first
     denial and `denied` after the second, which is permanent. The provider maps
@@ -1390,10 +1401,33 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `promptLimit: 1`.
 - **Channels.** Android channels come from the catalog
   (`targets.android.channelId`), with separate channels for advertising so a
-  player can turn them off in system settings.
+  player can turn them off in system settings. A topic without a `channelId`
+  posts to `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose,
+  and the provider refuses a channel that mixes advertising with other
+  topics. It creates the channels at start, because a push needs its channel
+  before it arrives, and tries again after a failure.
 - **Opt-out action.** The provider registers the advertising opt-out action
-  natively: an Android notification action, and an iOS notification category
-  set through Firebase Messaging.
+  natively as the action type `mpgd-advertising` with the action
+  `advertising-opt-out`, through `@capacitor/local-notifications`.
+  - On iOS that sets the app's notification category, which remote
+    notifications share, so an FCM send names it in
+    `apns.payload.aps.category`. Firebase Messaging has no category API, so
+    the category is not set through it as an earlier draft said.
+  - An Android FCM notification message cannot carry actions. An Android
+    advertising push needs the shell to render it natively with the action;
+    C1 adds that to the template.
+  - Tapping the action opens the topic's declared `optOutRoute`, never a route
+    from the payload.
+- **Opens.** A push carries its topic and its route in the data keys `topic`
+  and `route`; every other string entry reaches the game as untrusted `data`.
+  A route is kept only when `isRootRelativeNotificationRoute` accepts it, and
+  a topic only when the catalog declares it.
+- **Settings link.** Neither plugin opens the notification settings, so the
+  shell supplies the opener; without one `permission.settings` is false. The
+  provider resolves `openSettings` once the app is back in the foreground, so
+  the game stays paused while the settings screen is up: on Android the native
+  call returns as soon as the screen launches. It stops waiting after ten
+  minutes, or after five seconds when the app never left.
 - **Bridge.**
   - The Capacitor bridge adds `notifications.v2.requestPermission` and
     `.openSettings` to its external-activity methods, as v1
@@ -1401,9 +1435,16 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     so the game pauses under the permission UI.
   - Its provider registry passes `notifications.v2.*` through
     `assertMethodReady`, as it passes `commerce.v2.*`, so states stay answers.
+  - A notifications service registers the nine methods as implied ones, as a
+    commerce provider does; an in-process bridge serves them and validates
+    each payload and answer, and the gateway's client validates again. The
+    gateway serves its v1 `notifications` adapter from the same provider and
+    refuses a v1 push provider next to it.
 - **Cold starts.** Verify cold-start opens on a device: Capacitor 8.5 moved the
   iOS template to the UIScene lifecycle, which sets the notification delegate
-  later than Apple recommends.
+  later than Apple recommends. The provider registers its native listeners
+  when it is created and marks an open `cold` when it arrives before the first
+  subscriber.
 
 ### Apps in Toss {#profile-ait}
 
@@ -1583,6 +1624,9 @@ Other rules the profiles encode:
     its registry refuses the methods as methods a v1 provider declares. For the
     provider P2 adds, `requestPermission` and `openSettings` pause the game,
     and the registry passes the methods through `assertMethodReady`.
+  - P2 added that provider (see [Capacitor](#profile-capacitor)): the
+    Capacitor gateway exposes `notificationsV2` when a notifications service
+    is registered.
   - `withTargetAvailability` exposes `notificationsV2` only while
     `integrations.notifications` lets the game call notifications, as it does
     the v1 adapter. It then adds `PlatformCapabilities.notifications` from one
