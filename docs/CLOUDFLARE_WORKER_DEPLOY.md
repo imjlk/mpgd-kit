@@ -129,6 +129,8 @@ The current service binding methods are:
 - `recordLeaderboardScore(input)`
 - `recordVerifiedAttempt(input)` for trusted attempt coordinators
 - `getSnapshot(input)` for verified leaderboard reads
+- `deliverNotification(input)` and `endNotificationSession(input)` for
+  notifications v2 (see [Notifications v2](#notifications-v2))
 
 The verified-attempt writer is intentionally available only through the
 private service binding. It is not routed through the public JSON or oRPC
@@ -158,6 +160,61 @@ Continue with the opaque `nextCursor` returned by the prior response. Cursors
 are keyset positions bound to the board definition, not credentials or stable
 snapshot locks. The Worker returns private, non-cacheable responses and never
 mounts a public verified-attempt write route.
+
+## Notifications v2
+
+The Worker serves the notifications v2 backend
+([RFC](specs/notifications/notifications-v2-rfc.md#server)) once it has a
+topic catalog. It needs D1 for anything but local development: apply
+`0007_notifications.sql` with the other migrations.
+
+```toml
+[vars]
+# The game's notification topic catalog and deployment settings, as JSON vars.
+MPGD_NOTIFICATIONS_CATALOG = { version = "2026-10-19", defaultLocale = "ko", topics = [] }
+MPGD_NOTIFICATIONS_DEPLOYMENT = { advertisingRules = "kr", advertisingSender = { contact = "02-000-0000" } }
+
+# Authenticated game-services sessions for the client routes.
+[[services]]
+binding = "GAME_SERVICES_NOTIFICATIONS_AUTH"
+service = "game-identity"
+entrypoint = "NotificationSessions"
+
+# Fan-out through a queue (optional; without it a send fans out inline).
+[[queues.producers]]
+binding = "NOTIFICATIONS_QUEUE"
+queue = "mpgd-notifications"
+
+[[queues.consumers]]
+queue = "mpgd-notifications"
+
+# Purges and due replays.
+[triggers]
+crons = ["*/5 * * * *"]
+```
+
+FCM sends for `android` and `ios` once the service-account key is a secret:
+
+```sh
+pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUNT
+```
+
+- **Sessions.** `authenticateNotificationSession({ authorization })` returns
+  `{ playerId, sessionId, installationId, expiresAt? }`. The installation is
+  the session's, never a request field. `sessionId` stays the same across
+  refreshes. Call `endNotificationSession({ sessionId })` on the service
+  binding at logout or revocation; `expiresAt` unbinds the session's devices
+  on its own.
+- **Client routes** under `/game-services/notifications`: `GET /providers`
+  (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
+  (`{ registration, target }`; `target` is `android` or `ios`, whose catalog
+  mapping applies), `POST /endpoints/unregister`, `GET /notices`, and
+  `POST /notices/shown`.
+- **Sends** are never a client route: a game server calls
+  `deliverNotification(input)` on the service binding.
+- **Platform-user providers** resolve recipients through an optional
+  `GAME_SERVICES_NOTIFICATIONS_IDENTITY` binding
+  (`resolveNotificationRecipient({ provider, playerId })`).
 
 ## Production Notes
 
