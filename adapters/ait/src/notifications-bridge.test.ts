@@ -122,6 +122,36 @@ describe('Apps in Toss notifications v2 over the game bridge', () => {
     expect(capabilities.providerAvailability?.pushNotifications).toBeUndefined();
   });
 
+  it('bounds the capability read and maps a missing configuration', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge } = hostBridge();
+      const stalled: GamePlatformBridge = {
+        ...bridge,
+        request: (input) => input.method === 'notifications.v2.getCapabilities'
+          ? new Promise(() => {})
+          : bridge.request(input),
+      };
+      const pending = gatewayOver(stalled).getCapabilities();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(pending).resolves.toMatchObject({
+        notifications: { availability: 'temporarily-unavailable' },
+        providerAvailability: { pushNotifications: 'temporarily-unavailable' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const unconfigured = createAitHostBridge({
+      dependencies: createFakeAitHostDependencies(createFakeAitIapHost({ products: [] }), {
+        requestNotificationAgreement: createFakeAitNotificationHost().sdk.requestAgreement,
+      }),
+    });
+    await expect(gatewayOver(unconfigured).getCapabilities()).resolves.toMatchObject({
+      notifications: { availability: 'configuration-required', remote: { supported: true } },
+      providerAvailability: { pushNotifications: 'configuration-required' },
+    });
+  });
+
   it('reports a failed capability read as a block that offers nothing', async () => {
     const { bridge } = hostBridge();
     const failing: GamePlatformBridge = {
@@ -158,6 +188,35 @@ describe('createAitBridgeNotificationProvider', () => {
       .resolves.toMatchObject({ code: 'NOTIFICATIONS_V2_UNAVAILABLE', retryable: false });
     await expect(failureOf(failWith('AIT_BRIDGE_REQUEST_FAILED', true).getPermission({ topics: ['a'] })))
       .resolves.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true });
+  });
+
+  it('keeps the host code and the host retryability across the bridge', async () => {
+    const { bridge, fake } = hostBridge();
+    const provider = gatewayOver(bridge).notificationsV2 as NotificationProvider;
+    fake.queue({ kind: 'error', error: { code: 'NOTIFICATION_AGREEMENT_FAILED' } });
+    let failure: unknown;
+    try {
+      await provider.requestPermission({ topics: ['energy-full'] });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(NotificationError);
+    expect(failure).toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      hostCode: 'NOTIFICATION_AGREEMENT_FAILED',
+      retryable: false,
+    });
+
+    const notInstalled = answering(() => {
+      throw new PlatformOperationError({ code: 'AIT_BRIDGE_NOT_INSTALLED', retryable: false });
+    });
+    await expect(failureOf(notInstalled.getPermission({ topics: ['a'] })))
+      .resolves.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false });
+    const old = answering(() => {
+      throw new PlatformOperationError({ code: 'INVALID_BRIDGE_REQUEST' });
+    });
+    await expect(failureOf(old.getPermission({ topics: ['a'] })))
+      .resolves.toMatchObject({ code: 'NOTIFICATIONS_V2_UNAVAILABLE' });
   });
 
   it('refuses an answer the contract rejects or another provider id', async () => {
@@ -242,6 +301,22 @@ describe('createAitNotificationsV2BridgeHandler', () => {
       .resolves.toMatchObject({
         ok: false,
         error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
+      });
+  });
+
+  it('refuses a method outside notifications v2 and keeps a host failure non-retryable', async () => {
+    const handler = createAitNotificationsV2BridgeHandler({
+      ...base,
+      getPermission: async () => {
+        throw new PlatformOperationError({ code: 'AIT_SOMETHING', message: 'gone', retryable: false });
+      },
+    });
+    await expect(handler.request(request('identity.getPlayer', {})))
+      .resolves.toMatchObject({ ok: false, error: { code: 'UNSUPPORTED_METHOD' } });
+    await expect(handler.request(request('notifications.v2.getPermission', { topics: ['a'] })))
+      .resolves.toMatchObject({
+        ok: false,
+        error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false },
       });
   });
 

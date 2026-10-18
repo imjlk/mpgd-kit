@@ -2,6 +2,7 @@ import {
   bridgeNotificationsEventProtocol,
   createBridgeError,
   createBridgeEventSource,
+  isBridgeNotificationsV2Method,
   type BridgeEventStream,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
@@ -98,7 +99,14 @@ export function createAitNotificationsV2BridgeHandler(
 
   return {
     async request(request) {
-      const method = request.method as BridgeNotificationsV2Method;
+      if (!isBridgeNotificationsV2Method(request.method)) {
+        return createBridgeError(
+          request.id,
+          'UNSUPPORTED_METHOD',
+          `${request.method} is not a notifications v2 method.`,
+        );
+      }
+      const method = request.method;
       try {
         const data = await serve(method, request.payload);
         return { id: request.id, ok: true, data: validResult(method, data) };
@@ -169,8 +177,15 @@ function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
       error.retryable,
     );
   }
-  if (error instanceof PlatformOperationError && isNotificationErrorCode(error.code)) {
-    return createBridgeError(request.id, error.code, error.message, error.retryable);
+  if (error instanceof PlatformOperationError) {
+    return isNotificationErrorCode(error.code)
+      ? createBridgeError(request.id, error.code, error.message, error.retryable)
+      : createBridgeError(
+          request.id,
+          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          `${request.method} failed: ${error.message}`,
+          error.retryable,
+        );
   }
   // A failure the provider did not normalize is a host failure the game may retry.
   return createBridgeError(
@@ -196,7 +211,7 @@ export interface CreateAitBridgeNotificationProviderInput {
  * methods and the event envelope. It offers what the Apps in Toss profile
  * has: reads, requests, the `platform-user` registration, and the settings
  * answer, but no local notifications and no revocation. Answers are validated
- * again here, so a transport that forgets to stays fail-closed. A bridge error
+ * again here, so a transport that skips validation stays fail-closed. A bridge error
  * with a `NOTIFICATIONS_*` code becomes a `NotificationError` with that code;
  * `UNSUPPORTED_METHOD` from a host that predates the methods becomes
  * `NOTIFICATIONS_V2_UNAVAILABLE`; any other failure
@@ -267,6 +282,8 @@ export function createAitBridgeNotificationProvider(
   };
 }
 
+const hostCodePattern = /\(host code ([A-Za-z0-9_.:-]{1,128})\)$/u;
+
 function toNotificationError(error: unknown): NotificationError {
   if (error instanceof NotificationError) {
     return error;
@@ -275,14 +292,20 @@ function toNotificationError(error: unknown): NotificationError {
     ? error as { readonly code?: unknown; readonly message?: unknown; readonly retryable?: unknown }
     : {};
   const message = typeof failure.message === 'string' ? failure.message : undefined;
+  const retryable = failure.retryable === true;
   if (isNotificationErrorCode(failure.code)) {
+    // The host handler names the host's own code in the message; it is the
+    // only place a bridge error can carry it.
+    const hostCode = message === undefined ? undefined : hostCodePattern.exec(message)?.[1];
     return new NotificationError(failure.code, {
       ...(message === undefined ? {} : { message }),
-      retryable: failure.retryable === true,
+      retryable,
+      ...(hostCode === undefined ? {} : { hostCode }),
       cause: error,
     });
   }
-  if (failure.code === 'UNSUPPORTED_METHOD') {
+  if (failure.code === 'UNSUPPORTED_METHOD' || failure.code === 'INVALID_BRIDGE_REQUEST') {
+    // A host that predates the methods.
     return new NotificationError('NOTIFICATIONS_V2_UNAVAILABLE', {
       ...(message === undefined ? {} : { message }),
       cause: error,
@@ -290,6 +313,7 @@ function toNotificationError(error: unknown): NotificationError {
   }
   return new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
     ...(message === undefined ? {} : { message }),
+    retryable,
     cause: error,
   });
 }

@@ -249,7 +249,10 @@ export interface InstallAitHostBridgeOptions {
   /**
    * v1 notification topics mapped to approved Apps in Toss template codes.
    * Each one is a notifications v2 topic with `agreement: 'required'`;
-   * `notificationTopics` wins for a topic both name.
+   * `notificationTopics` wins for a topic named by both. v1 reads come from
+   * the v2 provider, which cannot read an agreement back, so a topic that
+   * needs one reads `not-subscribed` even after an agreement; read it through
+   * the game-services notifications runtime, which consults the backend.
    */
   readonly notificationTemplateCodes?: Partial<Readonly<Record<NotificationTopic, string>>>;
   /**
@@ -312,10 +315,15 @@ export function createAitHostBridge(
   const promotionRewards = normalizePromotionRewards(options.promotionRewards);
   const authorizePromotionGrant = options.authorizePromotionGrant;
   const resolvePendingPromotionGrant = options.resolvePendingPromotionGrant;
+  // Read once per bridge: the provider and the launch intent must judge the
+  // same launch, even if the page URL changes later (`history.replaceState`).
+  let launchUrl: { readonly value: string | undefined } | undefined;
+  const readLaunchUrl = (): string | undefined =>
+    (launchUrl ??= { value: readAitLaunchUrl(dependencies) }).value;
   const notifications = createAitNotificationProvider({
     sdk: {
       requestAgreement: dependencies.requestNotificationAgreement,
-      readInitialUrl: () => readAitLaunchUrl(dependencies),
+      readInitialUrl: readLaunchUrl,
     },
     topics: {
       ...normalizeNotificationTemplateCodes(options.notificationTemplateCodes),
@@ -484,7 +492,10 @@ export function createAitHostBridge(
         return ok(request, { status: 'unavailable', reloadExpected: false });
 
       case 'presentation.getLaunchIntent':
-        return ok(request, getLaunchIntent(readAitLaunchUrl(dependencies)));
+        return ok(
+          request,
+          getLaunchIntent(notifications.hasTopics() ? readLaunchUrl() : undefined),
+        );
 
       case 'presentation.requestGameSurface':
         return ok(request, 'already-fullscreen');
@@ -1332,7 +1343,9 @@ function readDeviceTimeZone(): string | undefined {
  * A launch from a Toss push or inbox message (`referrer=push` or `inbox`)
  * routes only through the notifications provider's cold `opened` event, so
  * the launch intent answers `home` for it and the game never routes one
- * launch twice (RFC "Opens").
+ * launch twice (RFC "Opens"). `launchUrl` is absent when no notification
+ * topic is configured: the provider then emits no open, so such a launch
+ * routes as any other.
  */
 function getLaunchIntent(launchUrl: string | undefined): LaunchIntent {
   if (readAitNotificationLanding(launchUrl) !== undefined) {

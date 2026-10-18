@@ -215,6 +215,12 @@ export function createAitPlatformGateway(input: {
         subscribe: (listener) => notificationEventSource.subscribe(listener),
       });
 
+  function requestNotificationsV1<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
+    return notificationsV2 === undefined
+      ? request<TData>(method, payload)
+      : requestOn<TData>(commerceBridge, method, payload);
+  }
+
   return {
     target: 'ait',
     async getCapabilities() {
@@ -251,11 +257,16 @@ export function createAitPlatformGateway(input: {
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
     },
+    // v1 is served from the v2 provider, so it reads the bridge v2 is pinned
+    // to whenever the gateway exposes v2.
     notifications: {
       getStatus: (topic) =>
-        request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
+        requestNotificationsV1<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
       requestSubscription: (topic) =>
-        request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
+        requestNotificationsV1<NotificationSubscriptionResult>(
+          'notifications.requestSubscription',
+          { topic },
+        ),
     },
     promotions: {
       getAvailability: (payload) =>

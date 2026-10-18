@@ -1609,6 +1609,13 @@ describe('AIT production host bridge', () => {
       protocol: 'mpgd.notifications.v2',
     })).resolves.toEqual({ status: 'unavailable' });
     for (const [method, payload] of [
+      ['notifications.v2.scheduleLocal', {
+        key: 'k',
+        topic: 'receipt',
+        fireAt: '2026-10-19T00:00:00Z',
+        title: 't',
+        body: 'b',
+      }],
       ['notifications.v2.revokePermission', { topics: ['receipt'] }],
       ['notifications.v2.listLocal', { protocol: 'mpgd.notifications.v2' }],
       ['notifications.v2.cancelLocal', { keys: ['k'] }],
@@ -1620,6 +1627,23 @@ describe('AIT production host bridge', () => {
     }
     await expect(requestError(bridge, 'notifications.v2.getPermission', { topics: 'receipt' }))
       .resolves.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT', retryable: false });
+  });
+
+  it('reads a v1 topic mapped without agreement as subscribed without a sheet', async () => {
+    const requestAgreement = vi.fn(() => () => {});
+    const bridge = createAitHostBridge({
+      notificationTopics: {
+        'friend-challenge': { templateSetCode: 'ttokdoku-challenge', agreement: 'none' },
+      },
+      dependencies: createDependencies({
+        requestNotificationAgreement: Object.assign(requestAgreement, { isSupported: () => true }),
+      }),
+    });
+    await expect(request(bridge, 'notifications.getStatus', { topic: 'friend-challenge' }))
+      .resolves.toBe('subscribed');
+    await expect(request(bridge, 'notifications.requestSubscription', { topic: 'friend-challenge' }))
+      .resolves.toBe('subscribed');
+    expect(requestAgreement).not.toHaveBeenCalled();
   });
 
   it('answers home for a launch from a Toss push and leaves its route to the cold open', async () => {
@@ -4989,6 +5013,62 @@ describe('AIT launch intent', () => {
   function nestedQueryParams(value: unknown): string {
     return `queryParams=${encodeURIComponent(JSON.stringify(value))}`;
   }
+
+  const notificationTopics = {
+    'energy-full': { templateSetCode: 'ttokdoku-energy-full', agreement: 'required' },
+  } as const;
+
+  it('reads a Toss inbox launch from the page URL when the host has no initial URL', async () => {
+    stubSearch('?entry=daily&referrer=inbox');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+    expect(events).toEqual([
+      expect.objectContaining({
+        event: { type: 'opened', channel: 'remote', source: 'cold', referrer: 'inbox', route: '/?entry=daily' },
+      }),
+    ]);
+  });
+
+  it('falls back to the page URL when reading Environment.initialURL throws', async () => {
+    stubSearch('?referrer=push');
+    const bridge = createAitHostBridge({
+      notificationTopics,
+      dependencies: createDependencies({
+        readInitialUrl: () => {
+          throw new Error('no native constant');
+        },
+      }),
+    });
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+  });
+
+  it('routes a push launch normally while no notification topic is configured', async () => {
+    stubSearch('?entry=daily&puzzleId=p-1&referrer=push');
+    const bridge = createAitHostBridge({ dependencies: createDependencies() });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'daily',
+      puzzleId: 'p-1',
+    });
+    expect(events).toEqual([]);
+  });
+
+  it('judges the launch once, so a later page URL change routes it neither twice nor never', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+    // The game's router drops the referrer before the runtime subscribes.
+    stubSearch('?entry=daily');
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toHaveLength(1);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+  });
 
   it('prefers direct search params over nested queryParams and only fills missing keys', async () => {
     stubSearch(`?puzzleId=direct-puzzle&${nestedQueryParams({

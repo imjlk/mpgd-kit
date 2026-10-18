@@ -86,6 +86,8 @@ export interface CreateAitNotificationProviderInput {
 export interface AitNotificationProvider extends NotificationProvider {
   /** Whether `topic` has an Apps in Toss mapping. */
   hasTopic(topic: NotificationTopicId): boolean;
+  /** Whether any topic is mapped; without one the provider never delivers an open. */
+  hasTopics(): boolean;
 }
 
 /** A fresh Apps in Toss capability block (RFC profile table). */
@@ -215,6 +217,7 @@ export function createAitNotificationProvider(
   return {
     provider: aitNotificationProviderId,
     hasTopic: (topic) => topics.has(topic),
+    hasTopics: () => topics.size > 0,
     async getCapabilities() {
       return createAitNotificationCapabilities(
         topics.size === 0 ? 'configuration-required' : 'available',
@@ -332,7 +335,7 @@ export function createAitNotificationProvider(
       // The only event is the launch's cold open: a Toss message opens the
       // mini-app with a new launch, so nothing arrives later, and the open
       // goes to the first subscriber only.
-      if (!landingRead) {
+      if (!landingRead && topics.size > 0) {
         landingRead = true;
         const landing = readAitNotificationLanding(readOptional(() => sdk.readInitialUrl()));
         if (landing !== undefined) {
