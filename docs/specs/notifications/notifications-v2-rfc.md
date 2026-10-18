@@ -1354,7 +1354,12 @@ Every provider answer maps to one of five kinds:
     needs no agreement, the record does not stop sends, and the host decides
     on each send.
 - **`ambiguous`**: the provider cannot say whether it sent (a timeout, a 5xx
-  answer, a crash after the claim).
+  answer, a crash after the claim). A remote provider that throws, or
+  answers none of the five kinds, is treated the same way and reported,
+  because it may have sent. This is the server's rule for a remote delivery
+  provider; a broken answer from a client provider is
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED` ([Bridge and
+  versioning](#bridge)).
   - The claim is kept, as the delivery ledger requires, and the send answers
     `in-flight`.
   - A direct caller retries after the lease.
