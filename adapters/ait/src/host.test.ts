@@ -5058,6 +5058,16 @@ describe('AIT launch intent', () => {
     expect(events).toEqual([]);
   });
 
+  it('reads the launch when the bridge is created, before the router can rewrite it', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    stubSearch('?entry=daily');
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toHaveLength(1);
+  });
+
   it('judges the launch once, so a later page URL change routes it neither twice nor never', async () => {
     stubSearch('?entry=daily&referrer=push');
     const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });

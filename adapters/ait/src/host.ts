@@ -335,6 +335,10 @@ export function createAitHostBridge(
     timeZone: readDeviceTimeZone,
   });
   const notificationsV2 = createAitNotificationsV2BridgeHandler(notifications);
+  if (notifications.hasTopics()) {
+    // Before the game's router can rewrite the page URL on the fallback path.
+    readLaunchUrl();
+  }
   /**
    * One IAP controller serves the commerce provider: the single IAP lock, the
    * in-flight purchase map, the durable attempt markers and the

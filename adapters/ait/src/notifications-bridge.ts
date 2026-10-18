@@ -171,7 +171,7 @@ function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
     return createBridgeError(
       request.id,
       error.code,
-      error.hostCode === undefined
+      error.hostCode === undefined || !hostCodeValue.test(error.hostCode)
         ? error.message
         : `${error.message} (host code ${error.hostCode})`,
       error.retryable,
@@ -211,11 +211,13 @@ export interface CreateAitBridgeNotificationProviderInput {
  * methods and the event envelope. It offers what the Apps in Toss profile
  * has: reads, requests, the `platform-user` registration, and the settings
  * answer, but no local notifications and no revocation. Answers are validated
- * again here, so a transport that skips validation stays fail-closed. A bridge error
- * with a `NOTIFICATIONS_*` code becomes a `NotificationError` with that code;
- * `UNSUPPORTED_METHOD` from a host that predates the methods becomes
- * `NOTIFICATIONS_V2_UNAVAILABLE`; any other failure
- * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. An event envelope of another
+ * again here, so a transport that skips validation stays fail-closed. A
+ * bridge error with a `NOTIFICATIONS_*` code becomes a `NotificationError`
+ * with that code and the host code the message names;
+ * `UNSUPPORTED_METHOD` or `INVALID_BRIDGE_REQUEST` from a host that predates
+ * the methods becomes `NOTIFICATIONS_V2_UNAVAILABLE`; any other failure
+ * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, retryable unless the failure says
+ * otherwise. An event envelope of another
  * protocol is ignored, and an invalid one is dropped with a warning.
  */
 export function createAitBridgeNotificationProvider(
@@ -282,6 +284,8 @@ export function createAitBridgeNotificationProvider(
   };
 }
 
+/** The host codes the bridge carries; the host handler names only these in a message. */
+const hostCodeValue = /^[A-Za-z0-9_.:-]{1,128}$/u;
 const hostCodePattern = /\(host code ([A-Za-z0-9_.:-]{1,128})\)$/u;
 
 function toNotificationError(error: unknown): NotificationError {
@@ -292,14 +296,16 @@ function toNotificationError(error: unknown): NotificationError {
     ? error as { readonly code?: unknown; readonly message?: unknown; readonly retryable?: unknown }
     : {};
   const message = typeof failure.message === 'string' ? failure.message : undefined;
-  const retryable = failure.retryable === true;
+  // Only an explicit flag overrides the code's default: a raw transport
+  // failure (a plain Error) stays retryable as NOTIFICATIONS_TEMPORARILY_UNAVAILABLE.
+  const explicit = typeof failure.retryable === 'boolean' ? { retryable: failure.retryable } : {};
   if (isNotificationErrorCode(failure.code)) {
     // The host handler names the host's own code in the message; it is the
     // only place a bridge error can carry it.
     const hostCode = message === undefined ? undefined : hostCodePattern.exec(message)?.[1];
     return new NotificationError(failure.code, {
       ...(message === undefined ? {} : { message }),
-      retryable,
+      ...explicit,
       ...(hostCode === undefined ? {} : { hostCode }),
       cause: error,
     });
@@ -313,7 +319,7 @@ function toNotificationError(error: unknown): NotificationError {
   }
   return new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
     ...(message === undefined ? {} : { message }),
-    retryable,
+    ...explicit,
     cause: error,
   });
 }

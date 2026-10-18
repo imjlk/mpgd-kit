@@ -212,6 +212,11 @@ describe('createAitBridgeNotificationProvider', () => {
     });
     await expect(failureOf(notInstalled.getPermission({ topics: ['a'] })))
       .resolves.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false });
+    const transport = answering(() => {
+      throw new TypeError('postMessage failed');
+    });
+    await expect(failureOf(transport.getPermission({ topics: ['a'] })))
+      .resolves.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true });
     const old = answering(() => {
       throw new PlatformOperationError({ code: 'INVALID_BRIDGE_REQUEST' });
     });
