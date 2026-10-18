@@ -87,7 +87,7 @@ const maxBodyBytes = 64 * 1024;
 const servicesByEnv = new WeakMap<object, WorkerNotifications>();
 const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
 const reportedMisconfiguration = new WeakSet<object>();
-const reportedIdleConsumer = new WeakSet<object>();
+const reportedUnreadyConsumer = new WeakSet<object>();
 
 /**
  * The notifications service for this environment, built once per env
@@ -403,8 +403,8 @@ export async function consumeNotificationDispatchBatch(
   const backoff = (attempts: number) => ({
     delaySeconds: Math.min(2 ** Math.max(attempts, 1) * 5, 300),
   });
-  if (notifications.status !== 'ready' && !reportedIdleConsumer.has(env)) {
-    reportedIdleConsumer.add(env);
+  if (notifications.status !== 'ready' && !reportedUnreadyConsumer.has(env)) {
+    reportedUnreadyConsumer.add(env);
     console.error(
       notifications.status === 'disabled'
         ? 'Notifications dispatch jobs arrived but this Worker has no MPGD_NOTIFICATIONS_CATALOG; they are acknowledged.'
