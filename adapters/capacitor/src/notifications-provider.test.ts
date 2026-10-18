@@ -173,18 +173,16 @@ describe('Capacitor notifications provider: capabilities', () => {
   it('declares no remote delivery without the push plugin and no local reminders without the local one', async () => {
     const localOnly = setup({ sdkPush: false });
     expect((await localOnly.provider.getCapabilities()).remote).toEqual({
-      supported: false, purposes: [], addressing: 'none', content: 'free-form',
+      supported: false,
+      purposes: [],
+      addressing: 'none',
+      content: 'free-form',
     });
     expect(localOnly.provider.register).toBeUndefined();
     const pushOnly = setup({ sdkLocal: false });
     expect((await pushOnly.provider.getCapabilities()).local).toEqual({ supported: false });
     expect(pushOnly.provider.scheduleLocal).toBeUndefined();
     expect(pushOnly.provider.listLocal).toBeUndefined();
-  });
-
-  it('refuses an installation address without a PushSdk that issues installation ids', () => {
-    expect(() => setup({ address: 'fcm-installation' }))
-      .toThrow(/fcm-installation needs a PushSdk with getInstallationId/u);
   });
 });
 
@@ -427,27 +425,6 @@ describe('Capacitor notifications provider: endpoints', () => {
     await expect(provider.register?.()).rejects.toMatchObject({
       code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
       hostCode: 'UNIMPLEMENTED',
-    });
-  });
-
-  it('registers a Firebase installation id when configured to', async () => {
-    const sdks = createFakeNotificationSdks({ platform: 'android' });
-    const push: PushSdk = Object.assign(Object.create(sdks.push!) as PushSdk, {
-      getInstallationId: async () => ({ installationId: 'fid-1' }),
-    });
-    const provider = createCapacitorNotificationProvider({
-      platform: 'android',
-      topics,
-      push,
-      local: sdks.local!,
-      app: sdks.app,
-      address: 'fcm-installation',
-      timeZone: () => undefined,
-      locale: () => undefined,
-    });
-    expect(await provider.register?.()).toEqual({
-      provider: 'fcm',
-      address: { kind: 'fcm-installation', value: 'fid-1', permission: 'prompt' },
     });
   });
 
@@ -1347,6 +1324,23 @@ describe('Capacitor notifications provider: opens and events', () => {
       }
     });
     expect(seen).toEqual(['friend-challenge', 'weekend-event', 'energy-full']);
+  });
+
+  it('delivers an event dispatched during the drain to a subscriber added during it', () => {
+    const { provider, sdks } = setup();
+    sdks.tap({ channel: 'remote', topic: 'friend-challenge' });
+    const second: (string | undefined)[] = [];
+    let added = false;
+    provider.subscribe((event) => {
+      if (!added) {
+        added = true;
+        provider.subscribe((later) => second.push(later.type === 'opened' ? later.topic : later.type));
+        sdks.tap({ channel: 'remote', topic: 'energy-full' });
+      }
+      void event;
+    });
+    // The backlog stays the first subscriber's; the later tap reaches both.
+    expect(second).toEqual(['energy-full']);
   });
 
   it('keeps the opens when the buffer overflows before the first subscriber', () => {

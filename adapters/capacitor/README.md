@@ -276,8 +276,9 @@ is created, which is how a cold-start open reaches it.
 - **Opens.** A tap becomes one `opened` event, kept whenever no listener is
   attached (before the first subscriber, and between two) for the next
   subscriber, as are endpoint and permission changes; a receipt that arrives
-  between two subscribers is dropped. A push carries its topic and route in the data keys `topic` and
-  `route` (`capacitorNotificationDataKeys`); its other string entries, except
+  between two subscribers is dropped. A push carries its topic and route in
+  the data keys `topic` and `route` (`capacitorNotificationDataKeys`); its
+  other string entries, except
   the transport's own keys (`from`, `collapse_key`, `google.*`, `gcm.*`, and
   the like), reach the game as untrusted `data`. A route is kept only when
   `isRootRelativeNotificationRoute` accepts it, and a topic only when the
@@ -305,12 +306,10 @@ is created, which is how a cold-start open reaches it.
   five seconds when the app never left.
 - **Endpoints.** `register()` answers the FCM token with the device
   permission, locale, and time zone, or `null` while Firebase cannot issue one
-  yet; a token Firebase issues later arrives as `endpoint-changed`. The
-  `address: 'fcm-installation'` option is reserved and unsendable: FCM HTTP
-  v1 cannot send to a Firebase installation id, so the game-services FCM
-  sender refuses such registrations, the messaging plugin has no
-  `getInstallationId`, and Firebase announces no installation id change.
-  Leave `address` at its default, `fcm-token`.
+  yet; a token Firebase issues later arrives as `endpoint-changed`. It
+  registers FCM tokens only: `fcm-installation` addresses are reserved,
+  because FCM HTTP v1 cannot send to a Firebase installation id and the
+  game-services FCM sender refuses them.
 
 ## App Store server-side transaction signatures
 

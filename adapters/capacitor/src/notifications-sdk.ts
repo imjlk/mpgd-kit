@@ -45,8 +45,6 @@ export interface PushSdk {
   requestPermissions(): Promise<{ readonly receive: PermissionState }>;
   /** Rejects while Firebase cannot issue a token yet (iOS before APNs registration, offline). */
   getToken(): Promise<{ readonly token: string }>;
-  /** A Firebase installation id, for a project that registers installations instead of tokens. */
-  getInstallationId?(): Promise<{ readonly installationId: string }>;
   createChannel?(channel: NotificationSdkChannel): Promise<void>;
   addListener(
     eventName: 'tokenReceived',

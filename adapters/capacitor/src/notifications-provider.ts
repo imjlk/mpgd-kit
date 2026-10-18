@@ -91,18 +91,6 @@ export interface CreateCapacitorNotificationProviderInput {
   /** Defaults to `capacitorNotificationProviderId` ('fcm'). */
   readonly provider?: NotificationProviderId;
   /**
-   * The address the backend sends to; 'fcm-token' when absent, and the only
-   * one the backend can send to today.
-   *
-   * 'fcm-installation' is reserved: FCM HTTP v1 cannot send to a Firebase
-   * installation id, so the game-services FCM sender refuses such
-   * registrations. It also needs `push.getInstallationId`, which
-   * `@capacitor-firebase/messaging` does not have, and Firebase announces no
-   * installation id change, so a shell would have to `register()` again on
-   * each return to the foreground. Do not use it until the sender supports it.
-   */
-  readonly address?: 'fcm-token' | 'fcm-installation';
-  /**
    * Denials Android accepts before only settings can change the answer: 2 for
    * a target SDK of 33 or later (Capacitor 8 projects target 36), 1 for an
    * app that targets 32 or lower. iOS always declares 1.
@@ -211,13 +199,10 @@ export function createCapacitorNotificationProvider(
 ): CapacitorNotificationProvider {
   const { push, local, platform } = input;
   const providerId = input.provider ?? capacitorNotificationProviderId;
-  const addressKind = input.address ?? 'fcm-token';
-  if (addressKind === 'fcm-installation' && push !== undefined
-    && push.getInstallationId === undefined) {
-    throw new Error(
-      'Capacitor notifications: address fcm-installation needs a PushSdk with getInstallationId.',
-    );
-  }
+  // The provider registers FCM tokens only. `fcm-installation` addresses are
+  // reserved: FCM HTTP v1 cannot send to a Firebase installation id, so the
+  // game-services sender refuses them.
+  const addressKind = 'fcm-token';
   const topics = [...input.topics];
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
   /**
@@ -315,7 +300,6 @@ export function createCapacitorNotificationProvider(
   } else if (local !== undefined) {
     askPermission = async () => (await local.requestPermissions()).display;
   }
-  const getInstallationId = push?.getInstallationId?.bind(push);
   let tokenFailureReported = false;
   let lastObserved: NotificationPermissionState | undefined;
   /**
@@ -474,8 +458,8 @@ export function createCapacitorNotificationProvider(
     listen(() => push.addListener('tokenReceived', (event) => {
       // A configuration-required provider announces no address, as it
       // registers none: the backend must not reach this device yet.
-      if (addressKind !== 'fcm-token' || configurationIssue !== undefined
-        || typeof event.token !== 'string' || event.token === '') {
+      if (configurationIssue !== undefined || typeof event.token !== 'string'
+        || event.token === '') {
         return;
       }
       const { token } = event;
@@ -864,9 +848,7 @@ export function createCapacitorNotificationProvider(
             assertConfigured();
             let value: string;
             try {
-              value = addressKind === 'fcm-installation' && getInstallationId !== undefined
-                ? (await getInstallationId()).installationId
-                : (await push.getToken()).token;
+              value = (await push.getToken()).token;
             } catch (error) {
               if (error instanceof NotificationError || isConfigurationFailure(error)) {
                 throw toNotificationError(error);
@@ -984,14 +966,20 @@ export function createCapacitorNotificationProvider(
       subscribed = true;
       if (first && !draining) {
         // Every buffered event reaches the next subscriber exactly once, in
-        // order: an event dispatched while the buffer drains queues behind it.
+        // order: an event dispatched while the buffer drains queues behind it
+        // and then reaches every listener attached by then, as a live one does.
         draining = true;
+        let backlog = buffer.length;
         try {
           for (let event = buffer.shift(); event !== undefined; event = buffer.shift()) {
-            try {
-              listener(event);
-            } catch (error) {
-              reportError(error);
+            const targets = backlog > 0 ? [listener] : [...listeners];
+            backlog -= 1;
+            for (const target of targets) {
+              try {
+                target(event);
+              } catch (error) {
+                reportError(error);
+              }
             }
           }
         } finally {
