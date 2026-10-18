@@ -223,9 +223,9 @@ export function createCapacitorProviderRegistry(
         // A notifications v2 provider is registered through `notificationsV2`;
         // a declared method would bypass the pass-through readiness rule.
         throw new Error(
-          `Capacitor provider ${provider.id} cannot declare notifications v2 method ${method}; `
-            + 'register a notifications service through `notificationsV2` instead, '
-            + 'notifications v2 is unavailable as a declared method.',
+          `Capacitor provider ${provider.id} cannot declare notifications v2 method ${method}: `
+            + 'notifications v2 is unavailable as a declared method. Register a notifications '
+            + 'service through `notificationsV2` instead.',
         );
       }
       if (!providerMethodSet.has(method)) {

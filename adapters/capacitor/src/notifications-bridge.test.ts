@@ -7,10 +7,15 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
-import { createUnsupportedCapabilities, type PlatformProviderAvailability } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  PlatformOperationError,
+  type PlatformProviderAvailability,
+} from '@mpgd/platform';
 import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
 import { runPlatformGatewayCapabilityConformance } from '@mpgd/platform/capability-conformance';
 import {
+  createUnsupportedNotificationCapabilities,
   NotificationError,
   type NotificationEvent,
   type NotificationProvider,
@@ -30,6 +35,7 @@ import { createCapacitorNotificationServiceProvider } from './notifications.js';
 import {
   assertProviderResponseData,
   createCapacitorProviderRegistry,
+  createDegradedNotificationCapabilities,
   type CapacitorServiceProvider,
 } from './providers.js';
 
@@ -215,6 +221,13 @@ describe('Capacitor gateway with a notifications v2 service', () => {
       open: 'none',
     });
     expect(capabilities.providerAvailability?.pushNotifications).toBe('temporarily-unavailable');
+    // The base entry writes the block out instead of importing it; it stays
+    // the unsupported block with another availability.
+    expect(capabilities.notifications).toEqual(createDegradedNotificationCapabilities());
+    expect(createDegradedNotificationCapabilities()).toEqual({
+      ...createUnsupportedNotificationCapabilities(),
+      availability: 'temporarily-unavailable',
+    });
   });
 
   it('serves v1 from v2 without the base plugin', async () => {
@@ -303,7 +316,7 @@ describe('Capacitor gateway with a notifications v2 service', () => {
       .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
   });
 
-  it('turns an answer the contract rejects into a retryable notifications error', async () => {
+  it('turns an answer the contract rejects into a notifications error that is not retried', async () => {
     const broken: NotificationProvider = {
       provider: 'fcm',
       getCapabilities: async () => createCapacitorNotificationProvider({
@@ -315,7 +328,78 @@ describe('Capacitor gateway with a notifications v2 service', () => {
     };
     const { gateway } = setup({ native: broken });
     await expect(gateway.notificationsV2?.getPermission({ topics: ['energy-full'] }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false });
+  });
+
+  it('rejects instead of throwing for input a caller outside TypeScript gets wrong', async () => {
+    const { gateway } = setup();
+    const call = gateway.notificationsV2?.getPermission(undefined as never);
+    expect(call).toBeInstanceOf(Promise);
+    await expect(call).rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+  });
+
+  it('releases the pause when the request fails', async () => {
+    const { gateway, sdks } = setup();
+    const pauses: string[] = [];
+    gateway.lifecycle.onPause(() => pauses.push('pause'));
+    gateway.lifecycle.onResume(() => pauses.push('resume'));
+    await settle();
+    sdks.failNext('push.requestPermissions', new Error('native'));
+    await expect(gateway.notificationsV2?.requestPermission({ topics: ['energy-full'] }))
       .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true });
+    expect(pauses).toEqual(['pause', 'resume']);
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('serves a game-rendered revocation through the bridge', async () => {
+    const revoke = vi.fn(async ({ topics: requested }: { readonly topics: readonly string[] }) => ({
+      snapshot: { app: 'prompt' as const, topics: Object.fromEntries(requested.map((topic) => [topic, 'prompt' as const])) },
+      outcomes: Object.fromEntries(requested.map((topic) => [topic, 'denied' as const])),
+    }));
+    const native = createCapacitorNotificationProvider({ platform: 'android', topics, app: null });
+    const { gateway } = setup({ native: { ...native, revokePermission: revoke } });
+    expect(await gateway.notificationsV2?.revokePermission?.({ topics: ['energy-full'] })).toEqual({
+      snapshot: { app: 'prompt', topics: { 'energy-full': 'prompt' } },
+      outcomes: { 'energy-full': 'denied' },
+    });
+    expect(revoke).toHaveBeenCalledWith({ topics: ['energy-full'] });
+  });
+
+  it('keeps the code of a PlatformOperationError that is not a NotificationError', async () => {
+    const native = createCapacitorNotificationProvider({ platform: 'android', topics, app: null });
+    const { gateway, requests } = setup({
+      native: {
+        ...native,
+        getPermission: async () => Promise.reject(new PlatformOperationError({
+          code: 'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED',
+          message: 'old host',
+        })),
+      },
+    });
+    await expect(gateway.notificationsV2?.getPermission({ topics: [] })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED',
+      retryable: false,
+    });
+    // A v2 failure never falls back to the base plugin.
+    expect(requests).toEqual([]);
+  });
+
+  it('treats unresolved catalog entries as outside the v1 catalog', async () => {
+    const native = createCapacitorNotificationProvider({ platform: 'android', topics, app: null });
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1',
+      buildId: 'unresolved',
+      app: createApp(),
+      visibility: null,
+      bridge: baseBridge([]),
+      providers: [createNotificationServiceProvider({
+        id: 'notifications',
+        notifications: native,
+        topics: [{ id: 'friend-challenge', targets: { android: {} } } as never],
+      })],
+    });
+    expect(await gateway.notifications?.getStatus('friend-challenge')).toBe('configuration-required');
   });
 
   it('keeps the provider error code across the bridge', async () => {

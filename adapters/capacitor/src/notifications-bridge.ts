@@ -94,7 +94,7 @@ export function createNotificationProviderBridge(
           checked as BridgeNotificationsV2Payload<'notifications.v2.requestPermission'>,
         );
       case 'notifications.v2.revokePermission':
-        return (implemented(provider.revokePermission, method)).call(
+        return implemented(provider.revokePermission, method).call(
           provider,
           checked as BridgeNotificationsV2Payload<'notifications.v2.revokePermission'>,
         );
@@ -208,7 +208,9 @@ export function createNotificationServiceProvider(
   input: CreateNotificationServiceProviderInput,
 ): CapacitorNotificationServiceProvider {
   const { notifications } = input;
-  const topics = input.topics.map(({ id }) => ({ id }));
+  // As given: an entry that still carries a catalog's `targets` names no
+  // single target, and the v1 adapter counts it as outside.
+  const topics = [...input.topics];
   const service: CapacitorNotificationsV2Service = {
     async getCapabilities() {
       return copyCapabilities(assertBridgeNotificationsV2Result('notifications.v2.getCapabilities', {
@@ -302,6 +304,12 @@ export interface CreateBridgeNotificationProviderInput {
  * else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. An event envelope that
  * names another protocol is skipped; a malformed one is dropped with a
  * warning, because it carries nothing the game could route.
+ *
+ * Events reach the listeners subscribed when they arrive. The provider
+ * buffers only until its first subscriber, so an event that arrives while no
+ * listener is attached is not kept: the consumer, the notifications runtime,
+ * subscribes once for its life and buffers for the game itself (RFC
+ * "Runtime").
  */
 export function createBridgeNotificationProvider(
   input: CreateBridgeNotificationProviderInput,
@@ -319,8 +327,10 @@ export function createBridgeNotificationProvider(
     try {
       return assertBridgeNotificationsV2Result(method, data);
     } catch (error) {
+      // A contract break does not go away on retry.
       throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
         message: `Bridge returned invalid data for ${method}.`,
+        retryable: false,
         cause: error,
       });
     }
@@ -331,10 +341,15 @@ export function createBridgeNotificationProvider(
     async getCapabilities() {
       return (await send('notifications.v2.getCapabilities', protocol)).capabilities;
     },
-    getPermission: ({ topics }) => send('notifications.v2.getPermission', { topics }),
-    requestPermission: ({ topics }) => send('notifications.v2.requestPermission', { topics }),
+    // Async, so input a caller outside TypeScript gets wrong rejects instead of throwing.
+    getPermission: async (request) => send('notifications.v2.getPermission', topicsPayload(request)),
+    requestPermission: async (request) =>
+      send('notifications.v2.requestPermission', topicsPayload(request)),
     ...(input.serves.revokePermission
-      ? { revokePermission: ({ topics }) => send('notifications.v2.revokePermission', { topics }) }
+      ? {
+          revokePermission: async (request) =>
+            send('notifications.v2.revokePermission', topicsPayload(request)),
+        }
       : {}),
     ...(input.serves.register
       ? {
@@ -378,6 +393,13 @@ export function createBridgeNotificationProvider(
   } satisfies NotificationProvider;
 }
 
+/** Only `topics` crosses: the payload validator refuses unknown keys, and a missing list stays missing. */
+function topicsPayload(request: { readonly topics: readonly string[] } | undefined): {
+  readonly topics: readonly string[];
+} {
+  return { topics: request?.topics as readonly string[] };
+}
+
 function toNotificationError(error: unknown): NotificationError {
   if (error instanceof NotificationError) {
     return error;
@@ -393,8 +415,11 @@ function toNotificationError(error: unknown): NotificationError {
       cause: error,
     });
   }
+  // A transport failure keeps its retryability: an invalid provider answer
+  // (`NATIVE_PROVIDER_INVALID_RESPONSE`) is not worth retrying.
   return new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
     ...(message === undefined ? {} : { message }),
+    ...(error instanceof PlatformOperationError ? { retryable: error.retryable } : {}),
     cause: error,
   });
 }
