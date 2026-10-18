@@ -26,7 +26,8 @@ const retryDelaysMs = [1_000, 4_000, 15_000];
  *   launch for the event only when the event can be delivered: a game that
  *   unsubscribes first, or whose chunk never loads, leaves the launch to the
  *   launch intent. A subscriber waiting for a failed load attaches on the
- *   next successful one.
+ *   next successful one: the provider retries after 1, 4, and 15 seconds
+ *   while someone waits, and any later call loads again after that.
  */
 export function createLazyAitBridgeNotificationProvider(
   input: CreateAitBridgeNotificationProviderInput,
@@ -34,6 +35,7 @@ export function createLazyAitBridgeNotificationProvider(
   let loaded: Loaded | undefined;
   let loading: Promise<Loaded> | undefined;
   let retries = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const waiting = new Set<(module: Loaded) => void>();
   const attachWaiting = (module: Loaded): void => {
     const attaches = [...waiting];
@@ -56,6 +58,7 @@ export function createLazyAitBridgeNotificationProvider(
     current.then(
       (module) => {
         loaded = module;
+        retries = 0;
         attachWaiting(module);
       },
       () => {
@@ -63,14 +66,24 @@ export function createLazyAitBridgeNotificationProvider(
           loading = undefined;
         }
         // Waiting subscribers would otherwise depend on a later call to
-        // load again: retry a few times on our own.
-        const delay = retryDelaysMs[retries];
-        if (waiting.size > 0 && delay !== undefined) {
-          retries += 1;
-          setTimeout(() => {
-            void load().catch(() => {});
-          }, delay);
+        // load again: retry a few times on our own, one timer at a time.
+        if (waiting.size === 0 || retryTimer !== undefined) {
+          return;
         }
+        const delay = retryDelaysMs[retries];
+        if (delay === undefined) {
+          console.warn(
+            'AIT notifications bridge client did not load; waiting subscribers attach on the next call that loads it.',
+          );
+          return;
+        }
+        retries += 1;
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          if (waiting.size > 0) {
+            void load().catch(() => {});
+          }
+        }, delay);
       },
     );
     return current;
@@ -132,7 +145,13 @@ export function createLazyAitBridgeNotificationProvider(
           console.warn('AIT notifications bridge client did not load yet.', error);
         });
       } else {
-        attach(loaded);
+        try {
+          attach(loaded);
+        } catch (error) {
+          // As on the waiting path: a host subscribe that throws is reported,
+          // not thrown into the game.
+          console.warn('AIT notifications subscriber could not attach.', error);
+        }
       }
       return () => {
         closed = true;

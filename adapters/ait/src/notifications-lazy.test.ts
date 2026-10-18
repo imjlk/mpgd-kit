@@ -74,8 +74,9 @@ describe('createLazyAitBridgeNotificationProvider', () => {
           throw new Error('host refused');
         }
         listeners.add(listener);
-        // The host replays its cold open synchronously to its first listener.
+        // The host replays what it buffered synchronously to a new listener.
         listener(opened('/cold'));
+        listener(opened('/second', 1));
         return () => {
           listeners.delete(listener);
         };
@@ -94,11 +95,12 @@ describe('createLazyAitBridgeNotificationProvider', () => {
       const third: NotificationEvent[] = [];
       provider.subscribe((event) => third.push(event));
       await vi.waitFor(() => expect(subscribeCalls).toBe(3));
+      // It left on the first event, so the second one of the replay is not delivered.
       expect(routes(seen)).toEqual(['/cold']);
       // The first listener left during the replay: its host listener is gone.
       expect(listeners.size).toBe(1);
       // The second attach threw; the third still attached, once.
-      expect(routes(third)).toEqual(['/cold']);
+      expect(routes(third)).toEqual(['/cold', '/second']);
       expect(other).toEqual([]);
       await provider.getPermission({ topics: [] });
       expect(subscribeCalls).toBe(3);
@@ -146,6 +148,43 @@ describe('createLazyAitBridgeNotificationProvider', () => {
       vi.resetModules();
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => expect(events.attached).toBe(1));
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries on a 1, 4, 15 second schedule only while someone waits, then gives up', async () => {
+    vi.useFakeTimers();
+    vi.doMock('./notifications-bridge.js', () => {
+      throw new Error('chunk missing');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { createLazyAitBridgeNotificationProvider } = await import('./notifications-lazy.js');
+      const quiet = createLazyAitBridgeNotificationProvider({
+        provider: 'apps-in-toss',
+        request: async () => ({ topics: {} }),
+        subscribe: () => () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // Nobody waits on the eager load: no retry is scheduled.
+      expect(vi.getTimerCount()).toBe(0);
+      const unsubscribe = quiet.subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+      unsubscribe();
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The timer fired with nobody waiting: no load, no further timer.
+      expect(vi.getTimerCount()).toBe(0);
+      quiet.subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(0);
+      for (const delay of [4_000, 15_000]) {
+        expect(vi.getTimerCount()).toBe(1);
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('did not load; waiting subscribers attach'));
     } finally {
       warn.mockRestore();
       vi.useRealTimers();
