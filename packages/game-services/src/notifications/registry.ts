@@ -18,6 +18,7 @@ import type {
   NotificationDeviceAddress,
   NotificationRemoteDeliveryProvider,
 } from './delivery-provider.js';
+import { describeError as describe } from './text.js';
 
 /**
  * The server-side provider registry (notifications v2 RFC, "Provider
@@ -227,8 +228,4 @@ export function createNotificationServiceCatalog(
       return topics;
     },
   };
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -22,7 +22,7 @@ import {
   type NotificationDispatchJob,
   type NotificationSession,
 } from './service.js';
-import { createInMemoryNotificationStore } from './store.js';
+import { createInMemoryNotificationStore, type NotificationStore } from './store.js';
 
 const fcmEntry: NotificationDeliveryProviderEntry = referenceNotificationProviders.fcm;
 const platformEntry: NotificationDeliveryProviderEntry = {
@@ -701,6 +701,360 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   }
   assert.deepEqual(last, { status: 'unavailable', reason: 'provider-rate-limited' });
   assert.deepEqual(store.inspect().sends, []);
+}
+
+// The ledger under contention, and providers that break the contract.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const inner = createInMemoryNotificationStore();
+  let conflicts = 0;
+  const contended: NotificationStore = {
+    ...inner,
+    async updateSend(write) {
+      // Another row's worker wins the race for a send that already has rows.
+      const held = await inner.getSend(write.key);
+      if (conflicts > 0 && (held?.send.rows.length ?? 0) > 0) {
+        conflicts -= 1;
+        return false;
+      }
+      return inner.updateSend(write);
+    },
+  };
+  const answers: NotificationRemoteDeliveryAnswer[] = [];
+  const fcm = fakeProvider('fcm', answers);
+  const service = createNotificationService({
+    store: contended,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    now: time.now,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  // A few lost compare-and-sets are retried.
+  conflicts = 3;
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'c-1', player: 'p-1', topic: 'friend-challenge' }),
+    {
+      status: 'delivered',
+      alreadyProcessed: false,
+    },
+  );
+  // A row whose claim never lands is not sent; it stays queued and runs once the lease ends.
+  conflicts = 1000;
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'c-2', player: 'p-1', topic: 'friend-challenge' }),
+    {
+      status: 'in-flight',
+    },
+  );
+  conflicts = 0;
+  assert.equal(fcm.calls.length, 1);
+  time.advance(300);
+  assert.deepEqual((await service.dispatchDue()).results, [
+    { sendKey: 'c-2', outcome: { status: 'delivered', alreadyProcessed: false } },
+  ]);
+  assert.equal(fcm.calls.length, 2);
+  // An answer outside the five kinds counts as ambiguous: the claim is kept.
+  answers.push({ status: 'sent' } as unknown as NotificationRemoteDeliveryAnswer);
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'c-3', player: 'p-1', topic: 'friend-challenge' }),
+    {
+      status: 'in-flight',
+    },
+  );
+  // An ambiguous device row is replayed after each lease, for a day, and then left in flight.
+  let replays = 0;
+  for (let hour = 0; hour < 26; hour += 1) {
+    answers.push(...Array.from({ length: 12 }, () => ({ status: 'ambiguous' }) as const));
+    for (let lease = 0; lease < 12; lease += 1) {
+      time.advance(300);
+      replays += (await service.dispatchDue()).results.length;
+    }
+    answers.length = 0;
+  }
+  assert.ok(replays >= 280 && replays <= 288, `replayed for about a day: ${replays}`);
+  assert.deepEqual((await service.dispatchDue()).results, []);
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'c-3', player: 'p-1', topic: 'friend-challenge' }),
+    {
+      status: 'in-flight',
+    },
+  );
+}
+
+// A failure before the provider call puts the row back; queued jobs run once.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  let readFails = true;
+  const platform = fakeProvider('platform', [{ status: 'ambiguous' }]);
+  const readable: NotificationRemoteDeliveryProvider = {
+    id: 'platform',
+    send: (request) => platform.send(request),
+    async readPermission() {
+      if (readFails) {
+        readFails = false;
+        throw new Error('host down');
+      }
+      return 'granted';
+    },
+  };
+  const jobs: NotificationDispatchJob[] = [];
+  const errors: string[] = [];
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      {
+        entry: {
+          ...platformEntry,
+          permission: { ...platformEntry.permission, serverReadable: true },
+        },
+        delivery: readable,
+        targets: ['web'],
+      },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    resolvePlatformRecipient: () => 'u-1',
+    now: time.now,
+    queue: {
+      async enqueue(batch) {
+        jobs.push(...batch);
+      },
+    },
+    onError: (_error, context) => {
+      errors.push(context.operation);
+    },
+  });
+  // The first read happens at the plan, and fails there: nothing is stored.
+  await expectCode(
+    service.deliver({ idempotencyKey: 'f-1', player: 'p-1', topic: 'friend-challenge' }),
+    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+  );
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'f-1', player: 'p-1', topic: 'friend-challenge' }),
+    {
+      status: 'in-flight',
+    },
+  );
+  readFails = true;
+  // The job's read fails: the row is released, not stranded.
+  await expectCode(
+    service.dispatch(jobs[0] as NotificationDispatchJob),
+    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+  );
+  assert.equal(platform.calls.length, 0);
+  await service.dispatch(jobs[0] as NotificationDispatchJob);
+  assert.equal(platform.calls.length, 1);
+  // A redelivered job does not replay an attempted (ambiguous) row; the lease does.
+  await service.dispatch(jobs[0] as NotificationDispatchJob);
+  assert.equal(platform.calls.length, 1);
+  time.advance(300);
+  assert.deepEqual((await service.dispatchDue()).results, [
+    { sendKey: 'f-1', outcome: { status: 'delivered', alreadyProcessed: false } },
+  ]);
+  assert.equal(platform.calls.length, 2);
+  assert.deepEqual(errors, []);
+}
+
+// Two sends claimed together under a cap of one: exactly one goes.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const release: (() => void)[] = [];
+  const calls: string[] = [];
+  const slow: NotificationRemoteDeliveryProvider = {
+    id: 'fcm',
+    async send(request) {
+      calls.push(request.sendKey);
+      await new Promise<void>((resolve) => {
+        release.push(resolve);
+      });
+      return { status: 'accepted' };
+    },
+  };
+  const jobs: NotificationDispatchJob[] = [];
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: slow, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([
+      { ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } }, frequency: { maxPerDay: 1 } },
+    ]),
+    now: time.now,
+    queue: {
+      async enqueue(batch) {
+        jobs.push(...batch);
+      },
+    },
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await service.deliver({ idempotencyKey: 'cap-b', player: 'p-1', topic: 'friend-challenge' });
+  await service.deliver({ idempotencyKey: 'cap-a', player: 'p-1', topic: 'friend-challenge' });
+  const running = Promise.all(jobs.map((job) => service.dispatch(job)));
+  while (calls.length === 0) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+  for (const resolve of release) {
+    resolve();
+  }
+  await running;
+  // Claimed in the same millisecond, the lower key goes first and the other counts it.
+  assert.deepEqual(calls, ['cap-a']);
+}
+
+// One send delivered through two providers is one send for the topic's cap.
+{
+  const fcm = fakeProvider('fcm');
+  const platform = fakeProvider('platform');
+  const time = clock('2026-10-19T03:00:00Z');
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['android'] },
+      { entry: platformEntry, delivery: platform, targets: ['web'] },
+    ]),
+    catalog: vectorCatalog([
+      { ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } }, frequency: { maxPerDay: 2 } },
+    ]),
+    resolvePlatformRecipient: () => 'u-1',
+    now: time.now,
+  });
+  await service.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  const deliver = (key: string) => service.deliver({
+    idempotencyKey: key,
+    player: 'p-1',
+    topic: 'friend-challenge',
+  });
+  await deliver('t-1');
+  time.advance(1);
+  await deliver('t-2');
+  time.advance(1);
+  assert.deepEqual(await deliver('t-3'), { status: 'suppressed', reason: 'frequency-capped' });
+  assert.deepEqual([fcm.calls.length, platform.calls.length], [2, 2]);
+}
+
+// A platform row left ambiguous next to a delivered device row is replayed by the caller's retry.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const fcm = fakeProvider('fcm');
+  const platform = fakeProvider('platform', [{ status: 'ambiguous' }]);
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['android'] },
+      { entry: platformEntry, delivery: platform, targets: ['web'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    resolvePlatformRecipient: () => 'u-1',
+    now: time.now,
+  });
+  await service.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  const send = { idempotencyKey: 'mix-1', player: 'p-1', topic: 'friend-challenge' };
+  assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: false });
+  time.advance(300);
+  assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: true });
+  assert.deepEqual([fcm.calls.length, platform.calls.length], [1, 2]);
+  assert.deepEqual((await service.dispatchDue()).results, []);
+}
+
+// A provider serving two targets needs the registration's target; a later longer Retry-After wins.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const platform = fakeProvider('platform', [
+    { status: 'rate-limited', retryAfterSeconds: 1 },
+    { status: 'rate-limited', retryAfterSeconds: 3600 },
+  ]);
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['android', 'ios'] },
+      { entry: platformEntry, delivery: platform, targets: ['web'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    resolvePlatformRecipient: () => 'u-1',
+    now: time.now,
+    random: () => 0,
+  });
+  await expectCode(
+    service.registerEndpoint(session('p-1'), {
+      registration: {
+        provider: 'fcm',
+        address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+      },
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  await service.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  const first = await service.deliver({
+    idempotencyKey: 'ra-1',
+    player: 'p-1',
+    topic: 'friend-challenge',
+    provider: 'platform',
+  });
+  assert.deepEqual(first, {
+    status: 'deferred',
+    reason: 'provider-rate-limited',
+    until: '2026-10-19T03:00:01Z',
+  });
+  time.advance(1);
+  const [second] = (await service.dispatchDue()).results;
+  assert.deepEqual(second?.outcome, {
+    status: 'deferred',
+    reason: 'provider-rate-limited',
+    until: '2026-10-19T04:00:01Z',
+  });
+  // A game records a notice it showed, never a push.
+  await expectCode(
+    service.recordNoticeShown(
+      session('p-1'),
+      {
+        kind: 'consent-result',
+        record: { kind: 'advertising', at: '2026-10-19T03:00:00Z' },
+        dueBy: '2026-11-02',
+      },
+      { channel: 'push' as never },
+    ),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
 }
 
 console.info('Notifications service unit tests passed.');

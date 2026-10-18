@@ -126,6 +126,10 @@ export type NotificationSendRowState =
       readonly leaseUntil: string;
       readonly claim?: string;
       readonly attempted: boolean;
+      /** When the latest holder claimed it to call the provider. */
+      readonly attemptedAt?: string;
+      /** When it was first claimed to call the provider; replays stop 24 hours later. */
+      readonly firstAttemptedAt?: string;
     };
 
 /** One recipient's ledger delivery of a send. */
@@ -245,7 +249,7 @@ export interface NotificationStore {
     readonly version: string;
     readonly send: NotificationStoredSend | undefined;
   }): Promise<boolean>;
-  /** The player's sends whose outcome is `in-flight`. */
+  /** The player's sends with at least one `in-flight` row. */
   listInFlightSends(player: string): Promise<readonly NotificationStoredSend[]>;
   /** Up to `limit` send keys with a row due at `at` (`notificationSendDueAt`), earliest first. */
   listDueSends(input: { readonly at: string; readonly limit: number }): Promise<readonly string[]>;
@@ -324,41 +328,49 @@ export function notificationSendOutcome(send: NotificationStoredSend): StoredOut
   return stored ?? (send.claim === undefined ? undefined : { status: 'in-flight' });
 }
 
+/** How long an ambiguous delivery is replayed before it is left in flight. */
+export const notificationAmbiguousReplayHours = 24;
+const ambiguousReplayMs = notificationAmbiguousReplayHours * 3_600_000;
+
+/** When the scheduler may first take the row, or `undefined` when it never will. */
+function rowDueAt(row: NotificationSendRow): number | undefined {
+  if (row.state.status === 'deferred') {
+    return Date.parse(row.state.until);
+  }
+  if (row.state.status !== 'in-flight') {
+    return undefined;
+  }
+  const lease = Date.parse(row.state.leaseUntil);
+  if (!row.state.attempted || row.state.firstAttemptedAt === undefined) {
+    return lease;
+  }
+  // The provider may have sent it every time: replays stop after a day, and
+  // the row stays in flight until its key's retention ends.
+  return lease - Date.parse(row.state.firstAttemptedAt) < ambiguousReplayMs ? lease : undefined;
+}
+
 /**
  * Whether the scheduler may take a row at `at`: a deferred row once `until`
- * passed, and an in-flight row once its lease expired when it was never
- * attempted (a queued delivery whose message was lost), belongs to a device
- * endpoint, or belongs to a scheduled send. A direct caller replays its own
- * attempted platform-user row instead.
+ * passed, and an in-flight row once its lease expired. That covers a queued
+ * delivery whose message was lost, a claim whose holder failed before the
+ * provider call, and an ambiguous answer, for a device endpoint, a scheduled
+ * send, or a direct platform send whose caller never retries. Ambiguous
+ * replays stop 24 hours after the first attempt.
  */
 export function isNotificationRowDue(
-  send: Pick<NotificationStoredSend, 'scheduled'>,
+  _send: Pick<NotificationStoredSend, 'scheduled'>,
   row: NotificationSendRow,
   at: number,
 ): boolean {
-  if (row.state.status === 'deferred') {
-    return Date.parse(row.state.until) <= at;
-  }
-  if (row.state.status === 'in-flight') {
-    return Date.parse(row.state.leaseUntil) <= at
-      && (!row.state.attempted || send.scheduled || row.installationId !== undefined);
-  }
-  return false;
+  const due = rowDueAt(row);
+  return due !== undefined && due <= at;
 }
 
 /** When the scheduler may first take one of the send's rows, or `undefined` when none waits for it. */
 export function notificationSendDueAt(send: NotificationStoredSend): string | undefined {
   let due: number | undefined;
   for (const row of send.rows) {
-    let at: number | undefined;
-    if (row.state.status === 'deferred') {
-      at = Date.parse(row.state.until);
-    } else if (
-      row.state.status === 'in-flight'
-      && (!row.state.attempted || send.scheduled || row.installationId !== undefined)
-    ) {
-      at = Date.parse(row.state.leaseUntil);
-    }
+    const at = rowDueAt(row);
     if (at !== undefined && (due === undefined || at < due)) {
       due = at;
     }
@@ -558,7 +570,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       return copy([...sends.values()]
         .map((entry) => entry.send)
         .filter((send) =>
-          send.request.player === player && notificationSendOutcome(send)?.status === 'in-flight'));
+          send.request.player === player && send.rows.some((row) => row.state.status === 'in-flight')));
     },
     async listDueSends({ at, limit }) {
       const now = Date.parse(at);

@@ -251,6 +251,9 @@ function createServiceBackend(input: CreateNotificationConformanceBackendInput):
       return service.listNotices(sessionOf(requireSession('listNotices')));
     },
     async recordNotice({ channel, ...notice }) {
+      if (channel === 'push') {
+        throw new Error('Only the backend records a pushed notice.');
+      }
       await service.recordNoticeShown(sessionOf(requireSession('recordNotice')), notice, { channel });
     },
     async deliver(request) {
