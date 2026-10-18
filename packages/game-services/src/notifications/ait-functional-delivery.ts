@@ -181,8 +181,9 @@ const maximumTimeoutMs = 60_000;
  *   With none sent, the per-channel `fail` lists decide: `rejected` with
  *   reason `agreement` when a failure's `reachedFailReason` is one of
  *   `agreementFailReasons`, otherwise `recipient`.
- * - `FAIL` with a code in `agreementErrorCodes` or `recipientErrorCodes` is
- *   `rejected` with that reason, before any documented meaning of the code;
+ * - `FAIL` with a code in `agreementErrorCodes` (first) or
+ *   `recipientErrorCodes` is `rejected` with that reason, before any
+ *   documented meaning of the code (HTTP 429 excepted, see below);
  *   otherwise 4095 is `rate-limited` with `retryAfterSeconds` (at most a
  *   day), and 5004, 4034, and 4010 are `rejected` with reason
  *   `configuration`. Any other code is `rejected` with reason `recipient` on HTTP 200

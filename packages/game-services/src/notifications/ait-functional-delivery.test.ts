@@ -338,8 +338,8 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     reason: 'agreement',
     providerCode: '5004',
   });
-  const { provider: asRecipient } = provider([fail('4095'), fail(4095)], {
-    recipientErrorCodes: ['4095'],
+  const { provider: asRecipient } = provider([fail('4095'), fail(4095), fail('5004')], {
+    recipientErrorCodes: ['4095', '5004'],
   });
   assert.deepEqual(await asRecipient.send(request), {
     status: 'rejected',
@@ -352,6 +352,22 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     reason: 'recipient',
     providerCode: '4095',
   });
+  assert.deepEqual(await asRecipient.send(request), {
+    status: 'rejected',
+    reason: 'recipient',
+    providerCode: '5004',
+  });
+  // A code in both sets is an agreement rejection; HTTP 429 stays rate-limited.
+  const { provider: both } = provider([fail('7777'), fail('4095', undefined, 429)], {
+    agreementErrorCodes: ['7777', '4095'],
+    recipientErrorCodes: ['7777'],
+  });
+  assert.deepEqual(await both.send(request), {
+    status: 'rejected',
+    reason: 'agreement',
+    providerCode: '7777',
+  });
+  assert.deepEqual(await both.send(request), { status: 'rate-limited', providerCode: '4095' });
 }
 
 // HTTP 429 is rate-limited whatever its body; other refusals are configuration.
