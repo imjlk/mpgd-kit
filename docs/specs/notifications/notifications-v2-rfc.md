@@ -1307,8 +1307,9 @@ Every provider answer maps to one of five kinds:
     so a send whose caller never retries still settles, and so does a row
     whose holder failed before the provider call.
   - Each ambiguous answer doubles the lease before the next replay (from
-    the claim lease up to an hour), because a provider without an
-    idempotency key may show every replay. Replays stop a day after the
+    the claim lease up to an hour), and so does a replay of a row whose
+    holder never answered, because a provider without an idempotency key
+    may show every replay. Replays stop a day after the
     first attempt: the row stays `in-flight` until its key's retention
     ends, and the backend reports it.
   - One rule covers every claimer. `deferred` would also claim that nothing
