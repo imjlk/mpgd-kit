@@ -54,7 +54,8 @@ function controlledLoader() {
     pending.push({
       promise,
       // Settling, then awaiting the same promise, runs after the provider's
-      // own handler, which was registered first.
+      // own handler, which `load()` in notifications-lazy.ts registers
+      // synchronously when it starts the load.
       async resolve() {
         resolve(bridgeClient);
         await promise;
@@ -189,6 +190,8 @@ describe('createLazyAitBridgeNotificationProvider', () => {
   });
 
   it('rejects with a retryable error while the client cannot load, then attaches waiting subscribers', async () => {
+    // The failed load schedules a retry timer; fake timers keep it inert.
+    vi.useFakeTimers();
     const loader = controlledLoader();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const events = channel();

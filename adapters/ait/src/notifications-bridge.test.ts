@@ -16,6 +16,9 @@ import {
   createAitSandboxBridge,
   type GamePlatformBridge,
 } from './index.js';
+// A static import: the gateway's dynamic import of the same client chunk is
+// then served from the module cache, so no test here races a cold import
+// against the 3-second capability read bound.
 import {
   createAitBridgeNotificationProvider,
   createAitNotificationsV2BridgeHandler,
