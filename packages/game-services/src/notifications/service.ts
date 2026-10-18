@@ -1429,7 +1429,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         throw invalidInput(`Provider ${provider.entry.provider} resolves platform users; it takes no device address.`);
       }
       if (!provider.addressKinds.includes(address.kind)) {
-        throw invalidInput(`Provider ${provider.entry.provider} cannot send to a ${address.kind} address.`);
+        // No provider sends to a Firebase installation id yet; the kind is
+        // reserved for when FCM does (RFC "Delivery providers").
+        const reserved = address.kind === 'fcm-installation'
+          ? ' Firebase installation ids are reserved and refused until FCM can send to them; register the FCM registration token.'
+          : '';
+        throw invalidInput(`Provider ${provider.entry.provider} cannot send to a ${address.kind} address.${reserved}`);
       }
       if (address.value.length > maxAddressLength || hasControlCharacter(address.value)) {
         throw invalidInput('The device address is out of bounds.');

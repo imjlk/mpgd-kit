@@ -188,7 +188,7 @@ const request: NotificationRemoteDeliveryRequest = {
           address: { kind: 'fcm-installation', value: 'fid' },
         },
       },
-      /registration tokens/u,
+      /installation ids \(fcm-installation\) are reserved and refused until FCM can send to them/u,
     ],
     [{ recipient: { kind: 'platform-user', id: 'u' } }, /registration tokens/u],
     [{ content: { route: '/', source: 'host-template' } }, /title and a body/u],

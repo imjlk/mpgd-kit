@@ -29,8 +29,16 @@ import type { NotificationProviderRegistration } from './registry.js';
 
 export const fcmMessagingScope = 'https://www.googleapis.com/auth/firebase.messaging';
 export const fcmTokenEndpoint = 'https://oauth2.googleapis.com/token';
-/** The FCM HTTP v1 API takes registration tokens; installation ids are not a send target. */
+/**
+ * The FCM HTTP v1 API takes registration tokens. A Firebase installation id
+ * (FID, the `fcm-installation` kind) is reserved: the kit types it because
+ * FCM is moving to FIDs, but HTTP v1 has no FID send target, so this
+ * provider refuses one at registration and at send until FCM supports it.
+ */
 export const fcmAddressKinds = Object.freeze(['fcm-token'] as const);
+/** Why an FID is refused, for registration and send errors. */
+export const fcmInstallationIdRefusal =
+  'Firebase installation ids (fcm-installation) are reserved and refused until FCM can send to them; register the FCM registration token (fcm-token).';
 /** Data keys this provider writes; a send's routing data may not use them. */
 export const fcmReservedDataKeys = Object.freeze(['topic', 'route'] as const);
 /** The iOS notification category of advertising, which carries the opt-out action. */
@@ -303,6 +311,9 @@ export type FcmMessageBuild =
  */
 export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): FcmMessageBuild {
   const { recipient, content } = request;
+  if (recipient.kind === 'device' && recipient.address.kind === 'fcm-installation') {
+    return { status: 'invalid', reason: fcmInstallationIdRefusal, code: 'INVALID_MESSAGE' };
+  }
   if (recipient.kind !== 'device' || recipient.address.kind !== 'fcm-token') {
     return {
       status: 'invalid',

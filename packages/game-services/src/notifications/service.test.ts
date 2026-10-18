@@ -636,10 +636,11 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     service.registerEndpoint(current, {
       registration: { provider: 'fcm', address: { kind, value, permission: 'granted' } },
     });
-  await expectCode(
-    register(session('p-1'), 'fid', 'fcm-installation'),
-    'NOTIFICATIONS_INVALID_INPUT',
-  );
+  // A Firebase installation id is reserved, and the refusal says so.
+  await assert.rejects(register(session('p-1'), 'fid', 'fcm-installation'), {
+    code: 'NOTIFICATIONS_INVALID_INPUT',
+    message: /cannot send to a fcm-installation address\. Firebase installation ids are reserved and refused until FCM can send to them/u,
+  });
   await expectCode(
     service.registerEndpoint(session('p-1'), {
       registration: { provider: 'nope', address: { kind: 'platform-user' } },

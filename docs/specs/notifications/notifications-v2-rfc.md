@@ -1356,7 +1356,12 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     relays to APNs; direct APNs needs HTTP/2, which Workers `fetch` does not
     document.
   - **Addresses.** They are typed because FCM is moving from registration
-    tokens to Firebase installation ids.
+    tokens to Firebase installation ids (FIDs). The provider sends to
+    registration tokens (`fcm-token`) only. The `fcm-installation` kind is
+    reserved: HTTP v1 has no FID send target, so the backend refuses an FID
+    registration (`NOTIFICATIONS_INVALID_INPUT`, with a message saying the
+    kind is reserved) and the provider refuses an FID send, until FCM
+    supports FIDs.
   - **Errors.**
     - `UNREGISTERED` is `unregistered`. `INVALID_ARGUMENT` is too, but only
       when the payload is known valid: the provider checks the message
