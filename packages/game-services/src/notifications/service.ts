@@ -1859,15 +1859,14 @@ function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
 /**
  * The gate's refusals from the steps before the permission step
  * (`evaluateNotificationDelivery`: topic, channel, purpose, recipient,
- * link), which a send-time permission read cannot change.
+ * link), which a send-time permission read cannot change. Typed by the
+ * gate's reason unions, so a misspelt reason does not compile; a gate that
+ * moved the permission step earlier must update this list (the
+ * permission-order test in service.test.ts covers both sides).
  */
-const earlyGateReasons: ReadonlySet<string> = new Set([
-  'topic-unknown',
-  'channel-unsupported',
-  'purpose-unsupported',
-  'no-endpoint',
-  'link-missing',
-]);
+const earlyGateReasons: ReadonlySet<NotificationDeliveryRefusal['reason']> = new Set<
+  NotificationDeliveryRefusal['reason']
+>(['topic-unknown', 'channel-unsupported', 'purpose-unsupported', 'no-endpoint', 'link-missing']);
 
 /** Writes that must not fail a settled delivery are tried this often. */
 const maxSideWriteAttempts = 3;

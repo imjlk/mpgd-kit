@@ -1111,9 +1111,11 @@ for (const claimLeaseSeconds of [1, 86_400]) {
   let recipient: string | undefined = 'u-1';
   const platform = fakeProvider('platform', [{ status: 'accepted' }]);
   let readFails = false;
+  let hostAnswer: 'granted' | 'denied' = 'granted';
   const jobs: NotificationDispatchJob[] = [];
+  const readableStore = createInMemoryNotificationStore();
   const service = createNotificationService({
-    store: createInMemoryNotificationStore(),
+    store: readableStore,
     registry: createNotificationProviderRegistry([
       {
         entry: {
@@ -1128,7 +1130,7 @@ for (const claimLeaseSeconds of [1, 86_400]) {
             if (readFails) {
               throw new Error('host down');
             }
-            return 'granted';
+            return hostAnswer;
           },
         },
         targets: ['web'],
@@ -1161,6 +1163,16 @@ for (const claimLeaseSeconds of [1, 86_400]) {
     'a needed read that fails is a retry',
   );
   assert.equal(reads, 1);
+  assert.ok(!readableStore.inspect().sends.some((send) => send.key === 'r-3'));
+  // A refusal the host's answer decides still reads it.
+  readFails = false;
+  hostAnswer = 'denied';
+  assert.equal(
+    (await service.deliver({ idempotencyKey: 'r-5', player: 'p-1', topic: 'friend-challenge' })).status,
+    'suppressed',
+  );
+  assert.equal(reads, 2);
+  hostAnswer = 'granted';
   // The same holds at the provider call: a queued row whose recipient is gone by then is
   // answered without the host.
   readFails = false;
@@ -1168,7 +1180,7 @@ for (const claimLeaseSeconds of [1, 86_400]) {
     await service.deliver({ idempotencyKey: 'r-4', player: 'p-1', topic: 'friend-challenge' }),
     { status: 'in-flight' },
   );
-  assert.equal(reads, 2);
+  assert.equal(reads, 3);
   readFails = true;
   recipient = undefined;
   await service.dispatch(jobs[0] as NotificationDispatchJob);
@@ -1176,7 +1188,7 @@ for (const claimLeaseSeconds of [1, 86_400]) {
     await service.deliver({ idempotencyKey: 'r-4', player: 'p-1', topic: 'friend-challenge' }),
     { status: 'unavailable', reason: 'no-endpoint' },
   );
-  assert.equal(reads, 2);
+  assert.equal(reads, 3);
   assert.equal(platform.calls.length, 0);
 }
 
