@@ -1220,4 +1220,26 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   );
 }
 
+// A null channel is a wrong type, not the default.
+{
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([]),
+    catalog: vectorCatalog([]),
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await expectCode(
+    service.recordNoticeShown(
+      session('p-1'),
+      {
+        kind: 'consent-result',
+        record: { kind: 'advertising', at: '2026-10-19T03:00:00Z' },
+        dueBy: '2026-11-02',
+      },
+      { channel: null as never },
+    ),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+}
+
 console.info('Notifications service unit tests passed.');

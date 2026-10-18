@@ -1048,7 +1048,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       case 'rejected':
         // A configuration rejection fails every send the same way: tell the
         // operator. A recipient or agreement refusal is the player's, not an alert.
-        if (answer.reason === 'configuration') {
+        if (answer.reason === 'configuration' && answer.providerCode !== 'MESSAGE_EXPIRED') {
           report(
             new Error(
               `The provider rejected the delivery (configuration${
@@ -1400,7 +1400,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           error,
         );
       }
-      const channel = options.channel ?? 'in-game';
+      const channel = options.channel === undefined ? 'in-game' : options.channel;
       // Only the backend records a push, once the push is delivered.
       if (channel !== 'in-game' && channel !== 'other') {
         throw invalidInput('channel: a game records a notice it showed, in-game or other.');

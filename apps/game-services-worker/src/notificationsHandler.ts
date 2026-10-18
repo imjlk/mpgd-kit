@@ -285,7 +285,13 @@ export function createNotificationsFetchHandler(
     }
     let body: Readonly<Record<string, unknown>> = {};
     if (method === 'POST') {
-      const parsed = await readBody(request);
+      let parsed: Awaited<ReturnType<typeof readBody>>;
+      try {
+        parsed = await readBody(request);
+      } catch {
+        // The client went away mid-body.
+        parsed = undefined;
+      }
       if (parsed === 'too-large') {
         return json({ error: 'PAYLOAD_TOO_LARGE' }, 413, privateHeaders);
       }
@@ -420,7 +426,8 @@ export async function runScheduledNotifications(env: GameServicesNotificationsEn
   if (notifications.status !== 'ready') {
     return;
   }
-  const asked = Number(env.MPGD_NOTIFICATIONS_DUE_BATCH ?? '25');
+  const declared = env.MPGD_NOTIFICATIONS_DUE_BATCH?.trim();
+  const asked = declared === undefined || declared === '' ? 25 : Number(declared);
   const limit = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
   try {
     await notifications.service.purge();
@@ -569,12 +576,13 @@ function errorName(error: unknown): string {
 }
 
 /**
- * A failure for the logs: its code or name and its message. Every message
- * these paths raise is the kit's or the store's own text; none carries a
- * token, a key, or a request body.
+ * A failure for the logs: its code or name and the start of its message.
+ * The kit's own messages carry no token or key; a store or parser message
+ * may quote stored text, so it is cut to 120 characters.
  */
 function describeFailure(error: unknown): string {
-  return error instanceof Error ? `${errorName(error)}: ${error.message}` : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return `${errorName(error)}: ${message.length > 120 ? `${message.slice(0, 120)}…` : message}`;
 }
 
 function json(body: unknown, status: number, headers: Readonly<Record<string, string>>): Response {
