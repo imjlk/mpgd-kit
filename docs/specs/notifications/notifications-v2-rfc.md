@@ -8,8 +8,9 @@ N2 lands the types and a conformance runner that cite it. Baseline:
 protocol: `mpgd.notifications.v2`, version `2.0.0-draft.1`.
 
 Platform facts below were checked on 2026-10-12 against the sources listed in
-[References](#references). Host policies change; re-check a fact before a
-provider pull request depends on it.
+[References](#references); P1 re-checked the Apps in Toss facts on
+2026-10-19. Host policies change; re-check a fact before a provider pull
+request depends on it.
 
 ## Summary {#summary}
 
@@ -874,8 +875,16 @@ Every open becomes one `opened` event with a route:
 
 On `landing-url` hosts, a launch whose referrer is `push` or `inbox` routes
 only through the cold `opened` event, and `presentation.getLaunchIntent()`
-answers `home` for that launch. Both come from the host bridge's existing
-launch-URL parser, so the game never routes one launch twice.
+answers `home` for that launch. Both come from one parser over one read of
+the launch URL per host bridge (`readAitNotificationLanding` in
+`@mpgd/adapter-ait`), so the game never routes one launch twice, and a page
+URL change between the two reads cannot split them. The route is the launch
+URL's path, query, and fragment without the `referrer` parameter, normalized
+by `normalizeRootRelativeRoute`; a route it refuses, or one longer than
+2,048 characters, is left out of the event, which still counts as an open.
+While no topic is mapped for the host, the provider emits no open and the
+launch intent routes such a launch like any other, so a game without
+notifications keeps its launch routes.
 
 The game routes the event like a launch intent. The data is untrusted. The
 route only opens a screen, and only when it passes the same root-relative
@@ -1290,16 +1299,36 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   - **Fan-out.** It goes through a queue, since one Worker invocation has a
     subrequest limit, and the gate runs when the queued call is made.
 - **Apps in Toss.**
-  - **Transport.** `sendFunctionalMessage` over mTLS, with the template set
-    code and context, one recipient per call in the first wave.
+  `createAitFunctionalMessageDeliveryProvider` in
+  `@mpgd/game-services/notifications/ait-functional-delivery`.
+  - **Transport.** `send-message` (`sendFunctionalMessage`) over the
+    partner API's mTLS client certificate, injected as a fetcher (a Workers
+    mTLS binding), with the template set code and context, one recipient per
+    call in the first wave. The recipient is the platform user the backend
+    resolved from the player's authenticated identity; the deployment's
+    `recipientKey` says whether that id is a Toss login user key
+    (`x-toss-user-key`) or an anonymous key (`x-anon-key`).
   - **Business errors.** They arrive as HTTP 200 with `resultType: FAIL`:
-    - 4095 is `rate-limited` with `retryAfterSeconds`;
-    - 5004 (template not approved) is `rejected` with reason `configuration`;
-    - P1 maps the recipient codes, including the one for a missing agreement;
-    - `HTTP_TIMEOUT`, `NETWORK_ERROR`, `INTERRUPTED`, and `INTERNAL_ERROR` are
-      `ambiguous`.
-  - **Partial success.** A `SUCCESS` response with a per-channel `fail` list
-    maps per channel.
+    - 4095 is `rate-limited` with `retryAfterSeconds` from
+      `error.data.retryAfterSeconds`;
+    - 5004 (template not approved), 4034 (no workspace, or no access to
+      it), and 4010 (credentials not found) are `rejected` with reason
+      `configuration`;
+    - the partner API documents no recipient-level code, including none for
+      a missing agreement (checked 2026-10-19). A deployment names the codes
+      it observes (`agreementErrorCodes`, `recipientErrorCodes`); any other
+      code is `rejected` with reason `recipient` on HTTP 200, and
+      `configuration` on HTTP 400, 401, and 403, where the request itself
+      was refused;
+    - `HTTP_TIMEOUT`, `NETWORK_ERROR`, `EXECUTION_FAIL`, `INTERRUPTED`, and
+      `INTERNAL_ERROR` are `ambiguous`, and so are HTTP 5xx answers,
+      transport failures, timeouts, and answers that cannot be read.
+  - **Partial success.** A `SUCCESS` response maps per channel (push, inbox,
+    SMS, Alimtalk, Friendtalk). With one recipient per call, the send is
+    `accepted` when any channel sent it. When none did, the per-channel
+    `fail` lists make it `rejected`: reason `agreement` when a
+    `reachedFailReason` is one the deployment names
+    (`agreementFailReasons`), otherwise `recipient`.
   - **Limits.** 15,000 per minute per app (the registry's `rate`), and 10 per
     minute per user (a provider limit).
 - **Devvit.** It runs inside the Devvit server, not the game-services Worker,
@@ -1413,8 +1442,10 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   it). `templateCode` is the same value as the send API's `templateSetCode`,
   so one catalog field serves both.
 - **Event mapping.**
-  - `newAgreement` and `alreadyAgreed` map to granted, and
-    `agreementRejected` to denied.
+  - `newAgreement` maps to the `granted` outcome, `alreadyAgreed` to
+    `already-granted`, and `agreementRejected` to `denied`; the snapshot
+    carries the decided state. Each topic that needs an agreement gets its
+    own sheet, one sheet at a time.
   - `TERMS_DISAGREED_MEMBER` (the user turned off Toss's personalization
     terms) maps to the `action-required` outcome with `requiredAction:
     'host-settings'`. It is not recorded, and the next request reaches the
@@ -1424,7 +1455,28 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   - A request with no event within 120 seconds answers `dismissed`. v1
     settled the same timeout as `unavailable`, which the v1 wrapper keeps.
   - Any other host error throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+  - After a `dismissed` sheet or `TERMS_DISAGREED_MEMBER`, the remaining
+    topics of the request answer the same outcome without a sheet, so a
+    request never stacks a sheet over an unanswered one.
+  - A `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` failure after an earlier sheet
+    of the same request was answered does not throw: the answered topics and
+    their evidence are returned, and the failed and remaining topics answer
+    `dismissed`. Any other failure throws, whatever was answered before.
   - The provider always calls the cleanup function the SDK returns.
+- **Evidence.** A request with a decided answer carries
+  `{ schema: 'apps-in-toss.notification-agreement.v1', payload }`, whose
+  payload names the provider and, per answered topic, `templateSetCode:<topic>`
+  and `result:<topic>` (the SDK event). It is the only proof the host offers,
+  so the backend keeps it on the `host-agreement` record.
+- **Reads.** A topic that needs an agreement reads `unknown`, or
+  `unsupported` on a Toss app older than 5.255.0. A topic mapped with
+  `agreement: 'none'` reads `granted`, and an unmapped topic `unsupported`.
+  Without any mapped topic the provider is `configuration-required` and
+  `register()` answers `null`.
+- **v1.** The host bridge serves the v1 methods from this provider and keeps
+  no session copy of an agreement, so a v1 `getStatus` reads
+  `not-subscribed` for a topic that needs one until the game reads it through
+  the runtime and its backend records.
 - **Templates without agreement.** Only templates linked to an agreement
   statement need agreement; the console rejects opt-in style templates without
   one. Messages a player needs to use the service (payment, refund, and
@@ -1564,7 +1616,10 @@ Other rules the profiles encode:
     [`docs/specs/notifications/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/notifications/schemas).
   - `validate:notifications-alignment`, run in `pnpm check`, keeps the
     constant, the vectors, and the schemas aligned.
-- **What N3 landed.** No transport serves v2 yet; P1–P3 add the providers.
+- **What N3 landed.** No transport served v2 yet; P1–P3 add the providers.
+  P1 serves it on the Apps in Toss host bridge, and the Apps in Toss gateway
+  exposes `notificationsV2` over a host that offers the notifications event
+  channel; the sandbox bridges still answer `NOTIFICATIONS_V2_UNAVAILABLE`.
   - `@mpgd/bridge` adds the nine methods to `BridgeMethod`
     (`bridgeNotificationsV2Methods`, kept equal to `notificationBridgeMethods`
     by a type check and a test). `@mpgd/bridge/notifications` validates each
@@ -1695,6 +1750,8 @@ listed fields of each item asserted:
 | `os-permission-dismissed` | On a device-addressed provider, a dismissed dialog leaves the state and counts no denial; no consent record |
 | `local-schedule-never-prompts` | Scheduling without permission returns `permission-required` and shows nothing |
 | `host-agreement-recorded` | Unreadable host: agreement recorded with its evidence and the implied topic preference, read back as granted after a restart; `already-granted` adds no record |
+| `host-agreement-dismissed` | A per-template sheet that closes without an answer is `dismissed`: nothing is recorded, the topic reads `unknown`, and the next request reaches the host again |
+| `host-agreement-rejected` | A rejected sheet records a denied host agreement with its evidence and no topic preference; sends stop until the player accepts again |
 | `host-agreement-then-withdrawn` | A withdrawn preference suppresses despite the agreement; accepting the sheet again re-enables the topic |
 | `host-service-topic-without-agreement` | A service template without an agreement statement reads granted and delivers with no prompt or record |
 | `host-gesture-and-terms` | No gesture throws `NOTIFICATIONS_USER_GESTURE_REQUIRED`; a host-terms decline is `action-required` (`host-settings`), unrecorded, and asked again |
@@ -1713,6 +1770,7 @@ listed fields of each item asserted:
 | `local-reminder-cancelled-on-withdrawal` | Turning a topic off cancels its pending local reminder |
 | `reminder-server-route` | Server route after the agreement, cancel, re-set, delivery at the due time through the gate |
 | `reminder-cancel-across-routes` | A key names one reminder across routes; cancel after a restart finds the server reminder |
+| `landing-open-before-listener` | On a `landing-url` host the cold open reaches the first subscriber once with the landing route; a later subscriber receives nothing |
 | `open-before-listener` | A cold-start open reaches the game's first subscriber once |
 | `endpoint-lifecycle` | Authentication alone moves a device address to the newly authenticated player; `UNREGISTERED` invalidates it |
 | `endpoint-fan-out` | Every granted installation receives the send; a dead one is invalidated alone; a retry sends nothing |
@@ -1818,6 +1876,9 @@ that also removes commerce v1.
   <https://developers-apps-in-toss.toss.im/guide/marketing/smart-message.md>,
   <https://developers-apps-in-toss.toss.im/documentation/common/growth/smart-message.md>,
   <https://developers-apps-in-toss.toss.im/documentation/sdk/domains-api/notification/notification.requestagreement.md>,
+  partner API <https://developers-apps-in-toss.toss.im/api/push.md>,
+  launch referrers <https://developers-apps-in-toss.toss.im/documentation/common/growth/analytics/referrer.md>,
+  `Environment.initialURL` <https://developers-apps-in-toss.toss.im/documentation/sdk/domains-api/environment/environment.initialurl.md>,
   game checklist <https://developers-apps-in-toss.toss.im/checklist/app-game.md>
 - Devvit notifications: <https://developers.reddit.com/docs/capabilities/notifications/notifications-overview>,
   <https://developers.reddit.com/docs/capabilities/notifications/pn-best-practices>
