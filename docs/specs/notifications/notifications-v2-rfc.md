@@ -1740,10 +1740,11 @@ Other rules the profiles encode:
   - `BridgeEvent` is the union above. `createBridgeEventSource` numbers one
     protocol's events from 0 for each session and attaches to the provider only
     for the first listener, so events the provider buffered reach it.
-  - The Cloudflare Pages host, the Apps in Toss host and sandbox bridges, and
-    the Devvit sandbox and server bridges (the kit's and the CLI template's)
+  - The Cloudflare Pages host, the Apps in Toss sandbox bridge, and the
+    Devvit sandbox and server bridges (the kit's and the CLI template's)
     answer every method with `NOTIFICATIONS_V2_UNAVAILABLE`
-    (`createNotificationsV2UnavailableBridgeError`).
+    (`createNotificationsV2UnavailableBridgeError`). The Apps in Toss host
+    bridge serves v2 since P1.
   - The Capacitor gateway answers the same code for a method no registered
     provider serves, before it pauses the game or reaches the base plugin, and
     its registry refuses the methods as methods a v1 provider declares. For the
