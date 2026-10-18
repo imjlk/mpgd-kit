@@ -1,0 +1,5 @@
+---
+npm/@mpgd/game-services: minor
+---
+
+Add `@mpgd/game-services/notifications/ait-functional-delivery`: `createAitFunctionalMessageDeliveryProvider` sends one Apps in Toss functional message per recipient over an injected mTLS fetcher (a Workers mTLS binding) and answers the notifications v2 provider answers: 4095 is `rate-limited` with `retryAfterSeconds`; 5004, 4034, and 4010 are `rejected` for configuration; `HTTP_TIMEOUT`, `NETWORK_ERROR`, `EXECUTION_FAIL`, `INTERRUPTED`, `INTERNAL_ERROR`, HTTP 5xx, and transport failures are `ambiguous`; HTTP 429 is `rate-limited` whatever its body; a `SUCCESS` answer is `accepted` when `msgCount` is above 0 or any channel sent the message, and otherwise rejected per its channel failures. Its request and answers fit the game-services delivery-provider contract structurally (a platform-user recipient, with `recipientKey` naming the partner key type). Deployments name the recipient-level and missing-agreement codes they observe, which the partner API does not document.

@@ -202,7 +202,7 @@ Primary platform references:
 
 - [Apps in Toss user key](https://developers-apps-in-toss.toss.im/user-hash-key/develop.md)
 - [Apps in Toss share link](https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EA%B3%B5%EC%9C%A0/getTossShareLink.md)
-- [Apps in Toss notification agreement](https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EC%9D%B8%ED%84%B0%EB%A0%89%EC%85%98/requestNotificationAgreement.md)
+- [Apps in Toss notification agreement](https://developers-apps-in-toss.toss.im/documentation/sdk/domains-api/notification/notification.requestagreement.md)
 - [Devvit view modes and entry points](https://developers.reddit.com/docs/capabilities/server/launch_screen_and_entry_points/view_modes_entry_points)
 - [Devvit logged-out sharing](https://developers.reddit.com/docs/guides/logged-out-users)
 - [Devvit notifications](https://developers.reddit.com/docs/capabilities/notifications/notifications-overview)

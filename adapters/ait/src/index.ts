@@ -8,6 +8,7 @@ import {
   type BridgeCommerceEvent,
   type BridgeEventStream,
   type BridgeMethod,
+  type BridgeNotificationsEvent,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -43,10 +44,17 @@ import {
   isCommerceCapabilities,
   type CommerceProvider,
 } from '@mpgd/platform/commerce';
+// Types only: the notifications validators load with the bridge client
+// (`./notifications-lazy`), so a game whose host offers no notifications
+// channel carries none of them.
+import type { NotificationCapabilities, NotificationProvider } from '@mpgd/platform/notifications';
 
 import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
 import { aitCommerceStoreId, createAitCommerceCapabilities } from './commerce-provider.js';
 import { createAitLifecycleAdapter } from './lifecycle.js';
+import { createLazyAitBridgeNotificationProvider } from './notifications-lazy.js';
+import { aitNotificationProviderId } from './notifications-provider-id.js';
+import { unsupportedNotificationCapabilities } from './notifications-unsupported.js';
 import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export interface GamePlatformBridge {
@@ -59,6 +67,12 @@ export interface GamePlatformBridge {
    * gateway then offers `commerce` over this bridge.
    */
   readonly commerceV2?: BridgeEventStream<BridgeCommerceEvent>;
+  /**
+   * Notifications v2 event channel (`@mpgd/bridge` `BridgeNotificationsEvent`
+   * envelopes). A host that serves the `notifications.v2.*` methods exposes
+   * it; the gateway then offers `notificationsV2` over this bridge.
+   */
+  readonly notificationsV2?: BridgeEventStream<BridgeNotificationsEvent>;
 }
 
 export interface AitSandboxStorage {
@@ -190,20 +204,41 @@ export function createAitPlatformGateway(input: {
         subscribe: (listener) => commerceEventSource.subscribe(listener),
       });
 
+  // Notifications v2, like commerce, stays on the bridge that offered its
+  // event channel.
+  const notificationEventSource = commerceBridge?.notificationsV2;
+  const notificationsV2: NotificationProvider | undefined = notificationEventSource === undefined
+    ? undefined
+    : createLazyAitBridgeNotificationProvider({
+        provider: aitNotificationProviderId,
+        request: (method, payload) => requestOn(commerceBridge, method, payload),
+        subscribe: (listener) => notificationEventSource.subscribe(listener),
+      });
+
+  function requestNotificationsV1<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
+    return notificationsV2 === undefined
+      ? request<TData>(method, payload)
+      : requestOn<TData>(commerceBridge, method, payload);
+  }
+
   return {
     target: 'ait',
     async getCapabilities() {
       const bridgeNow = input.bridge ?? getBridge() ?? input.fallbackBridge;
-      const capabilities = toGatewayCapabilities(
-        await requestOn<Readonly<Record<string, unknown>>>(bridgeNow, 'runtime.getCapabilities', {}),
-        commerce !== undefined,
+      const [hostAnswer, notifications] = await Promise.all([
+        requestOn<Readonly<Record<string, unknown>>>(bridgeNow, 'runtime.getCapabilities', {}),
+        notificationsV2 === undefined ? undefined : readNotificationCapabilities(notificationsV2),
+      ]);
+      let capabilities = withNotificationCapabilities(
+        toGatewayCapabilities(hostAnswer, commerce !== undefined),
+        notifications,
       );
       if (commerce !== undefined && commerceBridge !== bridgeNow) {
         const pinned = toGatewayCapabilities(
           await requestOn<Readonly<Record<string, unknown>>>(commerceBridge, 'runtime.getCapabilities', {}),
           true,
         );
-        return { ...capabilities, commerce: pinned.commerce };
+        capabilities = { ...capabilities, commerce: pinned.commerce };
       }
       return capabilities;
     },
@@ -222,11 +257,16 @@ export function createAitPlatformGateway(input: {
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
     },
+    // v1 is served from the v2 provider, so it reads the bridge v2 is pinned
+    // to whenever the gateway exposes v2.
     notifications: {
       getStatus: (topic) =>
-        request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
+        requestNotificationsV1<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
       requestSubscription: (topic) =>
-        request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
+        requestNotificationsV1<NotificationSubscriptionResult>(
+          'notifications.requestSubscription',
+          { topic },
+        ),
     },
     promotions: {
       getAvailability: (payload) =>
@@ -234,6 +274,7 @@ export function createAitPlatformGateway(input: {
       grantReward: (payload) => request<PromotionRewardResult>('promotions.grantReward', payload),
     },
     ...(commerce === undefined ? {} : { commerce }),
+    ...(notificationsV2 === undefined ? {} : { notificationsV2 }),
     ads: {
       ...(provider === undefined ? {} : { provider }),
       preload: (payload) => request('ads.preload', payload),
@@ -344,6 +385,76 @@ function toGatewayCapabilities(
   return capabilities as unknown as PlatformCapabilities;
 }
 
+/** Bound on one notifications capability read, as `withTargetAvailability` bounds it. */
+const notificationCapabilityReadTimeoutMs = 3_000;
+
+/** Failures the same host answers the same way again; `@mpgd/target-config` reads them as unsupported. */
+const unsupportedNotificationReadCodes: ReadonlySet<unknown> = new Set([
+  'NOTIFICATIONS_V2_UNAVAILABLE',
+  'NOTIFICATIONS_UNSUPPORTED',
+  'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED',
+]);
+
+/**
+ * One bounded read of the bridge provider's block. The provider validated
+ * it, so it is a fresh, exact block; a read that fails or stalls yields a
+ * block that offers nothing, with the availability that explains why.
+ */
+async function readNotificationCapabilities(
+  provider: NotificationProvider,
+): Promise<NotificationCapabilities> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      provider.getCapabilities(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Notification capabilities read timed out.')),
+          notificationCapabilityReadTimeoutMs,
+        );
+      }),
+    ]);
+  } catch (error) {
+    const failure = typeof error === 'object' && error !== null
+      ? error as { readonly code?: unknown; readonly retryable?: unknown }
+      : {};
+    let availability: NotificationCapabilities['availability'] = 'temporarily-unavailable';
+    if (failure.code === 'NOTIFICATIONS_CONFIGURATION_REQUIRED') {
+      availability = 'configuration-required';
+    } else if (failure.retryable !== true && unsupportedNotificationReadCodes.has(failure.code)) {
+      availability = 'unsupported';
+    }
+    return { ...unsupportedNotificationCapabilities(), availability };
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Adds the notifications v2 block exactly when the gateway exposes
+ * `notificationsV2`, with `providerAvailability.pushNotifications` equal to
+ * its availability (`PlatformCapabilities.notifications`).
+ */
+function withNotificationCapabilities(
+  capabilities: PlatformCapabilities,
+  notifications: NotificationCapabilities | undefined,
+): PlatformCapabilities {
+  if (notifications === undefined) {
+    const { notifications: _hidden, ...withoutNotifications } = capabilities;
+    return withoutNotifications;
+  }
+  return {
+    ...capabilities,
+    providerAvailability: {
+      ...capabilities.providerAvailability,
+      pushNotifications: notifications.availability,
+    },
+    notifications,
+  };
+}
+
 /** A fresh block on every read, whatever object the host answered with. */
 function copyCommerceCapabilities(capabilities: CommerceCapabilities): CommerceCapabilities {
   return {
@@ -386,9 +497,10 @@ export function createAitSandboxBridge(
       // Both the bridge option and the build id the gateway sends must name
       // the sandbox build; a bridge wired behind another gateway stays closed.
       const commerceServed = commerceEnabled && input.meta.buildId === aitSandboxBuildId;
-      // Notifications v2 arrives with the Apps in Toss provider (P1). Every
-      // build answers the dedicated code for every v2 method, the sandbox
-      // build included.
+      // Only the Toss app shows an agreement sheet, so only the host bridge
+      // serves notifications v2. Every sandbox build answers the dedicated
+      // code for every v2 method and exposes no notifications event channel,
+      // so its gateway offers no `notificationsV2`.
       if (isBridgeNotificationsV2Method(input.method)) {
         return createNotificationsV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
       }
