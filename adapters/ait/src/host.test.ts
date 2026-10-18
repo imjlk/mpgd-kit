@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
 
-import { bridgeNotificationsV2Methods, type BridgeRequest } from '@mpgd/bridge';
+import type { BridgeRequest } from '@mpgd/bridge';
 import type { CommerceDiagnostic, ProductInfo, PurchaseRestoreResult } from '@mpgd/platform';
 import {
   createAitHostBridge,
@@ -1487,7 +1487,7 @@ describe('AIT production host bridge', () => {
     }
   });
 
-  it('requests configured notification agreement and reflects the session result', async () => {
+  it('serves v1 notification requests from the v2 provider with a v1-only session cache', async () => {
     let callbacks: NotificationAgreementCallbacks | undefined;
     let cleanupCount = 0;
     const requestAgreement = Object.assign(
@@ -1507,6 +1507,9 @@ describe('AIT production host bridge', () => {
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'daily-ready',
     })).resolves.toBe('configuration-required');
+    await expect(request(bridge, 'notifications.requestSubscription', {
+      topic: 'daily-ready',
+    })).resolves.toBe('unavailable');
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'streak-at-risk',
     })).resolves.toBe('not-subscribed');
@@ -1514,42 +1517,191 @@ describe('AIT production host bridge', () => {
     const subscription = request(bridge, 'notifications.requestSubscription', {
       topic: 'streak-at-risk',
     });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    expect(callbacks?.options).toEqual({ templateCode: 'TTOKDOKU_STREAK_ALERT' });
     callbacks?.onEvent({ type: 'newAgreement' });
     await expect(subscription).resolves.toBe('subscribed');
+    // The host gives no read: v1 remembers this bridge's agreement, while
+    // v2 keeps reading `unknown` so the runtime takes the backend record.
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'streak-at-risk',
     })).resolves.toBe('subscribed');
     expect(cleanupCount).toBe(1);
-  });
 
-  it('fails closed for notifications v2 methods without prompting the host', async () => {
-    let agreementRequests = 0;
-    const requestAgreement = Object.assign(
-      () => {
-        agreementRequests += 1;
-        return () => {};
-      },
-      { isSupported: () => true },
-    );
-    const bridge = createAitHostBridge({
-      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
-      dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+    const v2 = await request(bridge, 'notifications.v2.getPermission', {
+      topics: ['streak-at-risk', 'daily-ready'],
     });
+    expect(v2).toEqual({ topics: { 'streak-at-risk': 'unknown', 'daily-ready': 'unsupported' } });
 
-    for (const method of bridgeNotificationsV2Methods) {
-      for (const payload of [{ topics: ['streak-at-risk'] }, { protocol: 'mpgd.notifications.v2' }, null]) {
-        await expect(requestError(bridge, method, payload)).resolves.toEqual({
-          code: 'NOTIFICATIONS_V2_UNAVAILABLE',
-          message: expect.stringContaining(method),
-          retryable: false,
-        });
-      }
-    }
-    expect(agreementRequests).toBe(0);
-    // The v1 methods keep serving the game.
+    // A denial through v2 clears it; an agreement through v2 sets it again.
+    // Read through a function: TypeScript would narrow the reassigned variable.
+    const latestCallbacks = (): NotificationAgreementCallbacks | undefined => callbacks;
+    callbacks = undefined;
+    const denied = request(bridge, 'notifications.v2.requestPermission', { topics: ['streak-at-risk'] });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    latestCallbacks()?.onEvent({ type: 'agreementRejected' });
+    await denied;
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'streak-at-risk',
     })).resolves.toBe('not-subscribed');
+    callbacks = undefined;
+    const agreed = request(bridge, 'notifications.v2.requestPermission', { topics: ['streak-at-risk'] });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    latestCallbacks()?.onEvent({ type: 'alreadyAgreed' });
+    await agreed;
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('subscribed');
+    // A new bridge (a restart) starts without the cache.
+    const restarted = createAitHostBridge({
+      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+      dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+    });
+    await expect(request(restarted, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('not-subscribed');
+  });
+
+  it('maps v1 requests through the v2 outcomes: rejected, dismissed, and too-old hosts', async () => {
+    vi.useFakeTimers();
+    try {
+      let callbacks: NotificationAgreementCallbacks | undefined;
+      let supported = true;
+      const requestAgreement = Object.assign(
+        (input: NotificationAgreementCallbacks) => {
+          callbacks = input;
+          return () => {};
+        },
+        { isSupported: () => supported },
+      );
+      const bridge = createAitHostBridge({
+        notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+        dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+      });
+
+      const rejected = request(bridge, 'notifications.requestSubscription', { topic: 'streak-at-risk' });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      callbacks?.onEvent({ type: 'agreementRejected' });
+      await expect(rejected).resolves.toBe('rejected');
+
+      callbacks = undefined;
+      const dismissed = request(bridge, 'notifications.requestSubscription', { topic: 'streak-at-risk' });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(dismissed).resolves.toBe('unavailable');
+
+      supported = false;
+      await expect(request(bridge, 'notifications.getStatus', {
+        topic: 'streak-at-risk',
+      })).resolves.toBe('unsupported');
+      await expect(request(bridge, 'notifications.requestSubscription', {
+        topic: 'streak-at-risk',
+      })).resolves.toBe('unavailable');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('serves notifications v2 methods and answers the methods Apps in Toss lacks', async () => {
+    const bridge = createAitHostBridge({
+      notificationTopics: {
+        receipt: { templateSetCode: 'ttokdoku-receipt', agreement: 'none' },
+      },
+      dependencies: createDependencies(),
+    });
+
+    await expect(request(bridge, 'notifications.v2.getCapabilities', {
+      protocol: 'mpgd.notifications.v2',
+    })).resolves.toMatchObject({
+      provider: 'apps-in-toss',
+      capabilities: {
+        availability: 'available',
+        permission: { scope: 'topic', prompt: 'host', readable: false, userGesture: true },
+        remote: { supported: true, addressing: 'platform-user', content: 'host-template' },
+        local: { supported: false },
+        open: 'landing-url',
+      },
+    });
+    await expect(request(bridge, 'notifications.v2.requestPermission', {
+      topics: ['receipt'],
+    })).resolves.toEqual({
+      snapshot: { topics: { receipt: 'granted' } },
+      outcomes: { receipt: 'already-granted' },
+    });
+    await expect(request(bridge, 'notifications.v2.register', {
+      protocol: 'mpgd.notifications.v2',
+    })).resolves.toMatchObject({
+      registration: { provider: 'apps-in-toss', address: { kind: 'platform-user' } },
+    });
+    await expect(request(bridge, 'notifications.v2.openSettings', {
+      protocol: 'mpgd.notifications.v2',
+    })).resolves.toEqual({ status: 'unavailable' });
+    for (const [method, payload] of [
+      ['notifications.v2.scheduleLocal', {
+        key: 'k',
+        topic: 'receipt',
+        fireAt: '2026-10-19T00:00:00Z',
+        title: 't',
+        body: 'b',
+      }],
+      ['notifications.v2.revokePermission', { topics: ['receipt'] }],
+      ['notifications.v2.listLocal', { protocol: 'mpgd.notifications.v2' }],
+      ['notifications.v2.cancelLocal', { keys: ['k'] }],
+    ] as const) {
+      await expect(requestError(bridge, method, payload)).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_UNSUPPORTED',
+        retryable: false,
+      });
+    }
+    await expect(requestError(bridge, 'notifications.v2.getPermission', { topics: 'receipt' }))
+      .resolves.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT', retryable: false });
+  });
+
+  it('reads a v1 topic mapped without agreement as subscribed without a sheet', async () => {
+    const requestAgreement = vi.fn(() => () => {});
+    const bridge = createAitHostBridge({
+      notificationTopics: {
+        'friend-challenge': { templateSetCode: 'ttokdoku-challenge', agreement: 'none' },
+      },
+      dependencies: createDependencies({
+        requestNotificationAgreement: Object.assign(requestAgreement, { isSupported: () => true }),
+      }),
+    });
+    await expect(request(bridge, 'notifications.getStatus', { topic: 'friend-challenge' }))
+      .resolves.toBe('subscribed');
+    await expect(request(bridge, 'notifications.requestSubscription', { topic: 'friend-challenge' }))
+      .resolves.toBe('subscribed');
+    expect(requestAgreement).not.toHaveBeenCalled();
+  });
+
+  it('answers home for a launch from a Toss push and leaves its route to the cold open', async () => {
+    const bridge = createAitHostBridge({
+      notificationTopics: {
+        'energy-full': { templateSetCode: 'ttokdoku-energy-full', agreement: 'required' },
+      },
+      dependencies: createDependencies({
+        readInitialUrl: () => 'intoss://ttokdoku/daily?entry=daily&puzzleId=p1&referrer=push',
+      }),
+    });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((event) => events.push(event));
+
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'home',
+    });
+    expect(events).toEqual([
+      {
+        protocol: 'mpgd.notifications.v2',
+        sequence: 0,
+        event: {
+          type: 'opened',
+          channel: 'remote',
+          source: 'cold',
+          referrer: 'push',
+          route: '/daily?entry=daily&puzzleId=p1',
+        },
+      },
+    ]);
   });
 
   it('deduplicates promotion grants with the server-issued claim id', async () => {
@@ -4890,6 +5042,114 @@ describe('AIT launch intent', () => {
     return `queryParams=${encodeURIComponent(JSON.stringify(value))}`;
   }
 
+  const notificationTopics = {
+    'energy-full': { templateSetCode: 'ttokdoku-energy-full', agreement: 'required' },
+  } as const;
+
+  it('reads a Toss inbox launch from the page URL when the host has no initial URL', async () => {
+    stubSearch('?entry=daily&referrer=inbox');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+    expect(events).toEqual([
+      expect.objectContaining({
+        event: { type: 'opened', channel: 'remote', source: 'cold', referrer: 'inbox', route: '/?entry=daily' },
+      }),
+    ]);
+  });
+
+  it('falls back to the page URL when reading Environment.initialURL throws', async () => {
+    stubSearch('?referrer=push');
+    const bridge = createAitHostBridge({
+      notificationTopics,
+      dependencies: createDependencies({
+        readInitialUrl: () => {
+          throw new Error('no native constant');
+        },
+      }),
+    });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toHaveLength(1);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+  });
+
+  it('routes a push launch normally while no notification topic is configured', async () => {
+    stubSearch('?entry=daily&puzzleId=p-1&referrer=push');
+    const bridge = createAitHostBridge({ dependencies: createDependencies() });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'daily',
+      puzzleId: 'p-1',
+    });
+    expect(events).toEqual([]);
+  });
+
+  it('reads the launch when the bridge is created, before the router can rewrite it', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    stubSearch('?entry=daily');
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toHaveLength(1);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+  });
+
+  it('keeps routing push launches through the launch intent for a v1-only game', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({
+      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+      dependencies: createDependencies(),
+    });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'daily' });
+    expect(events).toEqual([]);
+  });
+
+  it('routes a push launch through the cold open when the runtime subscribes first', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toHaveLength(1);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+  });
+
+  it('routes a push launch from its landing route when the intent comes first and the page URL lacks it', async () => {
+    stubSearch('');
+    const bridge = createAitHostBridge({
+      notificationTopics,
+      dependencies: createDependencies({
+        readInitialUrl: () => 'intoss://ttokdoku/daily?entry=daily&puzzleId=p-9&referrer=inbox',
+      }),
+    });
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'daily',
+      puzzleId: 'p-9',
+    });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toEqual([]);
+  });
+
+  it('routes a push launch through the launch intent when the game asks first, never losing it', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    // The game asks before its notifications runtime subscribes, or it
+    // exposes no notificationsV2 at all: the intent routes the launch.
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'daily' });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toEqual([]);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'daily' });
+  });
+
   it('prefers direct search params over nested queryParams and only fills missing keys', async () => {
     stubSearch(`?puzzleId=direct-puzzle&${nestedQueryParams({
       puzzleId: 'nested-puzzle',
@@ -5203,6 +5463,7 @@ function createDependencies(
     share: async () => {},
     grantPromotionReward: withSupportProbe(grantPromotionReward),
     requestNotificationAgreement: withSupportProbe(requestNotificationAgreement, false),
+    readInitialUrl: () => undefined,
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,

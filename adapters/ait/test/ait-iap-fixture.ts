@@ -264,6 +264,7 @@ export function createFakeAitHostDependencies(
       unsupported,
     ),
     requestNotificationAgreement: Object.assign(() => () => {}, unsupported),
+    readInitialUrl: () => undefined,
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,

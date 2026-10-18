@@ -643,11 +643,16 @@ contract remains deterministic and transport-neutral.
 
 ## Functional messages
 
-The target adapter can request notification agreement through the AIT client
-SDK. Delivery remains a server operation. Anonymous keys can be checked with
-`verifyAnonymousKey()`. Toss-user keys, however, are trusted only when they came
-from an authenticated Toss login and the backend's protected anonymous-to-user
-key mapping; `verifyAnonymousKey()` does not validate Toss-user keys, and
+The target adapter requests notification agreement through the AIT client SDK
+(`Notification.requestAgreement`, served as notifications v2 by the host
+bridge) and reports each answer as evidence for the backend's consent record.
+Delivery remains a server operation:
+`createAitFunctionalMessageDeliveryProvider` in
+`@mpgd/game-services/notifications/ait-functional-delivery` maps the partner
+API's answers to the notifications RFC's provider answers. Anonymous keys can
+be checked with `verifyAnonymousKey()`. Toss-user keys, however, are trusted
+only when they came from an authenticated Toss login and the backend's
+protected anonymous-to-user key mapping; `verifyAnonymousKey()` does not validate Toss-user keys, and
 `sendFunctionalMessage()` must never be treated as validation for an arbitrary
 `toss-user` key. After establishing the recipient through the appropriate
 authenticated path, adapt `sendFunctionalMessage()` to a durable

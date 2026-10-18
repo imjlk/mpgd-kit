@@ -6,6 +6,10 @@
     {
       "path": "remote.addressing",
       "equals": "platform-user"
+    },
+    {
+      "path": "permission.prompt",
+      "equals": "game"
     }
   ],
   "profile": {

@@ -1,0 +1,226 @@
+{
+  "vector": "host-agreement-rejected",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A rejected per-template sheet is recorded as a denied host agreement with its evidence and writes no topic preference; sends stop until the player accepts the sheet again, which records the agreement and the preference and lets the next send through.",
+  "appliesTo": [
+    {
+      "path": "permission.scope",
+      "equals": "topic"
+    },
+    {
+      "path": "permission.prompt",
+      "equals": "host"
+    },
+    {
+      "path": "permission.readable",
+      "equals": false
+    },
+    {
+      "path": "permission.allowance",
+      "equals": "persistent"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "templateSetCode": "fixture-energy-full",
+        "agreement": "required"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "denied"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "denied"
+        },
+        "snapshot": {
+          "topics": {
+            "energy-full": "denied"
+          }
+        },
+        "evidence": {
+          "schema": "fixture.host-agreement.v1"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ]
+      },
+      "returns": {
+        "topics": {
+          "energy-full": "denied"
+        },
+        "sources": {
+          "energy-full": "record"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "energy-full",
+        "idempotencyKey": "r-1"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "agreement-missing"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "granted"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "energy-full",
+        "idempotencyKey": "r-2"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 2,
+    "consent": [
+      {
+        "kind": "host-agreement",
+        "topic": "energy-full",
+        "state": "denied",
+        "source": "client-report",
+        "evidence": {
+          "schema": "fixture.host-agreement.v1"
+        }
+      },
+      {
+        "kind": "host-agreement",
+        "topic": "energy-full",
+        "state": "granted",
+        "source": "client-report",
+        "evidence": {
+          "schema": "fixture.host-agreement.v1"
+        }
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "energy-full",
+        "state": "granted",
+        "source": "player"
+      }
+    ],
+    "deliveries": [
+      {
+        "idempotencyKey": "r-1",
+        "status": "suppressed",
+        "reason": "agreement-missing"
+      },
+      {
+        "idempotencyKey": "r-2",
+        "status": "delivered",
+        "alreadyProcessed": false
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "energy-full"
+      }
+    ]
+  }
+}
