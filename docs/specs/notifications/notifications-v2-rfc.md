@@ -1391,7 +1391,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     reserved: HTTP v1 has no FID send target, so the backend refuses an FID
     registration (`NOTIFICATIONS_INVALID_INPUT`, with a message saying the
     kind is reserved) and the provider refuses an FID send (`rejected`,
-    provider code `INSTALLATION_ID_RESERVED`), until FCM supports FIDs.
+    provider code `INSTALLATION_ID_RESERVED`), until FCM supports FIDs. The
+    [Capacitor provider](#profile-capacitor) registers tokens only, so a
+    shipped client never sends one.
   - **Errors.**
     - `UNREGISTERED` is `unregistered`. `INVALID_ARGUMENT` is too, but only
       when the payload is known valid: the provider checks the message
