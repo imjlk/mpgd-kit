@@ -545,6 +545,53 @@ describe('Capacitor notifications provider: events around a request', () => {
     expect(errors).toEqual([new Error('first'), new Error('second')]);
   });
 
+  it('keeps the request answer when a read begun during the dialog finishes after it', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    let hold: ((state: { readonly display: 'prompt' }) => void) | undefined;
+    let calls = 0;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      checkPermissions: async () => {
+        calls += 1;
+        // The third read: begun while the dialog is up.
+        if (calls === 3) {
+          return new Promise((resolve) => {
+            hold = resolve;
+          });
+        }
+        return { display: sdks.osState };
+      },
+    };
+    const push = sdks.push!;
+    const ask = push.requestPermissions.bind(push);
+    let stale: Promise<unknown> | undefined;
+    const pushDuringDialog: PushSdk = Object.assign(Object.create(push) as PushSdk, {
+      requestPermissions: async () => {
+        stale = provider.getPermission({ topics: [] });
+        return ask();
+      },
+    });
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android', topics, push: pushDuringDialog, local, app: null,
+      timeZone: () => undefined, locale: () => undefined,
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.getPermission({ topics: [] });
+    sdks.queuePrompt('granted');
+    await provider.requestPermission({ topics: ['energy-full'] });
+    hold?.({ display: 'prompt' });
+    await stale;
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    expect(events).toEqual([{
+      type: 'endpoint-changed',
+      registration: {
+        provider: 'fcm',
+        address: { kind: 'fcm-token', value: 'tok-1', permission: 'granted' },
+      },
+    }]);
+  });
+
   it('shares the answer of a dialog that opened and closed during its own first read', async () => {
     const sdks = createFakeNotificationSdks({ platform: 'android' });
     let hold: ((state: { readonly display: 'prompt' }) => void) | undefined;

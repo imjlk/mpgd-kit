@@ -277,15 +277,12 @@ export function createCapacitorNotificationProvider(
    * The OS dialog in flight, whose answer settles `lastObserved`; a request
    * made while it is up shares it, so a double tap never asks twice.
    */
-  let requesting: Promise<{
-    readonly before: NotificationPermissionState;
-    readonly after: NotificationPermissionState;
-  }> | undefined;
+  let requesting: Promise<PermissionDialogAnswer> | undefined;
   /** The answer of the last dialog that settled. */
-  let lastAnswer: {
-    readonly before: NotificationPermissionState;
-    readonly after: NotificationPermissionState;
-  } | undefined;
+  let lastAnswer: PermissionDialogAnswer | undefined;
+  /** Whether a dialog that started after `generation` was taken has answered since. */
+  const answeredSince = (generation: number): boolean =>
+    lastAnswer !== undefined && lastAnswer.request > generation;
   /** Counts requests, so a read that overlapped one cannot settle `lastObserved` after it. */
   let requests = 0;
   const readAppState = async (): Promise<NotificationPermissionState> => {
@@ -293,12 +290,13 @@ export function createCapacitorNotificationProvider(
       return 'unsupported';
     }
     const generation = requests;
+    const duringDialog = requesting !== undefined;
     const state = await callSdk(checkPermission);
     const mapped = toPermissionState(state);
     // Only the request's own answer settles a request, so a read that began
     // before or during the dialog cannot overwrite that answer, even when it
     // finishes after the request did.
-    if (requesting === undefined && generation === requests) {
+    if (!duringDialog && requesting === undefined && !answeredSince(generation)) {
       lastObserved = mapped;
     }
     return mapped;
@@ -338,7 +336,7 @@ export function createCapacitorNotificationProvider(
       const state = await readAppState();
       // A request that began, or even ended, during the read reports its own
       // answer.
-      if (state !== before && requesting === undefined && generation === requests) {
+      if (state !== before && requesting === undefined && !answeredSince(generation)) {
         // Changed in system settings: no plugin reports it as an event.
         dispatch({
           type: 'permission-changed',
@@ -521,15 +519,18 @@ export function createCapacitorNotificationProvider(
     }
     actionTypesReady ??= Promise.resolve()
       .then(async () => {
-        await local?.registerActionTypes({
-        types: [{
-          id: capacitorAdvertisingActionTypeId,
-          actions: [{
-            id: notificationAdvertisingOptOutActionId,
-            title: input.advertisingOptOutTitle ?? '수신거부',
-            foreground: true,
+        if (local === undefined) {
+          return;
+        }
+        await local.registerActionTypes({
+          types: [{
+            id: capacitorAdvertisingActionTypeId,
+            actions: [{
+              id: notificationAdvertisingOptOutActionId,
+              title: input.advertisingOptOutTitle ?? '수신거부',
+              foreground: true,
+            }],
           }],
-        }],
         });
         setupFailureReported = false;
       })
@@ -691,7 +692,10 @@ export function createCapacitorNotificationProvider(
         // opened and closed it: then this call shares that answer instead
         // of asking again from a state read before it.
         answer = requesting
-          ?? (generation === requests || lastAnswer === undefined ? undefined : Promise.resolve(lastAnswer));
+          // Only a dialog that started after the read began, and answered.
+          ?? (lastAnswer !== undefined && answeredSince(generation)
+            ? Promise.resolve(lastAnswer)
+            : undefined);
         if (answer === undefined && before === 'blocked') {
           // Only settings can change it; the dialog would not show.
           for (const topic of askable) {
@@ -705,13 +709,16 @@ export function createCapacitorNotificationProvider(
           // setting is, so the read after it decides (through the local
           // plugin when present).
           requests += 1;
-          const asked = (async () => {
+          const request = requests;
+          // Started in a microtask, so `requesting` is set before the dialog
+          // opens and every read from then on sees it.
+          const asked = Promise.resolve().then(async () => {
             await callSdk(askPermission);
             const after = await readAppState();
             lastObserved = after;
-            lastAnswer = { before, after };
+            lastAnswer = { request, before, after };
             return lastAnswer;
-          })();
+          });
           requesting = asked;
           const clear = (): void => {
             if (requesting === asked) {
@@ -938,6 +945,13 @@ function toPermissionState(state: PermissionState | undefined): NotificationPerm
         message: `The notification plugin reported an unknown permission state: ${String(state)}.`,
       });
   }
+}
+
+/** One OS dialog's answer, and the `requests` count that started it. */
+interface PermissionDialogAnswer {
+  readonly request: number;
+  readonly before: NotificationPermissionState;
+  readonly after: NotificationPermissionState;
 }
 
 interface LocalEntryExtra extends LocalNotificationEntry {
