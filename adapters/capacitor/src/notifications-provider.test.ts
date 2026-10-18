@@ -1487,13 +1487,33 @@ describe('Capacitor notifications provider: settings', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(answer).toBe('opened');
     expect(errors).toEqual([
-      new Error('Capacitor notifications: openSettings did not settle before the settings wait ended.'),
+      new Error('Capacitor notifications: openSettings had not settled when the settings wait timed out.'),
     ]);
     // A late settle changes nothing and reports nothing more.
     settle?.();
     await vi.advanceTimersByTimeAsync(10);
     expect(answer).toBe('opened');
     expect(errors).toHaveLength(1);
+    // A late rejection is only reported.
+    const late = setup({
+      openSettings: () => new Promise<void>((_resolve, reject) => {
+        lateReject = reject;
+      }),
+      settingsLeaveTimeoutMs: 1_000,
+      settingsReturnTimeoutMs: 5_000,
+    });
+    let lateReject: ((error: Error) => void) | undefined;
+    let lateAnswer: string | undefined;
+    void late.provider.openSettings!().then((value) => {
+      lateAnswer = value;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lateAnswer).toBe('opened');
+    lateReject?.(new Error('late'));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lateAnswer).toBe('opened');
+    expect(late.errors).toHaveLength(2);
+    expect(late.errors[1]).toEqual(new Error('late'));
     // A never-settling opener that never left the app ends at the leave timeout.
     const stalled = setup({
       openSettings: () => new Promise<void>(() => undefined),
@@ -1507,6 +1527,19 @@ describe('Capacitor notifications provider: settings', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(second).toBe('opened');
     expect(stalled.errors).toHaveLength(1);
+  });
+
+  it('reports no stall when the player returns before the opener settles', async () => {
+    const { provider, sdks, errors } = setup({
+      // Settles only after the settings screen closed, as some iOS openers do.
+      openSettings: () => new Promise<void>(() => undefined),
+    });
+    const call = provider.openSettings!();
+    await settle();
+    sdks.app.setActive(false);
+    sdks.app.setActive(true);
+    expect(await call).toBe('opened');
+    expect(errors).toEqual([]);
   });
 
   it('answers unavailable when the opener fails', async () => {

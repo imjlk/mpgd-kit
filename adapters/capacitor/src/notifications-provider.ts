@@ -928,6 +928,8 @@ export function createCapacitorNotificationProvider(
       // settings screen is up: on Android the native call returns as soon as
       // the screen launches, before the app reports the background.
       let finish: () => void = () => undefined;
+      /** Whether the wait ended by a timer rather than the player's return. */
+      let timedOut = false;
       const returned = new Promise<void>((resolve) => {
         let left = false;
         const done = (): void => {
@@ -935,6 +937,10 @@ export function createCapacitorNotificationProvider(
           clearTimeout(leaveTimer);
           clearTimeout(returnTimer);
           resolve();
+        };
+        const expire = (): void => {
+          timedOut = true;
+          done();
         };
         const waiter = (active: boolean): void => {
           if (!active) {
@@ -947,10 +953,10 @@ export function createCapacitorNotificationProvider(
         // A screen that never took the app to the background does not hold the game.
         const leaveTimer = setTimeout(() => {
           if (!left) {
-            done();
+            expire();
           }
         }, input.settingsLeaveTimeoutMs ?? capacitorSettingsLeaveTimeoutMs);
-        const returnTimer = setTimeout(done, input.settingsReturnTimeoutMs
+        const returnTimer = setTimeout(expire, input.settingsReturnTimeoutMs
           ?? capacitorSettingsReturnTimeoutMs);
         finish = done;
       });
@@ -958,7 +964,7 @@ export function createCapacitorNotificationProvider(
       // hold the game past the timers, and settling after they ended changes
       // nothing (a late rejection is only reported).
       const opening = Promise.resolve()
-        .then(open)
+        .then(() => open())
         .then(
           () => 'opened' as const,
           (error: unknown) => {
@@ -976,10 +982,14 @@ export function createCapacitorNotificationProvider(
       }
       if (outcome === 'waited') {
         // The wait ended before the opener settled: answered as a missed
-        // return is, with the stall reported once.
-        reportError(new Error(
-          'Capacitor notifications: openSettings did not settle before the settings wait ended.',
-        ));
+        // return is. A timer ending it is a stall, reported once; the player
+        // coming back first is a normal round trip (some iOS openers settle
+        // only after the settings screen closes).
+        if (timedOut) {
+          reportError(new Error(
+            'Capacitor notifications: openSettings had not settled when the settings wait timed out.',
+          ));
+        }
         return 'opened';
       }
       await returned;
