@@ -327,7 +327,9 @@ describe('Apps in Toss notifications provider', () => {
     const late = latest;
     const second = provider.requestPermission({ topics: ['energy-full'] });
     await vi.waitFor(() => expect(latest).not.toBe(late));
-    // The stale answer arrives while the next sheet is open: it settles nothing.
+    // The stale answer arrives while the next sheet is open: it reaches
+    // neither the settled request nor the open one, and runs no cleanup
+    // again (the cleanup guard; the settled promise ignores it either way).
     late?.onEvent({ type: 'agreementRejected' });
     expect(cleanups).toBe(1);
     latest?.onEvent({ type: 'alreadyAgreed' });
