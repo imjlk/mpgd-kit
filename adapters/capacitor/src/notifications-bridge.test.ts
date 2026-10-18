@@ -652,6 +652,11 @@ describe('Capacitor registry with a notifications v2 service', () => {
       .not.toThrow();
     expect(() => assertProviderResponseData('notifications.v2.openSettings', { status: 'maybe' }, entry))
       .toThrow(/returned invalid data/u);
+    // A provider that broke the contract is a configuration error, not retried.
+    expect(() => assertProviderResponseData('notifications.v2.openSettings', { status: 'maybe' }, entry))
+      .toThrow(expect.objectContaining({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false }));
+    expect(() => assertProviderResponseData('ads.showInterstitial', { status: 'maybe' }))
+      .toThrow(expect.objectContaining({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' }));
     expect(() => assertProviderResponseData('notifications.v2.listLocal', {
       pending: [{ key: 'a', topic: 't', fireAt: '2026-10-12T06:00:00' }],
     }, entry)).toThrow(/returned invalid data/u);

@@ -269,13 +269,14 @@ is created, which is how a cold-start open reaches it.
   channel would mix advertising with other topics, so a player can always turn
   advertising off in system settings. Name the channels with the `channels`
   option.
-- **Topics.** Only topics this target maps count. A topic the catalog declares
-  without a mapping for the target reads `unsupported`, answers `unavailable`
-  to a request and `unsupported` to `scheduleLocal`, gets no channel, and an
-  open naming it carries no topic.
+- **Topics.** Only topics this target maps count. A topic the catalog does
+  not declare, or declares without a mapping for the target, reads
+  `unsupported`, answers `unavailable` to a request and `unsupported` to
+  `scheduleLocal`, gets no channel, and an open naming it carries no topic.
 - **Opens.** A tap becomes one `opened` event, kept whenever no listener is
   attached (before the first subscriber, and between two) for the next
-  subscriber. A push carries its topic and route in the data keys `topic` and
+  subscriber, as are endpoint and permission changes; a receipt that arrives
+  between two subscribers is dropped. A push carries its topic and route in the data keys `topic` and
   `route` (`capacitorNotificationDataKeys`); its other string entries, except
   the transport's own keys (`from`, `collapse_key`, `google.*`, `gcm.*`, and
   the like), reach the game as untrusted `data`. A route is kept only when
@@ -304,15 +305,12 @@ is created, which is how a cold-start open reaches it.
   five seconds when the app never left.
 - **Endpoints.** `register()` answers the FCM token with the device
   permission, locale, and time zone, or `null` while Firebase cannot issue one
-  yet; a token Firebase issues later arrives as `endpoint-changed`. Pass
-  `address: 'fcm-installation'` with a `PushSdk` whose `getInstallationId`
-  issues Firebase installation ids to register those instead; Firebase
-  announces no installation id change, so the provider reads the id again on
-  each return to the foreground and announces a change as `endpoint-changed`.
-  The messaging
-  plugin has no such method, and its proxy cannot be told apart from one that
-  has, so with the plain plugin `register()` answers
-  `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+  yet; a token Firebase issues later arrives as `endpoint-changed`. The
+  `address: 'fcm-installation'` option is reserved and unsendable: FCM HTTP
+  v1 cannot send to a Firebase installation id, so the game-services FCM
+  sender refuses such registrations, the messaging plugin has no
+  `getInstallationId`, and Firebase announces no installation id change.
+  Leave `address` at its default, `fcm-token`.
 
 ## App Store server-side transaction signatures
 

@@ -229,6 +229,12 @@ describe('Capacitor notifications provider: permission', () => {
       });
     }
     expect(sdks.prompts).toBe(0);
+    // Nor does it announce an address the backend could send advertising to.
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await settle();
+    expect(events).toEqual([]);
     // An advertising topic this target does not map needs no opt-out action.
     const unmapped = setup({
       platform: 'ios',
@@ -422,36 +428,6 @@ describe('Capacitor notifications provider: endpoints', () => {
       code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
       hostCode: 'UNIMPLEMENTED',
     });
-  });
-
-  it('announces a changed Firebase installation id when the app returns', async () => {
-    const sdks = createFakeNotificationSdks({ platform: 'android' });
-    let installationId = 'fid-1';
-    const push: PushSdk = Object.assign(Object.create(sdks.push!) as PushSdk, {
-      getInstallationId: async () => ({ installationId }),
-    });
-    const provider = createCapacitorNotificationProvider({
-      platform: 'android', topics, push, local: sdks.local!, app: sdks.app,
-      address: 'fcm-installation', timeZone: () => undefined, locale: () => undefined,
-    });
-    const events: NotificationEvent[] = [];
-    provider.subscribe((event) => events.push(event));
-    await provider.register?.();
-    // A token is not this provider's address.
-    sdks.emitPush('tokenReceived', { token: 'tok-1' });
-    sdks.app.setActive(true);
-    await settle();
-    expect(events).toEqual([]);
-    installationId = 'fid-2';
-    sdks.app.setActive(true);
-    await settle();
-    expect(events).toEqual([{
-      type: 'endpoint-changed',
-      registration: {
-        provider: 'fcm',
-        address: { kind: 'fcm-installation', value: 'fid-2', permission: 'prompt' },
-      },
-    }]);
   });
 
   it('registers a Firebase installation id when configured to', async () => {
@@ -872,6 +848,32 @@ describe('Capacitor notifications provider: local reminders', () => {
       extra: { mpgdKey: 'far', mpgdRoute: '/far' },
       isExactNotification: false,
     });
+  });
+
+  it('reports an evicted reminder it cannot restore without its title and body', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'ios' });
+    sdks.osState = 'granted';
+    const errors: unknown[] = [];
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      // A plugin that reports pending notifications without their text.
+      getPending: async () => ({
+        notifications: (await sdks.local!.getPending()).notifications
+          .map(({ id, extra }) => ({ id, extra })),
+      }),
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'ios', topics, local, app: null, onError: (error) => errors.push(error),
+    });
+    for (let id = 1; id <= 63; id += 1) {
+      sdks.addForeignPending(id);
+    }
+    await provider.scheduleLocal?.({ ...reminder, key: 'far', fireAt: '2026-10-20T00:00:00Z' });
+    sdks.failNext('local.schedule', new Error('native'));
+    await expect(provider.scheduleLocal?.({ ...reminder, key: 'near' })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+    expect(errors).toEqual([new Error('Capacitor notifications: could not restore the reminder far.')]);
   });
 
   it('keeps at most 64 pending on iOS, the nearest ones', async () => {
@@ -1313,7 +1315,9 @@ describe('Capacitor notifications provider: opens and events', () => {
     const first: NotificationEvent[] = [];
     const leave = provider.subscribe((event) => first.push(event));
     leave();
-    // Between two scenes: the open waits instead of being dropped.
+    // Between two scenes: the open waits instead of being dropped, and a
+    // receipt nobody saw is not replayed.
+    sdks.emitPush('notificationReceived', { notification: { data: { topic: 'friend-challenge' } } });
     sdks.tap({ channel: 'remote', topic: 'friend-challenge', route: '/?entry=friend-challenge' });
     const next: NotificationEvent[] = [];
     provider.subscribe((event) => next.push(event));
@@ -1325,6 +1329,24 @@ describe('Capacitor notifications provider: opens and events', () => {
     }]);
     // Delivered once: a second subscriber attached meanwhile does not get it again.
     expect(other).toEqual([]);
+  });
+
+  it('delivers an event dispatched while the buffer drains after the buffered ones', () => {
+    const { provider, sdks } = setup();
+    sdks.tap({ channel: 'remote', topic: 'friend-challenge' });
+    sdks.tap({ channel: 'remote', topic: 'weekend-event' });
+    const seen: (string | undefined)[] = [];
+    provider.subscribe((event) => {
+      if (event.type !== 'opened') {
+        return;
+      }
+      seen.push(event.topic);
+      if (event.topic === 'friend-challenge') {
+        // The game reacts to the first open in a way that taps again.
+        sdks.tap({ channel: 'remote', topic: 'energy-full' });
+      }
+    });
+    expect(seen).toEqual(['friend-challenge', 'weekend-event', 'energy-full']);
   });
 
   it('keeps the opens when the buffer overflows before the first subscriber', () => {
@@ -1374,7 +1396,6 @@ describe('Capacitor notifications provider: settings', () => {
       settingsLeaveTimeoutMs: 1_000,
       settingsReturnTimeoutMs: 5_000,
     });
-    expect(capacitorSettingsReturnTimeoutMs).toBe(120_000);
     const stayed = provider.openSettings!();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(await stayed).toBe('opened');
@@ -1386,6 +1407,22 @@ describe('Capacitor notifications provider: settings', () => {
       answer = value;
     });
     await vi.advanceTimersByTimeAsync(4_000);
+    expect(answer).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(answer).toBe('opened');
+  });
+
+  it('stops waiting for the return after two minutes by default', async () => {
+    vi.useFakeTimers();
+    expect(capacitorSettingsReturnTimeoutMs).toBe(120_000);
+    const { provider, sdks } = setup({ openSettings: async () => undefined });
+    let answer: string | undefined;
+    void provider.openSettings!().then((value) => {
+      answer = value;
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    sdks.app.setActive(false);
+    await vi.advanceTimersByTimeAsync(119_000);
     expect(answer).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(answer).toBe('opened');

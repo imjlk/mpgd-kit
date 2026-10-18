@@ -1454,8 +1454,13 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   later than Apple recommends. The provider registers its native listeners
   when it is created and marks an open `cold` when it arrives before the first
   subscriber. It also keeps events that arrive while no listener is attached
-  later for the next subscriber, because the gateway's bridge detaches when
-  its last listener leaves.
+  later for the next subscriber (all but receipts), because the gateway's
+  bridge detaches when its last listener leaves.
+- **Unmapped topics.** A topic the catalog does not declare, or declares
+  without a mapping for the target, reads `unsupported` and schedules
+  nothing; an open naming it carries no topic.
+- **Addresses.** The provider registers FCM tokens. `fcm-installation` is
+  reserved: FCM HTTP v1 cannot send to a Firebase installation id.
 
 ### Apps in Toss {#profile-ait}
 
@@ -1605,10 +1610,10 @@ Other rules the profiles encode:
 - **Methods.** `notifications.v2.getCapabilities`, `.getPermission`,
   `.requestPermission`, `.revokePermission`, `.register`, `.scheduleLocal`,
   `.cancelLocal`, `.listLocal`, and `.openSettings`. Transports without v2
-  answer `NOTIFICATIONS_V2_UNAVAILABLE`, which is not retryable. An answer
+  answer `NOTIFICATIONS_V2_UNAVAILABLE`, which is not retryable. Answer data
   that breaks the method's contract, caught on either side of the bridge,
   is `NOTIFICATIONS_CONFIGURATION_REQUIRED`, also not retryable, because the
-  provider broke it.
+  provider broke it. A malformed bridge envelope stays a transport failure.
 - **Events.** They share the bridge event channel. `BridgeEvent` becomes a
   union discriminated by `protocol`: the existing `mpgd.commerce.v2` envelope,
   and `{ protocol: 'mpgd.notifications.v2', sequence, event }` with

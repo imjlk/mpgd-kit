@@ -27,6 +27,7 @@ import {
 import type {
   LocalNotificationSdk,
   LocalNotificationSdkEntry,
+  LocalNotificationSdkSchema,
   NotificationSdkChannel,
   PushSdk,
   PushSdkNotification,
@@ -90,10 +91,15 @@ export interface CreateCapacitorNotificationProviderInput {
   /** Defaults to `capacitorNotificationProviderId` ('fcm'). */
   readonly provider?: NotificationProviderId;
   /**
-   * The address the backend sends to; 'fcm-token' when absent.
-   * 'fcm-installation' needs `push.getInstallationId`, which
-   * `@capacitor-firebase/messaging` does not have: a shell that registers
-   * Firebase installation ids passes a `PushSdk` that adds it.
+   * The address the backend sends to; 'fcm-token' when absent, and the only
+   * one the backend can send to today.
+   *
+   * 'fcm-installation' is reserved: FCM HTTP v1 cannot send to a Firebase
+   * installation id, so the game-services FCM sender refuses such
+   * registrations. It also needs `push.getInstallationId`, which
+   * `@capacitor-firebase/messaging` does not have, and Firebase announces no
+   * installation id change, so a shell would have to `register()` again on
+   * each return to the foreground. Do not use it until the sender supports it.
    */
   readonly address?: 'fcm-token' | 'fcm-installation';
   /**
@@ -185,7 +191,7 @@ export function capacitorLocalNotificationId(key: string): number {
  * - **Listeners first.** It registers every native listener synchronously,
  *   before any `await`, and keeps them for the process lifetime: Capacitor
  *   retains a plugin's events only until its first native listener, so a
- *   cold-start open reaches this provider, which buffers it for its first
+ *   cold-start open reaches this provider, which keeps it for its first
  *   subscriber.
  * - **Permission.** It reads `LocalNotifications.checkPermissions`, which
  *   reflects the system setting on every Android version, and maps the OS
@@ -262,13 +268,19 @@ export function createCapacitorNotificationProvider(
 
   // Events.
   const listeners = new Set<(event: NotificationEvent) => void>();
-  let buffer: NotificationEvent[] = [];
+  const buffer: NotificationEvent[] = [];
   let subscribed = false;
   // Events wait whenever no listener is attached, not only before the first:
   // the gateway's bridge detaches when its last listener leaves, so a game
   // that subscribes per scene would otherwise lose an open between scenes.
+  let draining = false;
   const dispatch = (event: NotificationEvent): void => {
-    if (listeners.size === 0) {
+    if (listeners.size === 0 || draining) {
+      // A receipt is worth nothing once the scene that showed it is gone; the
+      // opens, endpoint and permission changes are kept.
+      if (subscribed && !draining && event.type === 'received') {
+        return;
+      }
       buffer.push(event);
       if (buffer.length > eventBufferLimit) {
         // Keep the opens: a cold-start open must not be lost to later events.
@@ -305,25 +317,6 @@ export function createCapacitorNotificationProvider(
   }
   const getInstallationId = push?.getInstallationId?.bind(push);
   let tokenFailureReported = false;
-  /** The address last registered or announced, to notice an installation id that changed. */
-  let lastAddress: string | undefined;
-  /**
-   * Firebase announces a new token, not a new installation id, so for
-   * `fcm-installation` the provider reads the id again on each return to
-   * the foreground and announces a change as `endpoint-changed`.
-   */
-  const checkInstallationId = async (): Promise<void> => {
-    if (addressKind !== 'fcm-installation' || getInstallationId === undefined
-      || lastAddress === undefined) {
-      return;
-    }
-    const { installationId } = await getInstallationId();
-    if (typeof installationId !== 'string' || installationId === '' || installationId === lastAddress) {
-      return;
-    }
-    lastAddress = installationId;
-    dispatch({ type: 'endpoint-changed', registration: await registrationOf(installationId) });
-  };
   let lastObserved: NotificationPermissionState | undefined;
   /**
    * The OS dialog in flight, whose answer settles `lastObserved`; a request
@@ -378,7 +371,6 @@ export function createCapacitorNotificationProvider(
     // A push-only provider has no local reminder to retry the setup from.
     ensureChannels().catch(reportSetupFailure);
     ensureActionTypes().catch(reportSetupFailure);
-    checkInstallationId().catch(reportError);
     resumeCheck = resumeCheck.then(async () => {
       const before = lastObserved;
       const generation = requests;
@@ -395,7 +387,8 @@ export function createCapacitorNotificationProvider(
         // Changed in system settings: no plugin reports it as an event.
         dispatch({
           type: 'permission-changed',
-          snapshot: snapshotOf(mappedTopics.map((topic) => topic.id), state),
+          // Every declared topic; `snapshotOf` reads the unmapped ones `unsupported`.
+          snapshot: snapshotOf(topics.map((topic) => topic.id), state),
         });
       }
     }).catch(reportError);
@@ -479,12 +472,14 @@ export function createCapacitorNotificationProvider(
   };
   if (push !== undefined) {
     listen(() => push.addListener('tokenReceived', (event) => {
-      if (addressKind !== 'fcm-token' || typeof event.token !== 'string' || event.token === '') {
+      // A configuration-required provider announces no address, as it
+      // registers none: the backend must not reach this device yet.
+      if (addressKind !== 'fcm-token' || configurationIssue !== undefined
+        || typeof event.token !== 'string' || event.token === '') {
         return;
       }
       const { token } = event;
       tokenFailureReported = false;
-      lastAddress = token;
       // A rotated token goes out at once, with the permission this provider
       // last read: a permission changes only in system settings, and the
       // return from there reads it again. During a request (iOS issues the
@@ -615,12 +610,14 @@ export function createCapacitorNotificationProvider(
     return run;
   };
 
+  const availabilityOf = (): NotificationCapabilities['availability'] => {
+    if (unsupported) {
+      return 'unsupported';
+    }
+    return configurationIssue === undefined ? 'available' : 'configuration-required';
+  };
   const capabilities = (): NotificationCapabilities => ({
-    availability: unsupported
-      ? 'unsupported'
-      : configurationIssue === undefined
-        ? 'available'
-        : 'configuration-required',
+    availability: availabilityOf(),
     permission: {
       scope: 'app',
       prompt: 'os',
@@ -703,7 +700,11 @@ export function createCapacitorNotificationProvider(
     const id = existing?.id ?? freeId(checked.key, pending.all);
     const route = checked.route ?? declared.route;
     try {
-      await scheduleOne(sdk, checked, declared, id, fireAt, route);
+      await callSdk(() =>
+        sdk.schedule({
+          notifications: [schemaOf({ ...checked, id, fireAt, route })],
+        }),
+      );
     } catch (error) {
       // The new reminder failed after the farthest gave way: put that one back.
       if (evicted !== undefined) {
@@ -714,67 +715,55 @@ export function createCapacitorNotificationProvider(
     return { status: existing === undefined ? 'scheduled' : 'replaced' };
   };
 
+  /** One local notification as this provider writes it, for a new or a restored reminder. */
+  const schemaOf = (input: {
+    readonly id: number;
+    readonly title: string;
+    readonly body: string;
+    readonly key: string;
+    readonly topic: string;
+    readonly fireAt: string;
+    readonly route?: string | undefined;
+  }): LocalNotificationSdkSchema => {
+    const declared = mappedTopic(input.topic);
+    return {
+      id: input.id,
+      title: input.title,
+      body: input.body,
+      // Inexact, but allowed to fire in Doze: without it Android posts the
+      // reminder only when the device next wakes for another reason.
+      schedule: { at: new Date(input.fireAt), allowWhileIdle: true },
+      extra: {
+        [extraKeys.key]: input.key,
+        [extraKeys.topic]: input.topic,
+        [extraKeys.fireAt]: input.fireAt,
+        ...(input.route === undefined ? {} : { [extraKeys.route]: input.route }),
+      },
+      ...(platform === 'android' && declared !== undefined
+        ? { channelId: capacitorNotificationChannelId(declared) }
+        : {}),
+      isExactNotification: false,
+    };
+  };
+
   /** Puts an evicted reminder back as `getPending` reported it; reports when it cannot. */
   const restore = async (sdk: LocalNotificationSdk, entry: PendingReminder): Promise<void> => {
-    if (entry.title === undefined || entry.body === undefined) {
+    const { title, body } = entry;
+    if (title === undefined || body === undefined) {
       reportError(
         new Error(`Capacitor notifications: could not restore the reminder ${entry.key}.`),
       );
       return;
     }
-    const declared = topicById.get(entry.topic);
     try {
-      await callSdk(() => sdk.schedule({
-        notifications: [{
-          id: entry.id,
-          title: entry.title ?? '',
-          body: entry.body ?? '',
-          schedule: { at: new Date(entry.fireAt), allowWhileIdle: true },
-          extra: {
-            [extraKeys.key]: entry.key,
-            [extraKeys.topic]: entry.topic,
-            [extraKeys.fireAt]: entry.fireAt,
-            ...(entry.route === undefined ? {} : { [extraKeys.route]: entry.route }),
-          },
-          ...(platform === 'android' && declared !== undefined
-            ? { channelId: capacitorNotificationChannelId(declared) }
-            : {}),
-          isExactNotification: false,
-        }],
-      }));
+      await callSdk(() =>
+        sdk.schedule({
+          notifications: [schemaOf({ ...entry, title, body })],
+        }),
+      );
     } catch (error) {
       reportError(error);
     }
-  };
-
-  const scheduleOne = async (
-    sdk: LocalNotificationSdk,
-    checked: LocalNotificationRequest,
-    declared: NotificationTopicDeclaration,
-    id: number,
-    fireAt: string,
-    route: string | undefined,
-  ): Promise<void> => {
-    await callSdk(() => sdk.schedule({
-      notifications: [{
-        id,
-        title: checked.title,
-        body: checked.body,
-        // Inexact, but allowed to fire in Doze: without it Android posts the
-        // reminder only when the device next wakes for another reason.
-        schedule: { at: new Date(fireAt), allowWhileIdle: true },
-        extra: {
-          [extraKeys.key]: checked.key,
-          [extraKeys.topic]: checked.topic,
-          [extraKeys.fireAt]: fireAt,
-          ...(route === undefined ? {} : { [extraKeys.route]: route }),
-        },
-        ...(platform === 'android'
-          ? { channelId: capacitorNotificationChannelId(declared) }
-          : {}),
-        isExactNotification: false,
-      }],
-    }));
   };
 
   const provider: CapacitorNotificationProvider = {
@@ -896,7 +885,6 @@ export function createCapacitorNotificationProvider(
               return null;
             }
             tokenFailureReported = false;
-            lastAddress = value;
             return registrationOf(value);
           },
         }),
@@ -994,16 +982,20 @@ export function createCapacitorNotificationProvider(
       listeners.add(listener);
       // `source` reads `cold` only for opens before the first subscriber ever.
       subscribed = true;
-      if (first) {
-        const drained = buffer;
-        buffer = [];
-        // Every buffered event reaches the next subscriber exactly once.
-        for (const event of drained) {
-          try {
-            listener(event);
-          } catch (error) {
-            reportError(error);
+      if (first && !draining) {
+        // Every buffered event reaches the next subscriber exactly once, in
+        // order: an event dispatched while the buffer drains queues behind it.
+        draining = true;
+        try {
+          for (let event = buffer.shift(); event !== undefined; event = buffer.shift()) {
+            try {
+              listener(event);
+            } catch (error) {
+              reportError(error);
+            }
           }
+        } finally {
+          draining = false;
         }
       }
       return () => {
