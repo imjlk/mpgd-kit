@@ -449,6 +449,36 @@ describe('notifications conformance runner', () => {
     });
   });
 
+  it('runs a backend under test through createBackend and awaits its async backend steps', async () => {
+    const vector = vectorNamed('endpoint-unbind-on-session-end');
+    const created: string[] = [];
+    let revoked = false;
+    const result = await runNotificationConformanceVector(vector, {
+      createBackend: async (input, context) => {
+        created.push(`${context.vector.vector}:${input.entry?.provider ?? 'none'}:${input.defaultPlayer}`);
+        const backend = createNotificationConformanceBackend(input);
+        return Object.assign(Object.create(backend) as typeof backend, {
+          async revokeSession() {
+            await Promise.resolve();
+            backend.revokeSession();
+            revoked = true;
+          },
+        });
+      },
+    });
+    expect(result).toMatchObject({ status: 'passed', failures: [] });
+    expect(created).toEqual([`endpoint-unbind-on-session-end:${vector.profile.provider}:${vector.context.player}`]);
+    expect(revoked).toBe(true);
+    const failed = await runNotificationConformanceVector(vector, {
+      createBackend: () => {
+        throw new Error('no store');
+      },
+    });
+    expect(failed.failures).toEqual([
+      { path: 'backend', expected: 'the deployment and the notices are valid', actual: 'Error: no store' },
+    ]);
+  });
+
   it('turns a harness, capability, or deployment failure into a failed result', async () => {
     const vector = vectorNamed('unsupported-target');
     expect(await runNotificationConformanceVector(vector, {
