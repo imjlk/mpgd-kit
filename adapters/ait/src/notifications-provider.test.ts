@@ -321,17 +321,21 @@ describe('Apps in Toss notifications provider', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     await expect(first).resolves.toMatchObject({ outcomes: { 'energy-full': 'dismissed' } });
     expect(cleanups).toBe(1);
-    // The SDK's cleanup only unsubscribes the callbacks; a sheet the host
-    // keeps open can still be answered, and that answer is dropped.
+    // Here the provider's own callbacks stand in for the SDK's, whose
+    // cleanup also removes the bridge listener: a sheet the host keeps open
+    // can still be answered, and that answer reaches nothing.
     const late = latest;
-    expect(() => late?.onEvent({ type: 'newAgreement' })).not.toThrow();
     const second = provider.requestPermission({ topics: ['energy-full'] });
     await vi.waitFor(() => expect(latest).not.toBe(late));
+    // The stale answer arrives while the next sheet is open: it settles nothing.
+    late?.onEvent({ type: 'agreementRejected' });
+    expect(cleanups).toBe(1);
     latest?.onEvent({ type: 'alreadyAgreed' });
     await expect(second).resolves.toMatchObject({
       outcomes: { 'energy-full': 'already-granted' },
       evidence: { payload: { 'result:energy-full': 'alreadyAgreed' } },
     });
+    expect(cleanups).toBe(2);
   });
 
   it('prompts no further topic after an unanswered sheet', async () => {

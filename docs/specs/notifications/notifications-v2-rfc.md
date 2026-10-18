@@ -1479,10 +1479,10 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `NOTIFICATIONS_CONFIGURATION_REQUIRED` with that `hostCode`.
   - A request with no event within 120 seconds answers `dismissed`. v1
     settled the same timeout as `unavailable`, which the v1 wrapper keeps.
-    The provider then calls the SDK's cleanup, which unsubscribes the
-    callbacks but need not close the sheet: an answer the player gives
-    afterwards is lost. The agreement itself stays with Toss, so the next
-    request answers `alreadyAgreed` and records it then.
+    The provider then calls the SDK's cleanup, which removes the callbacks
+    and tells the host to drop the subscription. If the host keeps the sheet
+    open, an answer the player gives afterwards is lost; when Toss recorded
+    it, the next request answers `alreadyAgreed` and records it then.
   - Any other host error throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
   - After a `dismissed` sheet or `TERMS_DISAGREED_MEMBER`, the remaining
     topics of the request answer the same outcome without a sheet, so a
