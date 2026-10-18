@@ -277,7 +277,8 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
 
   const sortEntries = (entries: LocalNotificationEntry[]): LocalNotificationEntry[] =>
     entries.sort((left, right) =>
-      Date.parse(left.fireAt) - Date.parse(right.fireAt) || left.key.localeCompare(right.key));
+      Date.parse(left.fireAt) - Date.parse(right.fireAt)
+      || Number(left.key > right.key) - Number(left.key < right.key));
 
   const sdks: FakeNotificationSdks = {
     ...(input.push === false ? {} : { push }),

@@ -446,11 +446,34 @@ describe('Capacitor notifications provider: events around a request', () => {
     expect(events.map((event) => event.type)).toEqual(['permission-changed']);
   });
 
-  it('reports a token failure that is not a missing plugin', async () => {
+  it('reports a token failure that is not a missing plugin, once until a token arrives', async () => {
     const { provider, sdks, errors } = setup();
     sdks.failNext('push.getToken', new Error('Firebase is not configured'));
     expect(await provider.register?.()).toBeNull();
+    expect(await provider.register?.()).toBeNull();
     expect(errors).toEqual([new Error('Firebase is not configured')]);
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    expect(await provider.register?.()).not.toBeNull();
+    sdks.failNext('push.getToken', new Error('offline'));
+    expect(await provider.register?.()).toBeNull();
+    expect(errors).toEqual([new Error('Firebase is not configured'), new Error('offline')]);
+  });
+
+  it('stops waiting for a request that failed', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.getPermission({ topics: [] });
+    sdks.failNext('push.requestPermissions', new Error('native'));
+    await expect(provider.requestPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+    // Neither a token nor a return from settings waits for it any more.
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    sdks.osState = 'denied';
+    sdks.app.setActive(true);
+    await settle();
+    expect(events.map((event) => event.type)).toEqual(['endpoint-changed', 'permission-changed']);
   });
 });
 
@@ -514,6 +537,9 @@ describe('Capacitor notifications provider: local reminders', () => {
     await expect(provider.scheduleLocal?.({ ...reminder, route: '//evil.example/x' }))
       .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
     expect(await provider.scheduleLocal?.({ ...reminder, topic: 'weekend-event' }))
+      .toEqual({ status: 'unsupported' });
+    // Outside the resolved catalog: no channel was created for it.
+    expect(await provider.scheduleLocal?.({ ...reminder, topic: 'not-declared' }))
       .toEqual({ status: 'unsupported' });
     expect(sdks.scheduled).toEqual([]);
   });
@@ -703,6 +729,56 @@ describe('Capacitor notifications provider: native setup', () => {
     await expect(later.scheduleLocal?.({ ...reminder, key: 'b' })).resolves.toEqual({ status: 'scheduled' });
   });
 
+  it('answers permission-required before it needs the channels', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      createChannel: async () => Promise.reject(new Error('channel')),
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android', topics, local, app: null, onError: () => undefined,
+    });
+    await expect(provider.scheduleLocal?.(reminder)).resolves.toEqual({ status: 'permission-required' });
+  });
+
+  it('tries the channels of a push-only provider again when the app returns', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android', local: false });
+    let failures = 1;
+    const created: string[] = [];
+    const push: PushSdk = Object.assign(Object.create(sdks.push!) as PushSdk, {
+      createChannel: async (channel: { readonly id: string }) => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('channel');
+        }
+        created.push(channel.id);
+      },
+    });
+    createCapacitorNotificationProvider({
+      platform: 'android', topics, push, app: sdks.app, onError: () => undefined,
+    });
+    await settle();
+    expect(created).toEqual([]);
+    sdks.app.setActive(true);
+    await settle();
+    expect(created).toEqual(['reminders', 'mpgd-service', 'mpgd-advertising']);
+  });
+
+  it('needs no createChannel outside Android', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'ios' });
+    const { createChannel: _createChannel, ...rest } = sdks.local!;
+    const errors: unknown[] = [];
+    expect(() => createCapacitorNotificationProvider({
+      platform: 'ios',
+      topics,
+      local: rest as LocalNotificationSdk,
+      app: null,
+      onError: (error) => errors.push(error),
+    })).not.toThrow();
+    await settle();
+    expect(errors).toEqual([]);
+  });
+
   it('tries the opt-out action type again after a failure', async () => {
     const sdks = createFakeNotificationSdks({ platform: 'ios' });
     sdks.osState = 'granted';
@@ -724,6 +800,32 @@ describe('Capacitor notifications provider: native setup', () => {
     expect(errors).toEqual([new Error('categories')]);
     // A reminder does not need the category, so it is scheduled while it is retried.
     await expect(provider.scheduleLocal?.(reminder)).resolves.toEqual({ status: 'scheduled' });
+    await settle();
+    expect(calls).toBe(2);
+  });
+
+  it('tries the opt-out category again when the app returns, without a local reminder', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'ios' });
+    let calls = 0;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      registerActionTypes: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error('categories');
+        }
+      },
+    };
+    createCapacitorNotificationProvider({
+      platform: 'ios', topics, local, app: sdks.app, onError: () => undefined,
+    });
+    await settle();
+    expect(calls).toBe(1);
+    sdks.app.setActive(true);
+    await settle();
+    expect(calls).toBe(2);
+    // Kept once it succeeded.
+    sdks.app.setActive(true);
     await settle();
     expect(calls).toBe(2);
   });
@@ -794,6 +896,18 @@ describe('Capacitor notifications provider: opens and events', () => {
       source: 'warm',
       topic: 'friend-challenge',
       data: { routeId: 'r-1', fromUser: 'mina', topicality: 'high' },
+    }]);
+  });
+
+  it('reads an event without an action id as a tap', () => {
+    const { provider, sdks } = setup();
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdks.emitPush('notificationActionPerformed', {
+      notification: { data: { topic: 'friend-challenge', route: '/?entry=friend-challenge' } },
+    });
+    expect(events).toEqual([{
+      type: 'opened', channel: 'remote', source: 'warm', topic: 'friend-challenge', route: '/?entry=friend-challenge',
     }]);
   });
 
