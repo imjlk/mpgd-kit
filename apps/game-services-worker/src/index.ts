@@ -14,6 +14,7 @@ import {
   type GameServicesWorkerEnv,
 } from './handler.js';
 import {
+  asWorkerNotificationRpcResult,
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
   endWorkerNotificationSession,
@@ -53,14 +54,19 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
     return createWorkerService(this.env).getSnapshot(input);
   }
 
-  /** One notifications send for a game server (never a client route). */
+  /**
+   * One notifications send for a game server (never a client route). Any
+   * Worker with this binding can send to any player, as with the other
+   * service-binding methods; a notifications error comes back as
+   * `{ ok: false, error: { code, message, retryable } }`.
+   */
   async deliverNotification(input: unknown) {
-    return deliverWorkerNotification(this.env, input);
+    return asWorkerNotificationRpcResult(() => deliverWorkerNotification(this.env, input));
   }
 
   /** The identity Worker ends a session: the endpoints it registered are unbound. */
   async endNotificationSession(input: { readonly sessionId: string }) {
-    return endWorkerNotificationSession(this.env, input);
+    return asWorkerNotificationRpcResult(() => endWorkerNotificationSession(this.env, input));
   }
 
   /** The notifications dispatch queue's consumer. */

@@ -166,7 +166,11 @@ mounts a public verified-attempt write route.
 The Worker serves the notifications v2 backend
 ([RFC](specs/notifications/notifications-v2-rfc.md#server)) once it has a
 topic catalog. It needs D1 for anything but local development: apply
-`0007_notifications.sql` with the other migrations.
+`0007_notifications.sql` with the other migrations. The memory store keeps
+consent records and endpoints in one isolate only, and the Worker refuses
+it next to a queue, whose consumer runs in another isolate. The catalog,
+the deployment, and the providers are checked on first use; a broken one
+fails the notifications routes with 500 and is logged once.
 
 ```toml
 [vars]
@@ -187,8 +191,10 @@ queue = "mpgd-notifications"
 
 [[queues.consumers]]
 queue = "mpgd-notifications"
+max_retries = 5
+dead_letter_queue = "mpgd-notifications-dead"
 
-# Purges and due replays.
+# Purges and due replays (25 sends per run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise).
 [triggers]
 crons = ["*/5 * * * *"]
 ```
@@ -203,15 +209,23 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   `{ playerId, sessionId, installationId, expiresAt? }`. The installation is
   the session's, never a request field. `sessionId` stays the same across
   refreshes. Call `endNotificationSession({ sessionId })` on the service
-  binding at logout or revocation; `expiresAt` unbinds the session's devices
-  on its own.
+  binding at logout or revocation. `expiresAt` is when the whole session
+  (its refresh family) ends, not when one access token expires: the
+  session's devices are unbound from then.
 - **Client routes** under `/game-services/notifications`: `GET /providers`
   (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
   (`{ registration, target }`; `target` is `android` or `ios`, whose catalog
   mapping applies), `POST /endpoints/unregister`, `GET /notices`, and
   `POST /notices/shown`.
 - **Sends** are never a client route: a game server calls
-  `deliverNotification(input)` on the service binding.
+  `deliverNotification(input)` on the service binding. It answers
+  `{ ok: true, value }` with the send's outcome, or `{ ok: false, error: {
+  code, message, retryable } }`, because an error's fields do not cross the
+  RPC boundary. Any Worker bound to this one can send to any player, as
+  with the other service-binding methods.
+- **Queue.** A job that cannot run as asked is logged and acknowledged; any
+  other failure is retried with a growing delay. A row whose job is lost
+  stays due, and the cron replays it.
 - **Platform-user providers** resolve recipients through an optional
   `GAME_SERVICES_NOTIFICATIONS_IDENTITY` binding
   (`resolveNotificationRecipient({ provider, playerId })`).

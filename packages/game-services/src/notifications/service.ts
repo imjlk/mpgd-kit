@@ -717,19 +717,21 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const consent = await store.listConsent(request.player);
     const history = await loadHistory(request.player, request.idempotencyKey, at);
     const permissions = new Map<string, NotificationPermissionState | undefined>();
+    const histories = new Map<string, NotificationDeliveryHistoryEntry[]>();
     const rows: NotificationSendRow[] = [];
     const refusals: NotificationDeliveryRefusal[] = [];
     for (const recipient of recipients) {
       const id = recipient.provider.entry.provider;
       if (!permissions.has(id)) {
         permissions.set(id, await readServerPermission(recipient.provider, request));
+        histories.set(id, historyOn(history, id));
       }
       const { decision } = decide(
         request,
         origin,
         recipient,
         consent,
-        historyOn(history, id),
+        histories.get(id) ?? [],
         permissions.get(id),
         at,
       );
@@ -1482,7 +1484,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 
     async dispatchDue(options = {}) {
       // The batch size is clamped to 1 to 1000; anything that is not a number is the default, 100.
-      const asked = Number.isFinite(options.limit) ? Math.floor(options.limit ?? 100) : 100;
+      const asked = typeof options.limit === 'number' && Number.isFinite(options.limit)
+        ? Math.floor(options.limit)
+        : 100;
       const limit = Math.min(Math.max(asked, 1), 1000);
       const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
       const results: NotificationDueResult[] = [];

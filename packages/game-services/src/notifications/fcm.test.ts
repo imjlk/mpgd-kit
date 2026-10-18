@@ -629,6 +629,43 @@ const request: NotificationRemoteDeliveryRequest = {
   assert.equal(google.tokenCount(), 3);
 }
 
+// A usable token does not wait for a refresh that is under way.
+{
+  let clock = Date.parse('2026-10-19T03:00:00Z');
+  let release: (() => void) | undefined;
+  let grants = 0;
+  const google = fakeGoogle({
+    token: async () => {
+      grants += 1;
+      if (grants === 1) {
+        return Response.json({ access_token: 'old-token', expires_in: 3600 });
+      }
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return Response.json({ access_token: 'new-token', expires_in: 3600 });
+    },
+  });
+  const tokens = createFcmAccessTokenSource({
+    serviceAccount,
+    fetch: google.fetch,
+    now: () => clock,
+  });
+  assert.equal(await tokens.get(), 'old-token');
+  clock += 56 * 60 * 1000;
+  const refreshing = tokens.get();
+  // The first caller in the margin starts the refresh; the next one does not wait for it.
+  assert.equal(await tokens.get(), 'old-token');
+  while (release === undefined) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
+  release();
+  assert.equal(await refreshing, 'new-token');
+  assert.equal(await tokens.get(), 'new-token');
+}
+
 // The registration wires FCM into the registry for android and ios, registration tokens only.
 {
   const registration = createFcmProviderRegistration({

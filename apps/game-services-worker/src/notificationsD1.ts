@@ -242,8 +242,8 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     async listDueSends({ at, limit }) {
       const rows = await db.prepare(`SELECT send_key FROM notification_sends
         WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms, send_key LIMIT ?`)
-        // A limit that is not a number reads every due send (SQLite: a negative LIMIT is none).
-        .bind(millisOf(at), Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : -1)
+        // A limit that is not a number reads nothing, as the in-memory store answers.
+        .bind(millisOf(at), Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0)
         .all<{ readonly send_key: string }>();
       return rows.results.map((row) => row.send_key);
     },

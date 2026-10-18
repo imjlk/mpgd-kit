@@ -1181,4 +1181,43 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   assert.equal(store.inspect().sends[0]?.rows[0]?.firstAttemptedAt, first);
 }
 
+// Only a configuration rejection is reported; a player's refusal is not an alert.
+{
+  const fcm = fakeProvider('fcm', [
+    { status: 'rejected', reason: 'configuration', providerCode: 'SENDER_ID_MISMATCH' },
+    { status: 'rejected', reason: 'recipient' },
+    { status: 'rejected', reason: 'agreement' },
+  ]);
+  const reports: string[] = [];
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    now: () => '2026-10-19T03:00:00Z',
+    onError: (_error, context) => {
+      reports.push(context.operation);
+    },
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  for (const key of ['rj-1', 'rj-2', 'rj-3']) {
+    assert.deepEqual(
+      await service.deliver({ idempotencyKey: key, player: 'p-1', topic: 'friend-challenge' }),
+      { status: 'unavailable', reason: 'provider-rejected' },
+    );
+  }
+  assert.deepEqual(reports, ['provider.rejected']);
+  assert.deepEqual(
+    store.inspect().consent.map((record) => [record.kind, record.state, record.source]),
+    [['host-agreement', 'denied', 'provider']],
+  );
+}
+
 console.info('Notifications service unit tests passed.');

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import type { NotificationDispatchJob } from '@mpgd/game-services/notifications';
+import { Miniflare } from 'miniflare';
 
 import { createWorkerFetchHandler, type GameServicesWorkerEnv } from './handler.js';
 import {
@@ -66,6 +68,7 @@ const sessions: Readonly<Record<string, { playerId: string; sessionId: string; i
   'Bearer player-1': { playerId: 'p-1', sessionId: 's-1', installationId: 'install-1' },
   'Bearer player-1-ios': { playerId: 'p-1', sessionId: 's-2', installationId: 'install-2' },
   'Bearer broken': { playerId: '', sessionId: 's', installationId: 'i' } as never,
+  'Bearer bad-expiry': { playerId: 'p-9', sessionId: 's-9', installationId: 'i-9', expiresAt: 'tomorrow' } as never,
 };
 const auth = {
   async authenticateNotificationSession({ authorization }: { readonly authorization: string }) {
@@ -98,6 +101,12 @@ const call = async (path: string, init: { method?: string; authorization?: strin
   };
 };
 
+const miniflare = new Miniflare({
+  modules: true,
+  script: `export default { fetch() { return new Response('ok'); } };`,
+  d1Databases: { DB: 'notifications-routes' },
+});
+
 try {
   // The registry is public; session routes need a session.
   const providers = await call('/providers');
@@ -114,6 +123,34 @@ try {
   );
   assert.equal((await call('/elsewhere', { authorization: 'Bearer player-1' })).status, 404);
   assert.equal((await call('/providers', { method: 'POST', body: {} })).status, 405);
+  assert.equal((await call('/consent', { authorization: 'Bearer bad-expiry' })).status, 500);
+  assert.equal((await call('/', { authorization: 'Bearer player-1' })).status, 404);
+  const preflight = await fetchWorker(new Request(`${base}/consent`, { method: 'OPTIONS' }));
+  assert.equal(preflight.status, 204);
+  assert.equal(
+    preflight.headers.get('access-control-allow-headers'),
+    'Content-Type, Authorization',
+  );
+  // Session answers are never cached.
+  assert.equal(
+    (await call('/consent', { authorization: 'Bearer player-1' })).headers.get('cache-control'),
+    'no-store',
+  );
+  // A body past 64 KiB is refused while it streams, whatever Content-Length says.
+  const oversize = await fetchWorker(new Request(`${base}/consent`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer player-1' },
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let chunk = 0; chunk < 20; chunk += 1) {
+          controller.enqueue(new TextEncoder().encode(' '.repeat(4096)));
+        }
+        controller.close();
+      },
+    }),
+    duplex: 'half',
+  } as RequestInit));
+  assert.equal(oversize.status, 413);
 
   // Endpoints: the installation is the session's; the target picks the mapping.
   const registration = (value: string) => ({
@@ -138,6 +175,28 @@ try {
     authorization: 'Bearer player-1-ios',
     body: { registration: registration('tok-b'), target: 'ios' },
   })).status, 200);
+  // A field of the wrong type is a 400, never another request.
+  for (const [path, body] of [
+    ['/endpoints/unregister', { provider: 5 }],
+    ['/endpoints', { registration: registration('tok-x'), target: 7 }],
+    [
+      '/notices/shown',
+      {
+        notice: {
+          kind: 'consent-result',
+          record: { kind: 'advertising', at: '2026-10-19T03:00:00Z' },
+          dueBy: '2026-11-02',
+        },
+        channel: 'push',
+      },
+    ],
+  ] as const) {
+    const refused = await call(path, { authorization: 'Bearer player-1', body });
+    assert.deepEqual(
+      [path, refused.status, refused.body.error],
+      [path, 400, 'NOTIFICATIONS_INVALID_INPUT'],
+    );
+  }
   const malformed = await fetchWorker(
     new Request(`${base}/endpoints`, {
       method: 'POST',
@@ -222,21 +281,41 @@ try {
     { status: 'unavailable', reason: 'no-endpoint' },
   );
 
+  // A queue needs D1: the consumer runs in another isolate than the send.
+  const memoryQueue = {
+    ...env,
+    NOTIFICATIONS_QUEUE: {} as Queue<NotificationDispatchJob>,
+  } satisfies GameServicesWorkerEnv;
+  assert.equal(
+    (await createWorkerFetchHandler(memoryQueue)(new Request(`${base}/providers`))).status,
+    500,
+  );
+
   // With a queue, the fan-out runs in the consumer.
+  const db = await miniflare.getD1Database('DB') as unknown as D1Database;
+  const migration = await readFile(
+    new URL('../migrations/0007_notifications.sql', import.meta.url),
+    'utf8',
+  );
+  const statements = migration
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .filter((statement) => statement.trim() !== '');
+  for (const statement of statements) {
+    await db.prepare(statement).run();
+  }
   const queued: NotificationDispatchJob[] = [];
   const queueEnv = {
     ...env,
+    MPGD_STORE: 'd1',
+    DB: db,
     NOTIFICATIONS_QUEUE: {
-      async send() {
-        throw new Error('not used');
-      },
       async sendBatch(messages: Iterable<MessageSendRequest<NotificationDispatchJob>>) {
         for (const message of messages) {
           queued.push(message.body);
         }
-      },
-      async metrics() {
-        throw new Error('not used');
       },
     } as unknown as Queue<NotificationDispatchJob>,
   } satisfies GameServicesWorkerEnv;
@@ -248,37 +327,88 @@ try {
       body: JSON.stringify({ registration: registration('tok-q'), target: 'android' }),
     }),
   );
-  assert.deepEqual(
-    await deliverWorkerNotification(queueEnv, { idempotencyKey: 'worker-queued', player: 'p-1', topic: 'friend-challenge', templateData: { name: 'Q' } }),
-    { status: 'in-flight' },
-  );
+  const queuedSend = {
+    idempotencyKey: 'worker-queued',
+    player: 'p-1',
+    topic: 'friend-challenge',
+    templateData: { name: 'Q' },
+  };
+  assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), { status: 'in-flight' });
   assert.deepEqual(queued, [
     { sendKey: 'worker-queued', provider: 'fcm', rowKey: 'worker-queued:install-1' },
   ]);
-  const acks: string[] = [];
-  await consumeNotificationDispatchBatch(queueEnv, {
+  const acks: unknown[] = [];
+  const batch = (messages: readonly { readonly body: unknown; readonly attempts?: number }[]) => ({
     queue: 'notifications',
-    messages: [
-      ...queued.map((body, index) => ({
-        id: `m-${index}`,
-        timestamp: new Date(),
-        attempts: 1,
-        body,
-        ack: () => acks.push('ack'),
-        retry: () => acks.push('retry'),
-      })),
-      { id: 'bad', timestamp: new Date(), attempts: 1, body: { nope: true }, ack: () => acks.push('ack'), retry: () => acks.push('retry') },
-    ],
+    messages: messages.map((message, index) => ({
+      id: `m-${index}`,
+      timestamp: new Date(),
+      attempts: message.attempts ?? 1,
+      body: message.body,
+      ack: () => acks.push('ack'),
+      retry: (options?: unknown) => acks.push(['retry', options]),
+    })),
     ackAll() {},
     retryAll() {},
-  } as unknown as MessageBatch<unknown>);
-  assert.deepEqual(acks, ['ack', 'ack']);
-  assert.equal(sends.at(-1)?.token, 'tok-q');
-  assert.deepEqual(
-    await deliverWorkerNotification(queueEnv, { idempotencyKey: 'worker-queued', player: 'p-1', topic: 'friend-challenge', templateData: { name: 'Q' } }),
-    { status: 'delivered', alreadyProcessed: true },
+  }) as unknown as MessageBatch<unknown>;
+  // The first attempt's connection drops: ambiguous, so the job is done and the row waits for its lease.
+  const sendCount = sends.length;
+  const googleFetch = globalThis.fetch;
+  let dropNext = true;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (dropNext && String(input instanceof Request ? input.url : input).includes('messages:send')) {
+      dropNext = false;
+      throw new TypeError('fetch failed');
+    }
+    return googleFetch(input, init);
+  }) as typeof fetch;
+  await consumeNotificationDispatchBatch(
+    queueEnv,
+    batch([{ body: queued[0] }, { body: { nope: true } }]),
   );
-  await runScheduledNotifications(queueEnv);
+  globalThis.fetch = googleFetch;
+  assert.deepEqual(acks.splice(0), ['ack', 'ack']);
+  assert.equal(sends.length, sendCount);
+  assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), { status: 'in-flight' });
+  // A job the store cannot settle is retried by the queue with a growing delay.
+  await deliverWorkerNotification(queueEnv, { ...queuedSend, idempotencyKey: 'worker-queued-2' });
+  await consumeNotificationDispatchBatch(
+    { ...queueEnv, DB: brokenDb(db, /^\s*UPDATE/u) } satisfies GameServicesWorkerEnv,
+    batch([{ body: queued[1], attempts: 2 }]),
+  );
+  assert.deepEqual(acks.splice(0), [['retry', { delaySeconds: 20 }]]);
+  // A misconfigured Worker acknowledges: the rows stay due for the cron.
+  await consumeNotificationDispatchBatch(
+    { ...queueEnv, MPGD_NOTIFICATIONS_CATALOG: { version: 'x' } } satisfies GameServicesWorkerEnv,
+    batch([{ body: queued[1] }]),
+  );
+  assert.deepEqual(acks.splice(0), ['ack']);
+  await consumeNotificationDispatchBatch(queueEnv, batch([{ body: queued[1] }]));
+  assert.deepEqual(acks.splice(0), ['ack']);
+  assert.equal(sends.at(-1)?.token, 'tok-q');
+  // The cron replays the ambiguous row after its lease, even when the purge fails.
+  // The lease is moved into the past in place of waiting five minutes.
+  const stored = await db.prepare('SELECT send_json FROM notification_sends WHERE send_key = ?')
+    .bind('worker-queued')
+    .first<{ readonly send_json: string }>();
+  const expired = JSON.parse(stored?.send_json ?? '{}') as {
+    rows: { state: { leaseUntil?: string } }[];
+  };
+  for (const row of expired.rows) {
+    if (row.state.leaseUntil !== undefined) {
+      row.state.leaseUntil = '2026-01-01T00:00:00Z';
+    }
+  }
+  await db.prepare('UPDATE notification_sends SET send_json = ?, due_at_ms = ? WHERE send_key = ?')
+    .bind(JSON.stringify(expired), Date.parse('2026-01-01T00:00:00Z'), 'worker-queued')
+    .run();
+  await runScheduledNotifications(
+    { ...queueEnv, DB: brokenDb(db, /^\s*DELETE/u) } satisfies GameServicesWorkerEnv,
+  );
+  assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), {
+    status: 'delivered',
+    alreadyProcessed: true,
+  });
 
   // Without a catalog the routes are not mounted; a broken catalog fails closed at 500.
   assert.equal(
@@ -309,4 +439,28 @@ try {
   console.info('Worker notifications routes passed.');
 } finally {
   globalThis.fetch = realFetch;
+  await miniflare.dispose();
+}
+
+/** The database with matching statements refused (and every batch), as an unavailable D1 answers. */
+function brokenDb(db: D1Database, pattern: RegExp): D1Database {
+  return new Proxy(db, {
+    get(target, property) {
+      if (property === 'prepare') {
+        return (sql: string) => {
+          if (pattern.test(sql)) {
+            throw new Error('D1 is unavailable.');
+          }
+          return target.prepare(sql);
+        };
+      }
+      if (property === 'batch') {
+        return async () => {
+          throw new Error('D1 is unavailable.');
+        };
+      }
+      const value: unknown = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }

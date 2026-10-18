@@ -13,6 +13,7 @@ import {
 } from '@mpgd/game-services/notifications';
 import {
   assertNotificationDeployment,
+  isNotificationTimestamp,
   NotificationError,
   notificationsProtocolVersion,
 } from '@mpgd/platform/notifications';
@@ -62,13 +63,15 @@ export interface GameServicesNotificationsEnv {
   /** The deployment settings (a JSON var): advertisingRules, advertisingSender, and the zone. */
   readonly MPGD_NOTIFICATIONS_DEPLOYMENT?: unknown;
   /** The Firebase service-account key file (a secret, JSON); enables the FCM provider. */
-  readonly FCM_SERVICE_ACCOUNT?: string;
+  readonly FCM_SERVICE_ACCOUNT?: unknown;
   /** Overrides the service account's project id. */
   readonly FCM_PROJECT_ID?: string;
   readonly GAME_SERVICES_NOTIFICATIONS_AUTH?: GameServicesNotificationsAuthBinding;
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
+  /** Sends the cron replays per run; 25 by default, at most 100 (each send costs several subrequests). */
+  readonly MPGD_NOTIFICATIONS_DUE_BATCH?: string;
 }
 
 export type WorkerNotifications =
@@ -120,9 +123,10 @@ export function workerNotificationProviders(
   env: GameServicesNotificationsEnv,
 ): NotificationProviderRegistration[] {
   const providers: NotificationProviderRegistration[] = [];
-  if (env.FCM_SERVICE_ACCOUNT !== undefined && env.FCM_SERVICE_ACCOUNT.trim() !== '') {
+  const account = env.FCM_SERVICE_ACCOUNT;
+  if (account !== undefined && !(typeof account === 'string' && account.trim() === '')) {
     providers.push(createFcmProviderRegistration({
-      serviceAccount: parseFcmServiceAccount(env.FCM_SERVICE_ACCOUNT),
+      serviceAccount: parseFcmServiceAccount(account),
       ...(env.FCM_PROJECT_ID === undefined || env.FCM_PROJECT_ID === '' ? {} : { projectId: env.FCM_PROJECT_ID }),
     }));
   }
@@ -158,7 +162,10 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
       : {
           queue: {
             async enqueue(jobs) {
-              await queue.sendBatch(jobs.map((body) => ({ body })));
+              // A queue batch carries at most 100 messages.
+              for (let start = 0; start < jobs.length; start += 100) {
+                await queue.sendBatch(jobs.slice(start, start + 100).map((body) => ({ body })));
+              }
             },
           },
         }),
@@ -171,6 +178,13 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
 }
 
 function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationStore {
+  if (env.MPGD_STORE !== 'd1' && env.NOTIFICATIONS_QUEUE !== undefined) {
+    // The queue consumer and the cron run in other isolates, which cannot see
+    // this isolate's memory: every queued send would vanish.
+    throw new Error(
+      'NOTIFICATIONS_QUEUE needs MPGD_STORE = "d1"; the memory store is per isolate.',
+    );
+  }
   if (env.MPGD_STORE === 'd1') {
     if (env.DB === undefined) {
       throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
@@ -179,6 +193,9 @@ function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationSto
   }
   let store = memoryStoresByEnv.get(env);
   if (store === undefined) {
+    console.warn(
+      'Notifications use the memory store: consent records and endpoints live only in this isolate. Use D1 outside local development.',
+    );
     store = createInMemoryNotificationStore();
     memoryStoresByEnv.set(env, store);
   }
@@ -256,54 +273,65 @@ export function createNotificationsFetchHandler(
     if (!methods.includes(method)) {
       return json({ error: 'METHOD_NOT_ALLOWED' }, 405, corsHeaders);
     }
+    // Per-player answers are never cached; a client may read Retry-After.
+    const privateHeaders = {
+      ...corsHeaders,
+      'Cache-Control': 'no-store',
+      'Access-Control-Expose-Headers': 'Retry-After',
+    };
     const session = await authenticate(request, auth);
     if (session instanceof Response) {
-      return withHeaders(session, corsHeaders);
+      return withHeaders(session, privateHeaders);
     }
     let body: Readonly<Record<string, unknown>> = {};
     if (method === 'POST') {
       const parsed = await readBody(request);
+      if (parsed === 'too-large') {
+        return json({ error: 'PAYLOAD_TOO_LARGE' }, 413, privateHeaders);
+      }
       if (parsed === undefined) {
-        return json({ error: 'BAD_REQUEST' }, 400, corsHeaders);
+        return json({ error: 'BAD_REQUEST' }, 400, privateHeaders);
       }
       body = parsed;
     }
+    // Fields go to the service as sent: it validates each, so a wrong type
+    // is a 400 and never becomes another request.
     try {
       switch (`${method} ${route}`) {
         case 'GET /consent':
-          return json({ records: await service.listConsent(session) }, 200, corsHeaders);
+          return json({ records: await service.listConsent(session) }, 200, privateHeaders);
         case 'POST /consent':
           return json(
             { record: await service.recordConsent(session, body.record) },
             200,
-            corsHeaders,
+            privateHeaders,
           );
         case 'POST /endpoints':
           await service.registerEndpoint(session, {
             registration: body.registration,
-            ...(typeof body.target === 'string' ? { target: body.target } : {}),
+            ...(body.target === undefined ? {} : { target: body.target as string }),
           });
-          return json({}, 200, corsHeaders);
+          return json({}, 200, privateHeaders);
         case 'POST /endpoints/unregister':
           await service.unregisterEndpoint(
             session,
-            typeof body.provider === 'string' ? { provider: body.provider } : {},
+            body.provider === undefined ? {} : { provider: body.provider as string },
           );
-          return json({}, 200, corsHeaders);
+          return json({}, 200, privateHeaders);
         case 'GET /notices':
-          return json({ notices: await service.listNotices(session) }, 200, corsHeaders);
+          return json({ notices: await service.listNotices(session) }, 200, privateHeaders);
         case 'POST /notices/shown':
           await service.recordNoticeShown(
             session,
             body.notice,
-            body.channel === 'other' ? { channel: 'other' } : {},
+            body.channel === undefined ? {} : { channel: body.channel as 'in-game' },
           );
-          return json({}, 200, corsHeaders);
+          return json({}, 200, privateHeaders);
         default:
-          return json({ error: 'UNKNOWN_ENDPOINT' }, 404, corsHeaders);
+          return json({ error: 'UNKNOWN_ENDPOINT' }, 404, privateHeaders);
       }
     } catch (error) {
-      return errorResponse(error, corsHeaders);
+      return errorResponse(error, privateHeaders);
     }
   };
 }
@@ -311,6 +339,33 @@ export function createNotificationsFetchHandler(
 /** The send a game server makes through the service binding. */
 export async function deliverWorkerNotification(env: GameServicesNotificationsEnv, input: unknown): Promise<unknown> {
   return readyService(env).deliver(input);
+}
+
+/**
+ * A service-binding answer that keeps a notifications error's code across
+ * the RPC boundary, which carries an error's message but not its fields.
+ */
+export type WorkerNotificationRpcResult<Value> =
+  | { readonly ok: true; readonly value: Value }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string; readonly retryable: boolean };
+    };
+
+export async function asWorkerNotificationRpcResult<Value>(
+  work: () => Promise<Value>,
+): Promise<WorkerNotificationRpcResult<Value>> {
+  try {
+    return { ok: true, value: await work() };
+  } catch (error) {
+    if (error instanceof NotificationError) {
+      return {
+        ok: false,
+        error: { code: error.code, message: error.message, retryable: error.retryable },
+      };
+    }
+    throw error;
+  }
 }
 
 /** Ends a session's bindings: the identity Worker calls it on logout, revocation, or expiry. */
@@ -323,41 +378,63 @@ export async function endWorkerNotificationSession(
 
 /**
  * The dispatch queue's consumer: each message is one recipient's delivery.
- * A retryable failure is retried by the queue; any other failure is logged
- * and acknowledged, and the row stays due for the scheduled replay.
+ * A failure that may pass is retried with a growing delay; a job that cannot
+ * run as asked is logged and acknowledged, and its row stays due for the
+ * cron. Without a working service every message is acknowledged: the rows
+ * stay due in D1, and the cron replays them once the configuration is fixed.
  */
 export async function consumeNotificationDispatchBatch(
   env: GameServicesNotificationsEnv,
   batch: MessageBatch<unknown>,
 ): Promise<void> {
   const notifications = resolveWorkerNotifications(env);
-  for (const message of batch.messages) {
-    if (notifications.status !== 'ready') {
-      message.retry();
-      continue;
-    }
-    try {
-      await notifications.service.dispatch(message.body as NotificationDispatchJob);
-      message.ack();
-    } catch (error) {
-      if (error instanceof NotificationError && error.retryable) {
-        message.retry();
-      } else {
-        console.error('Notifications dispatch failed:', errorName(error));
+  // Deliveries are independent: one slow provider call does not hold up the others.
+  await Promise.all(
+    batch.messages.map(async (message) => {
+      if (notifications.status !== 'ready') {
         message.ack();
+        return;
       }
-    }
-  }
+      try {
+        await notifications.service.dispatch(message.body as NotificationDispatchJob);
+        message.ack();
+      } catch (error) {
+        if (error instanceof NotificationError && !error.retryable) {
+          console.error('Notifications dispatch failed:', describeFailure(error));
+          message.ack();
+        } else {
+          message.retry({ delaySeconds: Math.min(2 ** Math.max(message.attempts, 1) * 5, 300) });
+        }
+      }
+    }),
+  );
 }
 
-/** The cron: retention purges, then a batch of due rows (deferred sends, expired leases). */
+/**
+ * The cron: retention purges, then a batch of due rows (deferred sends,
+ * expired leases), each step on its own so a failed purge never skips the
+ * replays. The batch is small because each send costs several subrequests.
+ */
 export async function runScheduledNotifications(env: GameServicesNotificationsEnv): Promise<void> {
   const notifications = resolveWorkerNotifications(env);
   if (notifications.status !== 'ready') {
     return;
   }
-  await notifications.service.purge();
-  await notifications.service.dispatchDue({ limit: 100 });
+  const asked = Number(env.MPGD_NOTIFICATIONS_DUE_BATCH ?? '25');
+  const limit = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
+  try {
+    await notifications.service.purge();
+  } catch (error) {
+    console.error('Notifications purge failed:', describeFailure(error));
+  }
+  try {
+    const { failed } = await notifications.service.dispatchDue({ limit });
+    if (failed > 0) {
+      console.error('Notifications due replay:', failed, 'send(s) failed and stay due.');
+    }
+  } catch (error) {
+    console.error('Notifications due replay failed:', describeFailure(error));
+  }
 }
 
 function readyService(env: GameServicesNotificationsEnv): NotificationService {
@@ -383,7 +460,8 @@ async function authenticate(
   let principal: unknown;
   try {
     principal = await auth.authenticateNotificationSession({ authorization });
-  } catch {
+  } catch (error) {
+    console.error('Notifications session binding failed:', errorName(error));
     return json({ error: 'AUTHENTICATION_FAILED' }, 500, {});
   }
   if (principal === undefined || principal === null) {
@@ -397,9 +475,15 @@ async function authenticate(
     !text(record.playerId)
     || !text(record.sessionId)
     || !text(record.installationId)
-    || (record.expiresAt !== undefined && !text(record.expiresAt))
+    || (record.expiresAt !== undefined
+      && !(text(record.expiresAt) && record.expiresAt.length <= 64 && isNotificationTimestamp(record.expiresAt)))
   ) {
+    console.error('Notifications session binding answered no valid session.');
     return json({ error: 'AUTHENTICATION_FAILED' }, 500, {});
+  }
+  if (typeof record.expiresAt === 'string' && Date.parse(record.expiresAt) <= Date.now()) {
+    // A session that already ended writes nothing more.
+    return json({ error: 'UNAUTHORIZED' }, 401, {});
   }
   return {
     player: record.playerId,
@@ -409,16 +493,39 @@ async function authenticate(
   };
 }
 
-async function readBody(request: Request): Promise<Readonly<Record<string, unknown>> | undefined> {
+/** The JSON object body, read as a stream that stops at the size limit. */
+async function readBody(
+  request: Request,
+): Promise<Readonly<Record<string, unknown>> | 'too-large' | undefined> {
   const declared = Number(request.headers.get('content-length') ?? '0');
   if (Number.isFinite(declared) && declared > maxBodyBytes) {
-    return undefined;
+    return 'too-large';
   }
-  const text = await request.text();
-  if (new TextEncoder().encode(text).length > maxBodyBytes) {
-    return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (request.body !== null) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > maxBodyBytes) {
+        await reader.cancel();
+        return 'too-large';
+      }
+      chunks.push(value);
+    }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
   }
   try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     const parsed: unknown = text.length === 0 ? {} : JSON.parse(text);
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
       ? parsed as Readonly<Record<string, unknown>>
@@ -437,7 +544,7 @@ function errorResponse(error: unknown, corsHeaders: Readonly<Record<string, stri
       error.retryable ? { ...corsHeaders, 'Retry-After': '5' } : corsHeaders,
     );
   }
-  console.error('Notifications route failed:', errorName(error));
+  console.error('Notifications route failed:', describeFailure(error));
   return json({ error: 'INTERNAL_ERROR' }, 500, corsHeaders);
 }
 
@@ -459,6 +566,15 @@ function errorName(error: unknown): string {
     return error.code;
   }
   return error instanceof Error ? error.name : 'Error';
+}
+
+/**
+ * A failure for the logs: its code or name and its message. Every message
+ * these paths raise is the kit's or the store's own text; none carries a
+ * token, a key, or a request body.
+ */
+function describeFailure(error: unknown): string {
+  return error instanceof Error ? `${errorName(error)}: ${error.message}` : String(error);
 }
 
 function json(body: unknown, status: number, headers: Readonly<Record<string, string>>): Response {

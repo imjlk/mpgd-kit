@@ -71,9 +71,8 @@ import {
 } from './notificationsHandler.js';
 import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 
+/** `DB` and `MPGD_STORE` come from `GameServicesNotificationsEnv`, which every store here shares. */
 export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv {
-  readonly DB?: D1Database;
-  readonly MPGD_STORE?: 'memory' | 'd1';
   /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   /**
