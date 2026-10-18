@@ -1,0 +1,109 @@
+{
+  "vector": "landing-open-before-listener",
+  "protocol": "2.0.0-draft.1",
+  "summary": "On a landing-url host a message opens the game with a new launch: the cold open reaches the game's first subscriber exactly once with the landing route, a later subscriber receives nothing, and the open sends and grants nothing.",
+  "appliesTo": [
+    {
+      "path": "open",
+      "equals": "landing-url"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "templateSetCode": "fixture-energy-full",
+        "agreement": "required"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "host",
+      "action": "tap",
+      "input": {
+        "channel": "remote",
+        "route": "/?entry=continue"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "game",
+      "action": "subscribe",
+      "listener": "first"
+    },
+    {
+      "actor": "game",
+      "action": "subscribe",
+      "listener": "second"
+    }
+  ],
+  "expect": {
+    "events": {
+      "first": [
+        {
+          "type": "opened",
+          "channel": "remote",
+          "source": "cold",
+          "route": "/?entry=continue"
+        }
+      ],
+      "second": []
+    },
+    "consent": [],
+    "deliveries": [],
+    "providerCalls": []
+  }
+}

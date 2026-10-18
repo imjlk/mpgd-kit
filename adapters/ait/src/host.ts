@@ -1,12 +1,13 @@
 import {
+  Environment,
   getTossShareLink,
   getUserKeyForGame,
   grantPromotionRewardForGame as grantPromotionReward,
   IAP,
   isMinVersionSupported,
   loadFullScreenAd,
+  Notification,
   openGameCenterLeaderboard,
-  requestNotificationAgreement,
   share,
   showFullScreenAd,
   Storage,
@@ -17,7 +18,6 @@ import {
 import {
   assertBridgeRequest,
   bridgeStorageLoadProtocol,
-  createNotificationsV2UnavailableBridgeError,
   isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
@@ -27,12 +27,18 @@ import type {
   BannerAdMountResult,
   LaunchEntry,
   LaunchIntent,
+  NotificationSubscriptionResult,
+  NotificationSubscriptionStatus,
   NotificationTopic,
   PromotionRewardResult,
   ShareResult,
 } from '@mpgd/platform';
 
 import { assertAdShowInput, toAdAdapter } from '@mpgd/platform/ads';
+import {
+  toNotificationSubscriptionResult,
+  toNotificationSubscriptionStatus,
+} from '@mpgd/platform/notifications';
 import { createAitAdProvider } from './ad-provider.js';
 
 import type { AitAdPlacementType } from './ad-config.js';
@@ -58,6 +64,13 @@ import {
 } from './iap.js';
 import type { GamePlatformBridge } from './index.js';
 import { dispatchAitLifecycleEvent } from './lifecycle.js';
+import { createAitNotificationsV2BridgeHandler } from './notifications-bridge.js';
+import {
+  createAitNotificationProvider,
+  readAitNotificationLanding,
+  type AitNotificationProvider,
+  type AitNotificationTopicMapping,
+} from './notifications-provider.js';
 import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export {
@@ -93,7 +106,6 @@ const minimumPromotionTossAppVersion = '5.232.0';
  */
 const reservedStorageKeyPrefix = 'mpgd:ait:';
 const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
-const defaultNotificationAgreementTimeoutMs = 120_000;
 const notificationTopics = new Set<NotificationTopic>([
   'daily-ready',
   'streak-at-risk',
@@ -149,7 +161,10 @@ export interface AitHostDependencies {
   readonly getTossShareLink: typeof getTossShareLink;
   readonly share: typeof share;
   readonly grantPromotionReward: AitNativeMethod<typeof grantPromotionReward>;
-  readonly requestNotificationAgreement: AitNativeMethod<typeof requestNotificationAgreement>;
+  /** `Notification.requestAgreement` (Toss 5.255.0+), which replaced `requestNotificationAgreement`. */
+  readonly requestNotificationAgreement: AitNativeMethod<typeof Notification.requestAgreement>;
+  /** `Environment.initialURL`: the scheme URL the mini-app was launched with. */
+  readonly readInitialUrl?: () => string | undefined;
   readonly isMinVersionSupported: typeof isMinVersionSupported;
   readonly loadFullScreenAd: AitNativeMethod<typeof loadFullScreenAd>;
   readonly showFullScreenAd: AitNativeMethod<typeof showFullScreenAd>;
@@ -231,8 +246,24 @@ export interface InstallAitHostBridgeOptions {
    * game. Defaults to the Apps in Toss lifecycle resume signal.
    */
   readonly onPendingOrdersChanged?: CreateAitCommerceProviderInput['onPendingOrdersChanged'];
-  /** Logical notification topics mapped to approved Apps in Toss template codes. */
+  /**
+   * v1 notification topics mapped to approved Apps in Toss template codes.
+   * Each one is a notifications v2 topic with `agreement: 'required'`;
+   * `notificationTopics` wins for a topic named by both. v1 reads come from
+   * the v2 provider, which cannot read an agreement back: a topic agreed to
+   * during this bridge's lifetime reads `subscribed` from a v1-only session
+   * cache, and otherwise `not-subscribed`. Read it through the game-services
+   * notifications runtime, which consults the backend, across restarts.
+   */
   readonly notificationTemplateCodes?: Partial<Readonly<Record<NotificationTopic, string>>>;
+  /**
+   * Notifications v2 topics mapped to their Apps in Toss templates, as the
+   * catalog's `targets.ait` mapping declares them: `templateSetCode` (the
+   * agreement sheet's `templateCode` too) and `agreement`.
+   */
+  readonly notificationTopics?: Readonly<Record<string, AitNotificationTopicMapping>>;
+  /** May be shortened, but never extended beyond the 120-second agreement settle. */
+  readonly notificationAgreementTimeoutMs?: number;
   /** Maximum total wait for the native show request before display is observed. */
   readonly adTimeoutMs?: number;
   /** Maximum wait to acquire the process-wide native full-screen load slot. */
@@ -254,7 +285,8 @@ const defaultDependencies: AitHostDependencies = {
   getTossShareLink,
   share,
   grantPromotionReward,
-  requestNotificationAgreement,
+  requestNotificationAgreement: Notification.requestAgreement,
+  readInitialUrl: () => Environment.initialURL,
   isMinVersionSupported,
   loadFullScreenAd,
   showFullScreenAd,
@@ -284,9 +316,62 @@ export function createAitHostBridge(
   const promotionRewards = normalizePromotionRewards(options.promotionRewards);
   const authorizePromotionGrant = options.authorizePromotionGrant;
   const resolvePendingPromotionGrant = options.resolvePendingPromotionGrant;
-  const notificationTemplateCodes = normalizeNotificationTemplateCodes(
-    options.notificationTemplateCodes,
-  );
+  // Read once per bridge: the provider and the launch intent must judge the
+  // same launch, even if the page URL changes later (`history.replaceState`).
+  let launchUrl: { readonly value: string | undefined } | undefined;
+  // A push or inbox launch is routed exactly once, by whichever reader comes
+  // first: the provider's cold `opened` event (the game's notifications
+  // runtime subscribed), or the launch intent (the game asked before
+  // subscribing, or never subscribes because it exposes no `notificationsV2`).
+  let landingClaim: 'event' | 'intent' | undefined;
+  const claimLanding = (by: 'event' | 'intent'): boolean => (landingClaim ??= by) === by;
+  const readLaunchUrl = (): string | undefined =>
+    (launchUrl ??= { value: readAitLaunchUrl(dependencies) }).value;
+  const notifications = createAitNotificationProvider({
+    sdk: {
+      requestAgreement: dependencies.requestNotificationAgreement,
+      readInitialUrl: readLaunchUrl,
+    },
+    // v1-only games never subscribe to the v2 event, so their push launches
+    // keep routing through the launch intent.
+    landingOpens: Object.keys(options.notificationTopics ?? {}).length > 0,
+    claimLanding: () => claimLanding('event'),
+    topics: {
+      ...normalizeNotificationTemplateCodes(options.notificationTemplateCodes),
+      ...options.notificationTopics,
+    },
+    ...(options.notificationAgreementTimeoutMs === undefined
+      ? {}
+      : { agreementTimeoutMs: options.notificationAgreementTimeoutMs }),
+    timeZone: readDeviceTimeZone,
+  });
+  // v1 agreements of this bridge's lifetime (RFC "Migration and PR plan"):
+  // the host cannot read an agreement back, so v1 `getStatus` would read
+  // `not-subscribed` right after a granted request. The cache serves v1 only,
+  // until a game reads through the backend-reading runtime; v2 reads stay
+  // `unknown`. Any request through the provider, v1 or v2, updates it.
+  const v1Agreements = new Set<string>();
+  const observedNotifications: AitNotificationProvider = {
+    ...notifications,
+    async requestPermission(request) {
+      // A request that throws records nothing here: v1 asks one topic at a
+      // time, and its next request reaches the host again.
+      const result = await notifications.requestPermission(request);
+      for (const [topic, outcome] of Object.entries(result.outcomes)) {
+        if (outcome === 'granted' || outcome === 'already-granted') {
+          v1Agreements.add(topic);
+        } else if (outcome === 'denied' || outcome === 'blocked') {
+          v1Agreements.delete(topic);
+        }
+      }
+      return result;
+    },
+  };
+  const notificationsV2 = createAitNotificationsV2BridgeHandler(observedNotifications);
+  if (notifications.deliversLandingOpens()) {
+    // Before the game's router can rewrite the page URL on the fallback path.
+    readLaunchUrl();
+  }
   /**
    * One IAP controller serves the commerce provider: the single IAP lock, the
    * in-flight purchase map, the durable attempt markers and the
@@ -307,7 +392,6 @@ export function createAitHostBridge(
   );
   const commerceV2 = createAitCommerceV2BridgeHandler(commerceProvider);
   const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
-  const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();
   const activeBannerAttachments = new Map<string, { readonly destroy: () => void }>();
@@ -365,6 +449,11 @@ export function createAitHostBridge(
     commerceV2: {
       subscribe: (listener) => commerceV2.subscribe(listener),
     },
+    // Offered only while a topic is mapped, so a game without notifications
+    // exposes no notificationsV2 and never loads the bridge client.
+    ...(notifications.hasTopics()
+      ? { notificationsV2: { subscribe: (listener) => notificationsV2.subscribe(listener) } }
+      : {}),
     async request(input) {
       try {
         return await handleRequest(parseBridgeRequest(input));
@@ -380,11 +469,10 @@ export function createAitHostBridge(
   };
 
   async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
-    // Notifications v2 arrives with the Apps in Toss provider (P1); until then
-    // every v2 method answers the dedicated code, and the v1
-    // `notifications.*` methods below keep serving the game.
+    // The Apps in Toss notifications provider serves every v2 method; the v1
+    // `notifications.*` methods below are served from the same provider.
     if (isBridgeNotificationsV2Method(request.method)) {
-      return createNotificationsV2UnavailableBridgeError(request, 'Apps in Toss host bridge');
+      return await notificationsV2.request(request);
     }
     switch (request.method) {
       case 'runtime.getCapabilities': {
@@ -442,8 +530,20 @@ export function createAitHostBridge(
       case 'identity.requestUpgrade':
         return ok(request, { status: 'unavailable', reloadExpected: false });
 
-      case 'presentation.getLaunchIntent':
-        return ok(request, getLaunchIntent());
+      case 'presentation.getLaunchIntent': {
+        const landing = notifications.deliversLandingOpens()
+          ? readAitNotificationLanding(readLaunchUrl())
+          : undefined;
+        if (landing === undefined) {
+          return ok(request, getLaunchIntent());
+        }
+        if (!claimLanding('intent')) {
+          return ok(request, { entry: 'home' });
+        }
+        // The intent routes this notification launch: read the landing
+        // route's parameters, which the page URL need not carry.
+        return ok(request, getLaunchIntent(landingSearch(landing.route)));
+      }
 
       case 'presentation.requestGameSurface':
         return ok(request, 'already-fullscreen');
@@ -461,33 +561,21 @@ export function createAitHostBridge(
       case 'notifications.getStatus':
         return ok(
           request,
-          getNotificationStatus(
+          await getNotificationStatus(
             readNotificationTopic(request.payload),
-            notificationTemplateCodes,
-            notificationSubscriptions,
-            dependencies,
+            observedNotifications,
+            v1Agreements,
           ),
         );
 
-      case 'notifications.requestSubscription': {
-        const topic = readNotificationTopic(request.payload);
-        const templateCode = notificationTemplateCodes.get(topic);
-        if (
-          templateCode === undefined
-          || !isAitNativeMethodSupported(dependencies.requestNotificationAgreement)
-        ) {
-          return ok(request, 'unavailable');
-        }
-
-        const result = await requestAitNotificationAgreement(
-          dependencies.requestNotificationAgreement,
-          templateCode,
+      case 'notifications.requestSubscription':
+        return ok(
+          request,
+          await requestNotificationSubscription(
+            readNotificationTopic(request.payload),
+            observedNotifications,
+          ),
         );
-        if (result === 'subscribed') {
-          notificationSubscriptions.add(topic);
-        }
-        return ok(request, result);
-      }
 
       case 'promotions.getAvailability': {
         const campaignId = readCampaignId(request.payload);
@@ -751,60 +839,46 @@ interface AitShareDependencies {
   readonly share: typeof share;
 }
 
-type AitNotificationAgreement = AitHostDependencies['requestNotificationAgreement'];
-
-function getNotificationStatus(
+/**
+ * v1 status from the notifications v2 provider (RFC "Capabilities": an
+ * adapter that keeps v1 serves it from the v2 provider). The host gives no
+ * read of an agreement, so a topic that needs one reads `not-subscribed`
+ * until a game reads it through the notifications runtime, which consults
+ * the backend's records; an unmapped topic reads `configuration-required`.
+ */
+async function getNotificationStatus(
   topic: NotificationTopic,
-  templateCodes: ReadonlyMap<NotificationTopic, string>,
-  subscriptions: ReadonlySet<NotificationTopic>,
-  dependencies: AitHostDependencies,
-): 'subscribed' | 'not-subscribed' | 'configuration-required' | 'unsupported' {
-  if (!templateCodes.has(topic)) {
+  provider: AitNotificationProvider,
+  agreements: ReadonlySet<string>,
+): Promise<NotificationSubscriptionStatus> {
+  if (!provider.hasTopic(topic)) {
     return 'configuration-required';
   }
-  if (!isAitNativeMethodSupported(dependencies.requestNotificationAgreement)) {
-    return 'unsupported';
-  }
-  return subscriptions.has(topic) ? 'subscribed' : 'not-subscribed';
+  const snapshot = await provider.getPermission({ topics: [topic] });
+  const state = snapshot.topics[topic] ?? 'unknown';
+  return state === 'unknown' && agreements.has(topic)
+    ? 'subscribed'
+    : toNotificationSubscriptionStatus(state);
 }
 
-function requestAitNotificationAgreement(
-  requestAgreement: AitNotificationAgreement,
-  templateCode: string,
-): Promise<'subscribed' | 'rejected' | 'unavailable'> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let cleanup = (): void => {};
-    const finish = (result: 'subscribed' | 'rejected' | 'unavailable'): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      globalThis.clearTimeout(timer);
-      cleanup();
-      resolve(result);
-    };
-    const timer = globalThis.setTimeout(
-      () => finish('unavailable'),
-      defaultNotificationAgreementTimeoutMs,
-    );
-
-    try {
-      const unregister = requestAgreement({
-        options: { templateCode },
-        onEvent: ({ type }) => {
-          finish(type === 'agreementRejected' ? 'rejected' : 'subscribed');
-        },
-        onError: () => finish('unavailable'),
-      });
-      cleanup = unregister;
-      if (settled) {
-        cleanup();
-      }
-    } catch {
-      finish('unavailable');
-    }
-  });
+/**
+ * v1 request through the v2 provider: the RFC's v1 table, so a dismissed
+ * sheet (no answer within 120 seconds), a host-settings answer, and any
+ * failure, including a Toss app older than 5.255.0, answer `unavailable`.
+ */
+async function requestNotificationSubscription(
+  topic: NotificationTopic,
+  provider: AitNotificationProvider,
+): Promise<NotificationSubscriptionResult> {
+  if (!provider.hasTopic(topic)) {
+    return 'unavailable';
+  }
+  try {
+    const result = await provider.requestPermission({ topics: [topic] });
+    return toNotificationSubscriptionResult(result.outcomes[topic]);
+  } catch {
+    return 'unavailable';
+  }
 }
 
 function getPromotionAvailability(
@@ -1294,8 +1368,40 @@ const maximumLaunchParamLength = 256;
 const maximumNestedQueryParamsJsonLength = 4_096;
 const maximumNestedQueryParamCount = 32;
 
-function getLaunchIntent(): LaunchIntent {
-  const params = inboundSearchParams();
+/**
+ * The URL the mini-app was launched with: `Environment.initialURL`, or the
+ * page URL where the host gives none (the local mock, an old host). The
+ * launch intent and the notifications provider read the same URL, so they
+ * agree on whether a launch is a notification open.
+ */
+function readAitLaunchUrl(dependencies: Pick<AitHostDependencies, 'readInitialUrl'>): string | undefined {
+  try {
+    const initialUrl = dependencies.readInitialUrl?.();
+    if (typeof initialUrl === 'string' && initialUrl.length > 0) {
+      return initialUrl;
+    }
+  } catch {
+    // The native constant is missing outside the Toss app.
+  }
+  const href = globalThis.location?.href;
+  return typeof href === 'string' && href.length > 0 ? href : undefined;
+}
+
+function readDeviceTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The launch intent from the launch parameters. A Toss push or inbox launch
+ * that the provider's cold `opened` event already routed answers `home`
+ * before this is called (RFC "Opens"), so one launch is never routed twice.
+ */
+function getLaunchIntent(search?: string): LaunchIntent {
+  const params = inboundSearchParams(search);
   const challengeToken = boundedParam(params.get('challengeToken'));
   const puzzleId = boundedParam(params.get('puzzleId'));
   const requestedEntry = boundedParam(params.get('entry'));
@@ -1328,8 +1434,19 @@ function readInboundShare(): { readonly puzzleId?: string; readonly challengeTok
       };
 }
 
-function inboundSearchParams(): URLSearchParams {
-  const params = new URLSearchParams(globalThis.location?.search ?? '');
+/** The query of a landing route, or `undefined` when it has none, so the page URL's is read. */
+function landingSearch(route: string | undefined): string | undefined {
+  if (route === undefined) {
+    return undefined;
+  }
+  const hashIndex = route.indexOf('#');
+  const beforeHash = hashIndex < 0 ? route : route.slice(0, hashIndex);
+  const queryIndex = beforeHash.indexOf('?');
+  return queryIndex < 0 ? undefined : beforeHash.slice(queryIndex);
+}
+
+function inboundSearchParams(search?: string): URLSearchParams {
+  const params = new URLSearchParams(search ?? globalThis.location?.search ?? '');
   const nested = params.get('queryParams');
 
   if (nested !== null && nested.length <= maximumNestedQueryParamsJsonLength) {
@@ -1595,17 +1712,18 @@ function normalizePromotionRewards(
   return rewards;
 }
 
+/** The v1 template codes as v2 mappings; every v1 template needs an agreement. */
 function normalizeNotificationTemplateCodes(
   input: Partial<Readonly<Record<NotificationTopic, string>>> | undefined,
-): ReadonlyMap<NotificationTopic, string> {
-  const templateCodes = new Map<NotificationTopic, string>();
+): Record<string, AitNotificationTopicMapping> {
+  const topics: Record<string, AitNotificationTopicMapping> = {};
   for (const topic of notificationTopics) {
-    const templateCode = input?.[topic]?.trim();
-    if (templateCode !== undefined && templateCode.length > 0) {
-      templateCodes.set(topic, templateCode);
+    const templateSetCode = input?.[topic]?.trim();
+    if (templateSetCode !== undefined && templateSetCode.length > 0) {
+      topics[topic] = { templateSetCode, agreement: 'required' };
     }
   }
-  return templateCodes;
+  return topics;
 }
 
 function normalizeTimeout(value: number | undefined): number {

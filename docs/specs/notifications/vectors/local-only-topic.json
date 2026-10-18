@@ -6,6 +6,10 @@
     {
       "path": "remote.supported",
       "equals": true
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
     }
   ],
   "profile": {

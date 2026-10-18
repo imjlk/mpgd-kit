@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  Environment,
   getUserKeyForGame,
   IAP,
   loadFullScreenAd,
+  Notification,
   SafeArea,
   Storage,
   TossAds,
@@ -28,6 +30,8 @@ describe('Apps in Toss local SDK mock', () => {
     expect(TossAds.attachBanner.isSupported()).toBe(false);
     expect(IAP.createOneTimePurchaseOrder.isSupported()).toBe(false);
     expect(IAP.getProductItemList.isSupported()).toBe(false);
+    expect(Notification.requestAgreement.isSupported()).toBe(false);
+    expect(Environment.initialURL).toBe('');
     expect(() => SafeArea.get()).toThrow('SafeArea is unavailable');
     expect(() => SafeArea.subscribe({ onEvent: () => {} })()).not.toThrow();
   });

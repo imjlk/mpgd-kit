@@ -66,10 +66,18 @@ export const grantPromotionRewardForGame = Object.assign(async (): Promise<'ERRO
   isSupported: unsupported,
 });
 
-export const requestNotificationAgreement = Object.assign(
-  (_callbacks: unknown): (() => void) => noOpSubscription(),
-  { isSupported: unsupported },
-);
+export const Notification = {
+  requestAgreement: Object.assign((_callbacks: unknown): (() => void) => noOpSubscription(), {
+    isSupported: unsupported,
+  }),
+};
+
+/** Local browsers have no launch scheme URL; the host bridge then reads the page URL. */
+export const Environment = {
+  get initialURL(): string {
+    return '';
+  },
+};
 
 export const loadFullScreenAd = Object.assign(
   (_callbacks: unknown): (() => void) => noOpSubscription(),

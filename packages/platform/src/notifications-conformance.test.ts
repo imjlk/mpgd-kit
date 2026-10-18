@@ -266,7 +266,7 @@ async function devicePlayer(
 describe('notifications conformance runner', () => {
   it('passes every RFC vector with the reference runtime and fakes', async () => {
     const results = await runNotificationConformanceVectors(vectors);
-    expect(results).toHaveLength(42);
+    expect(results).toHaveLength(45);
     expect(results.filter((result) => !result.passed).map((result) => ({
       vector: result.vector,
       status: result.status,
@@ -372,7 +372,7 @@ describe('notifications conformance runner', () => {
     expect(results.filter((result) => result.status === 'passed').map((result) => result.vector))
       .toEqual(['unsupported-target']);
     const skipped = results.filter((result) => result.status === 'skipped');
-    expect(skipped).toHaveLength(41);
+    expect(skipped).toHaveLength(44);
     expect(skipped.every((result) => !result.passed && result.reason !== undefined)).toBe(true);
     const reasonOf = (name: string) => results.find((result) => result.vector === name)?.reason;
     // The unsupported block declares an app-scope OS prompt but no prompt limit.
