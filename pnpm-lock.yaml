@@ -190,9 +190,15 @@ importers:
       '@capacitor-community/admob':
         specifier: 8.1.0
         version: 8.1.0
+      '@capacitor-firebase/messaging':
+        specifier: 8.5.2
+        version: 8.5.2(@capacitor/core@8.5.2)
       '@capacitor/core':
         specifier: 8.5.2
         version: 8.5.2
+      '@capacitor/local-notifications':
+        specifier: 8.3.1
+        version: 8.3.1(@capacitor/core@8.5.2)
       '@mpgd/game-runtime':
         specifier: workspace:*
         version: link:../../packages/game-runtime
@@ -2055,6 +2061,15 @@ packages:
     resolution: {integrity: sha512-DMIxg80CwQsJd0EcvsCNtpWizFcesZUFCFNVxRctv4HLSH8RPGfaS3pxRuq+tXw6jy0za5o3g5l/+z201nHNsw==}
     engines: {node: '>=22.0.0'}
 
+  '@capacitor-firebase/messaging@8.5.2':
+    resolution: {integrity: sha512-6EFxNeU/9teXdlQMmlHdjVqAMq+rr2po8oxLflvGuA6Xy+LPKbKccvamShXnTLjGO30beD6YmERNv5k9SxeGvg==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+      firebase: ^12.6.0
+    peerDependenciesMeta:
+      firebase:
+        optional: true
+
   '@capacitor/android@8.5.2':
     resolution: {integrity: sha512-rtiaz78egCcS+vs29wkWCL3C+RhazKMSygXcjutwWP8NmO6r5UBxOvGf3Wjz5+ahobyQ723tn9gCePwRwcNDZQ==}
     peerDependencies:
@@ -2077,6 +2092,11 @@ packages:
     resolution: {integrity: sha512-eOT2S67AfTFG7KN0T3oxwAajrJz4rSye+ODfvChiwrk0F/+kWufFM1qU6cDjGJUOfwdAoeuEpZyWHSwZlu4GFg==}
     peerDependencies:
       '@capacitor/core': ^8.5.0
+
+  '@capacitor/local-notifications@8.3.1':
+    resolution: {integrity: sha512-F7zu/+p/mIR958YP4axOkeI5hBKRaXDyYjbNPrAil2wWfd7OxScPSTvP9t85NpQ0eULVRu0/sntoxOg6ck477A==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -8672,6 +8692,10 @@ snapshots:
       '@capacitor/core': 8.5.2
       '@rdlabo/capacitor-docgen': 0.4.1
 
+  '@capacitor-firebase/messaging@8.5.2(@capacitor/core@8.5.2)':
+    dependencies:
+      '@capacitor/core': 8.5.2
+
   '@capacitor/android@8.5.2(@capacitor/core@8.5.2)':
     dependencies:
       '@capacitor/core': 8.5.2
@@ -8708,6 +8732,10 @@ snapshots:
       tslib: 2.8.1
 
   '@capacitor/ios@8.5.2(@capacitor/core@8.5.2)':
+    dependencies:
+      '@capacitor/core': 8.5.2
+
+  '@capacitor/local-notifications@8.3.1(@capacitor/core@8.5.2)':
     dependencies:
       '@capacitor/core': 8.5.2
 

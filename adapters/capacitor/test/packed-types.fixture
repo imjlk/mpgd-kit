@@ -29,6 +29,13 @@ import type {
   SecureCredentialStore,
 } from '@mpgd/platform';
 import type { FeatureAvailabilityReason, PlatformFeature } from '@mpgd/target-config';
+import {
+  createCapacitorNotificationServiceProvider,
+  type CapacitorNotificationServiceProvider,
+  type LocalNotificationSdk,
+  type PushSdk,
+} from '@mpgd/adapter-capacitor/notifications';
+import type { NotificationProvider } from '@mpgd/platform/notifications';
 
 const feature: PlatformProviderFeature = 'pushNotifications';
 const readiness: PlatformProviderAvailability = 'configuration-required';
@@ -106,3 +113,18 @@ const storeServiceAsProvider: CapacitorServiceProvider = storeService;
 void storeServiceAsProvider;
 const normalized: CommerceError = normalizeStoreSdkError({ code: 'E_X' }, mapError);
 void normalized;
+
+declare const pushSdk: PushSdk;
+declare const localSdk: LocalNotificationSdk;
+const notificationService: CapacitorNotificationServiceProvider =
+  createCapacitorNotificationServiceProvider({
+    platform: 'ios',
+    topics: [],
+    push: pushSdk,
+    local: localSdk,
+    openSettings: async () => undefined,
+  });
+const notificationServiceAsProvider: CapacitorServiceProvider = notificationService;
+void notificationServiceAsProvider;
+const notificationsV2: NotificationProvider | undefined = packedGateway.notificationsV2;
+void notificationsV2;

@@ -524,18 +524,25 @@ describe('Capacitor optional provider composition', () => {
     }])).toThrow(/must declare features and methods/);
   });
 
-  it('is a tripwire for P2: isValidProviderData rejects every notifications v2 answer', () => {
-    // Not a test of this change: it passes with or without the explicit v2
-    // branch in isValidProviderData. It fails once a v2 answer is accepted, so
-    // P2 replaces it with tests of the answers it validates there.
+  it('rejects every notifications v2 answer from a provider without a notifications service', () => {
+    // Valid answers, so only the missing service refuses them; the answers a
+    // service validates are covered in notifications-bridge.test.ts.
     const answers: readonly (readonly [BridgeNotificationsV2Method, unknown])[] = [
       ['notifications.v2.getPermission', { app: 'granted', topics: {} }],
       ['notifications.v2.listLocal', { pending: [] }],
       ['notifications.v2.openSettings', { status: 'opened' }],
     ];
+    const v1: CapacitorServiceProvider = {
+      id: 'push',
+      features: ['pushNotifications'],
+      methods: ['notifications.getStatus', 'notifications.requestSubscription'],
+      async getAvailability() { return { pushNotifications: 'available' }; },
+      bridge: { async request() { throw new Error('must not be invoked'); } },
+    };
     for (const [method, answer] of answers) {
       expect(() => assertBridgeNotificationsV2Result(method, answer)).not.toThrow();
       expect(() => assertProviderResponseData(method, answer)).toThrow(/returned invalid data/);
+      expect(() => assertProviderResponseData(method, answer, v1)).toThrow(/returned invalid data/);
     }
     for (const method of bridgeNotificationsV2Methods) {
       expect(() => assertProviderResponseData(method, {})).toThrow(/returned invalid data/);
@@ -565,10 +572,10 @@ describe('Capacitor optional provider composition', () => {
       expect(registry.byMethod.has(method)).toBe(false);
       await expect(registry.assertMethodReady(method, { topics: ['daily'] })).resolves.toBeUndefined();
     }
-    // No provider can own a v2 method until P2 adds the registry surface for
-    // one, so put the unready push provider in charge of them directly: the
-    // registry passes them through instead of refusing them as unsupported or
-    // not configured.
+    // Even a provider whose v1 feature is not ready, put in charge of them
+    // directly, passes them through instead of refusing them as unsupported
+    // or not configured; a notifications service owns them in practice
+    // (notifications-bridge.test.ts).
     const owned = createCapacitorProviderRegistry([push]);
     for (const method of bridgeNotificationsV2Methods) {
       (owned.byMethod as Map<BridgeMethod, CapacitorServiceProvider>).set(method, push);

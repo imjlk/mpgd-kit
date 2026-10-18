@@ -10,6 +10,10 @@ import {
   normalizeStoreSdkError,
 } from '@mpgd/adapter-capacitor';
 import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/admob';
+import {
+  createCapacitorNotificationServiceProvider,
+  loadCapacitorNotificationSdks,
+} from '@mpgd/adapter-capacitor/notifications';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
 
@@ -230,3 +234,35 @@ assert.equal(await credentials.load({ key: 'packed.refresh' }), 'opaque-token');
 await credentials.remove({ key: 'packed.refresh' });
 assert.equal(await credentials.load({ key: 'packed.refresh' }), null);
 assert.equal(secureValues.size, 0);
+
+// The notifications subpath loads without its optional plugins, which this
+// consumer does not install: the loader leaves both out, the provider fails
+// closed, and the gateway serves notifications v2 and v1 from it.
+assert.deepEqual(await loadCapacitorNotificationSdks({
+  runtime: { isNativePlatform: () => true, isPluginAvailable: () => true },
+}), {});
+const notificationsGateway = createCapacitorPlatformGateway({
+  target: 'android', appVersion: '1', buildId: 'packed-notifications',
+  bridge: {
+    async request(input) {
+      return { id: input.id, ok: true, data: createUnsupportedCapabilities() };
+    },
+  },
+  providers: [createCapacitorNotificationServiceProvider({
+    platform: 'android',
+    topics: [{
+      id: 'friend-challenge', purpose: 'service', channels: ['remote'],
+      route: '/?entry=friend-challenge', mapping: {},
+    }],
+    app: null,
+  })],
+});
+const notificationCapabilities = await notificationsGateway.getCapabilities();
+assert.equal(notificationCapabilities.notifications.availability, 'unsupported');
+assert.equal(notificationCapabilities.providerAvailability.pushNotifications, 'unsupported');
+assert.deepEqual(
+  await notificationsGateway.notificationsV2.getPermission({ topics: ['friend-challenge'] }),
+  { app: 'unsupported', topics: { 'friend-challenge': 'unsupported' } },
+);
+assert.equal(await notificationsGateway.notifications.getStatus('friend-challenge'), 'unsupported');
+assert.equal('notificationsV2' in gateway, false);

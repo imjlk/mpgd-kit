@@ -1,9 +1,12 @@
 import {
   bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
   isBridgeCommerceV2Method,
   isBridgeNotificationsV2Method,
   type BridgeEvent,
   type BridgeMethod,
+  type BridgeNotificationsEvent,
+  type BridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
@@ -12,6 +15,7 @@ import { isAdMobClientRewardEvidence } from '@mpgd/game-services/admob-client-re
 import {
   PlatformOperationError,
   type CommerceCapabilities,
+  type NotificationSubscriptionAdapter,
   type PlatformProviderAvailability,
   type PlatformProviderFeature,
 } from '@mpgd/platform';
@@ -20,6 +24,9 @@ import {
   isCommerceCapabilities,
   type CommerceProvider,
 } from '@mpgd/platform/commerce';
+// Types only: the validators stay in `@mpgd/adapter-capacitor/notifications`,
+// so a game without notifications does not bundle them.
+import type { NotificationCapabilities, NotificationProvider } from '@mpgd/platform/notifications';
 
 import { assertCommerceBridgeResult } from './commerce-bridge.js';
 
@@ -67,10 +74,47 @@ export interface CapacitorServiceProvider {
    * covers the declared `features`.
    */
   readonly commerce?: CommerceProvider;
+  /**
+   * Optional notifications v2 service (`createNotificationServiceProvider`
+   * from `@mpgd/adapter-capacitor/notifications`). The nine
+   * `notifications.v2.*` methods are implied, and the gateway serves both
+   * `notificationsV2` and the v1 `notifications` adapter from it.
+   */
+  readonly notificationsV2?: CapacitorNotificationsV2Service;
   getAvailability(): Promise<Readonly<Partial<Record<
     PlatformProviderFeature,
     PlatformProviderAvailability
   >>>>;
+}
+
+/**
+ * What the gateway needs from a notifications v2 service. It comes from
+ * `@mpgd/adapter-capacitor/notifications`, which holds the validators, so the
+ * base adapter loads none of them.
+ */
+export interface CapacitorNotificationsV2Service {
+  /** The service's own capability block, validated and copied. */
+  getCapabilities(): Promise<NotificationCapabilities>;
+  /** Throws when `data` is not a valid answer to `method`. */
+  assertResult(method: BridgeNotificationsV2Method, data: unknown): void;
+  /**
+   * The game-facing surfaces over the gateway's request path: the
+   * `notificationsV2` provider, and the v1 adapter served from it (RFC
+   * "Capabilities": an adapter that exposes both backs v1 with v2).
+   */
+  createGatewaySurface(input: {
+    readonly request: <TData>(method: BridgeNotificationsV2Method, payload: unknown) => Promise<TData>;
+    readonly subscribe: (listener: (event: BridgeNotificationsEvent) => void) => () => void;
+  }): {
+    readonly notificationsV2: NotificationProvider;
+    readonly notifications: NotificationSubscriptionAdapter;
+  };
+}
+
+/** The provider the registry serves notifications v2 from. */
+export interface CapacitorNotificationServiceProvider extends CapacitorServiceProvider {
+  readonly notificationsV2: CapacitorNotificationsV2Service;
+  readonly bridge: NativeBridge & Required<Pick<NativeBridge, 'subscribe'>>;
 }
 
 /** The provider the registry serves commerce v2 from. */
@@ -91,6 +135,7 @@ const featureMethods = {
 const providerFeatures = Object.keys(featureMethods) as PlatformProviderFeature[];
 const providerMethodSet = new Set<BridgeMethod>(Object.values(featureMethods).flat());
 const impliedCommerceMethods: readonly BridgeMethod[] = bridgeCommerceV2Methods;
+const impliedNotificationMethods: readonly BridgeMethod[] = bridgeNotificationsV2Methods;
 const availabilitySet = new Set<PlatformProviderAvailability>([
   'unsupported',
   'configuration-required',
@@ -111,12 +156,22 @@ export interface CapacitorProviderCapabilitySnapshot {
    * registered.
    */
   readonly commerce: CommerceCapabilities;
+  /**
+   * Present exactly when a notifications v2 service is registered: its
+   * validated block, or the degraded block (`availability:
+   * 'temporarily-unavailable'`, nothing offered) when that bounded read
+   * stalled or failed. `availability.pushNotifications` equals its
+   * `availability`.
+   */
+  readonly notifications?: NotificationCapabilities;
 }
 
 export interface CapacitorProviderRegistry {
   readonly byMethod: ReadonlyMap<BridgeMethod, CapacitorServiceProvider>;
   /** The provider that serves commerce v2, when one is registered. */
   readonly commerce?: CapacitorCommerceServiceProvider;
+  /** The provider that serves notifications v2, when one is registered. */
+  readonly notifications?: CapacitorNotificationServiceProvider;
   /** Feature readiness plus the commerce block, from one bounded read per provider. */
   getCapabilitySnapshot(): Promise<CapacitorProviderCapabilitySnapshot>;
   assertMethodReady(method: BridgeMethod, payload?: unknown): Promise<void>;
@@ -139,13 +194,14 @@ export function createCapacitorProviderRegistry(
   const byFeature = new Map<PlatformProviderFeature, CapacitorServiceProvider>();
   const ids = new Set<string>();
   let commerce: CapacitorCommerceServiceProvider | undefined;
+  let notifications: CapacitorNotificationServiceProvider | undefined;
 
   for (const provider of providers) {
     if (provider.id.trim() === '' || ids.has(provider.id)) {
       throw new Error(`Capacitor provider ID is empty or registered twice: ${provider.id}`);
     }
     ids.add(provider.id);
-    if (provider.commerce === undefined
+    if (provider.commerce === undefined && provider.notificationsV2 === undefined
       && (provider.features.length === 0 || provider.methods.length === 0)) {
       throw new Error(`Capacitor provider ${provider.id} must declare features and methods.`);
     }
@@ -164,18 +220,22 @@ export function createCapacitorProviderRegistry(
         );
       }
       if (isBridgeNotificationsV2Method(method)) {
-        // A notifications v2 provider gets its own registry surface (P2); a
-        // declared method would bypass the pass-through readiness rule.
+        // A notifications v2 provider is registered through `notificationsV2`;
+        // a declared method would bypass the pass-through readiness rule.
         throw new Error(
-          `Capacitor provider ${provider.id} cannot declare notifications v2 method ${method}; `
-            + 'notifications v2 is unavailable as a declared method.',
+          `Capacitor provider ${provider.id} cannot declare notifications v2 method ${method}: `
+            + 'notifications v2 is unavailable as a declared method. Register a notifications '
+            + 'service through `notificationsV2` instead.',
         );
       }
       if (!providerMethodSet.has(method)) {
         throw new Error(`Capacitor provider ${provider.id} cannot replace base method ${method}.`);
       }
     }
-    const implied = provider.commerce === undefined ? [] : impliedCommerceMethods;
+    const implied = [
+      ...(provider.commerce === undefined ? [] : impliedCommerceMethods),
+      ...(provider.notificationsV2 === undefined ? [] : impliedNotificationMethods),
+    ];
     for (const method of [...methods, ...implied]) {
       if (byMethod.has(method)) {
         throw new Error(`Capacitor bridge method ${method} has multiple providers.`);
@@ -188,6 +248,13 @@ export function createCapacitorProviderRegistry(
       throw new Error(
         `Capacitor provider ${provider.id} declares a commerce provider but its bridge has no `
           + 'subscribe; build it with createCommerceServiceProvider.',
+      );
+    }
+    if (provider.notificationsV2 !== undefined && provider.bridge.subscribe === undefined) {
+      // Opens and endpoint changes arrive only as events.
+      throw new Error(
+        `Capacitor provider ${provider.id} declares a notifications service but its bridge has `
+          + 'no subscribe; build it with createNotificationServiceProvider.',
       );
     }
     for (const feature of provider.features) {
@@ -212,12 +279,26 @@ export function createCapacitorProviderRegistry(
       // Validated above: the bridge implements `subscribe`.
       commerce = provider as CapacitorCommerceServiceProvider;
     }
+    if (provider.notificationsV2 !== undefined) {
+      // Validated above: the bridge implements `subscribe`.
+      notifications = provider as CapacitorNotificationServiceProvider;
+    }
+  }
+  if (notifications !== undefined && byFeature.has('pushNotifications')) {
+    // The v1 adapter is served from the v2 provider, so the two report the
+    // same readiness (RFC "Capabilities").
+    throw new Error(
+      `Capacitor provider ${byFeature.get('pushNotifications')?.id} declares pushNotifications, `
+        + `which the notifications v2 provider ${notifications.id} serves.`,
+    );
   }
 
   interface ProviderStates {
     readonly states: Partial<Record<PlatformProviderFeature, PlatformProviderAvailability>>;
     /** The validated commerce block, when this provider serves commerce and the read succeeded. */
     readonly commerce?: CommerceCapabilities;
+    /** The validated notifications block, when this provider serves it and the read succeeded. */
+    readonly notifications?: NotificationCapabilities;
   }
 
   const readFeatureStates = async (
@@ -242,13 +323,20 @@ export function createCapacitorProviderRegistry(
   const readProviderStates = async (
     provider: CapacitorServiceProvider,
   ): Promise<ProviderStates> => {
-    const [states, commerceBlock] = await Promise.all([
+    const [states, commerceBlock, notificationsBlock] = await Promise.all([
       readFeatureStates(provider),
       provider.commerce === undefined
         ? Promise.resolve(undefined)
         : readCommerceCapabilities(provider.commerce),
+      provider.notificationsV2 === undefined
+        ? Promise.resolve(undefined)
+        : readNotificationCapabilities(provider.notificationsV2),
     ]);
-    return { states, ...(commerceBlock === undefined ? {} : { commerce: commerceBlock }) };
+    return {
+      states,
+      ...(commerceBlock === undefined ? {} : { commerce: commerceBlock }),
+      ...(notificationsBlock === undefined ? {} : { notifications: notificationsBlock }),
+    };
   };
 
   const getCapabilitySnapshot = async (): Promise<CapacitorProviderCapabilitySnapshot> => {
@@ -257,10 +345,12 @@ export function createCapacitorProviderRegistry(
       states[feature] = 'unsupported';
     }
     let commerceBlock: CommerceCapabilities | undefined;
+    let notificationsBlock: NotificationCapabilities | undefined;
     const snapshots = await Promise.all(providers.map(readProviderStates));
     for (const snapshot of snapshots) {
       Object.assign(states, snapshot.states);
       commerceBlock = snapshot.commerce ?? commerceBlock;
+      notificationsBlock = snapshot.notifications ?? notificationsBlock;
     }
     if (commerce === undefined) {
       commerceBlock = createUnsupportedCommerceCapabilities();
@@ -269,7 +359,13 @@ export function createCapacitorProviderRegistry(
       // provider degrades it without rejecting the snapshot.
       commerceBlock = createDegradedCommerceCapabilities();
     }
-    return { availability: states, commerce: commerceBlock };
+    if (notifications === undefined) {
+      return { availability: states, commerce: commerceBlock };
+    }
+    notificationsBlock ??= createDegradedNotificationCapabilities();
+    // The v1 readiness follows the v2 block it is served from.
+    states.pushNotifications = notificationsBlock.availability;
+    return { availability: states, commerce: commerceBlock, notifications: notificationsBlock };
   };
 
   const getAvailability = async (): Promise<Readonly<Record<
@@ -280,6 +376,7 @@ export function createCapacitorProviderRegistry(
   return {
     byMethod,
     ...(commerce === undefined ? {} : { commerce }),
+    ...(notifications === undefined ? {} : { notifications }),
     getAvailability,
     getCapabilitySnapshot,
     async assertMethodReady(method, payload) {
@@ -354,11 +451,19 @@ export function createCapacitorProviderRegistry(
   };
 }
 
-export function assertProviderResponseData(method: BridgeMethod, data: unknown): void {
-  const valid = isValidProviderData(method, data);
+export function assertProviderResponseData(
+  method: BridgeMethod,
+  data: unknown,
+  provider?: CapacitorServiceProvider,
+): void {
+  const valid = isValidProviderData(method, data, provider);
   if (!valid) {
     throw new PlatformOperationError({
-      code: 'NATIVE_PROVIDER_INVALID_RESPONSE',
+      // A notifications v2 answer that breaks the contract is the provider's
+      // configuration error (RFC "Bridge and versioning"), as on Apps in Toss.
+      code: isBridgeNotificationsV2Method(method)
+        ? 'NOTIFICATIONS_CONFIGURATION_REQUIRED'
+        : 'NATIVE_PROVIDER_INVALID_RESPONSE',
       message: `Capacitor provider returned invalid data for ${method}.`,
     });
   }
@@ -382,6 +487,40 @@ async function readCommerceCapabilities(
     lifecycle: { ...reported.lifecycle },
     authority: { ...reported.authority },
     availability: reported.availability,
+  };
+}
+
+/**
+ * One bounded notifications capability read. The service validates and copies
+ * its own block; a stalled or throwing read yields `undefined`.
+ */
+async function readNotificationCapabilities(
+  service: CapacitorNotificationsV2Service,
+): Promise<NotificationCapabilities | undefined> {
+  return readWithTimeout(Promise.resolve().then(() => service.getCapabilities()));
+}
+
+/**
+ * The notifications block a gateway reports while its service cannot be
+ * read: nothing offered, `availability: 'temporarily-unavailable'`. The same
+ * fields as `createUnsupportedNotificationCapabilities()`, written out so the
+ * base adapter loads no notifications module.
+ */
+export function createDegradedNotificationCapabilities(): NotificationCapabilities {
+  return {
+    availability: 'temporarily-unavailable',
+    permission: {
+      scope: 'app',
+      prompt: 'os',
+      readable: true,
+      serverReadable: false,
+      allowance: 'persistent',
+      userGesture: false,
+      settings: false,
+    },
+    remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
+    local: { supported: false },
+    open: 'none',
   };
 }
 
@@ -423,7 +562,11 @@ function isVoidData(value: unknown): boolean {
   return value === undefined || value === null || (isRecord(value) && Object.keys(value).length === 0);
 }
 
-function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
+function isValidProviderData(
+  method: BridgeMethod,
+  value: unknown,
+  provider: CapacitorServiceProvider | undefined,
+): boolean {
   if (isBridgeCommerceV2Method(method)) {
     try {
       assertCommerceBridgeResult(method, value);
@@ -433,10 +576,18 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
     }
   }
   if (isBridgeNotificationsV2Method(method)) {
-    // P2 must validate these answers here, with `assertBridgeNotificationsV2Result`
-    // from `@mpgd/bridge/notifications`, when it lets a provider serve the
-    // methods. Until then every notifications v2 answer is rejected.
-    return false;
+    // The service validates with `assertBridgeNotificationsV2Result` from
+    // `@mpgd/bridge/notifications`; a provider without one serves no v2
+    // method, so its answer is rejected.
+    if (provider?.notificationsV2 === undefined) {
+      return false;
+    }
+    try {
+      provider.notificationsV2.assertResult(method, value);
+      return true;
+    } catch {
+      return false;
+    }
   }
   switch (method) {
     case 'ads.preload':

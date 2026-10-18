@@ -32,6 +32,10 @@
     "./admob": {
       "types": "./dist/admob.d.ts",
       "default": "./dist/admob.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "default": "./dist/notifications.js"
     }
   },
   "files": [
@@ -55,17 +59,27 @@
   },
   "peerDependencies": {
     "@capacitor-community/admob": "^8.1.0",
-    "@capacitor/core": "^8.5.1"
+    "@capacitor-firebase/messaging": "^8.5.2",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/local-notifications": "^8.3.1"
   },
   "peerDependenciesMeta": {
     "@capacitor-community/admob": {
+      "optional": true
+    },
+    "@capacitor-firebase/messaging": {
+      "optional": true
+    },
+    "@capacitor/local-notifications": {
       "optional": true
     }
   },
   "devDependencies": {
     "@mpgd/game-runtime": "workspace:*",
     "@capacitor-community/admob": "8.1.0",
+    "@capacitor-firebase/messaging": "8.5.2",
     "@capacitor/core": "8.5.2",
+    "@capacitor/local-notifications": "8.3.1",
     "ttsc": "0.32.1",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
