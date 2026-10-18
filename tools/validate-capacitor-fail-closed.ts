@@ -325,16 +325,47 @@ assert.doesNotMatch(
 );
 // The base entry's module graph stays free of the optional peers: no other
 // module imports them (or one of their subpaths), a notifications module, or
-// the package's own notifications subpath. Matched as import syntax (`from`,
-// a bare `import`, or `import(`) with a quoted specifier, so prose that names
-// a module in backticks does not trip it.
-const quote = '["\']';
+// the package's own notifications subpath. Matched as import syntax on the
+// raw text: `from` or a bare `import` with a quoted specifier, or `import(`
+// and `require(` with a quoted or template specifier, comments allowed before
+// it (`import(/* @vite-ignore */ '…')`). Prose that names a module in
+// backticks after "from" does not trip it.
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\/]/gu, '\\$&');
+const adapterName = adapterPackage['name'];
+assert.ok(
+  typeof adapterName === 'string' && adapterName !== '',
+  'The Capacitor adapter must have a name',
+);
+const forbiddenSpecifier = [
+  `(?:${notificationPlugins.map(escapeRegExp).join('|')})(?:\\/[^"'\`]*)?`,
+  `(?:\\.\\.?\\/)+(?:[^"'\`]*\\/)?notifications[^"'\`]*`,
+  `${escapeRegExp(adapterName)}\\/notifications(?:\\/[^"'\`]*)?`,
+].join('|');
+const commentsThenSpace = '\\s*(?:\\/\\*[\\s\\S]*?\\*\\/\\s*)*';
 const notificationsSpecifier = new RegExp(
-  `(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*)${quote}(?:(?:${notificationPlugins.map((name) => name.replace('/', '\\/')).join('|')})(?:\\/[^"'\`]*)?`
-    + `|(?:\\.\\.?\\/)+(?:[^"'\`]*\\/)?notifications[^"'\`]*`
-    + `|${String(adapterPackage['name']).replace('/', '\\/')}\\/notifications(?:\\/[^"']*)?)${quote}`,
+  `(?:\\b(?:from|import)\\s*["'](?:${forbiddenSpecifier})["']`
+    + `|\\b(?:import|require)\\s*\\(${commentsThenSpace}["'\`](?:${forbiddenSpecifier})["'\`])`,
   'u',
 );
+// The pattern itself is checked, so an escaping slip cannot turn the scan
+// into a silent pass.
+for (const line of [
+  "import { LocalNotifications } from '@capacitor/local-notifications';",
+  'export * from "@capacitor-firebase/messaging/web";',
+  "import './notifications-sdk.js';",
+  'const m = import(/* @vite-ignore */ `../notifications/index.js`);',
+  `type X = typeof import('${adapterName}/notifications');`,
+  "const r = require('@capacitor/local-notifications');",
+]) {
+  assert.match(line, notificationsSpecifier, `The import scan must catch: ${line}`);
+}
+for (const line of [
+  "import { Capacitor } from '@capacitor/core';",
+  "import { createCapacitorAdMobRewardedProvider } from './admob.js';",
+  '// Loaded from `@capacitor/local-notifications` by the notifications subpath.',
+]) {
+  assert.doesNotMatch(line, notificationsSpecifier, `The import scan must not catch: ${line}`);
+}
 const scanned: string[] = [];
 for (const file of readdirSync(new URL('../adapters/capacitor/src/', import.meta.url), {
   encoding: 'utf8',

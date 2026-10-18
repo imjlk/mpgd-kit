@@ -506,6 +506,7 @@ describe('Capacitor notifications provider: events around a request', () => {
     const stale = provider.getPermission({ topics: [] });
     sdks.queuePrompt('granted');
     await provider.requestPermission({ topics: ['energy-full'] });
+    expect(hold).toBeDefined();
     hold?.({ display: 'prompt' });
     await stale;
     sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
@@ -580,6 +581,7 @@ describe('Capacitor notifications provider: events around a request', () => {
     await provider.getPermission({ topics: [] });
     sdks.queuePrompt('granted');
     await provider.requestPermission({ topics: ['energy-full'] });
+    expect(hold).toBeDefined();
     hold?.({ display: 'prompt' });
     await stale;
     sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
@@ -614,6 +616,7 @@ describe('Capacitor notifications provider: events around a request', () => {
     const late = provider.requestPermission({ topics: ['energy-full'] });
     sdks.queuePrompt('granted');
     const early = await provider.requestPermission({ topics: ['friend-challenge'] });
+    expect(hold).toBeDefined();
     hold?.({ display: 'prompt' });
     expect((await late).outcomes).toEqual({ 'energy-full': 'granted' });
     expect(early.outcomes).toEqual({ 'friend-challenge': 'granted' });
@@ -647,6 +650,7 @@ describe('Capacitor notifications provider: events around a request', () => {
     await settle();
     sdks.queuePrompt('granted');
     await provider.requestPermission({ topics: ['energy-full'] });
+    expect(hold).toBeDefined();
     hold?.({ display: 'granted' });
     await settle();
     expect(events).toEqual([]);
