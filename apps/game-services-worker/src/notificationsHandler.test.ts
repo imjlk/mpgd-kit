@@ -506,6 +506,104 @@ try {
         + 'A send-only Worker can ignore this.',
     ],
   );
+  // The Apps in Toss provider serves `ait` behind its mTLS binding and the identity resolver.
+  const partnerCalls: { readonly url: string; readonly headers: Headers; readonly body: string }[] = [];
+  const aitEnv = {
+    MPGD_STORE: 'memory',
+    MPGD_NOTIFICATIONS_CATALOG: {
+      version: '2026-10-19',
+      defaultLocale: 'ko',
+      topics: [
+        {
+          id: 'energy-full',
+          purpose: 'service',
+          channels: ['remote'],
+          route: '/?entry=energy',
+          copy: { ko: { title: '에너지', body: '에너지가 가득 찼어요.' } },
+          targets: { ait: { templateSetCode: 'my-game-energy-full', agreement: 'none' } },
+        },
+      ],
+    },
+    MPGD_AIT_NOTIFICATIONS: JSON.stringify({ recipientKey: 'toss-user' }),
+    AIT_PARTNER_MTLS: {
+      async fetch(input: string, init?: RequestInit) {
+        partnerCalls.push({
+          url: input,
+          headers: new Headers(init?.headers),
+          body: String(init?.body),
+        });
+        return Response.json({
+          resultType: 'SUCCESS',
+          success: {
+            msgCount: 1,
+            sentPushCount: 1,
+            sentInboxCount: 0,
+            sentSmsCount: 0,
+            sentAlimtalkCount: 0,
+            sentFriendtalkCount: 0,
+            detail: {
+              sentPush: [{ contentId: 'c-1' }],
+              sentInbox: [],
+              sentSms: [],
+              sentAlimtalk: [],
+              sentFriendtalk: [],
+            },
+            fail: { sentPush: [], sentInbox: [], sentSms: [], sentAlimtalk: [], sentFriendtalk: [] },
+          },
+        });
+      },
+    },
+    GAME_SERVICES_NOTIFICATIONS_IDENTITY: {
+      async resolveNotificationRecipient({ provider, playerId }: { readonly provider: string; readonly playerId: string }) {
+        return provider === 'apps-in-toss' && playerId === 'p-ait' ? 'toss-user-1' : null;
+      },
+    },
+  } satisfies GameServicesWorkerEnv;
+  const aitProviders = await createWorkerFetchHandler(aitEnv)(new Request(`${base}/providers`));
+  assert.equal(aitProviders.status, 200);
+  assert.deepEqual(((await aitProviders.json()) as { readonly targets: unknown }).targets, {
+    ait: 'apps-in-toss',
+  });
+  assert.deepEqual(
+    await deliverWorkerNotification(aitEnv, { idempotencyKey: 'ait-1', player: 'p-ait', topic: 'energy-full' }),
+    { status: 'delivered', alreadyProcessed: false },
+  );
+  assert.deepEqual(
+    partnerCalls.map((call) => [
+      call.url,
+      call.headers.get('x-toss-user-key'),
+      (JSON.parse(call.body) as { readonly templateSetCode?: unknown }).templateSetCode,
+    ]),
+    [
+      [
+        'https://apps-in-toss-api.toss.im/api-partner/v1/apps-in-toss/messenger/send-message',
+        'toss-user-1',
+        'my-game-energy-full',
+      ],
+    ],
+  );
+  // A player the identity service cannot resolve has no recipient there.
+  assert.deepEqual(
+    await deliverWorkerNotification(aitEnv, { idempotencyKey: 'ait-2', player: 'p-other', topic: 'energy-full' }),
+    { status: 'unavailable', reason: 'no-endpoint' },
+  );
+  assert.equal(partnerCalls.length, 1);
+  // Half a configuration, or no identity resolver, is a misconfigured Worker.
+  const { AIT_PARTNER_MTLS: _mtls, ...settingsOnly } = aitEnv;
+  const { MPGD_AIT_NOTIFICATIONS: _settings, ...bindingOnly } = aitEnv;
+  const { GAME_SERVICES_NOTIFICATIONS_IDENTITY: _identity, ...noIdentity } = aitEnv;
+  for (const broken of [
+    settingsOnly,
+    bindingOnly,
+    noIdentity,
+    { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'phone' } },
+    { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', agreementCodes: ['x'] } },
+  ]) {
+    assert.equal(
+      (await createWorkerFetchHandler(broken)(new Request(`${base}/providers`))).status,
+      500,
+    );
+  }
   console.info('Worker notifications routes passed.');
 } finally {
   globalThis.fetch = realFetch;

@@ -253,6 +253,17 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
 - **Platform-user providers** resolve recipients through an optional
   `GAME_SERVICES_NOTIFICATIONS_IDENTITY` binding
   (`resolveNotificationRecipient({ provider, playerId })`).
+- **Apps in Toss** functional messages serve the `ait` target when the
+  partner API's client certificate is bound as `AIT_PARTNER_MTLS` (a
+  `[[mtls_certificates]]` binding) and `MPGD_AIT_NOTIFICATIONS` names the
+  recipient key: `{ recipientKey = "toss-user" }` (a Toss login user key)
+  or `"anonymous"`, with optional `baseUrl`, `timeoutMs`,
+  `agreementErrorCodes`, `agreementFailReasons`, and
+  `recipientErrorCodes`. It needs the identity binding above, which answers
+  the player's key for provider `apps-in-toss`. A Worker with only one of
+  the two, without the identity binding, or with an unknown setting is
+  misconfigured (500 on the routes, logged once). Each catalog topic maps
+  `targets.ait` to `{ templateSetCode, agreement }`.
 
 ## Production Notes
 

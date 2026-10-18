@@ -13,6 +13,10 @@ import {
   type NotificationStore,
 } from '@mpgd/game-services/notifications';
 import {
+  createAitFunctionalMessageDeliveryProvider,
+  type CreateAitFunctionalMessageDeliveryProviderOptions,
+} from '@mpgd/game-services/notifications/ait-functional-delivery';
+import {
   assertNotificationDeployment,
   isNotificationTimestamp,
   NotificationError,
@@ -67,6 +71,18 @@ export interface GameServicesNotificationsEnv {
   readonly FCM_SERVICE_ACCOUNT?: unknown;
   /** Overrides the service account's project id. */
   readonly FCM_PROJECT_ID?: string;
+  /**
+   * The Apps in Toss partner API client certificate (a Workers mTLS
+   * binding); with `MPGD_AIT_NOTIFICATIONS`, it enables the Apps in Toss
+   * functional-message provider for the `ait` target.
+   */
+  readonly AIT_PARTNER_MTLS?: { fetch(input: string, init?: RequestInit): Promise<Response> };
+  /**
+   * The Apps in Toss provider's settings (a JSON var): `recipientKey`
+   * (`toss-user` or `anonymous`), and optionally `baseUrl`, `timeoutMs`,
+   * `agreementErrorCodes`, `agreementFailReasons`, `recipientErrorCodes`.
+   */
+  readonly MPGD_AIT_NOTIFICATIONS?: unknown;
   readonly GAME_SERVICES_NOTIFICATIONS_AUTH?: GameServicesNotificationsAuthBinding;
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
@@ -120,7 +136,10 @@ export function resolveWorkerNotifications(env: GameServicesNotificationsEnv): W
 /**
  * The delivery providers this Worker serves. FCM serves android and ios
  * when its service account is configured. The Apps in Toss functional
- * message provider (P1) is added here once it ships.
+ * message provider serves `ait` when its mTLS binding and settings are
+ * configured; it resolves recipients through the identity binding, which it
+ * therefore requires. Half a configuration is refused, so a deployment
+ * never runs without a provider it meant to have.
  */
 export function workerNotificationProviders(
   env: GameServicesNotificationsEnv,
@@ -133,7 +152,76 @@ export function workerNotificationProviders(
       ...(env.FCM_PROJECT_ID === undefined || env.FCM_PROJECT_ID === '' ? {} : { projectId: env.FCM_PROJECT_ID }),
     }));
   }
+  const aitSettings = parseJsonVar(env.MPGD_AIT_NOTIFICATIONS, 'MPGD_AIT_NOTIFICATIONS');
+  if (aitSettings !== undefined || env.AIT_PARTNER_MTLS !== undefined) {
+    if (env.AIT_PARTNER_MTLS === undefined || aitSettings === undefined) {
+      throw new Error(
+        'The Apps in Toss provider needs both the AIT_PARTNER_MTLS binding and MPGD_AIT_NOTIFICATIONS.',
+      );
+    }
+    if (env.GAME_SERVICES_NOTIFICATIONS_IDENTITY === undefined) {
+      throw new Error(
+        'The Apps in Toss provider needs the GAME_SERVICES_NOTIFICATIONS_IDENTITY binding to resolve recipients.',
+      );
+    }
+    const provider = createAitFunctionalMessageDeliveryProvider({
+      ...aitProviderSettings(aitSettings),
+      mtls: env.AIT_PARTNER_MTLS,
+    });
+    providers.push({ entry: provider.entry, delivery: provider, targets: ['ait'] });
+  }
   return providers;
+}
+
+/** `MPGD_AIT_NOTIFICATIONS`, checked field by field: a typo fails at startup, not at the first send. */
+function aitProviderSettings(value: unknown): Omit<CreateAitFunctionalMessageDeliveryProviderOptions, 'mtls'> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('MPGD_AIT_NOTIFICATIONS is an object.');
+  }
+  const settings = value as Readonly<Record<string, unknown>>;
+  const known = new Set([
+    'recipientKey',
+    'baseUrl',
+    'timeoutMs',
+    'agreementErrorCodes',
+    'agreementFailReasons',
+    'recipientErrorCodes',
+  ]);
+  const unknownField = Object.keys(settings).find((key) => !known.has(key));
+  if (unknownField !== undefined) {
+    throw new Error(`MPGD_AIT_NOTIFICATIONS has no field ${unknownField}.`);
+  }
+  const { recipientKey, baseUrl, timeoutMs } = settings;
+  if (recipientKey !== 'toss-user' && recipientKey !== 'anonymous') {
+    throw new Error("MPGD_AIT_NOTIFICATIONS.recipientKey is 'toss-user' or 'anonymous'.");
+  }
+  if (baseUrl !== undefined && typeof baseUrl !== 'string') {
+    throw new Error('MPGD_AIT_NOTIFICATIONS.baseUrl is a string.');
+  }
+  if (timeoutMs !== undefined && typeof timeoutMs !== 'number') {
+    throw new Error('MPGD_AIT_NOTIFICATIONS.timeoutMs is a number.');
+  }
+  const codes = (name: string): readonly string[] | undefined => {
+    const list = settings[name];
+    if (list === undefined) {
+      return undefined;
+    }
+    if (!Array.isArray(list) || !list.every((item) => typeof item === 'string')) {
+      throw new Error(`MPGD_AIT_NOTIFICATIONS.${name} is a list of strings.`);
+    }
+    return list as readonly string[];
+  };
+  const agreementErrorCodes = codes('agreementErrorCodes');
+  const agreementFailReasons = codes('agreementFailReasons');
+  const recipientErrorCodes = codes('recipientErrorCodes');
+  return {
+    recipientKey,
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(agreementErrorCodes === undefined ? {} : { agreementErrorCodes }),
+    ...(agreementFailReasons === undefined ? {} : { agreementFailReasons }),
+    ...(recipientErrorCodes === undefined ? {} : { recipientErrorCodes }),
+  };
 }
 
 function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNotifications {

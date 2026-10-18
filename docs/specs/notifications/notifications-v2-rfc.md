@@ -2015,6 +2015,10 @@ publishable package carries a Sampo changeset.
   because an error's fields do not cross RPC, the dispatch queue consumer,
   and a cron that purges and replays due rows. The Worker refuses a queue
   next to its memory store, whose state the consumer's isolate cannot see.
+  It serves FCM for `android` and `ios`, and the Apps in Toss provider for
+  `ait` behind its mTLS binding (`AIT_PARTNER_MTLS`), its settings
+  (`MPGD_AIT_NOTIFICATIONS`), and the identity binding that resolves its
+  recipients; half that configuration fails the Worker's notifications.
 - Left to S2: server reminders, notice pushes, and pacing by the
   registry's `rate`; the replay of deferred rows is in S1 so that rate
   limits and windows settle.
