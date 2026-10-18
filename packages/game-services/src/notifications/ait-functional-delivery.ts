@@ -183,7 +183,8 @@ const maximumTimeoutMs = 60_000;
  *   `agreementFailReasons`, otherwise `recipient`.
  * - `FAIL` with a code in `agreementErrorCodes` (first) or
  *   `recipientErrorCodes` is `rejected` with that reason, before any
- *   documented meaning of the code (HTTP 429 excepted, see below);
+ *   documented meaning of the code, on HTTP 200 and the refusing statuses
+ *   (HTTP 429, 5xx, 408, and 425 are decided by the status, see below);
  *   otherwise 4095 is `rate-limited` with `retryAfterSeconds` (at most a
  *   day), and 5004, 4034, and 4010 are `rejected` with reason
  *   `configuration`. Any other code is `rejected` with reason `recipient` on HTTP 200
