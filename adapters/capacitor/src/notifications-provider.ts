@@ -89,7 +89,12 @@ export interface CreateCapacitorNotificationProviderInput {
   readonly local?: LocalNotificationSdk;
   /** Defaults to `capacitorNotificationProviderId` ('fcm'). */
   readonly provider?: NotificationProviderId;
-  /** The address the backend sends to; `fcm-installation` needs `push.getInstallationId`. */
+  /**
+   * The address the backend sends to; 'fcm-token' when absent.
+   * 'fcm-installation' needs `push.getInstallationId`, which
+   * `@capacitor-firebase/messaging` does not have: a shell that registers
+   * Firebase installation ids passes a `PushSdk` that adds it.
+   */
   readonly address?: 'fcm-token' | 'fcm-installation';
   /**
    * Denials Android accepts before only settings can change the answer: 2 for
@@ -142,7 +147,7 @@ const extraKeys = Object.freeze({
 } as const);
 
 /** Push data keys that are not the game's: the provider's own and the transport's. */
-const reservedDataKey = /^(?:topic|route|from|collapse_key|aps|google\.|gcm\.|fcm_options)/u;
+const reservedDataKey = /^(?:topic|route|from|collapse_key|aps|fcm_options)$|^(?:google|gcm)\./u;
 const maxRouteLength = 2048;
 const eventBufferLimit = 64;
 const maxNativeId = 0x7f_ff_ff_ff;
@@ -189,7 +194,9 @@ export function capacitorLocalNotificationId(key: string): number {
  *   second. Only `requestPermission` shows the OS dialog; `scheduleLocal`
  *   answers `permission-required` instead.
  * - **Local reminders.** Inexact (`isExactNotification: false`), on the
- *   topic's channel, at most 64 pending on iOS, keeping the nearest.
+ *   topic's channel, at most 64 pending on iOS, keeping the nearest, one
+ *   operation at a time. A `fireAt` already past posts at once, as both
+ *   plugins do.
  * - **Fails closed.** Without either SDK the provider is `unsupported`;
  *   without `push` it declares no remote delivery, without `local` no local
  *   reminders.
@@ -262,6 +269,8 @@ export function createCapacitorNotificationProvider(
       : async () => (await local.requestPermissions()).display;
   const getInstallationId = push?.getInstallationId?.bind(push);
   let lastObserved: NotificationPermissionState | undefined;
+  /** The `requestPermission` call in flight, whose answer settles `lastObserved`. */
+  let requesting: Promise<unknown> | undefined;
   const readAppState = async (): Promise<NotificationPermissionState> => {
     if (checkPermission === undefined) {
       return 'unsupported';
@@ -281,22 +290,32 @@ export function createCapacitorNotificationProvider(
 
   // Settings round trips and permission changes made outside the game.
   const appStateWaiters = new Set<(active: boolean) => void>();
+  // One check at a time, each against the state the one before it read, so
+  // two quick returns announce one change once.
+  let resumeCheck: Promise<void> = Promise.resolve();
   const onAppState = (active: boolean): void => {
     for (const waiter of [...appStateWaiters]) {
       waiter(active);
     }
-    if (active && lastObserved !== undefined && !unsupported) {
-      const before = lastObserved;
-      void readAppState().then((state) => {
-        if (state !== before) {
-          // Changed in system settings: no plugin reports it as an event.
-          dispatch({
-            type: 'permission-changed',
-            snapshot: snapshotOf(topics.map((topic) => topic.id), state),
-          });
-        }
-      }, reportError);
+    if (!active || unsupported) {
+      return;
     }
+    resumeCheck = resumeCheck.then(async () => {
+      const before = lastObserved;
+      // A request's own dialog also takes the app out of the foreground on
+      // iOS; the request reports that answer itself.
+      if (before === undefined || requesting !== undefined) {
+        return;
+      }
+      const state = await readAppState();
+      if (state !== before) {
+        // Changed in system settings: no plugin reports it as an event.
+        dispatch({
+          type: 'permission-changed',
+          snapshot: snapshotOf(topics.map((topic) => topic.id), state),
+        });
+      }
+    }).catch(reportError);
   };
 
   const registrationWith = (
@@ -315,10 +334,15 @@ export function createCapacitorNotificationProvider(
   const registrationOf = async (value: string): Promise<NotificationEndpointRegistration> =>
     registrationWith(value, await readAppState());
 
-  const openedFromPush = (actionId: string, notification: PushSdkNotification): void => {
-    const data = isRecord(notification.data) ? notification.data : {};
-    const topicId = stringOf(data[capacitorNotificationDataKeys.topic]);
-    const declared = topicId === undefined ? undefined : topicById.get(topicId);
+  /** The declared topic a push names; the payload is untrusted. */
+  const declaredTopicOf = (data: Record<string, unknown>): NotificationTopicDeclaration | undefined => {
+    const id = stringOf(data[capacitorNotificationDataKeys.topic]);
+    return id === undefined ? undefined : topicById.get(id);
+  };
+  const openedFromPush = (actionId: string, notification: PushSdkNotification | undefined): void => {
+    const data = isRecord(notification?.data) ? notification.data : {};
+    const declared = declaredTopicOf(data);
+    const topicId = declared?.id;
     // The opt-out action opens the topic's declared opt-out screen, never a
     // route from the payload.
     const route = actionId === notificationAdvertisingOptOutActionId
@@ -342,7 +366,10 @@ export function createCapacitorNotificationProvider(
     });
   };
 
-  const openedFromLocal = (actionId: string, notification: LocalNotificationSdkEntry): void => {
+  const openedFromLocal = (
+    actionId: string,
+    notification: LocalNotificationSdkEntry | undefined,
+  ): void => {
     const entry = readLocalEntry(notification);
     if (entry === undefined || actionId === 'dismiss') {
       // Not one of this provider's reminders, or not an open.
@@ -357,13 +384,11 @@ export function createCapacitorNotificationProvider(
     });
   };
 
-  // Native listeners: synchronously, before any await, for the process lifetime.
-  const handles: Promise<PluginListenerHandle>[] = [];
+  // Native listeners: synchronously, before any await, and never removed,
+  // because the provider lives as long as the process.
   const listen = (register: () => Promise<PluginListenerHandle>): void => {
     try {
-      const handle = register();
-      handle.catch(reportError);
-      handles.push(handle);
+      register().catch(reportError);
     } catch (error) {
       reportError(error);
     }
@@ -373,29 +398,31 @@ export function createCapacitorNotificationProvider(
       if (addressKind !== 'fcm-token' || typeof event.token !== 'string' || event.token === '') {
         return;
       }
+      const { token } = event;
       // A rotated token goes out at once, with the permission this provider
       // last read: a permission changes only in system settings, and the
-      // return from there reads it again. Before any read it reads first.
-      if (lastObserved !== undefined) {
-        dispatch({
-          type: 'endpoint-changed',
-          registration: registrationWith(event.token, lastObserved),
-        });
+      // return from there reads it again. During a request (iOS issues the
+      // first token right after the grant) it waits for that answer, and
+      // before any read it reads first.
+      if (lastObserved !== undefined && requesting === undefined) {
+        dispatch({ type: 'endpoint-changed', registration: registrationWith(token, lastObserved) });
         return;
       }
-      void registrationOf(event.token).then(
-        (registration) => dispatch({ type: 'endpoint-changed', registration }),
-        reportError,
-      );
+      void (requesting ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(() => (lastObserved === undefined
+          ? registrationOf(token)
+          : registrationWith(token, lastObserved)))
+        .then((registration) => dispatch({ type: 'endpoint-changed', registration }), reportError);
     }));
     listen(() => push.addListener('notificationReceived', (event) => {
-      const data = isRecord(event.notification.data) ? event.notification.data : {};
-      const topic = stringOf(data[capacitorNotificationDataKeys.topic]);
+      const data = isRecord(event?.notification?.data) ? event.notification.data : {};
+      const topic = declaredTopicOf(data)?.id;
       dispatch({ type: 'received', channel: 'remote', ...(topic === undefined ? {} : { topic }) });
     }));
     listen(() =>
       push.addListener('notificationActionPerformed', (event) => {
-        openedFromPush(event.actionId, event.notification);
+        openedFromPush(String(event?.actionId), event?.notification);
       }),
     );
   }
@@ -410,7 +437,7 @@ export function createCapacitorNotificationProvider(
     );
     listen(() =>
       local.addListener('localNotificationActionPerformed', (event) => {
-        openedFromLocal(event.actionId, event.notification);
+        openedFromLocal(String(event?.actionId), event?.notification);
       }),
     );
   }
@@ -418,30 +445,58 @@ export function createCapacitorNotificationProvider(
     listen(() => app.addListener('appStateChange', (state) => onAppState(state.isActive)));
   }
 
-  // One-time native setup: Android channels and the opt-out action type. A
-  // remote push needs its channel before it arrives, so this starts now.
-  const setup: Promise<void> = unsupported
-    ? Promise.resolve()
-    : Promise.resolve().then(async () => {
-        const createChannel = local?.createChannel.bind(local) ?? push?.createChannel?.bind(push);
-        if (platform === 'android' && createChannel !== undefined) {
-          for (const channel of channels) {
-            await createChannel(channel);
-          }
-        }
-        await local?.registerActionTypes({
-          types: [{
-            id: capacitorAdvertisingActionTypeId,
-            actions: [{
-              id: notificationAdvertisingOptOutActionId,
-              title: input.advertisingOptOutTitle ?? '수신거부',
-              foreground: true,
-            }],
+  // Native setup: the Android channels and the opt-out action type. A remote
+  // push needs its channel before it arrives, so both start now. Each is kept
+  // only once it succeeded; a failure is reported and tried again on the next
+  // local reminder, which needs the channels and fails until they exist.
+  const createChannel = local?.createChannel.bind(local) ?? push?.createChannel?.bind(push);
+  let channelsReady: Promise<void> | undefined;
+  const ensureChannels = (): Promise<void> => {
+    channelsReady ??= (async () => {
+      if (platform !== 'android' || createChannel === undefined) {
+        return;
+      }
+      for (const channel of channels) {
+        await createChannel(channel);
+      }
+    })().catch((error: unknown) => {
+      channelsReady = undefined;
+      throw error;
+    });
+    return channelsReady;
+  };
+  let actionTypesReady: Promise<void> | undefined;
+  const ensureActionTypes = (): Promise<void> => {
+    actionTypesReady ??= Promise.resolve()
+      .then(() => local?.registerActionTypes({
+        types: [{
+          id: capacitorAdvertisingActionTypeId,
+          actions: [{
+            id: notificationAdvertisingOptOutActionId,
+            title: input.advertisingOptOutTitle ?? '수신거부',
+            foreground: true,
           }],
-        });
-      }).catch((error: unknown) => {
-        reportError(error);
+        }],
+      }))
+      .catch((error: unknown) => {
+        actionTypesReady = undefined;
+        throw error;
       });
+    return actionTypesReady;
+  };
+  if (!unsupported) {
+    ensureChannels().catch(reportError);
+    ensureActionTypes().catch(reportError);
+  }
+
+  // Local reminder operations run one at a time: each reads the pending list
+  // and decides from it, so two at once could both take the last free slot.
+  let localQueue: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = localQueue.then(operation, operation);
+    localQueue = run.catch(() => undefined);
+    return run;
+  };
 
   const capabilities = (): NotificationCapabilities => ({
     availability: unsupported ? 'unsupported' : 'available',
@@ -493,6 +548,59 @@ export function createCapacitorNotificationProvider(
     return { all, ours: sortEntries(ours) };
   };
 
+  /** Schedules a validated, non-advertising reminder; runs inside `serialized`. */
+  const scheduleChecked = async (
+    sdk: LocalNotificationSdk,
+    checked: LocalNotificationRequest,
+    declared: NotificationTopicDeclaration | undefined,
+  ): Promise<LocalScheduleResult> => {
+    await callSdk(ensureChannels);
+    ensureActionTypes().catch(reportError);
+    // Never let the plugin prompt: its schedule asks by itself.
+    if (await readAppState() !== 'granted') {
+      return { status: 'permission-required' };
+    }
+    const fireAt = normalizeNotificationTimestamp(checked.fireAt);
+    const pending = await readPending(sdk);
+    const existing = pending.ours.find((entry) => entry.key === checked.key);
+    const maxPending = platform === 'ios' ? capacitorIosMaxPendingLocalNotifications : undefined;
+    if (existing === undefined && maxPending !== undefined
+      && pending.all.length >= maxPending) {
+      // Keep the nearest: the farthest of this provider's reminders
+      // gives way, or the new one is refused.
+      const farthest = pending.ours.at(-1);
+      if (farthest === undefined || Date.parse(fireAt) >= Date.parse(farthest.fireAt)) {
+        return { status: 'capacity-exceeded' };
+      }
+      await callSdk(() => sdk.cancel({ notifications: [{ id: farthest.id }] }));
+    }
+    const id = existing?.id ?? freeId(checked.key, pending.all);
+    const route = checked.route ?? declared?.route;
+    await callSdk(() => sdk.schedule({
+      notifications: [{
+        id,
+        title: checked.title,
+        body: checked.body,
+        schedule: { at: new Date(fireAt) },
+        extra: {
+          [extraKeys.key]: checked.key,
+          [extraKeys.topic]: checked.topic,
+          [extraKeys.fireAt]: fireAt,
+          ...(route === undefined ? {} : { [extraKeys.route]: route }),
+        },
+        ...(platform === 'android'
+          ? {
+              channelId: capacitorNotificationChannelId(
+                declared ?? { purpose: 'requested' },
+              ),
+            }
+          : {}),
+        isExactNotification: false,
+      }],
+    }));
+    return { status: existing === undefined ? 'scheduled' : 'replaced' };
+  };
+
   const provider: CapacitorNotificationProvider = {
     provider: providerId,
     topics,
@@ -530,9 +638,21 @@ export function createCapacitorNotificationProvider(
       // The push plugin also registers with APNs on iOS; on Android 12 and
       // lower it answers granted without reading the setting, so the fresh
       // read below decides.
-      const answered = await callSdk(askPermission);
-      const after = local === undefined ? toPermissionState(answered) : await readAppState();
-      lastObserved = after;
+      const asked = (async () => {
+        const answered = await callSdk(askPermission);
+        const state = local === undefined ? toPermissionState(answered) : await readAppState();
+        lastObserved = state;
+        return state;
+      })();
+      requesting = asked;
+      let after: NotificationPermissionState;
+      try {
+        after = await asked;
+      } finally {
+        if (requesting === asked) {
+          requesting = undefined;
+        }
+      }
       const outcome: NotificationPermissionOutcome = after === 'granted'
         ? before === 'granted' ? 'already-granted' : 'granted'
         // A dialog closed without an answer leaves the state as it was.
@@ -555,11 +675,13 @@ export function createCapacitorNotificationProvider(
                 ? (await getInstallationId()).installationId
                 : (await push.getToken()).token;
             } catch (error) {
-              if (isConfigurationFailure(error)) {
+              if (error instanceof NotificationError || isConfigurationFailure(error)) {
                 throw toNotificationError(error);
               }
               // No address yet (iOS before APNs registration, offline):
-              // `tokenReceived` announces it as `endpoint-changed`.
+              // `tokenReceived` announces it as `endpoint-changed`. Reported,
+              // because a Firebase set up wrongly fails the same way.
+              reportError(error);
               return null;
             }
             return typeof value === 'string' && value !== '' ? registrationOf(value) : null;
@@ -584,67 +706,25 @@ export function createCapacitorNotificationProvider(
               // labelled, or held for the night window (RFC "Topic catalog").
               return { status: 'unsupported' };
             }
-            await setup;
-            // Never let the plugin prompt: its schedule asks by itself.
-            if (await readAppState() !== 'granted') {
-              return { status: 'permission-required' };
-            }
-            const fireAt = normalizeNotificationTimestamp(checked.fireAt);
-            const pending = await readPending(local);
-            const existing = pending.ours.find((entry) => entry.key === checked.key);
-            const maxPending = platform === 'ios'
-              ? capacitorIosMaxPendingLocalNotifications
-              : undefined;
-            if (existing === undefined && maxPending !== undefined
-              && pending.all.length >= maxPending) {
-              // Keep the nearest: the farthest of this provider's reminders
-              // gives way, or the new one is refused.
-              const farthest = pending.ours.at(-1);
-              if (farthest === undefined || Date.parse(fireAt) >= Date.parse(farthest.fireAt)) {
-                return { status: 'capacity-exceeded' };
-              }
-              await callSdk(() => local.cancel({ notifications: [{ id: farthest.id }] }));
-            }
-            const id = existing?.id ?? freeId(checked.key, pending.all);
-            const route = checked.route ?? declared?.route;
-            await callSdk(() => local.schedule({
-              notifications: [{
-                id,
-                title: checked.title,
-                body: checked.body,
-                schedule: { at: new Date(fireAt) },
-                extra: {
-                  [extraKeys.key]: checked.key,
-                  [extraKeys.topic]: checked.topic,
-                  [extraKeys.fireAt]: fireAt,
-                  ...(route === undefined ? {} : { [extraKeys.route]: route }),
-                },
-                ...(platform === 'android'
-                  ? {
-                      channelId: capacitorNotificationChannelId(
-                        declared ?? { purpose: 'requested' },
-                      ),
-                    }
-                  : {}),
-                isExactNotification: false,
-              }],
-            }));
-            return { status: existing === undefined ? 'scheduled' : 'replaced' };
+            return serialized(() => scheduleChecked(local, checked, declared));
           },
-          async cancelLocal(request: { readonly keys: readonly string[] }): Promise<void> {
+          cancelLocal(request: { readonly keys: readonly string[] }): Promise<void> {
             if (!Array.isArray(request?.keys)) {
-              throw new NotificationError('NOTIFICATIONS_INVALID_INPUT');
+              return Promise.reject(new NotificationError('NOTIFICATIONS_INVALID_INPUT'));
             }
             const keys = new Set(request.keys);
-            const ids = (await readPending(local)).ours
-              .filter((entry) => keys.has(entry.key))
-              .map((entry) => ({ id: entry.id }));
-            if (ids.length > 0) {
-              await callSdk(() => local.cancel({ notifications: ids }));
-            }
+            return serialized(async () => {
+              const ids = (await readPending(local)).ours
+                .filter((entry) => keys.has(entry.key))
+                .map((entry) => ({ id: entry.id }));
+              if (ids.length > 0) {
+                await callSdk(() => local.cancel({ notifications: ids }));
+              }
+            });
           },
-          async listLocal(): Promise<readonly LocalNotificationEntry[]> {
-            return (await readPending(local)).ours.map(({ key, topic, fireAt }) => ({ key, topic, fireAt }));
+          listLocal(): Promise<readonly LocalNotificationEntry[]> {
+            return serialized(async () => (await readPending(local)).ours
+              .map(({ key, topic, fireAt }) => ({ key, topic, fireAt })));
           },
         }),
     async openSettings(): Promise<NotificationSettingsResult> {
@@ -817,7 +897,8 @@ function freeId(key: string, pending: readonly LocalNotificationSdkEntry[]): num
 
 function sortEntries<TEntry extends LocalNotificationEntry>(entries: readonly TEntry[]): TEntry[] {
   return [...entries].sort((left, right) =>
-    Date.parse(left.fireAt) - Date.parse(right.fireAt) || left.key.localeCompare(right.key));
+    Date.parse(left.fireAt) - Date.parse(right.fireAt)
+    || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
 }
 
 async function callSdk<T>(call: () => Promise<T>): Promise<T> {

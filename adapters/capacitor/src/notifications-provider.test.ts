@@ -395,6 +395,65 @@ describe('Capacitor notifications provider: endpoints', () => {
   });
 });
 
+describe('Capacitor notifications provider: events around a request', () => {
+  it('announces a token issued during a request with the answer of that request', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.getPermission({ topics: [] });
+    const push = sdks.push!;
+    const request = push.requestPermissions.bind(push);
+    vi.spyOn(push, 'requestPermissions').mockImplementation(async () => {
+      const answer = await request();
+      // iOS registers with APNs on the grant, and Firebase issues the token
+      // before the provider has read the new state.
+      sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      return answer;
+    });
+    sdks.queuePrompt('granted');
+    await provider.requestPermission({ topics: ['energy-full'] });
+    await settle();
+    expect(events).toEqual([{
+      type: 'endpoint-changed',
+      registration: expect.objectContaining({
+        address: { kind: 'fcm-token', value: 'tok-1', permission: 'granted' },
+      }),
+    }]);
+  });
+
+  it('announces a settings change once for two quick returns, and none for the request dialog', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.getPermission({ topics: [] });
+    const push = sdks.push!;
+    const request = push.requestPermissions.bind(push);
+    vi.spyOn(push, 'requestPermissions').mockImplementation(async () => {
+      // The iOS alert takes the app out of the foreground and back.
+      sdks.app.setActive(false);
+      const answer = await request();
+      sdks.app.setActive(true);
+      return answer;
+    });
+    sdks.queuePrompt('granted');
+    await provider.requestPermission({ topics: ['energy-full'] });
+    await settle();
+    expect(events).toEqual([]);
+    sdks.osState = 'denied';
+    sdks.app.setActive(true);
+    sdks.app.setActive(true);
+    await settle();
+    expect(events.map((event) => event.type)).toEqual(['permission-changed']);
+  });
+
+  it('reports a token failure that is not a missing plugin', async () => {
+    const { provider, sdks, errors } = setup();
+    sdks.failNext('push.getToken', new Error('Firebase is not configured'));
+    expect(await provider.register?.()).toBeNull();
+    expect(errors).toEqual([new Error('Firebase is not configured')]);
+  });
+});
+
 describe('Capacitor notifications provider: local reminders', () => {
   it('answers permission-required without calling the plugin, which would prompt', async () => {
     const { provider, sdks } = setup();
@@ -503,6 +562,52 @@ describe('Capacitor notifications provider: local reminders', () => {
   });
 });
 
+describe('Capacitor notifications provider: concurrent local reminders', () => {
+  it('runs one operation at a time, so the last free slot is taken once', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    for (let id = 1; id <= 63; id += 1) {
+      sdks.addForeignPending(id);
+    }
+    const [first, second] = await Promise.all([
+      provider.scheduleLocal?.({ ...reminder, key: 'a' }),
+      provider.scheduleLocal?.({ ...reminder, key: 'b', fireAt: '2026-10-12T07:00:00Z' }),
+    ]);
+    expect([first, second]).toEqual([{ status: 'scheduled' }, { status: 'capacity-exceeded' }]);
+    expect((await sdks.local!.getPending()).notifications).toHaveLength(64);
+  });
+
+  it('answers scheduled then replaced for two calls with one new key', async () => {
+    const { provider, sdks } = setup();
+    grant(sdks);
+    const results = await Promise.all([
+      provider.scheduleLocal?.(reminder),
+      provider.scheduleLocal?.({ ...reminder, fireAt: '2026-10-12T07:00:00Z' }),
+      provider.listLocal?.(),
+    ]);
+    expect(results).toEqual([
+      { status: 'scheduled' },
+      { status: 'replaced' },
+      [{ key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T07:00:00Z' }],
+    ]);
+  });
+
+  it('keeps the queue going after a failed operation', async () => {
+    const { provider, sdks } = setup();
+    grant(sdks);
+    sdks.failNext('local.schedule', new Error('native'));
+    const [failed, next] = await Promise.allSettled([
+      provider.scheduleLocal?.(reminder),
+      provider.scheduleLocal?.({ ...reminder, key: 'other' }),
+    ]);
+    expect(failed).toMatchObject({
+      status: 'rejected',
+      reason: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' },
+    });
+    expect(next).toEqual({ status: 'fulfilled', value: { status: 'scheduled' } });
+  });
+});
+
 describe('Capacitor notifications provider: native setup', () => {
   it('creates one Android channel per channel id, advertising apart, and the opt-out action', async () => {
     const { sdks } = setup({
@@ -563,6 +668,65 @@ describe('Capacitor notifications provider: native setup', () => {
     await settle();
     expect(errors).toEqual([new Error('boom')]);
   });
+
+  it('does not schedule onto missing channels, and tries the setup again', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    sdks.osState = 'granted';
+    let failures = 1;
+    const created: string[] = [];
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      createChannel: async (channel) => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('channel');
+        }
+        created.push(channel.id);
+      },
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android', topics, local, app: null, onError: () => undefined,
+    });
+    await settle();
+    await expect(provider.scheduleLocal?.(reminder)).resolves.toEqual({ status: 'scheduled' });
+    expect(created).toEqual(['reminders', 'mpgd-service', 'mpgd-advertising']);
+    failures = 1;
+    const later = createCapacitorNotificationProvider({
+      platform: 'android', topics, local, app: null, onError: () => undefined,
+    });
+    await settle();
+    failures = 1;
+    await expect(later.scheduleLocal?.({ ...reminder, key: 'b' })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+    expect(sdks.scheduled.map((entry) => entry.extra['mpgdKey'])).toEqual(['energy']);
+    await expect(later.scheduleLocal?.({ ...reminder, key: 'b' })).resolves.toEqual({ status: 'scheduled' });
+  });
+
+  it('tries the opt-out action type again after a failure', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'ios' });
+    sdks.osState = 'granted';
+    let calls = 0;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      registerActionTypes: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error('categories');
+        }
+      },
+    };
+    const errors: unknown[] = [];
+    const provider = createCapacitorNotificationProvider({
+      platform: 'ios', topics, local, app: null, onError: (error) => errors.push(error),
+    });
+    await settle();
+    expect(errors).toEqual([new Error('categories')]);
+    // A reminder does not need the category, so it is scheduled while it is retried.
+    await expect(provider.scheduleLocal?.(reminder)).resolves.toEqual({ status: 'scheduled' });
+    await settle();
+    expect(calls).toBe(2);
+  });
 });
 
 describe('Capacitor notifications provider: opens and events', () => {
@@ -602,6 +766,55 @@ describe('Capacitor notifications provider: opens and events', () => {
     for (const event of events) {
       expect(event).toEqual({ type: 'opened', channel: 'remote', source: 'warm', topic: 'friend-challenge' });
     }
+  });
+
+  it('keeps game data keys that only start like a reserved key, and drops the transport keys', () => {
+    const { provider, sdks } = setup();
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdks.emitPush('notificationActionPerformed', {
+      actionId: 'tap',
+      notification: {
+        data: {
+          topic: 'friend-challenge',
+          routeId: 'r-1',
+          fromUser: 'mina',
+          topicality: 'high',
+          from: '1234',
+          collapse_key: 'k',
+          'google.message_id': 'm',
+          'gcm.notification.e': '1',
+          fcm_options: 'x',
+        },
+      },
+    });
+    expect(events).toEqual([{
+      type: 'opened',
+      channel: 'remote',
+      source: 'warm',
+      topic: 'friend-challenge',
+      data: { routeId: 'r-1', fromUser: 'mina', topicality: 'high' },
+    }]);
+  });
+
+  it('names only a declared topic, and survives an event without a notification', () => {
+    const { provider, sdks } = setup();
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdks.emitPush('notificationActionPerformed', {
+      actionId: 'tap',
+      notification: { data: { topic: 'not-declared', route: '/shop' } },
+    });
+    sdks.emitPush('notificationReceived', { notification: { data: { topic: 'not-declared' } } });
+    sdks.emitPush('notificationActionPerformed', { actionId: 'tap' });
+    sdks.emitPush('notificationReceived', {});
+    sdks.emitLocal('localNotificationActionPerformed', { actionId: 'tap' });
+    expect(events).toEqual([
+      { type: 'opened', channel: 'remote', source: 'warm', route: '/shop' },
+      { type: 'received', channel: 'remote' },
+      { type: 'opened', channel: 'remote', source: 'warm' },
+      { type: 'received', channel: 'remote' },
+    ]);
   });
 
   it('opens the declared opt-out screen from the advertising opt-out action', () => {
