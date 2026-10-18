@@ -164,10 +164,18 @@ export function workerNotificationProviders(
         'The Apps in Toss provider needs the GAME_SERVICES_NOTIFICATIONS_IDENTITY binding to resolve recipients.',
       );
     }
-    const provider = createAitFunctionalMessageDeliveryProvider({
-      ...aitProviderSettings(aitSettings),
-      mtls: env.AIT_PARTNER_MTLS,
-    });
+    let provider: ReturnType<typeof createAitFunctionalMessageDeliveryProvider>;
+    try {
+      provider = createAitFunctionalMessageDeliveryProvider({
+        ...aitProviderSettings(aitSettings),
+        mtls: env.AIT_PARTNER_MTLS,
+      });
+    } catch (error) {
+      // The provider checks the base URL and the timeout range; name the setting they came from.
+      throw new Error(
+        `MPGD_AIT_NOTIFICATIONS: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     providers.push({ entry: provider.entry, delivery: provider, targets: ['ait'] });
   }
   return providers;
@@ -176,7 +184,7 @@ export function workerNotificationProviders(
 /** `MPGD_AIT_NOTIFICATIONS`, checked field by field: a typo fails at startup, not at the first send. */
 function aitProviderSettings(value: unknown): Omit<CreateAitFunctionalMessageDeliveryProviderOptions, 'mtls'> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('MPGD_AIT_NOTIFICATIONS is an object.');
+    throw new Error('MPGD_AIT_NOTIFICATIONS must be an object.');
   }
   const settings = value as Readonly<Record<string, unknown>>;
   const known = new Set([
@@ -189,17 +197,19 @@ function aitProviderSettings(value: unknown): Omit<CreateAitFunctionalMessageDel
   ]);
   const unknownField = Object.keys(settings).find((key) => !known.has(key));
   if (unknownField !== undefined) {
-    throw new Error(`MPGD_AIT_NOTIFICATIONS has no field ${unknownField}.`);
+    throw new Error(
+      `MPGD_AIT_NOTIFICATIONS has no field ${unknownField}; it takes ${[...known].join(', ')}.`,
+    );
   }
   const { recipientKey, baseUrl, timeoutMs } = settings;
   if (recipientKey !== 'toss-user' && recipientKey !== 'anonymous') {
-    throw new Error("MPGD_AIT_NOTIFICATIONS.recipientKey is 'toss-user' or 'anonymous'.");
+    throw new Error("MPGD_AIT_NOTIFICATIONS.recipientKey must be 'toss-user' or 'anonymous'.");
   }
   if (baseUrl !== undefined && typeof baseUrl !== 'string') {
-    throw new Error('MPGD_AIT_NOTIFICATIONS.baseUrl is a string.');
+    throw new Error('MPGD_AIT_NOTIFICATIONS.baseUrl must be a string.');
   }
   if (timeoutMs !== undefined && typeof timeoutMs !== 'number') {
-    throw new Error('MPGD_AIT_NOTIFICATIONS.timeoutMs is a number.');
+    throw new Error('MPGD_AIT_NOTIFICATIONS.timeoutMs must be a number.');
   }
   const codes = (name: string): readonly string[] | undefined => {
     const list = settings[name];
@@ -207,7 +217,7 @@ function aitProviderSettings(value: unknown): Omit<CreateAitFunctionalMessageDel
       return undefined;
     }
     if (!Array.isArray(list) || !list.every((item) => typeof item === 'string')) {
-      throw new Error(`MPGD_AIT_NOTIFICATIONS.${name} is a list of strings.`);
+      throw new Error(`MPGD_AIT_NOTIFICATIONS.${name} must be a list of strings.`);
     }
     return list as readonly string[];
   };

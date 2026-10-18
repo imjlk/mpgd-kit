@@ -9,6 +9,7 @@ import {
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
   endWorkerNotificationSession,
+  resolveWorkerNotifications,
   runScheduledNotifications,
 } from './notificationsHandler.js';
 
@@ -592,18 +593,62 @@ try {
   const { AIT_PARTNER_MTLS: _mtls, ...settingsOnly } = aitEnv;
   const { MPGD_AIT_NOTIFICATIONS: _settings, ...bindingOnly } = aitEnv;
   const { GAME_SERVICES_NOTIFICATIONS_IDENTITY: _identity, ...noIdentity } = aitEnv;
-  for (const broken of [
-    settingsOnly,
-    bindingOnly,
-    noIdentity,
-    { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'phone' } },
-    { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', agreementCodes: ['x'] } },
-  ]) {
+  for (const [broken, reason] of [
+    [settingsOnly, /needs both the AIT_PARTNER_MTLS binding and MPGD_AIT_NOTIFICATIONS/u],
+    [bindingOnly, /needs both the AIT_PARTNER_MTLS binding and MPGD_AIT_NOTIFICATIONS/u],
+    [noIdentity, /needs the GAME_SERVICES_NOTIFICATIONS_IDENTITY binding/u],
+    [{ ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'phone' } }, /recipientKey must be/u],
+    [
+      { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', agreementCodes: ['x'] } },
+      /has no field agreementCodes/u,
+    ],
+    [
+      { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', agreementErrorCodes: [1] } },
+      /agreementErrorCodes must be a list of strings/u,
+    ],
+    [
+      { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', timeoutMs: 0 } },
+      /^MPGD_AIT_NOTIFICATIONS: /u,
+    ],
+    [
+      { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', baseUrl: 'not a url' } },
+      /^MPGD_AIT_NOTIFICATIONS: /u,
+    ],
+  ] as const) {
     assert.equal(
       (await createWorkerFetchHandler(broken)(new Request(`${base}/providers`))).status,
       500,
     );
+    const resolved = resolveWorkerNotifications(broken);
+    assert.ok(
+      resolved.status === 'misconfigured' && reason.test(resolved.error.message),
+      resolved.status,
+    );
   }
+  // A partner answer named as a missing agreement records the provider's denial.
+  const agreementEnv = {
+    ...aitEnv,
+    MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', agreementErrorCodes: ['4100'] },
+    AIT_PARTNER_MTLS: {
+      async fetch() {
+        return Response.json({
+          resultType: 'FAIL',
+          error: { errorCode: '4100', reason: 'not agreed' },
+        });
+      },
+    },
+  } satisfies GameServicesWorkerEnv;
+  assert.deepEqual(
+    await deliverWorkerNotification(agreementEnv, { idempotencyKey: 'ait-3', player: 'p-ait', topic: 'energy-full' }),
+    { status: 'unavailable', reason: 'provider-rejected' },
+  );
+  const agreementService = resolveWorkerNotifications(agreementEnv);
+  assert.ok(agreementService.status === 'ready');
+  assert.deepEqual(
+    (await agreementService.service.listConsent({ player: 'p-ait', sessionId: 's-ait', installationId: 'i-ait' }))
+      .map((record) => [record.kind, record.topic, record.state, record.source]),
+    [['host-agreement', 'energy-full', 'denied', 'provider']],
+  );
   console.info('Worker notifications routes passed.');
 } finally {
   globalThis.fetch = realFetch;

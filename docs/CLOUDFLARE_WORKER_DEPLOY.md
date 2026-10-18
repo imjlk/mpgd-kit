@@ -260,10 +260,18 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   or `"anonymous"`, with optional `baseUrl`, `timeoutMs`,
   `agreementErrorCodes`, `agreementFailReasons`, and
   `recipientErrorCodes`. It needs the identity binding above, which answers
-  the player's key for provider `apps-in-toss`. A Worker with only one of
-  the two, without the identity binding, or with an unknown setting is
-  misconfigured (500 on the routes, logged once). Each catalog topic maps
-  `targets.ait` to `{ templateSetCode, agreement }`.
+  the player's key for provider `apps-in-toss`: a key from an authenticated
+  Toss login or the protected key mapping, never one a client sent (see
+  [Apps in Toss production evidence](APPS_IN_TOSS_PRODUCTION_EVIDENCE.md#functional-messages)).
+  A Worker with only one of the two, without the identity binding, or with
+  an unknown or invalid setting is misconfigured (500 on the routes, logged
+  once with the setting's name), and so are its FCM sends. Each catalog
+  topic maps `targets.ait` to `{ templateSetCode, agreement }`.
+  - Name the partner API's codes for a recipient who has not agreed
+    (`agreementErrorCodes`, `agreementFailReasons`) once you observe them.
+    Without them such an answer is a `recipient` refusal, no denial is
+    recorded, and every later send to that player calls the partner API
+    again, against its limit of 10 calls per minute per user.
 
 ## Production Notes
 
