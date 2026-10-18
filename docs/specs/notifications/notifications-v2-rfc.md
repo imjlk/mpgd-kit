@@ -852,9 +852,10 @@ Local reminders use inexact timing:
 - Android 14 denies `SCHEDULE_EXACT_ALARM` by default to new installs, Play
   restricts `USE_EXACT_ALARM` to alarm and calendar apps, and a game reminder
   does not need minute precision.
-- The Capacitor template removes `SCHEDULE_EXACT_ALARM` from the merged
-  manifest, and the provider schedules with `isExactNotification: false` and
-  `allowWhileIdle: true`, so a reminder still fires in Doze.
+- The Capacitor shell removes `SCHEDULE_EXACT_ALARM` from the merged manifest
+  (the template does so from C1), and the provider schedules with
+  `isExactNotification: false` and `allowWhileIdle: true`, so a reminder
+  still fires in Android's Doze mode.
 - The provider keeps at most `local.maxPending` reminders, keeping the
   nearest ones.
 
@@ -1616,8 +1617,8 @@ Other rules the profiles encode:
     [`docs/specs/notifications/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/notifications/schemas).
   - `validate:notifications-alignment`, run in `pnpm check`, keeps the
     constant, the vectors, and the schemas aligned.
-- **What N3 landed.** No transport served v2 then; the providers came with
-  P1–P3.
+- **What N3 landed.** No transport served v2 then; P2 added the Capacitor
+  provider, and P1 and P3 add the others.
   - `@mpgd/bridge` adds the nine methods to `BridgeMethod`
     (`bridgeNotificationsV2Methods`, kept equal to `notificationBridgeMethods`
     by a type check and a test). `@mpgd/bridge/notifications` validates each

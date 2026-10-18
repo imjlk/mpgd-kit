@@ -250,8 +250,9 @@ is created, which is how a cold-start open reaches it.
   `permission-required` without calling the plugin, whose own `schedule` would
   prompt on Android 13+.
   - Reminders are inexact (`isExactNotification: false`; the plugin's default
-    would open the exact-alarm settings screen) but may fire in Doze
-    (`allowWhileIdle: true`). Remove `SCHEDULE_EXACT_ALARM`, which the
+    would open the exact-alarm settings screen) but may fire in Android's Doze
+    mode (`allowWhileIdle: true`; Android lets such alarms fire about once per
+    nine minutes per app). Remove `SCHEDULE_EXACT_ALARM`, which the
     plugin's manifest adds, from the merged manifest (`tools:node="remove"`).
   - Each is keyed by a stable 32-bit native id, replaced by key, and posted on
     the topic's Android channel. Operations run one at a time, in call order.
