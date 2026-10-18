@@ -86,6 +86,12 @@ export interface CreateAitNotificationProviderInput {
    * they never subscribe, so the launch intent must keep routing it.
    */
   readonly landingOpens?: boolean;
+  /**
+   * Called before the cold open is emitted; `false` means another reader
+   * (the host's launch intent) already routed this launch, so the provider
+   * emits nothing. Absent, the provider always may.
+   */
+  readonly claimLanding?: () => boolean;
 }
 
 /** The provider, plus the read the v1 surface and the launch intent share. */
@@ -351,7 +357,7 @@ export function createAitNotificationProvider(
       if (!landingRead && landingOpens) {
         landingRead = true;
         const landing = readAitNotificationLanding(readOptional(() => sdk.readInitialUrl()));
-        if (landing !== undefined) {
+        if (landing !== undefined && input.claimLanding?.() !== false) {
           deliver(listener, toOpenedEvent(landing));
         }
       }

@@ -52,19 +52,24 @@ installAitHostBridge({
 - **No read-back.** Neither the mini-app nor the server can read an agreement,
   and revoking it in Toss settings raises no event. Each decision comes back
   with `apps-in-toss.notification-agreement.v1` evidence for the backend's
-  consent record. The host keeps no session copy, so a v1
-  `notifications.getStatus` reads `not-subscribed` for a topic that needs an
-  agreement (`unsupported` on Toss older than 5.255.0); read it through the
-  runtime instead.
+  consent record. v2 reads stay `unknown`. For v1, a topic agreed to during
+  this bridge's lifetime reads `subscribed` from a v1-only session cache (a
+  denial clears it); otherwise `notifications.getStatus` reads
+  `not-subscribed` for a topic that needs an agreement (`unsupported` on Toss
+  older than 5.255.0). Read through the runtime to see agreements across
+  restarts.
 - **Templates without agreement.** `agreement: 'none'` topics read `granted`
   and never show a sheet.
-- **Opens.** A launch whose referrer is `push` or `inbox` reaches the game once,
-  as a cold `opened` event with the landing route (the console template's
-  landing URL, normalized by `normalizeRootRelativeRoute`).
-  `presentation.getLaunchIntent()` answers `home` for that launch so it is not
-  routed twice. Both apply only while `notificationTopics` maps a topic; a game
-  that maps only v1 `notificationTemplateCodes` keeps routing push launches
-  through the launch intent.
+- **Opens.** A launch whose referrer is `push` or `inbox` is routed exactly
+  once, by whichever comes first: the cold `opened` event with the landing
+  route (the console template's landing URL, normalized by
+  `normalizeRootRelativeRoute`), when the notifications runtime subscribes
+  first, after which `presentation.getLaunchIntent()` answers `home`; or the
+  launch intent, when the game asks before subscribing. Start the runtime
+  before reading the launch intent to get the `opened` event. Opens apply only
+  while `notificationTopics` maps a topic; a game that maps only v1
+  `notificationTemplateCodes` keeps routing push launches through the launch
+  intent.
 - **Not on Apps in Toss.** Local notifications, a settings link, and
   advertising topics (promotional pushes are console campaigns).
 

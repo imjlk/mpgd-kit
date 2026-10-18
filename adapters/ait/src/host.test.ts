@@ -1487,7 +1487,7 @@ describe('AIT production host bridge', () => {
     }
   });
 
-  it('serves v1 notification requests from the v2 provider without a session cache', async () => {
+  it('serves v1 notification requests from the v2 provider with a v1-only session cache', async () => {
     let callbacks: NotificationAgreementCallbacks | undefined;
     let cleanupCount = 0;
     const requestAgreement = Object.assign(
@@ -1521,17 +1521,45 @@ describe('AIT production host bridge', () => {
     expect(callbacks?.options).toEqual({ templateCode: 'TTOKDOKU_STREAK_ALERT' });
     callbacks?.onEvent({ type: 'newAgreement' });
     await expect(subscription).resolves.toBe('subscribed');
-    // The host gives no read and the bridge keeps no session copy: the
-    // backend's consent record, read through the runtime, decides.
+    // The host gives no read: v1 remembers this bridge's agreement, while
+    // v2 keeps reading `unknown` so the runtime takes the backend record.
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'streak-at-risk',
-    })).resolves.toBe('not-subscribed');
+    })).resolves.toBe('subscribed');
     expect(cleanupCount).toBe(1);
 
     const v2 = await request(bridge, 'notifications.v2.getPermission', {
       topics: ['streak-at-risk', 'daily-ready'],
     });
     expect(v2).toEqual({ topics: { 'streak-at-risk': 'unknown', 'daily-ready': 'unsupported' } });
+
+    // A denial through v2 clears it; an agreement through v2 sets it again.
+    // Read through a function: TypeScript would narrow the reassigned variable.
+    const latestCallbacks = (): NotificationAgreementCallbacks | undefined => callbacks;
+    callbacks = undefined;
+    const denied = request(bridge, 'notifications.v2.requestPermission', { topics: ['streak-at-risk'] });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    latestCallbacks()?.onEvent({ type: 'agreementRejected' });
+    await denied;
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('not-subscribed');
+    callbacks = undefined;
+    const agreed = request(bridge, 'notifications.v2.requestPermission', { topics: ['streak-at-risk'] });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    latestCallbacks()?.onEvent({ type: 'alreadyAgreed' });
+    await agreed;
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('subscribed');
+    // A new bridge (a restart) starts without the cache.
+    const restarted = createAitHostBridge({
+      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+      dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+    });
+    await expect(request(restarted, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('not-subscribed');
   });
 
   it('maps v1 requests through the v2 outcomes: rejected, dismissed, and too-old hosts', async () => {
@@ -5042,6 +5070,9 @@ describe('AIT launch intent', () => {
         },
       }),
     });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toHaveLength(1);
     await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
   });
 
@@ -5062,10 +5093,10 @@ describe('AIT launch intent', () => {
     stubSearch('?entry=daily&referrer=push');
     const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
     stubSearch('?entry=daily');
-    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
     const events: unknown[] = [];
     bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
     expect(events).toHaveLength(1);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
   });
 
   it('keeps routing push launches through the launch intent for a v1-only game', async () => {
@@ -5080,16 +5111,26 @@ describe('AIT launch intent', () => {
     expect(events).toEqual([]);
   });
 
-  it('judges the launch once, so a later page URL change routes it neither twice nor never', async () => {
+  it('routes a push launch through the cold open when the runtime subscribes first', async () => {
     stubSearch('?entry=daily&referrer=push');
     const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
-    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
-    // The game's router drops the referrer before the runtime subscribes.
-    stubSearch('?entry=daily');
     const events: unknown[] = [];
     bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
     expect(events).toHaveLength(1);
     await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
+  });
+
+  it('routes a push launch through the launch intent when the game asks first, never losing it', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });
+    // The game asks before its notifications runtime subscribes, or it
+    // exposes no notificationsV2 at all: the intent routes the launch.
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'daily' });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toEqual([]);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'daily' });
   });
 
   it('prefers direct search params over nested queryParams and only fills missing keys', async () => {

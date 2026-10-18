@@ -250,9 +250,10 @@ export interface InstallAitHostBridgeOptions {
    * v1 notification topics mapped to approved Apps in Toss template codes.
    * Each one is a notifications v2 topic with `agreement: 'required'`;
    * `notificationTopics` wins for a topic named by both. v1 reads come from
-   * the v2 provider, which cannot read an agreement back, so a topic that
-   * needs one reads `not-subscribed` even after an agreement; read it through
-   * the game-services notifications runtime, which consults the backend.
+   * the v2 provider, which cannot read an agreement back: a topic agreed to
+   * during this bridge's lifetime reads `subscribed` from a v1-only session
+   * cache, and otherwise `not-subscribed`. Read it through the game-services
+   * notifications runtime, which consults the backend, across restarts.
    */
   readonly notificationTemplateCodes?: Partial<Readonly<Record<NotificationTopic, string>>>;
   /**
@@ -318,6 +319,12 @@ export function createAitHostBridge(
   // Read once per bridge: the provider and the launch intent must judge the
   // same launch, even if the page URL changes later (`history.replaceState`).
   let launchUrl: { readonly value: string | undefined } | undefined;
+  // A push or inbox launch is routed exactly once, by whichever reader comes
+  // first: the provider's cold `opened` event (the game's notifications
+  // runtime subscribed), or the launch intent (the game asked before
+  // subscribing, or never subscribes because it exposes no `notificationsV2`).
+  let landingClaim: 'event' | 'intent' | undefined;
+  const claimLanding = (by: 'event' | 'intent'): boolean => (landingClaim ??= by) === by;
   const readLaunchUrl = (): string | undefined =>
     (launchUrl ??= { value: readAitLaunchUrl(dependencies) }).value;
   const notifications = createAitNotificationProvider({
@@ -328,6 +335,7 @@ export function createAitHostBridge(
     // v1-only games never subscribe to the v2 event, so their push launches
     // keep routing through the launch intent.
     landingOpens: Object.keys(options.notificationTopics ?? {}).length > 0,
+    claimLanding: () => claimLanding('event'),
     topics: {
       ...normalizeNotificationTemplateCodes(options.notificationTemplateCodes),
       ...options.notificationTopics,
@@ -337,7 +345,27 @@ export function createAitHostBridge(
       : { agreementTimeoutMs: options.notificationAgreementTimeoutMs }),
     timeZone: readDeviceTimeZone,
   });
-  const notificationsV2 = createAitNotificationsV2BridgeHandler(notifications);
+  // v1 agreements of this bridge's lifetime (RFC "Migration and PR plan"):
+  // the host cannot read an agreement back, so v1 `getStatus` would read
+  // `not-subscribed` right after a granted request. The cache serves v1 only,
+  // until a game reads through the backend-reading runtime; v2 reads stay
+  // `unknown`. Any request through the provider, v1 or v2, updates it.
+  const v1Agreements = new Set<string>();
+  const observedNotifications: AitNotificationProvider = {
+    ...notifications,
+    async requestPermission(request) {
+      const result = await notifications.requestPermission(request);
+      for (const [topic, outcome] of Object.entries(result.outcomes)) {
+        if (outcome === 'granted' || outcome === 'already-granted') {
+          v1Agreements.add(topic);
+        } else if (outcome === 'denied' || outcome === 'blocked') {
+          v1Agreements.delete(topic);
+        }
+      }
+      return result;
+    },
+  };
+  const notificationsV2 = createAitNotificationsV2BridgeHandler(observedNotifications);
   if (notifications.deliversLandingOpens()) {
     // Before the game's router can rewrite the page URL on the fallback path.
     readLaunchUrl();
@@ -498,11 +526,14 @@ export function createAitHostBridge(
       case 'identity.requestUpgrade':
         return ok(request, { status: 'unavailable', reloadExpected: false });
 
-      case 'presentation.getLaunchIntent':
+      case 'presentation.getLaunchIntent': {
+        const notificationOpen = notifications.deliversLandingOpens()
+          && readAitNotificationLanding(readLaunchUrl()) !== undefined;
         return ok(
           request,
-          getLaunchIntent(notifications.deliversLandingOpens() ? readLaunchUrl() : undefined),
+          notificationOpen && !claimLanding('intent') ? { entry: 'home' } : getLaunchIntent(),
         );
+      }
 
       case 'presentation.requestGameSurface':
         return ok(request, 'already-fullscreen');
@@ -520,7 +551,11 @@ export function createAitHostBridge(
       case 'notifications.getStatus':
         return ok(
           request,
-          await getNotificationStatus(readNotificationTopic(request.payload), notifications),
+          await getNotificationStatus(
+            readNotificationTopic(request.payload),
+            observedNotifications,
+            v1Agreements,
+          ),
         );
 
       case 'notifications.requestSubscription':
@@ -528,7 +563,7 @@ export function createAitHostBridge(
           request,
           await requestNotificationSubscription(
             readNotificationTopic(request.payload),
-            notifications,
+            observedNotifications,
           ),
         );
 
@@ -804,12 +839,16 @@ interface AitShareDependencies {
 async function getNotificationStatus(
   topic: NotificationTopic,
   provider: AitNotificationProvider,
+  agreements: ReadonlySet<string>,
 ): Promise<NotificationSubscriptionStatus> {
   if (!provider.hasTopic(topic)) {
     return 'configuration-required';
   }
   const snapshot = await provider.getPermission({ topics: [topic] });
-  return toNotificationSubscriptionStatus(snapshot.topics[topic] ?? 'unknown');
+  const state = snapshot.topics[topic] ?? 'unknown';
+  return state === 'unknown' && agreements.has(topic)
+    ? 'subscribed'
+    : toNotificationSubscriptionStatus(state);
 }
 
 /**
@@ -1347,17 +1386,11 @@ function readDeviceTimeZone(): string | undefined {
 }
 
 /**
- * A launch from a Toss push or inbox message (`referrer=push` or `inbox`)
- * routes only through the notifications provider's cold `opened` event, so
- * the launch intent answers `home` for it and the game never routes one
- * launch twice (RFC "Opens"). `launchUrl` is absent when the provider
- * delivers no landing open (no `notificationTopics`, as for a game that maps
- * only v1 template codes): such a launch then routes as any other.
+ * The launch intent from the launch parameters. A Toss push or inbox launch
+ * that the provider's cold `opened` event already routed answers `home`
+ * before this is called (RFC "Opens"), so one launch is never routed twice.
  */
-function getLaunchIntent(launchUrl: string | undefined): LaunchIntent {
-  if (readAitNotificationLanding(launchUrl) !== undefined) {
-    return { entry: 'home' };
-  }
+function getLaunchIntent(): LaunchIntent {
   const params = inboundSearchParams();
   const challengeToken = boundedParam(params.get('challengeToken'));
   const puzzleId = boundedParam(params.get('puzzleId'));

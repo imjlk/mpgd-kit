@@ -877,12 +877,19 @@ Every open becomes one `opened` event with a route:
 | `landing-url` (Apps in Toss) | The landing URL is set per template in the console. The host bridge reads the launch URL once when it is installed (`Environment.initialURL`, or the page URL where the host gives none) with its `push` or `inbox` referrer. |
 | `host-link` (Devvit) | A notification links to the send's post or comment (`link`). The game routes from that post's data, so routing needs dedicated posts. |
 
-On `landing-url` hosts, a launch whose referrer is `push` or `inbox` routes
-only through the cold `opened` event, and `presentation.getLaunchIntent()`
-answers `home` for that launch. Both come from one parser over one read of
-the launch URL per host bridge (the adapter's internal
-`readAitNotificationLanding`), so the game never routes one launch twice, and a page
-URL change between the two reads cannot split them. The route is the launch
+On `landing-url` hosts, a launch whose referrer is `push` or `inbox` is
+routed exactly once, by whichever reader comes first:
+
+- When the game's notifications runtime subscribes first, the cold `opened`
+  event carries the route, and `presentation.getLaunchIntent()` answers
+  `home` for that launch.
+- When the game asks for the launch intent first (before its runtime
+  starts, or because it exposes no `notificationsV2`), the intent routes the
+  launch, and no `opened` event is emitted for it.
+
+Both come from one parser over one read of the launch URL per host bridge
+(the adapter's internal `readAitNotificationLanding`), so a page URL change
+between the two reads cannot split them, and the landing is never lost. The route is the launch
 URL's path, query, and fragment without the `referrer` parameter, normalized
 by `normalizeRootRelativeRoute`; a route it refuses, or one longer than
 2,048 characters, is left out of the event, which still counts as an open.
@@ -1488,10 +1495,15 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   `register()` answers `null`. On a Toss app older than 5.255.0 it stays
   `available`, because topics mapped with `agreement: 'none'` are still
   delivered; only the agreement reads and requests answer for the version.
-- **v1.** The host bridge serves the v1 methods from this provider and keeps
-  no session copy of an agreement, so a v1 `getStatus` reads
-  `not-subscribed` for a topic that needs one until the game reads it through
-  the runtime and its backend records.
+- **v1.** The host bridge serves the v1 methods from this provider. A topic
+  the player agreed to during the bridge's lifetime (`granted` or
+  `already-granted` from a v1 `requestSubscription` or a v2
+  `requestPermission`) reads `subscribed` for v1 from a v1-only session
+  cache, which a `denied` or `blocked` answer clears; otherwise a topic that
+  needs an agreement reads `not-subscribed`. v2 `getPermission` keeps
+  reading `unknown`, so the runtime takes the backend record, which also
+  serves v1 callers through `toNotificationSubscriptionAdapter` across
+  restarts.
 - **Templates without agreement.** Only templates linked to an agreement
   statement need agreement; the console rejects opt-in style templates without
   one. Messages a player needs to use the service (payment, refund, and
@@ -1808,7 +1820,10 @@ listed fields of each item asserted:
 
 The v1 `NotificationSubscriptionAdapter` stays. N2 adds
 `toNotificationSubscriptionAdapter(runtime, catalog)` over the runtime, so
-reads see backend records. v1 callers request with `gesture: true`, and
+reads see backend records. Until a game reads through it, an adapter whose
+host cannot read a decision back may serve its raw v1 `getStatus` from a
+v1-only cache of the decisions of the session (Apps in Toss does; see
+[Apps in Toss](#profile-ait)); its v2 reads never use that cache. v1 callers request with `gesture: true`, and
 `approval-required` stays with the target config, which keeps the v1 adapter
 when v2 is not exposed.
 

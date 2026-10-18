@@ -419,6 +419,32 @@ describe('Apps in Toss notifications provider', () => {
     expect(second).toEqual([]);
   });
 
+  it('emits no open when landing opens are off or another reader claimed the launch', () => {
+    const initialUrl = 'intoss://my-game/daily?referrer=push';
+    for (const options of [{ landingOpens: false }, { claimLanding: () => false }]) {
+      const events: NotificationEvent[] = [];
+      const provider = createAitNotificationProvider({
+        sdk: createFakeAitNotificationHost({ initialUrl }).sdk,
+        topics,
+        ...options,
+      });
+      provider.subscribe((event) => events.push(event));
+      expect(events).toEqual([]);
+    }
+    let claims = 0;
+    const events: NotificationEvent[] = [];
+    createAitNotificationProvider({
+      sdk: createFakeAitNotificationHost({ initialUrl }).sdk,
+      topics,
+      claimLanding: () => {
+        claims += 1;
+        return true;
+      },
+    }).subscribe((event) => events.push(event));
+    expect(events).toHaveLength(1);
+    expect(claims).toBe(1);
+  });
+
   it('emits nothing for an ordinary launch or an unreadable launch URL', () => {
     for (const initialUrl of ['intoss://my-game/daily?referrer=gamehome', undefined]) {
       const events: NotificationEvent[] = [];
