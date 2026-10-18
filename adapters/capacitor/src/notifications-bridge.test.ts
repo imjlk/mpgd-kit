@@ -277,6 +277,38 @@ describe('Capacitor gateway with a notifications v2 service', () => {
     await gateway.lifecycle.dispose?.();
   });
 
+  it('keeps an open that arrives between two game subscribers, through the bridge', () => {
+    const { gateway, sdks } = setup();
+    const scene1: NotificationEvent[] = [];
+    const leave = gateway.notificationsV2?.subscribe((event) => scene1.push(event));
+    leave?.();
+    sdks.tap({ channel: 'remote', topic: 'friend-challenge', route: '/?entry=friend-challenge' });
+    const scene2: NotificationEvent[] = [];
+    gateway.notificationsV2?.subscribe((event) => scene2.push(event));
+    expect(scene1).toEqual([]);
+    expect(scene2).toEqual([{
+      type: 'opened', channel: 'remote', source: 'warm', topic: 'friend-challenge', route: '/?entry=friend-challenge',
+    }]);
+  });
+
+  it('reports a push-only shell with an advertising topic as configuration-required', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'ios', local: false });
+    const advertising: NotificationTopicDeclaration = {
+      id: 'weekend-event', purpose: 'advertising', channels: ['remote'], route: '/events',
+      optOutRoute: '/settings/notifications', mapping: {},
+    };
+    const native = createCapacitorNotificationProvider({
+      platform: 'ios', topics: [...topics, advertising], push: sdks.push!, app: null,
+    });
+    const { gateway } = setup({ native });
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.notifications?.availability).toBe('configuration-required');
+    expect(capabilities.providerAvailability?.pushNotifications).toBe('configuration-required');
+    expect(await gateway.notifications?.getStatus('friend-challenge')).toBe('configuration-required');
+    await expect(gateway.notificationsV2?.getPermission({ topics: ['friend-challenge'] }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false });
+  });
+
   it('delivers a cold-start open to the first game subscriber through the bridge', () => {
     const { gateway, sdks } = setup();
     sdks.tap({ channel: 'remote', topic: 'friend-challenge', route: '/?entry=friend-challenge' });
@@ -316,7 +348,7 @@ describe('Capacitor gateway with a notifications v2 service', () => {
       .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
   });
 
-  it('turns an answer the contract rejects into a notifications error that is not retried', async () => {
+  it('answers an invalid provider answer as configuration-required, not retried', async () => {
     const broken: NotificationProvider = {
       provider: 'fcm',
       getCapabilities: async () => createCapacitorNotificationProvider({
@@ -328,7 +360,7 @@ describe('Capacitor gateway with a notifications v2 service', () => {
     };
     const { gateway } = setup({ native: broken });
     await expect(gateway.notificationsV2?.getPermission({ topics: ['energy-full'] }))
-      .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false });
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false });
   });
 
   it.each(['getPermission', 'requestPermission', 'revokePermission'] as const)(
@@ -564,7 +596,7 @@ describe('bridge notifications client', () => {
     expect(typeof client.openSettings).toBe('function');
   });
 
-  it('does not retry an answer its own validator rejects', async () => {
+  it('answers an answer its own validator rejects as configuration-required', async () => {
     const client = createBridgeNotificationProvider({
       provider: 'fcm',
       serves: { revokePermission: false, register: false, local: false },
@@ -572,7 +604,7 @@ describe('bridge notifications client', () => {
       subscribe: () => () => undefined,
     });
     await expect(client.getPermission({ topics: ['a'] })).rejects.toMatchObject({
-      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
       retryable: false,
     });
   });

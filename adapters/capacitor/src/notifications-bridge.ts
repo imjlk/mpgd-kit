@@ -56,7 +56,8 @@ export interface CreateNotificationProviderBridgeInput {
  * In-process `NativeBridge` over a notifications v2 provider. Each
  * `notifications.v2.*` request validates its payload (a payload the contract
  * rejects answers `NOTIFICATIONS_INVALID_INPUT`) and its answer (one the
- * contract rejects answers `NATIVE_PROVIDER_INVALID_RESPONSE`). A method the
+ * contract rejects answers `NOTIFICATIONS_CONFIGURATION_REQUIRED`, because the
+ * provider broke it). A method the
  * provider does not implement answers `NOTIFICATIONS_UNSUPPORTED`, except
  * `openSettings`, which answers `unavailable`. Events go out through
  * `createBridgeEventSource`, which attaches to the provider only for the
@@ -143,7 +144,7 @@ export function createNotificationProviderBridge(
       } catch (error) {
         return createBridgeError(
           request.id,
-          'NATIVE_PROVIDER_INVALID_RESPONSE',
+          'NOTIFICATIONS_CONFIGURATION_REQUIRED',
           `Notifications provider returned invalid data for ${method}: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -314,17 +315,16 @@ export interface CreateBridgeNotificationProviderInput {
  * methods and the event envelope. Answers are validated again on this side,
  * so a transport that forgets to stays fail-closed. A bridge failure becomes
  * a `NotificationError`: one with a notifications code keeps it, anything
- * else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the retryable flag
- * follows the failure: an invalid answer is not retryable whatever its code.
- * Callers retry on the flag, not the code. An event envelope that
+ * else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with the failure's
+ * retryable flag. An answer the contract rejects is
+ * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, which is not retryable, because the
+ * provider broke the contract. An event envelope that
  * names another protocol is skipped; a malformed one is dropped with a
  * warning, because it carries nothing the game could route.
  *
- * Events reach the listeners subscribed when they arrive. The provider
- * buffers only until its first subscriber, so an event that arrives while no
- * listener is attached is not kept: the consumer, the notifications runtime,
- * subscribes once for its life and buffers for the game itself (RFC
- * "Runtime").
+ * Events reach the listeners subscribed when they arrive. The Capacitor
+ * provider keeps events that arrive while no listener is attached for the
+ * next subscriber, so a game that subscribes per scene loses no open.
  */
 export function createBridgeNotificationProvider(
   input: CreateBridgeNotificationProviderInput,
@@ -345,10 +345,9 @@ export function createBridgeNotificationProvider(
     try {
       return assertBridgeNotificationsV2Result(method, data);
     } catch (error) {
-      // A contract break does not go away on retry.
-      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+      // The provider broke the contract; a retry would not change that.
+      throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
         message: `Bridge returned invalid data for ${method}.`,
-        retryable: false,
         cause: error,
       });
     }
@@ -432,8 +431,7 @@ function toNotificationError(error: unknown): NotificationError {
     : undefined;
   const options = {
     ...(error instanceof Error ? { message: error.message } : {}),
-    // A transport failure keeps its retryability: an invalid provider answer
-    // (`NATIVE_PROVIDER_INVALID_RESPONSE`) is not worth retrying.
+    // A transport failure keeps its retryability.
     ...(error instanceof PlatformOperationError ? { retryable: error.retryable } : {}),
     cause: error,
   };

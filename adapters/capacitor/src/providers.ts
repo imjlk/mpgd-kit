@@ -459,7 +459,11 @@ export function assertProviderResponseData(
   const valid = isValidProviderData(method, data, provider);
   if (!valid) {
     throw new PlatformOperationError({
-      code: 'NATIVE_PROVIDER_INVALID_RESPONSE',
+      // A notifications v2 answer that breaks the contract is the provider's
+      // configuration error (RFC "Bridge and versioning"), as on Apps in Toss.
+      code: isBridgeNotificationsV2Method(method)
+        ? 'NOTIFICATIONS_CONFIGURATION_REQUIRED'
+        : 'NATIVE_PROVIDER_INVALID_RESPONSE',
       message: `Capacitor provider returned invalid data for ${method}.`,
     });
   }

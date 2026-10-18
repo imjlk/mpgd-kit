@@ -387,10 +387,8 @@ Rules every provider follows:
   `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED`, `NOTIFICATIONS_INVALID_INPUT`,
   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and `NOTIFICATIONS_V2_UNAVAILABLE`
   from a bridge without v2. Only `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` is
-  retryable. A client keeps the retryable flag of the failure it maps, and an
-  answer the contract rejects is never retryable, so a
-  `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` can be final. Callers retry on the
-  flag, not the code.
+  retryable, and a client that maps a transport failure to it keeps that
+  failure's retryable flag, so callers retry on the flag.
 - **A required player action is a state.** It reaches the game in one of two
   ways, and both carry `requiredAction`:
   - While the host needs a player action before it can prompt at all
@@ -1383,10 +1381,12 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     implementation, or the import fails, so the provider fails closed for
     that half: no push plugin, no remote delivery; no local plugin, no local
     reminders; neither, `availability: 'unsupported'`.
-  - Without the local plugin the provider also registers no opt-out category
-    and reads the permission through the push plugin, which on Android 12 and
-    lower answers granted whatever the setting is. A game with advertising
-    topics installs both.
+  - Without the local plugin the provider reads the permission through the
+    push plugin, which on Android 12 and lower answers granted whatever the
+    setting is. It also cannot register the opt-out action every advertising
+    push carries (see [Advertising rules](#advertising-rules)), so a catalog
+    that maps an advertising topic makes it `configuration-required`, as a
+    registry mismatch makes a provider.
   - The messaging plugin's web fallback imports the `firebase` package, so a
     game that bundles the subpath installs it too.
   - The base adapter entry loads neither plugin nor the notifications
@@ -1435,7 +1435,7 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   shell supplies the opener; without one `permission.settings` is false. The
   provider resolves `openSettings` once the app is back in the foreground, so
   the game stays paused while the settings screen is up: on Android the native
-  call returns as soon as the screen launches. It stops waiting after ten
+  call returns as soon as the screen launches. It stops waiting after two
   minutes, or after five seconds when the app never left.
 - **Bridge.**
   - The Capacitor bridge adds `notifications.v2.requestPermission` and
@@ -1453,7 +1453,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   iOS template to the UIScene lifecycle, which sets the notification delegate
   later than Apple recommends. The provider registers its native listeners
   when it is created and marks an open `cold` when it arrives before the first
-  subscriber.
+  subscriber. It also keeps events that arrive while no listener is attached
+  later for the next subscriber, because the gateway's bridge detaches when
+  its last listener leaves.
 
 ### Apps in Toss {#profile-ait}
 
@@ -1603,7 +1605,10 @@ Other rules the profiles encode:
 - **Methods.** `notifications.v2.getCapabilities`, `.getPermission`,
   `.requestPermission`, `.revokePermission`, `.register`, `.scheduleLocal`,
   `.cancelLocal`, `.listLocal`, and `.openSettings`. Transports without v2
-  answer `NOTIFICATIONS_V2_UNAVAILABLE`, which is not retryable.
+  answer `NOTIFICATIONS_V2_UNAVAILABLE`, which is not retryable. An answer
+  that breaks the method's contract, caught on either side of the bridge,
+  is `NOTIFICATIONS_CONFIGURATION_REQUIRED`, also not retryable, because the
+  provider broke it.
 - **Events.** They share the bridge event channel. `BridgeEvent` becomes a
   union discriminated by `protocol`: the existing `mpgd.commerce.v2` envelope,
   and `{ protocol: 'mpgd.notifications.v2', sequence, event }` with
