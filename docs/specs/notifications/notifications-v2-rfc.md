@@ -919,6 +919,16 @@ provider's capabilities with the entry for that provider, and a mismatch
 makes the provider `configuration-required`, as commerce does with
 `CommerceServiceCapabilities`.
 
+- **Targets.** Each entry serves one or more catalog targets, and a target
+  maps to one provider. Two targets may share a provider, as `android` and
+  `ios` share FCM. The gate reads the topic as the recipient's target
+  declares it, with that target's mapping (see the
+  [endpoint registry](#endpoint-registry)). The backend publishes the
+  served targets next to the entries.
+- **Per-send providers.** The S1 backend refuses a `per-send` entry: it
+  does not yet reserve an acceptance in the same atomic step that claims
+  the delivery (see [Deferred sends](#policy-gate)).
+
 ### Endpoint registry {#endpoint-registry}
 
 The server records where a player can be reached, per provider. Registration
@@ -932,8 +942,20 @@ player's account would deliver that player's notifications to the device.
   - A new address for the same installation replaces the old one.
   - An address is unique per provider.
   - Registering an installation for a new player moves it.
+  - **Target.** A registration on a provider that serves several targets
+    names the catalog target of the device (`android` or `ios` for FCM), and
+    the gate reads that target's mapping for the endpoint, such as its
+    Android `channelId`. The game-services client knows its target and adds
+    it to the registration request, and the backend refuses a registration
+    on such a provider without one. A topic the target does not map is
+    `topic-unknown` for that endpoint.
 - **Unbinding.** An authenticated unbind, or the end of the session that
   registered the installation, removes the endpoint from the player.
+  - The identity service ends a session by calling the backend at logout or
+    revocation.
+  - A session that ends on its own carries its `expiresAt`, and its
+    endpoints count as unbound from then. The session id is the session's
+    whole life (its refresh family), not one access token.
 - **Platform-user providers (Apps in Toss, Devvit).** They register no
   address. The backend resolves the recipient from the player's authenticated
   identity for that provider, never from a key the client sends. It keeps the
@@ -999,7 +1021,9 @@ in, so the game shows the text the scheduler would push:
   consent.
 
 It also records each notice given: the notice's name, the channel
-(`in-game`, `push`, or `other`), and the time.
+(`in-game`, `push`, or `other`), and the time. Only the backend records
+`push`, once it delivered the push; a game records a notice it showed as
+`in-game` or `other`.
 
 The game shows a notice in the game and records it through
 `notices.recordShown` with the notice as `list()` gave it, or with its name:
@@ -1223,6 +1247,16 @@ that provider whose latest registration reported `granted`.
 - **Several providers.** A send names an optional `provider`. Without one it
   goes to every provider the player has a recipient on, each evaluated on its
   own.
+- **Queued fan-out.** The backend checks the gate once per recipient when
+  the send arrives and stores a row for each recipient it allows or defers.
+  Each allowed row is then one dispatch job, run inline or through a queue,
+  and the gate runs again when the job makes the provider call. A send
+  dispatched through the queue answers `in-flight` until a row settles.
+- **Limits.** Each other send counts once for the topic's cap, on the gate's
+  provider when it reached it there. An in-flight send counts once a holder
+  claimed it for a provider call. Of two sends claimed at the same moment,
+  the earlier one (then the lower key) is the one the other counts, so a cap
+  of one lets one through.
 
 #### Provider answers {#provider-answers}
 
@@ -1260,6 +1294,11 @@ Every provider answer maps to one of five kinds:
   - A direct caller retries after the lease.
   - A scheduled or deferred row is `in-flight` too. The scheduler, which owns
     it, replays it through `deliverIdempotently` once the lease expires.
+  - The scheduler also replays a direct send's row once its lease expired,
+    so a send whose caller never retries still settles, and so does a row
+    whose holder failed before the provider call.
+  - Replays stop a day after the first attempt: the row stays `in-flight`
+    until its key's retention ends, and the backend reports it.
   - One rule covers every claimer. `deferred` would also claim that nothing
     was sent, which an `ambiguous` answer cannot prove.
 
@@ -1280,13 +1319,29 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     tokens to Firebase installation ids.
   - **Errors.**
     - `UNREGISTERED` is `unregistered`. `INVALID_ARGUMENT` is too, but only
-      when the payload is known valid.
+      when the payload is known valid: the provider checks the message
+      against FCM's rules before it sends, and FCM's answer names the token
+      (a `message.token` field violation) and no other field. Any other
+      `INVALID_ARGUMENT` is `rejected` with reason `configuration`, so a
+      payload bug never prunes live tokens.
     - `QUOTA_EXCEEDED` is `rate-limited`.
-    - `UNAVAILABLE` and `INTERNAL` are `ambiguous`.
+    - `UNAVAILABLE` and `INTERNAL` are `ambiguous`, and so are a timeout and
+      a dropped connection.
     - `SENDER_ID_MISMATCH` and `THIRD_PARTY_AUTH_ERROR` are `rejected` with
       reason `configuration`.
+    - **Access tokens.** A key that cannot sign or a refused grant is
+      `rejected` with reason `configuration`; a token endpoint that is down
+      sent nothing and is `rate-limited`.
   - **Expiry and actions.** The expiry is `android.ttl` and the
-    `apns-expiration` header.
+    `apns-expiration` header. A message that would expire within a second
+    is not sent (`rejected`, provider code `MESSAGE_EXPIRED`), because FCM
+    reads a time to live of 0 as "deliver now if the device is reachable".
+  - **Payload.** The gate's title and body are the FCM `notification`.
+    `data` carries the send's routing data and the reserved keys
+    `mpgd.topic`, `mpgd.route`, and, when the content has actions,
+    `mpgd.actions` (JSON). Android uses the mapping's `channelId`, and iOS
+    gets the first action's id as the APNs category. Routing data may not
+    use the `mpgd.` prefix or FCM's reserved keys.
   - **Fan-out.** It goes through a queue, since one Worker invocation has a
     subrequest limit, and the gate runs when the queued call is made.
 - **Apps in Toss.**
@@ -1621,6 +1676,12 @@ How a real provider is judged:
   calls the provider's `scheduleLocal` directly. That call must answer
   `permission-required` without prompting or scheduling, because the runtime
   answers before it reaches the provider.
+- **Backends under test.** `createBackend` replaces the fake backend with
+  another one, such as the production service over an in-memory store. It
+  receives the fake's inputs: the derived registry entry, the vector's
+  catalog, deployment, and notices, the clock, and the host's send-time
+  permission read. The S1 service passes every vector except those that
+  need S2's server reminders or notice pushes, and the per-send vector.
 
 ### Vector format {#vector-format}
 
@@ -1777,6 +1838,23 @@ publishable package carries a Sampo changeset.
 | P3 | `@mpgd/adapter-devvit`: game-rendered opt-in and opt-out through the server bridge, a client-side `identity.requestUpgrade` over `showLoginPrompt()`, and a delivery provider over `enqueue` with per-send links inside the Devvit server | |
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending, Devvit scheduler path | No reminders |
+
+**What S1 landed.**
+
+- `@mpgd/game-services/notifications`: the provider registry with served
+  targets, the remote delivery provider contract (`{ id, send }`, built
+  from platform types only), the endpoint registry, consent records and the
+  notices API, sends through the key states, the gate, queued fan-out, and
+  the five answers, due-row replays (deferred rows and expired leases),
+  retention purges, the FCM provider, and a reference in-memory store.
+  `./notifications/store-conformance` pins the store contract.
+- The game-services Worker: migration `0007_notifications.sql` and the D1
+  store, the session-bound client routes, the `deliverNotification` and
+  `endNotificationSession` service-binding methods, the dispatch queue
+  consumer, and a cron that purges and replays due rows.
+- Left to S2: server reminders, notice pushes, and pacing by the
+  registry's `rate`; the replay of deferred rows is in S1 so that rate
+  limits and windows settle.
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
