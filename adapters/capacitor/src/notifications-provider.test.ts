@@ -1465,6 +1465,50 @@ describe('Capacitor notifications provider: settings', () => {
     expect(answer).toBe('opened');
   });
 
+  it('does not wait forever for an opener that never settles', async () => {
+    vi.useFakeTimers();
+    let settle: (() => void) | undefined;
+    const { provider, sdks, errors } = setup({
+      openSettings: () => new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+      settingsLeaveTimeoutMs: 1_000,
+      settingsReturnTimeoutMs: 5_000,
+    });
+    let answer: string | undefined;
+    void provider.openSettings!().then((value) => {
+      answer = value;
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    // The app left, and the return was missed.
+    sdks.app.setActive(false);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(answer).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(answer).toBe('opened');
+    expect(errors).toEqual([
+      new Error('Capacitor notifications: openSettings did not settle before the settings wait ended.'),
+    ]);
+    // A late settle changes nothing and reports nothing more.
+    settle?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(answer).toBe('opened');
+    expect(errors).toHaveLength(1);
+    // A never-settling opener that never left the app ends at the leave timeout.
+    const stalled = setup({
+      openSettings: () => new Promise<void>(() => undefined),
+      settingsLeaveTimeoutMs: 1_000,
+      settingsReturnTimeoutMs: 5_000,
+    });
+    let second: string | undefined;
+    void stalled.provider.openSettings!().then((value) => {
+      second = value;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(second).toBe('opened');
+    expect(stalled.errors).toHaveLength(1);
+  });
+
   it('answers unavailable when the opener fails', async () => {
     const { provider, errors } = setup({
       openSettings: async () => Promise.reject(new Error('no settings')),

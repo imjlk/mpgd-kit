@@ -954,12 +954,33 @@ export function createCapacitorNotificationProvider(
           ?? capacitorSettingsReturnTimeoutMs);
         finish = done;
       });
-      try {
-        await open();
-      } catch (error) {
-        reportError(error);
+      // The opener is raced with the wait: one that never settles must not
+      // hold the game past the timers, and settling after they ended changes
+      // nothing (a late rejection is only reported).
+      const opening = Promise.resolve()
+        .then(open)
+        .then(
+          () => 'opened' as const,
+          (error: unknown) => {
+            reportError(error);
+            return 'failed' as const;
+          },
+        );
+      const outcome = await Promise.race([
+        opening,
+        returned.then(() => 'waited' as const),
+      ]);
+      if (outcome === 'failed') {
         finish();
         return 'unavailable';
+      }
+      if (outcome === 'waited') {
+        // The wait ended before the opener settled: answered as a missed
+        // return is, with the stall reported once.
+        reportError(new Error(
+          'Capacitor notifications: openSettings did not settle before the settings wait ended.',
+        ));
+        return 'opened';
       }
       await returned;
       return 'opened';
