@@ -1,4 +1,5 @@
 import type {
+  NotificationConsentRecordInput,
   NotificationEndpointWrite,
   NotificationStore,
   NotificationStoredSend,
@@ -44,7 +45,7 @@ export async function runNotificationStoreConformance(
       state: 'denied',
       source: 'provider',
       evidence: { schema: 'fixture.host-agreement.v1', payload: { code: 'x' } },
-    } as never,
+    } as NotificationConsentRecordInput,
     at: at(0),
   });
   equal(first.at, at(0), 'consent: the first record keeps the backend time');
@@ -357,6 +358,314 @@ export async function runNotificationStoreConformance(
     (await store.listHistory({ player: 'p-1', since: at(0) })).map((entry) => entry.sendKey),
     ['h-1'],
     'purge: history from the cutoff on is kept',
+  );
+
+  await runConcurrencyAndEdgeClauses(store, at, endpoint, send);
+}
+
+/**
+ * The clauses a store can get wrong while passing the sequential ones:
+ * parallel callers of each atomic step, the dead-address and unbind edges,
+ * the due and in-flight indexes as rows change state, and purge boundaries.
+ */
+async function runConcurrencyAndEdgeClauses(
+  store: NotificationStore,
+  at: (offsetMs: number) => string,
+  endpoint: (
+    installationId: string,
+    value: string,
+    extra?: Partial<NotificationEndpointWrite>,
+  ) => NotificationEndpointWrite,
+  send: NotificationStoredSend,
+): Promise<void> {
+  const later = (offsetMs: number): string => at(10 * 86_400_000 + offsetMs);
+
+  // Parallel callers of each atomic step.
+  const parallel = await Promise.all(
+    Array.from({ length: 8 }, () =>
+      store.appendConsent({
+        player: 'p-parallel',
+        record: { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v1' },
+        at: later(0),
+      }),
+    ),
+  );
+  deepEqual(
+    parallel.map((record) => Date.parse(record.at)).sort((left, right) => left - right),
+    Array.from({ length: 8 }, (_, index) => Date.parse(later(index))),
+    'concurrency: parallel consent records each take their own millisecond',
+  );
+  deepEqual(
+    (await store.listConsent('p-parallel')).map((record) => record.at),
+    Array.from({ length: 8 }, (_, index) => later(index)),
+    'concurrency: parallel consent records are listed in time order',
+  );
+  await Promise.all([
+    store.putEndpoint(endpoint('race-1', 'tok-race', { player: 'p-race' })),
+    store.putEndpoint(endpoint('race-2', 'tok-race', { player: 'p-race' })),
+  ]);
+  equal(
+    (await store.listEndpoints({ player: 'p-race', provider: 'fcm' })).length,
+    1,
+    'concurrency: one address stays on one installation',
+  );
+  const racing = {
+    ...send,
+    key: 'race-send',
+    request: { ...send.request, idempotencyKey: 'race-send' },
+  };
+  const versions = await Promise.all(Array.from({ length: 4 }, () => store.createSend(racing)));
+  equal(
+    versions.filter((version) => version !== undefined).length,
+    1,
+    'concurrency: a key is created once',
+  );
+  const racingVersion = (await store.getSend('race-send'))?.version ?? '';
+  const writes = await Promise.all(
+    Array.from({ length: 4 }, () =>
+      store.updateSend({
+        key: 'race-send',
+        version: racingVersion,
+        send: { ...racing, changedAt: later(1) },
+      }),
+    ),
+  );
+  equal(writes.filter(Boolean).length, 1, 'concurrency: one write wins a version');
+
+  // Dead addresses and unbinding.
+  await store.putEndpoint(endpoint('dead-1', 'tok-dead', { player: 'p-edge' }));
+  await store.invalidateEndpoint({
+    provider: 'fcm',
+    installationId: 'dead-1',
+    value: 'tok-dead',
+    at: later(5),
+  });
+  await store.invalidateEndpoint({
+    provider: 'fcm',
+    installationId: 'dead-1',
+    value: 'tok-dead',
+    at: later(9),
+  });
+  const reregistered = await store.putEndpoint(
+    endpoint('dead-1', 'tok-dead', {
+      player: 'p-edge',
+      permission: 'blocked',
+      lastRegisteredAt: later(20),
+    }),
+  );
+  deepEqual(
+    [
+      reregistered.status,
+      reregistered.invalidatedAt,
+      reregistered.permission,
+      reregistered.lastRegisteredAt,
+    ],
+    ['invalid', later(5), 'blocked', later(20)],
+    'endpoints: a dead address keeps its first invalidation and takes the new registration fields',
+  );
+  await store.invalidateEndpoint({
+    provider: 'fcm',
+    installationId: 'other',
+    value: 'tok-dead',
+    at: later(30),
+  });
+  // Another installation that reports the dead address takes it, valid.
+  const taken = await store.putEndpoint(endpoint('dead-2', 'tok-dead', { player: 'p-edge' }));
+  equal(taken.status, 'valid', 'endpoints: another installation takes a dead address as valid');
+  equal(
+    await store.getEndpoint({ provider: 'fcm', installationId: 'dead-1' }),
+    undefined,
+    'endpoints: the dead copy goes',
+  );
+  const revived = await store.putEndpoint(endpoint('dead-2', 'tok-new', { player: 'p-edge' }));
+  equal(revived.invalidatedAt, undefined, 'endpoints: a revived endpoint has no invalidation time');
+  await store.putEndpoint({
+    ...endpoint('multi', 'tok-m1', { player: 'p-edge' }),
+    provider: 'fcm',
+  });
+  await store.putEndpoint({
+    ...endpoint('multi', 'tok-m2', { player: 'p-edge' }),
+    provider: 'other',
+  });
+  await store.removeEndpoints({ installationId: 'multi', player: 'p-edge', provider: 'other' });
+  ok(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'multi' })) !== undefined,
+    'endpoints: an unbind of one provider keeps the other',
+  );
+  await store.putEndpoint({
+    ...endpoint('multi', 'tok-m2', { player: 'p-edge' }),
+    provider: 'other',
+  });
+  await store.removeEndpoints({ installationId: 'multi', player: 'p-edge' });
+  ok(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'multi' })) === undefined
+      && (await store.getEndpoint({ provider: 'other', installationId: 'multi' })) === undefined,
+    'endpoints: an unbind without a provider removes every provider',
+  );
+
+  // Notices are named by instant and per player.
+  const notice = {
+    kind: 'reconfirmation',
+    record: { kind: 'night', at: '2026-10-19T03:00:00Z' },
+    dueBy: '2028-10-18',
+    player: 'p-edge',
+    channel: 'in-game',
+    at: later(0),
+  } as const;
+  await store.addNoticeGiven(notice);
+  await store.addNoticeGiven({
+    ...notice,
+    record: { kind: 'night', at: '2026-10-19T12:00:00+09:00' },
+  });
+  await store.addNoticeGiven({ ...notice, player: 'p-other' });
+  equal(
+    (await store.listNoticesGiven('p-edge')).length,
+    1,
+    'notices: another spelling of the instant is the same notice',
+  );
+  equal(
+    (await store.listNoticesGiven('p-other')).length,
+    1,
+    'notices: the same name for another player is recorded',
+  );
+
+  // The due and in-flight indexes follow the rows.
+  const edge = (key: string, rows: NotificationStoredSend['rows'], extra: Partial<NotificationStoredSend> = {}) => ({
+    ...send,
+    key,
+    request: { ...send.request, idempotencyKey: key, player: 'p-index' },
+    rows,
+    changedAt: later(0),
+    ...extra,
+  });
+  const queued = edge('idx-queued', [
+    {
+      key: 'idx-queued',
+      provider: 'platform',
+      state: { status: 'in-flight', leaseUntil: later(300), attempted: false },
+    },
+  ]);
+  const mixed = edge('idx-mixed', [
+    { key: 'idx-mixed:a', provider: 'fcm', installationId: 'a', state: { status: 'delivered' } },
+    {
+      key: 'idx-mixed',
+      provider: 'platform',
+      firstAttemptedAt: later(0),
+      state: {
+        status: 'in-flight',
+        leaseUntil: later(400),
+        claim: 'c',
+        attempted: true,
+        attemptedAt: later(0),
+      },
+    },
+  ]);
+  const abandoned = edge('idx-abandoned', [
+    {
+      key: 'idx-abandoned',
+      provider: 'platform',
+      firstAttemptedAt: later(0),
+      state: {
+        status: 'in-flight',
+        leaseUntil: later(86_400_000),
+        claim: 'c',
+        attempted: true,
+        attemptedAt: later(86_100_000),
+      },
+    },
+  ]);
+  const claimOnly = edge('idx-claim', [], { claim: { token: 't', leaseUntil: later(300) } });
+  for (const created of [queued, mixed, abandoned, claimOnly]) {
+    await store.createSend(created);
+  }
+  deepEqual(
+    await store.getSend('idx-mixed').then((held) => held?.send),
+    mixed,
+    'sends: attempt times round-trip',
+  );
+  deepEqual(
+    [...await store.listDueSends({ at: later(2 * 86_400_000), limit: 100 })].filter((key) => key.startsWith('idx-')).sort(),
+    ['idx-mixed', 'idx-queued'],
+    'sends: a queued and an attempted row are due at their lease; an abandoned row and a bare claim never',
+  );
+  deepEqual(
+    (await store.listInFlightSends('p-index')).map((row) => row.key).sort(),
+    ['idx-abandoned', 'idx-mixed', 'idx-queued'],
+    'sends: a send with any in-flight row is in flight, even next to a delivered row',
+  );
+  const settled = await store.getSend('idx-mixed');
+  await store.updateSend({
+    key: 'idx-mixed',
+    version: settled?.version ?? '',
+    send: { ...mixed, rows: [mixed.rows[0] as NotificationStoredSend['rows'][number]] },
+  });
+  ok(
+    !(await store.listDueSends({ at: later(2 * 86_400_000), limit: 100 })).includes('idx-mixed')
+      && !(await store.listInFlightSends('p-index')).some((row) => row.key === 'idx-mixed'),
+    'sends: a send whose rows all delivered leaves both indexes',
+  );
+
+  // History keeps one entry per send and provider.
+  await store.addHistory({
+    sendKey: 'two-providers',
+    provider: 'fcm',
+    player: 'p-edge',
+    topic: 't',
+    at: later(1),
+  });
+  await store.addHistory({
+    sendKey: 'two-providers',
+    provider: 'other',
+    player: 'p-edge',
+    topic: 't',
+    at: later(2),
+  });
+  equal(
+    (await store.listHistory({ player: 'p-edge', since: later(0) })).length,
+    2,
+    'history: another provider is another entry',
+  );
+
+  // Purge cutoffs are exclusive, and records outside purge survive it.
+  await store.putEndpoint(
+    endpoint('edge-invalid', 'tok-edge', { player: 'p-edge', lastRegisteredAt: later(0) }),
+  );
+  await store.invalidateEndpoint({
+    provider: 'fcm',
+    installationId: 'edge-invalid',
+    value: 'tok-edge',
+    at: later(50),
+  });
+  await store.putPlatformRegistration({
+    player: 'p-edge',
+    provider: 'ait',
+    registeredAt: later(0),
+  });
+  await store.purge({
+    sendsChangedBefore: later(0),
+    historyBefore: later(1),
+    invalidEndpointsBefore: later(50),
+    staleEndpointsBefore: later(0),
+    sessionEndpointsBefore: later(0),
+  });
+  ok(
+    (await store.getSend('idx-queued')) !== undefined,
+    'purge: a send changed at the cutoff is kept',
+  );
+  ok(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'edge-invalid' })) !== undefined,
+    'purge: an endpoint invalidated at the cutoff is kept',
+  );
+  equal(
+    (await store.listHistory({ player: 'p-edge', since: later(0) })).length,
+    2,
+    'purge: history at the cutoff is kept',
+  );
+  equal((await store.listConsent('p-parallel')).length, 8, 'purge: consent records are not purged');
+  equal((await store.listNoticesGiven('p-edge')).length, 1, 'purge: notices given are not purged');
+  ok(
+    (await store.getPlatformRegistration({ player: 'p-edge', provider: 'ait' })) !== undefined,
+    'purge: registrations are not purged',
   );
 }
 

@@ -1,6 +1,7 @@
 -- Notifications v2 server (docs/specs/notifications/notifications-v2-rfc.md, "Server").
 -- Times are stored twice: *_ms as epoch milliseconds for comparisons, and
--- the canonical RFC 3339 text inside the JSON a row carries.
+-- the canonical RFC 3339 text inside the JSON a row carries. The JSON is the
+-- record; the other columns index it and serve operator queries.
 
 -- Append-only consent history per player; `sequence` orders it and the
 -- backend dates each record at least 1 ms after the player's previous one.
@@ -40,6 +41,15 @@ CREATE INDEX IF NOT EXISTS idx_notification_endpoints_player
   ON notification_endpoints (player_id, provider);
 CREATE INDEX IF NOT EXISTS idx_notification_endpoints_session
   ON notification_endpoints (session_id);
+-- The purge's three cutoffs.
+CREATE INDEX IF NOT EXISTS idx_notification_endpoints_registered
+  ON notification_endpoints (last_registered_at_ms);
+CREATE INDEX IF NOT EXISTS idx_notification_endpoints_invalidated
+  ON notification_endpoints (invalidated_at_ms)
+  WHERE status = 'invalid';
+CREATE INDEX IF NOT EXISTS idx_notification_endpoints_session_expiry
+  ON notification_endpoints (session_expires_at_ms)
+  WHERE session_expires_at_ms IS NOT NULL;
 
 -- Platform-user registrations keep only the locale and zone.
 CREATE TABLE IF NOT EXISTS notification_platform_registrations (
@@ -76,7 +86,7 @@ CREATE TABLE IF NOT EXISTS notification_sends (
 );
 
 CREATE INDEX IF NOT EXISTS idx_notification_sends_due
-  ON notification_sends (due_at_ms)
+  ON notification_sends (due_at_ms, send_key)
   WHERE due_at_ms IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_sends_player_in_flight
   ON notification_sends (player_id)
@@ -96,3 +106,5 @@ CREATE TABLE IF NOT EXISTS notification_delivery_history (
 
 CREATE INDEX IF NOT EXISTS idx_notification_delivery_history_player
   ON notification_delivery_history (player_id, at_ms);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_history_at
+  ON notification_delivery_history (at_ms);

@@ -22,10 +22,11 @@ import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
 export function createD1NotificationStore(db: D1Database): NotificationStore {
   return {
     async appendConsent({ player, record, at }) {
-      const atMs = Date.parse(at);
+      const atMs = millisOf(at);
       const recordJson = JSON.stringify(record);
       const topic = 'topic' in record && typeof record.topic === 'string' ? record.topic : null;
-      // Two writers can take the same sequence; the primary key refuses one, which retries.
+      // Two writers can take the same sequence; the primary key refuses one,
+      // which retries. D1 serializes writes, so this guards other SQLite hosts.
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
           const stored = await db.prepare(`INSERT INTO notification_consent_records
@@ -95,8 +96,8 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
             write.timeZone ?? null,
             write.target ?? null,
             write.sessionId,
-            write.sessionExpiresAt === undefined ? null : Date.parse(write.sessionExpiresAt),
-            Date.parse(write.lastRegisteredAt),
+            write.sessionExpiresAt === undefined ? null : millisOf(write.sessionExpiresAt),
+            millisOf(write.lastRegisteredAt),
             json,
           ),
         db.prepare(`SELECT status, invalidated_at_ms, endpoint_json FROM notification_endpoints
@@ -163,17 +164,18 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     },
 
     async addNoticeGiven(notice) {
-      await db.prepare(`INSERT OR IGNORE INTO notification_notices_given
+      await db.prepare(`INSERT INTO notification_notices_given
           (player_id, kind, record_kind, record_at_ms, due_by, channel, given_at_ms, notice_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (player_id, kind, record_kind, record_at_ms, due_by) DO NOTHING`)
         .bind(
           notice.player,
           notice.kind,
           notice.record.kind,
-          Date.parse(notice.record.at),
+          millisOf(notice.record.at),
           notice.dueBy,
           notice.channel,
-          Date.parse(notice.at),
+          millisOf(notice.at),
           JSON.stringify(notice),
         )
         .run();
@@ -197,9 +199,11 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     async createSend(send) {
       const version = crypto.randomUUID();
       const index = sendIndexOf(send);
-      const result = await db.prepare(`INSERT OR IGNORE INTO notification_sends
+      // Only an existing key is ignored; a row that breaks a constraint throws.
+      const result = await db.prepare(`INSERT INTO notification_sends
           (send_key, version, player_id, in_flight, due_at_ms, changed_at_ms, send_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (send_key) DO NOTHING`)
         .bind(send.key, version, send.request.player, index.inFlight, index.dueAtMs, index.changedAtMs, JSON.stringify(send))
         .run();
       return result.meta.changes === 1 ? version : undefined;
@@ -238,16 +242,18 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     async listDueSends({ at, limit }) {
       const rows = await db.prepare(`SELECT send_key FROM notification_sends
         WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms, send_key LIMIT ?`)
-        .bind(Date.parse(at), Math.max(0, Math.floor(limit)))
+        // A limit that is not a number reads every due send (SQLite: a negative LIMIT is none).
+        .bind(Date.parse(at), Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : -1)
         .all<{ readonly send_key: string }>();
       return rows.results.map((row) => row.send_key);
     },
 
     async addHistory(entry) {
-      await db.prepare(`INSERT OR IGNORE INTO notification_delivery_history
+      await db.prepare(`INSERT INTO notification_delivery_history
           (send_key, provider, player_id, topic, at_ms)
-        VALUES (?, ?, ?, ?, ?)`)
-        .bind(entry.sendKey, entry.provider, entry.player, entry.topic, Date.parse(entry.at))
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (send_key, provider) DO NOTHING`)
+        .bind(entry.sendKey, entry.provider, entry.player, entry.topic, millisOf(entry.at))
         .run();
     },
     async listHistory({ player, since }) {
@@ -304,6 +310,15 @@ interface HistoryRow {
   readonly at_ms: number;
 }
 
+/** Epoch milliseconds of a stored time; a time that does not parse is refused rather than bound as NULL. */
+function millisOf(at: string): number {
+  const millis = Date.parse(at);
+  if (!Number.isFinite(millis)) {
+    throw new TypeError(`Not a timestamp: ${JSON.stringify(at)}`);
+  }
+  return millis;
+}
+
 function consentRecordOf(recordJson: string, atMs: number): NotificationConsentRecord {
   const record = JSON.parse(recordJson) as NotificationConsentRecordInput;
   return { ...record, at: formatNotificationInstant(atMs) } as NotificationConsentRecord;
@@ -329,10 +344,11 @@ function sendIndexOf(send: NotificationStoredSend): {
   return {
     inFlight: send.rows.some((row) => row.state.status === 'in-flight') ? 1 : 0,
     dueAtMs: due === undefined ? null : Date.parse(due),
-    changedAtMs: Date.parse(send.changedAt),
+    changedAtMs: millisOf(send.changedAt),
   };
 }
 
+/** Only the sequence collision is retried; a CHECK or NOT NULL failure is a bug and throws at once. */
 function isConstraintError(error: unknown): boolean {
-  return error instanceof Error && /constraint|UNIQUE/iu.test(error.message);
+  return error instanceof Error && /UNIQUE constraint failed|SQLITE_CONSTRAINT_PRIMARYKEY/u.test(error.message);
 }
