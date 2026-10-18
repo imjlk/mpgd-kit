@@ -853,7 +853,8 @@ Local reminders use inexact timing:
   restricts `USE_EXACT_ALARM` to alarm and calendar apps, and a game reminder
   does not need minute precision.
 - The Capacitor template removes `SCHEDULE_EXACT_ALARM` from the merged
-  manifest and schedules with `isExactNotification: false`.
+  manifest, and the provider schedules with `isExactNotification: false` and
+  `allowWhileIdle: true`, so a reminder still fires in Doze.
 - The provider keeps at most `local.maxPending` reminders, keeping the
   nearest ones.
 
@@ -1401,7 +1402,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     - Android 12 and below have no runtime permission, and push plugins can
       report `granted` while the player has turned notifications off
       (`@capacitor/push-notifications` does). The provider therefore reads
-      `LocalNotifications.checkPermissions`, which reflects the system setting.
+      `LocalNotifications.checkPermissions`, which reflects the system
+      setting, when the local plugin is present.
   - **iOS.** `denied` is `blocked`, and the iOS provider declares
     `promptLimit: 1`.
 - **Channels.** Android channels come from the catalog
@@ -1409,8 +1411,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   player can turn them off in system settings. A topic without a `channelId`
   posts to `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose,
   and creating the provider throws when a channel would mix advertising with
-  other topics. It creates the channels at start, because a push needs its channel
-  before it arrives, and tries again after a failure.
+  other topics. It creates the channels at start, because a push needs its
+  channel before it arrives, and tries again after a failure.
 - **Opt-out action.** The provider registers the advertising opt-out action
   natively as the action type `mpgd-advertising` with the action
   `advertising-opt-out`, through `@capacitor/local-notifications`.
@@ -1549,8 +1551,9 @@ What the kit enforces for `advertising` topics under `kr`:
   - At the end comes a statement that opting out is free (p.19).
   - The message carries an opt-out action that opens the opt-out screen
     directly; describing a settings path is not enough (p.44). An Android FCM
-    notification message cannot show actions, so the Capacitor shell renders
-    an Android advertising push itself (see [Capacitor](#profile-capacitor)).
+    notification message cannot show actions, so an Android advertising push
+    needs the Capacitor shell to render it natively with the action (see
+    [Capacitor](#profile-capacitor)).
 - **Notices.**
   - A result notice is due within 14 days of a consent, refusal, or
     withdrawal. It gives the sender's name, the act and its date, and the
@@ -1613,7 +1616,8 @@ Other rules the profiles encode:
     [`docs/specs/notifications/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/notifications/schemas).
   - `validate:notifications-alignment`, run in `pnpm check`, keeps the
     constant, the vectors, and the schemas aligned.
-- **What N3 landed.** No transport served v2 then; P1–P3 add the providers.
+- **What N3 landed.** No transport served v2 then; the providers came with
+  P1–P3.
   - `@mpgd/bridge` adds the nine methods to `BridgeMethod`
     (`bridgeNotificationsV2Methods`, kept equal to `notificationBridgeMethods`
     by a type check and a test). `@mpgd/bridge/notifications` validates each

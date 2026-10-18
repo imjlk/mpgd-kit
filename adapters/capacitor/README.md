@@ -240,19 +240,25 @@ is created, which is how a cold-start open reaches it.
   where the push plugin answers `granted` regardless. The OS `denied` reads
   `blocked`: after one denial on iOS (`promptLimit` 1) and after the second on
   Android 13+ (`promptLimit` 2; pass `androidPromptLimit: 1` for an app that
-  targets SDK 32 or lower). Only `requestPermission` shows the dialog. A change
-  made in system settings is read on the next read and announced as
+  targets SDK 32 or lower). Only `requestPermission` shows the dialog, and a
+  request made while the dialog is up shares its answer. A change made in
+  system settings is read on the next read and announced as
   `permission-changed` when the app returns to the foreground.
 - **Local reminders.** `scheduleLocal` answers `unsupported` for a topic
   outside the resolved catalog and for an advertising topic, which never
   schedules locally. Otherwise it reads the permission first and answers
   `permission-required` without calling the plugin, whose own `schedule` would
-  prompt on Android 13+. Reminders are inexact (`isExactNotification: false`;
-  the plugin's default would open the exact-alarm settings screen), keyed by a
-  stable 32-bit native id, replaced by key, posted on the topic's Android
-  channel, and capped at 64 pending on iOS, keeping the nearest. Remove
-  `SCHEDULE_EXACT_ALARM`, which the plugin's manifest adds, from the merged
-  manifest (`tools:node="remove"`).
+  prompt on Android 13+.
+  - Reminders are inexact (`isExactNotification: false`; the plugin's default
+    would open the exact-alarm settings screen) but may fire in Doze
+    (`allowWhileIdle: true`). Remove `SCHEDULE_EXACT_ALARM`, which the
+    plugin's manifest adds, from the merged manifest (`tools:node="remove"`).
+  - Each is keyed by a stable 32-bit native id, replaced by key, and posted on
+    the topic's Android channel. Operations run one at a time, in call order.
+  - iOS keeps at most 64 pending, so the provider keeps the nearest: at the
+    ceiling it cancels the farthest of its reminders before it schedules a
+    nearer one. Android declares no ceiling, but its alarm manager refuses an
+    app with about 500 pending alarms.
 - **Channels.** Each topic posts to its mapping's `channelId`, or to
   `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose
   (`capacitorNotificationChannelId`). Creating the provider throws when a
@@ -260,23 +266,27 @@ is created, which is how a cold-start open reaches it.
   advertising off in system settings. Name the channels with the `channels`
   option.
 - **Opens.** A tap becomes one `opened` event, buffered until the first
-  subscriber and marked `cold` before it. A push carries its topic and route in
-  the data keys `topic` and `route` (`capacitorNotificationDataKeys`); the
-  other string entries, except the transport's own keys (`from`,
-  `collapse_key`, `google.*`, `gcm.*`, and the like), reach the game as
-  untrusted `data`. A route is kept only
-  when `isRootRelativeNotificationRoute` accepts it, and a topic only when the
-  catalog declares it. Nothing is granted from an open.
-- **Advertising opt-out.** The provider registers the action type
-  `mpgd-advertising` (`capacitorAdvertisingActionTypeId`) with the
-  `advertising-opt-out` action (title `advertisingOptOutTitle`, '수신거부' by
-  default) through the local plugin. On iOS that sets the notification
-  category an FCM send names in `apns.payload.aps.category`, and the action
-  opens the `optOutRoute` of the advertising topic the push names in its
-  `topic` data key; without that key it opens nothing. An Android FCM
-  notification message cannot
-  carry actions, so an Android advertising push needs the shell to render it
-  natively with the action; the template work for that is C1's.
+  subscriber. A push carries its topic and route in the data keys `topic` and
+  `route` (`capacitorNotificationDataKeys`); its other string entries, except
+  the transport's own keys (`from`, `collapse_key`, `google.*`, `gcm.*`, and
+  the like), reach the game as untrusted `data`. A route is kept only when
+  `isRootRelativeNotificationRoute` accepts it, and a topic only when the
+  catalog declares it. Nothing is granted from an open. An open that arrives
+  before the first subscriber is marked `cold`; Capacitor replays a cold-start
+  tap asynchronously, so one replayed after the game subscribed reads `warm`.
+- **Advertising opt-out.** For a catalog with an advertising topic, the
+  provider registers the action type `mpgd-advertising`
+  (`capacitorAdvertisingActionTypeId`) with the `advertising-opt-out` action
+  (title `advertisingOptOutTitle`, '수신거부' by default) through the local
+  plugin.
+  - On iOS that sets the app's notification categories, all at once, so it
+    replaces categories the shell registered through the same plugin. An FCM
+    send names the category in `apns.payload.aps.category`.
+  - The action opens the `optOutRoute` of the advertising topic the push names
+    in its `topic` data key; without that key it opens nothing.
+  - An Android FCM notification message cannot carry actions, so an Android
+    advertising push needs the shell to render it natively with the action;
+    the template work for that is C1's.
 - **Settings.** Neither plugin opens the notification settings, so the shell
   passes `openSettings` (for example a small native method); without it
   `permission.settings` is `false` and `openSettings` answers `unavailable`.
@@ -286,8 +296,11 @@ is created, which is how a cold-start open reaches it.
 - **Endpoints.** `register()` answers the FCM token with the device
   permission, locale, and time zone, or `null` while Firebase cannot issue one
   yet; a token Firebase issues later arrives as `endpoint-changed`. Pass
-  `address: 'fcm-installation'` with a `PushSdk` that adds `getInstallationId`
-  to register Firebase installation ids instead.
+  `address: 'fcm-installation'` with a `PushSdk` whose `getInstallationId`
+  issues Firebase installation ids to register those instead. The messaging
+  plugin has no such method, and its proxy cannot be told apart from one that
+  has, so with the plain plugin `register()` answers
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
 
 ## App Store server-side transaction signatures
 

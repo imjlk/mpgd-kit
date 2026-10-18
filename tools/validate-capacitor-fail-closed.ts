@@ -283,16 +283,22 @@ for (const name of notificationPlugins) {
     );
   }
 }
+/** Source without comments, so a doc line neither satisfies nor trips a check. */
+const codeOf = (source: string): string => source
+  .replace(/\/\*[\s\S]*?\*\//gu, '')
+  .replace(/^\s*\/\/.*$/gmu, '');
+const optionalManifests = ['packages/cli/templates/phaser-game/package.json', 'examples/phaser-starter/package.json']
+  .filter((path) => existsSync(new URL(`../${path}`, import.meta.url)));
 const pushNotificationsManifests: [string, ReturnType<typeof manifest>][] = [
   ['package.json', manifest(read('package.json'), 'root')],
   ['adapters/capacitor/package.json', adapterManifest],
   ['apps/mobile-capacitor/package.json', referenceShell],
-  ...['packages/cli/templates/phaser-game/package.json', 'examples/phaser-starter/package.json']
-    .map((path): [string, ReturnType<typeof manifest>] => [path, manifest(read(path), path)]),
-  ...readdirSync(new URL('../native-plugins/', import.meta.url))
-    .map((name) => `native-plugins/${name}/package.json`)
-    .filter((path) => existsSync(new URL(`../${path}`, import.meta.url)))
-    .map((path): [string, ReturnType<typeof manifest>] => [path, manifest(read(path), path)]),
+  ...[
+    ...optionalManifests,
+    ...readdirSync(new URL('../native-plugins/', import.meta.url))
+      .map((name) => `native-plugins/${name}/package.json`)
+      .filter((path) => existsSync(new URL(`../${path}`, import.meta.url))),
+  ].map((path): [string, ReturnType<typeof manifest>] => [path, manifest(read(path), path)]),
 ];
 for (const [path, packageManifest] of pushNotificationsManifests) {
   for (const field of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
@@ -304,42 +310,48 @@ for (const [path, packageManifest] of pushNotificationsManifests) {
   }
 }
 assert.doesNotMatch(
-  read('packages/cli/src/capacitor-shell-starter.ts'),
+  codeOf(shellStarter),
   /@capacitor\/push-notifications/u,
   'The CLI shell starter must not install @capacitor/push-notifications',
 );
 // The base entry's module graph stays free of the optional peers: no other
-// module imports them, or a notifications module that does.
+// module imports them (or one of their subpaths), or a notifications module.
+const quote = '["\'`]';
 const notificationsSpecifier = new RegExp(
-  `["'\`](?:${notificationPlugins.map((name) => name.replace('/', '\\/')).join('|')}|\\./notifications[^"'\`]*)["'\`]`,
+  `${quote}(?:(?:${notificationPlugins.map((name) => name.replace('/', '\\/')).join('|')})(?:\\/[^"'\`]*)?`
+    + `|(?:\\.\\.?\\/)+(?:[^"'\`]*\\/)?notifications[^"'\`]*)${quote}`,
   'u',
 );
-for (const entry of readdirSync(new URL('../adapters/capacitor/src/', import.meta.url), {
+const scanned: string[] = [];
+for (const file of readdirSync(new URL('../adapters/capacitor/src/', import.meta.url), {
+  encoding: 'utf8',
   recursive: true,
 })) {
-  const file = String(entry).replaceAll('\\', '/');
-  const name = file.split('/').at(-1) ?? file;
-  if (!file.endsWith('.ts') || name.startsWith('notifications') || file.endsWith('.test.ts')) {
+  const path = file.replaceAll('\\', '/');
+  if (!path.endsWith('.ts') || path.endsWith('.test.ts')
+    || path.startsWith('notifications')) {
     continue;
   }
+  scanned.push(path);
   assert.doesNotMatch(
-    read(`adapters/capacitor/src/${file}`),
+    codeOf(read(`adapters/capacitor/src/${path}`)),
     notificationsSpecifier,
-    `adapters/capacitor/src/${file}: only the notifications subpath may import the notification plugins or modules`,
+    `adapters/capacitor/src/${path}: only the notifications subpath may import the notification plugins or modules`,
   );
 }
-// Code, not comments: the scheduled notification sets the flag itself.
-const notificationsProvider = read('adapters/capacitor/src/notifications-provider.ts')
-  .replace(/\/\*[\s\S]*?\*\//gu, '')
-  .replace(/^\s*\/\/.*$/gmu, '');
+assert.ok(
+  scanned.includes('index.ts') && scanned.includes('providers.ts'),
+  'The base entry modules must be among the scanned Capacitor sources',
+);
+const notificationsProvider = codeOf(read('adapters/capacitor/src/notifications-provider.ts'));
 assert.match(
   notificationsProvider,
-  /^\s+isExactNotification: false,$/mu,
+  /isExactNotification:\s*false\b/u,
   'Capacitor local reminders must be scheduled with inexact alarms',
 );
 assert.doesNotMatch(
   notificationsProvider,
-  /isExactNotification: true|isExactMandatory/u,
+  /isExactNotification:\s*true|isExactMandatory/u,
   'Capacitor local reminders must never ask for exact alarms',
 );
 
