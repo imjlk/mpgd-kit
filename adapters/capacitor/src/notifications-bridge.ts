@@ -30,6 +30,7 @@ import {
   type NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
 
+import { namesOtherProtocol } from './bridge-events.js';
 import type {
   CapacitorNotificationServiceProvider,
   CapacitorNotificationsV2Service,
@@ -119,6 +120,13 @@ export function createNotificationProviderBridge(
             ? 'unavailable'
             : await provider.openSettings(),
         };
+      default: {
+        // A method added to the list without a case here fails to compile.
+        const unhandled: never = method;
+        throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
+          message: `The notifications bridge does not serve ${String(unhandled)}.`,
+        });
+      }
     }
   };
 
@@ -192,7 +200,8 @@ export interface CreateNotificationServiceProviderInput {
   /**
    * The topics resolved for the target, as the provider was created with
    * them: the v1 adapter answers `configuration-required` for a topic outside
-   * them.
+   * them, and so for an entry that still carries a catalog's `targets`,
+   * which names no single target.
    */
   readonly topics: readonly Pick<NotificationTopicDeclaration, 'id'>[];
 }
@@ -208,9 +217,9 @@ export function createNotificationServiceProvider(
   input: CreateNotificationServiceProviderInput,
 ): CapacitorNotificationServiceProvider {
   const { notifications } = input;
-  // As given: an entry that still carries a catalog's `targets` names no
-  // single target, and the v1 adapter counts it as outside.
-  const topics = [...input.topics];
+  // Copied entry by entry, `targets` included: an entry that still carries
+  // one names no single target, and the v1 adapter counts it as outside.
+  const topics = input.topics.map((topic) => ({ ...topic }));
   const service: CapacitorNotificationsV2Service = {
     async getCapabilities() {
       return copyCapabilities(assertBridgeNotificationsV2Result('notifications.v2.getCapabilities', {
@@ -301,7 +310,9 @@ export interface CreateBridgeNotificationProviderInput {
  * methods and the event envelope. Answers are validated again on this side,
  * so a transport that forgets to stays fail-closed. A bridge failure becomes
  * a `NotificationError`: one with a notifications code keeps it, anything
- * else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. An event envelope that
+ * else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the retryable flag
+ * follows the failure: an invalid answer is not retryable whatever its code.
+ * Callers retry on the flag, not the code. An event envelope that
  * names another protocol is skipped; a malformed one is dropped with a
  * warning, because it carries nothing the game could route.
  *
@@ -318,6 +329,16 @@ export function createBridgeNotificationProvider(
     method: TMethod,
     payload: BridgeNotificationsV2Payload<TMethod>,
   ): Promise<BridgeNotificationsV2Result<TMethod>> => {
+    // Checked here too, so a payload the contract rejects never pauses the
+    // game for a request that cannot succeed.
+    try {
+      assertBridgeNotificationsV2Payload(method, payload);
+    } catch (error) {
+      throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+        message: `${method} payload is invalid: ${error instanceof Error ? error.message : String(error)}`,
+        cause: error,
+      });
+    }
     let data: unknown;
     try {
       data = await input.request<unknown>(method, payload);
@@ -341,7 +362,8 @@ export function createBridgeNotificationProvider(
     async getCapabilities() {
       return (await send('notifications.v2.getCapabilities', protocol)).capabilities;
     },
-    // Async, so input a caller outside TypeScript gets wrong rejects instead of throwing.
+    // Async, so wrong input from a caller outside TypeScript rejects instead
+    // of throwing synchronously.
     getPermission: async (request) => send('notifications.v2.getPermission', topicsPayload(request)),
     requestPermission: async (request) =>
       send('notifications.v2.requestPermission', topicsPayload(request)),
@@ -374,10 +396,7 @@ export function createBridgeNotificationProvider(
     },
     subscribe(listener: (event: NotificationEvent) => void) {
       return input.subscribe((envelope) => {
-        const protocolName: unknown = typeof envelope === 'object' && envelope !== null
-          ? (envelope as { readonly protocol?: unknown }).protocol
-          : undefined;
-        if (typeof protocolName === 'string' && protocolName !== bridgeNotificationsEventProtocol) {
+        if (namesOtherProtocol(envelope, bridgeNotificationsEventProtocol)) {
           return;
         }
         let event: NotificationEvent;
@@ -393,7 +412,11 @@ export function createBridgeNotificationProvider(
   } satisfies NotificationProvider;
 }
 
-/** Only `topics` crosses: the payload validator refuses unknown keys, and a missing list stays missing. */
+/**
+ * Only `topics` crosses, since the payload validator refuses unknown keys. A
+ * missing request or list stays missing on purpose: the cast lets `send`'s
+ * payload validator reject it as `NOTIFICATIONS_INVALID_INPUT`.
+ */
 function topicsPayload(request: { readonly topics: readonly string[] } | undefined): {
   readonly topics: readonly string[];
 } {
@@ -407,21 +430,17 @@ function toNotificationError(error: unknown): NotificationError {
   const code: unknown = typeof error === 'object' && error !== null
     ? (error as { readonly code?: unknown }).code
     : undefined;
-  const message = error instanceof Error ? error.message : undefined;
-  if (isNotificationErrorCode(code)) {
-    return new NotificationError(code, {
-      ...(message === undefined ? {} : { message }),
-      ...(error instanceof PlatformOperationError ? { retryable: error.retryable } : {}),
-      cause: error,
-    });
-  }
-  // A transport failure keeps its retryability: an invalid provider answer
-  // (`NATIVE_PROVIDER_INVALID_RESPONSE`) is not worth retrying.
-  return new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
-    ...(message === undefined ? {} : { message }),
+  const options = {
+    ...(error instanceof Error ? { message: error.message } : {}),
+    // A transport failure keeps its retryability: an invalid provider answer
+    // (`NATIVE_PROVIDER_INVALID_RESPONSE`) is not worth retrying.
     ...(error instanceof PlatformOperationError ? { retryable: error.retryable } : {}),
     cause: error,
-  });
+  };
+  return new NotificationError(
+    isNotificationErrorCode(code) ? code : 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    options,
+  );
 }
 
 /** A field-by-field copy, so the gateway never hands out a provider-owned block. */

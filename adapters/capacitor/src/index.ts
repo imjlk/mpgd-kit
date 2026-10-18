@@ -30,6 +30,7 @@ import {
   type CapacitorIncomingUrlKind,
   type CapacitorVisibilitySource,
 } from './app-events.js';
+import { namesOtherProtocol } from './bridge-events.js';
 import { createBridgeCommerceProvider } from './commerce-bridge.js';
 import {
   assertProviderResponseData,
@@ -186,13 +187,9 @@ export function createCapacitorPlatformGateway(input: {
         // else, a malformed envelope included, reaches the commerce
         // provider's validator.
         subscribe: (listener) => commerceProvider.bridge.subscribe((envelope) => {
-          const protocol: unknown = typeof envelope === 'object' && envelope !== null
-            ? (envelope as { readonly protocol?: unknown }).protocol
-            : undefined;
-          if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
-            return;
+          if (!namesOtherProtocol(envelope, bridgeCommerceEventProtocol)) {
+            listener(envelope as BridgeCommerceEvent);
           }
-          listener(envelope as BridgeCommerceEvent);
         }),
       });
   const notificationsProvider: CapacitorNotificationServiceProvider | undefined =
@@ -205,13 +202,9 @@ export function createCapacitorPlatformGateway(input: {
     // Only an envelope that names another protocol is dropped; anything else,
     // a malformed envelope included, reaches the client's validator.
     subscribe: (listener) => notificationsProvider.bridge.subscribe((envelope) => {
-      const protocol: unknown = typeof envelope === 'object' && envelope !== null
-        ? (envelope as { readonly protocol?: unknown }).protocol
-        : undefined;
-      if (typeof protocol === 'string' && protocol !== bridgeNotificationsEventProtocol) {
-        return;
+      if (!namesOtherProtocol(envelope, bridgeNotificationsEventProtocol)) {
+        listener(envelope as BridgeNotificationsEvent);
       }
-      listener(envelope as BridgeNotificationsEvent);
     }),
   });
   const lifecycle = createCapacitorAppEvents({

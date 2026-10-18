@@ -331,12 +331,23 @@ describe('Capacitor gateway with a notifications v2 service', () => {
       .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false });
   });
 
-  it('rejects instead of throwing for input a caller outside TypeScript gets wrong', async () => {
-    const { gateway } = setup();
-    const call = gateway.notificationsV2?.getPermission(undefined as never);
-    expect(call).toBeInstanceOf(Promise);
-    await expect(call).rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
-  });
+  it.each(['getPermission', 'requestPermission', 'revokePermission'] as const)(
+    '%s rejects instead of throwing, before any pause, for input a caller gets wrong',
+    async (method) => {
+      const native = createCapacitorNotificationProvider({ platform: 'android', topics, app: null });
+      const { gateway } = setup({
+        native: { ...native, revokePermission: async () => native.requestPermission({ topics: [] }) },
+      });
+      const pauses: string[] = [];
+      gateway.lifecycle.onPause(() => pauses.push('pause'));
+      await settle();
+      const call = gateway.notificationsV2?.[method]?.(undefined as never);
+      expect(call).toBeInstanceOf(Promise);
+      await expect(call).rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT', retryable: false });
+      expect(pauses).toEqual([]);
+      await gateway.lifecycle.dispose?.();
+    },
+  );
 
   it('releases the pause when the request fails', async () => {
     const { gateway, sdks } = setup();
@@ -521,6 +532,19 @@ describe('bridge notifications client', () => {
     expect(typeof client.openSettings).toBe('function');
   });
 
+  it('does not retry an answer its own validator rejects', async () => {
+    const client = createBridgeNotificationProvider({
+      provider: 'fcm',
+      serves: { revokePermission: false, register: false, local: false },
+      request: async <TData>() => ({ app: 'granted', topics: { a: 'maybe' } }) as TData,
+      subscribe: () => () => undefined,
+    });
+    await expect(client.getPermission({ topics: ['a'] })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      retryable: false,
+    });
+  });
+
   it('keeps a notifications error code and maps anything else to temporarily unavailable', async () => {
     const failing = (error: unknown) => createBridgeNotificationProvider({
       provider: 'fcm',
@@ -589,6 +613,35 @@ describe('Capacitor registry with a notifications v2 service', () => {
     const { subscribe: _subscribe, ...bridge } = service().bridge;
     expect(() => createCapacitorProviderRegistry([{ ...service(), bridge }]))
       .toThrow(/declares a notifications service but its bridge has no subscribe/u);
+  });
+
+  it('copies every capability field, optional ones included', async () => {
+    const native = createCapacitorNotificationProvider({ platform: 'ios', topics, app: null });
+    const full = {
+      availability: 'available',
+      permission: {
+        scope: 'app',
+        prompt: 'os',
+        readable: true,
+        serverReadable: false,
+        allowance: 'persistent',
+        userGesture: false,
+        promptLimit: 1,
+        maxTopicsPerPrompt: 3,
+        settings: true,
+      },
+      remote: { supported: true, purposes: ['service'], addressing: 'device', content: 'free-form' },
+      local: { supported: true, maxPending: 64 },
+      open: 'payload',
+    } as const;
+    const entry = createNotificationServiceProvider({
+      id: 'notifications',
+      notifications: { ...native, getCapabilities: async () => full },
+      topics,
+    });
+    const copy = await entry.notificationsV2.getCapabilities();
+    expect(copy).toEqual(full);
+    expect(copy.remote.purposes).not.toBe(full.remote.purposes);
   });
 
   it('builds the provider and its entry in one call', async () => {
