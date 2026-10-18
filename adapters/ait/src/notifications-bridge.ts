@@ -285,8 +285,9 @@ export function createAitBridgeNotificationProvider(
 }
 
 /** The host codes the bridge carries; the host handler names only these in a message. */
-const hostCodeValue = /^[A-Za-z0-9_.:-]{1,128}$/u;
-const hostCodePattern = /\(host code ([A-Za-z0-9_.:-]{1,128})\)$/u;
+const hostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
+const hostCodeValue = new RegExp(`^${hostCodeCharacters}$`, 'u');
+const hostCodePattern = new RegExp(`\\(host code (${hostCodeCharacters})\\)$`, 'u');
 
 function toNotificationError(error: unknown): NotificationError {
   if (error instanceof NotificationError) {

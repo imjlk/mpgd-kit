@@ -325,6 +325,25 @@ describe('createAitNotificationsV2BridgeHandler', () => {
       });
   });
 
+  it('names only a readable host code in the message', async () => {
+    const throwing = (hostCode: string) =>
+      createAitNotificationsV2BridgeHandler({
+        ...base,
+        requestPermission: async () => {
+          throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', { hostCode });
+        },
+      });
+    const readable = await throwing('CODE_1').request(
+      request('notifications.v2.requestPermission', { topics: ['a'] }),
+    );
+    expect(readable).toMatchObject({ ok: false, error: { message: expect.stringMatching(/\(host code CODE_1\)$/u) } });
+    const unreadable = await throwing('bad code (x)').request(
+      request('notifications.v2.requestPermission', { topics: ['a'] }),
+    );
+    expect(unreadable).toMatchObject({ ok: false });
+    expect(unreadable.ok ? '' : unreadable.error.message).not.toContain('host code');
+  });
+
   it('refuses an empty request and answers null for a provider without registration', async () => {
     const handler = createAitNotificationsV2BridgeHandler(base);
     await expect(handler.request(request('notifications.v2.requestPermission', { topics: [] })))
