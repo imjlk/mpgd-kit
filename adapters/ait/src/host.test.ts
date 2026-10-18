@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
 
-import { bridgeNotificationsV2Methods, type BridgeRequest } from '@mpgd/bridge';
+import type { BridgeRequest } from '@mpgd/bridge';
 import type { CommerceDiagnostic, ProductInfo, PurchaseRestoreResult } from '@mpgd/platform';
 import {
   createAitHostBridge,
@@ -1487,7 +1487,7 @@ describe('AIT production host bridge', () => {
     }
   });
 
-  it('requests configured notification agreement and reflects the session result', async () => {
+  it('serves v1 notification requests from the v2 provider without a session cache', async () => {
     let callbacks: NotificationAgreementCallbacks | undefined;
     let cleanupCount = 0;
     const requestAgreement = Object.assign(
@@ -1507,6 +1507,9 @@ describe('AIT production host bridge', () => {
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'daily-ready',
     })).resolves.toBe('configuration-required');
+    await expect(request(bridge, 'notifications.requestSubscription', {
+      topic: 'daily-ready',
+    })).resolves.toBe('unavailable');
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'streak-at-risk',
     })).resolves.toBe('not-subscribed');
@@ -1514,42 +1517,139 @@ describe('AIT production host bridge', () => {
     const subscription = request(bridge, 'notifications.requestSubscription', {
       topic: 'streak-at-risk',
     });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    expect(callbacks?.options).toEqual({ templateCode: 'TTOKDOKU_STREAK_ALERT' });
     callbacks?.onEvent({ type: 'newAgreement' });
     await expect(subscription).resolves.toBe('subscribed');
-    await expect(request(bridge, 'notifications.getStatus', {
-      topic: 'streak-at-risk',
-    })).resolves.toBe('subscribed');
-    expect(cleanupCount).toBe(1);
-  });
-
-  it('fails closed for notifications v2 methods without prompting the host', async () => {
-    let agreementRequests = 0;
-    const requestAgreement = Object.assign(
-      () => {
-        agreementRequests += 1;
-        return () => {};
-      },
-      { isSupported: () => true },
-    );
-    const bridge = createAitHostBridge({
-      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
-      dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
-    });
-
-    for (const method of bridgeNotificationsV2Methods) {
-      for (const payload of [{ topics: ['streak-at-risk'] }, { protocol: 'mpgd.notifications.v2' }, null]) {
-        await expect(requestError(bridge, method, payload)).resolves.toEqual({
-          code: 'NOTIFICATIONS_V2_UNAVAILABLE',
-          message: expect.stringContaining(method),
-          retryable: false,
-        });
-      }
-    }
-    expect(agreementRequests).toBe(0);
-    // The v1 methods keep serving the game.
+    // The host gives no read and the bridge keeps no session copy: the
+    // backend's consent record, read through the runtime, decides.
     await expect(request(bridge, 'notifications.getStatus', {
       topic: 'streak-at-risk',
     })).resolves.toBe('not-subscribed');
+    expect(cleanupCount).toBe(1);
+
+    const v2 = await request(bridge, 'notifications.v2.getPermission', {
+      topics: ['streak-at-risk', 'daily-ready'],
+    });
+    expect(v2).toEqual({ topics: { 'streak-at-risk': 'unknown', 'daily-ready': 'unsupported' } });
+  });
+
+  it('maps v1 requests through the v2 outcomes: rejected, dismissed, and too-old hosts', async () => {
+    vi.useFakeTimers();
+    try {
+      let callbacks: NotificationAgreementCallbacks | undefined;
+      let supported = true;
+      const requestAgreement = Object.assign(
+        (input: NotificationAgreementCallbacks) => {
+          callbacks = input;
+          return () => {};
+        },
+        { isSupported: () => supported },
+      );
+      const bridge = createAitHostBridge({
+        notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+        dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+      });
+
+      const rejected = request(bridge, 'notifications.requestSubscription', { topic: 'streak-at-risk' });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      callbacks?.onEvent({ type: 'agreementRejected' });
+      await expect(rejected).resolves.toBe('rejected');
+
+      callbacks = undefined;
+      const dismissed = request(bridge, 'notifications.requestSubscription', { topic: 'streak-at-risk' });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(dismissed).resolves.toBe('unavailable');
+
+      supported = false;
+      await expect(request(bridge, 'notifications.getStatus', {
+        topic: 'streak-at-risk',
+      })).resolves.toBe('unsupported');
+      await expect(request(bridge, 'notifications.requestSubscription', {
+        topic: 'streak-at-risk',
+      })).resolves.toBe('unavailable');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('serves notifications v2 methods and answers the methods Apps in Toss lacks', async () => {
+    const bridge = createAitHostBridge({
+      notificationTopics: {
+        receipt: { templateSetCode: 'ttokdoku-receipt', agreement: 'none' },
+      },
+      dependencies: createDependencies(),
+    });
+
+    await expect(request(bridge, 'notifications.v2.getCapabilities', {
+      protocol: 'mpgd.notifications.v2',
+    })).resolves.toMatchObject({
+      provider: 'apps-in-toss',
+      capabilities: {
+        availability: 'available',
+        permission: { scope: 'topic', prompt: 'host', readable: false, userGesture: true },
+        remote: { supported: true, addressing: 'platform-user', content: 'host-template' },
+        local: { supported: false },
+        open: 'landing-url',
+      },
+    });
+    await expect(request(bridge, 'notifications.v2.requestPermission', {
+      topics: ['receipt'],
+    })).resolves.toEqual({
+      snapshot: { topics: { receipt: 'granted' } },
+      outcomes: { receipt: 'already-granted' },
+    });
+    await expect(request(bridge, 'notifications.v2.register', {
+      protocol: 'mpgd.notifications.v2',
+    })).resolves.toMatchObject({
+      registration: { provider: 'apps-in-toss', address: { kind: 'platform-user' } },
+    });
+    await expect(request(bridge, 'notifications.v2.openSettings', {
+      protocol: 'mpgd.notifications.v2',
+    })).resolves.toEqual({ status: 'unavailable' });
+    for (const [method, payload] of [
+      ['notifications.v2.revokePermission', { topics: ['receipt'] }],
+      ['notifications.v2.listLocal', { protocol: 'mpgd.notifications.v2' }],
+      ['notifications.v2.cancelLocal', { keys: ['k'] }],
+    ] as const) {
+      await expect(requestError(bridge, method, payload)).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_UNSUPPORTED',
+        retryable: false,
+      });
+    }
+    await expect(requestError(bridge, 'notifications.v2.getPermission', { topics: 'receipt' }))
+      .resolves.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT', retryable: false });
+  });
+
+  it('answers home for a launch from a Toss push and leaves its route to the cold open', async () => {
+    const bridge = createAitHostBridge({
+      notificationTopics: {
+        'energy-full': { templateSetCode: 'ttokdoku-energy-full', agreement: 'required' },
+      },
+      dependencies: createDependencies({
+        readInitialUrl: () => 'intoss://ttokdoku/daily?entry=daily&puzzleId=p1&referrer=push',
+      }),
+    });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((event) => events.push(event));
+
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'home',
+    });
+    expect(events).toEqual([
+      {
+        protocol: 'mpgd.notifications.v2',
+        sequence: 0,
+        event: {
+          type: 'opened',
+          channel: 'remote',
+          source: 'cold',
+          referrer: 'push',
+          route: '/daily?entry=daily&puzzleId=p1',
+        },
+      },
+    ]);
   });
 
   it('deduplicates promotion grants with the server-issued claim id', async () => {
@@ -5203,6 +5303,7 @@ function createDependencies(
     share: async () => {},
     grantPromotionReward: withSupportProbe(grantPromotionReward),
     requestNotificationAgreement: withSupportProbe(requestNotificationAgreement, false),
+    readInitialUrl: () => undefined,
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,
