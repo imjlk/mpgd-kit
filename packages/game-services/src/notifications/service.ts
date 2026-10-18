@@ -124,7 +124,11 @@ export interface NotificationSession {
   readonly sessionId: string;
   /** The guest session's installation id. */
   readonly installationId: string;
-  /** When the session ends on its own, RFC 3339; endpoints it registered count as unbound from then. */
+  /**
+   * When the session ends on its own, RFC 3339; endpoints it registered
+   * count as unbound from then. Each call moves their stored end to a later
+   * one (or clears it when this is absent), never to an earlier one.
+   */
   readonly expiresAt?: string;
 }
 
@@ -1309,11 +1313,30 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     return settle(send.key, [...refusals, ...ran.refusals]);
   };
 
+  /**
+   * Each authenticated call carries the session's current end, and the
+   * endpoints the session registered move to it when it is later, so a
+   * session the identity service extended keeps its devices bound without a
+   * new registration. It never fails the call; a failure is reported.
+   */
+  const authenticated = async (session: NotificationSession): Promise<NotificationSession> => {
+    const current = sessionOf(session);
+    try {
+      await store.extendSessionEndpoints({
+        sessionId: current.sessionId,
+        ...(current.expiresAt === undefined ? {} : { expiresAt: normalizeNotificationTimestamp(current.expiresAt) }),
+      });
+    } catch (error) {
+      report(error, 'endpoints.extend');
+    }
+    return current;
+  };
+
   return {
     providers: () => registry.snapshot(),
 
     async recordConsent(session, record) {
-      const { player } = sessionOf(session);
+      const { player } = await authenticated(session);
       if (!isPlainObject(record)) {
         throw invalidInput('A consent record is an object.');
       }
@@ -1362,11 +1385,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     },
 
     async listConsent(session) {
-      return store.listConsent(sessionOf(session).player);
+      return store.listConsent((await authenticated(session)).player);
     },
 
     async registerEndpoint(session, request) {
-      const current = sessionOf(session);
+      const current = await authenticated(session);
       let registration: ReturnType<typeof assertNotificationEndpointRegistration>;
       try {
         registration = assertNotificationEndpointRegistration(request.registration);
@@ -1435,7 +1458,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     },
 
     async unregisterEndpoint(session, request = {}) {
-      const current = sessionOf(session);
+      const current = await authenticated(session);
       if (request.provider !== undefined && !isBoundedText(request.provider)) {
         throw invalidInput('provider: expected a non-empty string.');
       }
@@ -1454,11 +1477,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     },
 
     async listNotices(session) {
-      return noticesOf(sessionOf(session).player, nowMs());
+      return noticesOf((await authenticated(session)).player, nowMs());
     },
 
     async recordNoticeShown(session, notice, options = {}) {
-      const { player } = sessionOf(session);
+      const { player } = await authenticated(session);
       let named: NotificationNoticeIdentity;
       try {
         const parsed = assertRecordNotificationNoticeInput(notice);

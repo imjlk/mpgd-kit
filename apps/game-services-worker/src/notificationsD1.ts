@@ -145,6 +145,22 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
         .run();
       return result.meta.changes;
     },
+    async extendSessionEndpoints({ sessionId, expiresAt }) {
+      // The endpoint JSON is what reads answer, so it moves with the column.
+      const result = await (expiresAt === undefined
+        ? db.prepare(`UPDATE notification_endpoints SET
+              session_expires_at_ms = NULL,
+              endpoint_json = json_remove(endpoint_json, '$.sessionExpiresAt')
+            WHERE session_id = ? AND session_expires_at_ms IS NOT NULL`)
+          .bind(sessionId)
+        : db.prepare(`UPDATE notification_endpoints SET
+              session_expires_at_ms = ?,
+              endpoint_json = json_set(endpoint_json, '$.sessionExpiresAt', ?)
+            WHERE session_id = ? AND session_expires_at_ms < ?`)
+          .bind(millisOf(expiresAt), expiresAt, sessionId, millisOf(expiresAt))
+      ).run();
+      return result.meta.changes;
+    },
 
     async putPlatformRegistration(registration) {
       await db.prepare(`INSERT INTO notification_platform_registrations (player_id, provider, registration_json)

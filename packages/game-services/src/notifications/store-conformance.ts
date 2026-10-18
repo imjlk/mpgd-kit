@@ -142,6 +142,55 @@ export async function runNotificationStoreConformance(
     'p-2',
     'endpoints: an unbind names the player',
   );
+  // A session's later end moves its endpoints' ends; an earlier one or another session's does not.
+  await store.putEndpoint(
+    endpoint('i-5', 'tok-5', { sessionId: 'extended', sessionExpiresAt: at(60_000) }),
+  );
+  await store.putEndpoint(endpoint('i-6', 'tok-6', { sessionId: 'extended' }));
+  await store.putEndpoint(
+    endpoint('i-7', 'tok-7', { sessionId: 'other', sessionExpiresAt: at(60_000) }),
+  );
+  equal(
+    await store.extendSessionEndpoints({ sessionId: 'extended', expiresAt: at(30_000) }),
+    0,
+    'endpoints: a session end never moves earlier',
+  );
+  equal(
+    await store.extendSessionEndpoints({ sessionId: 'extended', expiresAt: at(120_000) }),
+    1,
+    'endpoints: a later session end moves only the endpoints that have one',
+  );
+  equal(
+    Date.parse(
+      (await store.getEndpoint({ provider: 'fcm', installationId: 'i-5' }))?.sessionExpiresAt ?? '',
+    ),
+    Date.parse(at(120_000)),
+    'endpoints: the moved end reads back',
+  );
+  equal(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'i-6' }))?.sessionExpiresAt,
+    undefined,
+    'endpoints: an endpoint without an end keeps none',
+  );
+  equal(
+    Date.parse(
+      (await store.getEndpoint({ provider: 'fcm', installationId: 'i-7' }))?.sessionExpiresAt ?? '',
+    ),
+    Date.parse(at(60_000)),
+    'endpoints: only the named session moves',
+  );
+  equal(
+    await store.extendSessionEndpoints({ sessionId: 'extended' }),
+    1,
+    'endpoints: a session that no longer ends clears the end',
+  );
+  equal(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'i-5' }))?.sessionExpiresAt,
+    undefined,
+    'endpoints: the cleared end reads back',
+  );
+  await store.removeSessionEndpoints({ sessionId: 'extended' });
+  await store.removeSessionEndpoints({ sessionId: 'other' });
   equal(
     await store.removeSessionEndpoints({ sessionId: 'shared' }),
     2,

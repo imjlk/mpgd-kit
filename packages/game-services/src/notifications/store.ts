@@ -236,6 +236,13 @@ export interface NotificationStore {
   }): Promise<void>;
   /** Removes every endpoint `sessionId` registered; answers how many. */
   removeSessionEndpoints(input: { readonly sessionId: string }): Promise<number>;
+  /**
+   * Moves the end of every endpoint `sessionId` registered to `expiresAt`
+   * where the stored end is earlier, or clears it when the session no longer
+   * ends on its own (`expiresAt` absent). An endpoint without an end keeps
+   * none, and no end moves earlier. Answers how many changed.
+   */
+  extendSessionEndpoints(input: { readonly sessionId: string; readonly expiresAt?: string }): Promise<number>;
 
   putPlatformRegistration(registration: NotificationPlatformRegistration): Promise<void>;
   getPlatformRegistration(input: {
@@ -537,6 +544,24 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
         }
       }
       return removed;
+    },
+    async extendSessionEndpoints({ sessionId, expiresAt }) {
+      let changed = 0;
+      for (let index = 0; index < endpoints.length; index += 1) {
+        const endpoint = endpoints[index];
+        if (
+          endpoint === undefined
+          || endpoint.sessionId !== sessionId
+          || endpoint.sessionExpiresAt === undefined
+          || (expiresAt !== undefined && Date.parse(endpoint.sessionExpiresAt) >= Date.parse(expiresAt))
+        ) {
+          continue;
+        }
+        const { sessionExpiresAt: _earlier, ...kept } = endpoint;
+        endpoints[index] = expiresAt === undefined ? kept : { ...kept, sessionExpiresAt: expiresAt };
+        changed += 1;
+      }
+      return changed;
     },
     async putPlatformRegistration(registration) {
       platformRegistrations.set(

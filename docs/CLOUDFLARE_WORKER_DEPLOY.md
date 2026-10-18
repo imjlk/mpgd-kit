@@ -214,7 +214,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   refreshes. Call `endNotificationSession({ sessionId })` on the service
   binding at logout or revocation. `expiresAt` is when the whole session
   (its refresh family) ends, not when one access token expires: the
-  session's devices are unbound from then.
+  session's devices are unbound from then. Return the family's current end
+  on every call; when it is later than the stored one, the session's
+  endpoints move to it, so an extended session keeps its devices.
 - **Client routes** under `/game-services/notifications`: `GET /providers`
   (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
   (`{ registration, target }`; `target` is `android` or `ios`, whose catalog

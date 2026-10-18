@@ -693,6 +693,84 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   assert.deepEqual(store.inspect().endpoints, []);
 }
 
+// A session's later end, reported on any authenticated call, keeps its endpoints bound.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const fcm = fakeProvider('fcm');
+  const store = createInMemoryNotificationStore();
+  const errors: string[] = [];
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'], addressKinds: ['fcm-token'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    now: time.now,
+    onError: (_error, context) => errors.push(context.operation),
+  });
+  const ending = (expiresAt?: string): NotificationSession => ({
+    ...session('p-1', 'i-1', 'sess-a'),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+  });
+  const storedEnd = () => store.inspect().endpoints.map((endpoint) => endpoint.sessionExpiresAt);
+  await service.registerEndpoint(ending('2026-10-20T03:00:00Z'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok-a', permission: 'granted' },
+    },
+  });
+  // Each authenticated call moves the end later, never earlier.
+  await service.listConsent(ending('2026-10-21T03:00:00Z'));
+  assert.deepEqual(storedEnd(), ['2026-10-21T03:00:00Z']);
+  await service.listNotices(ending('2026-10-20T12:00:00Z'));
+  assert.deepEqual(storedEnd(), ['2026-10-21T03:00:00Z']);
+  await service.recordConsent(ending('2026-10-22T03:00:00+09:00'), {
+    kind: 'topic-preference',
+    topic: 'friend-challenge',
+    state: 'granted',
+    source: 'player',
+  });
+  assert.deepEqual(storedEnd(), ['2026-10-21T18:00:00Z']);
+  // Another session of the player's does not move this one.
+  await service.listConsent({
+    ...session('p-1', 'i-2', 'sess-b'),
+    expiresAt: '2027-01-01T00:00:00Z',
+  });
+  assert.deepEqual(storedEnd(), ['2026-10-21T18:00:00Z']);
+  // Past the first end, the refreshed endpoint still receives.
+  time.advance(2 * 86_400);
+  await service.deliver({ idempotencyKey: 'x-1', player: 'p-1', topic: 'friend-challenge' });
+  assert.deepEqual(
+    fcm.calls.map((call) => call.idempotencyKey),
+    ['x-1:i-1'],
+  );
+  // A session that no longer ends on its own clears the end.
+  await service.recordNoticeShown(ending(), {
+    kind: 'consent-result',
+    record: { kind: 'advertising', at: '2026-10-19T03:00:00Z' },
+    dueBy: '2026-11-02',
+  });
+  assert.deepEqual(storedEnd(), [undefined]);
+  await service.unregisterEndpoint(ending('2026-10-25T03:00:00Z'), { provider: 'other' });
+  assert.deepEqual(storedEnd(), [undefined]);
+  // A store that cannot extend is reported and never fails the call.
+  const failing: NotificationStore = {
+    ...store,
+    extendSessionEndpoints: async () => {
+      throw new Error('store is down');
+    },
+  };
+  const degraded = createNotificationService({
+    store: failing,
+    registry: createNotificationProviderRegistry([]),
+    catalog: vectorCatalog([]),
+    now: time.now,
+    onError: (_error, context) => errors.push(context.operation),
+  });
+  assert.equal((await degraded.listConsent(ending('2026-10-30T03:00:00Z'))).length, 1);
+  assert.deepEqual(errors, ['endpoints.extend']);
+}
+
 // Several providers, provider failures, and the direct caller's replay after the lease.
 {
   const time = clock('2026-10-19T03:00:00Z');
