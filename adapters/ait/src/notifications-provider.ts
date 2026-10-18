@@ -80,14 +80,24 @@ export interface CreateAitNotificationProviderInput {
   readonly timeZone?: () => string | undefined;
   /** The player's locale for the `platform-user` registration; absent when unknown. */
   readonly locale?: () => string | undefined;
+  /**
+   * Whether a launch from a Toss message becomes an `opened` event (default
+   * true). The host bridge turns it off for games that map only v1 topics:
+   * they never subscribe, so the launch intent must keep routing it.
+   */
+  readonly landingOpens?: boolean;
 }
 
 /** The provider, plus the read the v1 surface and the launch intent share. */
 export interface AitNotificationProvider extends NotificationProvider {
   /** Whether `topic` has an Apps in Toss mapping. */
   hasTopic(topic: NotificationTopicId): boolean;
-  /** Whether any topic is mapped; without one the provider never delivers an open. */
-  hasTopics(): boolean;
+  /**
+   * Whether a push or inbox launch becomes the cold `opened` event: landing
+   * opens are on and a topic is mapped. The launch intent leaves such a
+   * launch to the event exactly when this is true.
+   */
+  deliversLandingOpens(): boolean;
 }
 
 /** A fresh Apps in Toss capability block (RFC profile table). */
@@ -184,6 +194,7 @@ export function createAitNotificationProvider(
   const topics = normalizeAitNotificationTopics(input.topics);
   const timeoutMs = normalizeAgreementTimeout(input.agreementTimeoutMs);
   const { sdk } = input;
+  const landingOpens = input.landingOpens !== false && topics.size > 0;
   let landingRead = false;
   // One agreement sheet at a time: the SDK keeps a callback per call, and two
   // sheets at once would leave the player answering the wrong one.
@@ -217,7 +228,7 @@ export function createAitNotificationProvider(
   return {
     provider: aitNotificationProviderId,
     hasTopic: (topic) => topics.has(topic),
-    hasTopics: () => topics.size > 0,
+    deliversLandingOpens: () => landingOpens,
     async getCapabilities() {
       return createAitNotificationCapabilities(
         topics.size === 0 ? 'configuration-required' : 'available',
@@ -337,7 +348,7 @@ export function createAitNotificationProvider(
       // The only event is the launch's cold open: a Toss message opens the
       // mini-app with a new launch, so nothing arrives later, and the open
       // goes to the first subscriber only.
-      if (!landingRead && topics.size > 0) {
+      if (!landingRead && landingOpens) {
         landingRead = true;
         const landing = readAitNotificationLanding(readOptional(() => sdk.readInitialUrl()));
         if (landing !== undefined) {

@@ -164,7 +164,7 @@ export interface AitHostDependencies {
   /** `Notification.requestAgreement` (Toss 5.255.0+), which replaced `requestNotificationAgreement`. */
   readonly requestNotificationAgreement: AitNativeMethod<typeof Notification.requestAgreement>;
   /** `Environment.initialURL`: the scheme URL the mini-app was launched with. */
-  readonly readInitialUrl: () => string | undefined;
+  readonly readInitialUrl?: () => string | undefined;
   readonly isMinVersionSupported: typeof isMinVersionSupported;
   readonly loadFullScreenAd: AitNativeMethod<typeof loadFullScreenAd>;
   readonly showFullScreenAd: AitNativeMethod<typeof showFullScreenAd>;
@@ -325,6 +325,9 @@ export function createAitHostBridge(
       requestAgreement: dependencies.requestNotificationAgreement,
       readInitialUrl: readLaunchUrl,
     },
+    // v1-only games never subscribe to the v2 event, so their push launches
+    // keep routing through the launch intent.
+    landingOpens: Object.keys(options.notificationTopics ?? {}).length > 0,
     topics: {
       ...normalizeNotificationTemplateCodes(options.notificationTemplateCodes),
       ...options.notificationTopics,
@@ -335,7 +338,7 @@ export function createAitHostBridge(
     timeZone: readDeviceTimeZone,
   });
   const notificationsV2 = createAitNotificationsV2BridgeHandler(notifications);
-  if (notifications.hasTopics()) {
+  if (notifications.deliversLandingOpens()) {
     // Before the game's router can rewrite the page URL on the fallback path.
     readLaunchUrl();
   }
@@ -498,7 +501,7 @@ export function createAitHostBridge(
       case 'presentation.getLaunchIntent':
         return ok(
           request,
-          getLaunchIntent(notifications.hasTopics() ? readLaunchUrl() : undefined),
+          getLaunchIntent(notifications.deliversLandingOpens() ? readLaunchUrl() : undefined),
         );
 
       case 'presentation.requestGameSurface':
@@ -1324,7 +1327,7 @@ const maximumNestedQueryParamCount = 32;
  */
 function readAitLaunchUrl(dependencies: Pick<AitHostDependencies, 'readInitialUrl'>): string | undefined {
   try {
-    const initialUrl = dependencies.readInitialUrl();
+    const initialUrl = dependencies.readInitialUrl?.();
     if (typeof initialUrl === 'string' && initialUrl.length > 0) {
       return initialUrl;
     }
@@ -1347,9 +1350,9 @@ function readDeviceTimeZone(): string | undefined {
  * A launch from a Toss push or inbox message (`referrer=push` or `inbox`)
  * routes only through the notifications provider's cold `opened` event, so
  * the launch intent answers `home` for it and the game never routes one
- * launch twice (RFC "Opens"). `launchUrl` is absent when no notification
- * topic is configured: the provider then emits no open, so such a launch
- * routes as any other.
+ * launch twice (RFC "Opens"). `launchUrl` is absent when the provider
+ * delivers no landing open (no `notificationTopics`, as for a game that maps
+ * only v1 template codes): such a launch then routes as any other.
  */
 function getLaunchIntent(launchUrl: string | undefined): LaunchIntent {
   if (readAitNotificationLanding(launchUrl) !== undefined) {

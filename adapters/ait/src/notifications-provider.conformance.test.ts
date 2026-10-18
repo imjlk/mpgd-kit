@@ -170,6 +170,9 @@ function createAitHarness(
         current = build();
         subscribed = false;
       },
+      () => {
+        current = build();
+      },
     ),
     hostAgreementEvidenceSchema: aitNotificationAgreementEvidenceSchema,
   };
@@ -179,6 +182,7 @@ function createHostActor(
   fake: FakeAitNotificationHost,
   isSubscribed: () => boolean,
   restart: () => void,
+  launch: () => void,
 ): NotificationConformanceHostActor {
   const unscriptable = (what: string): never => {
     throw new NotificationConformanceScriptError(`The Apps in Toss host cannot script ${what}.`);
@@ -222,6 +226,8 @@ function createHostActor(
       fake.setInitialUrl(
         `intoss://fixture-game${route}${route.includes('?') ? '&' : '?'}referrer=push`,
       );
+      // The message opens the mini-app with this launch: a new process reads it.
+      launch();
     },
     restart,
   };

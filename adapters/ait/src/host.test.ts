@@ -5068,6 +5068,18 @@ describe('AIT launch intent', () => {
     expect(events).toHaveLength(1);
   });
 
+  it('keeps routing push launches through the launch intent for a v1-only game', async () => {
+    stubSearch('?entry=daily&referrer=push');
+    const bridge = createAitHostBridge({
+      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+      dependencies: createDependencies(),
+    });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'daily' });
+    expect(events).toEqual([]);
+  });
+
   it('judges the launch once, so a later page URL change routes it neither twice nor never', async () => {
     stubSearch('?entry=daily&referrer=push');
     const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });

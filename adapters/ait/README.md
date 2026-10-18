@@ -62,7 +62,9 @@ installAitHostBridge({
   as a cold `opened` event with the landing route (the console template's
   landing URL, normalized by `normalizeRootRelativeRoute`).
   `presentation.getLaunchIntent()` answers `home` for that launch so it is not
-  routed twice. Both apply only while a topic is configured.
+  routed twice. Both apply only while `notificationTopics` maps a topic; a game
+  that maps only v1 `notificationTemplateCodes` keeps routing push launches
+  through the launch intent.
 - **Not on Apps in Toss.** Local notifications, a settings link, and
   advertising topics (promotional pushes are console campaigns).
 
