@@ -1,7 +1,7 @@
 {
   "vector": "local-capacity-keeps-nearest",
   "protocol": "2.0.0-draft.1",
-  "summary": "A host that keeps at most 64 pending local notifications (iOS; the vector is sized for 64) keeps the nearest: a reminder later than every pending one answers capacity-exceeded, and each earlier one is scheduled while the farthest pending one is cancelled, whatever order they were scheduled in.",
+  "summary": "A host that keeps at most 64 pending local notifications (iOS's limit, 64) keeps the nearest: a reminder later than every pending one answers capacity-exceeded, and each earlier one is scheduled while the farthest pending one is cancelled, whatever order they were scheduled in.",
   "appliesTo": [
     {
       "path": "local.maxPending",
@@ -127,7 +127,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-37",
+        "key": "r-49",
         "topic": "energy-full",
         "fireAt": "2026-10-14T14:00:00Z"
       },
@@ -140,7 +140,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-10",
+        "key": "r-34",
         "topic": "energy-full",
         "fireAt": "2026-10-13T11:00:00Z"
       },
@@ -153,7 +153,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-47",
+        "key": "r-19",
         "topic": "energy-full",
         "fireAt": "2026-10-15T00:00:00Z"
       },
@@ -166,7 +166,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-20",
+        "key": "r-04",
         "topic": "energy-full",
         "fireAt": "2026-10-13T21:00:00Z"
       },
@@ -179,7 +179,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-57",
+        "key": "r-53",
         "topic": "energy-full",
         "fireAt": "2026-10-15T10:00:00Z"
       },
@@ -192,7 +192,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-30",
+        "key": "r-38",
         "topic": "energy-full",
         "fireAt": "2026-10-14T07:00:00Z"
       },
@@ -205,7 +205,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-03",
+        "key": "r-23",
         "topic": "energy-full",
         "fireAt": "2026-10-13T04:00:00Z"
       },
@@ -218,7 +218,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-40",
+        "key": "r-08",
         "topic": "energy-full",
         "fireAt": "2026-10-14T17:00:00Z"
       },
@@ -231,7 +231,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-13",
+        "key": "r-57",
         "topic": "energy-full",
         "fireAt": "2026-10-13T14:00:00Z"
       },
@@ -244,7 +244,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-50",
+        "key": "r-42",
         "topic": "energy-full",
         "fireAt": "2026-10-15T03:00:00Z"
       },
@@ -257,7 +257,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-23",
+        "key": "r-27",
         "topic": "energy-full",
         "fireAt": "2026-10-14T00:00:00Z"
       },
@@ -270,7 +270,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-60",
+        "key": "r-12",
         "topic": "energy-full",
         "fireAt": "2026-10-15T13:00:00Z"
       },
@@ -283,7 +283,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-33",
+        "key": "r-61",
         "topic": "energy-full",
         "fireAt": "2026-10-14T10:00:00Z"
       },
@@ -296,7 +296,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-06",
+        "key": "r-46",
         "topic": "energy-full",
         "fireAt": "2026-10-13T07:00:00Z"
       },
@@ -309,7 +309,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-43",
+        "key": "r-31",
         "topic": "energy-full",
         "fireAt": "2026-10-14T20:00:00Z"
       },
@@ -335,7 +335,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-53",
+        "key": "r-01",
         "topic": "energy-full",
         "fireAt": "2026-10-15T06:00:00Z"
       },
@@ -348,7 +348,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-26",
+        "key": "r-50",
         "topic": "energy-full",
         "fireAt": "2026-10-14T03:00:00Z"
       },
@@ -361,7 +361,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-63",
+        "key": "r-35",
         "topic": "energy-full",
         "fireAt": "2026-10-15T16:00:00Z"
       },
@@ -374,7 +374,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-36",
+        "key": "r-20",
         "topic": "energy-full",
         "fireAt": "2026-10-14T13:00:00Z"
       },
@@ -387,7 +387,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-09",
+        "key": "r-05",
         "topic": "energy-full",
         "fireAt": "2026-10-13T10:00:00Z"
       },
@@ -400,7 +400,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-46",
+        "key": "r-54",
         "topic": "energy-full",
         "fireAt": "2026-10-14T23:00:00Z"
       },
@@ -413,7 +413,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-19",
+        "key": "r-39",
         "topic": "energy-full",
         "fireAt": "2026-10-13T20:00:00Z"
       },
@@ -426,7 +426,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-56",
+        "key": "r-24",
         "topic": "energy-full",
         "fireAt": "2026-10-15T09:00:00Z"
       },
@@ -439,7 +439,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-29",
+        "key": "r-09",
         "topic": "energy-full",
         "fireAt": "2026-10-14T06:00:00Z"
       },
@@ -452,7 +452,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-02",
+        "key": "r-58",
         "topic": "energy-full",
         "fireAt": "2026-10-13T03:00:00Z"
       },
@@ -465,7 +465,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-39",
+        "key": "r-43",
         "topic": "energy-full",
         "fireAt": "2026-10-14T16:00:00Z"
       },
@@ -478,7 +478,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-12",
+        "key": "r-28",
         "topic": "energy-full",
         "fireAt": "2026-10-13T13:00:00Z"
       },
@@ -491,7 +491,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-49",
+        "key": "r-13",
         "topic": "energy-full",
         "fireAt": "2026-10-15T02:00:00Z"
       },
@@ -504,7 +504,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-22",
+        "key": "r-62",
         "topic": "energy-full",
         "fireAt": "2026-10-13T23:00:00Z"
       },
@@ -517,7 +517,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-59",
+        "key": "r-47",
         "topic": "energy-full",
         "fireAt": "2026-10-15T12:00:00Z"
       },
@@ -543,7 +543,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-05",
+        "key": "r-17",
         "topic": "energy-full",
         "fireAt": "2026-10-13T06:00:00Z"
       },
@@ -556,7 +556,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-42",
+        "key": "r-02",
         "topic": "energy-full",
         "fireAt": "2026-10-14T19:00:00Z"
       },
@@ -569,7 +569,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-15",
+        "key": "r-51",
         "topic": "energy-full",
         "fireAt": "2026-10-13T16:00:00Z"
       },
@@ -582,7 +582,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-52",
+        "key": "r-36",
         "topic": "energy-full",
         "fireAt": "2026-10-15T05:00:00Z"
       },
@@ -595,7 +595,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-25",
+        "key": "r-21",
         "topic": "energy-full",
         "fireAt": "2026-10-14T02:00:00Z"
       },
@@ -608,7 +608,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-62",
+        "key": "r-06",
         "topic": "energy-full",
         "fireAt": "2026-10-15T15:00:00Z"
       },
@@ -621,7 +621,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-35",
+        "key": "r-55",
         "topic": "energy-full",
         "fireAt": "2026-10-14T12:00:00Z"
       },
@@ -634,7 +634,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-08",
+        "key": "r-40",
         "topic": "energy-full",
         "fireAt": "2026-10-13T09:00:00Z"
       },
@@ -647,7 +647,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-45",
+        "key": "r-25",
         "topic": "energy-full",
         "fireAt": "2026-10-14T22:00:00Z"
       },
@@ -660,7 +660,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-18",
+        "key": "r-10",
         "topic": "energy-full",
         "fireAt": "2026-10-13T19:00:00Z"
       },
@@ -673,7 +673,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-55",
+        "key": "r-59",
         "topic": "energy-full",
         "fireAt": "2026-10-15T08:00:00Z"
       },
@@ -686,7 +686,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-28",
+        "key": "r-44",
         "topic": "energy-full",
         "fireAt": "2026-10-14T05:00:00Z"
       },
@@ -699,7 +699,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-01",
+        "key": "r-29",
         "topic": "energy-full",
         "fireAt": "2026-10-13T02:00:00Z"
       },
@@ -712,7 +712,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-38",
+        "key": "r-14",
         "topic": "energy-full",
         "fireAt": "2026-10-14T15:00:00Z"
       },
@@ -725,7 +725,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-11",
+        "key": "r-63",
         "topic": "energy-full",
         "fireAt": "2026-10-13T12:00:00Z"
       },
@@ -751,7 +751,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-21",
+        "key": "r-33",
         "topic": "energy-full",
         "fireAt": "2026-10-13T22:00:00Z"
       },
@@ -764,7 +764,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-58",
+        "key": "r-18",
         "topic": "energy-full",
         "fireAt": "2026-10-15T11:00:00Z"
       },
@@ -777,7 +777,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-31",
+        "key": "r-03",
         "topic": "energy-full",
         "fireAt": "2026-10-14T08:00:00Z"
       },
@@ -790,7 +790,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-04",
+        "key": "r-52",
         "topic": "energy-full",
         "fireAt": "2026-10-13T05:00:00Z"
       },
@@ -803,7 +803,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-41",
+        "key": "r-37",
         "topic": "energy-full",
         "fireAt": "2026-10-14T18:00:00Z"
       },
@@ -816,7 +816,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-14",
+        "key": "r-22",
         "topic": "energy-full",
         "fireAt": "2026-10-13T15:00:00Z"
       },
@@ -829,7 +829,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-51",
+        "key": "r-07",
         "topic": "energy-full",
         "fireAt": "2026-10-15T04:00:00Z"
       },
@@ -842,7 +842,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-24",
+        "key": "r-56",
         "topic": "energy-full",
         "fireAt": "2026-10-14T01:00:00Z"
       },
@@ -855,7 +855,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-61",
+        "key": "r-41",
         "topic": "energy-full",
         "fireAt": "2026-10-15T14:00:00Z"
       },
@@ -868,7 +868,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-34",
+        "key": "r-26",
         "topic": "energy-full",
         "fireAt": "2026-10-14T11:00:00Z"
       },
@@ -881,7 +881,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-07",
+        "key": "r-11",
         "topic": "energy-full",
         "fireAt": "2026-10-13T08:00:00Z"
       },
@@ -894,7 +894,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-44",
+        "key": "r-60",
         "topic": "energy-full",
         "fireAt": "2026-10-14T21:00:00Z"
       },
@@ -907,7 +907,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-17",
+        "key": "r-45",
         "topic": "energy-full",
         "fireAt": "2026-10-13T18:00:00Z"
       },
@@ -920,7 +920,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-54",
+        "key": "r-30",
         "topic": "energy-full",
         "fireAt": "2026-10-15T07:00:00Z"
       },
@@ -933,7 +933,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "r-27",
+        "key": "r-15",
         "topic": "energy-full",
         "fireAt": "2026-10-14T04:00:00Z"
       },
@@ -994,91 +994,91 @@
         },
         {
           "op": "schedule",
-          "key": "r-37",
+          "key": "r-49",
           "fireAt": "2026-10-14T14:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-10",
+          "key": "r-34",
           "fireAt": "2026-10-13T11:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-47",
+          "key": "r-19",
           "fireAt": "2026-10-15T00:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-20",
+          "key": "r-04",
           "fireAt": "2026-10-13T21:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-57",
+          "key": "r-53",
           "fireAt": "2026-10-15T10:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-30",
+          "key": "r-38",
           "fireAt": "2026-10-14T07:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-03",
+          "key": "r-23",
           "fireAt": "2026-10-13T04:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-40",
+          "key": "r-08",
           "fireAt": "2026-10-14T17:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-13",
+          "key": "r-57",
           "fireAt": "2026-10-13T14:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-50",
+          "key": "r-42",
           "fireAt": "2026-10-15T03:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-23",
+          "key": "r-27",
           "fireAt": "2026-10-14T00:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-60",
+          "key": "r-12",
           "fireAt": "2026-10-15T13:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-33",
+          "key": "r-61",
           "fireAt": "2026-10-14T10:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-06",
+          "key": "r-46",
           "fireAt": "2026-10-13T07:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-43",
+          "key": "r-31",
           "fireAt": "2026-10-14T20:00:00Z",
           "exact": false
         },
@@ -1090,91 +1090,91 @@
         },
         {
           "op": "schedule",
-          "key": "r-53",
+          "key": "r-01",
           "fireAt": "2026-10-15T06:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-26",
+          "key": "r-50",
           "fireAt": "2026-10-14T03:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-63",
+          "key": "r-35",
           "fireAt": "2026-10-15T16:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-36",
+          "key": "r-20",
           "fireAt": "2026-10-14T13:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-09",
+          "key": "r-05",
           "fireAt": "2026-10-13T10:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-46",
+          "key": "r-54",
           "fireAt": "2026-10-14T23:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-19",
+          "key": "r-39",
           "fireAt": "2026-10-13T20:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-56",
+          "key": "r-24",
           "fireAt": "2026-10-15T09:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-29",
+          "key": "r-09",
           "fireAt": "2026-10-14T06:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-02",
+          "key": "r-58",
           "fireAt": "2026-10-13T03:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-39",
+          "key": "r-43",
           "fireAt": "2026-10-14T16:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-12",
+          "key": "r-28",
           "fireAt": "2026-10-13T13:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-49",
+          "key": "r-13",
           "fireAt": "2026-10-15T02:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-22",
+          "key": "r-62",
           "fireAt": "2026-10-13T23:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-59",
+          "key": "r-47",
           "fireAt": "2026-10-15T12:00:00Z",
           "exact": false
         },
@@ -1186,91 +1186,91 @@
         },
         {
           "op": "schedule",
-          "key": "r-05",
+          "key": "r-17",
           "fireAt": "2026-10-13T06:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-42",
+          "key": "r-02",
           "fireAt": "2026-10-14T19:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-15",
+          "key": "r-51",
           "fireAt": "2026-10-13T16:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-52",
+          "key": "r-36",
           "fireAt": "2026-10-15T05:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-25",
+          "key": "r-21",
           "fireAt": "2026-10-14T02:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-62",
+          "key": "r-06",
           "fireAt": "2026-10-15T15:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-35",
+          "key": "r-55",
           "fireAt": "2026-10-14T12:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-08",
+          "key": "r-40",
           "fireAt": "2026-10-13T09:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-45",
+          "key": "r-25",
           "fireAt": "2026-10-14T22:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-18",
+          "key": "r-10",
           "fireAt": "2026-10-13T19:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-55",
+          "key": "r-59",
           "fireAt": "2026-10-15T08:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-28",
+          "key": "r-44",
           "fireAt": "2026-10-14T05:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-01",
+          "key": "r-29",
           "fireAt": "2026-10-13T02:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-38",
+          "key": "r-14",
           "fireAt": "2026-10-14T15:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-11",
+          "key": "r-63",
           "fireAt": "2026-10-13T12:00:00Z",
           "exact": false
         },
@@ -1282,97 +1282,97 @@
         },
         {
           "op": "schedule",
-          "key": "r-21",
+          "key": "r-33",
           "fireAt": "2026-10-13T22:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-58",
+          "key": "r-18",
           "fireAt": "2026-10-15T11:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-31",
+          "key": "r-03",
           "fireAt": "2026-10-14T08:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-04",
+          "key": "r-52",
           "fireAt": "2026-10-13T05:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-41",
+          "key": "r-37",
           "fireAt": "2026-10-14T18:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-14",
+          "key": "r-22",
           "fireAt": "2026-10-13T15:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-51",
+          "key": "r-07",
           "fireAt": "2026-10-15T04:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-24",
+          "key": "r-56",
           "fireAt": "2026-10-14T01:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-61",
+          "key": "r-41",
           "fireAt": "2026-10-15T14:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-34",
+          "key": "r-26",
           "fireAt": "2026-10-14T11:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-07",
+          "key": "r-11",
           "fireAt": "2026-10-13T08:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-44",
+          "key": "r-60",
           "fireAt": "2026-10-14T21:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-17",
+          "key": "r-45",
           "fireAt": "2026-10-13T18:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-54",
+          "key": "r-30",
           "fireAt": "2026-10-15T07:00:00Z",
           "exact": false
         },
         {
           "op": "schedule",
-          "key": "r-27",
+          "key": "r-15",
           "fireAt": "2026-10-14T04:00:00Z",
           "exact": false
         },
         {
           "op": "cancel",
-          "key": "r-63"
+          "key": "r-35"
         },
         {
           "op": "schedule",
@@ -1382,7 +1382,7 @@
         },
         {
           "op": "cancel",
-          "key": "r-62"
+          "key": "r-06"
         },
         {
           "op": "schedule",
@@ -1408,77 +1408,77 @@
           "fireAt": "2026-10-13T01:00:00Z"
         },
         {
-          "key": "r-01",
+          "key": "r-29",
           "topic": "energy-full",
           "fireAt": "2026-10-13T02:00:00Z"
         },
         {
-          "key": "r-02",
+          "key": "r-58",
           "topic": "energy-full",
           "fireAt": "2026-10-13T03:00:00Z"
         },
         {
-          "key": "r-03",
+          "key": "r-23",
           "topic": "energy-full",
           "fireAt": "2026-10-13T04:00:00Z"
         },
         {
-          "key": "r-04",
+          "key": "r-52",
           "topic": "energy-full",
           "fireAt": "2026-10-13T05:00:00Z"
         },
         {
-          "key": "r-05",
+          "key": "r-17",
           "topic": "energy-full",
           "fireAt": "2026-10-13T06:00:00Z"
         },
         {
-          "key": "r-06",
+          "key": "r-46",
           "topic": "energy-full",
           "fireAt": "2026-10-13T07:00:00Z"
         },
         {
-          "key": "r-07",
+          "key": "r-11",
           "topic": "energy-full",
           "fireAt": "2026-10-13T08:00:00Z"
         },
         {
-          "key": "r-08",
+          "key": "r-40",
           "topic": "energy-full",
           "fireAt": "2026-10-13T09:00:00Z"
         },
         {
-          "key": "r-09",
+          "key": "r-05",
           "topic": "energy-full",
           "fireAt": "2026-10-13T10:00:00Z"
         },
         {
-          "key": "r-10",
+          "key": "r-34",
           "topic": "energy-full",
           "fireAt": "2026-10-13T11:00:00Z"
         },
         {
-          "key": "r-11",
+          "key": "r-63",
           "topic": "energy-full",
           "fireAt": "2026-10-13T12:00:00Z"
         },
         {
-          "key": "r-12",
+          "key": "r-28",
           "topic": "energy-full",
           "fireAt": "2026-10-13T13:00:00Z"
         },
         {
-          "key": "r-13",
+          "key": "r-57",
           "topic": "energy-full",
           "fireAt": "2026-10-13T14:00:00Z"
         },
         {
-          "key": "r-14",
+          "key": "r-22",
           "topic": "energy-full",
           "fireAt": "2026-10-13T15:00:00Z"
         },
         {
-          "key": "r-15",
+          "key": "r-51",
           "topic": "energy-full",
           "fireAt": "2026-10-13T16:00:00Z"
         },
@@ -1488,77 +1488,77 @@
           "fireAt": "2026-10-13T17:00:00Z"
         },
         {
-          "key": "r-17",
+          "key": "r-45",
           "topic": "energy-full",
           "fireAt": "2026-10-13T18:00:00Z"
         },
         {
-          "key": "r-18",
+          "key": "r-10",
           "topic": "energy-full",
           "fireAt": "2026-10-13T19:00:00Z"
         },
         {
-          "key": "r-19",
+          "key": "r-39",
           "topic": "energy-full",
           "fireAt": "2026-10-13T20:00:00Z"
         },
         {
-          "key": "r-20",
+          "key": "r-04",
           "topic": "energy-full",
           "fireAt": "2026-10-13T21:00:00Z"
         },
         {
-          "key": "r-21",
+          "key": "r-33",
           "topic": "energy-full",
           "fireAt": "2026-10-13T22:00:00Z"
         },
         {
-          "key": "r-22",
+          "key": "r-62",
           "topic": "energy-full",
           "fireAt": "2026-10-13T23:00:00Z"
         },
         {
-          "key": "r-23",
+          "key": "r-27",
           "topic": "energy-full",
           "fireAt": "2026-10-14T00:00:00Z"
         },
         {
-          "key": "r-24",
+          "key": "r-56",
           "topic": "energy-full",
           "fireAt": "2026-10-14T01:00:00Z"
         },
         {
-          "key": "r-25",
+          "key": "r-21",
           "topic": "energy-full",
           "fireAt": "2026-10-14T02:00:00Z"
         },
         {
-          "key": "r-26",
+          "key": "r-50",
           "topic": "energy-full",
           "fireAt": "2026-10-14T03:00:00Z"
         },
         {
-          "key": "r-27",
+          "key": "r-15",
           "topic": "energy-full",
           "fireAt": "2026-10-14T04:00:00Z"
         },
         {
-          "key": "r-28",
+          "key": "r-44",
           "topic": "energy-full",
           "fireAt": "2026-10-14T05:00:00Z"
         },
         {
-          "key": "r-29",
+          "key": "r-09",
           "topic": "energy-full",
           "fireAt": "2026-10-14T06:00:00Z"
         },
         {
-          "key": "r-30",
+          "key": "r-38",
           "topic": "energy-full",
           "fireAt": "2026-10-14T07:00:00Z"
         },
         {
-          "key": "r-31",
+          "key": "r-03",
           "topic": "energy-full",
           "fireAt": "2026-10-14T08:00:00Z"
         },
@@ -1568,77 +1568,77 @@
           "fireAt": "2026-10-14T09:00:00Z"
         },
         {
-          "key": "r-33",
+          "key": "r-61",
           "topic": "energy-full",
           "fireAt": "2026-10-14T10:00:00Z"
         },
         {
-          "key": "r-34",
+          "key": "r-26",
           "topic": "energy-full",
           "fireAt": "2026-10-14T11:00:00Z"
         },
         {
-          "key": "r-35",
+          "key": "r-55",
           "topic": "energy-full",
           "fireAt": "2026-10-14T12:00:00Z"
         },
         {
-          "key": "r-36",
+          "key": "r-20",
           "topic": "energy-full",
           "fireAt": "2026-10-14T13:00:00Z"
         },
         {
-          "key": "r-37",
+          "key": "r-49",
           "topic": "energy-full",
           "fireAt": "2026-10-14T14:00:00Z"
         },
         {
-          "key": "r-38",
+          "key": "r-14",
           "topic": "energy-full",
           "fireAt": "2026-10-14T15:00:00Z"
         },
         {
-          "key": "r-39",
+          "key": "r-43",
           "topic": "energy-full",
           "fireAt": "2026-10-14T16:00:00Z"
         },
         {
-          "key": "r-40",
+          "key": "r-08",
           "topic": "energy-full",
           "fireAt": "2026-10-14T17:00:00Z"
         },
         {
-          "key": "r-41",
+          "key": "r-37",
           "topic": "energy-full",
           "fireAt": "2026-10-14T18:00:00Z"
         },
         {
-          "key": "r-42",
+          "key": "r-02",
           "topic": "energy-full",
           "fireAt": "2026-10-14T19:00:00Z"
         },
         {
-          "key": "r-43",
+          "key": "r-31",
           "topic": "energy-full",
           "fireAt": "2026-10-14T20:00:00Z"
         },
         {
-          "key": "r-44",
+          "key": "r-60",
           "topic": "energy-full",
           "fireAt": "2026-10-14T21:00:00Z"
         },
         {
-          "key": "r-45",
+          "key": "r-25",
           "topic": "energy-full",
           "fireAt": "2026-10-14T22:00:00Z"
         },
         {
-          "key": "r-46",
+          "key": "r-54",
           "topic": "energy-full",
           "fireAt": "2026-10-14T23:00:00Z"
         },
         {
-          "key": "r-47",
+          "key": "r-19",
           "topic": "energy-full",
           "fireAt": "2026-10-15T00:00:00Z"
         },
@@ -1648,67 +1648,67 @@
           "fireAt": "2026-10-15T01:00:00Z"
         },
         {
-          "key": "r-49",
+          "key": "r-13",
           "topic": "energy-full",
           "fireAt": "2026-10-15T02:00:00Z"
         },
         {
-          "key": "r-50",
+          "key": "r-42",
           "topic": "energy-full",
           "fireAt": "2026-10-15T03:00:00Z"
         },
         {
-          "key": "r-51",
+          "key": "r-07",
           "topic": "energy-full",
           "fireAt": "2026-10-15T04:00:00Z"
         },
         {
-          "key": "r-52",
+          "key": "r-36",
           "topic": "energy-full",
           "fireAt": "2026-10-15T05:00:00Z"
         },
         {
-          "key": "r-53",
+          "key": "r-01",
           "topic": "energy-full",
           "fireAt": "2026-10-15T06:00:00Z"
         },
         {
-          "key": "r-54",
+          "key": "r-30",
           "topic": "energy-full",
           "fireAt": "2026-10-15T07:00:00Z"
         },
         {
-          "key": "r-55",
+          "key": "r-59",
           "topic": "energy-full",
           "fireAt": "2026-10-15T08:00:00Z"
         },
         {
-          "key": "r-56",
+          "key": "r-24",
           "topic": "energy-full",
           "fireAt": "2026-10-15T09:00:00Z"
         },
         {
-          "key": "r-57",
+          "key": "r-53",
           "topic": "energy-full",
           "fireAt": "2026-10-15T10:00:00Z"
         },
         {
-          "key": "r-58",
+          "key": "r-18",
           "topic": "energy-full",
           "fireAt": "2026-10-15T11:00:00Z"
         },
         {
-          "key": "r-59",
+          "key": "r-47",
           "topic": "energy-full",
           "fireAt": "2026-10-15T12:00:00Z"
         },
         {
-          "key": "r-60",
+          "key": "r-12",
           "topic": "energy-full",
           "fireAt": "2026-10-15T13:00:00Z"
         },
         {
-          "key": "r-61",
+          "key": "r-41",
           "topic": "energy-full",
           "fireAt": "2026-10-15T14:00:00Z"
         }
