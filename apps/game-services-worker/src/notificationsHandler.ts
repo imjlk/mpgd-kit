@@ -565,19 +565,14 @@ async function readBody(
 
 function errorResponse(error: unknown, corsHeaders: Readonly<Record<string, string>>): Response {
   if (error instanceof NotificationError) {
-    // A player's own write cap is a throttle, not an outage.
-    const status = error instanceof NotificationConsentRateLimitError ? 429 : statusOf(error.code);
+    // A player's own write cap is a throttle, not an outage, and says when it lifts.
+    const throttled = error instanceof NotificationConsentRateLimitError;
+    const status = throttled ? 429 : statusOf(error.code);
+    const retryAfterSeconds = throttled ? error.retryAfterSeconds : 5;
     return json(
       { error: error.code, ...(status < 500 ? { message: error.message } : {}) },
       status,
-      error.retryable
-        ? {
-            ...corsHeaders,
-            'Retry-After': String(
-              error instanceof NotificationConsentRateLimitError ? error.retryAfterSeconds : 5,
-            ),
-          }
-        : corsHeaders,
+      error.retryable ? { ...corsHeaders, 'Retry-After': String(retryAfterSeconds) } : corsHeaders,
     );
   }
   console.error('Notifications route failed:', describeFailure(error));

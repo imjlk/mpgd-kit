@@ -962,9 +962,11 @@ player's account would deliver that player's notifications to the device.
   - Every authenticated call reports the session's current `expiresAt`.
     When it is later than an endpoint's stored end, the backend moves the
     end of every endpoint the session registered to it, or clears it when
-    the session no longer ends on its own. A stored end never moves
-    earlier, so a session the identity service extends keeps its devices
-    without a new registration.
+    the session no longer ends on its own; a cleared end stays cleared. The
+    extension never moves an end earlier, so a session the identity service
+    extends keeps its devices without a new registration (a registration
+    writes its own request's end). An extension is not a registration for
+    the 60-day stale rule.
 - **Platform-user providers (Apps in Toss, Devvit).** They register no
   address. The backend resolves the recipient from the player's authenticated
   identity for that provider, never from a key the client sends. It keeps the

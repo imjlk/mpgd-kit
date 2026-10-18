@@ -216,7 +216,12 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   (its refresh family) ends, not when one access token expires: the
   session's devices are unbound from then. Return the family's current end
   on every call; when it is later than the stored one, the session's
-  endpoints move to it, so an extended session keeps its devices.
+  endpoints move to it, so an extended session keeps its devices (until the
+  cron purges an endpoint whose end passed; then the client registers
+  again). Omit `expiresAt` only for a session that never ends on its own:
+  it clears the session's stored ends, and no later call restores them. An
+  extension does not count as a registration, so an endpoint not
+  registered for 60 days still goes stale.
 - **Client routes** under `/game-services/notifications`: `GET /providers`
   (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
   (`{ registration, target }`; `target` is `android` or `ios`, whose catalog

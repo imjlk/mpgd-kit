@@ -113,7 +113,8 @@ const maxEvidenceBytes = 16_384;
 /**
  * Client-written consent records a player may add per rolling day. It is
  * generous: it only stops a client that writes in a loop, since every send
- * reads the player's whole history.
+ * reads the player's whole history. It is checked before the write, so
+ * concurrent writes may pass it by a few.
  */
 export const maxClientNotificationConsentRecordsPerDay = 200;
 
@@ -1320,6 +1321,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * session the identity service extended keeps its devices bound without a
    * new registration. It never fails the call; a failure is reported.
    */
+  // It runs before a call's own validation on purpose: the session is
+  // authenticated, so even a call refused for its input reports a valid end.
   const authenticated = async (session: NotificationSession): Promise<NotificationSession> => {
     const current = sessionOf(session);
     try {

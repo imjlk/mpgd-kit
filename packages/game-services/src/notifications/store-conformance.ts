@@ -156,6 +156,11 @@ export async function runNotificationStoreConformance(
     'endpoints: a session end never moves earlier',
   );
   equal(
+    await store.extendSessionEndpoints({ sessionId: 'extended', expiresAt: at(60_000) }),
+    0,
+    'endpoints: the same end changes nothing',
+  );
+  equal(
     await store.extendSessionEndpoints({ sessionId: 'extended', expiresAt: at(120_000) }),
     1,
     'endpoints: a later session end moves only the endpoints that have one',

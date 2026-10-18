@@ -737,8 +737,9 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     expiresAt: '2027-01-01T00:00:00Z',
   });
   assert.deepEqual(storedEnd(), ['2026-10-21T18:00:00Z']);
-  // Past the first end, the refreshed endpoint still receives.
+  // Past the first end, the refreshed endpoint still receives, and purge keeps it.
   time.advance(2 * 86_400);
+  assert.equal((await service.purge()).endpoints, 0);
   await service.deliver({ idempotencyKey: 'x-1', player: 'p-1', topic: 'friend-challenge' });
   assert.deepEqual(
     fcm.calls.map((call) => call.idempotencyKey),
@@ -751,6 +752,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     dueBy: '2026-11-02',
   });
   assert.deepEqual(storedEnd(), [undefined]);
+  // Clearing is one-way: a later reported end does not bring one back.
   await service.unregisterEndpoint(ending('2026-10-25T03:00:00Z'), { provider: 'other' });
   assert.deepEqual(storedEnd(), [undefined]);
   // A store that cannot extend is reported and never fails the call.
