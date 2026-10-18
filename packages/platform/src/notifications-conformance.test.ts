@@ -476,11 +476,16 @@ describe('notifications conformance runner', () => {
         },
       });
     const inputs: unknown[] = [];
+    const contexts: unknown[] = [];
+    const omitted: boolean[] = [];
     for (const name of ['endpoint-unbind-on-session-end', 'endpoint-fan-out', 'advertising-needs-consent']) {
       const vector = vectorNamed(name);
       const result = await runNotificationConformanceVector(vector, {
         createBackend: async (input, context) => {
-          expect(context.vector).toBe(vector);
+          contexts.push(context.vector);
+          if (name === 'endpoint-unbind-on-session-end') {
+            omitted.push('deployment' in input, 'notices' in input);
+          }
           inputs.push({
             vector: name,
             provider: input.entry?.provider,
@@ -494,15 +499,18 @@ describe('notifications conformance runner', () => {
         },
       });
       expect(result).toMatchObject({ vector: name, status: 'passed', failures: [] });
+      expect(contexts.at(-1)).toBe(vector);
       // Each async step finished before the runner moved on to the next one.
       if (name === 'endpoint-unbind-on-session-end') {
-        expect(order[order.indexOf('revoked') + 1]).toBe('deliver');
+        expect(order.slice(0, 2)).toEqual(['revoked', 'deliver']);
       }
       if (name === 'endpoint-fan-out') {
         expect(order.slice(0, 3)).toEqual(['installed:installation-2', 'installed:installation-3', 'deliver']);
       }
       order.length = 0;
     }
+    // A vector without a deployment or notices passes neither key.
+    expect(omitted).toEqual([false, false]);
     const advertising = vectorNamed('advertising-needs-consent');
     expect(inputs).toContainEqual({
       vector: 'advertising-needs-consent',
@@ -513,14 +521,21 @@ describe('notifications conformance runner', () => {
       deployment: advertising.deployment,
       notices: advertising.notices,
     });
-    const failed = await runNotificationConformanceVector(vectorNamed('endpoint-unbind-on-session-end'), {
-      createBackend: () => {
+    for (const createBackend of [
+      () => {
         throw new Error('no store');
       },
-    });
-    expect(failed.failures).toEqual([
-      { path: 'backend', expected: 'createBackend resolves', actual: 'Error: no store' },
-    ]);
+      async () => {
+        throw new Error('no store');
+      },
+    ]) {
+      const failed = await runNotificationConformanceVector(vectorNamed('endpoint-unbind-on-session-end'), {
+        createBackend,
+      });
+      expect(failed.failures).toEqual([
+        { path: 'backend', expected: 'createBackend resolves', actual: 'Error: no store' },
+      ]);
+    }
   });
 
   it('turns a harness, capability, or deployment failure into a failed result', async () => {
