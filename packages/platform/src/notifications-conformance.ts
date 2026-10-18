@@ -860,7 +860,11 @@ export interface NotificationConformanceBackend extends NotificationConformanceB
   readonly noticesGiven: readonly NotificationConformanceNoticeRecord[];
 }
 
-/** The fake backend, which finishes every step synchronously. */
+/**
+ * The fake backend. Its `revokeSession` and `registerInstallation` finish
+ * synchronously, so its callers need not await them; its other methods
+ * (`deliver`, `runScheduler`, and the client methods) still return promises.
+ */
 export interface NotificationConformanceFakeBackend extends NotificationConformanceBackend {
   revokeSession(): void;
   registerInstallation(input: NotificationConformanceInstallationFixture): void;
