@@ -409,7 +409,8 @@ const request: NotificationRemoteDeliveryRequest = {
     })),
     { status: 'rate-limited', retryAfterSeconds: 90 },
   );
-  // A token source that failed is not cached.
+  // An outage is remembered for five seconds, then the token source asks again.
+  let outageClock = now();
   let fail = true;
   const flaky = fakeGoogle({
     token: () => {
@@ -420,8 +421,14 @@ const request: NotificationRemoteDeliveryRequest = {
       return Response.json({ access_token: 'late-token', expires_in: 3600 });
     },
   });
-  const tokens = createFcmAccessTokenSource({ serviceAccount, fetch: flaky.fetch, now });
+  const tokens = createFcmAccessTokenSource({
+    serviceAccount,
+    fetch: flaky.fetch,
+    now: () => outageClock,
+  });
   await assert.rejects(tokens.get(), { name: 'FcmAccessTokenError', retryable: true });
+  await assert.rejects(tokens.get(), { name: 'FcmAccessTokenError', retryable: true });
+  outageClock += 5_001;
   assert.equal(await tokens.get(), 'late-token');
   // A key that cannot be imported names no key material.
   const broken = createFcmAccessTokenSource({
@@ -537,6 +544,39 @@ const request: NotificationRemoteDeliveryRequest = {
     createFcmDeliveryProvider({ serviceAccount, projectId: 'example.com:my-project' }).id,
     'fcm',
   );
+}
+
+// Lateness keeps its own code; FCM's codes are sanitized; a token outage is not asked once per send.
+{
+  const now = () => Date.parse('2026-10-19T03:00:00Z');
+  const google = fakeGoogle({});
+  assert.deepEqual(
+    await createFcmDeliveryProvider({ serviceAccount, fetch: google.fetch, now })
+      .send({ ...request, expiresAt: '2026-10-19T03:00:00.400Z' }),
+    { status: 'rejected', reason: 'configuration', providerCode: 'MESSAGE_EXPIRED' },
+  );
+  assert.equal(google.exchanges.length, 0);
+  assert.deepEqual(
+    classifyFcmError({ status: 400, body: { error: { status: 'weird status!\n<b>' } } }),
+    { status: 'rejected', reason: 'configuration', providerCode: 'WEIRD_STATUS_B_' },
+  );
+  let clock = now();
+  const down = fakeGoogle({ token: () => new Response('down', { status: 503 }) });
+  const provider = createFcmDeliveryProvider({
+    serviceAccount,
+    fetch: down.fetch,
+    now: () => clock,
+  });
+  for (let send = 0; send < 3; send += 1) {
+    assert.deepEqual(await provider.send(request), {
+      status: 'rate-limited',
+      retryAfterSeconds: 60,
+    });
+  }
+  assert.equal(down.tokenCount(), 1);
+  clock += 5_001;
+  await provider.send(request);
+  assert.equal(down.tokenCount(), 2);
 }
 
 // The registration wires FCM into the registry for android and ios, registration tokens only.

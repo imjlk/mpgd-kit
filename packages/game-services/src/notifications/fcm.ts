@@ -42,6 +42,8 @@ const maxPayloadBytes = 3840;
 const maxRetryAfterSeconds = 86_400;
 /** How long a refused grant or an unusable key answers without asking Google again. */
 const failedTokenCacheMs = 30_000;
+/** How long a token endpoint that is down answers without asking again. */
+const retryableTokenCacheMs = 5_000;
 const tokenLifetimeSeconds = 3600;
 /** A cached token is refreshed this long before it expires. */
 const tokenRefreshMarginMs = 5 * 60 * 1000;
@@ -217,8 +219,13 @@ export function createFcmAccessTokenSource(input: {
       }
       pending ??= mint()
         .catch((error: unknown) => {
-          if (error instanceof FcmAccessTokenError && !error.retryable) {
-            failed = { error, until: now() + failedTokenCacheMs };
+          if (error instanceof FcmAccessTokenError) {
+            // A refused grant waits 30 s; an outage waits a few seconds, so a
+            // fan-out during it does not ask Google once per send either.
+            failed = {
+              error,
+              until: now() + (error.retryable ? retryableTokenCacheMs : failedTokenCacheMs),
+            };
           }
           throw error;
         })
@@ -253,7 +260,12 @@ export interface CreateFcmDeliveryProviderInput {
 /** The FCM HTTP v1 message this provider sends, or why it cannot send one. */
 export type FcmMessageBuild =
   | { readonly status: 'ready'; readonly message: Readonly<Record<string, unknown>> }
-  | { readonly status: 'invalid'; readonly reason: string };
+  | {
+      readonly status: 'invalid';
+      readonly reason: string;
+      /** `MESSAGE_EXPIRED` for a message that would arrive too late, else `INVALID_MESSAGE`. */
+      readonly code: 'INVALID_MESSAGE' | 'MESSAGE_EXPIRED';
+    };
 
 /**
  * Builds the HTTP v1 `message` for one delivery and checks it against FCM's
@@ -266,21 +278,34 @@ export type FcmMessageBuild =
 export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): FcmMessageBuild {
   const { recipient, content } = request;
   if (recipient.kind !== 'device' || recipient.address.kind !== 'fcm-token') {
-    return { status: 'invalid', reason: 'FCM sends to registration tokens only' };
+    return {
+      status: 'invalid',
+      reason: 'FCM sends to registration tokens only',
+      code: 'INVALID_MESSAGE',
+    };
   }
   if (content.title === undefined || content.body === undefined) {
-    return { status: 'invalid', reason: 'FCM content needs a title and a body' };
+    return {
+      status: 'invalid',
+      reason: 'FCM content needs a title and a body',
+      code: 'INVALID_MESSAGE',
+    };
   }
   // A null-prototype object keeps a `__proto__` key from vanishing silently.
   const data: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const [key, value] of Object.entries(request.data ?? {})) {
     if (isReservedDataKey(key)) {
-      return { status: 'invalid', reason: `the data key ${JSON.stringify(key)} is reserved` };
+      return {
+        status: 'invalid',
+        reason: `the data key ${JSON.stringify(key)} is reserved`,
+        code: 'INVALID_MESSAGE',
+      };
     }
     if (typeof value !== 'string') {
       return {
         status: 'invalid',
         reason: `the data value of ${JSON.stringify(key)} is not a string`,
+        code: 'INVALID_MESSAGE',
       };
     }
     data[key] = value;
@@ -296,11 +321,19 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
   const expiresAt = request.expiresAt === undefined ? undefined : Date.parse(request.expiresAt);
   const at = Date.parse(request.at);
   if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || !Number.isFinite(at))) {
-    return { status: 'invalid', reason: 'the expiry or the call time is not a timestamp' };
+    return {
+      status: 'invalid',
+      reason: 'the expiry or the call time is not a timestamp',
+      code: 'INVALID_MESSAGE',
+    };
   }
   if (expiresAt !== undefined && expiresAt - at < 1000) {
     // A time to live of 0 means "now, if reachable" to FCM: an expired message is not sent at all.
-    return { status: 'invalid', reason: 'the message expires before it could arrive' };
+    return {
+      status: 'invalid',
+      reason: 'the message expires before it could arrive',
+      code: 'MESSAGE_EXPIRED',
+    };
   }
   const android: Record<string, unknown> = {
     ...(expiresAt === undefined ? {} : { ttl: `${Math.floor((expiresAt - at) / 1000)}s` }),
@@ -327,6 +360,7 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
     return {
       status: 'invalid',
       reason: `the payload is ${payloadBytes} bytes; this provider sends at most ${maxPayloadBytes}`,
+      code: 'INVALID_MESSAGE',
     };
   }
   return {
@@ -352,7 +386,9 @@ export function classifyFcmError(input: {
 }): NotificationRemoteDeliveryAnswer {
   const error = isRecord(input.body) && isRecord(input.body.error) ? input.body.error : undefined;
   const details = Array.isArray(error?.details) ? error.details.filter(isRecord) : [];
-  const code = fcmErrorCodeOf(input.body) ?? (typeof error?.status === 'string' ? error.status : undefined);
+  const raw = fcmErrorCodeOf(input.body) ?? (typeof error?.status === 'string' ? error.status : undefined);
+  // FCM's own codes are short upper-case words; anything else is cut down before it reaches logs.
+  const code = raw === undefined ? undefined : providerCodeOf(raw);
   const rateLimited = (): NotificationRemoteDeliveryAnswer => ({
     status: 'rate-limited',
     retryAfterSeconds: input.retryAfterSeconds ?? defaultRetryAfterSeconds,
@@ -421,8 +457,9 @@ export function createFcmDeliveryProvider(
     async send(request) {
       const built = buildFcmMessage(request);
       if (built.status === 'invalid') {
-        // Nothing was sent, and the same send would fail again.
-        return { status: 'rejected', reason: 'configuration', providerCode: 'INVALID_MESSAGE' };
+        // Nothing was sent, and the same send would fail again (an expired
+        // message keeps its own code, so lateness is not read as a setup error).
+        return { status: 'rejected', reason: 'configuration', providerCode: built.code };
       }
       const body = JSON.stringify({ message: built.message });
       for (let attempt = 0; attempt < 2; attempt += 1) {
