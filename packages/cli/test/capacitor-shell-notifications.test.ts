@@ -421,6 +421,21 @@ try {
     );
   }
 
+  // The settings module the starter's notifications.ts imports counts too.
+  {
+    const root = createGame();
+    roots.push(root);
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(root, 'src/platform/notificationSettings.ts'), 'export {};\n');
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(plan.changedFiles.includes(androidGateway), false);
+    assert.ok(
+      plan.warnings.some((warning) =>
+        /game-owned src\/platform\/notificationSettings\.ts differs/u.test(warning),
+      ),
+    );
+  }
+
   // The game's kit packages must have the notifications subpath and accept the plugins.
   {
     const root = createGame();

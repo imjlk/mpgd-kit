@@ -123,7 +123,7 @@ assert.match(
 );
 assert.match(
   byPath(phaser, 'src/scenes/LobbyScene.ts'),
-  /scene\.start\('NotificationSettingsScene'\)/u,
+  /scene\.start\(notificationSettingsSceneKey\)/u,
 );
 const manifest = JSON.parse(byPath(phaser, 'package.json')) as {
   readonly scripts: Record<string, string>;
@@ -247,6 +247,19 @@ assert.throws(
       phaser: [...overlay.phaser, duplicated],
     }),
   /would overwrite/u,
+);
+// The opt-out route and the notice route are the route the game routes to its settings screen.
+const settingsRoute = /export const starterNotificationSettingsRoute = '([^']+)';/u
+  .exec(byPath(phaser, 'src/platform/notifications.ts'))?.[1];
+assert.equal(settingsRoute, '/?entry=notification-settings');
+for (const topic of validation.catalog.topics) {
+  if (topic.purpose === 'advertising') {
+    assert.equal(topic.optOutRoute, settingsRoute, `${topic.id} opt-out route`);
+  }
+}
+assert.equal(
+  validation.catalog.topics.find((topic) => topic.id === 'consent-notice')?.route,
+  settingsRoute,
 );
 // No advertising topic reaches Apps in Toss or Devvit, which cannot carry it.
 const events = validation.catalog.topics.find((topic) => topic.id === 'events');

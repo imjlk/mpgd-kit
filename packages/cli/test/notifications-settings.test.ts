@@ -341,7 +341,7 @@ const common = {
   console.warn = () => undefined;
   try {
     const view = await createStarterNotificationSettings({ ...common, provider: failing, runtime: undefined }).load();
-    assert.equal(view.available, true);
+    assert.equal(view.available, false);
     assert.equal(view.message, '알림 설정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
   } finally {
     console.warn = original;

@@ -323,7 +323,8 @@ export function createStarterNotificationSettings(
       // A failed host or backend read is shown, never thrown into the screen.
       console.warn('[notifications] settings read failed.', error);
       rendered = [];
-      return { ...unavailableView(strings.readFailed), available: true };
+      // Only the message: the permission state is unknown.
+      return unavailableView(strings.readFailed);
     }
   };
 

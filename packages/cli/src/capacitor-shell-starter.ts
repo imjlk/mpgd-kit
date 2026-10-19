@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
-import { satisfies, valid } from 'semver';
+import { satisfies, valid, validRange } from 'semver';
 
 import {
   capacitorGatewayRegistersNotifications,
@@ -589,7 +589,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         'storekit: those install the kit store plugin into this shell and the game',
         'and register it with cap sync; notifications installs',
         '@capacitor-firebase/messaging and @capacitor/local-notifications (never',
-        '@capacitor/push-notifications, which claims the same iOS push handler).',
+        `${conflictingPushPlugin}, which claims the same iOS push handler).`,
         'Notifications also need the Firebase files (google-services.json,',
         'GoogleService-Info.plist) and the iOS Push Notifications capability; see',
         'the mpgd-kit Firebase guide. A plugin never reports a feature as',
@@ -3186,6 +3186,12 @@ function planNotificationsProvider(input: {
         + 'packages (mpgd kit upgrade) first.',
     );
   }
+  // The adapter's own peers (Capacitor core) must accept the game's installed copies too.
+  assertInstalledPeers(
+    gameRoot,
+    `@mpgd/adapter-capacitor@${String(adapter.version)}`,
+    adapter.peerDependencies,
+  );
   const adapterPeers = typeof adapter.peerDependencies === 'object' && adapter.peerDependencies !== null
     ? adapter.peerDependencies as Readonly<Record<string, unknown>>
     : {};
@@ -3316,7 +3322,8 @@ function assertInstalledPeers(gameRoot: string, label: string, peerDependencies:
     peerDependencies as Readonly<Record<string, unknown>>,
   )) {
     const peerFile = path.join(gameRoot, 'node_modules', peer, 'package.json');
-    if (typeof range !== 'string' || !existsSync(peerFile)) {
+    // A range semver cannot read (`workspace:*`, a tag) is not checked.
+    if (typeof range !== 'string' || validRange(range) === null || !existsSync(peerFile)) {
       continue;
     }
     const peerVersion = readJsonObject(peerFile).version;

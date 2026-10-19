@@ -135,9 +135,13 @@ export function subscribeStarterNotificationOpens(
   });
 }
 
+const settingsEntry = new URL(starterNotificationSettingsRoute, 'https://game.invalid')
+  .searchParams.get('entry');
+
+/** Whether a route opens the settings screen: the same `entry` as `starterNotificationSettingsRoute`. */
 function isSettingsRoute(route: string): boolean {
   try {
-    return new URL(route, 'https://game.invalid').searchParams.get('entry') === 'notification-settings';
+    return new URL(route, 'https://game.invalid').searchParams.get('entry') === settingsEntry;
   } catch {
     return false;
   }

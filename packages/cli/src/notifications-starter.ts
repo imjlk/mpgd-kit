@@ -280,6 +280,14 @@ const phaserEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
   ],
   'src/scenes/LobbyScene.ts': [
     {
+      anchor: "import { starterContextKey, type StarterContext } from '../runtime/gameContext';\n",
+      replacement: [
+        "import { starterContextKey, type StarterContext } from '../runtime/gameContext';",
+        "import { notificationSettingsSceneKey } from './NotificationSettingsScene';",
+        '',
+      ].join('\n'),
+    },
+    {
       anchor: "    this.input.once('pointerdown', () => this.scene.start('PlayScene'));\n",
       replacement: [
         '    // The settings button shows only where this target has notifications.',
@@ -294,7 +302,7 @@ const phaserEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         '          .setOrigin(1, 0)',
         '          .setPadding(16, 12, 16, 12)',
         '          .setInteractive({ useHandCursor: true });',
-        "    notificationsButton?.on('pointerup', () => this.scene.start('NotificationSettingsScene'));",
+        "    notificationsButton?.on('pointerup', () => this.scene.start(notificationSettingsSceneKey));",
         '    // A tap anywhere else starts the game; the scene drops this listener on shutdown.',
         "    this.input.on('pointerdown', (_pointer: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]) => {",
         '      if (notificationsButton === undefined || !over.includes(notificationsButton)) {',
@@ -499,6 +507,7 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
 export const notificationsCapacitorGatewayModules: readonly string[] = Object.freeze([
   'src/platform/capacitorNotifications.ts',
   'src/platform/notifications.ts',
+  'src/platform/notificationSettings.ts',
 ]);
 
 /** Whether a Capacitor gateway already registers a notifications provider. */
