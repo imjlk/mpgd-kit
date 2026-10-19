@@ -202,9 +202,9 @@ queue = "mpgd-notifications"
 max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
-# Purges and the scheduler, every minute (recommended; C1's template does the same). Each run
-# goes on in rounds (a batch of due reminders and notice checks, then a batch of due sends) until
-# nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS (20 by default) is used.
+# Purges and the scheduler, every minute (the recommended period; the purges run each time too).
+# Each run goes on in rounds (a batch of due reminders and notice checks, then a batch of due
+# sends) until nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS (20 by default) is used.
 # MPGD_NOTIFICATIONS_DUE_BATCH sets each batch (25 by default, at most 100). A reminder fires no
 # earlier than its time: the first run at or after it takes it unless the run's budget runs out
 # first (a failed item waits a minute), and its send then waits for the provider's rate, the
@@ -278,16 +278,17 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   due at once but queues behind those already due. A reminder the gate
   refuses when it comes due, such as after the player's registering session
   ended, is spent.
-- **Throughput.** A run is bounded by time, not by count. The cost of one
-  reminder is about ten D1 queries plus the provider call, so a run
-  without a queue fires on the order of a hundred or more reminders in its
-  20 seconds (measure yours): a wave of 10,000 due together drains in
-  about an hour of one-minute runs. With the queue bound, the cron only
-  writes the sends and takes their rows, and the consumers make the
-  provider calls in parallel, so a run gets through several times more.
-  For larger waves, bind the queue, or raise
-  `MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS` (at most 300) within the time
-  Cloudflare allows a scheduled run on your plan and cron interval.
+- **Throughput.** A run is bounded by its time budget, but its real ceiling
+  is the platform's per-invocation limits: each reminder costs roughly ten
+  D1 queries, and a send without the queue costs its provider calls too,
+  so the free plan's subrequest and D1 query limits allow only a few items
+  per run, and the paid plan's limits a few hundred. These are rough,
+  unmeasured estimates: measure yours. With the queue bound, the cron only
+  writes the sends and takes their rows, and each consumer invocation makes
+  its own provider calls under its own limits, so large waves need the
+  queue. Keep the budget under the cron period (60 seconds for a
+  one-minute cron), or runs overlap; the scheduler's compare-and-set writes
+  keep overlapping runs correct, but they compete for the same items.
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
   other failure is retried with a growing delay (10 s, doubling, at most
   5 min). While the notifications configuration is broken (a catalog or

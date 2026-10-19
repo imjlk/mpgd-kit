@@ -2265,14 +2265,15 @@ that also removes commerce v1.
    Devvit server meets the delivery ledger's fencing contract.
 3. **Scheduler backend.** D1 plus Cron is the default; Durable Object alarms
    would give per-player precision at higher cost. S2 keeps D1 plus Cron for
-   the first wave. A game reminder needs no minute precision (local reminders
-   are inexact too), the cron's period bounds the lateness (the Worker's
-   sample and C1's template run it every minute), each run works through
-   the due items in batches for up to its time budget, and the due indexes
-   keep a run's cost to the items due, not to every player. Alarms would need a Durable Object per player or a
-   sharded set, and a second store for the ledger the gate reads in one
-   place. Revisit when a game needs reminders at second precision or a
-   backlog outgrows what one run's budget gets through each minute.
+   the first wave. A game reminder needs no minute precision (local
+   reminders are inexact too), the cron's period bounds the lateness (every
+   minute is the recommended period, which the Worker's sample uses), each
+   run works through the due items in batches for up to its time budget,
+   and the due indexes keep a run's cost to the items due, not to every
+   player. Alarms would need a Durable Object per player or a sharded set,
+   and a second store for the ledger the gate reads in one place. Revisit
+   when a game needs reminders at second precision or a backlog outgrows
+   what one run's budget gets through each minute.
 4. **Remote copy on the server.** Whether the Worker reads localized copy from
    the catalog file or from a project-provided resolver.
 5. **Bulk sends.** The first wave sends one recipient per call. Bulk paths
