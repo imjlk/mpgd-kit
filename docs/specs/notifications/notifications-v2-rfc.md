@@ -1942,7 +1942,7 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   mappings to `installAitHostBridge` as `notificationTopics`. Since C1 the
   kit's, the template's, and the lite starter's wrappers read them at build
   time with `readAitNotificationTopicsFile` from
-    `@mpgd/adapter-ait/notification-config`, which checks the catalog with
+  `@mpgd/adapter-ait/notification-config`, which checks the catalog with
   `validateNotificationTopicCatalog` and the Apps in Toss registry entry (so
   an advertising topic, a blank template code, and an unknown agreement are
   refused) and leaves other targets and the deployment to

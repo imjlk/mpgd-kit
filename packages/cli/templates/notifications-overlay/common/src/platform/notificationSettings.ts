@@ -75,16 +75,19 @@ export interface StarterNotificationSettingsView {
   readonly reminders: readonly {
     readonly topic: string;
     readonly label: string;
-    /** The player's latest `topic-preference` record for the topic is `granted`. */
+    /**
+     * The player's latest `topic-preference` record for the topic is `granted`,
+     * and on a per-topic host its host agreement is granted too.
+     */
     readonly enabled: boolean;
   }[];
   /** Present when this target delivers an advertising topic. */
   readonly advertising?: {
     /** The latest `advertising` record is `granted`. */
     readonly granted: boolean;
-        /** The latest `night` record is `granted`, and so is the latest `advertising` record. */
+    /** The latest `night` record is `granted`, and so is the latest `advertising` record. */
     readonly night: boolean;
-        /** Whether the night switch can be tapped: only while advertising consent is granted. */
+    /** Whether the night switch can be tapped: only while advertising consent is granted. */
     readonly nightSelectable: boolean;
   };
   /** Consent notices the server says are due, in the player's language. */
@@ -220,6 +223,8 @@ const messages = {
     advertisingOn: '광고성 정보 수신에 동의했어요.',
     advertisingOff: '광고성 정보 수신동의를 철회했어요.',
     advertisingAndNightOff: '광고성 정보 수신동의와 야간 광고성 정보 수신동의를 철회했어요.',
+    advertisingOnStaleNightOff:
+      '광고성 정보 수신에 동의했어요. 예전에 남아 있던 야간 광고성 정보 수신동의는 철회했어요. 원하면 다시 켤 수 있어요.',
     nightNeedsAdvertising: '야간 광고성 정보 수신은 광고성 정보 수신에 먼저 동의해야 켤 수 있어요.',
     choicesUnreadable: '수신 설정을 불러오지 못해 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.',
     nightOn: '야간 광고성 정보 수신에 동의했어요.',
@@ -244,6 +249,8 @@ const messages = {
     advertisingOn: 'You agreed to promotional notifications.',
     advertisingOff: 'You withdrew your consent to promotional notifications.',
     advertisingAndNightOff: 'You withdrew your consent to promotional notifications, by day and at night.',
+    advertisingOnStaleNightOff:
+      'You agreed to promotional notifications. An earlier consent for night-time ones was withdrawn; turn it on again if you want it.',
     nightNeedsAdvertising: 'Agree to promotional notifications first to get them at night.',
     choicesUnreadable: 'Your choices could not be read, so nothing was changed. Try again later.',
     nightOn: 'You agreed to promotional notifications at night.',
@@ -602,6 +609,9 @@ export function createStarterNotificationSettings(
         // The message says what changed (or, when nothing had to, the state asked for).
         if (writeAdvertising === false && writeNight === false) {
           return strings.advertisingAndNightOff;
+        }
+        if (writeAdvertising === true && writeNight === false) {
+          return strings.advertisingOnStaleNightOff;
         }
         if (writeAdvertising !== undefined) {
           return writeAdvertising ? strings.advertisingOn : strings.advertisingOff;

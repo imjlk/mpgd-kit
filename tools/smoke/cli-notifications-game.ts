@@ -171,11 +171,11 @@ try {
 
     // `pnpm validate:notifications` refuses the starter's sender placeholder…
     const manifest = JSON.parse(readFileSync(join(gameRoot, 'package.json'), 'utf8')) as {
-      readonly scripts: Readonly<Record<string, string>>;
+      readonly scripts?: Readonly<Record<string, string>>;
     };
     const script = 'ttsx --project tsconfig.tools.json tools/validate-notifications.ts';
     assert.equal(
-      manifest.scripts['validate:notifications'],
+      manifest.scripts?.['validate:notifications'],
       script,
       `${template}: validate script`,
     );

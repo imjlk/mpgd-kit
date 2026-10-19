@@ -343,6 +343,10 @@ const common = {
   assert.deepEqual(calls.at(-1), {
     advertising: { advertising: 'granted', night: 'withdrawn', textVersion: '1' },
   });
+  assert.equal(
+    on.message,
+    '광고성 정보 수신에 동의했어요. 예전에 남아 있던 야간 광고성 정보 수신동의는 철회했어요. 원하면 다시 켤 수 있어요.',
+  );
   assert.deepEqual(on.advertising, { granted: true, night: false, nightSelectable: true });
   // Advertising already off: only the standing night consent is withdrawn, and the message says so.
   append({ kind: 'advertising', state: 'withdrawn', textVersion: '1' });
