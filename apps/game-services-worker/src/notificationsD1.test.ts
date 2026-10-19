@@ -20,10 +20,10 @@ const miniflare = new Miniflare({
 });
 
 async function applyMigration(db: D1Database): Promise<void> {
-  const sql = await readFile(
-    new URL('../migrations/0007_notifications.sql', import.meta.url),
-    'utf8',
-  );
+  const sql = (await Promise.all(
+    ['0007_notifications.sql', '0008_notification_scheduler.sql'].map((file) =>
+      readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')),
+  )).join('\n');
   // Strip comments, then run each statement.
   const statements = sql
     .split('\n')
@@ -53,6 +53,7 @@ try {
       'notification_notices_given',
       'notification_sends',
       'notification_delivery_history',
+      'notification_schedule',
     ]) {
       await db.prepare(`DELETE FROM ${table}`).run();
     }

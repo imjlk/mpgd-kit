@@ -1,6 +1,9 @@
+import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
+
 import type {
   NotificationConsentRecordInput,
   NotificationEndpointWrite,
+  NotificationScheduleEntry,
   NotificationStore,
   NotificationStoredSend,
 } from './store.js';
@@ -8,8 +11,9 @@ import type {
 /**
  * The behavior every `NotificationStore` must have, run against a fresh
  * store: the atomic steps the service relies on (consent dating, endpoint
- * address uniqueness and dead addresses, versioned compare-and-set on sends,
- * idempotent notices and history) and the purge cutoffs. A durable store
+ * address uniqueness and dead addresses, versioned compare-and-set on sends
+ * and schedule entries, idempotent notices and history, consent pruning,
+ * provider-wide history counts) and the purge cutoffs. A durable store
  * (the Worker's D1 store, a Redis store) runs it in its own tests. Throws on
  * the first difference.
  */
@@ -415,6 +419,260 @@ export async function runNotificationStoreConformance(
   );
 
   await runConcurrencyAndEdgeClauses(store, at, endpoint, send);
+  await runSchedulerClauses(store, at);
+}
+
+/**
+ * The steps S2's scheduler adds: schedule entries (create once,
+ * compare-and-set, the due index), provider-wide history counts for
+ * pacing, and consent pruning with the notices that name pruned records.
+ */
+async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: number) => string): Promise<void> {
+  const base = 40 * 86_400_000;
+  const t = (offsetMs: number): string => at(base + offsetMs);
+
+  // Consent pruning: by instant, per player, with the notices given that report on a pruned record.
+  const records: NotificationConsentRecord[] = [];
+  for (const record of [
+    { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v1' },
+    { kind: 'advertising', state: 'withdrawn', source: 'player', textVersion: 'v1' },
+    { kind: 'topic-preference', topic: 'energy-full', state: 'granted', source: 'player' },
+    { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v2' },
+  ] as const) {
+    records.push(await store.appendConsent({ player: 'p-prune', record, at: t(0) }));
+  }
+  const other = await store.appendConsent({
+    player: 'p-prune-other',
+    record: { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v1' },
+    at: t(0),
+  });
+  const [granted, withdrawn, preference, regranted] = records;
+  const given = (recordAt: string, dueBy: string, player = 'p-prune') => ({
+    kind: 'consent-result' as const,
+    record: { kind: 'advertising' as const, at: recordAt },
+    dueBy,
+    player,
+    channel: 'push' as const,
+    at: t(10),
+  });
+  await store.addNoticeGiven(given(granted?.at ?? '', '2026-12-12'));
+  await store.addNoticeGiven(given(regranted?.at ?? '', '2026-12-13'));
+  await store.addNoticeGiven(given(other.at, '2026-12-12', 'p-prune-other'));
+  equal(
+    await store.pruneConsent({
+      player: 'p-prune',
+      // The same instant in another spelling names the same record.
+      at: [
+        granted?.at ?? '',
+        new Date(Date.parse(withdrawn?.at ?? '')).toISOString().replace('Z', '+00:00'),
+        // An instant with no record of this player.
+        t(-5),
+      ],
+    }),
+    2,
+    'prune: deletes the records at those instants',
+  );
+  deepEqual(
+    (await store.listConsent('p-prune')).map((record) => record.at),
+    [preference?.at, regranted?.at],
+    'prune: the other records stay, oldest first',
+  );
+  deepEqual(
+    (await store.listNoticesGiven('p-prune')).map((notice) => notice.record.at),
+    [regranted?.at],
+    'prune: a notice given about a pruned record goes with it',
+  );
+  equal((await store.listConsent('p-prune-other')).length, 1, 'prune: per player');
+  equal(
+    (await store.listNoticesGiven('p-prune-other')).length,
+    1,
+    'prune: another player keeps its notices',
+  );
+  equal(
+    await store.pruneConsent({ player: 'p-prune', at: [] }),
+    0,
+    'prune: nothing named, nothing deleted',
+  );
+  const next = await store.appendConsent({
+    player: 'p-prune',
+    record: { kind: 'night', state: 'granted', source: 'player', textVersion: 'v1' },
+    at: t(0),
+  });
+  equal(
+    Date.parse(next.at),
+    Date.parse(regranted?.at ?? '') + 1,
+    'prune: a later record is still dated after the latest one',
+  );
+
+  // History counts per provider across players, from `since` on.
+  for (const [sendKey, provider, player, offset] of [
+    ['count-1', 'paced', 'p-a', 100],
+    ['count-2', 'paced', 'p-b', 200],
+    ['count-3', 'paced', 'p-a', 300],
+    ['count-4', 'other-paced', 'p-a', 300],
+  ] as const) {
+    await store.addHistory({ sendKey, provider, player, topic: 't', at: t(offset) });
+  }
+  equal(await store.countHistory({ provider: 'paced', since: t(0) }), 3, 'count: every player');
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(200) }),
+    2,
+    'count: since is inclusive',
+  );
+  equal(await store.countHistory({ provider: 'paced', since: t(301) }), 0, 'count: none after');
+  equal(
+    await store.countHistory({ provider: 'other-paced', since: t(0) }),
+    1,
+    'count: per provider',
+  );
+
+  // Schedule entries: create once, compare-and-set, the due index.
+  const entry = (player: string, id: string, dueAt: string | undefined): NotificationScheduleEntry => ({
+    player,
+    id,
+    ...(dueAt === undefined ? {} : { dueAt }),
+    item: {
+      kind: 'reminder',
+      key: id.slice('reminder:'.length),
+      topic: 'energy-full',
+      fireAt: dueAt ?? t(0),
+      templateData: { count: 3, ready: true, name: 'x' },
+      link: 't3_x',
+    },
+  });
+  const first = entry('p-s', 'reminder:energy', t(1_000));
+  const version = await store.createScheduleEntry(first);
+  ok(typeof version === 'string', 'schedule: created');
+  equal(
+    await store.createScheduleEntry(first),
+    undefined,
+    'schedule: an id is created once per player',
+  );
+  const held = await store.getScheduleEntry({ player: 'p-s', id: 'reminder:energy' });
+  deepEqual(held?.entry, first, 'schedule: read back as written');
+  equal(held?.version, version, 'schedule: with its version');
+  equal(
+    await store.getScheduleEntry({ player: 'p-s2', id: 'reminder:energy' }),
+    undefined,
+    'schedule: per player',
+  );
+  ok(
+    typeof await store.createScheduleEntry(entry('p-s2', 'reminder:energy', t(500))) === 'string',
+    'schedule: another player has its own ids',
+  );
+  await store.createScheduleEntry({
+    player: 'p-s',
+    id: 'notices',
+    item: { kind: 'notices', attempts: 2, failed: ['k'] },
+  });
+  await store.createScheduleEntry(entry('p-s3', 'reminder:later', t(2_000)));
+  deepEqual(
+    await store.listDueScheduleEntries({ at: t(999), limit: 10 }),
+    [{ player: 'p-s2', id: 'reminder:energy' }],
+    'schedule: not due before dueAt',
+  );
+  deepEqual(
+    await store.listDueScheduleEntries({ at: t(2_000), limit: 10 }),
+    [
+      { player: 'p-s2', id: 'reminder:energy' },
+      { player: 'p-s', id: 'reminder:energy' },
+      { player: 'p-s3', id: 'reminder:later' },
+    ],
+    'schedule: due at dueAt, earliest first; an entry without dueAt is never due',
+  );
+  deepEqual(
+    await store.listDueScheduleEntries({ at: t(2_000), limit: 1 }),
+    [{ player: 'p-s2', id: 'reminder:energy' }],
+    'schedule: limited',
+  );
+  const moved = {
+    ...first,
+    dueAt: t(3_000),
+    item: { ...first.item, fireAt: t(3_000) },
+  } as NotificationScheduleEntry;
+  ok(
+    await store.updateScheduleEntry({ player: 'p-s', id: 'reminder:energy', version: version ?? '', entry: moved }),
+    'schedule: a write with the version succeeds',
+  );
+  ok(
+    !await store.updateScheduleEntry({ player: 'p-s', id: 'reminder:energy', version: version ?? '', entry: first }),
+    'schedule: a stale version is refused',
+  );
+  const current = await store.getScheduleEntry({ player: 'p-s', id: 'reminder:energy' });
+  deepEqual(current?.entry, moved, 'schedule: the write is stored');
+  ok(
+    current !== undefined && current.version !== version,
+    'schedule: every write changes the version',
+  );
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(2_999), limit: 10 })).map((due) => due.player),
+    ['p-s2', 'p-s3'],
+    'schedule: the due index follows the write',
+  );
+  const notices = await store.getScheduleEntry({ player: 'p-s', id: 'notices' });
+  ok(
+    notices !== undefined && await store.updateScheduleEntry({
+      player: 'p-s',
+      id: 'notices',
+      version: notices.version,
+      entry: { player: 'p-s', id: 'notices', dueAt: t(0), item: { kind: 'notices', attempts: 0 } },
+    }),
+    'schedule: an entry gains a due time',
+  );
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(0), limit: 10 })).map((due) => due.id),
+    ['notices'],
+    'schedule: and is listed from then',
+  );
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-s',
+      id: 'reminder:energy',
+      version: current?.version ?? '',
+      entry: undefined,
+    }),
+    'schedule: deleted with the version',
+  );
+  equal(
+    await store.getScheduleEntry({ player: 'p-s', id: 'reminder:energy' }),
+    undefined,
+    'schedule: gone',
+  );
+  ok(
+    !await store.updateScheduleEntry({
+      player: 'p-s',
+      id: 'reminder:energy',
+      version: current?.version ?? '',
+      entry: first,
+    }),
+    'schedule: a deleted entry is not written back',
+  );
+
+  // Parallel callers.
+  const created = await Promise.all(
+    Array.from({ length: 6 }, () => store.createScheduleEntry(entry('p-race', 'reminder:r', t(0)))),
+  );
+  equal(
+    created.filter((value) => value !== undefined).length,
+    1,
+    'concurrency: one of parallel creates wins',
+  );
+  const raced = await store.getScheduleEntry({ player: 'p-race', id: 'reminder:r' });
+  const updated = await Promise.all(
+    Array.from({ length: 6 }, (_, index) =>
+      store.updateScheduleEntry({
+        player: 'p-race',
+        id: 'reminder:r',
+        version: raced?.version ?? '',
+        entry: entry('p-race', 'reminder:r', t(index)),
+      }),
+    ),
+  );
+  equal(
+    updated.filter(Boolean).length,
+    1,
+    'concurrency: one of parallel writes with one version wins',
+  );
 }
 
 /**

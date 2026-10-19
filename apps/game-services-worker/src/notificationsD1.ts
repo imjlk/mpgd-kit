@@ -6,6 +6,7 @@ import {
   type NotificationHistoryEntry,
   type NotificationNoticeGiven,
   type NotificationPlatformRegistration,
+  type NotificationScheduleEntry,
   type NotificationStore,
   type NotificationStoredEndpoint,
   type NotificationStoredSend,
@@ -13,11 +14,13 @@ import {
 import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
 
 /**
- * The notifications store over D1 (migration 0007_notifications.sql). Each
- * atomic step the store contract names is one statement or one batch:
- * consent records take their sequence and time in one INSERT … SELECT, an
- * endpoint write drops another installation's copy of its address in the
- * same batch, and a send is written only while it keeps its version.
+ * The notifications store over D1 (migrations 0007_notifications.sql and
+ * 0008_notification_scheduler.sql). Each atomic step the store contract
+ * names is one statement or one batch: consent records take their sequence
+ * and time in one INSERT … SELECT, an endpoint write drops another
+ * installation's copy of its address in the same batch, a pruning deletes
+ * records and the notices about them in one batch, and a send or a
+ * schedule entry is written only while it keeps its version.
  */
 export function createD1NotificationStore(db: D1Database): NotificationStore {
   return {
@@ -54,6 +57,29 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
         .bind(player)
         .all<{ readonly record_json: string; readonly at_ms: number }>();
       return rows.results.map((row) => consentRecordOf(row.record_json, row.at_ms));
+    },
+    async pruneConsent({ player, at }) {
+      const instants = [...new Set(at.map(millisOf))];
+      if (instants.length === 0) {
+        return 0;
+      }
+      // One batch, so a notice given never outlives the record it names. Chunks
+      // keep each statement under D1's bound-parameter limit.
+      const statements: D1PreparedStatement[] = [];
+      const recordStatements: number[] = [];
+      for (let start = 0; start < instants.length; start += pruneChunk) {
+        const chunk = instants.slice(start, start + pruneChunk);
+        const marks = chunk.map(() => '?').join(', ');
+        recordStatements.push(statements.length);
+        statements.push(
+          db.prepare(`DELETE FROM notification_consent_records WHERE player_id = ? AND at_ms IN (${marks})`)
+            .bind(player, ...chunk),
+          db.prepare(`DELETE FROM notification_notices_given WHERE player_id = ? AND record_at_ms IN (${marks})`)
+            .bind(player, ...chunk),
+        );
+      }
+      const results = await db.batch(statements);
+      return recordStatements.reduce((sum, index) => sum + (results[index]?.meta.changes ?? 0), 0);
     },
 
     async putEndpoint(write) {
@@ -286,6 +312,56 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
         at: formatNotificationInstant(row.at_ms),
       }));
     },
+    async countHistory({ provider, since }) {
+      const row = await db.prepare(`SELECT COUNT(*) AS count FROM notification_delivery_history
+        WHERE provider = ? AND at_ms >= ?`)
+        .bind(provider, millisOf(since))
+        .first<{ readonly count: number }>();
+      return row?.count ?? 0;
+    },
+
+    async getScheduleEntry({ player, id }) {
+      const row = await db.prepare(`SELECT version, entry_json FROM notification_schedule
+        WHERE player_id = ? AND entry_id = ?`)
+        .bind(player, id)
+        .first<{ readonly version: string; readonly entry_json: string }>();
+      return row === null
+        ? undefined
+        : { version: row.version, entry: JSON.parse(row.entry_json) as NotificationScheduleEntry };
+    },
+    async createScheduleEntry(entry) {
+      const version = crypto.randomUUID();
+      const result = await db.prepare(`INSERT INTO notification_schedule
+          (player_id, entry_id, version, due_at_ms, entry_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (player_id, entry_id) DO NOTHING`)
+        .bind(entry.player, entry.id, version, dueMillisOf(entry), JSON.stringify(entry))
+        .run();
+      return result.meta.changes === 1 ? version : undefined;
+    },
+    async updateScheduleEntry({ player, id, version, entry }) {
+      if (entry === undefined) {
+        const result = await db.prepare(`DELETE FROM notification_schedule
+          WHERE player_id = ? AND entry_id = ? AND version = ?`)
+          .bind(player, id, version)
+          .run();
+        return result.meta.changes === 1;
+      }
+      const stored: NotificationScheduleEntry = { ...entry, player, id };
+      const result = await db.prepare(`UPDATE notification_schedule
+        SET version = ?, due_at_ms = ?, entry_json = ?
+        WHERE player_id = ? AND entry_id = ? AND version = ?`)
+        .bind(crypto.randomUUID(), dueMillisOf(stored), JSON.stringify(stored), player, id, version)
+        .run();
+      return result.meta.changes === 1;
+    },
+    async listDueScheduleEntries({ at, limit }) {
+      const rows = await db.prepare(`SELECT player_id, entry_id FROM notification_schedule
+        WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms LIMIT ?`)
+        .bind(millisOf(at), limitOf(limit))
+        .all<{ readonly player_id: string; readonly entry_id: string }>();
+      return rows.results.map((row) => ({ player: row.player_id, id: row.entry_id }));
+    },
 
     async purge(cutoffs) {
       const [sends, history, endpoints] = await db.batch([
@@ -324,6 +400,13 @@ interface HistoryRow {
   readonly player_id: string;
   readonly topic: string;
   readonly at_ms: number;
+}
+
+/** Instants per pruning statement: two more parameters stay under D1's limit of 100. */
+const pruneChunk = 90;
+
+function dueMillisOf(entry: NotificationScheduleEntry): number | null {
+  return entry.dueAt === undefined ? null : millisOf(entry.dueAt);
 }
 
 function limitOf(limit: number): number {

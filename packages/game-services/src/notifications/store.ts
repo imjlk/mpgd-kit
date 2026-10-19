@@ -14,8 +14,9 @@ import type { NotificationDeviceAddress } from './delivery-provider.js';
 /**
  * Persistence for the notifications service (notifications v2 RFC, "Server"):
  * consent records, the endpoint registry, platform-user registrations, the
- * notices given, the send ledger with its per-recipient rows, and the
- * delivery history the gate's limits count. The service owns every rule; a
+ * notices given, the send ledger with its per-recipient rows, the delivery
+ * history the gate's limits count, and the scheduler's entries (server
+ * reminders and each player's notice check). The service owns every rule; a
  * store only keeps rows and answers the few atomic steps listed on each
  * method. `createInMemoryNotificationStore` is the reference implementation;
  * the game-services Worker ships a D1 one.
@@ -191,6 +192,53 @@ export interface NotificationPurgeCounts {
   readonly endpoints: number;
 }
 
+/**
+ * A server reminder a player set (RFC "Reminders"): one per player and key.
+ * Once the scheduler turned it into its `reminder:` send it is `firedAt`,
+ * no longer pending, and kept only so a later set or cancel can stop that
+ * send while it still waits.
+ */
+export interface NotificationStoredReminder {
+  readonly kind: 'reminder';
+  readonly key: string;
+  readonly topic: string;
+  /** Canonical RFC 3339. */
+  readonly fireAt: string;
+  readonly templateData?: NotificationTemplateData;
+  readonly link?: string;
+  readonly firedAt?: string;
+}
+
+/** When the scheduler next looks at a player's consent notices, with the backoff of refused pushes. */
+export interface NotificationNoticeCheck {
+  readonly kind: 'notices';
+  /** Notice pushes refused in a row; each refusal doubles the wait before the next try. */
+  readonly attempts: number;
+  /** Notice send keys whose push could not render; each fails once and is not tried again. */
+  readonly failed?: readonly string[];
+}
+
+export type NotificationScheduleItem = NotificationStoredReminder | NotificationNoticeCheck;
+
+/**
+ * One scheduler item of a player, named by `id` (`reminder:<key>` for a
+ * reminder, `notices` for the notice check). The store keeps the item as
+ * given and indexes `dueAt`; the service decides what it means.
+ */
+export interface NotificationScheduleEntry {
+  readonly player: string;
+  readonly id: string;
+  /** When the scheduler takes the entry next; an entry without one is never listed as due. */
+  readonly dueAt?: string;
+  readonly item: NotificationScheduleItem;
+}
+
+/** A schedule entry with the version a conditional write must name. */
+export interface NotificationVersionedScheduleEntry {
+  readonly entry: NotificationScheduleEntry;
+  readonly version: string;
+}
+
 export interface NotificationStore {
   /**
    * Appends a consent record for `player`, dated `at` or, when the player's
@@ -204,6 +252,13 @@ export interface NotificationStore {
   }): Promise<NotificationConsentRecord>;
   /** The player's consent records, oldest first. */
   listConsent(player: string): Promise<readonly NotificationConsentRecord[]>;
+  /**
+   * Deletes the player's consent records dated at these instants (each of a
+   * player's records has its own millisecond, so the instant names it), and
+   * the notices given that report on them, in one atomic step. Answers how
+   * many records it deleted.
+   */
+  pruneConsent(input: { readonly player: string; readonly at: readonly string[] }): Promise<number>;
 
   /**
    * Binds a device endpoint, atomically: another installation's endpoint
@@ -278,6 +333,30 @@ export interface NotificationStore {
     readonly player: string;
     readonly since: string;
   }): Promise<readonly NotificationHistoryEntry[]>;
+  /** How many deliveries every player received through `provider` at or after `since` (the scheduler's pacing). */
+  countHistory(input: { readonly provider: string; readonly since: string }): Promise<number>;
+
+  getScheduleEntry(input: {
+    readonly player: string;
+    readonly id: string;
+  }): Promise<NotificationVersionedScheduleEntry | undefined>;
+  /** Stores a new entry; answers its version, or `undefined` when the player already has one with its id. */
+  createScheduleEntry(entry: NotificationScheduleEntry): Promise<string | undefined>;
+  /**
+   * Replaces (or, with `entry: undefined`, deletes) the entry while it still
+   * has `version`; answers whether it did. Every write gets a new version.
+   */
+  updateScheduleEntry(input: {
+    readonly player: string;
+    readonly id: string;
+    readonly version: string;
+    readonly entry: NotificationScheduleEntry | undefined;
+  }): Promise<boolean>;
+  /** Up to `limit` entries whose `dueAt` is at or before `at`, earliest first. */
+  listDueScheduleEntries(input: {
+    readonly at: string;
+    readonly limit: number;
+  }): Promise<readonly { readonly player: string; readonly id: string }[]>;
 
   purge(cutoffs: NotificationPurgeCutoffs): Promise<NotificationPurgeCounts>;
 }
@@ -414,6 +493,7 @@ export interface InMemoryNotificationStoreState {
   readonly noticesGiven: readonly NotificationNoticeGiven[];
   readonly sends: readonly NotificationStoredSend[];
   readonly history: readonly NotificationHistoryEntry[];
+  readonly schedule: readonly NotificationScheduleEntry[];
 }
 
 export interface InMemoryNotificationStore extends NotificationStore {
@@ -433,6 +513,8 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
   const noticesGiven: NotificationNoticeGiven[] = [];
   const sends = new Map<string, NotificationVersionedSend>();
   const history: NotificationHistoryEntry[] = [];
+  const schedule = new Map<string, NotificationVersionedScheduleEntry>();
+  const scheduleKey = (player: string, id: string): string => JSON.stringify([player, id]);
   let versions = 0;
   const nextVersion = (): string => {
     versions += 1;
@@ -457,6 +539,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
         noticesGiven,
         sends: [...sends.values()].map((entry) => entry.send),
         history,
+        schedule: [...schedule.values()].map((held) => held.entry),
       });
     },
     async appendConsent({ player, record, at }) {
@@ -474,6 +557,24 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
     },
     async listConsent(player) {
       return copy(consent.filter((row) => row.player === player).map((row) => row.record));
+    },
+    async pruneConsent({ player, at }) {
+      const instants = new Set(at.map((instant) => Date.parse(instant)));
+      let removed = 0;
+      for (let index = consent.length - 1; index >= 0; index -= 1) {
+        const row = consent[index];
+        if (row !== undefined && row.player === player && instants.has(Date.parse(row.record.at))) {
+          consent.splice(index, 1);
+          removed += 1;
+        }
+      }
+      for (let index = noticesGiven.length - 1; index >= 0; index -= 1) {
+        const given = noticesGiven[index];
+        if (given !== undefined && given.player === player && instants.has(Date.parse(given.record.at))) {
+          noticesGiven.splice(index, 1);
+        }
+      }
+      return removed;
     },
     async putEndpoint(write) {
       for (let index = endpoints.length - 1; index >= 0; index -= 1) {
@@ -632,6 +733,47 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
     async listHistory({ player, since }) {
       const from = Date.parse(since);
       return copy(history.filter((sent) => sent.player === player && Date.parse(sent.at) >= from));
+    },
+    async countHistory({ provider, since }) {
+      const from = Date.parse(since);
+      return history.filter((sent) => sent.provider === provider && Date.parse(sent.at) >= from).length;
+    },
+    async getScheduleEntry({ player, id }) {
+      const held = schedule.get(scheduleKey(player, id));
+      return held === undefined ? undefined : copy(held);
+    },
+    async createScheduleEntry(entry) {
+      const key = scheduleKey(entry.player, entry.id);
+      if (schedule.has(key)) {
+        return undefined;
+      }
+      const version = nextVersion();
+      schedule.set(key, { entry: copy(entry), version });
+      return version;
+    },
+    async updateScheduleEntry({ player, id, version, entry }) {
+      const key = scheduleKey(player, id);
+      const held = schedule.get(key);
+      if (held === undefined || held.version !== version) {
+        return false;
+      }
+      if (entry === undefined) {
+        schedule.delete(key);
+      } else {
+        schedule.set(key, { entry: { ...copy(entry), player, id }, version: nextVersion() });
+      }
+      return true;
+    },
+    async listDueScheduleEntries({ at, limit }) {
+      const now = Date.parse(at);
+      return [...schedule.values()]
+        .flatMap(({ entry }) => {
+          const due = entry.dueAt === undefined ? Number.NaN : Date.parse(entry.dueAt);
+          return due <= now ? [{ player: entry.player, id: entry.id, due }] : [];
+        })
+        .sort((left, right) => left.due - right.due)
+        .slice(0, Math.max(0, limit))
+        .map(({ player, id }) => ({ player, id }));
     },
     async purge(cutoffs) {
       const before = (at: string | undefined, cutoff: string): boolean =>
