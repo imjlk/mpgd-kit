@@ -1823,11 +1823,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * send), so a run that stops between them leaves the reminder pending and
    * the next run finds its rows. A refused send spends the reminder. A set or
    * cancel since the read wins: it stops the send, and so does this run.
+   * Answers `busy` while another run is making the send, and `stale` when
+   * this run read a reminder a set has replaced since: neither worked it.
    */
   const fireReminder = async (
     held: NotificationVersionedScheduleEntry,
     reminder: NotificationStoredReminder,
-  ): Promise<NotificationDueResult | undefined> => {
+  ): Promise<NotificationDueResult | 'busy' | 'stale' | undefined> => {
     const { player } = held.entry;
     const at = nowMs();
     let key: string;
@@ -1868,7 +1870,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // reminder's own send and the next run repairs the rest.
       const current = await store.getScheduleEntry({ player, id: held.entry.id });
       if (current?.version !== held.version) {
-        return undefined;
+        return 'stale';
       }
       await stopReminderSend(player, reminder, made.existing.fingerprint);
       made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
@@ -1888,7 +1890,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     if (made === 'busy') {
       // Another run is making the send; its lease frees the key if it stops.
-      return undefined;
+      return 'busy';
     }
     if ('existing' in made) {
       // Its rows were stored by a run that stopped before marking it: they carry it.
@@ -2317,6 +2319,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           await forgetFiredReminder(held, item);
         } else {
           const result = await fireReminder(held, item);
+          if (result === 'busy') {
+            // Another run holds its send: it waits a minute, so the next
+            // round does not list it again, and it is not progress. A run
+            // that marks it fired meanwhile loses to this version, finds the
+            // same reminder, and its rows still serve it.
+            await deferEntry(held, nowMs());
+            continue;
+          }
+          if (result === 'stale') {
+            // A set replaced it since the read: the newer entry stands.
+            continue;
+          }
           if (result !== undefined) {
             touched.set(result.sendKey, result.outcome);
           }

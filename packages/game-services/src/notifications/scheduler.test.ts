@@ -164,6 +164,7 @@ function harness(options: {
   readonly store?: (store: InMemoryNotificationStore) => NotificationStore;
   /** Providers whose platform identity of the player is not known yet. */
   readonly unresolved?: readonly string[];
+  readonly elapsedMs?: () => number;
 } = {}): Harness {
   const time = clock(options.start ?? '2026-10-19T03:00:00Z');
   const fcm = fakeProvider('fcm', options.answers ?? []);
@@ -198,6 +199,7 @@ function harness(options: {
         }
       : {}),
     now: time.now,
+    ...(options.elapsedMs === undefined ? {} : { elapsedMs: options.elapsedMs }),
     random: () => 0,
     onError: (_error, context) => errors.push(context.operation),
   });
@@ -918,6 +920,54 @@ const pending = (h: Harness) =>
   h.time.set('2026-10-19T03:05:00Z');
   await h.service.runScheduler();
   assert.equal(h.fcm.calls.length, 1, 'the next run after the lease sends it');
+  assert.deepEqual(pending(h), []);
+}
+
+// Reminders whose sends other runs hold wait a minute and are not progress: a batch of them ends the run after one round.
+{
+  let listings = 0;
+  let wall = 0;
+  const h = harness({
+    store: (inner) => ({
+      ...inner,
+      async listDueScheduleEntries(input) {
+        listings += 1;
+        return inner.listDueScheduleEntries(input);
+      },
+    }),
+    // Each read is a second later: without the fix the run would go on for its 20-second budget.
+    elapsedMs: () => (wall += 1_000),
+  });
+  for (const player of ['p-1', 'p-2']) {
+    await register(h, player);
+    await h.service.setReminder(session(player), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T03:00:00Z',
+    });
+    const key = `reminder:${player}:k:2026-10-19T03:00:00Z`;
+    await h.store.createSend({
+      key,
+      fingerprint: 'other-run',
+      request: { idempotencyKey: key, player, topic: 'friend-challenge' },
+      origin: { kind: 'reminder', key: 'k' },
+      scheduled: true,
+      rows: [],
+      claim: { token: 'live', leaseUntil: '2026-10-19T03:05:00Z' },
+      changedAt: '2026-10-19T03:00:00Z',
+    });
+  }
+  await h.service.runScheduler({ limit: 2 });
+  assert.equal(listings, 1, 'one round: the held reminders are not listed again');
+  assert.deepEqual(
+    pending(h).map((entry) => entry.dueAt),
+    ['2026-10-19T03:01:00Z', '2026-10-19T03:01:00Z'],
+    'each waits a minute',
+  );
+  assert.equal(h.fcm.calls.length, 0);
+  h.time.set('2026-10-19T03:05:00Z');
+  await h.service.runScheduler({ limit: 2 });
+  assert.equal(h.fcm.calls.length, 2, 'after the lease the next run sends them');
   assert.deepEqual(pending(h), []);
 }
 

@@ -1604,8 +1604,9 @@ scheduler (after P3).
   the run's wall-time budget (20 seconds by default) is used, so a wave of
   reminders due together drains in one run rather than one batch per run.
   The new sends' rows leave through the same paced path as every other due
-  row. A schedule that cannot be read does not hold the due rows, and a
-  failed entry waits a minute.
+  row. A schedule that cannot be read does not hold the due rows; a failed
+  entry, and a reminder whose send another run is still making, waits a
+  minute and is not progress.
 - **Pacing.** The scheduler dispatches due rows per provider at no more than
   the registry entry's `rate`, oldest first. A backlog that comes due at 08:00
   therefore drains at the provider's pace, while `until` stays the earliest
