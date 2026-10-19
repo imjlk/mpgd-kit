@@ -3188,10 +3188,11 @@ function planNotificationsProvider(input: {
   }
   // The starter's provider module also imports the settings opener, which
   // an adapter older than this CLI's notifications starter does not have.
-  const adapterTypes = readExisting(
-    path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/dist/notifications.d.ts'),
-  );
-  if (adapterTypes !== undefined && !adapterTypes.includes('openCapacitorNotificationSettings')) {
+  const adapterDist = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/dist');
+  const adapterTypes = readExisting(path.join(adapterDist, 'notifications.d.ts'));
+  const openerTypes = readExisting(path.join(adapterDist, 'notifications-settings.d.ts'));
+  if (adapterTypes !== undefined
+    && !`${adapterTypes}\n${openerTypes ?? ''}`.includes('openCapacitorNotificationSettings')) {
     throw new Error(
       `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `
         + 'openCapacitorNotificationSettings, which the notifications starter uses; upgrade the '

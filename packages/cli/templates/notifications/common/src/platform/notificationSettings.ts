@@ -132,7 +132,7 @@ export const starterNotificationLabels = {
     on: '켜짐',
     off: '꺼짐',
     notices: '수신동의 안내',
-    notConnected: '게임 서버가 연결되면 리마인더와 광고성 정보 수신동의를 여기서 켜고 끌 수 있어요.',
+    notConnected: '게임 서버가 연결되면 리마인더와 광고성 정보 수신 설정을 여기서 켜고 끌 수 있어요.',
     back: '돌아가기',
     close: '닫기',
   },
