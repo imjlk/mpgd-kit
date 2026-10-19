@@ -833,16 +833,23 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
   );
   const consentBefore = await store.listConsent('p-prune');
   const givenBefore = await store.listNoticesGiven('p-prune');
-  await rejects(
-    () =>
-      store.pruneConsent({ player: 'p-prune', at: [consentBefore[0]?.at ?? t(0), 'not-a-time'] }),
-    'invalid: a pruned instant that does not parse',
-  );
-  deepEqual(
-    [await store.listConsent('p-prune'), await store.listNoticesGiven('p-prune')],
-    [consentBefore, givenBefore],
-    'invalid: a refused pruning deletes nothing, not even the instants that parse',
-  );
+  ok(consentBefore.length > 0 && givenBefore.length > 0, 'invalid: records and a notice to keep');
+  const instants = consentBefore.map((record) => record.at);
+  // Every record (one with a notice given) named next to an instant that does not parse, last and first.
+  for (const at of [
+    [...instants, 'not-a-time'],
+    ['not-a-time', ...instants],
+  ]) {
+    await rejects(
+      () => store.pruneConsent({ player: 'p-prune', at }),
+      'invalid: a pruned instant that does not parse',
+    );
+    deepEqual(
+      [await store.listConsent('p-prune'), await store.listNoticesGiven('p-prune')],
+      [consentBefore, givenBefore],
+      'invalid: a refused pruning deletes nothing, not even the records and notices that parse',
+    );
+  }
 }
 
 /**
