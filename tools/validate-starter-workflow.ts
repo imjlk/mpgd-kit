@@ -330,6 +330,7 @@ if (manifest !== null) {
 validatePhaserTemplateAITPolyfill();
 validateCheckedInAITWrapper();
 validatePhaserTemplateAITWrapper();
+validateAitWrapperNotificationTopics();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitBridge();
@@ -1389,6 +1390,49 @@ function validateCheckedInAITWrapper(): void {
   }
 }
 
+/**
+ * Every Apps in Toss wrapper (the kit's, the template's, and the private lite
+ * starter's) reads the notification topic catalog the same way and hands its
+ * topics to the host bridge only when one is mapped.
+ */
+function validateAitWrapperNotificationTopics(): void {
+  for (const [root, defaultFile] of [
+    ['apps/target-ait', 'packages/catalog/notifications.json'],
+    ['packages/cli/templates/phaser-game/apps/target-ait', 'notifications/topics.json'],
+    ['examples/lite-starter/apps/target-ait', 'notifications/topics.json'],
+  ] as const) {
+    const vitePath = `${root}/vite.config.ts`;
+    const mainPath = `${root}/src/main.ts`;
+    const typesPath = `${root}/src/runtime-config.types.ts`;
+    for (const [path, requiredTexts] of [
+      [
+        vitePath,
+        [
+          'readAitNotificationTopicsFile(',
+          'configured: process.env.MPGD_NOTIFICATION_TOPICS_FILE,',
+          "rootDir: fileURLToPath(new URL('../..', import.meta.url)),",
+          `defaultFile: '${defaultFile}',`,
+          'notificationTopics: aitNotificationTopics,',
+        ],
+      ],
+      [
+        mainPath,
+        [
+          '...notificationBridgeOptions(),',
+          'Object.keys(runtimeConfig.notificationTopics).length === 0',
+          'notificationTopics: runtimeConfig.notificationTopics',
+        ],
+      ],
+      [typesPath, ['readonly notificationTopics: Readonly<Record<']],
+    ] as const) {
+      const source = existsSync(path) ? readText(path) : '';
+      for (const requiredText of requiredTexts) {
+        assertIncludesText(source, requiredText, `${path}: notification topics wiring.`);
+      }
+    }
+  }
+}
+
 function validatePhaserTemplateAITWrapper(): void {
   const templateRoot = 'packages/cli/templates/phaser-game';
   const wrapperRoot = `${templateRoot}/apps/target-ait`;
@@ -1538,8 +1582,6 @@ function validatePhaserTemplateAITWrapper(): void {
       "from 'virtual:mpgd-ait-runtime-config'",
       ...aitSafeAreaWrapperRequiredTexts,
       'installAitHostBridge({',
-      '...notificationBridgeOptions(),',
-      'notificationTopics: runtimeConfig.notificationTopics',
       'mountAitGameBundle(app)',
     ]) {
       assertIncludesText(content, requiredText, wrapperMainPath);
@@ -1555,9 +1597,6 @@ function validatePhaserTemplateAITWrapper(): void {
     for (const requiredText of [
       "from '@mpgd/adapter-ait/ad-config'",
       "from '@mpgd/adapter-ait/notification-config'",
-      'process.env.MPGD_NOTIFICATION_TOPICS_FILE',
-      "new URL('../../notifications/topics.json', import.meta.url)",
-      'notificationTopics: aitNotificationTopics,',
       "'@apps-in-toss/web-framework': '@mpgd/adapter-ait/local-mock'",
       'MPGD_AIT_LOCAL_MOCK',
       "command === 'build'",

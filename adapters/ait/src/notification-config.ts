@@ -22,8 +22,8 @@ export interface ExtractAitNotificationTopicConfigOptions {
  * host bridge then exposes no notifications at all when no topic is mapped.
  *
  * It checks only what the bridge needs and refuses, with the source label,
- * what would reach a player wrongly: a malformed catalog, a duplicate topic
- * id, a mapping that is not an object, a blank `templateSetCode`, an
+ * what would reach a player wrongly: a malformed catalog, a duplicate or
+ * `__proto__` topic id, `targets` or a mapping that is not an object, a blank `templateSetCode`, an
  * `agreement` other than `required` or `none`, and an `advertising` topic,
  * which Apps in Toss cannot deliver. `pnpm validate:notifications` (or
  * `validateNotificationTopicCatalog` from `@mpgd/catalog`) checks the rest of
@@ -44,7 +44,8 @@ export function extractAitNotificationTopicConfig(
   const mappings: Record<string, AitNotificationTopicMapping> = {};
 
   for (const [index, topic] of topics.entries()) {
-    if (!isRecord(topic) || typeof topic.id !== 'string' || topic.id.trim().length === 0) {
+    if (!isRecord(topic) || typeof topic.id !== 'string' || topic.id.trim().length === 0
+      || topic.id === '__proto__') {
       throw new Error(`AIT notification topic at index ${index} is invalid: ${sourceLabel}`);
     }
     if (seen.has(topic.id)) {
@@ -54,7 +55,13 @@ export function extractAitNotificationTopicConfig(
     }
     seen.add(topic.id);
     const targets = topic.targets;
-    if (!isRecord(targets) || !Object.prototype.hasOwnProperty.call(targets, target)) {
+    if (targets === undefined) {
+      continue;
+    }
+    if (!isRecord(targets)) {
+      throw new Error(`Notification topic "${topic.id}" has invalid targets: ${sourceLabel}`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(targets, target)) {
       continue;
     }
     const mapping = targets[target];
@@ -90,4 +97,61 @@ export function extractAitNotificationTopicConfig(
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The file system and path calls `readAitNotificationTopicsFile` makes (node's in a build config). */
+export interface AitNotificationTopicsFileSystem {
+  existsSync(path: string): boolean;
+  readFileSync(path: string, encoding: 'utf8'): string;
+  resolve(...paths: string[]): string;
+}
+
+export interface ReadAitNotificationTopicsFileInput extends ExtractAitNotificationTopicConfigOptions {
+  /** `MPGD_NOTIFICATION_TOPICS_FILE`, as set; blank counts as unset. */
+  readonly configured: string | undefined;
+  /**
+   * The game root (the kit root for the kit wrapper): a relative configured
+   * path resolves against it, as `pnpm validate:notifications` reads it, not
+   * against the wrapper directory the build runs in.
+   */
+  readonly rootDir: string;
+  /** The catalog read when nothing is configured and it exists, relative to `rootDir`. */
+  readonly defaultFile: string;
+}
+
+/**
+ * Reads the wrapper's `notificationTopics` from the catalog file:
+ * `configured` (resolved against `rootDir`), which must exist, else
+ * `defaultFile` when it exists, else no topics. An unreadable file or
+ * invalid JSON throws with the resolved path; the catalog's own refusals
+ * are `extractAitNotificationTopicConfig`'s.
+ */
+export function readAitNotificationTopicsFile(
+  input: ReadAitNotificationTopicsFileInput,
+  fs: AitNotificationTopicsFileSystem,
+): Readonly<Record<string, AitNotificationTopicMapping>> {
+  const configured = input.configured?.trim();
+  let file: string;
+  if (configured !== undefined && configured.length > 0) {
+    file = fs.resolve(input.rootDir, configured);
+  } else {
+    file = fs.resolve(input.rootDir, input.defaultFile);
+    if (!fs.existsSync(file)) {
+      return {};
+    }
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(`AIT notification topic catalog is unreadable or invalid JSON: ${file}`, {
+      cause: error,
+    });
+  }
+
+  return extractAitNotificationTopicConfig(parsed, {
+    ...(input.target === undefined ? {} : { target: input.target }),
+    sourceLabel: input.sourceLabel ?? file,
+  });
 }

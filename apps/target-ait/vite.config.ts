@@ -1,11 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { AitIapProductConfig } from '@mpgd/adapter-ait';
 import { extractAitAdBridgeConfig, type AitAdBridgeConfig } from '@mpgd/adapter-ait/ad-config';
 import { extractAitIapProductConfig } from '@mpgd/adapter-ait/iap-config';
 import {
-  extractAitNotificationTopicConfig,
+  readAitNotificationTopicsFile,
   type AitNotificationTopicMapping,
 } from '@mpgd/adapter-ait/notification-config';
 import ttsc from '@ttsc/unplugin/vite';
@@ -14,9 +15,18 @@ import { defineConfig, type Plugin } from 'vite';
 const aitAppName = process.env.MPGD_AIT_APP_NAME?.trim() || 'mpgd-kit';
 const aitAdConfig = readAitAdConfig(process.env.MPGD_AD_PLACEMENTS_FILE);
 const aitIapProducts = readAitIapProducts(process.env.MPGD_PRODUCT_CATALOG_FILE);
-const aitNotificationTopics = readAitNotificationTopics(
-  process.env.MPGD_NOTIFICATION_TOPICS_FILE,
-  fileURLToPath(new URL('../../packages/catalog/notifications.json', import.meta.url)),
+// Notifications v2 topics come from the notification topic catalog
+// (`targets.ait`), so the wrapper and the backend share one source:
+// MPGD_NOTIFICATION_TOPICS_FILE (a relative path is read from the kit
+// root), else packages/catalog/notifications.json when it exists. Without a catalog, or with
+// no topic mapped for Apps in Toss, the host bridge exposes no notifications.
+const aitNotificationTopics = readAitNotificationTopicsFile(
+  {
+    configured: process.env.MPGD_NOTIFICATION_TOPICS_FILE,
+    rootDir: fileURLToPath(new URL('../..', import.meta.url)),
+    defaultFile: 'packages/catalog/notifications.json',
+  },
+  { existsSync, readFileSync, resolve },
 );
 const aitLocalMockPath = fileURLToPath(
   new URL('../../adapters/ait/src/local-mock.ts', import.meta.url),
@@ -125,37 +135,4 @@ function readAitIapProducts(path: string | undefined): readonly AitIapProductCon
   }
 
   return extractAitIapProductConfig(parsed, { sourceLabel: path });
-}
-
-/**
- * The notifications v2 topics come from the notification topic catalog
- * (`targets.ait`: `templateSetCode` and `agreement`) so the wrapper and the
- * backend share one source: `MPGD_NOTIFICATION_TOPICS_FILE`, else
- * the kit's `packages/catalog/notifications.json` when it exists. Without a catalog, or with no topic mapped
- * for Apps in Toss, the host bridge exposes no notifications.
- */
-function readAitNotificationTopics(
-  path: string | undefined,
-  defaultPath: string,
-): Readonly<Record<string, AitNotificationTopicMapping>> {
-  const configured = path?.trim();
-  const file = configured === undefined || configured.length === 0
-    ? existsSync(defaultPath)
-      ? defaultPath
-      : undefined
-    : configured;
-  if (file === undefined) {
-    return {};
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
-  } catch (error) {
-    throw new Error(`AIT notification topic catalog is unreadable or invalid JSON: ${file}`, {
-      cause: error,
-    });
-  }
-
-  return extractAitNotificationTopicConfig(parsed, { sourceLabel: file });
 }

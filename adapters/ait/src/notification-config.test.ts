@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractAitNotificationTopicConfig } from './notification-config';
+import { posix } from 'node:path';
+
+import {
+  extractAitNotificationTopicConfig,
+  readAitNotificationTopicsFile,
+  type AitNotificationTopicsFileSystem,
+} from './notification-config';
 
 const catalog = {
   version: '2026-10-19',
@@ -55,6 +61,9 @@ describe('extractAitNotificationTopicConfig', () => {
       [{ topics: 'x' }, /catalog is invalid/u],
       [{ topics: [{ id: '' }] }, /index 0 is invalid/u],
       [{ topics: [{ id: 'a' }, { id: 'a' }] }, /Duplicate notification topic "a"/u],
+      [JSON.parse('{"topics":[{"id":"__proto__","targets":{"ait":{"templateSetCode":"c","agreement":"required"}}}]}'), /index 0 is invalid/u],
+      [{ topics: [{ id: 'a', targets: 'ait' }] }, /"a" has invalid targets/u],
+      [{ topics: [{ id: 'a', targets: [] }] }, /"a" has invalid targets/u],
       [{ topics: [{ id: 'a', targets: { ait: 'code' } }] }, /invalid ait mapping/u],
       [{ topics: [{ id: 'a', targets: { ait: { templateSetCode: ' ', agreement: 'required' } } }] }, /non-empty ait templateSetCode/u],
       [{ topics: [{ id: 'a', targets: { ait: { templateSetCode: 'c', agreement: 'optional' } } }] }, /agreement 'required' or 'none'/u],
@@ -63,5 +72,52 @@ describe('extractAitNotificationTopicConfig', () => {
     for (const [input, message] of refusals) {
       expect(() => extractAitNotificationTopicConfig(input, { sourceLabel: 'topics.json' })).toThrow(message);
     }
+  });
+});
+
+describe('readAitNotificationTopicsFile', () => {
+  const catalogText = JSON.stringify({
+    topics: [{ id: 'daily-ready', purpose: 'requested', targets: { ait: { templateSetCode: 'c', agreement: 'required' } } }],
+  });
+  const mapped = { 'daily-ready': { templateSetCode: 'c', agreement: 'required' } };
+  const fileSystem = (files: Readonly<Record<string, string>>): AitNotificationTopicsFileSystem => ({
+    existsSync: (path) => Object.prototype.hasOwnProperty.call(files, path),
+    readFileSync: (path) => {
+      const text = files[path];
+      if (text === undefined) {
+        throw new Error(`ENOENT: ${path}`);
+      }
+      return text;
+    },
+    resolve: (...paths) => posix.resolve(...paths),
+  });
+
+  it('reads the default file when nothing is configured, and no topics without it', () => {
+    const input = { configured: undefined, rootDir: '/game', defaultFile: 'notifications/topics.json' };
+    expect(readAitNotificationTopicsFile(input, fileSystem({ '/game/notifications/topics.json': catalogText })))
+      .toEqual(mapped);
+    expect(readAitNotificationTopicsFile(input, fileSystem({}))).toEqual({});
+    expect(readAitNotificationTopicsFile({ ...input, configured: '  ' }, fileSystem({}))).toEqual({});
+  });
+
+  it('resolves a relative configured path against the game root, not the wrapper', () => {
+    expect(readAitNotificationTopicsFile(
+      { configured: ' config/topics.json ', rootDir: '/game', defaultFile: 'notifications/topics.json' },
+      fileSystem({ '/game/config/topics.json': catalogText }),
+    )).toEqual(mapped);
+    expect(readAitNotificationTopicsFile(
+      { configured: '/elsewhere/topics.json', rootDir: '/game', defaultFile: 'notifications/topics.json' },
+      fileSystem({ '/elsewhere/topics.json': catalogText }),
+    )).toEqual(mapped);
+  });
+
+  it('throws for a configured file that is missing or not JSON, naming the resolved path', () => {
+    const input = { configured: 'missing.json', rootDir: '/game', defaultFile: 'notifications/topics.json' };
+    expect(() => readAitNotificationTopicsFile(input, fileSystem({})))
+      .toThrow('unreadable or invalid JSON: /game/missing.json');
+    expect(() => readAitNotificationTopicsFile(input, fileSystem({ '/game/missing.json': '{' })))
+      .toThrow('unreadable or invalid JSON: /game/missing.json');
+    expect(() => readAitNotificationTopicsFile(input, fileSystem({ '/game/missing.json': '[]' })))
+      .toThrow('catalog is invalid: /game/missing.json');
   });
 });
