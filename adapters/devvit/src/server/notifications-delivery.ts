@@ -594,19 +594,23 @@ export type DevvitNotificationTaskResult =
     };
 
 /**
- * Runs one scheduler task with a bounded batch. `dispatch` replays at most
- * `dispatchLimit` (100, a positive integer) due sends in chunks of 10 and
- * starts no chunk after `budgetMs` (20 seconds). The run ends at a chunk
- * in which no send produced a result (nothing is due, or every send
- * failed), at a chunk that repeats a send or lists fewer sends than it
- * asked for, and once it has counted 10 failures. A send that fails after
- * its row was claimed backs off for a minute; one that fails before its
- * claim stays due and the next chunk lists it again, so the failure cap
- * bounds how often one run retries and reports it. `replayed` counts the
- * sends that produced a result, each once; `failed` counts failures, a
- * send listed again counting again. `purge` deletes at most the store's `purgeLimit` rows of each kind (200 for the store
- * `createDevvitNotificationService` builds). A backlog drains over the
- * following runs.
+ * Runs one scheduler task with a bounded batch.
+ *
+ * `dispatch` replays at most `dispatchLimit` (100, a positive integer) due
+ * sends in chunks of 10 and starts no chunk after `budgetMs` (20 seconds).
+ * The run ends early at a chunk in which no send produced a result, at a
+ * chunk that repeats a send or lists fewer sends than it asked for, and
+ * once it has counted 10 failures. A send that fails after its claim backs
+ * off for a minute; one that fails before its claim stays due, and each
+ * chunk lists and reports it again. The cap bounds a run's failures, and
+ * so its error reports, to under 20; it does not bound how often a single
+ * stuck send is retried, and many distinct failures end a run before its
+ * limit. `replayed` counts the sends that produced a result, each once;
+ * `failed` counts failures, a send listed again counting again.
+ *
+ * `purge` deletes at most the store's `purgeLimit` rows of each kind (200
+ * for the store `createDevvitNotificationService` builds). A backlog
+ * drains over the following runs.
  */
 export async function runDevvitNotificationTask(
   service: Pick<NotificationService, 'dispatchDue' | 'purge'>,

@@ -744,6 +744,11 @@ describe('Devvit notification scheduler tasks', () => {
       result: { task: 'dispatch', replayed: 90, failed: 10 },
       limits: Array.from({ length: 10 }, () => 10),
     });
+    // The cap counts the run's failures: five a chunk end it after two chunks.
+    expect(await run(() => ({ results: 5, failed: 5 }))).toEqual({
+      result: { task: 'dispatch', replayed: 10, failed: 10 },
+      limits: [10, 10],
+    });
     // Nine sends fail before their claim and are listed again by each chunk:
     // the run ends once it has counted a chunk's worth of failures.
     expect(await run(() => ({ results: 1, failed: 9 }))).toEqual({

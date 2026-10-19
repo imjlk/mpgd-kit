@@ -1565,13 +1565,15 @@ the Devvit scheduler.
   100 due sends (deferred, rate-limited, and ambiguous rows past their
   lease), in chunks of 10, starting no chunk after 20 seconds (Devvit
   documents no time limit for a task, so a run is kept well inside the
-  next minute's). A run ends at a chunk in which no send produced a
+  next minute's). A run ends early at a chunk in which no send produced a
   result, at a chunk that repeats a send or lists fewer than it asked for,
   and once it has counted 10 failures. A send that fails after its claim
-  backs off for a minute; one that fails before its claim stays due, and
-  the failure cap bounds how often one run retries it. `mpgd-notifications-purge` runs `purge`
-  every five minutes, at most 200 rows of each kind (57,600 a day, above the 25,000 sends a day
-  Devvit allows). A backlog drains over the next runs. Both tasks run, and
+  backs off for a minute; one that fails before its claim stays due and is
+  retried by each chunk. The cap bounds a run's failures and error reports
+  to under 20, not the retries of one stuck send.
+  `mpgd-notifications-purge` runs `purge` every five minutes, at most 200
+  rows of each kind (57,600 a day, above the 25,000 sends a day Devvit
+  allows). A backlog drains over the next runs. Both tasks run, and
   take two of the installation's recurring tasks, even while a game has no
   notifications service; such a run does no work.
 - **Left to a follow-up.** S2's reminder scheduler on Devvit (its server
