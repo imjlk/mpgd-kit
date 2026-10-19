@@ -3200,7 +3200,9 @@ function planNotificationsProvider(input: {
   const openerTypes = readExisting(
     path.join(adapterRoot, path.dirname(typesPath), 'notifications-settings.d.ts'),
   );
-  if (adapterTypes !== undefined
+  // Refused only when the declarations show the opener is absent: an
+  // `export *` the check cannot follow passes, and the build then decides.
+  if (adapterTypes !== undefined && !/\bexport\s*\*/u.test(adapterTypes)
     && !`${adapterTypes}\n${openerTypes ?? ''}`.includes('openCapacitorNotificationSettings')) {
     throw new Error(
       `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `

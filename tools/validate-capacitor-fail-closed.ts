@@ -409,7 +409,8 @@ for (const [path, requiredText] of [
   ],
   [
     'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
-    '@PluginMethod\n    public void openNotificationSettings(PluginCall call)',
+    // Annotation and method, whatever the indentation between them.
+    /@PluginMethod\s+public void openNotificationSettings\(PluginCall call\)/u,
   ],
   [
     'native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/CapacitorGameServicesPlugin.swift',
@@ -420,7 +421,11 @@ for (const [path, requiredText] of [
     '@objc func openNotificationSettings(_ call: CAPPluginCall)',
   ],
 ] as const) {
-  assert.ok(read(path).includes(requiredText), `${path} must keep ${requiredText}`);
+  const source = read(path).replace(/\r\n/gu, '\n');
+  assert.ok(
+    typeof requiredText === 'string' ? source.includes(requiredText) : requiredText.test(source),
+    `${path} must keep ${String(requiredText)}`,
+  );
 }
 
 console.info(
