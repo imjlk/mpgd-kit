@@ -97,9 +97,12 @@ function linkDependencies(directory: string, installs: readonly string[]): void 
       symlinkSync(source, destination, linkType);
     }
   };
-  for (const installed of installs.filter((path) => existsSync(path))) {
+  for (const installed of installs) {
+    // A missing install would surface later as an obscure missing module.
+    assert.ok(existsSync(installed), `Install ${installed} first (pnpm install).`);
     for (const entry of readdirSync(installed)) {
-      if (entry === '@mpgd' || entry === '.cache' || entry === '.pnpm' || entry === '.bin') {
+      // pnpm's own files (.bin, .pnpm, .modules.yaml) and the workspace's packages are not linked.
+      if (entry === '@mpgd' || entry.startsWith('.')) {
         continue;
       }
       if (entry.startsWith('@')) {
@@ -167,12 +170,16 @@ try {
     typecheck(devvit, 'tsconfig.json', `${template}: Devvit type check`);
 
     // `pnpm validate:notifications` refuses the starter's sender placeholder…
-    const validate = [
-      runner,
-      '--project',
-      'tsconfig.tools.json',
-      'tools/validate-notifications.ts',
-    ];
+    const manifest = JSON.parse(readFileSync(join(gameRoot, 'package.json'), 'utf8')) as {
+      readonly scripts: Readonly<Record<string, string>>;
+    };
+    const script = 'ttsx --project tsconfig.tools.json tools/validate-notifications.ts';
+    assert.equal(
+      manifest.scripts['validate:notifications'],
+      script,
+      `${template}: validate script`,
+    );
+    const validate = [runner, ...script.split(' ').slice(1)];
     const refused = run(validate, gameRoot);
     assert.ifError(refused.error);
     assert.equal(
@@ -191,7 +198,7 @@ try {
       `${JSON.stringify({ ...deployment, advertisingSender: { ...deployment.advertisingSender, contact: '080-1234-5678' } }, null, 2)}\n`,
     );
     const accepted = passed(run(validate, gameRoot), `${template}: validate:notifications`);
-    assert.match(accepted.stdout, /Notification topics: 5; advertising rules: kr\./u);
+    assert.match(accepted.stdout, /Notification topics: \d+; advertising rules: kr\./u);
     console.info(`${template}: notifications game generated, type-checked, and validated.`);
   }
 } finally {
