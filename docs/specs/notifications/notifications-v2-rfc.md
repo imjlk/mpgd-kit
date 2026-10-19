@@ -704,9 +704,9 @@ products and ad placements.
     `required`, or `none` for a `service` topic whose console template has no
     agreement statement.
   - **Devvit** needs `title` ≤ 60 and `body` ≤ 100 characters and may carry a
-    default `link`, a `t3_` or `t1_` id. For Devvit, a character is a Unicode
-    code point, and the provider checks the filled text again at send time (see
-    [Delivery providers](#remote-delivery)).
+    default `link`, a `t3_` or `t1_` id. For Devvit the kit counts a
+    character as a Unicode code point, and the provider checks the filled text
+    again at send time (see [Delivery providers](#remote-delivery)).
   - A field's `pattern` is read with the `u` flag. The validator reports a
     pattern that does not compile instead of throwing.
   - `agreement: 'none'` must not map to a `per-send` provider. Such a topic
@@ -1506,8 +1506,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       the length once template data fills them. A title over 60 or a body
       over 100 is `rejected` with reason `configuration`.
     - Devvit has not confirmed the unit. If its server counts UTF-16 units,
-      a text with astral characters could still be refused, and that refusal
-      arrives as an `enqueue` error.
+      a text with astral characters could still be refused, and if it counts
+      UTF-8 bytes, so could a shorter Korean text (3 bytes a syllable). Such a
+      refusal arrives as an `enqueue` error.
   - **Answers.** `failureCount` and `errors` map per recipient.
     - `successCount` above 0 is `accepted`.
     - An error proves nothing was queued for the recipient. A message that
@@ -1779,8 +1780,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `@devvit/web/client`) makes `identity.requestUpgrade` open Reddit's login
     for such a player. It answers `{ status: 'completed', reloadExpected:
     true }`, because Reddit reloads the post after login, and the game reads
-    the session again then. A player who closes the prompt gets no reload and
-    is still a guest on the next read. A prompt that cannot open answers
+    the session again then. A player who closes the prompt is expected to get
+    no reload and is still a guest on the next read. A prompt that cannot open answers
     `{ status: 'unavailable', reloadExpected: false }`.
   - A logged-in player gets the server's `completed` answer.
   - The reddit `identityUpgrade` integration stays `configuration-required`
@@ -1804,8 +1805,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic outside the catalog's
     `reddit` mappings answers `unavailable` without an opt-in.
   - `createDevvitPlatformGateway({ notifications: { topics } })` exposes
-    `notificationsV2` over that bridge, loads its client and validators on
-    first use, adds the capability block and
+    `notificationsV2` over that bridge, loads its client and validators in
+    their own chunk (starting with the gateway), adds the capability block and
     `providerAvailability.pushNotifications`, adds the webview's locale and
     zone to the registration, and serves the v1 adapter from the same
     provider. Without the option the gateway exposes no `notificationsV2`.
@@ -2216,8 +2217,8 @@ that also removes commerce v1.
      `createDevvitRedisNotificationStore` makes each write one
      WATCH/MULTI/EXEC transaction on the send's key, with the index writes
      in it: it reads the stored version after WATCH and writes only when it
-     matches, so a write that another worker's claim preceded aborts at
-     EXEC.
+     matches, so a write that another worker's claim preceded is refused
+     (the version differs) or aborts at EXEC.
    - **The claim token** is the service's own check. A holder settles its
      answer only while its token still holds the row, and it reads that
      under the same version fence.
@@ -2229,7 +2230,8 @@ that also removes commerce v1.
    - **Abort detection.** `@devvit/redis` resolves an aborted EXEC as an
      empty array and drops replies it cannot map (a protobuf zero may arrive
      unset), so every transaction ends with a SET of a commit marker whose
-     reply always maps; only an empty or all-nil result is an abort.
+     reply always maps; only a `null`, empty, or all-nil result is an
+     abort.
    - **Clocks.** Leases compare against the service's clock, not Redis TTLs.
      Clock skew between Devvit server instances can only start a replay
      early, which the `ambiguous` rule already allows (Devvit's `enqueue`
