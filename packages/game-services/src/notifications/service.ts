@@ -121,6 +121,8 @@ const defaultClaimLeaseSeconds = 300;
 const maxLedgerAttempts = 8;
 /** Settling an answer the provider already gave is retried harder, so it is not replayed. */
 const maxCompleteAttempts = 24;
+/** How long after the first attempt an ambiguous delivery is replayed. */
+const ambiguousReplayMs = notificationAmbiguousReplayHours * 3_600_000;
 /** The longest wait between ambiguous replays. */
 const maxAmbiguousLeaseMs = 3_600_000;
 /** Longest accepted text for ids, locales, links, and versions. */
@@ -943,7 +945,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           && row.state.claim === undefined
           && !(row.state.attempted
             && row.firstAttemptedAt !== undefined
-            && at - Date.parse(row.firstAttemptedAt) >= notificationAmbiguousReplayHours * 3_600_000);
+            && at - Date.parse(row.firstAttemptedAt) >= ambiguousReplayMs);
       case 'retry':
         // A direct caller replays its own platform rows once their lease ended.
         return row.state.status === 'in-flight'
@@ -2578,12 +2580,19 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           const pending = previous !== undefined && previous.firedAt === undefined;
           // A previous send of the same content at the same time (the same key
           // and fingerprint) serves this reminder, so it stays; any other is stopped.
-          const stopped = previous !== undefined
-            && await stopReminderSend(
-              player,
-              previous,
-              previous.fireAt === reminder.fireAt ? { unlessFingerprint: notificationSendFingerprint(request) } : {},
-            );
+          // After the write, best effort: the reminder is set either way, and a
+          // run that fires the previous one meanwhile stops its own send.
+          let stopped = false;
+          try {
+            stopped = previous !== undefined
+              && await stopReminderSend(
+                player,
+                previous,
+                previous.fireAt === reminder.fireAt ? { unlessFingerprint: notificationSendFingerprint(request) } : {},
+              );
+          } catch (error) {
+            report(error, 'reminders.stop');
+          }
           return { status: pending || stopped ? 'replaced' : 'scheduled' };
         }
       }
@@ -2606,10 +2615,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           return { cancelled: false };
         }
         const reminder = held.entry.item;
+        // Before the removal, so a failure leaves the cancel to retry; and
+        // after it, best effort, for a scheduler run that fired the reminder
+        // in between (whose own mark then fails and stops its send too).
+        const stoppedBefore = await stopReminderSend(player, reminder);
         if (await removeEntry(held)) {
-          // After the removal, so a scheduler run that fires it meanwhile loses its send too.
-          const stopped = await stopReminderSend(player, reminder);
-          return { cancelled: reminder.firedAt === undefined || stopped };
+          let stoppedAfter = false;
+          try {
+            stoppedAfter = await stopReminderSend(player, reminder);
+          } catch (error) {
+            report(error, 'reminders.stop');
+          }
+          return { cancelled: reminder.firedAt === undefined || stoppedBefore || stoppedAfter };
         }
       }
       throw busy(id);
@@ -2705,7 +2722,7 @@ function takenRow(row: NotificationSendRow, at: number, leaseMs: number): Notifi
   }
   const windowEnd = row.firstAttemptedAt === undefined
     ? Number.POSITIVE_INFINITY
-    : Date.parse(row.firstAttemptedAt) + notificationAmbiguousReplayHours * 3_600_000 - 1;
+    : Date.parse(row.firstAttemptedAt) + ambiguousReplayMs - 1;
   return {
     ...row,
     state: {
@@ -2932,7 +2949,7 @@ function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
     // An attempted row's replays end a day after its first attempt; the
     // backoff does not close that window early, unless it already closed.
     const windowEnd = row.state.attempted && row.firstAttemptedAt !== undefined
-      ? Date.parse(row.firstAttemptedAt) + notificationAmbiguousReplayHours * 3_600_000 - 1
+      ? Date.parse(row.firstAttemptedAt) + ambiguousReplayMs - 1
       : Number.POSITIVE_INFINITY;
     const until = windowEnd > at ? Math.min(notBefore, windowEnd) : notBefore;
     return {

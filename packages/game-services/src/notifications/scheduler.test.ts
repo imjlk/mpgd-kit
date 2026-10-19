@@ -1200,6 +1200,56 @@ const pending = (h: Harness) =>
   );
 }
 
+// A stop that fails after a set's or a cancel's write is reported, and the call still answers.
+{
+  let failReads = 0;
+  const quiet: NotificationTopicDeclaration = {
+    ...challenge,
+    quietHours: { start: '22:00', end: '08:00' },
+  };
+  const h = harness({
+    topics: [quiet],
+    store: (inner) => ({
+      ...inner,
+      async getSend(key) {
+        if (failReads > 0 && key.startsWith('reminder:')) {
+          failReads -= 1;
+          if (failReads === 0) {
+            throw new Error('D1 is unavailable.');
+          }
+        }
+        return inner.getSend(key);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T13:30:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  h.time.set(fireAt);
+  await h.service.runScheduler();
+  // The set's only stop fails: the reminder is set all the same.
+  failReads = 1;
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt: '2026-10-20T13:30:00Z' }),
+    { status: 'scheduled' },
+  );
+  assert.deepEqual(h.errors, ['reminders.stop']);
+  assert.equal(pending(h)[0]?.dueAt, '2026-10-20T13:30:00Z');
+  // The cancel's stop before the removal runs; the one after it fails and is reported.
+  h.time.set('2026-10-20T13:30:00Z');
+  await h.service.runScheduler();
+  failReads = 2;
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(h.errors, ['reminders.stop', 'reminders.stop']);
+  assert.deepEqual(
+    h.store.inspect().sends.filter((send) => send.key.endsWith('2026-10-20T13:30:00Z')),
+    [],
+    'the waiting send was stopped before the removal',
+  );
+}
+
 // A fired reminder whose send cannot be read is kept, not forgotten, and looked at again a minute later.
 {
   let failRead = false;
