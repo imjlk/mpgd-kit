@@ -19,6 +19,11 @@ export interface FakeNotificationRedis extends DevvitNotificationRedis {
   beforeExec?: ((watched: readonly string[]) => void | Promise<void>) | undefined;
   /** Writes a string outside any transaction, bumping its version. */
   poke(key: string, value: string): void;
+  /**
+   * Drops the last reply of every committed EXEC, as `@devvit/redis` drops a
+   * reply it cannot map: the transaction commits, and its result is short.
+   */
+  dropLastReply: boolean;
   /** Marks a key as written by another client without changing it, as a WATCH sees it. */
   touch(key: string): void;
   keys(): readonly string[];
@@ -167,6 +172,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
   };
 
   const redis: FakeNotificationRedis = {
+    dropLastReply: false,
     get aborted() {
       return aborted;
     },
@@ -205,6 +211,10 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
       await tick();
       return Object.fromEntries(hash(key, false) ?? []);
     },
+    async hSet(key, values) {
+      await tick();
+      return write.hSet(key, values);
+    },
     async hMGet(key, fields) {
       await tick();
       const stored = hash(key, false);
@@ -214,8 +224,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
       await tick();
       const sorted = [...(zset(key, false) ?? new Map<string, number>())]
         .map(([member, score]) => ({ member, score }))
-        .sort((left, right) =>
-          left.score - right.score || (left.member < right.member ? -1 : left.member > right.member ? 1 : 0));
+        .sort((left, right) => left.score - right.score || compareMembers(left.member, right.member));
       if (options === undefined || options.by === 'rank') {
         if (options?.limit !== undefined) {
           throw new Error("zRange parsing error: 'limit' only allowed when 'options.by' is 'lex' or 'score'");
@@ -258,12 +267,18 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
       const transaction: DevvitNotificationRedisTransaction = {
         async multi() {
           await tick();
+          if (queue !== undefined) {
+            throw new Error('ERR MULTI calls can not be nested');
+          }
           queue = [];
         },
         async exec() {
           await tick();
+          if (queue === undefined) {
+            throw new Error('ERR EXEC without MULTI');
+          }
           await redis.beforeExec?.(watched);
-          const commands = queue ?? [];
+          const commands = queue;
           closed = true;
           queue = undefined;
           const changed = [...seen].some(([key, version]) => (versions.get(key) ?? 0) !== version);
@@ -271,13 +286,17 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
             aborted += 1;
             return [];
           }
-          return commands.map((command) => command());
+          const replies = commands.map((command) => command());
+          return redis.dropLastReply ? replies.slice(0, -1) : replies;
         },
         async discard() {
           await tick();
           closed = true;
           queue = undefined;
         },
+        // Simplification: the store abandons a transaction client after
+        // UNWATCH or DISCARD, so the fake closes it rather than keeping the
+        // connection usable as Redis does.
         async unwatch() {
           await tick();
           closed = true;
@@ -293,4 +312,12 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
     },
   };
   return redis;
+}
+
+/** Byte order for the ASCII members the store writes (Redis compares members as bytes). */
+function compareMembers(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
 }

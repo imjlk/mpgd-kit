@@ -141,6 +141,78 @@ describe('createDevvitRedisNotificationStore', () => {
     })).rejects.toThrow(/contention exceeded 2 attempts/u);
   });
 
+  it('reads a committed EXEC with a short reply list as committed, not as a lost race', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    redis.dropLastReply = true;
+    const version = await store.createSend(send('k', [claimed('a', '2026-10-19T03:05:00Z')]));
+    expect(version).toBeTypeOf('string');
+    expect((await store.getSend('k'))?.version).toBe(version);
+    expect(await store.updateSend({
+      key: 'k',
+      version: version ?? '',
+      send: send('k', [{ key: 'k', provider: 'devvit', state: { status: 'delivered' } }]),
+    })).toBe(true);
+    const current = await store.getSend('k');
+    expect(current?.send.rows[0]?.state.status).toBe('delivered');
+    expect(await store.updateSend({ key: 'k', version: current?.version ?? '', send: undefined })).toBe(true);
+    expect(await store.getSend('k')).toBeUndefined();
+  });
+
+  it('keeps players, keys with separators, and namespaces apart', async () => {
+    const redis = createFakeNotificationRedis();
+    const one = createDevvitRedisNotificationStore(redis, { namespace: 'game-a' });
+    const two = createDevvitRedisNotificationStore(redis, { namespace: 'game-b' });
+    const record = { kind: 'delivery-permission', state: 'granted', source: 'client-report' } as const;
+    await one.appendConsent({ player: 'a:b', record, at: '2026-10-19T03:00:00Z' });
+    await one.appendConsent({ player: 'a%3Ab', record, at: '2026-10-19T03:00:00Z' });
+    await two.appendConsent({ player: 'a:b', record, at: '2026-10-19T03:00:00Z' });
+    expect(await one.listConsent('a:b')).toHaveLength(1);
+    expect(await one.listConsent('a%3Ab')).toHaveLength(1);
+    expect(await two.listConsent('a%3Ab')).toEqual([]);
+    await one.createSend(send('x:y', []));
+    expect(await one.getSend('x%3Ay')).toBeUndefined();
+    expect(await two.getSend('x:y')).toBeUndefined();
+  });
+
+  it('purges in batches, drops stale index entries and unreadable values, and keeps newer history', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis, { purgeLimit: 600 });
+    for (let index = 0; index < 700; index += 1) {
+      await store.addHistory({
+        sendKey: `h-${String(index)}`,
+        provider: 'devvit',
+        player: 't2_player',
+        topic: 't',
+        at: '2026-10-01T00:00:00Z',
+      });
+    }
+    expect(await store.listHistory({ player: 't2_player', since: '2026-09-01T00:00:00Z' })).toHaveLength(700);
+    await store.createSend(send('old', []));
+    // A send value that is not JSON, and an index entry whose value is gone.
+    redis.poke('mpgd:notifications:send:broken', 'not json');
+    const index = await redis.watch();
+    await index.multi();
+    await index.zAdd('mpgd:notifications:sends:changed', { member: 'broken', score: 0 }, { member: 'gone', score: 0 });
+    await index.exec();
+    const cutoffs = {
+      sendsChangedBefore: '2026-11-01T00:00:00Z',
+      historyBefore: '2026-11-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-11-01T00:00:00Z',
+      staleEndpointsBefore: '2026-11-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-11-01T00:00:00Z',
+    };
+    const first = await store.purge(cutoffs);
+    expect(first).toEqual({ sends: 2, history: 600, endpoints: 0 });
+    expect(await store.getSend('old')).toBeUndefined();
+    expect(redis.keys().filter((key) => key.includes(':send:') || key.endsWith(':changed'))).toEqual([]);
+    const second = await store.purge(cutoffs);
+    expect(second.history).toBe(100);
+    expect(await store.listHistory({ player: 't2_player', since: '2026-09-01T00:00:00Z' })).toEqual([]);
+    expect(redis.keys().filter((key) => key.includes('history'))).toEqual([]);
+    expect(() => createDevvitRedisNotificationStore(redis, { purgeLimit: 0 })).toThrow(TypeError);
+  });
+
   it('rejects an empty namespace and out-of-range attempts', () => {
     const redis = createFakeNotificationRedis();
     expect(() => createDevvitRedisNotificationStore(redis, { namespace: '' })).toThrow(TypeError);

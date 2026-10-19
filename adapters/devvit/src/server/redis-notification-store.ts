@@ -33,13 +33,21 @@ import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
  *   endpoint call reads all of it.
  * - **History** is a hash per player (one field per send and provider, so a
  *   repeat is ignored) with a sorted set by time.
+ * - **Order.** Lists come sorted (by time, then by key or installation),
+ *   not in insertion order as in the in-memory store; the interface promises
+ *   only "oldest first" and "earliest first", and the service sorts where
+ *   it needs more.
+ * - **Purge** deletes at most `purgeLimit` rows of each kind per call; the
+ *   next scheduled purge continues.
  *
  * The Devvit Redis client (`@devvit/redis` `TxClient.exec()`) resolves an
  * aborted transaction as an empty array, never `null`, so a result shorter
  * than the commands queued is a conflict and the step is retried, as in
- * `createDevvitRedisPostOperationStore`.
+ * `createDevvitRedisPostOperationStore`; a send write first reads back
+ * whether its own new version landed, so a committed write is never retried.
+ * Devvit allows 20 concurrent transactions per installation by default.
  *
- * Devvit Redis: <https://developers.reddit.com/docs/capabilities/server/redis>
+ * Devvit Redis: <https://developers.reddit.com/docs/versioned_docs/version-0.14/capabilities/server/redis>
  * (transactions: WATCH, MULTI, EXEC, DISCARD, UNWATCH).
  */
 
@@ -70,6 +78,7 @@ export interface DevvitNotificationRedis {
   hGet(key: string, field: string): Promise<string | undefined>;
   hGetAll(key: string): Promise<Record<string, string>>;
   hMGet(key: string, fields: string[]): Promise<(string | null)[]>;
+  hSet(key: string, fieldValues: Record<string, string>): Promise<unknown>;
   zRange(
     key: string,
     start: number | string,
@@ -89,11 +98,14 @@ export interface CreateDevvitRedisNotificationStoreOptions {
   readonly transactionAttempts?: number;
   /** A fresh send version token; random by default. */
   readonly newVersion?: () => string;
+  /** Rows of each kind one `purge` call deletes at most; 1,000 by default. */
+  readonly purgeLimit?: number;
 }
 
 export const defaultDevvitNotificationNamespace = 'mpgd:notifications';
 const defaultTransactionAttempts = 16;
 const maximumTransactionAttempts = 64;
+const defaultPurgeLimit = 1_000;
 /** Sorted-set page size; `@devvit/redis` reads at most 1,000 members per score or lex range. */
 const pageSize = 500;
 
@@ -120,6 +132,10 @@ export function createDevvitRedisNotificationStore(
     );
   }
   const newVersion = options.newVersion ?? (() => globalThis.crypto.randomUUID());
+  const purgeLimit = options.purgeLimit ?? defaultPurgeLimit;
+  if (!Number.isSafeInteger(purgeLimit) || purgeLimit < 1) {
+    throw new TypeError('purgeLimit must be a positive safe integer.');
+  }
   const enc = encodeURIComponent;
   const keys = {
     consent: (player: string) => `${namespace}:consent:${enc(player)}`,
@@ -139,19 +155,26 @@ export function createDevvitRedisNotificationStore(
    * Runs one atomic step: watches `watched`, lets `plan` read and decide,
    * and queues its commands in one MULTI/EXEC. A plan without commands only
    * unwatches. A transaction that another writer aborted is planned again.
+   *
+   * `@devvit/redis` drops a reply it cannot map from the EXEC result, so a
+   * result shorter than the queue is read as an abort. A plan whose write
+   * must not run twice gives `committed`, which reads back whether its own
+   * write landed (its new version is stored), so a committed transaction is
+   * never mistaken for a lost one.
    */
   async function transact<Result>(
     watched: readonly string[],
     plan: () => Promise<{
       readonly commands: readonly Command[];
       readonly result: Result;
+      readonly committed?: () => Promise<boolean>;
     }>,
   ): Promise<Result> {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const transaction = await redis.watch(...watched);
       let multiStarted = false;
       try {
-        const { commands, result } = await plan();
+        const { commands, result, committed } = await plan();
         if (commands.length === 0) {
           await transaction.unwatch();
           return result;
@@ -162,14 +185,15 @@ export function createDevvitRedisNotificationStore(
           await command(transaction);
         }
         const results = await transaction.exec();
-        if (results === null) {
-          continue;
-        }
-        if (!Array.isArray(results)) {
+        if (results !== null && !Array.isArray(results)) {
           throw new Error('Devvit Redis transaction returned an unsupported response.');
         }
-        if (results.length < commands.length) {
-          // An aborted WATCH transaction: another writer changed a watched key.
+        if (results === null || results.length < commands.length) {
+          // An aborted WATCH transaction (another writer changed a watched
+          // key), unless the plan's own write is there.
+          if (committed !== undefined && await committed()) {
+            return result;
+          }
           continue;
         }
         return result;
@@ -183,21 +207,28 @@ export function createDevvitRedisNotificationStore(
     );
   }
 
-  /** Every member of a sorted set in score order, read in pages. */
-  async function scoreRange(key: string, min: string, max: string): Promise<string[]> {
+  /** The members of a sorted set in score order, read in pages, up to `limit`. */
+  async function scoreRange(
+    key: string,
+    min: string,
+    max: string,
+    limit = Number.POSITIVE_INFINITY,
+  ): Promise<string[]> {
     const members: string[] = [];
-    for (let offset = 0; ; offset += pageSize) {
+    for (let offset = 0; members.length < limit; offset += pageSize) {
+      const count = Math.min(pageSize, limit - members.length);
       const page = await redis.zRange(key, min, max, {
         by: 'score',
-        limit: { offset, count: pageSize },
+        limit: { offset, count },
       });
       for (const entry of page) {
         members.push(entry.member);
       }
-      if (page.length < pageSize) {
-        return members;
+      if (page.length < count) {
+        break;
       }
     }
+    return members;
   }
 
   async function readEndpoints(): Promise<NotificationStoredEndpoint[]> {
@@ -260,8 +291,7 @@ export function createDevvitRedisNotificationStore(
     }
     const flying = (send: NotificationStoredSend | undefined): boolean =>
       send !== undefined && send.rows.some((row) => row.state.status === 'in-flight');
-    if (before !== undefined && flying(before)
-      && (!flying(after) || after?.request.player !== before.request.player)) {
+    if (before !== undefined && flying(before) && !flying(after)) {
       commands.push((transaction) => transaction.zRem(keys.inFlight(before.request.player), [key]));
     }
     if (after !== undefined && flying(after)) {
@@ -274,9 +304,7 @@ export function createDevvitRedisNotificationStore(
 
   async function readSend(key: string): Promise<StoredSendValue | undefined> {
     const value = await redis.get(keys.send(key));
-    return value === undefined || value === null
-      ? undefined
-      : parse<StoredSendValue>(value, keys.send(key));
+    return isMissing(value) ? undefined : parse<StoredSendValue>(value, keys.send(key));
   }
 
   return {
@@ -326,14 +354,14 @@ export function createDevvitRedisNotificationStore(
     },
     async getEndpoint({ provider, installationId }) {
       const value = await redis.hGet(keys.endpoints, endpointField(provider, installationId));
-      return value === undefined || value === null
+      return isMissing(value)
         ? undefined
         : parse<NotificationStoredEndpoint>(value, keys.endpoints);
     },
     async invalidateEndpoint({ provider, installationId, value, at }) {
       await transact([keys.endpoints], async () => {
         const stored = await redis.hGet(keys.endpoints, endpointField(provider, installationId));
-        const endpoint = stored === undefined || stored === null
+        const endpoint = isMissing(stored)
           ? undefined
           : parse<NotificationStoredEndpoint>(stored, keys.endpoints);
         if (endpoint === undefined || endpoint.address.value !== value || endpoint.status !== 'valid') {
@@ -381,14 +409,12 @@ export function createDevvitRedisNotificationStore(
     async putPlatformRegistration(registration) {
       const field = JSON.stringify([registration.player, registration.provider]);
       const value = JSON.stringify(registration);
-      await transact([keys.registrations], async () => ({
-        commands: [(transaction) => transaction.hSet(keys.registrations, { [field]: value })],
-        result: undefined,
-      }));
+      // One write that reads nothing: no transaction, so registrations never contend.
+      await redis.hSet(keys.registrations, { [field]: value });
     },
     async getPlatformRegistration({ player, provider }) {
       const value = await redis.hGet(keys.registrations, JSON.stringify([player, provider]));
-      return value === undefined || value === null
+      return isMissing(value)
         ? undefined
         : parse<NotificationPlatformRegistration>(value, keys.registrations);
     },
@@ -403,7 +429,7 @@ export function createDevvitRedisNotificationStore(
         notice.dueBy,
       ]);
       await transact([key], async () => {
-        if ((await redis.hGet(key, field)) !== undefined) {
+        if (!isMissing(await redis.hGet(key, field))) {
           return { commands: [], result: undefined };
         }
         const value = JSON.stringify(notice);
@@ -427,7 +453,7 @@ export function createDevvitRedisNotificationStore(
     async createSend(send) {
       const valueKey = keys.send(send.key);
       return transact([valueKey], async () => {
-        if ((await redis.get(valueKey)) !== undefined) {
+        if (!isMissing(await redis.get(valueKey))) {
           return { commands: [], result: undefined };
         }
         const version = newVersion();
@@ -438,6 +464,7 @@ export function createDevvitRedisNotificationStore(
             ...sendIndexCommands(send.key, undefined, send),
           ],
           result: version,
+          committed: async () => (await readSend(send.key))?.version === version,
         };
       });
     },
@@ -455,15 +482,18 @@ export function createDevvitRedisNotificationStore(
               ...sendIndexCommands(key, stored.send, undefined),
             ],
             result: true,
+            committed: async () => (await readSend(key)) === undefined,
           };
         }
-        const value = JSON.stringify({ send, version: newVersion() } satisfies StoredSendValue);
+        const next = newVersion();
+        const value = JSON.stringify({ send, version: next } satisfies StoredSendValue);
         return {
           commands: [
             (transaction) => transaction.set(valueKey, value),
             ...sendIndexCommands(key, stored.send, send),
           ],
           result: true,
+          committed: async () => (await readSend(key))?.version === next,
         };
       });
     },
@@ -475,7 +505,7 @@ export function createDevvitRedisNotificationStore(
       const values = await redis.mGet(index.map((entry) => keys.send(entry.member)));
       const sends: NotificationStoredSend[] = [];
       for (const [position, value] of values.entries()) {
-        if (value === null || value === undefined) {
+        if (isMissing(value)) {
           continue;
         }
         const { send } = parse<StoredSendValue>(value, keys.send(index[position]?.member ?? ''));
@@ -499,7 +529,10 @@ export function createDevvitRedisNotificationStore(
           limit: { offset, count: want },
         });
         for (const entry of page) {
-          due.push(entry.member);
+          // Offsets move while other workers write the index: keep each key once.
+          if (!due.includes(entry.member)) {
+            due.push(entry.member);
+          }
         }
         if (page.length < want) {
           break;
@@ -513,7 +546,7 @@ export function createDevvitRedisNotificationStore(
       const key = keys.history(entry.player);
       const field = JSON.stringify([entry.sendKey, entry.provider]);
       await transact([key], async () => {
-        if ((await redis.hGet(key, field)) !== undefined) {
+        if (!isMissing(await redis.hGet(key, field))) {
           return { commands: [], result: undefined };
         }
         const value = JSON.stringify(entry);
@@ -543,12 +576,27 @@ export function createDevvitRedisNotificationStore(
     },
 
     async purge(cutoffs) {
+      // Each kind purges at most `purgeLimit` rows per call, oldest first; the
+      // next scheduled purge continues, so a backlog never outlasts a request.
       let sendCount = 0;
       const sendsBefore = Date.parse(cutoffs.sendsChangedBefore);
-      for (const key of await scoreRange(keys.changed, '-inf', `(${String(sendsBefore)}`)) {
+      for (const key of await scoreRange(keys.changed, '-inf', `(${String(sendsBefore)}`, purgeLimit)) {
         const valueKey = keys.send(key);
         const deleted = await transact([valueKey], async () => {
-          const stored = await readSend(key);
+          let stored: StoredSendValue | undefined;
+          try {
+            stored = await readSend(key);
+          } catch {
+            // A value that is not JSON is past its retention by its index: drop it.
+            return {
+              commands: [
+                (transaction) => transaction.del(valueKey),
+                (transaction) => transaction.zRem(keys.changed, [key]),
+                (transaction) => transaction.zRem(keys.due, [key]),
+              ],
+              result: true,
+            };
+          }
           if (stored === undefined) {
             // A stale index entry: drop it.
             return { commands: [(transaction) => transaction.zRem(keys.changed, [key])], result: false };
@@ -571,20 +619,39 @@ export function createDevvitRedisNotificationStore(
 
       let historyCount = 0;
       const historyBefore = Date.parse(cutoffs.historyBefore);
-      for (const member of await scoreRange(keys.historyAll, '-inf', `(${String(historyBefore)}`)) {
-        const [player, field] = parse<[string, string]>(member, keys.historyAll);
+      for (const member of await scoreRange(keys.historyAll, '-inf', `(${String(historyBefore)}`, purgeLimit)) {
+        const named = tryParse<unknown>(member);
+        if (
+          !Array.isArray(named)
+          || named.length !== 2
+          || typeof named[0] !== 'string'
+          || typeof named[1] !== 'string'
+        ) {
+          await transact([keys.historyAll], async () => ({
+            commands: [(transaction) => transaction.zRem(keys.historyAll, [member])],
+            result: undefined,
+          }));
+          continue;
+        }
+        const [player, field] = named as [string, string];
         const key = keys.history(player);
         const removed = await transact([key], async () => {
           const value = await redis.hGet(key, field);
-          const entry = value === undefined ? undefined : parse<NotificationHistoryEntry>(value, key);
-          const old = entry !== undefined && Date.parse(entry.at) < historyBefore;
+          const entry = isMissing(value) ? undefined : tryParse<NotificationHistoryEntry>(value);
+          const at = entry === undefined ? Number.NaN : Date.parse(entry.at);
+          if (!isMissing(value) && Number.isFinite(at) && at >= historyBefore) {
+            // Not old after all (never written so): keep the entry and its indexes.
+            return { commands: [], result: false };
+          }
           return {
             commands: [
-              ...(old ? [(transaction: DevvitNotificationRedisTransaction) => transaction.hDel(key, [field])] : []),
+              ...(isMissing(value)
+                ? []
+                : [(transaction: DevvitNotificationRedisTransaction) => transaction.hDel(key, [field])]),
               (transaction) => transaction.zRem(keys.historyAt(player), [field]),
               (transaction) => transaction.zRem(keys.historyAll, [member]),
             ],
-            result: old,
+            result: !isMissing(value),
           };
         });
         if (removed) {
@@ -605,6 +672,19 @@ export function createDevvitRedisNotificationStore(
       return { sends: sendCount, history: historyCount, endpoints: endpointCount };
     },
   };
+}
+
+/** A missing key, field, or member: `@devvit/redis` answers `undefined`, a classic client `null`. */
+function isMissing(value: string | null | undefined): value is null | undefined {
+  return value === undefined || value === null;
+}
+
+function tryParse<Value>(value: string): Value | undefined {
+  try {
+    return JSON.parse(value) as Value;
+  } catch {
+    return undefined;
+  }
 }
 
 function parse<Value>(value: string, key: string): Value {
