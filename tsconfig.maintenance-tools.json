@@ -22,6 +22,7 @@
     "tools/validation/**/*.ts",
     "tools/graph-runtime.test.ts",
     "tools/workspace/kit-dependency-links.mjs",
-    "tools/workspace/relink-kit-workspace.mjs"
+    "tools/workspace/relink-kit-workspace.mjs",
+    "tools/oneplay/**/*.ts"
   ]
 }
