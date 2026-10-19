@@ -101,7 +101,11 @@ export const devvitNotificationHostCodes = Object.freeze({
  *   call that throws is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
  * - **Revocation.** `optOutCurrentUser` for a user who is opted in (one who
  *   is already out needs none, which Devvit might refuse), the `denied`
- *   outcome for every topic, and a fresh read.
+ *   outcome for every mapped topic (`unavailable` for the others, and no
+ *   opt-out when none is mapped), and the state the opt-out produced:
+ *   `prompt`, not opted in.
+ * - **Unmapped topics.** A topic the catalog does not map for `reddit`
+ *   reads `unsupported` in every snapshot.
  * - **Registration.** A logged-in user registers `{ kind: 'platform-user' }`;
  *   the webview adds its locale and zone. No device address exists.
  */
@@ -128,12 +132,15 @@ export function createDevvitServerNotificationProvider(
       });
     }
   };
+  /** The app's state for each mapped topic; a topic the catalog does not map for `reddit` reads `unsupported`. */
   const snapshotOf = (
     topics: readonly string[],
     state: NotificationPermissionState,
   ): NotificationPermissionSnapshot => ({
     app: state,
-    topics: Object.fromEntries(topics.map((topic) => [topic, state])),
+    topics: Object.fromEntries(
+      topics.map((topic) => [topic, mapped.has(topic) ? state : 'unsupported']),
+    ),
     ...(state === 'action-required' ? { requiredAction: 'login' as const } : {}),
   });
   const read = async (userId: `t2_${string}`): Promise<NotificationPermissionState> =>
@@ -197,6 +204,13 @@ export function createDevvitServerNotificationProvider(
       if (userId === undefined) {
         return loginRequired(topics);
       }
+      const outcomes = Object.fromEntries(
+        topics.map((topic) => [topic, mapped.has(topic) ? 'denied' as const : 'unavailable' as const]),
+      );
+      if (!topics.some((topic) => mapped.has(topic))) {
+        // Nothing this provider maps: no opt-out, as a request opts nothing in.
+        return { snapshot: snapshotOf(topics, await read(userId)), outcomes };
+      }
       // A user who is already out needs no opt-out, which Devvit might refuse.
       if ((await read(userId)) === 'granted') {
         const response = await plugin(() => input.notifications.optOutCurrentUser(), 'optOutCurrentUser');
@@ -205,10 +219,9 @@ export function createDevvitServerNotificationProvider(
           throw failure;
         }
       }
-      return {
-        snapshot: snapshotOf(topics, await read(userId)),
-        outcomes: Object.fromEntries(topics.map((topic) => [topic, 'denied' as const])),
-      };
+      // The opt-out (or the read that found the user out) decided the state:
+      // not opted in, which reads `prompt`. A second read could be stale.
+      return { snapshot: snapshotOf(topics, 'prompt'), outcomes };
     },
     async register() {
       return user() === undefined

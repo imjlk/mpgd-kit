@@ -1817,8 +1817,10 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
     `DEVVIT_OPT_IN_REFUSED`; a plugin call that throws is
     `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic outside the catalog's
-    `reddit` mappings answers `unavailable` without an opt-in, and a
-    revocation for a user who is already out calls no opt-out.
+    `reddit` mappings reads `unsupported` and answers `unavailable` to a
+    request or revocation, which opts nothing in or out for it. A revocation
+    for a user who is already out calls no opt-out, and a revocation answers
+    the state it produced (`prompt`, not opted in) rather than a second read.
   - Devvit's and the plugin's own error text stays on the server: the
     webview gets a fixed message, and the handler's `onError` option sees
     the cause (`console.warn` by default, which skips the expected

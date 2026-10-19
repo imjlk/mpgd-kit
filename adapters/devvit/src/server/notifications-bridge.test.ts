@@ -73,7 +73,7 @@ describe('createDevvitServerNotificationProvider', () => {
     });
     await expect(provider.getPermission({ topics })).resolves.toMatchObject({ app: 'prompt' });
     await expect(provider.requestPermission({ topics: ['friend-challenge', 'unmapped'] })).resolves.toEqual({
-      snapshot: { app: 'granted', topics: { 'friend-challenge': 'granted', unmapped: 'granted' } },
+      snapshot: { app: 'granted', topics: { 'friend-challenge': 'granted', unmapped: 'unsupported' } },
       outcomes: { 'friend-challenge': 'granted', unmapped: 'unavailable' },
     });
     await expect(provider.requestPermission({ topics: ['daily-puzzle'] })).resolves.toMatchObject({
@@ -91,6 +91,47 @@ describe('createDevvitServerNotificationProvider', () => {
     });
   });
 
+  it('reads unmapped topics as unsupported and revokes only mapped ones', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    plugin.optedIn.add(user);
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    await expect(provider.getPermission({ topics: ['friend-challenge', 'unmapped'] })).resolves.toEqual({
+      app: 'granted',
+      topics: { 'friend-challenge': 'granted', unmapped: 'unsupported' },
+    });
+    // Only unmapped topics: nothing is opted out.
+    await expect(provider.revokePermission?.({ topics: ['unmapped'] })).resolves.toEqual({
+      snapshot: { app: 'granted', topics: { unmapped: 'unsupported' } },
+      outcomes: { unmapped: 'unavailable' },
+    });
+    expect(plugin.optOutCalls).toBe(0);
+    await expect(provider.revokePermission?.({ topics: ['friend-challenge', 'unmapped'] })).resolves.toEqual({
+      snapshot: { app: 'prompt', topics: { 'friend-challenge': 'prompt', unmapped: 'unsupported' } },
+      outcomes: { 'friend-challenge': 'denied', unmapped: 'unavailable' },
+    });
+    expect(plugin.optOutCalls).toBe(1);
+  });
+
+  it('answers a revocation with the state the opt-out produced, not a later read', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    plugin.optedIn.add(user);
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    // A read after the opt-out would still see the user in (eventual consistency).
+    plugin.optOutCurrentUser = async () => ({ success: true });
+    await expect(provider.revokePermission?.({ topics: ['friend-challenge'] })).resolves.toEqual({
+      snapshot: { app: 'prompt', topics: { 'friend-challenge': 'prompt' } },
+      outcomes: { 'friend-challenge': 'denied' },
+    });
+  });
+
   it('does not opt in for a request with only unmapped topics', async () => {
     const plugin = createFakeDevvitNotifications({ currentUserId: user });
     const provider = createDevvitServerNotificationProvider({
@@ -99,7 +140,7 @@ describe('createDevvitServerNotificationProvider', () => {
       topics,
     });
     await expect(provider.requestPermission({ topics: ['other'] })).resolves.toEqual({
-      snapshot: { app: 'prompt', topics: { other: 'prompt' } },
+      snapshot: { app: 'prompt', topics: { other: 'unsupported' } },
       outcomes: { other: 'unavailable' },
     });
     expect(plugin.optInCalls).toBe(0);
