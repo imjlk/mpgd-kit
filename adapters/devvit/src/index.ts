@@ -159,7 +159,7 @@ export interface DevvitGatewayNotificationsOptions {
   readonly timeZone?: () => string | undefined;
   /** The webview's locale for the registration; `navigator.language` by default. */
   readonly locale?: () => string | undefined;
-  /** Loads the notifications client chunk; the dynamic import by default. Tests inject it. */
+  /** Loads the notifications client chunk, when the gateway is created; the dynamic import by default. Tests inject it. */
   readonly load?: () => Promise<DevvitNotificationClientModule>;
 }
 

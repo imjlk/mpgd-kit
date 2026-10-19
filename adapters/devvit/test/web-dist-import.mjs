@@ -4,13 +4,19 @@ import { readFileSync } from 'node:fs';
 // The main entry must not load notifications runtime code: its client and
 // validators come in their own chunk (`notifications-client.js`).
 const mainEntry = readFileSync(new URL('../dist/index.js', import.meta.url), 'utf8');
-for (const specifier of ['@mpgd/bridge/notifications', '@mpgd/platform/notifications']) {
-  assert.equal(
-    mainEntry.includes(`'${specifier}'`),
-    false,
-    `dist/index.js must not import ${specifier}`,
+for (const specifier of ['@mpgd/bridge/notifications', '@mpgd/platform/notifications', './notifications-client.js']) {
+  const quoted = specifier.replaceAll('.', '\\.').replaceAll('/', '\\/');
+  assert.doesNotMatch(
+    mainEntry,
+    new RegExp(`(?:from|import)\\s*["']${quoted}["']`, 'u'),
+    `dist/index.js must not import ${specifier} statically`,
   );
 }
+assert.match(
+  mainEntry,
+  /import\(\s*["']\.\/notifications-client\.js["']\s*\)/u,
+  'dist/index.js loads the notifications client with a dynamic import',
+);
 
 globalThis.addEventListener = () => {};
 

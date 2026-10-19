@@ -213,7 +213,7 @@ export function createDevvitRedisNotificationStore(
         // An aborted WATCH transaction (another writer changed a watched
         // key) answers no reply; one that answers only nil is read the same
         // way, since no command queued here replies nil when it commits.
-        if (results === null || results.every((reply) => reply === null)) {
+        if (results === null || results.every((reply) => reply === null || reply === undefined)) {
           continue;
         }
         return result;

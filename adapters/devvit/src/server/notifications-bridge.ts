@@ -66,6 +66,12 @@ export interface CreateDevvitServerNotificationProviderInput {
    * for a topic outside them answers `unavailable` without opting in.
    */
   readonly topics: readonly string[];
+  /**
+   * Every failure the bridge answers with an error, with its cause (the
+   * plugin's own text, which the webview never sees). `console.warn` by
+   * default.
+   */
+  readonly onError?: ((error: unknown, context: { readonly method: string }) => void) | undefined;
 }
 
 /** Host codes of the failures this provider normalizes. */
@@ -88,8 +94,9 @@ export const devvitNotificationHostCodes = Object.freeze({
  *   `DEVVIT_OPT_IN_REFUSED`, which is not retryable: Devvit documents no
  *   transient refusal, and a refusal the game retried would loop. A plugin
  *   call that throws is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
- * - **Revocation.** `optOutCurrentUser`, the `denied` outcome for every
- *   topic, and a fresh read.
+ * - **Revocation.** `optOutCurrentUser` for a user who is opted in (one who
+ *   is already out needs none, which Devvit might refuse), the `denied`
+ *   outcome for every topic, and a fresh read.
  * - **Registration.** A logged-in user registers `{ kind: 'platform-user' }`;
  *   the webview adds its locale and zone. No device address exists.
  */
@@ -139,12 +146,11 @@ export function createDevvitServerNotificationProvider(
     if (response?.success === true) {
       return undefined;
     }
-    const detail = typeof response?.message === 'string' && response.message.length > 0
-      ? `: ${response.message}`
-      : '';
+    // Devvit's own message stays on the server (as the cause).
     return new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `Devvit refused ${what}${detail}`,
+      message: `Devvit refused ${what}.`,
       hostCode,
+      cause: new Error(typeof response?.message === 'string' ? response.message : 'no message'),
     });
   };
 
@@ -232,6 +238,9 @@ export function createDevvitNotificationsV2BridgeHandler(
   input: CreateDevvitServerNotificationProviderInput,
 ): DevvitNotificationsV2BridgeHandler {
   const provider = createDevvitServerNotificationProvider(input);
+  const onError = input.onError ?? ((error: unknown, context: { readonly method: string }) => {
+    console.warn(`devvit notifications ${context.method} failed`, error);
+  });
 
   const serve = async (method: BridgeNotificationsV2Method, payload: unknown): Promise<unknown> => {
     switch (method) {
@@ -279,6 +288,13 @@ export function createDevvitNotificationsV2BridgeHandler(
         const data = await serve(method, request.payload);
         return { id: request.id, ok: true, data: validResult(method, data) };
       } catch (error) {
+        if (!(error instanceof InvalidPayloadError)) {
+          try {
+            onError(error, { method });
+          } catch {
+            // A failing log never changes the answer.
+          }
+        }
         return toBridgeError(request, error);
       }
     },

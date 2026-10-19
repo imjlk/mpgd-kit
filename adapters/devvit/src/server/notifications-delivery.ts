@@ -137,7 +137,9 @@ function readsAsRateLimit(message: string): boolean {
   if (/rate[ -]?limit|too many (?:requests|notifications)|quota|throttl/iu.test(message)) {
     return true;
   }
-  if (/\b(?:characters?|length|long|title|body|link|size|bytes?)\b/iu.test(message)) {
+  if (/\b(?:characters?|length|long|title|body|link|size|bytes?|text|message|content|payload|template)\b/iu.test(
+    message,
+  )) {
     return false;
   }
   // "Daily send limit", "per-user limits": the limit names what it counts.
@@ -158,11 +160,11 @@ function readsAsRateLimit(message: string): boolean {
  */
 function readsAsUserRefusal(message: string): boolean {
   // A message about the link, the post, or the comment is not the user's.
-  if (/\b(?:link|post|comment|t[13]_\w*)/iu.test(message)) {
+  if (/\b(?:links?|posts?|comments?)\b|\bt[13]_/iu.test(message)) {
     return false;
   }
   return /\bopt(?:ed|ing)?[ -]?(?:in|out)\b|\bnot subscribed\b|\bnotifications? (?:are )?disabled\b/iu.test(message)
-    || /\b(?:user|account|recipient)\b(?:\s+\S+){0,2}?\s+(?:is |was |has been )?(?:not found|does not exist|deleted|suspended|banned)\b/iu
+    || /\b(?:user|account|recipient)\b(?:\s+\S+){0,3}?\s+(?:is |was |has been )?(?:not found|does not exist|deleted|suspended|banned)\b/iu
       .test(message);
 }
 
@@ -284,7 +286,7 @@ export function createDevvitNotificationDeliveryProvider(
         if (kind === 'rate-limited') {
           // A daily limit lifts no sooner than an hour from now; any other
           // waits the service's default first delay.
-          answer = /\b(?:daily|per[- ]?day|today)\b/iu.test(message)
+          answer = /\b(?:daily|per[- ]?(?:day|user|app)|today)\b/iu.test(message)
             ? { status: 'rate-limited', retryAfterSeconds: 3600 }
             : { status: 'rate-limited' };
         } else if (kind === 'ambiguous') {

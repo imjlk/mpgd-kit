@@ -142,17 +142,33 @@ describe('createDevvitServerNotificationProvider', () => {
     });
   });
 
-  it("keeps the plugin's error text on the server", async () => {
+  it("keeps the plugin's error text on the server and reports it there", async () => {
     const plugin = createFakeDevvitNotifications({ currentUserId: user });
     plugin.isOptedIn = () => Promise.reject(new Error('redis://internal-host:6379 timed out'));
+    const reported: { method: string; cause: unknown }[] = [];
     const bridge = createDevvitNotificationsV2BridgeHandler({
       notifications: plugin,
       currentUserId: () => plugin.currentUserId,
       topics,
+      onError: (error, { method }) => {
+        reported.push({ method, cause: (error as { cause?: unknown }).cause });
+      },
     });
     const response = await bridge.request(request('notifications.v2.getPermission', { topics: ['friend-challenge'] }));
     expect(response.ok).toBe(false);
     expect(JSON.stringify(response)).not.toContain('internal-host');
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.method).toBe('notifications.v2.getPermission');
+    expect(String(reported[0]?.cause)).toContain('internal-host');
+    // A refused opt-in keeps Devvit's message on the server too.
+    plugin.isOptedIn = async () => false;
+    plugin.optInAnswers.push({ success: false, message: 'internal approval queue 7' });
+    const refused = await bridge.request(request('notifications.v2.requestPermission', { topics: ['friend-challenge'] }));
+    expect(JSON.stringify(refused)).not.toContain('approval queue');
+    expect(reported).toHaveLength(2);
+    // An invalid payload is the caller's, not reported.
+    await bridge.request(request('notifications.v2.requestPermission', { topics: [] }));
+    expect(reported).toHaveLength(2);
   });
 
   it('refuses an opt-out Devvit refused', async () => {
