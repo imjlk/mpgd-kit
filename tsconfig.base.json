@@ -33,6 +33,7 @@
       "@mpgd/adapter-ait/package.json": ["./adapters/ait/package.json"],
       "@mpgd/adapter-ait/ad-config": ["./adapters/ait/src/ad-config.ts"],
       "@mpgd/adapter-ait/iap-config": ["./adapters/ait/src/iap-config.ts"],
+      "@mpgd/adapter-ait/notification-config": ["./adapters/ait/src/notification-config.ts"],
       "@mpgd/adapter-ait/authority-fetch": ["./adapters/ait/src/authority-fetch.ts"],
       "@mpgd/adapter-ait/host": ["./adapters/ait/src/host.ts"],
       "@mpgd/adapter-ait/safe-area": ["./adapters/ait/src/safe-area.ts"],

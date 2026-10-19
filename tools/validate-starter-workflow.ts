@@ -1447,6 +1447,7 @@ function validatePhaserTemplateAITWrapper(): void {
 
       for (const [subpath, basename] of [
         ['./ad-config', 'ad-config'],
+        ['./notification-config', 'notification-config'],
         ['./host', 'host'],
         ['./local-mock', 'local-mock'],
         ['./safe-area', 'safe-area'],
@@ -1537,6 +1538,8 @@ function validatePhaserTemplateAITWrapper(): void {
       "from 'virtual:mpgd-ait-runtime-config'",
       ...aitSafeAreaWrapperRequiredTexts,
       'installAitHostBridge({',
+      '...notificationBridgeOptions(),',
+      'notificationTopics: runtimeConfig.notificationTopics',
       'mountAitGameBundle(app)',
     ]) {
       assertIncludesText(content, requiredText, wrapperMainPath);
@@ -1551,6 +1554,10 @@ function validatePhaserTemplateAITWrapper(): void {
     const content = readText(wrapperVitePath);
     for (const requiredText of [
       "from '@mpgd/adapter-ait/ad-config'",
+      "from '@mpgd/adapter-ait/notification-config'",
+      'process.env.MPGD_NOTIFICATION_TOPICS_FILE',
+      "new URL('../../notifications/topics.json', import.meta.url)",
+      'notificationTopics: aitNotificationTopics,',
       "'@apps-in-toss/web-framework': '@mpgd/adapter-ait/local-mock'",
       'MPGD_AIT_LOCAL_MOCK',
       "command === 'build'",
