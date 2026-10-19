@@ -62,12 +62,31 @@
         const $ = (id) => document.getElementById(id);
         let ctx = {}; // the initializeAsync result (playerId, etc.)
 
+        let gameStarted = false;
+        function startGameOnce() {
+          if (gameStarted) return;
+          startGame();
+          gameStarted = true;
+        }
+        function startGame() {
+          // REQUIRED: call the game's bootstrap here, after its real assets finish loading.
+          // Shared by native-host startup and the playable browser fallback.
+        }
+        async function verifyPurchaseOnServer(result) {
+          // REQUIRED: persist result.purchaseToken plus the server-issued intent, then
+          // send them through your authenticated game backend. Retry reconciliation on
+          // relaunch; never repurchase to retry verification. The backend verifies,
+          // grants idempotently, consumes, and returns the authoritative account.
+          // Replace this hook; fail closed until configured. PNS is a second recovery path.
+          throw new Error("Purchase verification backend is not connected");
+        }
         function say(m) { $("msg").textContent = m; }
         // Keep the game playable without the SDK: turn off only what needs the app
         function runWithoutSdk(why) {
           $("boot").classList.add("done");
           $("btnBuy").disabled = true;
           $("btnAd").disabled = true;
+          startGameOnce();
           say("Running without ONE store features (" + why + ")");
         }
         function saveProgress() {
@@ -123,6 +142,7 @@
               sdk.startGameAsync()
                 .then(() => {
                   $("boot").classList.add("done");
+                  startGameOnce();
                   // Feature checks are valid only after init
                   $("btnBuy").disabled = !sdk.iap.isSupported();
                   $("btnAd").disabled = !sdk.ads.isSupported("rewarded");
@@ -153,12 +173,18 @@
             //   user and purchase by this value. At most 200 bytes in UTF-8.
             developerPayload: "" /* TODO: e.g. your user ID and an order key (ctx.playerId can be absent) */,
           })
-            .then((r) => {
+            .then(async (r) => {
               // A success response only signals that payment completed. The game
               //   company's server grants the item after verifying r.purchaseToken. The
               //   payment notification (PNS) also goes to the server, and consumption is the
               //   server's job too (buying an unconsumed product again gives already_owned).
-              say("Purchase complete: " + r.productId);
+              say("Payment received; verifying purchase…");
+              try {
+                await verifyPurchaseOnServer(r);
+                say("Purchase verified: " + r.productId);
+              } catch {
+                say("Payment received; verification pending. Do not purchase again to retry.");
+              }
             })
             .catch((e) => {
               // Branch on reason only. Do not show an error for user_cancelled

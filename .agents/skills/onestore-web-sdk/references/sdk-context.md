@@ -211,8 +211,8 @@ Granting rules (all important):
 - A successful `purchase()` response **only signals that payment completed; it is not a reason to
   grant the item.** The game company's server grants the item after verifying the payment with
   `purchaseToken`
-- Payment completion is **notified to the game company's server via PNS**. PNS arrives even if the
-  client never gets the response (network loss, app killed), so **build granting around the server**
+- Payment completion is **notified to the game company's server via PNS**. PNS is a backup signal that may be delayed or lost. Independently verify or reconcile
+  purchases through the server API; never grant from PNS alone.
 - **Consumption is also the game company's server's job.** The app does not consume purchases
   automatically, so buying an unconsumed product again fails with `already_owned`. See the ONE store
   server API documentation

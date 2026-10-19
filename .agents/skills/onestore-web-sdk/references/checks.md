@@ -32,7 +32,7 @@ Show the full table; the point is to show what is already done too. Cite evidenc
 | A10-1 | Ad preload | `loadRewarded` / `loadInterstitial` is called early, when the game starts (recommended; without it the first ad takes longer) |
 | A11 | Reward granting | Whether the client grants currency directly (if so, needs confirmation: granting through the server postback is the policy) |
 | A12 | Purchase | `reason` branches for `purchase` (`user_cancelled`, etc.) and the hook for server-side `purchaseToken` verification |
-| A12-1 | developerPayload | `purchase` requests include `developerPayload`, **the slot for the information needed to grant the item (such as a user identifier).** It is optional, but without it the purchase result and PNS notification cannot be matched for granting. Also check that it is at most 200 bytes in UTF-8 |
+| A12-1 | developerPayload | `purchase` requests include `developerPayload`, **the slot for the information needed to grant the item (such as a user identifier).** It is optional: transaction identifiers correlate the purchase result and PNS. Require a reliable server-owned account/order mapping, for example an opaque developerPayload bound to an authenticated intent. Also check that it is at most 200 bytes in UTF-8 |
 | A13 | External navigation | `openDeeplink` is used instead of `window.top.location` or `window.open` |
 | A14 | Frame-busting code | Frame-busting code such as `window.parent !== window` checks (should be **missing**) |
 | A15 | Forbidden APIs | Use of `alert` / `confirm` / `prompt` / `print` (should be **missing**) |

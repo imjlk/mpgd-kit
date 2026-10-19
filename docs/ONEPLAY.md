@@ -113,3 +113,5 @@ handling, apply viewport safe-area insets, and respect `gameSettings` mute state
 SDK listeners alone do not complete those game-owned connections. SDK player IDs partition
 local state; they do not replace a server-authenticated account credential. Device-held
 installation credentials do not promise cross-device or post-reinstall recovery.
+
+Local sample corrections are tracked in `.agents/skills/onestore-web-sdk/LOCAL_PATCHES.md`; review them after each upstream skill refresh. The sample never marks a purchase verified until its game-owned reconciliation hook succeeds.
