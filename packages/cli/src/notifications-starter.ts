@@ -445,6 +445,47 @@ export function applyNotificationsStarter<File extends NotificationsStarterFile>
   return [...edited, ...added];
 }
 
+/** The Capacitor gateways the notifications starter wires, by native platform. */
+export const notificationsCapacitorGateways: Readonly<Record<'android' | 'ios', string>> = Object.freeze(
+  {
+    android: 'src/platform/buildGateways/capacitorAndroid.ts',
+    ios: 'src/platform/buildGateways/capacitorIos.ts',
+  },
+);
+
+/**
+ * The game modules the wired Capacitor gateways import (from the overlay's
+ * `common` part), and the catalog files they read. A game that already has
+ * one keeps its own.
+ */
+export const notificationsCapacitorSupportFiles: readonly string[] = Object.freeze([
+  'src/platform/capacitorNotifications.ts',
+  'src/platform/notifications.ts',
+  'src/platform/notificationSettings.ts',
+  'notifications/topics.json',
+  'notifications/deployment.json',
+  'tools/validate-notifications.ts',
+  'docs/NOTIFICATIONS.md',
+]);
+
+/** Whether a Capacitor gateway already registers a notifications provider. */
+export function capacitorGatewayRegistersNotifications(source: string): boolean {
+  return /\b(?:createStarterCapacitorNotifications|createCapacitorNotificationServiceProvider)\s*\(/u
+    .test(source);
+}
+
+/**
+ * The template's Capacitor gateway with the notifications provider wired in:
+ * the same anchored edits `--providers notifications` makes at generation.
+ */
+export function wireCapacitorGatewayNotifications(relativePath: string, source: string): string {
+  const edits = commonEdits[relativePath];
+  if (edits === undefined || !Object.values(notificationsCapacitorGateways).includes(relativePath)) {
+    throw new Error(`${relativePath} is not a Capacitor gateway the notifications starter wires.`);
+  }
+  return applyEdits(relativePath, source, edits);
+}
+
 /** Reads `--providers` for `mpgd game create`: only `notifications` is a game-level provider today. */
 export function readGameCreateProviders(value: string | undefined): readonly string[] {
   if (value === undefined) {
