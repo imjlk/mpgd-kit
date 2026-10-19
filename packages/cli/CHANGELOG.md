@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.51.0 — 2026-10-19
+
+### Changed
+
+- The generated Devvit server bridge (`apps/target-devvit/src/server/bridge.ts`) takes an optional `notifications` handler, `createDevvitNotificationsV2BridgeHandler` from `@mpgd/adapter-devvit/server`, which serves the `notifications.v2.*` methods. The generated entrypoint does not pass one yet, so every v2 method keeps answering `NOTIFICATIONS_V2_UNAVAILABLE` there; a handler that throws answers a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+- The Devvit notifications service's own work runs on the Devvit scheduler. `@mpgd/adapter-devvit/server` adds `devvitNotificationSchedulerTasks` (`mpgd-notifications-dispatch` every minute and `mpgd-notifications-purge` every five minutes, with their `/internal/scheduler/...` endpoints), `devvitNotificationTaskForEndpoint`, and `runDevvitNotificationTask(service, task)`. A dispatch run is one `runScheduler` run of the service, so server reminders fire on Devvit along with the due sends: rounds of at most 10 due schedule entries and 10 due sends, starting no round after 20 seconds; the result counts the sends the run `touched`. A purge run deletes at most the store's `purgeLimit` rows of each kind; `createDevvitNotificationService` now builds its Redis store with `purgeLimit` 200 unless `storeOptions` names one. The generated Devvit app declares both tasks in `devvit.json` and routes them through `src/server/notificationTasks.ts`; without a notifications service the tasks do no work.
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.18.0, adapter-browser@0.11.2, adapter-capacitor@0.11.0, adapter-devvit@0.13.0, adapter-verse8@0.7.2, analytics@0.4.11, bridge@0.13.2, capacitor-play-billing@0.3.2, capacitor-storekit@0.3.2, catalog@0.10.2, game-runtime@0.7.2, game-services@0.25.0, i18n@0.6.16, platform@0.24.0, target-config@0.23.2
+
 ## 0.50.1 — 2026-10-17
 
 ### Fixed

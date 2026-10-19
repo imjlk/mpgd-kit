@@ -1,5 +1,11 @@
 # @mpgd/capacitor-game-services
 
+## 0.7.2 — 2026-10-19
+
+### Patch changes
+
+- Updated dependencies: bridge@0.13.2
+
 ## 0.7.1 — 2026-10-16
 
 ### Changed

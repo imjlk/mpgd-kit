@@ -1,5 +1,12 @@
 # @mpgd/platform
 
+## 0.24.0 — 2026-10-19
+
+### Minor changes
+
+- [07b1cb72](https://github.com/imjlk/mpgd-kit/commit/07b1cb72d5e1843238dda6bdc904d7c3227c8795) `NotificationConformanceReminderSetStatus` gains `capacity-exceeded` and `unavailable`, which a backend under test may answer when it caps a player's pending server reminders or when no provider the player can be reached on maps the topic. The fake backend answers neither; the reference runtime passes them through as the reminder's status. — Thanks @imjlk!
+- [089efeb0](https://github.com/imjlk/mpgd-kit/commit/089efeb0dd6ca4d3f5efb218b97b8f3e9fadfbe2) Let the notifications conformance runner drive a backend under test: `runNotificationConformanceVector` accepts `createBackend`, which receives the inputs the fake backend would, and awaits `revokeSession` and `registerInstallation` when a backend finishes them asynchronously. A production notifications service can now pass the server vectors. `createNotificationConformanceBackend` returns `NotificationConformanceFakeBackend`, whose `revokeSession` and `registerInstallation` are synchronous, so callers need not await them. — Thanks @imjlk!
+
 ## 0.23.1 — 2026-10-16
 
 ### Changed
