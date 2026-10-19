@@ -145,9 +145,17 @@ export function createDevvitServerNotificationProvider(
   });
   const read = async (userId: `t2_${string}`): Promise<NotificationPermissionState> =>
     (await plugin(() => input.notifications.isOptedIn(userId), 'isOptedIn')) ? 'granted' : 'prompt';
+  /** `forMapped` for each mapped topic, `unavailable` for the others. */
+  const outcomesWith = (
+    topics: readonly string[],
+    forMapped: NotificationPermissionOutcome,
+  ): Record<string, NotificationPermissionOutcome> =>
+    Object.fromEntries(
+      topics.map((topic) => [topic, mapped.has(topic) ? forMapped : 'unavailable']),
+    );
   const loginRequired = (topics: readonly string[]): NotificationPermissionResult => ({
     snapshot: snapshotOf(topics, 'action-required'),
-    outcomes: Object.fromEntries(topics.map((topic) => [topic, 'action-required' as const])),
+    outcomes: outcomesWith(topics, 'action-required'),
     requiredAction: 'login',
   });
   const refused = (
@@ -181,12 +189,8 @@ export function createDevvitServerNotificationProvider(
         return loginRequired(topics);
       }
       const askable = topics.filter((topic) => mapped.has(topic));
-      const outcomesWith = (
-        forMapped: NotificationPermissionOutcome,
-      ): Record<string, NotificationPermissionOutcome> =>
-        Object.fromEntries(topics.map((topic) => [topic, mapped.has(topic) ? forMapped : 'unavailable']));
       if (askable.length === 0) {
-        return { snapshot: snapshotOf(topics, await read(userId)), outcomes: outcomesWith('unavailable') };
+        return { snapshot: snapshotOf(topics, await read(userId)), outcomes: outcomesWith(topics, 'unavailable') };
       }
       let outcome: NotificationPermissionOutcome = 'already-granted';
       if ((await read(userId)) !== 'granted') {
@@ -197,16 +201,14 @@ export function createDevvitServerNotificationProvider(
         }
         outcome = 'granted';
       }
-      return { snapshot: snapshotOf(topics, 'granted'), outcomes: outcomesWith(outcome) };
+      return { snapshot: snapshotOf(topics, 'granted'), outcomes: outcomesWith(topics, outcome) };
     },
     async revokePermission({ topics }) {
       const userId = user();
       if (userId === undefined) {
         return loginRequired(topics);
       }
-      const outcomes = Object.fromEntries(
-        topics.map((topic) => [topic, mapped.has(topic) ? 'denied' as const : 'unavailable' as const]),
-      );
+      const outcomes = outcomesWith(topics, 'denied');
       if (!topics.some((topic) => mapped.has(topic))) {
         // Nothing this provider maps: no opt-out, as a request opts nothing in.
         return { snapshot: snapshotOf(topics, await read(userId)), outcomes };

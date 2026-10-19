@@ -48,6 +48,26 @@ describe('createDevvitServerNotificationProvider', () => {
     expect([plugin.optInCalls, plugin.optOutCalls]).toEqual([0, 0]);
   });
 
+  it('answers an unmapped topic unsupported and unavailable for a logged-out viewer too', async () => {
+    const plugin = createFakeDevvitNotifications();
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    await expect(provider.getPermission({ topics: ['friend-challenge', 'unmapped'] })).resolves.toEqual({
+      app: 'action-required',
+      topics: { 'friend-challenge': 'action-required', unmapped: 'unsupported' },
+      requiredAction: 'login',
+    });
+    for (const call of [provider.requestPermission, provider.revokePermission]) {
+      await expect(call?.call(provider, { topics: ['friend-challenge', 'unmapped'] })).resolves.toMatchObject({
+        outcomes: { 'friend-challenge': 'action-required', unmapped: 'unavailable' },
+        requiredAction: 'login',
+      });
+    }
+  });
+
   it('ignores a context user id that is not a t2_ id', async () => {
     const plugin = createFakeDevvitNotifications({ currentUserId: 'anonymous' });
     const provider = createDevvitServerNotificationProvider({
