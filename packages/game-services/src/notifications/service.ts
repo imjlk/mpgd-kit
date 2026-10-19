@@ -1561,13 +1561,23 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     };
   };
 
-  const dispatchDueRows = async (options: { readonly limit?: number } = {}) => {
+  /**
+   * One batch of due rows. `pace` carries each provider's remaining budget
+   * across the batches of one scheduler run, so rows taken in an earlier
+   * batch (still in flight, not yet counted as delivered) count too.
+   * Answers how many sends were listed and how many of them the pace held
+   * back entirely.
+   */
+  const dispatchDueRows = async (
+    options: { readonly limit?: number } = {},
+    pace: ReturnType<typeof paceBudgets> = paceBudgets(),
+  ) => {
     const limit = batchLimit(options.limit);
     const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
     const listed = keys.length;
     const results: NotificationDueResult[] = [];
-    const pace = paceBudgets();
     let failed = 0;
+    let paced = 0;
     for (const sendKey of keys) {
       try {
         const held = await store.getSend(sendKey);
@@ -1577,12 +1587,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         const at = nowMs();
         // Oldest first within each provider's pace: a row over it stays due for the next run.
         const due: NotificationSendRow[] = [];
+        let heldBack = false;
         for (const row of held.send.rows) {
-          if (isNotificationRowDue(row, at) && await pace.take(row.provider)) {
-            due.push(row);
+          if (isNotificationRowDue(row, at)) {
+            if (await pace.take(row.provider)) {
+              due.push(row);
+            } else {
+              heldBack = true;
+            }
           }
         }
         if (due.length === 0) {
+          paced += heldBack ? 1 : 0;
           continue;
         }
         if (input.queue !== undefined) {
@@ -1612,7 +1628,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         report(error, 'dispatchDue', sendKey);
       }
     }
-    return { results, failed, listed };
+    return { results, failed, listed, paced };
   };
 
   // Scheduler items.
@@ -2221,7 +2237,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
       }
       // A per-send provider counts every accepted prompt (gate step 3), so
-      // while one is registered the acceptance records are never pruned.
+      // while one is registered the acceptance records are never pruned, and
+      // that part of the history grows with every acceptance.
       // The registry refuses per-send providers today; this keeps a
       // registry that serves one from losing acceptances silently.
       const perSend = registry.providers.some(
@@ -2264,14 +2281,21 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const runScheduleEntries = async (
     limit: number,
     touched: Map<string, NotificationDeliveryOutcome>,
-  ): Promise<{ readonly listed: number; readonly handled: number; readonly failed: number }> => {
+  ): Promise<{
+    readonly listed: number;
+    readonly handled: number;
+    readonly failed: number;
+    readonly unreadable: boolean;
+  }> => {
     let failed = 0;
     let due: readonly { readonly player: string; readonly id: string }[] = [];
+    let unreadable = false;
     try {
       due = await store.listDueScheduleEntries({ at: formatNotificationInstant(nowMs()), limit });
     } catch (error) {
       // The due rows still go out: a schedule that cannot be read must not hold them.
       failed += 1;
+      unreadable = true;
       report(error, 'scheduler.list');
     }
     let handled = 0;
@@ -2282,7 +2306,6 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         if (held?.entry.dueAt === undefined || Date.parse(held.entry.dueAt) > nowMs()) {
           continue;
         }
-        handled += 1;
         const { item } = held.entry;
         if (item.kind === 'notices') {
           for (const result of await checkNotices(held, item)) {
@@ -2296,6 +2319,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             touched.set(result.sendKey, result.outcome);
           }
         }
+        // Counted once the entry was worked: a failing one is not progress.
+        handled += 1;
       } catch (error) {
         failed += 1;
         report(error, 'scheduler', `${encodeURIComponent(player)}:${id}`);
@@ -2306,7 +2331,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
       }
     }
-    return { listed: due.length, handled, failed };
+    return { listed: due.length, handled, failed, unreadable };
   };
 
   /**
@@ -2785,19 +2810,32 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const elapsed = input.elapsedMs ?? (() => globalThis.performance.now());
       const startedAt = elapsed();
       const touched = new Map<string, NotificationDeliveryOutcome>();
+      // One pace for the whole run: rows taken in an earlier round count.
+      const pace = paceBudgets();
       let failed = 0;
       for (;;) {
-        const entries = await runScheduleEntries(limit, touched);
-        failed += entries.failed;
-        const dispatched = await dispatchDueRows({ limit });
-        failed += dispatched.failed;
-        for (const result of dispatched.results) {
-          touched.set(result.sendKey, result.outcome);
+        let more: boolean;
+        let progressed: boolean;
+        try {
+          const entries = await runScheduleEntries(limit, touched);
+          failed += entries.failed;
+          const dispatched = await dispatchDueRows({ limit }, pace);
+          failed += dispatched.failed;
+          for (const result of dispatched.results) {
+            touched.set(result.sendKey, result.outcome);
+          }
+          // Another round only while one may be due (a batch came back
+          // full, and not only with rows the pace holds back, nor with a
+          // schedule that cannot be read) and this round got somewhere.
+          more = (entries.listed === limit && !entries.unreadable)
+            || (dispatched.listed === limit && dispatched.paced < dispatched.listed);
+          progressed = entries.handled > 0 || dispatched.results.length > 0;
+        } catch (error) {
+          // A round that fails keeps what earlier rounds did.
+          failed += 1;
+          report(error, 'scheduler.round');
+          break;
         }
-        // Another round only while one may be due (a batch came back full)
-        // and this round got somewhere, within the budget.
-        const more = entries.listed === limit || dispatched.listed === limit;
-        const progressed = entries.handled > 0 || dispatched.results.length > 0;
         if (!more || !progressed || elapsed() - startedAt >= budgetMs) {
           break;
         }

@@ -1748,4 +1748,22 @@ const pending = (h: Harness) =>
   }
 }
 
+// The pace holds across the rounds of one run: with the queue, rows taken earlier count before they deliver.
+{
+  const h = harness({
+    queue: true,
+    fcmEntry: { ...fcmEntry, rate: { count: 3, windowSeconds: 60 } },
+  });
+  for (let index = 0; index < 10; index += 1) {
+    await register(h, `p-${index}`);
+    await h.service.setReminder(session(`p-${index}`), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T03:00:00Z',
+    });
+  }
+  await h.service.runScheduler({ limit: 2 });
+  assert.equal(h.jobs.length, 3, 'no more than the rate in one run, across its rounds');
+}
+
 console.info('Notifications scheduler tests passed.');
