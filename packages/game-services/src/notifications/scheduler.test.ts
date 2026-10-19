@@ -1167,6 +1167,13 @@ const pending = (h: Harness) =>
     '2026-10-19T03:00:00Z',
     'the stale settle lost: the check is still due for the night record',
   );
+  // On the send day both notices go out: the night record was not lost.
+  h.time.set('2026-10-25T15:00:00Z');
+  await h.service.runScheduler();
+  assert.deepEqual(h.fcm.calls.map((call) => call.content.title).sort(), [
+    '[Game] consent-result.advertising.granted',
+    '[Game] consent-result.night.granted',
+  ]);
 }
 
 // A second run that marks the same reminder fired between the first run's rows and its mark: the rows still serve it.
