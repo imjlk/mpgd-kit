@@ -2114,8 +2114,12 @@ in the kit's reading rather than the guide's, another real player's action),
 `requested` is the request case with its
 repeated-send caveat, and everything else is `advertising`. Each game decides
 per topic, ideally with legal review before launch. The starter topics'
-purposes were decided for C1 (open question 1, resolved below): no starter
-topic is advertising.
+purposes were decided for C1 (open question 1, resolved below): none of
+the three retention topics (`daily-ready`, `streak-at-risk`,
+`friend-challenge`) is advertising. The starter's `events` topic is a
+sample of an `advertising` topic, with the advertising consent, night
+window, labels, and notices that brings (iOS only, see
+[Capacitor](#profile-capacitor)).
 
 Other rules the profiles encode:
 
