@@ -37,14 +37,16 @@ import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
  *   not in insertion order as in the in-memory store; the interface promises
  *   only "oldest first" and "earliest first", and the service sorts where
  *   it needs more.
- * - **Purge** deletes at most `purgeLimit` rows of each kind per call; the
- *   next scheduled purge continues.
+ * - **Purge** deletes every row past its cutoff, as the interface says; a
+ *   deployment that bounds each call sets `purgeLimit`, and the next
+ *   scheduled purge continues.
  *
  * The Devvit Redis client (`@devvit/redis` `TxClient.exec()`) resolves an
  * aborted transaction as an empty array, never `null`, so a result shorter
- * than the commands queued is a conflict and the step is retried, as in
- * `createDevvitRedisPostOperationStore`; a send write first reads back
- * whether its own new version landed, so a committed write is never retried.
+ * than the commands queued would be a conflict in
+ * `createDevvitRedisPostOperationStore`. Here every transaction ends with a
+ * commit marker whose reply always maps, so only an empty result is an
+ * abort, and a committed write is never retried as if it were lost.
  * Devvit allows 20 concurrent transactions per installation by default.
  *
  * Devvit Redis: <https://developers.reddit.com/docs/versioned_docs/version-0.14/capabilities/server/redis>
@@ -98,14 +100,14 @@ export interface CreateDevvitRedisNotificationStoreOptions {
   readonly transactionAttempts?: number;
   /** A fresh send version token; random by default. */
   readonly newVersion?: () => string;
-  /** Rows of each kind one `purge` call deletes at most; 1,000 by default. */
+  /** Sends and history rows one `purge` call deletes at most, each; unbounded by default. */
   readonly purgeLimit?: number;
 }
 
 export const defaultDevvitNotificationNamespace = 'mpgd:notifications';
 const defaultTransactionAttempts = 16;
 const maximumTransactionAttempts = 64;
-const defaultPurgeLimit = 1_000;
+const defaultPurgeLimit = Number.POSITIVE_INFINITY;
 /** Sorted-set page size; `@devvit/redis` reads at most 1,000 members per score or lex range. */
 const pageSize = 500;
 
@@ -133,7 +135,7 @@ export function createDevvitRedisNotificationStore(
   }
   const newVersion = options.newVersion ?? (() => globalThis.crypto.randomUUID());
   const purgeLimit = options.purgeLimit ?? defaultPurgeLimit;
-  if (!Number.isSafeInteger(purgeLimit) || purgeLimit < 1) {
+  if (purgeLimit !== defaultPurgeLimit && (!Number.isSafeInteger(purgeLimit) || purgeLimit < 1)) {
     throw new TypeError('purgeLimit must be a positive safe integer.');
   }
   const enc = encodeURIComponent;
@@ -149,6 +151,7 @@ export function createDevvitRedisNotificationStore(
     history: (player: string) => `${namespace}:history:${enc(player)}`,
     historyAt: (player: string) => `${namespace}:history-at:${enc(player)}`,
     historyAll: `${namespace}:history-all`,
+    commitMarker: `${namespace}:commit`,
   };
 
   /**
@@ -156,25 +159,25 @@ export function createDevvitRedisNotificationStore(
    * and queues its commands in one MULTI/EXEC. A plan without commands only
    * unwatches. A transaction that another writer aborted is planned again.
    *
-   * `@devvit/redis` drops a reply it cannot map from the EXEC result, so a
-   * result shorter than the queue is read as an abort. A plan whose write
-   * must not run twice gives `committed`, which reads back whether its own
-   * write landed (its new version is stored), so a committed transaction is
-   * never mistaken for a lost one.
+   * `@devvit/redis` drops from the EXEC result every reply it cannot map,
+   * which may include a protobuf zero (a ZREM or HSET that changed nothing),
+   * and resolves an aborted transaction as an empty array. So each
+   * transaction ends with a SET of the namespace's commit marker, whose `OK`
+   * always maps: a committed EXEC answers at least that reply, and only an
+   * empty (or `null`) result is an abort.
    */
   async function transact<Result>(
     watched: readonly string[],
     plan: () => Promise<{
       readonly commands: readonly Command[];
       readonly result: Result;
-      readonly committed?: () => Promise<boolean>;
     }>,
   ): Promise<Result> {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const transaction = await redis.watch(...watched);
       let multiStarted = false;
       try {
-        const { commands, result, committed } = await plan();
+        const { commands, result } = await plan();
         if (commands.length === 0) {
           await transaction.unwatch();
           return result;
@@ -184,16 +187,13 @@ export function createDevvitRedisNotificationStore(
         for (const command of commands) {
           await command(transaction);
         }
+        await transaction.set(keys.commitMarker, newVersion());
         const results = await transaction.exec();
         if (results !== null && !Array.isArray(results)) {
           throw new Error('Devvit Redis transaction returned an unsupported response.');
         }
-        if (results === null || results.length < commands.length) {
-          // An aborted WATCH transaction (another writer changed a watched
-          // key), unless the plan's own write is there.
-          if (committed !== undefined && await committed()) {
-            return result;
-          }
+        if (results === null || results.length === 0) {
+          // An aborted WATCH transaction: another writer changed a watched key.
           continue;
         }
         return result;
@@ -300,6 +300,16 @@ export function createDevvitRedisNotificationStore(
       );
     }
     return commands;
+  }
+
+  /** A stored send value, or `'unreadable'` for one that is not a send. */
+  function readSendValue(raw: string): StoredSendValue | 'unreadable' {
+    const value = tryParse<Partial<StoredSendValue> | null>(raw);
+    return typeof value === 'object' && value !== null
+      && typeof value.version === 'string'
+      && typeof value.send === 'object' && value.send !== null
+      ? value as StoredSendValue
+      : 'unreadable';
   }
 
   async function readSend(key: string): Promise<StoredSendValue | undefined> {
@@ -464,7 +474,6 @@ export function createDevvitRedisNotificationStore(
             ...sendIndexCommands(send.key, undefined, send),
           ],
           result: version,
-          committed: async () => (await readSend(send.key))?.version === version,
         };
       });
     },
@@ -482,18 +491,15 @@ export function createDevvitRedisNotificationStore(
               ...sendIndexCommands(key, stored.send, undefined),
             ],
             result: true,
-            committed: async () => (await readSend(key)) === undefined,
           };
         }
-        const next = newVersion();
-        const value = JSON.stringify({ send, version: next } satisfies StoredSendValue);
+        const value = JSON.stringify({ send, version: newVersion() } satisfies StoredSendValue);
         return {
           commands: [
             (transaction) => transaction.set(valueKey, value),
             ...sendIndexCommands(key, stored.send, send),
           ],
           result: true,
-          committed: async () => (await readSend(key))?.version === next,
         };
       });
     },
@@ -508,7 +514,12 @@ export function createDevvitRedisNotificationStore(
         if (isMissing(value)) {
           continue;
         }
-        const { send } = parse<StoredSendValue>(value, keys.send(index[position]?.member ?? ''));
+        const stored = readSendValue(value);
+        if (stored === 'unreadable') {
+          // An unreadable row is not this player's in-flight send; purge drops it.
+          continue;
+        }
+        const { send } = stored;
         if (send.request.player === player && send.rows.some((row) => row.state.status === 'in-flight')) {
           sends.push(send);
         }
@@ -521,6 +532,7 @@ export function createDevvitRedisNotificationStore(
         return [];
       }
       const due: string[] = [];
+      const seen = new Set<string>();
       let offset = 0;
       while (due.length < count) {
         const want = Math.min(pageSize, count - due.length);
@@ -530,7 +542,8 @@ export function createDevvitRedisNotificationStore(
         });
         for (const entry of page) {
           // Offsets move while other workers write the index: keep each key once.
-          if (!due.includes(entry.member)) {
+          if (!seen.has(entry.member)) {
+            seen.add(entry.member);
             due.push(entry.member);
           }
         }
@@ -539,7 +552,7 @@ export function createDevvitRedisNotificationStore(
         }
         offset += page.length;
       }
-      return due.slice(0, count);
+      return due;
     },
 
     async addHistory(entry) {
@@ -576,18 +589,20 @@ export function createDevvitRedisNotificationStore(
     },
 
     async purge(cutoffs) {
-      // Each kind purges at most `purgeLimit` rows per call, oldest first; the
-      // next scheduled purge continues, so a backlog never outlasts a request.
+      // Oldest first; with `purgeLimit`, at most that many sends and history
+      // rows per call, and the next scheduled purge continues.
       let sendCount = 0;
       const sendsBefore = Date.parse(cutoffs.sendsChangedBefore);
       for (const key of await scoreRange(keys.changed, '-inf', `(${String(sendsBefore)}`, purgeLimit)) {
         const valueKey = keys.send(key);
         const deleted = await transact([valueKey], async () => {
-          let stored: StoredSendValue | undefined;
-          try {
-            stored = await readSend(key);
-          } catch {
-            // A value that is not JSON is past its retention by its index: drop it.
+          // A Redis failure here fails the purge; only a value that does not
+          // parse as a send is dropped, since nothing can use it.
+          const raw = await redis.get(valueKey);
+          const stored = isMissing(raw) ? undefined : readSendValue(raw);
+          if (stored === 'unreadable') {
+            // Its in-flight index entry, if any, names a player the value no
+            // longer tells; listInFlightSends skips the missing value.
             return {
               commands: [
                 (transaction) => transaction.del(valueKey),
@@ -637,8 +652,8 @@ export function createDevvitRedisNotificationStore(
         const key = keys.history(player);
         const removed = await transact([key], async () => {
           const value = await redis.hGet(key, field);
-          const entry = isMissing(value) ? undefined : tryParse<NotificationHistoryEntry>(value);
-          const at = entry === undefined ? Number.NaN : Date.parse(entry.at);
+          const entry = isMissing(value) ? undefined : tryParse<Partial<NotificationHistoryEntry> | null>(value);
+          const at = typeof entry?.at === 'string' ? Date.parse(entry.at) : Number.NaN;
           if (!isMissing(value) && Number.isFinite(at) && at >= historyBefore) {
             // Not old after all (never written so): keep the entry and its indexes.
             return { commands: [], result: false };

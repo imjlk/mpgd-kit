@@ -141,22 +141,30 @@ describe('createDevvitRedisNotificationStore', () => {
     })).rejects.toThrow(/contention exceeded 2 attempts/u);
   });
 
-  it('reads a committed EXEC with a short reply list as committed, not as a lost race', async () => {
+  it('reads a committed EXEC whose zero replies Devvit dropped as committed, not as a lost race', async () => {
     const redis = createFakeNotificationRedis();
-    const store = createDevvitRedisNotificationStore(redis);
-    redis.dropLastReply = true;
-    const version = await store.createSend(send('k', [claimed('a', '2026-10-19T03:05:00Z')]));
-    expect(version).toBeTypeOf('string');
-    expect((await store.getSend('k'))?.version).toBe(version);
-    expect(await store.updateSend({
-      key: 'k',
-      version: version ?? '',
-      send: send('k', [{ key: 'k', provider: 'devvit', state: { status: 'delivered' } }]),
-    })).toBe(true);
-    const current = await store.getSend('k');
-    expect(current?.send.rows[0]?.state.status).toBe('delivered');
-    expect(await store.updateSend({ key: 'k', version: current?.version ?? '', send: undefined })).toBe(true);
-    expect(await store.getSend('k')).toBeUndefined();
+    redis.dropZeroReplies = true;
+    // The whole conformance suite still holds when every zero reply is dropped.
+    await runNotificationStoreConformance(() => createDevvitRedisNotificationStore(redis));
+    const store = createDevvitRedisNotificationStore(createFakeNotificationRedis());
+    const zeroes = createFakeNotificationRedis();
+    zeroes.dropZeroReplies = true;
+    const dropping = createDevvitRedisNotificationStore(zeroes);
+    for (const target of [store, dropping]) {
+      await target.putEndpoint({
+        provider: 'fcm',
+        installationId: 'i-1',
+        player: 't2_player',
+        address: { kind: 'fcm-token', value: 'tok' },
+        permission: 'granted',
+        sessionId: 's',
+        sessionExpiresAt: '2026-10-20T00:00:00Z',
+        lastRegisteredAt: '2026-10-19T00:00:00Z',
+      });
+      // HSET of an existing field replies 0: the count must still be 1.
+      expect(await target.extendSessionEndpoints({ sessionId: 's', expiresAt: '2026-10-21T00:00:00Z' })).toBe(1);
+    }
+    expect(zeroes.aborted).toBe(0);
   });
 
   it('keeps players, keys with separators, and namespaces apart', async () => {
@@ -178,6 +186,7 @@ describe('createDevvitRedisNotificationStore', () => {
   it('purges in batches, drops stale index entries and unreadable values, and keeps newer history', async () => {
     const redis = createFakeNotificationRedis();
     const store = createDevvitRedisNotificationStore(redis, { purgeLimit: 600 });
+    const unbounded = createDevvitRedisNotificationStore(redis);
     for (let index = 0; index < 700; index += 1) {
       await store.addHistory({
         sendKey: `h-${String(index)}`,
@@ -210,7 +219,53 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(second.history).toBe(100);
     expect(await store.listHistory({ player: 't2_player', since: '2026-09-01T00:00:00Z' })).toEqual([]);
     expect(redis.keys().filter((key) => key.includes('history'))).toEqual([]);
+    for (let index = 0; index < 700; index += 1) {
+      await unbounded.addHistory({
+        sendKey: `again-${String(index)}`,
+        provider: 'devvit',
+        player: 't2_player',
+        topic: 't',
+        at: '2026-10-01T00:00:00Z',
+      });
+    }
+    // Without purgeLimit, one call deletes every row past its cutoff.
+    expect((await unbounded.purge(cutoffs)).history).toBe(700);
     expect(() => createDevvitRedisNotificationStore(redis, { purgeLimit: 0 })).toThrow(TypeError);
+  });
+
+  it('drops a malformed history member and keeps an entry its index misdates', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    await store.addHistory({ sendKey: 'h-1', provider: 'devvit', player: 't2_p', topic: 't', at: '2026-12-01T00:00:00Z' });
+    const index = await redis.watch();
+    await index.multi();
+    await index.zAdd(
+      'mpgd:notifications:history-all',
+      { member: 'not json', score: 0 },
+      // An index entry dated before the cutoff for an entry that is not old.
+      { member: JSON.stringify(['t2_p', JSON.stringify(['h-1', 'devvit'])]), score: 0 },
+    );
+    await index.exec();
+    const counts = await store.purge({
+      sendsChangedBefore: '2026-11-01T00:00:00Z',
+      historyBefore: '2026-11-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-11-01T00:00:00Z',
+      staleEndpointsBefore: '2026-11-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-11-01T00:00:00Z',
+    });
+    expect(counts.history).toBe(0);
+    expect(await store.listHistory({ player: 't2_p', since: '2026-11-15T00:00:00Z' })).toHaveLength(1);
+    const left = await redis.zRange('mpgd:notifications:history-all', '-inf', '+inf', { by: 'score' });
+    expect(left.map((entry) => entry.member)).not.toContain('not json');
+  });
+
+  it("skips an unreadable in-flight row instead of failing the player's list", async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    await store.createSend(send('ok', [claimed('a', '2026-10-19T03:05:00Z')]));
+    await store.createSend(send('bad', [claimed('a', '2026-10-19T03:05:00Z')]));
+    redis.poke('mpgd:notifications:send:bad', '{}');
+    expect((await store.listInFlightSends('t2_player')).map((row) => row.key)).toEqual(['ok']);
   });
 
   it('rejects an empty namespace and out-of-range attempts', () => {

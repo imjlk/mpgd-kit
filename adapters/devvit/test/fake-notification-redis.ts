@@ -20,10 +20,11 @@ export interface FakeNotificationRedis extends DevvitNotificationRedis {
   /** Writes a string outside any transaction, bumping its version. */
   poke(key: string, value: string): void;
   /**
-   * Drops the last reply of every committed EXEC, as `@devvit/redis` drops a
-   * reply it cannot map: the transaction commits, and its result is short.
+   * Drops every numeric zero reply from a committed EXEC, as `@devvit/redis`
+   * drops a reply it cannot map (a protobuf zero may arrive unset): the
+   * transaction commits, and its result is short.
    */
-  dropLastReply: boolean;
+  dropZeroReplies: boolean;
   /** Marks a key as written by another client without changing it, as a WATCH sees it. */
   touch(key: string): void;
   keys(): readonly string[];
@@ -172,7 +173,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
   };
 
   const redis: FakeNotificationRedis = {
-    dropLastReply: false,
+    dropZeroReplies: false,
     get aborted() {
       return aborted;
     },
@@ -287,7 +288,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
             return [];
           }
           const replies = commands.map((command) => command());
-          return redis.dropLastReply ? replies.slice(0, -1) : replies;
+          return redis.dropZeroReplies ? replies.filter((reply) => reply !== 0) : replies;
         },
         async discard() {
           await tick();
