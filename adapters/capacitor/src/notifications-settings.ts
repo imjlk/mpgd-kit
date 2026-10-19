@@ -1,12 +1,13 @@
 import {
   CapacitorGameServices,
-  type OpenNotificationSettingsResult,
+  type CapacitorGameServicesPlugin,
 } from '@mpgd/capacitor-game-services';
 
 /** The part of `@mpgd/capacitor-game-services` the settings opener calls. */
-export interface CapacitorNotificationSettingsPlugin {
-  openNotificationSettings(): Promise<OpenNotificationSettingsResult>;
-}
+export type CapacitorNotificationSettingsPlugin = Pick<
+  CapacitorGameServicesPlugin,
+  'openNotificationSettings'
+>;
 
 /**
  * Opens this app's notification settings through

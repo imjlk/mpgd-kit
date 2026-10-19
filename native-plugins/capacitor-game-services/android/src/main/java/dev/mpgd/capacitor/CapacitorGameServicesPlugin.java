@@ -114,9 +114,11 @@ public class CapacitorGameServicesPlugin extends Plugin {
 
     /**
      * Opens this app's notification settings for the notifications v2
-     * provider's {@code openSettings}. Resolves {@code { opened }} as soon as
-     * the screen is launched; the provider waits for the player to come back.
-     * {@code opened} is false when no activity handles the screen.
+     * provider's {@code openSettings}, or the app details screen before
+     * Android 8 and when the device cannot open the notification screen.
+     * Resolves {@code { opened }} as soon as a screen is launched; the
+     * provider waits for the player to come back. {@code opened} is false
+     * when neither screen could be started.
      */
     @PluginMethod
     public void openNotificationSettings(PluginCall call) {
@@ -137,7 +139,7 @@ public class CapacitorGameServicesPlugin extends Plugin {
         call.resolve(new JSObject().put("opened", opened));
     }
 
-    /** Starts one settings screen; false when no activity handles it. */
+    /** Starts one settings screen; false when no activity handles it or the device refuses it. */
     private boolean startSettings(NotificationSettingsIntent target) {
         Intent intent = new Intent(target.action);
         if (target.appPackageExtra != null) {
@@ -157,7 +159,9 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 activity.startActivity(intent);
             }
             return true;
-        } catch (ActivityNotFoundException error) {
+        } catch (ActivityNotFoundException | SecurityException error) {
+            // No activity handles the screen, or the device refuses to start
+            // it (an unexported or permission-gated settings activity).
             return false;
         }
     }

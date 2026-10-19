@@ -68,7 +68,7 @@ public class NotificationSettingsIntentTest {
             }
             try {
                 NotificationSettingsIntent.appDetails(packageName);
-                fail("Expected a missing package name to be refused by the fallback.");
+                fail("Expected a missing package name to be refused by appDetails.");
             } catch (IllegalArgumentException expected) {
                 // Same for the app details screen.
             }
