@@ -100,7 +100,7 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     ['a link that is not a post or comment', { link: 't5_subreddit' }, 'configuration', devvitNotificationProviderCodes.linkInvalid],
     ['a title over 60 code points', { content: { ...request().content, title: 'x'.repeat(61), body: 'b' } }, 'configuration', devvitNotificationProviderCodes.titleTooLong],
     ['a body over 100 code points', { content: { ...request().content, title: 't', body: 'x'.repeat(101) } }, 'configuration', devvitNotificationProviderCodes.bodyTooLong],
-    ['a filled text with a mustache tag', { content: { ...request().content, title: 't', body: '{{evil}} sent you a challenge.' } }, 'configuration', devvitNotificationProviderCodes.templateSyntax],
+    ['a filled text with a mustache tag', { content: { ...request().content, title: 't', body: '{{evil}} sent you a challenge.' } }, 'recipient', devvitNotificationProviderCodes.templateSyntax],
     ['a content without a body', { content: { route: '/', source: 'host-template', title: 't' } }, 'configuration', devvitNotificationProviderCodes.textMissing],
     ['a blank title', { content: { ...request().content, title: ' ' } }, 'configuration', devvitNotificationProviderCodes.textMissing],
   ] as const)('refuses %s before enqueue', async (_name, overrides, reason, providerCode) => {
@@ -135,14 +135,56 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     ['a rate-limit error', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Rate limit exceeded for user' }] }, { status: 'rate-limited' }],
     ['another per-user error', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'user has not opted in' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['an error without a user', { successCount: 0, failureCount: 1, errors: [{ userId: undefined, message: 'too many requests' }] }, { status: 'rate-limited' }],
-    ['a failure count without errors', { successCount: 0, failureCount: 1, errors: [] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a failure count without errors', { successCount: 0, failureCount: 1, errors: [] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a per-user error nothing names', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['the daily app limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'App reached the daily limit' }] }, { status: 'rate-limited' }],
+    ['a success next to an error', { successCount: 1, failureCount: 1, errors: [{ userId: 't2_other', message: 'x' }] }, { status: 'accepted' }],
+    ['an error for another user only', { successCount: 0, failureCount: 0, errors: [{ userId: 't2_other', message: 'x' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
+    ['a malformed answer', null as unknown as DevvitEnqueueResponse, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
     ['an answer that counts nothing', { successCount: 0, failureCount: 0, errors: [] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
     ['a call that throws', () => Promise.reject(new Error('twirp unavailable')), { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueFailed }],
   ])('maps %s per recipient', async (_name, answer, expected) => {
     const plugin = createFakePlugin();
-    plugin.answers.push(answer);
+    plugin.answers.push(answer === null ? (() => Promise.resolve(answer)) : answer);
     const provider = createDevvitNotificationDeliveryProvider({ notifications: plugin });
     await expect(provider.send(request())).resolves.toEqual(expected);
+  });
+
+  it("reports every enqueue failure with Devvit's message and the answer it got", async () => {
+    const plugin = createFakePlugin();
+    plugin.answers.push(
+      { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'user has opted out' }] },
+      () => Promise.reject(new Error('deadline exceeded')),
+    );
+    const reports: unknown[] = [];
+    const provider = createDevvitNotificationDeliveryProvider({
+      notifications: plugin,
+      onEnqueueError: (report) => {
+        reports.push(report);
+        throw new Error('a failing log');
+      },
+    });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'rejected', reason: 'recipient' });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
+    expect(reports).toEqual([
+      { sendKey: 'k-1', source: 'answer', message: 'user has opted out', answer: 'rejected' },
+      { sendKey: 'k-1', source: 'thrown', message: 'deadline exceeded', answer: 'ambiguous' },
+    ]);
+  });
+
+  it('lets a deployment classify a thrown error that proves nothing was sent', async () => {
+    const plugin = createFakePlugin();
+    plugin.answers.push(() => Promise.reject(new Error('PERMISSION_DENIED: app not approved')));
+    const provider = createDevvitNotificationDeliveryProvider({
+      notifications: plugin,
+      classifyEnqueueError: (message, source) =>
+        (source === 'thrown' && message.startsWith('PERMISSION_DENIED') ? 'configuration' : undefined),
+    });
+    await expect(provider.send(request())).resolves.toEqual({
+      status: 'rejected',
+      reason: 'configuration',
+      providerCode: devvitNotificationProviderCodes.enqueueFailed,
+    });
   });
 
   it('lets a deployment classify the enqueue errors it observes', async () => {
@@ -150,9 +192,9 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     plugin.answers.push({ successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'APP_NOT_APPROVED' }] });
     const provider = createDevvitNotificationDeliveryProvider({
       notifications: plugin,
-      classifyEnqueueError: (message) => (message === 'APP_NOT_APPROVED' ? 'configuration' : undefined),
+      classifyEnqueueError: (message) => (message === 'APP_NOT_APPROVED' ? 'rate-limited' : undefined),
     });
-    await expect(provider.send(request())).resolves.toMatchObject({ status: 'rejected', reason: 'configuration' });
+    await expect(provider.send(request())).resolves.toEqual({ status: 'rate-limited' });
   });
 
   it('reads isOptedIn at send time', async () => {
@@ -312,6 +354,65 @@ describe('createDevvitNotificationService', () => {
     expect(await a.store.listHistory({ player: user, since: '2026-10-19T00:00:00Z' })).toHaveLength(1);
     // Devvit's enqueue takes no idempotency key: the replay reached it twice.
     expect(plugin.calls).toHaveLength(2);
+  });
+
+  it("keeps the replay's claim when the stale holder's late answer is accepted too", async () => {
+    const now = { value: '2026-10-19T03:00:00Z' };
+    const redis = createFakeNotificationRedis();
+    const plugin = createFakePlugin();
+    let releaseA: ((answer: DevvitEnqueueResponse) => void) | undefined;
+    plugin.answers.push(() => new Promise<DevvitEnqueueResponse>((resolve) => {
+      releaseA = resolve;
+    }));
+    const a = setup(now, redis, plugin);
+    const b = setup(now, redis, plugin);
+    const delivering = a.service.deliver({
+      idempotencyKey: 'fence-2',
+      player: user,
+      topic: 'friend-challenge',
+      templateData: { friend: 'Mina' },
+    });
+    while (releaseA === undefined) {
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    now.value = '2026-10-19T03:05:01Z';
+    await b.service.dispatchDue();
+    const afterReplay = await a.store.getSend('fence-2');
+    releaseA({ successCount: 1, failureCount: 0, errors: [] });
+    await expect(delivering).resolves.toMatchObject({ status: 'delivered' });
+    // A's stale claim wrote nothing: the row and its version are B's.
+    expect((await a.store.getSend('fence-2'))?.version).toBe(afterReplay?.version);
+    expect(await a.store.listHistory({ player: user, since: '2026-10-19T00:00:00Z' })).toHaveLength(1);
+  });
+
+  it('takes a store, or Redis with its store options, never both and never neither', () => {
+    const redis = createFakeNotificationRedis();
+    const store = setup({ value: '2026-10-19T03:00:00Z' }).store;
+    const base = { notifications: createFakePlugin(), catalog: catalogFile };
+    expect(() => createDevvitNotificationService({ ...base, redis, store })).toThrow(TypeError);
+    expect(() => createDevvitNotificationService({ ...base, store, storeOptions: { namespace: 'x' } })).toThrow(TypeError);
+    expect(() => createDevvitNotificationService(base)).toThrow(TypeError);
+    expect(createDevvitNotificationService({ ...base, store }).store).toBe(store);
+  });
+
+  it('reports enqueue failures through onError', async () => {
+    const errors: unknown[] = [];
+    const plugin = createFakePlugin();
+    plugin.answers.push({ successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] });
+    const { service } = createDevvitNotificationService({
+      redis: createFakeNotificationRedis(),
+      notifications: plugin,
+      catalog: catalogFile,
+      now: () => '2026-10-19T03:00:00Z',
+      onError: (_error, context) => {
+        errors.push(context);
+      },
+    });
+    await expect(service.deliver({ idempotencyKey: 'e-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
+      .resolves.toMatchObject({ status: 'unavailable', reason: 'provider-rejected' });
+    expect(errors).toContainEqual({ operation: 'devvit.enqueue', sendKey: 'e-1', provider: 'devvit' });
   });
 
   it('builds a session only for a Reddit user id', () => {

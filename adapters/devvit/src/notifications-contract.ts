@@ -37,12 +37,17 @@ export const devvitNotificationsPerUserPerDay = 2;
 export const devvitNotificationsPerAppPerDay = 25_000;
 
 /**
- * Devvit's length unit. The docs give the limits in "characters" without a
- * unit, and the SDK (`@devvit/notifications` 0.14.1) checks nothing before
- * `Enqueue`. The kit counts Unicode code points, as the catalog validator
- * counts its mapping fields, so an accented letter or an emoji counts once
- * as a reader sees it (a grapheme cluster of several code points, such as a
- * flag, counts more than once, which only errs on the short side). It counts
+ * Devvit's length unit, which the RFC left to P3. The docs give the limits
+ * in "characters" without a unit, the SDK (`@devvit/notifications` 0.14.1)
+ * checks nothing before `Enqueue`, and Devvit admins approve the copy
+ * before a game may send it, so the limit is a copy-review rule more than an
+ * API one. The kit counts Unicode code points, as the catalog validator
+ * counts its mapping fields: an accented letter or an emoji counts once, as
+ * a reader sees it, and a grapheme cluster of several code points (a flag, a
+ * family emoji) counts more than once, which is stricter than a reader.
+ * Devvit has not confirmed the unit; if its server counts UTF-16 units, a
+ * text with astral characters (most emoji) that passes here could still be
+ * refused there, and the refusal arrives as an `enqueue` error. It counts
  * the filled text, at send time, because `{{name}}` placeholders change the
  * length once template data fills them.
  */
