@@ -2538,13 +2538,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         // The gate would refuse every send of it, so it is refused now.
         throw invalidInput(`Advertising topic ${reminder.topic} needs the deployment's advertisingRules.`);
       }
-      const request: NotificationStoredSendRequest = {
-        idempotencyKey: sendKey,
-        player,
-        topic: reminder.topic,
-        ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
-        ...(reminder.link === undefined ? {} : { link: reminder.link }),
-      };
+      // The same request the scheduler makes, so their fingerprints compare.
+      const request = reminderRequest(player, reminder);
       const at = nowMs();
       // Where the player can be reached now, else every declaring provider unresolved.
       const reached = (await recipientsOf(request, at, origin)).filter((recipient) =>
@@ -2598,7 +2593,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // the write, stops the previous one's send that waits; a scheduler run
       // that fires the previous one meanwhile then fails to mark it and stops
       // its own send. A previous send of this reminder's content at its key
-      // (an identical re-set) serves it and stays.
+      // (an identical re-set) serves it and stays. A stop that fails fails the
+      // set before anything is written, so the set is retried as a whole.
       const id = reminderEntryId(reminder.key);
       // A reminder set for a time already past is due now, not at that time,
       // so a burst of past-dated reminders queues behind those already due.

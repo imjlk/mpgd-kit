@@ -836,12 +836,12 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
   ok(consentBefore.length > 0 && givenBefore.length > 0, 'invalid: records and a notice to keep');
   const instants = consentBefore.map((record) => record.at);
   // Every record (one with a notice given) named next to an instant that does not parse, last and first.
-  for (const at of [
+  for (const pruneAt of [
     [...instants, 'not-a-time'],
     ['not-a-time', ...instants],
   ]) {
     await rejects(
-      () => store.pruneConsent({ player: 'p-prune', at }),
+      () => store.pruneConsent({ player: 'p-prune', at: pruneAt }),
       'invalid: a pruned instant that does not parse',
     );
     deepEqual(
