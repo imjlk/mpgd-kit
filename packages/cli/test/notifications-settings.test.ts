@@ -531,6 +531,27 @@ const common = {
   ]);
   unsubscribe();
   assert.equal(listener, undefined);
+  // A route with no `entry` is not the settings screen.
+  const plainListeners: ((event: NotificationEvent) => void)[] = [];
+  let plain = 0;
+  routeNotificationOpens(
+    {
+      subscribe: (next) => {
+        plainListeners.push(next);
+        return () => undefined;
+      },
+    },
+    {
+      settings: () => {
+        plain += 1;
+      },
+    },
+  );
+  for (const next of plainListeners) {
+    next(opened('/'));
+  }
+  assert.equal(plainListeners.length, 1);
+  assert.equal(plain, 0);
 }
 
 console.info('Notification settings model checks passed.');

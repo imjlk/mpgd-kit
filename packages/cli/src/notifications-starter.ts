@@ -493,18 +493,7 @@ export const notificationsCapacitorGateways: Readonly<Record<'android' | 'ios', 
  * `common` part), and the catalog files they read. A game that already has
  * one keeps its own.
  */
-export const notificationsCapacitorSupportFiles: readonly string[] = Object.freeze([
-  'src/platform/capacitorNotifications.ts',
-  'src/platform/notifications.ts',
-  'src/platform/notificationSettings.ts',
-  'src/platform/notificationOpens.ts',
-  'notifications/topics.json',
-  'notifications/deployment.json',
-  'tools/validate-notifications.ts',
-  'docs/NOTIFICATIONS.md',
-]);
-
-/** The starter modules a wired Capacitor gateway imports, directly or through the other. */
+/** The starter modules a wired Capacitor gateway imports, directly or through one another. */
 export const notificationsCapacitorGatewayModules: readonly string[] = Object.freeze([
   'src/platform/capacitorNotifications.ts',
   'src/platform/notifications.ts',
@@ -512,10 +501,26 @@ export const notificationsCapacitorGatewayModules: readonly string[] = Object.fr
   'src/platform/notificationOpens.ts',
 ]);
 
+/**
+ * The files `mpgd target init capacitor --providers notifications` writes
+ * with a wired gateway when the game has none: the modules it imports, the
+ * catalog files they read, the validator, and the game's notifications doc.
+ */
+export const notificationsCapacitorSupportFiles: readonly string[] = Object.freeze([
+  ...notificationsCapacitorGatewayModules,
+  'notifications/topics.json',
+  'notifications/deployment.json',
+  'tools/validate-notifications.ts',
+  'docs/NOTIFICATIONS.md',
+]);
+
 /** Whether a Capacitor gateway already registers a notifications provider. */
 export function capacitorGatewayRegistersNotifications(source: string): boolean {
   // One pass over strings and comments: neither registers anything, and a
-  // string that holds `//` or `/*` does not start a comment.
+  // string that holds `//` or `/*` does not start a comment. Regex literals
+  // are not tokenized, so a quote or `/*` inside one can hide a call or
+  // expose a commented one; such a gateway gets a warning or keeps its
+  // wiring as it is, and is never rewritten wrongly.
   const code = source.replace(
     /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
     (token) => (token.startsWith('/') ? ' ' : '""'),

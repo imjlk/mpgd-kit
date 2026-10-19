@@ -3186,18 +3186,23 @@ function planNotificationsProvider(input: {
         + 'packages (mpgd kit upgrade) first.',
     );
   }
-  // The adapter's own peers (Capacitor core) must accept the game's installed copies too.
+  // The adapter's other peers (Capacitor core) must accept the game's
+  // installed copies too; the plugins get their own message below.
   assertInstalledPeers(
     gameRoot,
     `@mpgd/adapter-capacitor@${String(adapter.version)}`,
-    adapter.peerDependencies,
+    typeof adapter.peerDependencies === 'object' && adapter.peerDependencies !== null
+      ? Object.fromEntries(Object.entries(adapter.peerDependencies as Record<string, unknown>)
+        .filter(([name]) => !notificationsShellPlugins.includes(name)))
+      : undefined,
   );
   const adapterPeers = typeof adapter.peerDependencies === 'object' && adapter.peerDependencies !== null
     ? adapter.peerDependencies as Readonly<Record<string, unknown>>
     : {};
   for (const plugin of shellPlugins) {
     const range = adapterPeers[plugin.packageName];
-    if (typeof range === 'string' && !satisfies(plugin.version, range, { includePrerelease: true })) {
+    if (typeof range === 'string' && validRange(range) !== null
+      && !satisfies(plugin.version, range, { includePrerelease: true })) {
       throw new Error(
         plugin.installed
           ? `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `

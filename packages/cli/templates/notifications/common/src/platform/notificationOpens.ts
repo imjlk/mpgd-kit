@@ -54,5 +54,7 @@ const settingsEntry = new URL(starterNotificationSettingsRoute, 'https://game.in
  * `isRootRelativeNotificationRoute` accepted reach it, which parse.
  */
 function isSettingsRoute(route: string): boolean {
-  return new URL(route, 'https://game.invalid').searchParams.get('entry') === settingsEntry;
+  // A settings route without an `entry` would match every route: fail closed.
+  return settingsEntry !== null
+    && new URL(route, 'https://game.invalid').searchParams.get('entry') === settingsEntry;
 }
