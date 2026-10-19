@@ -137,9 +137,14 @@ function readsAsRateLimit(message: string): boolean {
   if (/rate[ -]?limit|too many (?:requests|notifications)|quota|throttl/iu.test(message)) {
     return true;
   }
-  if (/\b(?:characters?|length|long|title|body|link|size|bytes?|text|message|content|payload|template)\b/iu.test(
-    message,
-  )) {
+  // A limit that names a period ("daily", "per user") counts sends; without
+  // one, a word about the text marks a length or content refusal.
+  const counted = /\b(?:daily|per[- ]?(?:user|app|day)|today)\b/iu.test(message);
+  if (
+    !counted
+    && /\b(?:characters?|length|long|title|body|link|size|bytes?|text|message|content|payload|template)\b/iu
+      .test(message)
+  ) {
     return false;
   }
   // "Daily send limit", "per-user limits": the limit names what it counts.
@@ -160,11 +165,11 @@ function readsAsRateLimit(message: string): boolean {
  */
 function readsAsUserRefusal(message: string): boolean {
   // A message about the link, the post, or the comment is not the user's.
-  if (/\b(?:links?|posts?|comments?)\b|\bt[13]_/iu.test(message)) {
+  if (/\b(?:perma)?(?:link|post|comment)(?:s|_?ids?)?\b|\bt[13]_/iu.test(message)) {
     return false;
   }
   return /\bopt(?:ed|ing)?[ -]?(?:in|out)\b|\bnot subscribed\b|\bnotifications? (?:are )?disabled\b/iu.test(message)
-    || /\b(?:user|account|recipient)\b(?:\s+\S+){0,3}?\s+(?:is |was |has been )?(?:not found|does not exist|deleted|suspended|banned)\b/iu
+    || /\b(?:user|account|recipient)(?:\s+(?:with\s+)?(?:id\s+)?t2_\w+)?\s+(?:is\s+|was\s+|has\s+been\s+)?(?:not found|does not exist|deleted|suspended|banned)\b/iu
       .test(message);
 }
 

@@ -160,12 +160,22 @@ describe('createDevvitServerNotificationProvider', () => {
     expect(reported).toHaveLength(1);
     expect(reported[0]?.method).toBe('notifications.v2.getPermission');
     expect(String(reported[0]?.cause)).toContain('internal-host');
+    // A hook that rejects or throws changes nothing.
+    const quiet = createDevvitNotificationsV2BridgeHandler({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+      onError: (() => Promise.reject(new Error('log sink down'))) as unknown as () => void,
+    });
+    await expect(quiet.request(request('notifications.v2.getPermission', { topics: ['friend-challenge'] })))
+      .resolves.toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' } });
     // A refused opt-in keeps Devvit's message on the server too.
     plugin.isOptedIn = async () => false;
     plugin.optInAnswers.push({ success: false, message: 'internal approval queue 7' });
     const refused = await bridge.request(request('notifications.v2.requestPermission', { topics: ['friend-challenge'] }));
     expect(JSON.stringify(refused)).not.toContain('approval queue');
     expect(reported).toHaveLength(2);
+    expect(String(reported[1]?.cause)).toContain('approval queue');
     // An invalid payload is the caller's, not reported.
     await bridge.request(request('notifications.v2.requestPermission', { topics: [] }));
     expect(reported).toHaveLength(2);

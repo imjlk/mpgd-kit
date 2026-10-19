@@ -66,10 +66,15 @@ export interface CreateDevvitServerNotificationProviderInput {
    * for a topic outside them answers `unavailable` without opting in.
    */
   readonly topics: readonly string[];
+}
+
+export interface CreateDevvitNotificationsV2BridgeHandlerInput extends CreateDevvitServerNotificationProviderInput {
   /**
-   * Every failure the bridge answers with an error, with its cause (the
-   * plugin's own text, which the webview never sees). `console.warn` by
-   * default.
+   * Every failure of a notifications method the handler answers with an
+   * error, except an invalid payload (the caller's), with its cause (the
+   * plugin's own text, which the webview never sees). Synchronous; a hook
+   * that throws or rejects changes nothing. By default `console.warn`, which
+   * skips the expected `NOTIFICATIONS_UNSUPPORTED` of the local methods.
    */
   readonly onError?: ((error: unknown, context: { readonly method: string }) => void) | undefined;
 }
@@ -235,10 +240,13 @@ export interface DevvitNotificationsV2BridgeHandler {
  * so the bridge carries no notifications events.
  */
 export function createDevvitNotificationsV2BridgeHandler(
-  input: CreateDevvitServerNotificationProviderInput,
+  input: CreateDevvitNotificationsV2BridgeHandlerInput,
 ): DevvitNotificationsV2BridgeHandler {
   const provider = createDevvitServerNotificationProvider(input);
   const onError = input.onError ?? ((error: unknown, context: { readonly method: string }) => {
+    if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_UNSUPPORTED') {
+      return;
+    }
     console.warn(`devvit notifications ${context.method} failed`, error);
   });
 
@@ -290,7 +298,10 @@ export function createDevvitNotificationsV2BridgeHandler(
       } catch (error) {
         if (!(error instanceof InvalidPayloadError)) {
           try {
-            onError(error, { method });
+            const logged: unknown = onError(error, { method });
+            if (logged instanceof Promise) {
+              logged.catch(() => {});
+            }
           } catch {
             // A failing log never changes the answer.
           }
