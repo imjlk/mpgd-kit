@@ -1078,4 +1078,129 @@ const pending = (h: Harness) =>
   );
 }
 
+// A second run that marks the same reminder fired between the first run's rows and its mark: the rows still serve it.
+{
+  let nested: (() => Promise<unknown>) | undefined;
+  const h = harness({
+    store: (inner) => ({
+      ...inner,
+      async updateSend(input) {
+        const done = await inner.updateSend(input);
+        if (done && input.send?.origin.kind === 'reminder' && input.send.rows.length > 0 && nested !== undefined) {
+          const run = nested;
+          nested = undefined;
+          await run();
+        }
+        return done;
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  nested = () => h.service.runScheduler();
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1, 'sent once, not stopped');
+  assert.deepEqual(pending(h), []);
+}
+
+// Re-setting a fired reminder for the same time keeps its waiting send: the send key is the same.
+{
+  const quiet: NotificationTopicDeclaration = {
+    ...challenge,
+    quietHours: { start: '22:00', end: '08:00' },
+  };
+  const h = harness({ topics: [quiet] });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T13:30:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  h.time.set(fireAt);
+  await h.service.runScheduler();
+  assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'deferred');
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt }),
+    { status: 'scheduled' },
+  );
+  assert.equal(h.store.inspect().sends.length, 1, 'the waiting send stays');
+  h.time.set('2026-10-19T23:00:00Z');
+  await h.service.runScheduler();
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1, 'delivered once at the end of the quiet hours');
+  assert.deepEqual(pending(h), []);
+}
+
+// A fired reminder whose send cannot be read is kept, not forgotten, and looked at again a minute later.
+{
+  let failRead = false;
+  const h = harness({
+    store: (inner) => ({
+      ...inner,
+      async getSend(key) {
+        if (failRead && key.startsWith('reminder:')) {
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.getSend(key);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  await h.service.runScheduler();
+  h.time.advance(30 * 86_400);
+  failRead = true;
+  await h.service.runScheduler();
+  const entry = h.store.inspect().schedule.find((candidate) => candidate.id === 'reminder:k');
+  assert.equal(Date.parse(entry?.dueAt ?? ''), Date.parse(h.time.now()) + 60_000);
+  failRead = false;
+  h.time.advance(60);
+  await h.service.runScheduler();
+  assert.deepEqual(h.store.inspect().schedule, []);
+}
+
+// A push that survives a check and is refused later still backs off.
+{
+  const answers: NotificationRemoteDeliveryAnswer[] = [];
+  for (let index = 0; index < 50; index += 1) {
+    answers.push({ status: 'ambiguous' }, { status: 'rejected', reason: 'recipient' });
+  }
+  const h = harness({ topics: [weekend, noticeTopic], deployment: kr, notices: true, answers });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2026-10-26T00:00:00Z');
+  for (let hour = 0; hour < 72; hour += 1) {
+    await h.service.runScheduler();
+    h.time.advance(3600);
+  }
+  // Each push costs two calls (the ambiguous one and its replay), and pushes back off.
+  assert.ok(h.fcm.calls.length <= 20, `calls in 72 hours: ${h.fcm.calls.length}`);
+  answers.length = 0;
+}
+
+// A player id no notice key can hold fails its check once.
+{
+  const h = harness({ topics: [weekend, noticeTopic], deployment: kr, notices: true });
+  await h.service.recordConsent(session('p-\uD800'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const run = await h.service.runScheduler();
+  assert.equal(run.failed, 0);
+  assert.deepEqual(h.store.inspect().schedule, []);
+  assert.deepEqual(h.errors, ['scheduler.notice']);
+}
+
 console.info('Notifications scheduler tests passed.');

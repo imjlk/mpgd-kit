@@ -1814,8 +1814,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       return { sendKey: key, outcome: result.outcome };
     }
     if (!await markFired()) {
-      // A set or cancel since the read: its own stop runs after its write; this one covers the rest.
-      await stopReminderSend(player, reminder);
+      // The entry changed since the read. Another run that found these rows
+      // marked the same reminder fired, or a set kept its time: the rows
+      // serve it. A cancel, or a set to another time, stops them; its own
+      // stop runs after its write, and this one covers the rest.
+      const now = await store.getScheduleEntry({ player, id: held.entry.id });
+      const same = now?.entry.item.kind === 'reminder' && now.entry.item.fireAt === reminder.fireAt;
+      if (!same) {
+        await stopReminderSend(player, reminder);
+      }
       return undefined;
     }
     return { sendKey: key, outcome: result.outcome };
@@ -1830,17 +1837,19 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     held: NotificationVersionedScheduleEntry,
     reminder: NotificationStoredReminder,
   ): Promise<void> => {
-    let waiting = false;
+    let key: string | undefined;
     try {
-      const key = createNotificationReminderIdempotencyKey({
+      key = createNotificationReminderIdempotencyKey({
         player: held.entry.player,
         key: reminder.key,
         fireAt: reminder.fireAt,
       });
-      waiting = (await store.getSend(key))?.send.rows.some((row) => row.state.status !== 'delivered') ?? false;
     } catch {
-      waiting = false;
+      key = undefined;
     }
+    // A read that fails throws, so the entry waits a minute rather than going while its send may wait.
+    const waiting = key !== undefined
+      && ((await store.getSend(key))?.send.rows.some((row) => row.state.status !== 'delivered') ?? false);
     if (!waiting) {
       await removeEntry(held);
       return;
@@ -1887,6 +1896,19 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const at = nowMs();
     const now = formatNotificationInstant(at);
     const today = toSeoulCalendarDate(now);
+    try {
+      // Only the player can make a notice key fail (an id with a lone surrogate): its check fails once.
+      createNotificationNoticeIdempotencyKey({
+        kind: 'consent-result',
+        record: { kind: 'advertising', at: now },
+        dueBy: today,
+        player,
+      });
+    } catch (error) {
+      await removeEntry(held);
+      report(error, 'scheduler.notice');
+      return [];
+    }
     const records = await store.listConsent(player);
     const given = await store.listNoticesGiven(player);
     const owed = listNotificationNotices(records, given, now);
@@ -1924,20 +1946,32 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       );
       if (made === 'busy') {
         waiting = true;
+        if (previouslyPushed.has(key)) {
+          pushed.push(key);
+        }
         continue;
       }
       if ('existing' in made) {
         if (notificationSendOutcome(made.existing)?.status === 'delivered') {
-          // Delivered, but its record was not written: it is recorded now, not pushed again.
-          await store.addNoticeGiven({ ...identity, player, channel: 'push', at: now });
+          // Delivered, but its record was not written: it is recorded now (while it is listed), not pushed again.
+          if (await noticeListed(player, identity, at)) {
+            await store.addNoticeGiven({ ...identity, player, channel: 'push', at: now });
+          }
         } else {
+          // Still waiting: it stays this check's push, so a later refusal still backs off.
           waiting = true;
+          if (previouslyPushed.has(key)) {
+            pushed.push(key);
+          }
         }
         continue;
       }
       try {
         const result = await storeItemRows(made.created, at, seoulMidnight(sendFrom));
-        if (result !== undefined) {
+        if (result === undefined) {
+          // Another run took the key over: its push is looked at again.
+          waiting = true;
+        } else {
           results.push({ sendKey: key, outcome: result.outcome });
           if (result.stored) {
             waiting = true;
@@ -2096,6 +2130,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           });
         }
       }
+      // A per-send provider would count every accepted prompt; the registry
+      // refuses those, and compaction must keep their records before it serves one.
       const prunable = records.filter((record) =>
         Date.parse(record.at) <= at - consentCompactionMs && !keep.has(Date.parse(record.at)));
       if (prunable.length > 0) {
@@ -2500,7 +2536,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           : await store.updateScheduleEntry({ player, id, version: held.version, entry });
         if (written) {
           const pending = previous !== undefined && previous.firedAt === undefined;
-          const stopped = previous !== undefined && await stopReminderSend(player, previous);
+          // A previous reminder at the same time has the same send key: its
+          // send, if any, now serves this one, so it is not stopped.
+          const stopped = previous !== undefined
+            && previous.fireAt !== reminder.fireAt
+            && await stopReminderSend(player, previous);
           return { status: pending || stopped ? 'replaced' : 'scheduled' };
         }
       }
@@ -2643,19 +2683,23 @@ function reminderOf(raw: unknown): NotificationStoredReminder {
   }
   const known = new Set(['key', 'topic', 'fireAt', 'templateData', 'link']);
   const unknown = Object.keys(raw).find((name) => !known.has(name));
+  const keyIssue = typeof raw.key === 'string'
+    ? notificationKeyIssue(raw.key)
+    : 'expected a string';
+  const dataIssue = raw.templateData === undefined
+    ? undefined
+    : notificationTemplateDataIssue(raw.templateData);
   let issue: string | undefined;
   if (unknown !== undefined) {
     issue = `${unknown}: not a reminder field`;
-  } else if (typeof raw.key !== 'string') {
-    issue = 'key: expected a string';
-  } else if (notificationKeyIssue(raw.key) !== undefined) {
-    issue = `key: ${notificationKeyIssue(raw.key) ?? ''}`;
+  } else if (keyIssue !== undefined) {
+    issue = `key: ${keyIssue}`;
   } else if (!isBoundedText(raw.topic)) {
     issue = 'topic: expected a non-empty string';
   } else if (typeof raw.fireAt !== 'string' || raw.fireAt.length > 64 || !isNotificationTimestamp(raw.fireAt)) {
     issue = 'fireAt: expected RFC 3339 with an explicit offset';
-  } else if (raw.templateData !== undefined && notificationTemplateDataIssue(raw.templateData) !== undefined) {
-    issue = `templateData: ${notificationTemplateDataIssue(raw.templateData) ?? ''}`;
+  } else if (dataIssue !== undefined) {
+    issue = `templateData: ${dataIssue}`;
   } else if (raw.link !== undefined && !isBoundedText(raw.link)) {
     issue = 'link: expected a non-empty string';
   }
