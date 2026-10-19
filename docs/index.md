@@ -47,6 +47,6 @@ the consent flow, the Korean advertising rules, and how to add a topic; the
 [Firebase setup guide](FIREBASE_NOTIFICATIONS.md) covers Android and iOS push.
 The [notifications v2 RFC](specs/notifications/notifications-v2-rfc.md)
 proposes capability-declared notification providers, server-side consent
-records, one delivery policy gate, reminders, and conformance vectors. It is
-also a draft until its types and conformance runner land; it is not confirmed
-behavior.
+records, one delivery policy gate, reminders, and conformance vectors. Its
+types, conformance runner, providers, and backend have landed; it is still a
+draft, and a conformance vector is not device or release verification.

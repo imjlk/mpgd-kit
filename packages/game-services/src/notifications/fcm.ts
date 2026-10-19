@@ -24,7 +24,8 @@ import type { NotificationProviderRegistration } from './registry.js';
  * `mpgd-requested`, or `mpgd-advertising` by purpose. An advertising send
  * names the iOS category `mpgd-advertising`, whose opt-out action the app
  * registers; an Android FCM notification message cannot carry actions, so
- * the shell renders advertising natively (C1). An expiry becomes
+ * rendering advertising natively in the shell is a follow-up after C1. An
+ * expiry becomes
  * `android.ttl` and the `apns-expiration` header.
  */
 

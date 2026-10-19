@@ -24,9 +24,14 @@ is the practical summary. For Android and iOS also read the
   one from the starter's `src/platform/notificationSettings.ts`.
 - **Existing game, Apps in Toss and Reddit.** Add the catalog and wiring by
   hand, following the starter: the Apps in Toss wrapper already reads
-  `notifications/topics.json` (or `MPGD_NOTIFICATION_TOPICS_FILE`), and the
-  Reddit gateway and Devvit server need the options shown in
-  [What each target supports](#targets).
+  `notifications/topics.json` (or `MPGD_NOTIFICATION_TOPICS_FILE`). The Reddit
+  gateway passes `notifications: { topics }` (the ids the catalog maps for
+  `reddit`) and `loginPrompt: createDevvitWebLoginPrompt()` to
+  `createDevvitPlatformGateway`, and the Devvit server passes
+  `createDevvitNotificationsV2BridgeHandler({ notifications, currentUserId,
+  topics })` to its bridge and runs `createDevvitNotificationService({ redis,
+  notifications, catalog, deployment })` in its scheduler tasks (see the
+  [Devvit adapter README](../adapters/devvit/README.md#notifications)).
 
 Before every release run `pnpm validate:notifications`. It checks the catalog
 against the providers each target enables and the deployment settings, and it
@@ -36,7 +41,7 @@ fails until the advertising sender's contact placeholder is replaced.
 
 | Target | Consent UI | Remote | Local reminders | Opens | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Android (Capacitor) | OS dialog, once per app; two denials on Android 13+ leave only settings | FCM, all three purposes | yes, inexact | push data `route` | Channels per purpose; advertising has its own. |
+| Android (Capacitor) | OS dialog for the app, shown up to twice on Android 13+; after the second denial only settings can change it | FCM, all three purposes | yes, inexact | push data `route` | Channels per purpose; advertising has its own. |
 | iOS (Capacitor) | OS dialog, once; a denial leaves only settings | FCM (relayed to APNs), all three purposes | yes, at most 64 pending | push data `route` | Advertising pushes carry the opt-out action through the `mpgd-advertising` category. |
 | Apps in Toss | A Toss sheet per topic, from a tap | Functional messages (`service`, `requested`) through the partner API | no | landing URL per console template | No advertising, and functional messages may not carry benefits or retention content: check that a reminder qualifies before mapping it (the starter maps none). Each topic maps `targets.ait` to the console template code and `agreement`. Toss gives no read, so the backend record decides. |
 | Reddit (Devvit) | The game's own toggle, from a tap; the player must be logged in | Devvit notifications (`service`, `requested`), copy pre-approved by Devvit admins | no | the linked post | Gated beta: keep `integrations.notifications` at `approval-required` until Reddit approves the app. Each send needs a post or comment link. |
@@ -60,8 +65,8 @@ Consent has three layers, and the game never decides one alone:
    `requested` topic (a reminder) this is the player's request, and the topic
    is off until the player turns it on.
 3. **Purpose consent**: 광고성 정보 수신동의 (advertising consent) and the
-   separate night consent for 21:00 to 08:00 KST, required before any
-   advertising push under the Korean rules.
+   separate night consent, which an advertising push arriving between 21:00
+   and 08:00 KST also needs, under the Korean rules.
 
 Rules the starter's settings screen follows, and your own screen must too:
 
@@ -72,8 +77,9 @@ Rules the starter's settings screen follows, and your own screen must too:
 - **Nothing is pre-checked.** Reminders, advertising consent, and night consent
   start off. The advertising switch is labelled 광고성 정보 수신동의 and says it
   is optional; it is not phrased as a benefit alert.
-- **Never pay for consent.** No reward for turning notifications on (App
-  Review Guideline 5.1.2(i)), and the game keeps working when the player
+- **Never pay for consent.** No reward for turning notifications on and no
+  feature held back without them (App Review Guideline 5.1.2(i)), and the
+  game keeps working when the player
   declines (Apps in Toss game checklist).
 - **Turn off where it was turned on.** The game-rendered Devvit opt-in has a
   *Turn off* in the game; advertising and night consent are withdrawn in the
@@ -100,7 +106,9 @@ starter routes one kind of open itself: the advertising opt-out action and
 the consent notices carry `/?entry=notification-settings`, and an open with
 that route shows the settings screen (after boot, when the game was just
 started by it), because the opt-out must open that screen directly. Route
-your other topics' opens the same way.
+your other topics' opens in the `other` route of
+`subscribeStarterNotificationOpens`: it is the game's one open listener, the
+first subscriber, which is the one a cold-start open reaches.
 
 ## Korean advertising rules
 
@@ -138,15 +146,19 @@ locale, with the act's date as `{{consentDate}}`:
   after advertising consent is withdrawn.
 
 The starter's Korean copy follows that wording, with the game's title in
-brackets as the sender. The settings screen also shows the notices the server lists and
+brackets as the sender. The notice must name the same sender as
+`advertisingSender.name` in `notifications/deployment.json`: when you change
+one, change every `notices.copy` variant too. The settings screen also shows the notices the server lists and
 records them as given in the game, for players who are not reachable by push.
 
 **Which topics are advertising** is your decision, ideally with legal review.
 KISA's guide counts as advertising anything sent for the sender's economic
 benefit, including benefits handed out unasked, periodic use reminders,
 deadline nudges, and abandoned-cart reminders; information the player
-requested, or needs because of a transaction or another player's action, is
-not.
+requested, or that a contract or transaction obliges you to send, is not.
+The guide has no example about games: treating a message about another
+player's action (a friend's challenge) as `service` is the kit's reading of
+those exceptions, not the guide's.
 
 ## The starter topics
 
@@ -160,13 +172,18 @@ not.
 
 The purposes of `daily-ready` and `streak-at-risk` were decided for the kit
 (RFC open question 1): they are reminders of the player's own progress that
-the player asked for. **The risk:** the KISA guide reads deadline nudges such
-as "your streak ends today" as advertising (p.50), and repeated sends without
-a further request turn requested information into advertising (p.11). Keep
-their copy to the player's own progress, with no reward, benefit, event, or
-promotion, and send them only to players who turned them on. A game that adds
-rewards or promotions to these messages must declare them `advertising`
-instead, with the consent, night window, and labels that brings.
+the player asked for. **The risk:** the KISA guide reads periodic reminders
+that promote use (p.50, Q01-01) and deadline nudges (p.50, Q01-02) as
+advertising; `daily-ready` has the shape of the first and a streak reminder is
+close to the second. Repeated sends without a further request turn requested
+information into advertising (p.11, p.52 Q01-10), so one opt-in followed by
+daily sends is the weakest part of the `requested` reading: have it reviewed
+before launch. Keep their copy to the player's own progress, with no reward,
+benefit, event, or promotion, and send them only to players who turned them
+on. A game that adds rewards or promotions to these messages must declare them
+`advertising` instead, with the consent, night window, and labels that brings.
+The same holds for `friend-challenge` if a challenge carries a reward or an
+invitation to buy.
 
 ## Adding a topic
 

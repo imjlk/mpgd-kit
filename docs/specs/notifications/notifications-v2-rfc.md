@@ -902,8 +902,10 @@ Local reminders use inexact timing:
 - Android 14 denies `SCHEDULE_EXACT_ALARM` by default to new installs, Play
   restricts `USE_EXACT_ALARM` to alarm and calendar apps, and a game reminder
   does not need minute precision.
-- The app removes `SCHEDULE_EXACT_ALARM` from its merged manifest (C1's
-  template is to do it for generated games), and the provider schedules with
+- The app removes `SCHEDULE_EXACT_ALARM` from its merged manifest (since C1
+  the kit's reference shell does, and `mpgd target init capacitor
+  --providers notifications` does it for a newly generated shell project),
+  and the provider schedules with
   `isExactNotification: false` and `allowWhileIdle: true`, so a reminder
   still fires in Android's Doze mode.
 - The provider keeps at most `local.maxPending` reminders, keeping the
@@ -1534,7 +1536,8 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `mpgd-advertising` by purpose. An advertising send names the iOS
     category `mpgd-advertising` in `apns.payload.aps.category`, whose
     opt-out action the app registers. An Android FCM notification message
-    cannot carry actions; the shell renders advertising natively (C1). FCM's
+    cannot carry actions; rendering advertising natively in the shell is a
+    follow-up after C1. FCM's
     reserved data keys are refused before the send.
 - **Apps in Toss.**
   `createAitFunctionalMessageDeliveryProvider` in
@@ -1803,8 +1806,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     notifications share, so an FCM send names it in
     `apns.payload.aps.category`. Firebase Messaging has no category API.
   - An Android FCM notification message cannot carry actions. An Android
-    advertising push needs the shell to render it natively with the action;
-    C1 adds that to the template.
+    advertising push needs the shell to render it natively with the action,
+    which is a follow-up after C1; until then the game's settings screen is
+    the Android opt-out route.
   - Tapping the action opens the declared `optOutRoute` of the advertising
     topic the push names in its `topic` data key, never a route from the
     payload.
@@ -2074,7 +2078,8 @@ Other rules the profiles encode:
 
 - App Review Guideline 4.5.4: no required push, and explicit opt-in and
   in-app opt-out for marketing push.
-- App Review Guideline 5.1.2(i): no reward for enabling push.
+- App Review Guideline 5.1.2(i): an app may not require enabling push to use
+  its features, or give compensation for enabling it.
 - Google Play's notification policy: promotions for the app itself are
   allowed; ads, promotion of other apps, and notifications that imitate the
   system are not.
@@ -2407,9 +2412,9 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   reminders fire on Devvit, and the Redis store implements S2's store
   steps.
 - Left to follow-ups: a shared host-side `notifications.v2` bridge
-  handler for the Apps in Toss and Devvit adapters, the runtime's backend client for a service the
-  Devvit server hosts (the game-services client), and the wiring in the
-  generated Devvit app (landed in C1).
+  handler for the Apps in Toss and Devvit adapters, and the runtime's
+  backend client for a service the Devvit server hosts (the game-services
+  client). The wiring in the generated Devvit app landed in C1.
 
 **What C1 landed.**
 
@@ -2466,14 +2471,23 @@ that also removes commerce v1.
    - **Rationale.** These are reminders the player asked for, about their own
      progress: the guide's request exception (p.11), with the player's opt-in
      per topic as the request.
-   - **Risk.** The guide treats deadline nudges as advertising (p.50,
-     Q01-02), and `streak-at-risk` is close to one; repeated sends without a
-     further request can also turn requested information into advertising
-     (p.11, p.52 Q01-10). The starter copy therefore states the player's own
-     progress only and carries no benefit, reward, event, or promotion. A
-     game that adds rewards or promotions to these messages, or sends them
-     to players who did not turn them on, must declare them `advertising`
-     instead, with the consent, night window, and labels that brings.
+   - **Risk.** The guide treats periodic reminders that promote use (p.50,
+     Q01-01) and deadline nudges (p.50, Q01-02) as advertising: `daily-ready`
+     has the shape of the first and `streak-at-risk` is close to the second.
+     Repeated sends without a further request can also turn requested
+     information into advertising (p.11, p.52 Q01-10), and one opt-in
+     followed by recurring sends is the weakest part of reading these topics
+     as `requested`; a game should have it reviewed before launch. The
+     starter copy therefore states the player's own progress only and
+     carries no benefit, reward, event, or promotion. A game that adds
+     rewards or promotions to these messages, or sends them to players who
+     did not turn them on, must declare them `advertising` instead, with the
+     consent, night window, and labels that brings.
+   - **`friend-challenge`.** The guide has no example about games;
+     "another real player's action" as a non-advertising case is the kit's
+     reading of its transaction and request exceptions, not a guide
+     criterion. A challenge that carries a reward or an invitation to buy is
+     advertising.
    - **Where it lives.** The CLI's notifications starter
      (`mpgd game create --providers notifications`) declares these purposes,
      and the [notifications guide](../../NOTIFICATIONS.md) repeats the risk.

@@ -28,6 +28,13 @@ shell at the game's versions, declares them and `firebase` (which the
 messaging plugin's web fallback imports, so the bundler must resolve it) in
 the game, and runs `cap sync` on an existing native project.
 
+In the shell's `capacitor.config.ts`, set
+`plugins.FirebaseMessaging.presentationOptions` (for example
+`['badge', 'sound', 'alert']`), without which a push that arrives while the
+app is in the foreground is not shown, and `plugins.LocalNotifications.smallIcon`
+(an Android drawable for local reminders). The initializer never rewrites an
+existing config.
+
 **Never install `@capacitor/push-notifications` next to them.** On iOS both
 plugins claim Capacitor's one handler for remote-notification registration and
 delivery, so one of them silently stops receiving tokens or taps. The
@@ -116,7 +123,12 @@ for the full configuration):
    and `0008_notification_scheduler.sql`.
 4. Run the scheduler from a cron. **Every minute** (`crons = ["* * * * *"]`)
    is the recommended period: it bounds how late a server reminder or a due
-   send can be, and each run works only on what is due.
+   send can be, and each run works only on what is due. On a plan with a low
+   subrequest limit per run, lower `MPGD_NOTIFICATIONS_DUE_BATCH` as the
+   deploy guide describes. `MPGD_NOTIFICATIONS_CATALOG` and
+   `MPGD_NOTIFICATIONS_DEPLOYMENT` are JSON vars: paste the files' contents
+   into `[vars]` (TOML inline tables) or the dashboard, and update them with
+   every catalog change.
 5. The client routes (consent records, endpoint registration, reminders,
    notices) need the `GAME_SERVICES_NOTIFICATIONS_AUTH` session binding from
    the identity side, which the kit does not ship yet; a send-only Worker
@@ -127,8 +139,11 @@ for the full configuration):
 - `pnpm validate:notifications` in the game passes (it refuses the starter's
   sender contact placeholder).
 - On an Android 13+ device and an iPhone: the settings screen's *Turn on
-  notifications* shows the OS dialog once, from a tap; a denial on iOS, or a
-  second one on Android 13+, offers only *Open system settings*.
+  notifications* shows the OS dialog from a tap (up to twice on Android 13+,
+  once on iOS); a denial on iOS, or a second one on Android 13+, offers only
+  *Open system settings*.
+- A push that arrives with the app in the foreground is shown (it needs
+  `presentationOptions`).
 - A push sent through the Worker's `deliverNotification` for a `service`
   topic arrives with the app in the background, and a tap opens the topic's
   route (cold and warm starts). Verify cold starts on iOS in particular:
