@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import type {
   NotificationCapabilities,
+  NotificationEvent,
   NotificationNotice,
   NotificationPermissionResult,
   NotificationPermissionSnapshot,
@@ -11,6 +12,7 @@ import type {
 } from '@mpgd/platform/notifications';
 
 import { createStarterNotificationSettings } from '../templates/notifications/common/src/platform/notificationSettings.js';
+import { routeNotificationOpens } from '../templates/notifications/common/src/platform/notificationOpens.js';
 
 // The notification settings screen's model, which the generated Phaser scene
 // and lite panel drive (`--providers notifications`).
@@ -477,6 +479,58 @@ const common = {
   } finally {
     console.warn = original;
   }
+}
+
+// The one open listener: the settings route opens the screen, every other
+// open reaches `other` with an unsafe route left out, and nothing throws.
+{
+  let listener: ((event: NotificationEvent) => void) | undefined;
+  const source = {
+    subscribe: (next: (event: NotificationEvent) => void) => {
+      listener = next;
+      return () => {
+        listener = undefined;
+      };
+    },
+  };
+  let settings = 0;
+  const others: unknown[] = [];
+  const unsubscribe = routeNotificationOpens(source, {
+    settings: () => {
+      settings += 1;
+    },
+    other: (open) => {
+      others.push(open);
+    },
+  });
+  const opened = (route: string | undefined): NotificationEvent => ({
+    type: 'opened',
+    channel: 'remote',
+    source: 'cold',
+    topic: 'daily-ready',
+    ...(route === undefined ? {} : { route }),
+    data: { day: '3' },
+  });
+  listener?.(opened('/?entry=notification-settings'));
+  listener?.(opened('/?entry=continue'));
+  listener?.(opened('//evil.example/?entry=notification-settings'));
+  listener?.(opened('http://['));
+  listener?.({ type: 'received', channel: 'remote' });
+  assert.equal(settings, 1);
+  assert.deepEqual(others, [
+    {
+      type: 'opened',
+      channel: 'remote',
+      source: 'cold',
+      topic: 'daily-ready',
+      route: '/?entry=continue',
+      data: { day: '3' },
+    },
+    { type: 'opened', channel: 'remote', source: 'cold', topic: 'daily-ready', data: { day: '3' } },
+    { type: 'opened', channel: 'remote', source: 'cold', topic: 'daily-ready', data: { day: '3' } },
+  ]);
+  unsubscribe();
+  assert.equal(listener, undefined);
 }
 
 console.info('Notification settings model checks passed.');

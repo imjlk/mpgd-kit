@@ -1,8 +1,4 @@
-import {
-  isRootRelativeNotificationRoute,
-  resolveNotificationTopicsForTarget,
-  type NotificationTopicCatalog,
-} from '@mpgd/catalog';
+import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } from '@mpgd/catalog';
 import type { PlatformGateway } from '@mpgd/platform';
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
 import type {
@@ -11,6 +7,7 @@ import type {
 } from '@mpgd/platform/notifications';
 
 import notificationTopicsJson from '../../notifications/topics.json';
+import { routeNotificationOpens, type NotificationOpenRoutes } from './notificationOpens';
 import {
   createStarterNotificationSettings,
   type StarterNotificationSettings,
@@ -92,57 +89,17 @@ export function createStarterNotificationSettingsModel(
   });
 }
 
-/** The route the advertising opt-out action and the consent notices open. */
-export const starterNotificationSettingsRoute = '/?entry=notification-settings';
-
 /**
- * The game's one listener for notification opens. It is the runtime's (or
- * the provider's) first subscriber, which is the one that receives a
- * cold-start open (RFC "Buffer before the first listener"), so route every
- * topic's opens here rather than in a later subscriber. The starter routes
- * the settings screen: the advertising opt-out action and the consent
- * notices carry `/?entry=notification-settings`, and the RFC requires the
- * opt-out to open that screen directly. `other` receives every other open,
- * with a route only when it is a safe root-relative one. The data an open
- * carries is untrusted and never grants anything. Returns the unsubscribe.
+ * The game's one listener for notification opens (see
+ * `routeNotificationOpens` in `notificationOpens.ts`), over the runtime when
+ * the game has one, else the provider. Returns the unsubscribe.
  */
 export function subscribeStarterNotificationOpens(
   platform: PlatformGateway,
-  routes: {
-    readonly settings: () => void;
-    readonly other?: (open: { readonly topic?: string; readonly route?: string }) => void;
-  },
+  routes: NotificationOpenRoutes,
 ): () => void {
   const source = starterNotificationRuntime(platform) ?? platform.notificationsV2;
-  if (source === undefined) {
-    return () => undefined;
-  }
-  return source.subscribe((event) => {
-    if (event.type !== 'opened') {
-      return;
-    }
-    const route = event.route !== undefined && isRootRelativeNotificationRoute(event.route)
-      ? event.route
-      : undefined;
-    if (route !== undefined && isSettingsRoute(route)) {
-      routes.settings();
-      return;
-    }
-    routes.other?.({
-      ...(event.topic === undefined ? {} : { topic: event.topic }),
-      ...(route === undefined ? {} : { route }),
-    });
-  });
+  return source === undefined ? () => undefined : routeNotificationOpens(source, routes);
 }
 
-const settingsEntry = new URL(starterNotificationSettingsRoute, 'https://game.invalid')
-  .searchParams.get('entry');
-
-/** Whether a route opens the settings screen: the same `entry` as `starterNotificationSettingsRoute`. */
-function isSettingsRoute(route: string): boolean {
-  try {
-    return new URL(route, 'https://game.invalid').searchParams.get('entry') === settingsEntry;
-  } catch {
-    return false;
-  }
-}
+export { starterNotificationSettingsRoute } from './notificationOpens';

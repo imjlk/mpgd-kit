@@ -82,6 +82,7 @@ for (const added of [
   'src/platform/notifications.ts',
   'src/platform/capacitorNotifications.ts',
   'src/platform/notificationSettings.ts',
+  'src/platform/notificationOpens.ts',
   'src/scenes/NotificationSettingsScene.ts',
   'tools/validate-notifications.ts',
 ]) {
@@ -250,7 +251,7 @@ assert.throws(
 );
 // The opt-out route and the notice route are the route the game routes to its settings screen.
 const settingsRoute = /export const starterNotificationSettingsRoute = '([^']+)';/u
-  .exec(byPath(phaser, 'src/platform/notifications.ts'))?.[1];
+  .exec(byPath(phaser, 'src/platform/notificationOpens.ts'))?.[1];
 assert.equal(settingsRoute, '/?entry=notification-settings');
 for (const topic of validation.catalog.topics) {
   if (topic.purpose === 'advertising') {

@@ -405,7 +405,10 @@ export function createStarterNotificationSettings(
       if (runtime === undefined || shown.length === 0) {
         return;
       }
-      const results = await Promise.allSettled(shown.map((notice) => runtime.notices.recordShown(notice)));
+      // `async` so a runtime that throws synchronously is a rejection here too.
+      const results = await Promise.allSettled(
+        shown.map(async (notice) => runtime.notices.recordShown(notice)),
+      );
       for (const result of results) {
         if (result.status === 'rejected') {
           // The server pushes an unrecorded notice before it is due.

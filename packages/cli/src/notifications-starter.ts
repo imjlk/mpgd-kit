@@ -497,6 +497,7 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
   'src/platform/capacitorNotifications.ts',
   'src/platform/notifications.ts',
   'src/platform/notificationSettings.ts',
+  'src/platform/notificationOpens.ts',
   'notifications/topics.json',
   'notifications/deployment.json',
   'tools/validate-notifications.ts',
@@ -508,6 +509,7 @@ export const notificationsCapacitorGatewayModules: readonly string[] = Object.fr
   'src/platform/capacitorNotifications.ts',
   'src/platform/notifications.ts',
   'src/platform/notificationSettings.ts',
+  'src/platform/notificationOpens.ts',
 ]);
 
 /** Whether a Capacitor gateway already registers a notifications provider. */

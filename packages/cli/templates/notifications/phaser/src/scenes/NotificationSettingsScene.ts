@@ -17,7 +17,7 @@ export const notificationSettingsSceneKey = 'NotificationSettingsScene';
 const textStyle = { color: '#d6dee8', fontFamily: 'Arial, sans-serif', fontSize: '18px' } as const;
 const buttonStyle = { ...textStyle, color: '#5eead4' } as const;
 /** The list's viewport on the 960x540 game: between the title and the Back button. */
-const list = { top: 80, height: 400, width: 960 } as const;
+const list = { top: 110, height: 370, width: 960 } as const;
 
 /**
  * Routes notification opens: one whose route is the settings screen (the
@@ -67,9 +67,10 @@ export function routeNotificationSettingsOpens(game: Phaser.Game, context: Start
 
 /**
  * The game-rendered notification settings: the OS or host permission,
- * reminder topics, and the advertising and night consent the Korean rules
- * require before any advertising push (`notificationSettings.ts` holds the
- * logic). Every change is a tap; no switch starts on. The list has a camera
+ * reminder topics, and the advertising consent the Korean rules require
+ * before any advertising push (`notificationSettings.ts` holds the
+ * logic). Night consent covers advertising that arrives between 21:00 and
+ * 08:00 KST. Every change is a tap; no switch starts on. The list has a camera
  * of its own, which clips it under WebGL and Canvas alike and keeps hidden
  * rows from taking taps; it scrolls by dragging.
  */
@@ -78,6 +79,8 @@ export class NotificationSettingsScene extends Phaser.Scene {
   private labels!: StarterNotificationLabels;
   private content!: Phaser.GameObjects.Container;
   private listCamera!: Phaser.Cameras.Scene2D.Camera;
+  /** The last tap's outcome, in a strip that does not scroll. */
+  private outcome!: Phaser.GameObjects.Text;
   private busy = false;
   /** Each visit's token: a pending action from an earlier visit changes nothing. */
   private visit = 0;
@@ -105,9 +108,12 @@ export class NotificationSettingsScene extends Phaser.Scene {
     const back = this.button(480, 510, this.labels.back, () => {
       this.scene.start('LobbyScene');
     }).setOrigin(0.5);
+    this.outcome = this.add
+      .text(480, 88, '', { ...textStyle, color: '#f59e0b', fontSize: '16px' })
+      .setOrigin(0.5);
     this.content = this.add.container(0, 0);
     this.listCamera = this.cameras.add(0, list.top, list.width, list.height);
-    this.listCamera.ignore([title, back]);
+    this.listCamera.ignore([title, back, this.outcome]);
     this.cameras.main.ignore(this.content);
     this.enableScroll();
     const visit = this.visit;
@@ -179,10 +185,8 @@ export class NotificationSettingsScene extends Phaser.Scene {
       y += object.height + 8;
     };
 
-    // The outcome of the last tap comes first, so it is seen without scrolling.
-    if (view.message !== undefined) {
-      line(view.message, { ...textStyle, color: '#f59e0b' });
-    }
+    // The outcome of the last tap stays in view above the list, wherever it is scrolled.
+    this.outcome.setText(view.message ?? '');
     if (!view.available) {
       if (view.message === undefined) {
         line(text.unavailable);

@@ -14,6 +14,7 @@ left for you.
 | `src/platform/notifications.ts` | Reads the catalog for a target, and the place to return your notifications runtime. |
 | `src/platform/capacitorNotifications.ts` | The Android and iOS provider (FCM and local reminders), registered by the Capacitor gateways. |
 | `src/platform/notificationSettings.ts` | The settings screen's logic: permission, reminders, advertising and night consent, notices. |
+| `src/platform/notificationOpens.ts` | The game's one listener for notification opens: the settings route, and an `other` route for your topics. |
 | `src/scenes/NotificationSettingsScene.ts` or `src/lite/notificationSettingsPanel.ts` | The settings screen the game renders. |
 | `tools/validate-notifications.ts` | `pnpm validate:notifications`. |
 
