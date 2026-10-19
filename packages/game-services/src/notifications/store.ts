@@ -207,6 +207,8 @@ export interface NotificationStoredReminder {
   readonly templateData?: NotificationTemplateData;
   readonly link?: string;
   readonly firedAt?: string;
+  /** A fired reminder's send fingerprint (its content), which names the send it made. */
+  readonly fingerprint?: string;
 }
 
 /** When the scheduler next looks at a player's consent notices, with the backoff of refused pushes. */

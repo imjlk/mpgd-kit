@@ -1200,7 +1200,8 @@ const pending = (h: Harness) =>
   );
 }
 
-// A stop that fails after a set's or a cancel's write is reported, and the call still answers.
+// A set's stop runs before its write, so a failure leaves the set to retry; a cancel's
+// second stop after the removal is best effort.
 {
   let failReads = 0;
   const quiet: NotificationTopicDeclaration = {
@@ -1227,13 +1228,14 @@ const pending = (h: Harness) =>
   await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
   h.time.set(fireAt);
   await h.service.runScheduler();
-  // The set's only stop fails: the reminder is set all the same.
+  // The set's stop fails before its write: nothing changes, and the retry stops the waiting send.
   failReads = 1;
-  assert.deepEqual(
-    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt: '2026-10-20T13:30:00Z' }),
-    { status: 'scheduled' },
-  );
-  assert.deepEqual(h.errors, ['reminders.stop']);
+  const moved = { key: 'k', topic: 'friend-challenge', fireAt: '2026-10-20T13:30:00Z' };
+  await assert.rejects(h.service.setReminder(session('p-1'), moved), /D1 is unavailable/u);
+  assert.deepEqual(pending(h), []);
+  assert.equal(h.store.inspect().sends.length, 1);
+  assert.deepEqual(await h.service.setReminder(session('p-1'), moved), { status: 'replaced' });
+  assert.deepEqual(h.store.inspect().sends, []);
   assert.equal(pending(h)[0]?.dueAt, '2026-10-20T13:30:00Z');
   // The cancel's stop before the removal runs; the one after it fails and is reported.
   h.time.set('2026-10-20T13:30:00Z');
@@ -1242,12 +1244,73 @@ const pending = (h: Harness) =>
   assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
     cancelled: true,
   });
-  assert.deepEqual(h.errors, ['reminders.stop', 'reminders.stop']);
+  assert.deepEqual(h.errors, ['reminders.stop']);
   assert.deepEqual(
     h.store.inspect().sends.filter((send) => send.key.endsWith('2026-10-20T13:30:00Z')),
     [],
     'the waiting send was stopped before the removal',
   );
+}
+
+// A run whose mark fails after a same-time set of other content stops only its own content's send.
+{
+  let interleave: (() => Promise<unknown>) | undefined;
+  const other: NotificationTopicDeclaration = { ...challenge, id: 'match-ready' };
+  const h = harness({
+    topics: [challenge, other],
+    store: (inner) => ({
+      ...inner,
+      async updateScheduleEntry(input) {
+        // Between this run storing its rows and marking its reminder: a set of other content,
+        // and another run that fires it (its rows replace these at the same key).
+        if (interleave !== undefined && input.entry?.item.kind === 'reminder' && input.entry.item.firedAt !== undefined) {
+          const run = interleave;
+          interleave = undefined;
+          await run();
+        }
+        return inner.updateScheduleEntry(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  interleave = async () => {
+    assert.deepEqual(
+      await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt }),
+      { status: 'replaced' },
+    );
+    await h.service.runScheduler();
+  };
+  await h.service.runScheduler();
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.topic.id),
+    ['match-ready'],
+  );
+  assert.deepEqual(pending(h), []);
+}
+
+// A delivered send of a replaced reminder at the same key and time keeps the key: the new one is reported, not sent.
+{
+  const other: NotificationTopicDeclaration = { ...challenge, id: 'match-ready' };
+  const h = harness({ topics: [challenge, other] });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1);
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt }),
+    { status: 'scheduled' },
+  );
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.topic.id),
+    ['friend-challenge'],
+  );
+  assert.deepEqual(h.errors, ['scheduler.reminder']);
+  assert.deepEqual(pending(h), []);
 }
 
 // A fired reminder whose send cannot be read is kept, not forgotten, and looked at again a minute later.
@@ -1319,6 +1382,45 @@ const pending = (h: Harness) =>
   assert.equal(run.failed, 0);
   assert.deepEqual(h.store.inspect().schedule, []);
   assert.deepEqual(h.errors, ['scheduler.notice']);
+}
+
+// A provider's own failure is marked, so a host logs only its name.
+{
+  const contexts: { readonly operation: string; readonly fromProvider?: boolean }[] = [];
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      {
+        entry: fcmEntry,
+        delivery: {
+          id: 'fcm',
+          async send() {
+            throw new Error('fetch failed for tok-secret');
+          },
+        },
+        targets: ['vector'],
+      },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    now: () => '2026-10-19T03:00:00Z',
+    onError: (_error, context) => contexts.push(context),
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok-secret', permission: 'granted' },
+    },
+  });
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'x', player: 'p-1', topic: 'friend-challenge' }),
+    {
+      status: 'in-flight',
+    },
+  );
+  assert.deepEqual(
+    contexts.map((context) => [context.operation, context.fromProvider]),
+    [['provider.send', true]],
+  );
 }
 
 console.info('Notifications scheduler tests passed.');

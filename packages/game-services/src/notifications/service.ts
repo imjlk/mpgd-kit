@@ -236,6 +236,11 @@ export interface CreateNotificationServiceInput {
       readonly sendKey?: string;
       readonly provider?: string;
       readonly rowKey?: string;
+      /**
+       * True when the error is a delivery provider's own failure, whose
+       * message may quote a device token or a credential: log its name only.
+       */
+      readonly fromProvider?: boolean;
     },
   ) => void;
 }
@@ -444,6 +449,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     context: string | { readonly sendKey: string; readonly provider?: string; readonly rowKey?: string } = {
       sendKey: '',
     },
+    fromProvider = false,
   ): void => {
     const where = typeof context === 'string' ? { sendKey: context } : context;
     try {
@@ -452,6 +458,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         ...(where.sendKey === '' ? {} : { sendKey: where.sendKey }),
         ...(where.provider === undefined ? {} : { provider: where.provider }),
         ...(where.rowKey === undefined ? {} : { rowKey: where.rowKey }),
+        ...(fromProvider ? { fromProvider } : {}),
       });
     } catch {
       // A failing error hook must not change the call's answer.
@@ -864,7 +871,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       return known;
     } catch (error) {
       // The provider may have sent it: one rule for every failure it cannot prove.
-      report(error, 'provider.send', request.idempotencyKey);
+      report(error, 'provider.send', request.idempotencyKey, true);
       return { status: 'ambiguous' };
     }
   };
@@ -1683,6 +1690,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     return { outcome: notificationSendOutcome(stored) ?? { status: 'in-flight' }, stored: true };
   };
 
+  /** The content of a reminder's send: kept on a fired reminder, which drops the rest. */
+  const reminderFingerprint = (player: string, reminder: NotificationStoredReminder): string =>
+    reminder.fingerprint ?? notificationSendFingerprint(reminderRequest(player, reminder));
+
   /** The send a reminder makes: its request, whose fingerprint names its content. */
   const reminderRequest = (
     player: string,
@@ -1702,16 +1713,16 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   /**
    * Stops a reminder's send that still waits: the rows not delivered yet
    * (deferred, queued, or in flight) are dropped, and a send the scheduler
-   * is still making loses its key, so no row of it is ever stored. A set or
-   * a cancel runs it after its own write, for the pending reminder as for a
-   * fired one, so a scheduler run that fires the old reminder meanwhile
-   * loses either way. A send the provider may already have accepted cannot
-   * be recalled. Answers whether anything waited.
+   * is still making loses its key, so no row of it is ever stored. Only a
+   * send of `fingerprint` (the reminder's own content) is stopped, since the
+   * send key names only the key and time: a send of other content at the key
+   * belongs to the reminder that replaced this one. A send the provider may
+   * already have accepted cannot be recalled. Answers whether anything waited.
    */
   const stopReminderSend = async (
     player: string,
     reminder: NotificationStoredReminder,
-    options: { readonly unlessFingerprint?: string } = {},
+    fingerprint: string,
   ): Promise<boolean> => {
     let key: string;
     try {
@@ -1721,12 +1732,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
       const held = await store.getSend(key);
-      if (
-        held === undefined
-        || held.send.origin.kind !== 'reminder'
-        // A send of the same content serves the reminder that replaced this one: it stays.
-        || held.send.fingerprint === options.unlessFingerprint
-      ) {
+      if (held === undefined || held.send.origin.kind !== 'reminder' || held.send.fingerprint !== fingerprint) {
         return false;
       }
       const { send } = held;
@@ -1789,14 +1795,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await removeEntry(held);
       throw invalidInput(describe(error), error);
     }
-    const request: NotificationStoredSendRequest = {
-      idempotencyKey: key,
-      player,
-      topic: reminder.topic,
-      ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
-      ...(reminder.link === undefined ? {} : { link: reminder.link }),
-    };
-    // A fired reminder keeps only what names its send.
+    const request = reminderRequest(player, reminder);
+    const fingerprint = notificationSendFingerprint(request);
+    // A fired reminder keeps only what names its send, and its content.
     const fired: NotificationScheduleEntry = {
       player,
       id: held.entry.id,
@@ -1807,26 +1808,38 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         topic: reminder.topic,
         fireAt: reminder.fireAt,
         firedAt: formatNotificationInstant(at),
+        fingerprint,
       },
     };
     const markFired = () =>
       store.updateScheduleEntry({ player, id: held.entry.id, version: held.version, entry: fired });
-    const fingerprint = notificationSendFingerprint(request);
     let made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
     if (made !== 'busy' && 'existing' in made && made.existing.fingerprint !== fingerprint) {
-      // The key holds a send of a reminder this one replaced at the same
-      // time, with other content: what still waits of it goes, and this
+      // The key holds the send of a reminder this one replaced at the same
+      // time with other content: what still waits of it goes, and this
       // reminder makes its own send.
-      await stopReminderSend(player, reminder, { unlessFingerprint: fingerprint });
+      await stopReminderSend(player, reminder, made.existing.fingerprint);
       made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
+      if (made !== 'busy' && 'existing' in made && made.existing.fingerprint !== fingerprint) {
+        // A row of it was delivered, so the key keeps that send: this
+        // reminder cannot have its own under the same key and time.
+        report(
+          new Error(
+            "A delivered send of another reminder holds this reminder's key and time; it is not sent.",
+          ),
+          'scheduler.reminder',
+          key,
+        );
+        await markFired();
+        return undefined;
+      }
     }
     if (made === 'busy') {
       // Another run is making the send; its lease frees the key if it stops.
       return undefined;
     }
     if ('existing' in made) {
-      // Its rows were stored (by a run that stopped before marking it), or
-      // what the replaced reminder delivered keeps the key: they carry it.
+      // Its rows were stored by a run that stopped before marking it: they carry it.
       await markFired();
       return undefined;
     }
@@ -1849,24 +1862,24 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       return { sendKey: key, outcome: result.outcome };
     }
     if (!await markFired()) {
-      // The entry changed since the read. The rows serve it when another run
-      // that found them marked it fired (it does so only for this content), or
-      // a set kept its time and content. A cancel, or a set to another time
-      // or content, stops them: its own stop runs after its write, and this
-      // one covers the rest. A read that fails stops them too, so a cancel
-      // is never outlived by its send.
+      // The entry changed since the read. The rows serve it when it is the
+      // same reminder (time and content), pending or marked fired by another
+      // run that found them. A cancel, or a set to another time or content,
+      // stops them: theirs runs before their write, and this one covers a
+      // send stored after it. Only this content's send is stopped, so a send
+      // the new reminder made at the same key stays. A read that fails stops
+      // them too, so a cancel is never outlived by its send.
       let same = false;
       try {
         const now = (await store.getScheduleEntry({ player, id: held.entry.id }))?.entry.item;
         same = now?.kind === 'reminder'
           && now.fireAt === reminder.fireAt
-          && (now.firedAt !== undefined
-            || notificationSendFingerprint(reminderRequest(player, now)) === fingerprint);
+          && reminderFingerprint(player, now) === fingerprint;
       } catch (error) {
         report(error, 'scheduler.reread');
       }
       if (!same) {
-        await stopReminderSend(player, reminder);
+        await stopReminderSend(player, reminder, fingerprint);
       }
       return undefined;
     }
@@ -2565,34 +2578,30 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (!passed) {
         return { status: refusal ?? 'permission-required' };
       }
-      // One reminder per key: setting it replaces the pending one and, after
-      // the write, stops a send of the previous one that waits (one a
-      // scheduler run is making for it, too).
+      // One reminder per key: setting it replaces the previous one and, before
+      // the write, stops the previous one's send that waits; a scheduler run
+      // that fires the previous one meanwhile then fails to mark it and stops
+      // its own send. A previous send of this reminder's content at its key
+      // (an identical re-set) serves it and stays.
       const id = reminderEntryId(reminder.key);
       const entry: NotificationScheduleEntry = { player, id, dueAt: reminder.fireAt, item: reminder };
+      const fingerprint = notificationSendFingerprint(request);
+      let stopped = false;
       for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
         const held = await store.getScheduleEntry({ player, id });
         const previous = held?.entry.item.kind === 'reminder' ? held.entry.item : undefined;
+        if (previous !== undefined) {
+          const previousFingerprint = reminderFingerprint(player, previous);
+          const identical = previous.fireAt === reminder.fireAt && previousFingerprint === fingerprint;
+          if (!identical) {
+            stopped = (await stopReminderSend(player, previous, previousFingerprint)) || stopped;
+          }
+        }
         const written = held === undefined
           ? (await store.createScheduleEntry(entry)) !== undefined
           : await store.updateScheduleEntry({ player, id, version: held.version, entry });
         if (written) {
           const pending = previous !== undefined && previous.firedAt === undefined;
-          // A previous send of the same content at the same time (the same key
-          // and fingerprint) serves this reminder, so it stays; any other is stopped.
-          // After the write, best effort: the reminder is set either way, and a
-          // run that fires the previous one meanwhile stops its own send.
-          let stopped = false;
-          try {
-            stopped = previous !== undefined
-              && await stopReminderSend(
-                player,
-                previous,
-                previous.fireAt === reminder.fireAt ? { unlessFingerprint: notificationSendFingerprint(request) } : {},
-              );
-          } catch (error) {
-            report(error, 'reminders.stop');
-          }
           return { status: pending || stopped ? 'replaced' : 'scheduled' };
         }
       }
@@ -2609,24 +2618,26 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         throw invalidInput(`key: ${issue}.`);
       }
       const id = reminderEntryId(raw.key);
+      let stopped = false;
       for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
         const held = await store.getScheduleEntry({ player, id });
         if (held === undefined || held.entry.item.kind !== 'reminder') {
-          return { cancelled: false };
+          return { cancelled: stopped };
         }
         const reminder = held.entry.item;
+        const fingerprint = reminderFingerprint(player, reminder);
         // Before the removal, so a failure leaves the cancel to retry; and
-        // after it, best effort, for a scheduler run that fired the reminder
-        // in between (whose own mark then fails and stops its send too).
-        const stoppedBefore = await stopReminderSend(player, reminder);
+        // after it, best effort, for a scheduler run that stored the send in
+        // between (its own mark then fails and stops it too). Only this
+        // reminder's content is stopped.
+        stopped = (await stopReminderSend(player, reminder, fingerprint)) || stopped;
         if (await removeEntry(held)) {
-          let stoppedAfter = false;
           try {
-            stoppedAfter = await stopReminderSend(player, reminder);
+            stopped = (await stopReminderSend(player, reminder, fingerprint)) || stopped;
           } catch (error) {
             report(error, 'reminders.stop');
           }
-          return { cancelled: reminder.firedAt === undefined || stoppedBefore || stoppedAfter };
+          return { cancelled: reminder.firedAt === undefined || stopped };
         }
       }
       throw busy(id);
