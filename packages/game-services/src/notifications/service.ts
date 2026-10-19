@@ -160,6 +160,14 @@ const reminderRefusalRank = {
  * concurrent writes may pass it by a few.
  */
 export const maxClientNotificationConsentRecordsPerDay = 200;
+/**
+ * Pending server reminders a player may keep, as many as iOS keeps local
+ * notifications. Replacing a pending one is always allowed; a new key past
+ * it answers `capacity-exceeded`.
+ */
+export const maxPendingNotificationReminders = 64;
+/** How far ahead a server reminder may be set; a later `fireAt` is refused. */
+export const notificationReminderHorizonDays = 90;
 
 /** An authenticated game-services session, as the deployment's identity service resolves it. */
 export interface NotificationSession {
@@ -269,7 +277,11 @@ export type NotificationReminderSetStatus =
   | 'permission-required'
   | 'request-missing'
   | 'preference-off'
-  | 'advertising-consent-missing';
+  | 'advertising-consent-missing'
+  /** The player keeps `maxPendingNotificationReminders` pending reminders already. */
+  | 'capacity-exceeded'
+  /** No provider the player can be reached on maps the topic for its target. */
+  | 'unavailable';
 
 export interface NotificationService {
   /** The registry entries and served targets the backend publishes. */
@@ -2520,6 +2532,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const { player } = await authenticated(session);
       const reminder = reminderOf(raw);
       refuseNoticeTopic(reminder.topic);
+      if (Date.parse(reminder.fireAt) - nowMs() > notificationReminderHorizonDays * dayMs) {
+        throw invalidInput(`Invalid reminder: fireAt is more than ${notificationReminderHorizonDays} days ahead.`);
+      }
       let sendKey: string;
       try {
         sendKey = createNotificationReminderIdempotencyKey({ player, key: reminder.key, fireAt: reminder.fireAt });
@@ -2558,11 +2573,21 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // Gate steps 3 to 5 at set time: one candidate that passes is enough.
       const consent = await store.listConsent(player);
       const permissions = new Map<string, Promise<NotificationPermissionState | undefined>>();
-      let refusal: Exclude<NotificationReminderSetStatus, 'scheduled' | 'replaced'> | undefined;
+      let refusal: keyof typeof reminderRefusalRank | undefined;
       let passed = false;
+      let mapped = false;
+      let linkRefusal: string | undefined;
       for (const recipient of candidates) {
         const topic = topicFor(recipient.provider, recipient.target, reminder.topic, origin);
         if (topic === undefined || !topic.channels.includes('remote')) {
+          continue;
+        }
+        mapped = true;
+        // The gate's link step, at set time: a provider whose sends need a
+        // link takes the reminder's (by its mapping rule) or the mapping's.
+        const linkIssue = reminderLinkIssue(recipient.provider, topic, reminder.link);
+        if (linkIssue !== undefined) {
+          linkRefusal ??= linkIssue;
           continue;
         }
         const id = recipient.provider.entry.provider;
@@ -2589,7 +2614,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
       }
       if (!passed) {
-        return { status: refusal ?? 'permission-required' };
+        if (refusal !== undefined) {
+          return { status: refusal };
+        }
+        if (linkRefusal !== undefined) {
+          throw invalidInput(`Invalid reminder: ${linkRefusal}`);
+        }
+        // Mapped for none of the player's targets (or none reached): nothing could deliver it.
+        return { status: mapped ? 'permission-required' : 'unavailable' };
       }
       // One reminder per key: setting it replaces the previous one and, before
       // the write, stops the previous one's send that waits; a scheduler run
@@ -2611,6 +2643,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
         const held = await store.getScheduleEntry({ player, id });
         const previous = held?.entry.item.kind === 'reminder' ? held.entry.item : undefined;
+        // Replacing a pending reminder is always allowed; a new one counts against the cap.
+        if (
+          (previous === undefined || previous.firedAt !== undefined)
+          && await store.countPendingReminders(player) >= maxPendingNotificationReminders
+        ) {
+          return { status: 'capacity-exceeded' };
+        }
         if (previous !== undefined) {
           const previousFingerprint = reminderFingerprint(player, previous);
           const identical = previous.fireAt === reminder.fireAt && previousFingerprint === fingerprint;
@@ -2727,6 +2766,40 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       });
     },
   };
+}
+
+/**
+ * Why a reminder's `link` cannot reach the player through `provider`, or
+ * `undefined`. A provider whose entry needs a link (Devvit) needs the
+ * reminder's or the topic mapping's, as the gate does at send time
+ * (`link-missing`), and a given link must match the provider's mapping rule
+ * for `link`, so a bad one is refused when it is set rather than spent when
+ * it fires.
+ */
+function reminderLinkIssue(
+  provider: RegisteredNotificationProvider,
+  topic: NotificationTopicDeclaration,
+  link: string | undefined,
+): string | undefined {
+  if (link !== undefined) {
+    const pattern = provider.validation.mapping['link']?.pattern;
+    if (pattern !== undefined) {
+      let rule: RegExp;
+      try {
+        rule = new RegExp(pattern, 'u');
+      } catch {
+        return undefined;
+      }
+      if (!rule.test(link)) {
+        return `link does not match provider ${provider.entry.provider}'s link rule.`;
+      }
+    }
+    return undefined;
+  }
+  if (provider.entry.link && typeof topic.mapping?.['link'] !== 'string') {
+    return `provider ${provider.entry.provider} sends need a link, and neither the reminder nor the topic mapping has one.`;
+  }
+  return undefined;
 }
 
 /** A scheduler batch: clamped to 1 to 1000; anything that is not a number is the default, 100. */

@@ -20,6 +20,7 @@ import {
 } from './registry.js';
 import {
   createNotificationService,
+  maxPendingNotificationReminders,
   type NotificationDispatchJob,
   type NotificationService,
   type NotificationSession,
@@ -1525,6 +1526,119 @@ const pending = (h: Harness) =>
     1,
     'the game still lists the notice',
   );
+}
+
+// A player keeps at most maxPendingNotificationReminders pending reminders; replacing one is always allowed.
+{
+  const h = harness();
+  await register(h, 'p-1');
+  const set = (key: string, fireAt = '2026-10-20T03:00:00Z') =>
+    h.service.setReminder(session('p-1'), { key, topic: 'friend-challenge', fireAt });
+  for (let index = 0; index < maxPendingNotificationReminders; index += 1) {
+    assert.deepEqual(await set(`k-${index}`), { status: 'scheduled' });
+  }
+  assert.deepEqual(await set('one-more'), { status: 'capacity-exceeded' });
+  assert.deepEqual(
+    await set('k-0', '2026-10-20T04:00:00Z'),
+    { status: 'replaced' },
+    'a replace is allowed',
+  );
+  assert.equal(pending(h).length, maxPendingNotificationReminders);
+  // Once one fires, a new key fits again; another player has a cap of its own.
+  await set('k-1', '2026-10-19T03:00:00Z');
+  await h.service.runScheduler();
+  assert.deepEqual(await set('one-more'), { status: 'scheduled' });
+  await register(h, 'p-2');
+  assert.deepEqual(
+    await h.service.setReminder(session('p-2'), { key: 'k-0', topic: 'friend-challenge', fireAt: '2026-10-20T03:00:00Z' }),
+    { status: 'scheduled' },
+  );
+  // fireAt is bounded to the horizon.
+  await expectCode(set('far', '2027-01-18T03:00:01Z'), 'NOTIFICATIONS_INVALID_INPUT');
+  await expectCode(
+    h.service.setReminder(session('p-2'), {
+      key: 'far',
+      topic: 'friend-challenge',
+      fireAt: '2027-01-18T03:00:01Z',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  assert.deepEqual(
+    await h.service.setReminder(session('p-2'), { key: 'near', topic: 'friend-challenge', fireAt: '2027-01-17T03:00:00Z' }),
+    { status: 'scheduled' },
+  );
+}
+
+// A topic no target of the player's endpoints maps answers unavailable, not permission-required.
+{
+  const fcm = fakeProvider('fcm');
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['android', 'ios'] },
+    ]),
+    catalog: {
+      defaultLocale: 'ko',
+      topicsFor: (target) => (target === 'android' ? [challenge] : []),
+    },
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await service.registerEndpoint(session('p-1'), {
+    target: 'ios',
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok-ios', permission: 'granted' },
+    },
+  });
+  assert.deepEqual(
+    await service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt: '2026-10-19T04:00:00Z' }),
+    { status: 'unavailable' },
+  );
+}
+
+// A reminder's link follows the gate's link step and the provider's link rule, when it is set.
+{
+  const linked = fakeProvider('linked');
+  const linkedEntry: NotificationDeliveryProviderEntry = {
+    ...platformEntry,
+    provider: 'linked',
+    link: true,
+  };
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      {
+        entry: {
+          ...linkedEntry,
+          mapping: { link: { required: false, pattern: '^t[13]_[A-Za-z0-9]+$' } },
+        },
+        delivery: linked,
+        targets: ['vector'],
+      },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await service.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  const set = (link?: string) =>
+    service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+      ...(link === undefined ? {} : { link }),
+    });
+  await expectCode(set(), 'NOTIFICATIONS_INVALID_INPUT', 'no link where the provider needs one');
+  await expectCode(
+    set('https://evil.example/'),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'a link the rule refuses',
+  );
+  assert.deepEqual(await set('t3_abc123'), { status: 'scheduled' });
 }
 
 console.info('Notifications scheduler tests passed.');
