@@ -1080,6 +1080,54 @@ const pending = (h: Harness) =>
   );
 }
 
+// A run that read the history of an already-due check before a consent's write loses its settle:
+// the write gives the check a new version, so the check stays due for the new record.
+{
+  let interleave: (() => Promise<unknown>) | undefined;
+  const h = harness({
+    topics: [weekend, noticeTopic],
+    deployment: kr,
+    notices: true,
+    store: (inner) => ({
+      ...inner,
+      async listNoticesGiven(player) {
+        if (interleave !== undefined) {
+          const run = interleave;
+          interleave = undefined;
+          await run();
+        }
+        return inner.listNoticesGiven(player);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const check = () => h.store.inspect().schedule.find((entry) => entry.id === 'notices');
+  assert.equal(check()?.dueAt, '2026-10-19T03:00:00Z', 'the check is already due');
+  // The run reads the history (the advertising record only), then the night record is written.
+  interleave = async () => {
+    h.time.advance(60);
+    await h.service.recordConsent(session('p-1'), {
+      kind: 'night',
+      state: 'granted',
+      source: 'player',
+      textVersion: 'v1',
+    });
+  };
+  await h.service.runScheduler();
+  assert.equal(interleave, undefined, 'the write ran inside the check');
+  assert.equal(
+    check()?.dueAt,
+    '2026-10-19T03:00:00Z',
+    'the stale settle lost: the check is still due for the night record',
+  );
+}
+
 // A second run that marks the same reminder fired between the first run's rows and its mark: the rows still serve it.
 {
   let nested: (() => Promise<unknown>) | undefined;

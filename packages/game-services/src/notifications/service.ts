@@ -2154,9 +2154,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
-   * Makes the player's notice check due at `at`, and clears its backoff. With
-   * `onlyBackedOff`, it acts only on a check that is backing off after a
-   * refused push (a new registration may let the push through).
+   * Makes the player's notice check due at `at`, and clears its backoff,
+   * always with a new version. With `onlyBackedOff`, it acts only on a check
+   * that is backing off after a refused push (a new registration may let
+   * the push through).
    */
   const markNoticesDue = async (player: string, at: number, onlyBackedOff = false): Promise<void> => {
     if (!carriesNotices()) {
@@ -2173,11 +2174,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const dueAt = held?.entry.dueAt === undefined
         ? at
         : Math.min(Date.parse(held.entry.dueAt), at);
-      if (held !== undefined && check.attempts === 0 && held.entry.dueAt !== undefined && Date.parse(held.entry.dueAt) <= at) {
-        return;
-      }
-      // A new act or registration starts over: the backoff ends, and the
-      // pushes of the last check are not read as refused.
+      // Written even when the check is already due: the new version makes a
+      // run that read the history before this act lose its settle, so the
+      // act's notice is looked at again. A new act or registration starts
+      // over: the backoff ends, and the pushes of the last check are not
+      // read as refused.
       const { pushed: _pushed, ...kept } = check;
       const entry: NotificationScheduleEntry = {
         player,
