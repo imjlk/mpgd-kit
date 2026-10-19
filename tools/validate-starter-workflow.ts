@@ -1717,7 +1717,44 @@ function validatePhaserTemplateDevvitBridge(): void {
     }
   }
 
-  // The notifications scheduler tasks module ships as a byte-identical copy.
+  // The notifications scheduler tasks: each app declares both tasks in
+  // devvit.json and routes them, and the module ships as a byte-identical copy.
+  for (const root of [
+    'apps/target-devvit',
+    'packages/cli/templates/phaser-game/apps/target-devvit',
+    'examples/lite-starter/apps/target-devvit',
+  ]) {
+    const manifest = readJson(`${root}/devvit.json`) as {
+      readonly scheduler?: { readonly tasks?: Record<string, { readonly endpoint?: unknown; readonly cron?: unknown }> };
+    } | null;
+    for (const [name, endpoint, cron] of [
+      [
+        'mpgd-notifications-dispatch',
+        '/internal/scheduler/mpgd-notifications-dispatch',
+        '* * * * *',
+      ],
+      ['mpgd-notifications-purge', '/internal/scheduler/mpgd-notifications-purge', '*/5 * * * *'],
+    ] as const) {
+      const task = manifest?.scheduler?.tasks?.[name];
+      if (task?.endpoint !== endpoint || task.cron !== cron) {
+        failures.push(
+          `${root}/devvit.json: scheduler.tasks.${name} must be ${endpoint} at "${cron}".`,
+        );
+      }
+    }
+    for (const requiredText of [
+      "import { handleNotificationTask, notificationTaskForPath } from './notificationTasks.js';",
+      'notificationTaskForPath(requestPathname(request))',
+      'await handleNotificationTask({',
+      'notifications: notificationService',
+    ]) {
+      assertIncludesText(
+        readText(`${root}/src/server/index.ts`),
+        requiredText,
+        `${root}/src/server/index.ts: notifications scheduler task routing.`,
+      );
+    }
+  }
   const kitTasksPath = 'apps/target-devvit/src/server/notificationTasks.ts';
   for (const copyPath of [
     'packages/cli/templates/phaser-game/apps/target-devvit/src/server/notificationTasks.ts',

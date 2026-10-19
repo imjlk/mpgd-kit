@@ -610,11 +610,17 @@ describe('Devvit notification scheduler tasks', () => {
     };
     await expect(runDevvitNotificationTask(service, 'purge')).resolves.toEqual({ task: 'purge', sends: 3, history: 2, endpoints: 1 });
     await runDevvitNotificationTask(service, 'dispatch');
-    expect(calls).toEqual([{ limit: 100 }]);
-    // The service builds its Redis store with purgeLimit 500.
+    // The first chunk came back short: nothing more is due.
+    expect(calls).toEqual([{ limit: 20 }]);
+    // The service builds its Redis store with purgeLimit 200, also when the options name none.
     const redis = createFakeNotificationRedis();
-    const { store } = createDevvitNotificationService({ redis, notifications: createFakePlugin(), catalog: catalogFile });
-    for (let index = 0; index < 501; index += 1) {
+    const { store } = createDevvitNotificationService({
+      redis,
+      notifications: createFakePlugin(),
+      catalog: catalogFile,
+      storeOptions: { namespace: 'game', purgeLimit: undefined },
+    });
+    for (let index = 0; index < 201; index += 1) {
       await store.addHistory({ sendKey: `h-${String(index)}`, provider: 'devvit', player: user, topic: 't', at: '2026-01-01T00:00:00Z' });
     }
     const cutoffs = {
@@ -624,7 +630,36 @@ describe('Devvit notification scheduler tasks', () => {
       staleEndpointsBefore: '2026-06-01T00:00:00Z',
       sessionEndpointsBefore: '2026-06-01T00:00:00Z',
     };
-    expect((await store.purge(cutoffs)).history).toBe(500);
+    expect((await store.purge(cutoffs)).history).toBe(200);
     expect((await store.purge(cutoffs)).history).toBe(1);
+  });
+
+  it('dispatches in chunks within the batch and the time budget', async () => {
+    let now = 0;
+    const limits: number[] = [];
+    const service = {
+      dispatchDue: async (input?: { readonly limit?: number }) => {
+        const limit = input?.limit ?? 0;
+        limits.push(limit);
+        now += 6_000;
+        return {
+          results: Array.from({ length: limit }, (_, index) => ({
+            sendKey: `k-${String(index)}`,
+            outcome: { status: 'delivered' as const, alreadyProcessed: false },
+          })),
+          failed: 0,
+        };
+      },
+      purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
+    };
+    // Every chunk is full: 20s of budget allows four chunks (at 0, 6, 12, 18 s).
+    await expect(runDevvitNotificationTask(service, 'dispatch', { clock: () => now }))
+      .resolves.toEqual({ task: 'dispatch', replayed: 80, failed: 0 });
+    expect(limits).toEqual([20, 20, 20, 20]);
+    limits.length = 0;
+    now = 0;
+    await expect(runDevvitNotificationTask(service, 'dispatch', { clock: () => now, dispatchLimit: 30, budgetMs: 60_000 }))
+      .resolves.toEqual({ task: 'dispatch', replayed: 30, failed: 0 });
+    expect(limits).toEqual([20, 10]);
   });
 });

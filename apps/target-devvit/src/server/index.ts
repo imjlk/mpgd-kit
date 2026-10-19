@@ -62,17 +62,7 @@ async function handleHttpRequest(
   setResponseSecurityHeaders(response);
 
   if (request.method === 'POST' && requestPathname(request) === '/internal/menu/create-post') {
-    try {
-      await drainRequestBody(request, maxRequestBodySize);
-    } catch (error) {
-      if (!(error instanceof RequestBodyTooLargeError)) {
-        throw error;
-      }
-
-      discardOversizedRequestBody(request, response);
-      sendJson(response, 413, {
-        error: 'REQUEST_BODY_TOO_LARGE',
-      });
+    if (!(await drainOrRejectBody(request, response))) {
       return;
     }
 
@@ -84,14 +74,7 @@ async function handleHttpRequest(
     ? notificationTaskForPath(requestPathname(request))
     : undefined;
   if (notificationTask !== undefined) {
-    try {
-      await drainRequestBody(request, maxRequestBodySize);
-    } catch (error) {
-      if (!(error instanceof RequestBodyTooLargeError)) {
-        throw error;
-      }
-      discardOversizedRequestBody(request, response);
-      sendJson(response, 413, { error: 'REQUEST_BODY_TOO_LARGE' });
+    if (!(await drainOrRejectBody(request, response))) {
       return;
     }
     const answer = await handleNotificationTask({
@@ -244,6 +227,21 @@ async function* readRequestBodyChunks(
     }
 
     yield buffer;
+  }
+}
+
+/** Drains a bounded internal request body; answers 413 and false when it is too large. */
+async function drainOrRejectBody(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+  try {
+    await drainRequestBody(request, maxRequestBodySize);
+    return true;
+  } catch (error) {
+    if (!(error instanceof RequestBodyTooLargeError)) {
+      throw error;
+    }
+    discardOversizedRequestBody(request, response);
+    sendJson(response, 413, { error: 'REQUEST_BODY_TOO_LARGE' });
+    return false;
   }
 }
 

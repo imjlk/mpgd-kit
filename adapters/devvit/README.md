@@ -60,8 +60,9 @@ Reddit approves. The profile follows the
   points of the filled text. Devvit allows 2 sends per user per day and 25,000
   per app per day. Players' own calls take `devvitNotificationSession(userId)`.
   Two `devvit.json` scheduler tasks keep its work moving:
-  `mpgd-notifications-dispatch` (every minute, at most 100 due sends) and
-  `mpgd-notifications-purge` (hourly, at most 500 rows of each kind). Route
+  `mpgd-notifications-dispatch` (every minute, at most 100 due sends within 20
+  seconds) and `mpgd-notifications-purge` (every five minutes, at most 200
+  rows of each kind). Route
   their endpoints (`devvitNotificationSchedulerTasks`) to
   `runDevvitNotificationTask(service, task)`, as the kit's
   `apps/target-devvit` server does. S2's reminders come with the reminder

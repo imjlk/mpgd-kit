@@ -1294,7 +1294,8 @@ player's state changes is evaluated again. A replay that ends `suppressed` or
 `unavailable` deletes the row and leaves no entry, exactly like a first
 evaluation. Entries are kept for 30 days after their last change. Callers
 must not retry an older key. D1 purges on a schedule, and so does the
-Devvit Redis ledger, through the Devvit scheduler (hourly, in batches).
+Devvit Redis ledger, through the Devvit scheduler (every five minutes, in
+batches).
 
 #### Device fan-out {#fan-out}
 
@@ -1562,8 +1563,12 @@ the Devvit scheduler.
   `@mpgd/adapter-devvit/server`), each with a bounded batch:
   `mpgd-notifications-dispatch` runs `dispatchDue` every minute for at most
   100 due sends (deferred, rate-limited, and ambiguous rows past their
-  lease), and `mpgd-notifications-purge` runs `purge` hourly, at most 500
-  rows of each kind. A backlog drains over the next runs.
+  lease), in chunks of 20 that stop after 20 seconds, within Devvit's task
+  time limit; `mpgd-notifications-purge` runs `purge` every five minutes,
+  at most 200 rows of each kind (57,600 a day, above the 25,000 sends a day
+  Devvit allows). A backlog drains over the next runs. Both tasks run, and
+  take two of the installation's recurring tasks, even while a game has no
+  notifications service; such a run does no work.
 - **Left to a follow-up.** S2's reminder scheduler on Devvit (its server
   reminders and notice pushes) is wired once S2 and P3 have merged; it can
   take over the dispatch task then.

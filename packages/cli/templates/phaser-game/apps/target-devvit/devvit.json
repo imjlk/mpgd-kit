@@ -52,7 +52,7 @@
       },
       "mpgd-notifications-purge": {
         "endpoint": "/internal/scheduler/mpgd-notifications-purge",
-        "cron": "17 * * * *"
+        "cron": "*/5 * * * *"
       }
     }
   }

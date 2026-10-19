@@ -8,7 +8,7 @@ import {
 /**
  * The notifications scheduler tasks of `devvit.json` (`scheduler.tasks`):
  * `mpgd-notifications-dispatch` replays due sends every minute and
- * `mpgd-notifications-purge` purges old rows hourly, each in a bounded
+ * `mpgd-notifications-purge` purges old rows every five minutes, each in a bounded
  * batch (`runDevvitNotificationTask` from `@mpgd/adapter-devvit/server`).
  * A server without a notifications service (no topic catalog yet) answers
  * the tasks without work.

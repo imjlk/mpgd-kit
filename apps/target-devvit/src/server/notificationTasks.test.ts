@@ -70,7 +70,8 @@ test('a task runs one bounded batch and logs only when it did work', async () =>
   };
   const dispatched = await handleNotificationTask({ task: 'dispatch', notifications, log });
   assert.deepEqual(dispatched.result, { task: 'dispatch', replayed: 1, failed: 0 });
-  assert.deepEqual(limits, [100]);
+  // One short chunk: nothing more was due.
+  assert.deepEqual(limits, [20]);
   const purged = await handleNotificationTask({ task: 'purge', notifications, log });
   assert.equal(purged.status, 200);
   assert.equal(logs.length, 1);

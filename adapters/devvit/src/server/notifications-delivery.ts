@@ -459,8 +459,8 @@ export function createDevvitNotificationService(
   } else {
     // A scheduled purge runs in a time-bounded Devvit task: bound each call.
     store = createDevvitRedisNotificationStore(redis, {
-      purgeLimit: devvitNotificationPurgeBatch,
       ...storeOptions,
+      purgeLimit: storeOptions?.purgeLimit ?? devvitNotificationPurgeBatch,
     });
   }
   const registry = createNotificationProviderRegistry([
@@ -521,8 +521,10 @@ export function devvitNotificationSession(userId: string): NotificationSession {
 /**
  * The Devvit scheduler tasks that keep the service's own work moving:
  * `dispatch` replays due rows (deferred sends, rate-limited ones, and
- * ambiguous answers once their lease ends), and `purge` forgets old keys,
- * history, and dead endpoints. A game declares both in `devvit.json`
+ * ambiguous answers once their lease ends) every minute, and `purge`
+ * forgets old keys, history, and dead endpoints every five minutes. They
+ * run, and use two of the installation's recurring tasks, even while the
+ * game has no notifications service; such a run does no work. A game declares both in `devvit.json`
  * (`scheduler.tasks`, each with its `endpoint` and `cron`) and routes each
  * endpoint to `runDevvitNotificationTask`. S2's reminder scheduler takes
  * over the dispatch once it lands.
@@ -540,7 +542,7 @@ export const devvitNotificationSchedulerTasks = Object.freeze({
   purge: Object.freeze({
     name: 'mpgd-notifications-purge',
     endpoint: '/internal/scheduler/mpgd-notifications-purge',
-    cron: '17 * * * *',
+    cron: '*/5 * * * *',
   }),
 } as const);
 
@@ -549,8 +551,18 @@ export type DevvitNotificationTask = keyof typeof devvitNotificationSchedulerTas
 /** Due sends one dispatch task replays at most. */
 export const devvitNotificationDispatchBatch = 100;
 
-/** Rows of each kind one purge task deletes at most (the Redis store's `purgeLimit`). */
-export const devvitNotificationPurgeBatch = 500;
+/**
+ * Rows of each kind one purge task deletes at most (the Redis store's
+ * `purgeLimit`). Every five minutes that is 57,600 a day of each kind,
+ * above the 25,000 sends a day Devvit allows an app.
+ */
+export const devvitNotificationPurgeBatch = 200;
+
+/** Due sends one `dispatchDue` call of a dispatch task replays. */
+const dispatchChunk = 20;
+
+/** A dispatch task stops starting chunks after this long, within Devvit's task time limit. */
+export const devvitNotificationDispatchBudgetMs = 20_000;
 
 /** The task an internal scheduler endpoint names, or `undefined` for any other path. */
 export function devvitNotificationTaskForEndpoint(pathname: string): DevvitNotificationTask | undefined {
@@ -577,21 +589,38 @@ export type DevvitNotificationTaskResult =
 
 /**
  * Runs one scheduler task with a bounded batch: `dispatch` replays at most
- * `dispatchLimit` (100) due sends, one failing send never stopping the
+ * `dispatchLimit` (100) due sends, in chunks of 20, and starts no chunk
+ * after `budgetMs` (20 seconds), one failing send never stopping the
  * others; `purge` deletes at most the store's `purgeLimit` rows of each
- * kind (500 for the store `createDevvitNotificationService` builds). A
+ * kind (200 for the store `createDevvitNotificationService` builds). A
  * backlog drains over the following runs.
  */
 export async function runDevvitNotificationTask(
   service: Pick<NotificationService, 'dispatchDue' | 'purge'>,
   task: DevvitNotificationTask,
-  options: { readonly dispatchLimit?: number } = {},
+  options: {
+    readonly dispatchLimit?: number;
+    readonly budgetMs?: number;
+    /** Milliseconds now; `Date.now` by default. Tests inject it. */
+    readonly clock?: () => number;
+  } = {},
 ): Promise<DevvitNotificationTaskResult> {
   if (task === 'dispatch') {
-    const { results, failed } = await service.dispatchDue({
-      limit: options.dispatchLimit ?? devvitNotificationDispatchBatch,
-    });
-    return { task, replayed: results.length, failed };
+    const limit = options.dispatchLimit ?? devvitNotificationDispatchBatch;
+    const clock = options.clock ?? Date.now;
+    const deadline = clock() + (options.budgetMs ?? devvitNotificationDispatchBudgetMs);
+    let replayed = 0;
+    let failed = 0;
+    while (replayed + failed < limit && clock() < deadline) {
+      const chunk = Math.min(dispatchChunk, limit - replayed - failed);
+      const answer = await service.dispatchDue({ limit: chunk });
+      replayed += answer.results.length;
+      failed += answer.failed;
+      if (answer.results.length + answer.failed < chunk) {
+        break;
+      }
+    }
+    return { task, replayed, failed };
   }
   const counts = await service.purge();
   return { task, ...counts };
