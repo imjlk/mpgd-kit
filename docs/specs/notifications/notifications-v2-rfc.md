@@ -843,7 +843,12 @@ Server reminders apply gate steps 3 to 5 at set time against the backend's
 records (or the host read for a server-readable provider). They answer
 `permission-required`, `request-missing`, `preference-off`, or
 `advertising-consent-missing`, and store nothing on failure. The scheduler
-runs the whole gate again at send time.
+runs the whole gate again at send time, and a reminder it refuses then (the
+player turned the topic off, or has no valid endpoint left, such as after
+the registering session ended) is spent: a game that still wants it sets it
+again once the player can be reached. A reminder set for a time already
+past is due at once, behind the reminders already due, and keeps its
+`fireAt` in its send key.
 
 - **Where.** The backend checks every provider that delivers the topic
   remotely and that the player can be reached on now: each valid endpoint
@@ -899,14 +904,20 @@ the pending reminder, and cancelling removes it.
   reminder made at the same key stays.
 - **Same key and time.** The send key names the reminder's key and time,
   not its content. Setting a reminder again with the same time and content
-  keeps the send the previous one made, if it made one. With other content, the rows of the
-  previous send that still wait are stopped and the new reminder makes its
-  own send, unless a row of the previous send was already delivered: then
-  the key keeps that send, the new reminder makes none, and the backend
-  reports it.
-- A fired reminder is kept, as its key, topic, `fireAt`, `firedAt`, and
-  its send's fingerprint (its content), for the 30 days of a key's
-  retention (a day at a time longer while its send still waits), so a
+  keeps the send the previous one made, if it made one. With other content,
+  the rows of the previous send that still wait are stopped and the new
+  reminder makes its own send, unless one row of the previous send (for any
+  provider or endpoint) was already delivered: then the key keeps that send
+  for every provider, the new reminder makes none, and the backend reports
+  it. A scheduler run that read a reminder a set has replaced since leaves
+  the newer reminder's send alone.
+- **A set that fails.** A set stops the previous reminder's waiting send
+  before its write; if the write then fails, the previous reminder stays as
+  it was without that send, and the set is retried.
+- A fired reminder is kept, as its key, topic, `fireAt`, `firedAt`, and the
+  fingerprint of its own content (which names the send it made, or, after a
+  delivered collision, the send it could not make), for the 30 days of a
+  key's retention (a day at a time longer while its send still waits), so a
   later set or cancel can still stop that send.
 
 ## Opens {#opens}
@@ -1193,7 +1204,8 @@ If a notice is not recorded by the start of the day seven days before
   reads only the players a notice is due for. It is due at the earliest of
   the next notice's first send day, an hour while a push waits in the
   ledger, and the backoff below; a new `advertising` or `night` record makes
-  it due at once.
+  it due at once. Making it due is best effort: a consent is recorded even
+  while the check cannot be written, and the game still lists the notice.
 - **Refused pushes.** While a push the gate refused (the player has no
   endpoint, or turned the notice topic off), or one the provider refused
   when it was sent, is the check's only reason to run, the check waits an

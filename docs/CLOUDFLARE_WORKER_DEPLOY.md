@@ -170,9 +170,10 @@ topic catalog. It needs D1 for anything but local development: apply
 other migrations, and apply 0008 before deploying a Worker version that
 has the scheduler. Without its table the reminder routes fail, and so does
 the cron's reminder and notice step (the cron logs the missing table and
-still sends due rows); under the Korean rules with a notice topic and a
-provider that can carry notices (FCM), advertising and night consent writes
-fail too. The memory store keeps consent records and endpoints in one
+still sends due rows); advertising and night consent writes are still
+recorded, but their notice pushes are not scheduled (the failure is
+logged), and records written before 0008 get a notice check only at the
+player's next advertising or night record. The memory store keeps consent records and endpoints in one
 isolate only, and the Worker refuses it next to a queue, whose consumer
 runs in another isolate. The catalog,
 the deployment, and the providers are checked on first use; a broken one
@@ -269,6 +270,11 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   rows for the queue, and the consumer sends them; without it, the cron
   sends them itself. A refused notice push is tried again after an hour,
   doubling to a day, or as soon as the player registers a device again.
+- **Reminder limits.** The backend does not cap how many server reminders
+  one player keeps yet (a follow-up); a reminder set for a past time is due
+  at once but queues behind those already due. A reminder the gate refuses
+  when it comes due, such as after the player's registering session ended,
+  is spent.
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
   other failure is retried with a growing delay (10 s, doubling, at most
   5 min). While the notifications configuration is broken (a catalog or
