@@ -1,0 +1,217 @@
+# Notifications for game developers
+
+This guide is for a game built on mpgd-kit that sends notifications: what
+each target supports, how a player's consent flows, the Korean advertising
+rules, and how to add a topic. The contract is the
+[notifications v2 RFC](specs/notifications/notifications-v2-rfc.md); this page
+is the practical summary. For Android and iOS also read the
+[Firebase setup guide](FIREBASE_NOTIFICATIONS.md).
+
+## Getting started
+
+- **New game.** `mpgd game create my-game --providers notifications` (also
+  with `--template lite`) adds the notifications starter: the topic catalog
+  `notifications/topics.json`, the backend settings
+  `notifications/deployment.json`, the wiring for Android, iOS, Apps in Toss,
+  and Reddit, a game-rendered notification settings screen, and
+  `pnpm validate:notifications`. A game created without the flag has none of
+  it and bundles none of the notification code.
+- **Existing game, Android and iOS.** `mpgd target init capacitor
+  --providers notifications` installs the two Capacitor plugins into the
+  game-owned shell and wires a Capacitor gateway that is still the
+  template's; a game-owned gateway gets a warning that says what to
+  register. It does not add the settings screen to an existing game: render
+  one from the starter's `src/platform/notificationSettings.ts`.
+- **Existing game, Apps in Toss and Reddit.** Add the catalog and wiring by
+  hand, following the starter: the Apps in Toss wrapper already reads
+  `notifications/topics.json` (or `MPGD_NOTIFICATION_TOPICS_FILE`), and the
+  Reddit gateway and Devvit server need the options shown in
+  [What each target supports](#targets).
+
+Before every release run `pnpm validate:notifications`. It checks the catalog
+against the providers each target enables and the deployment settings, and it
+fails until the advertising sender's contact placeholder is replaced.
+
+## What each target supports {#targets}
+
+| Target | Consent UI | Remote | Local reminders | Opens | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Android (Capacitor) | OS dialog, once per app; two denials on Android 13+ leave only settings | FCM, all three purposes | yes, inexact | push data `route` | Channels per purpose; advertising has its own. |
+| iOS (Capacitor) | OS dialog, once; a denial leaves only settings | FCM (relayed to APNs), all three purposes | yes, at most 64 pending | push data `route` | Advertising pushes carry the opt-out action through the `mpgd-advertising` category. |
+| Apps in Toss | A Toss sheet per topic, from a tap | Functional messages (`service`, `requested`) through the partner API | no | landing URL per console template | No advertising, and functional messages may not carry benefits or retention content: check that a reminder qualifies before mapping it (the starter maps none). Each topic maps `targets.ait` to the console template code and `agreement`. Toss gives no read, so the backend record decides. |
+| Reddit (Devvit) | The game's own toggle, from a tap; the player must be logged in | Devvit notifications (`service`, `requested`), copy pre-approved by Devvit admins | no | the linked post | Gated beta: keep `integrations.notifications` at `approval-required` until Reddit approves the app. Each send needs a post or comment link. |
+| Web, Microsoft Store PWA, CrazyGames, OnePlay, Verse8 | none | none | none | none | Notifications read `unsupported`. |
+
+The starter sets `integrations.notifications: "available"` for `android`,
+`ios`, and `ait`. The provider still reports its own readiness (no plugin in
+the shell, no mapped topic), which the target config follows. For `reddit` it
+sets `integrations.identityUpgrade: "available"`, because the gateway passes
+`loginPrompt: createDevvitWebLoginPrompt()`: a logged-out player taps
+*Turn on* and is asked to log in.
+
+## How consent flows
+
+Consent has three layers, and the game never decides one alone:
+
+1. **Delivery permission**: the OS dialog (Android, iOS), the Toss agreement
+   sheet (Apps in Toss), or the game's Devvit opt-in. The host is the source
+   of truth.
+2. **Topic preference**: the player's on/off per topic in the game. For a
+   `requested` topic (a reminder) this is the player's request, and the topic
+   is off until the player turns it on.
+3. **Purpose consent**: 광고성 정보 수신동의 (advertising consent) and the
+   separate night consent for 21:00 to 08:00 KST, required before any
+   advertising push under the Korean rules.
+
+Rules the starter's settings screen follows, and your own screen must too:
+
+- **Ask from a player action.** Every prompt runs from a tap. Apps in Toss and
+  Devvit refuse a prompt outside one; on iOS the dialog shows only once, so
+  explain first and prompt only after the player chose to turn notifications
+  on.
+- **Nothing is pre-checked.** Reminders, advertising consent, and night consent
+  start off. The advertising switch is labelled 광고성 정보 수신동의 and says it
+  is optional; it is not phrased as a benefit alert.
+- **Never pay for consent.** No reward for turning notifications on (App
+  Review Guideline 5.1.2(i)), and the game keeps working when the player
+  declines (Apps in Toss game checklist).
+- **Turn off where it was turned on.** The game-rendered Devvit opt-in has a
+  *Turn off* in the game; advertising and night consent are withdrawn in the
+  same screen. A blocked OS permission offers only *Open system settings*
+  (`@mpgd/capacitor-game-services` opens the app's notification settings).
+- **The server keeps the records.** The game reports decisions through the
+  notifications runtime (`NotificationRuntime` from
+  `@mpgd/platform/notifications`): `requestPermission`, `revokePermission`,
+  `setTopicPreference`, and `setAdvertisingConsent` with the consent text
+  version. The backend's policy gate decides every send from those records.
+
+> **The runtime is not in the kit yet.** Composing the provider with the
+> backend needs a game-services client for the Worker's notification routes,
+> and those routes need the identity side's session binding. Until both ship,
+> `createStarterNotificationRuntime` in the starter returns `undefined`. The
+> settings screen then asks only for the OS or host permission, keeps the
+> reminder, advertising, and night switches off, and says the choices cannot
+> be saved. Return your own `NotificationRuntime` there if your backend
+> implements the routes.
+
+Notification opens are hints, never grants: an open carries a route and
+untrusted data, and anything worth claiming goes through the server.
+
+## Korean advertising rules
+
+The deployment setting `advertisingRules` in
+`notifications/deployment.json` decides how advertising is treated
+([RFC](specs/notifications/notifications-v2-rfc.md#advertising-rules)):
+
+- `kr` applies 정보통신망법 §50 to every recipient of the deployment: prior
+  advertising consent separate from the OS permission, separate night consent
+  (arrival between 21:00 and 08:00 KST), "(광고)" and the sender line at the
+  start of each advertising message, the free opt-out line at the end, an
+  opt-out action, and the consent notices below. Any deployment that may
+  reach players in Korea must use it. The starter does.
+- `none` keeps advertising consent and the opt-out route (App Review
+  Guideline 4.5.4 needs them too) without the night window, labels, or
+  notices.
+
+Under `kr` the deployment names the **advertising sender**: its name (left
+out only when it equals the app's name) and a phone number or address. The
+starter's contact is the placeholder `REPLACE-WITH-SENDER-PHONE-OR-ADDRESS`,
+which `pnpm validate:notifications` refuses.
+
+**Notices.** The server sends, through the catalog's `notices.topic`
+(`consent-notice` in the starter), a result notice within 14 days of each
+advertising or night consent, refusal, or withdrawal (decree art. 62-2), and
+a re-confirmation every two years from the consent date (art. 62-3). Their
+text is the catalog's `notices.copy`, one title and body per variant and
+locale, with the act's date as `{{consentDate}}`:
+
+- A result notice states the sender's name, the act (consent, refusal, or
+  withdrawal) with its date, and that it was processed.
+- A re-confirmation states the sender's name, the consent and its date, and
+  how to keep or withdraw it. The night re-confirmation must not say the
+  player still receives night advertising, because a night consent stands
+  after advertising consent is withdrawn.
+
+The starter's Korean copy follows that wording, with the game's title in
+brackets as the sender. The settings screen also shows the notices the server lists and
+records them as given in the game, for players who are not reachable by push.
+
+**Which topics are advertising** is your decision, ideally with legal review.
+KISA's guide counts as advertising anything sent for the sender's economic
+benefit, including benefits handed out unasked, periodic use reminders,
+deadline nudges, and abandoned-cart reminders; information the player
+requested, or needs because of a transaction or another player's action, is
+not.
+
+## The starter topics
+
+| Topic | Purpose | Why |
+| --- | --- | --- |
+| `daily-ready` | `requested` | A reminder the player turns on about their own daily run. |
+| `streak-at-risk` | `requested` | A reminder the player turns on about their own streak. |
+| `friend-challenge` | `service` | Relays a real player's action. |
+| `events` | `advertising` | Sample advertising topic (Android and iOS only). |
+| `consent-notice` | `service` | The notice topic; its text is `notices.copy`. |
+
+The purposes of `daily-ready` and `streak-at-risk` were decided for the kit
+(RFC open question 1): they are reminders of the player's own progress that
+the player asked for. **The risk:** the KISA guide reads deadline nudges such
+as "your streak ends today" as advertising (p.50), and repeated sends without
+a further request turn requested information into advertising (p.11). Keep
+their copy to the player's own progress, with no reward, benefit, event, or
+promotion, and send them only to players who turned them on. A game that adds
+rewards or promotions to these messages must declare them `advertising`
+instead, with the consent, night window, and labels that brings.
+
+## Adding a topic
+
+1. Add an entry to `notifications/topics.json`:
+
+   ```json
+   {
+     "id": "energy-full",
+     "purpose": "requested",
+     "channels": ["local", "remote"],
+     "route": "/?entry=continue",
+     "copy": {
+       "ko": { "title": "에너지 충전 완료", "body": "에너지가 가득 찼어요." },
+       "en": { "title": "Energy full", "body": "Your energy is full." }
+     },
+     "frequency": { "maxPerDay": 3 },
+     "quietHours": { "start": "22:00", "end": "08:00" },
+     "targets": {
+       "android": { "channelId": "mpgd-requested" },
+       "ios": {},
+       "ait": { "templateSetCode": "my-game-energy-full", "agreement": "required" },
+       "reddit": { "title": "Energy full", "body": "Your energy is full again." }
+     }
+   }
+   ```
+
+   - **Purpose.** `service`, `requested`, or `advertising`, by what the
+     message is for (see above). An `advertising` topic needs an
+     `optOutRoute`, cannot use the `local` channel, and cannot map to Apps in
+     Toss or Devvit.
+   - **Routes** are root-relative and already normalized (`/a/../b` is
+     refused, not rewritten).
+   - **Targets.** A target that does not map the topic never delivers it.
+     Apps in Toss needs the console template's code and `agreement`
+     (`none` only for a `service` template without an agreement statement);
+     Devvit needs its pre-approved `title` (60) and `body` (100 characters).
+   - **Copy** must include the catalog's `defaultLocale`; `{{name}}`
+     placeholders are filled from the reminder's or send's template data.
+2. Run `pnpm validate:notifications`.
+3. Give the Worker the new catalog (`MPGD_NOTIFICATIONS_CATALOG`) and, for
+   Reddit, redeploy the Devvit app, whose server reads the catalog at build
+   time. Apps in Toss reads it when the wrapper is built.
+4. For a `requested` topic, add a switch for it to the settings screen (the
+   starter lists every `requested` topic the target maps) and set reminders
+   through `runtime.reminders.set({ key, topic, fireAt })`; the runtime picks
+   a local or a server reminder from the target's capabilities.
+
+## Validation scope
+
+The starter's settings model, the CLI wiring, and the catalog are covered by
+the kit's tests, and every provider passes the RFC's conformance vectors with
+fakes. Delivery on a device, Firebase configuration, Apps in Toss templates,
+and Devvit approval are verified by you, per target, before release.

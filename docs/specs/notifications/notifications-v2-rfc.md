@@ -1922,6 +1922,12 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   as a `rejected` answer with reason `agreement`, which records the denial.
 - **Copy and landing.** Copy (title ≤ 7, body ≤ 25 characters) and the landing
   URL live in the console template.
+- **Wrapper.** The mini-app wrapper passes the catalog's `targets.ait`
+  mappings to `installAitHostBridge` as `notificationTopics`. Since C1 the
+  kit's, the template's, and the lite starter's wrappers read them at build
+  time with `readAitNotificationTopicsFile` from
+  `@mpgd/adapter-ait/notification-config`, which refuses an advertising
+  topic, a blank template code, and an unknown agreement.
 - **No advertising.** Functional messages may not carry benefits or retention
   content, and promotional campaigns are console-only, so `remote.purposes`
   excludes `advertising`. Console recurring sends (daily or weekly, name
@@ -1988,9 +1994,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     zone to the registration, and serves the v1 adapter from the same
     provider. Without the option the gateway exposes no `notificationsV2`.
     Devvit has no server-to-webview channel, so the provider emits no events.
-  - The kit's and the CLI template's server bridges take the handler; their
-    entrypoints do not wire it yet, because the kit ships no topic catalog
-    (C1).
+  - The kit's and the CLI template's server bridges take the handler. The
+    kit's entrypoint does not wire it, because the kit ships no topic
+    catalog; a game created with `--providers notifications` does (C1).
 
 ## Advertising rules {#advertising-rules}
 
@@ -2061,7 +2067,8 @@ The purposes map onto these criteria: `service` is the transaction and
 real-player-action case, `requested` is the request case with its
 repeated-send caveat, and everything else is `advertising`. Each game decides
 per topic, ideally with legal review before launch. The starter topics'
-defaults are an [open question](#open-questions).
+purposes were decided for C1 (open question 1, resolved below): no starter
+topic is advertising.
 
 Other rules the profiles encode:
 
@@ -2402,7 +2409,47 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
 - Left to follow-ups: a shared host-side `notifications.v2` bridge
   handler for the Apps in Toss and Devvit adapters, the runtime's backend client for a service the
   Devvit server hosts (the game-services client), and the wiring in the
-  generated Devvit app (C1).
+  generated Devvit app (landed in C1).
+
+**What C1 landed.**
+
+- `mpgd game create --providers notifications` (and `@mpgd/create-game`)
+  adds a notifications starter to a new Phaser or lite game: the topic
+  catalog `notifications/topics.json` with the starter purposes of open
+  question 1, a sample advertising topic, and the notice topic with every
+  `notices.copy` variant in Korean and English; the deployment settings
+  `notifications/deployment.json` with `advertisingRules: "kr"`; the wiring
+  for Android and iOS (the Capacitor provider with named channels, the
+  opt-out action, and the native settings opener), Apps in Toss (the
+  wrapper reads the catalog), and Reddit (the opt-in bridge handler, the
+  Devvit notifications service in the scheduler tasks, and the login
+  prompt); the target integrations; a game-rendered settings screen for the
+  permission, reminders, advertising consent (광고성 정보 수신동의), and
+  night consent; and `pnpm validate:notifications`. Games created without
+  the flag are unchanged.
+- `mpgd target init capacitor --providers notifications` installs the two
+  plugins into a game-owned shell and the game, wires a template gateway,
+  refuses `@capacitor/push-notifications`, and drops `SCHEDULE_EXACT_ALARM`
+  from a newly generated Android project; the kit's reference shell drops it
+  too.
+- `openNotificationSettings` in `@mpgd/capacitor-game-services` and
+  `openCapacitorNotificationSettings` in
+  `@mpgd/adapter-capacitor/notifications`.
+- The [notifications guide](../../NOTIFICATIONS.md) and the
+  [Firebase setup guide](../../FIREBASE_NOTIFICATIONS.md).
+- Left to follow-ups:
+  - The runtime's backend client (a game-services client over the Worker's
+    notification routes). The routes need the identity side's session
+    binding, which is its own follow-up, and the only runtime is the
+    conformance reference. Until both land, the starter's
+    `createStarterNotificationRuntime` returns `undefined`: the settings
+    screen asks for the permission but records no reminder, advertising, or
+    night consent, and says so.
+  - Native rendering of Android advertising pushes with the opt-out action
+    in the Capacitor shell; until then the game's settings screen is the
+    Android opt-out route.
+  - The shared host-side `notifications.v2` bridge handler, and bulk sends
+    (open question 5).
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
@@ -2410,12 +2457,26 @@ that also removes commerce v1.
 
 ## Open questions {#open-questions}
 
-1. **Starter topic purposes.** The v1 topics need declared purposes in the
-   template. Measured against the guide's criteria, `friend-challenge`
-   (relaying a real player's action) reads as `service`, a daily content
-   release reads as `requested` once the player turns it on, and
-   `streak-at-risk` resembles the deadline nudges the guide calls advertising.
-   The project owner decides before C1.
+1. **Starter topic purposes.** Resolved for C1 by the project owner on
+   2026-10-19. The starter retention topics are not advertising:
+   - **Decision.** `daily-ready` and `streak-at-risk` are `requested`: they
+     are off until the player turns each one on in the game.
+     `friend-challenge` is `service`, because it relays a real player's
+     action.
+   - **Rationale.** These are reminders the player asked for, about their own
+     progress: the guide's request exception (p.11), with the player's opt-in
+     per topic as the request.
+   - **Risk.** The guide treats deadline nudges as advertising (p.50,
+     Q01-02), and `streak-at-risk` is close to one; repeated sends without a
+     further request can also turn requested information into advertising
+     (p.11, p.52 Q01-10). The starter copy therefore states the player's own
+     progress only and carries no benefit, reward, event, or promotion. A
+     game that adds rewards or promotions to these messages, or sends them
+     to players who did not turn them on, must declare them `advertising`
+     instead, with the consent, night window, and labels that brings.
+   - **Where it lives.** The CLI's notifications starter
+     (`mpgd game create --providers notifications`) declares these purposes,
+     and the [notifications guide](../../NOTIFICATIONS.md) repeats the risk.
 2. **Devvit ledger.** Resolved in P3: the Redis-backed store meets the
    delivery ledger's fencing contract.
    - **The fence** is the send's version. Every update names the version it

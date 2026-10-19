@@ -42,6 +42,9 @@ rewarded/interstitial semantics, presentation ownership, evidence registration,
 and fake-SDK conformance vectors. It is also a draft; its scenarios do not yet
 certify adapter behavior.
 
+The [notifications guide](NOTIFICATIONS.md) explains what each target supports,
+the consent flow, the Korean advertising rules, and how to add a topic; the
+[Firebase setup guide](FIREBASE_NOTIFICATIONS.md) covers Android and iOS push.
 The [notifications v2 RFC](specs/notifications/notifications-v2-rfc.md)
 proposes capability-declared notification providers, server-side consent
 records, one delivery policy gate, reminders, and conformance vectors. It is

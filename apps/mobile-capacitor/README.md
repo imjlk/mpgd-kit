@@ -32,5 +32,7 @@ To try `@mpgd/adapter-capacitor/notifications` here (see the
   a game-owned shell's newly generated Android project, and warns about an
   existing one that lacks it.
 
-The game template's wiring and the Firebase setup guide come with the CLI work
-(C1 in the [notifications RFC](../../docs/specs/notifications/notifications-v2-rfc.md#pr-plan)).
+A game created with `mpgd game create --providers notifications` is wired
+already, and `mpgd target init capacitor --providers notifications` installs
+the plugins into its game-owned shell; see the
+[Firebase setup guide](../../docs/FIREBASE_NOTIFICATIONS.md).

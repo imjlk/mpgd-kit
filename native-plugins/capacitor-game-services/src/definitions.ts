@@ -11,8 +11,9 @@ export interface CapacitorGameServicesPlugin {
   /**
    * Opens this app's notification settings: Android 8+
    * `Settings.ACTION_APP_NOTIFICATION_SETTINGS` (the app details screen
-   * before it), iOS 16+ `UIApplication.openNotificationSettingsURLString`
-   * (the app's settings page before it). It answers as soon as the screen
+   * before it, and when the device cannot open that screen), iOS 16+
+   * `UIApplication.openNotificationSettingsURLString` (the app's settings
+   * page before it). It answers as soon as the screen
    * is launched, not when the player comes back. A shell built with an
    * older plugin rejects it as unimplemented.
    */

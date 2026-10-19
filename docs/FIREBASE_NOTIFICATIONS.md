@@ -1,0 +1,136 @@
+# Firebase setup for notifications
+
+Android and iOS notifications in mpgd-kit go through Firebase Cloud
+Messaging (FCM) on both platforms: the game-services Worker sends to FCM, and
+FCM relays to APNs for iOS. This guide sets up one Firebase project for a
+game that was created with `mpgd game create --providers notifications`, or
+that added notifications with
+`mpgd target init capacitor --providers notifications`. The contract behind
+it is the [notifications v2 RFC](specs/notifications/notifications-v2-rfc.md#profile-capacitor);
+the game-side flow is in the [notifications guide](NOTIFICATIONS.md).
+
+What this guide covers is configuration. Nothing in the kit verifies that a
+device receives a push: run the steps below on real devices before release.
+
+## 1. The plugins
+
+The game-owned shell (`apps/mobile-capacitor` in the game) needs:
+
+- `@capacitor-firebase/messaging` 8.x: remote notifications through FCM, on
+  Android and iOS.
+- `@capacitor/local-notifications` 8.x: local reminders, the permission read
+  (it reflects the system setting on Android 12 and lower, where the
+  messaging plugin answers `granted` regardless), and the advertising
+  opt-out action.
+
+`mpgd target init capacitor --providers notifications` installs both into the
+shell at the game's versions, declares them and `firebase` (which the
+messaging plugin's web fallback imports, so the bundler must resolve it) in
+the game, and runs `cap sync` on an existing native project.
+
+**Never install `@capacitor/push-notifications` next to them.** On iOS both
+plugins claim Capacitor's one handler for remote-notification registration and
+delivery, so one of them silently stops receiving tokens or taps. The
+initializer refuses a game or shell that lists it; remove it first.
+
+## 2. The Firebase project
+
+1. Create a Firebase project (or reuse one) in the
+   [Firebase console](https://console.firebase.google.com/).
+2. Add an **Android app** with the shell's package id (the `--app-id` of
+   `mpgd target init capacitor`) and an **iOS app** with the same bundle id.
+3. Keep the project id; the Worker reads it from the service-account key.
+
+## 3. Android
+
+1. Download `google-services.json` for the Android app and put it at
+   `apps/mobile-capacitor/android/app/google-services.json`. The Capacitor 8
+   Android template applies the Google services Gradle plugin when that file
+   exists; without it the push half fails closed (the provider declares no
+   remote delivery) and the initializer warns.
+2. Notification channels are created by the provider at start, from the
+   catalog (`targets.android.channelId`, else `mpgd-service`,
+   `mpgd-requested`, or `mpgd-advertising` by purpose). Advertising always
+   has its own channel, so a player can turn it off in system settings. The
+   starter names them in `src/platform/capacitorNotifications.ts`.
+3. `SCHEDULE_EXACT_ALARM`: the local-notifications plugin adds it to the
+   merged manifest, but reminders are inexact (Android 14 denies the
+   permission to new installs, and Play restricts it to alarm and calendar
+   apps). A shell project the initializer generates drops it with
+   `<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />`;
+   add that line to an existing project's
+   `android/app/src/main/AndroidManifest.xml` (the initializer warns while it
+   is missing).
+4. An Android FCM notification message cannot carry action buttons, so the
+   advertising opt-out action does not appear on Android advertising pushes
+   yet; rendering them natively in the shell is a planned follow-up. Until
+   then the advertising topic's `optOutRoute` must stay reachable from the
+   game's own settings screen, which the starter's screen is.
+
+## 4. iOS
+
+1. **APNs key.** In the Apple Developer account, create an APNs
+   authentication key (`.p8`). In the Firebase console, open *Project
+   settings → Cloud Messaging → Apple app configuration* and upload the key
+   with its Key ID and your Team ID. One key serves development and
+   production.
+2. **`GoogleService-Info.plist`.** Download it for the iOS app and add it to
+   the `App` target in Xcode (`apps/mobile-capacitor/ios/App/App/`). The
+   initializer warns while it is missing.
+3. **Capabilities.** In Xcode, add *Push Notifications* to the `App` target
+   (this writes the `aps-environment` entitlement). Add *Background Modes →
+   Remote notifications* only if the game handles silent data pushes; the kit
+   does not send them.
+4. **AppDelegate.** Follow the
+   [`@capacitor-firebase/messaging` iOS setup](https://github.com/capawesome-team/capacitor-firebase/tree/main/packages/messaging#ios):
+   configure Firebase at launch and forward the APNs registration callbacks to
+   Capacitor, as its README shows for the plugin version you installed. The
+   initializer never edits native sources.
+5. Categories: the provider registers the advertising opt-out category
+   `mpgd-advertising` (action `advertising-opt-out`) through the
+   local-notifications plugin; the Worker's FCM sender names it in
+   `apns.payload.aps.category` for advertising pushes. Registering
+   categories this way replaces categories the shell registered through the
+   same plugin.
+
+## 5. The Worker
+
+The game-services Worker sends through FCM HTTP v1 with a service account
+(see [Cloudflare Worker deploy](CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2)
+for the full configuration):
+
+1. In the Google Cloud console for the Firebase project, create a service
+   account that may send through Firebase Cloud Messaging (for example with
+   the *Firebase Cloud Messaging API Admin* role) and create a JSON key.
+2. Store the whole key file as the `FCM_SERVICE_ACCOUNT` secret; never put it
+   in `wrangler.toml` or the repository:
+
+   ```sh
+   pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUNT < service-account.json
+   ```
+
+   `FCM_PROJECT_ID` overrides the key's `project_id` when they differ.
+3. Set `MPGD_NOTIFICATIONS_CATALOG` to the game's `notifications/topics.json`
+   and `MPGD_NOTIFICATIONS_DEPLOYMENT` to `notifications/deployment.json`
+   (both JSON vars), and apply the D1 migrations `0007_notifications.sql`
+   and `0008_notification_scheduler.sql`.
+4. Run the scheduler from a cron. **Every minute** (`crons = ["* * * * *"]`)
+   is the recommended period: it bounds how late a server reminder or a due
+   send can be, and each run works only on what is due.
+5. The client routes (consent records, endpoint registration, reminders,
+   notices) need the `GAME_SERVICES_NOTIFICATIONS_AUTH` session binding from
+   the identity side, which the kit does not ship yet; a send-only Worker
+   (`deliverNotification` from a game server) works without it.
+
+## 6. Check it
+
+- `pnpm validate:notifications` in the game passes (it refuses the starter's
+  sender contact placeholder).
+- On an Android 13+ device and an iPhone: the settings screen's *Turn on
+  notifications* shows the OS dialog once, from a tap; a denial on iOS, or a
+  second one on Android 13+, offers only *Open system settings*.
+- A push sent through the Worker's `deliverNotification` for a `service`
+  topic arrives with the app in the background, and a tap opens the topic's
+  route (cold and warm starts). Verify cold starts on iOS in particular:
+  Capacitor 8.5 moved the iOS template to the UIScene lifecycle, which sets
+  the notification delegate later than Apple recommends.

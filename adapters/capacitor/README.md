@@ -297,8 +297,9 @@ is created, which is how a cold-start open reaches it.
   - The action opens the `optOutRoute` of the advertising topic the push names
     in its `topic` data key; without that key it opens nothing.
   - An Android FCM notification message cannot carry actions, so an Android
-    advertising push needs the shell to render it natively with the action;
-    the template work for that is C1's.
+    advertising push needs the shell to render it natively with the action,
+    which is not built yet (a follow-up after C1); until then the game's
+    settings screen is the Android opt-out route.
 - **Settings.** Neither plugin opens the notification settings, so the
   provider takes an `openSettings` opener; without one `permission.settings`
   is `false` and `openSettings` answers `unavailable`.
