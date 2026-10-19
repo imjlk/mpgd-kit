@@ -471,9 +471,11 @@ try {
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /has no openCapacitorNotificationSettings/u,
     );
+    // A subpath that re-exports the opener with `export *` still passes.
+    writeFileSync(types, "export * from './notifications-settings.js';\n");
     writeFileSync(
-      types,
-      'export { openCapacitorNotificationSettings } from "./notifications-settings.js";\n',
+      path.join(path.dirname(types), 'notifications-settings.d.ts'),
+      'export declare function openCapacitorNotificationSettings(): Promise<void>;\n',
     );
     const plugin = path.join(root, 'node_modules/@capacitor-firebase/messaging/package.json');
     mkdirSync(path.dirname(plugin), { recursive: true });

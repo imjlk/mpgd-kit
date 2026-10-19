@@ -409,7 +409,7 @@ for (const [path, requiredText] of [
   ],
   [
     'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
-    'public void openNotificationSettings(PluginCall call)',
+    '@PluginMethod\n    public void openNotificationSettings(PluginCall call)',
   ],
   [
     'native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/CapacitorGameServicesPlugin.swift',

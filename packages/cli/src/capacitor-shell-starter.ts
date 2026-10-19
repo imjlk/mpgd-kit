@@ -3188,9 +3188,18 @@ function planNotificationsProvider(input: {
   }
   // The starter's provider module also imports the settings opener, which
   // an adapter older than this CLI's notifications starter does not have.
-  const adapterDist = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/dist');
-  const adapterTypes = readExisting(path.join(adapterDist, 'notifications.d.ts'));
-  const openerTypes = readExisting(path.join(adapterDist, 'notifications-settings.d.ts'));
+  // The subpath's declared types file (dist/notifications.d.ts today), and
+  // the module it re-exports the opener from.
+  const adapterRoot = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor');
+  const declaredTypes = (adapterExports as Readonly<Record<string, unknown>>)['./notifications'];
+  const typesPath = typeof declaredTypes === 'object' && declaredTypes !== null
+    && typeof (declaredTypes as { readonly types?: unknown }).types === 'string'
+    ? (declaredTypes as { readonly types: string }).types
+    : './dist/notifications.d.ts';
+  const adapterTypes = readExisting(path.join(adapterRoot, typesPath));
+  const openerTypes = readExisting(
+    path.join(adapterRoot, path.dirname(typesPath), 'notifications-settings.d.ts'),
+  );
   if (adapterTypes !== undefined
     && !`${adapterTypes}\n${openerTypes ?? ''}`.includes('openCapacitorNotificationSettings')) {
     throw new Error(
