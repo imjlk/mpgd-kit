@@ -1768,8 +1768,18 @@ const pending = (h: Harness) =>
 
 // A run whose remaining due rows the pace holds back ends; a round that throws keeps what came before.
 {
-  const h = harness({ fcmEntry: { ...fcmEntry, rate: { count: 1, windowSeconds: 60 } } });
-  for (let index = 0; index < 5; index += 1) {
+  let listings = 0;
+  const h = harness({
+    fcmEntry: { ...fcmEntry, rate: { count: 1, windowSeconds: 60 } },
+    store: (inner) => ({
+      ...inner,
+      async listDueSends(input) {
+        listings += 1;
+        return inner.listDueSends(input);
+      },
+    }),
+  });
+  for (let index = 0; index < 3; index += 1) {
     await register(h, `p-${index}`);
     await h.service.setReminder(session(`p-${index}`), {
       key: 'k',
@@ -1777,9 +1787,11 @@ const pending = (h: Harness) =>
       fireAt: '2026-10-19T03:00:00Z',
     });
   }
-  await h.service.runScheduler({ limit: 1 });
-  assert.equal(h.fcm.calls.length, 1, 'one send within the pace; the run ends while the rest wait');
+  await h.service.runScheduler({ limit: 2 });
+  assert.equal(h.fcm.calls.length, 1, 'one send within the pace');
   assert.equal(pending(h).length, 0, 'every reminder fired into a waiting send');
+  // Round 2 fires the last reminder and finds a full batch the pace holds back entirely: the run ends there.
+  assert.equal(listings, 2, 'no third round for a batch the pace holds back');
 }
 {
   let listings = 0;

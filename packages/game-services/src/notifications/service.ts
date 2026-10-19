@@ -2286,17 +2286,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     readonly listed: number;
     readonly handled: number;
     readonly failed: number;
-    readonly unreadable: boolean;
   }> => {
     let failed = 0;
     let due: readonly { readonly player: string; readonly id: string }[] = [];
-    let unreadable = false;
     try {
       due = await store.listDueScheduleEntries({ at: formatNotificationInstant(nowMs()), limit });
     } catch (error) {
       // The due rows still go out: a schedule that cannot be read must not hold them.
       failed += 1;
-      unreadable = true;
       report(error, 'scheduler.list');
     }
     let handled = 0;
@@ -2332,7 +2329,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
       }
     }
-    return { listed: due.length, handled, failed, unreadable };
+    return { listed: due.length, handled, failed };
   };
 
   /**
@@ -2826,8 +2823,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             touched.set(result.sendKey, result.outcome);
           }
           // Another round only while one may be due (a batch came back
-          // full, and not only with rows the pace holds back, nor with a
-          // schedule that cannot be read) and this round got somewhere.
+          // full, and not only with sends the pace holds back) and this
+          // round got somewhere. A schedule that cannot be read lists
+          // nothing, so its batch is never full.
           more = entries.listed === limit
             || (dispatched.listed === limit && dispatched.paced < dispatched.listed);
           progressed = entries.handled > 0 || dispatched.results.length > 0;

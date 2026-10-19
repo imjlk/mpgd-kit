@@ -287,8 +287,11 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   free plan and on the order of a hundred on the paid one, fewer with
   inline sends. These are rough, unmeasured estimates: measure yours. The
   batch size, the provider pace, and the time budget are how a run stays
-  under those limits: lower `MPGD_NOTIFICATIONS_DUE_BATCH` or the budget if
-  runs fail on them. With the queue bound, the cron only
+  under those limits; the budget only bounds the number of rounds, so the
+  batch decides one round's cost. The default batch of 25 is already about
+  250 queries in one round: on the free plan set
+  `MPGD_NOTIFICATIONS_DUE_BATCH` to about 3 to 5, and lower it or the
+  budget anywhere runs fail on the limits. With the queue bound, the cron only
   writes the sends and takes their rows, and each consumer invocation makes
   its own provider calls under its own limits, so large waves need the
   queue. Keep the budget under the cron period (60 seconds for a
