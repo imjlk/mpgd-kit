@@ -1681,6 +1681,22 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     return { outcome: notificationSendOutcome(stored) ?? { status: 'in-flight' }, stored: true };
   };
 
+  /** The send a reminder makes: its request, whose fingerprint names its content. */
+  const reminderRequest = (
+    player: string,
+    reminder: NotificationStoredReminder,
+  ): NotificationStoredSendRequest => ({
+    idempotencyKey: createNotificationReminderIdempotencyKey({
+      player,
+      key: reminder.key,
+      fireAt: reminder.fireAt,
+    }),
+    player,
+    topic: reminder.topic,
+    ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
+    ...(reminder.link === undefined ? {} : { link: reminder.link }),
+  });
+
   /**
    * Stops a reminder's send that still waits: the rows not delivered yet
    * (deferred, queued, or in flight) are dropped, and a send the scheduler
@@ -1690,7 +1706,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * loses either way. A send the provider may already have accepted cannot
    * be recalled. Answers whether anything waited.
    */
-  const stopReminderSend = async (player: string, reminder: NotificationStoredReminder): Promise<boolean> => {
+  const stopReminderSend = async (
+    player: string,
+    reminder: NotificationStoredReminder,
+    options: { readonly unlessFingerprint?: string } = {},
+  ): Promise<boolean> => {
     let key: string;
     try {
       key = createNotificationReminderIdempotencyKey({ player, key: reminder.key, fireAt: reminder.fireAt });
@@ -1699,7 +1719,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
       const held = await store.getSend(key);
-      if (held === undefined || held.send.origin.kind !== 'reminder') {
+      if (
+        held === undefined
+        || held.send.origin.kind !== 'reminder'
+        // A send of the same content serves the reminder that replaced this one: it stays.
+        || held.send.fingerprint === options.unlessFingerprint
+      ) {
         return false;
       }
       const { send } = held;
@@ -1784,14 +1809,22 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     };
     const markFired = () =>
       store.updateScheduleEntry({ player, id: held.entry.id, version: held.version, entry: fired });
-    const made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
+    const fingerprint = notificationSendFingerprint(request);
+    let made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
+    if (made !== 'busy' && 'existing' in made && made.existing.fingerprint !== fingerprint) {
+      // The key holds a send of a reminder this one replaced at the same
+      // time, with other content: what still waits of it goes, and this
+      // reminder makes its own send.
+      await stopReminderSend(player, reminder, { unlessFingerprint: fingerprint });
+      made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
+    }
     if (made === 'busy') {
       // Another run is making the send; its lease frees the key if it stops.
       return undefined;
     }
     if ('existing' in made) {
-      // Its rows were stored (by a run that stopped before marking it, or for
-      // an identical reminder): they carry it from here.
+      // Its rows were stored (by a run that stopped before marking it), or
+      // what the replaced reminder delivered keeps the key: they carry it.
       await markFired();
       return undefined;
     }
@@ -1814,12 +1847,22 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       return { sendKey: key, outcome: result.outcome };
     }
     if (!await markFired()) {
-      // The entry changed since the read. Another run that found these rows
-      // marked the same reminder fired, or a set kept its time: the rows
-      // serve it. A cancel, or a set to another time, stops them; its own
-      // stop runs after its write, and this one covers the rest.
-      const now = await store.getScheduleEntry({ player, id: held.entry.id });
-      const same = now?.entry.item.kind === 'reminder' && now.entry.item.fireAt === reminder.fireAt;
+      // The entry changed since the read. The rows serve it when another run
+      // that found them marked it fired (it does so only for this content), or
+      // a set kept its time and content. A cancel, or a set to another time
+      // or content, stops them: its own stop runs after its write, and this
+      // one covers the rest. A read that fails stops them too, so a cancel
+      // is never outlived by its send.
+      let same = false;
+      try {
+        const now = (await store.getScheduleEntry({ player, id: held.entry.id }))?.entry.item;
+        same = now?.kind === 'reminder'
+          && now.fireAt === reminder.fireAt
+          && (now.firedAt !== undefined
+            || notificationSendFingerprint(reminderRequest(player, now)) === fingerprint);
+      } catch (error) {
+        report(error, 'scheduler.reread');
+      }
       if (!same) {
         await stopReminderSend(player, reminder);
       }
@@ -1945,10 +1988,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         at,
       );
       if (made === 'busy') {
+        // Any waiting push stays this check's push, so a refusal after it backs off.
         waiting = true;
-        if (previouslyPushed.has(key)) {
-          pushed.push(key);
-        }
+        pushed.push(key);
         continue;
       }
       if ('existing' in made) {
@@ -1960,9 +2002,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         } else {
           // Still waiting: it stays this check's push, so a later refusal still backs off.
           waiting = true;
-          if (previouslyPushed.has(key)) {
-            pushed.push(key);
-          }
+          pushed.push(key);
         }
         continue;
       }
@@ -2536,11 +2576,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           : await store.updateScheduleEntry({ player, id, version: held.version, entry });
         if (written) {
           const pending = previous !== undefined && previous.firedAt === undefined;
-          // A previous reminder at the same time has the same send key: its
-          // send, if any, now serves this one, so it is not stopped.
+          // A previous send of the same content at the same time (the same key
+          // and fingerprint) serves this reminder, so it stays; any other is stopped.
           const stopped = previous !== undefined
-            && previous.fireAt !== reminder.fireAt
-            && await stopReminderSend(player, previous);
+            && await stopReminderSend(
+              player,
+              previous,
+              previous.fireAt === reminder.fireAt ? { unlessFingerprint: notificationSendFingerprint(request) } : {},
+            );
           return { status: pending || stopped ? 'replaced' : 'scheduled' };
         }
       }

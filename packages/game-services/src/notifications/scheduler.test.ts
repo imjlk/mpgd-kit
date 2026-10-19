@@ -1132,6 +1132,74 @@ const pending = (h: Harness) =>
   assert.deepEqual(pending(h), []);
 }
 
+// Re-setting a reminder for the same time with other content replaces its waiting send.
+{
+  const quiet: NotificationTopicDeclaration = {
+    ...challenge,
+    quietHours: { start: '22:00', end: '08:00' },
+  };
+  const other: NotificationTopicDeclaration = { ...quiet, id: 'match-ready' };
+  const h = harness({ topics: [quiet, other] });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T13:30:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  h.time.set(fireAt);
+  await h.service.runScheduler();
+  assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'deferred');
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt }),
+    { status: 'replaced' },
+    'the old content stops',
+  );
+  assert.deepEqual(h.store.inspect().sends, []);
+  await h.service.runScheduler();
+  h.time.set('2026-10-19T23:00:00Z');
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.topic.id),
+    ['match-ready'],
+  );
+}
+
+// A run that finds a send of a replaced reminder's other content at its key sends its own.
+{
+  const quiet: NotificationTopicDeclaration = {
+    ...challenge,
+    quietHours: { start: '22:00', end: '08:00' },
+  };
+  const other: NotificationTopicDeclaration = { ...quiet, id: 'match-ready' };
+  const h = harness({ topics: [quiet, other] });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T13:30:00Z';
+  const key = 'reminder:p-1:k:2026-10-19T13:30:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt });
+  // The send a replaced friend-challenge reminder left at the same key, still waiting.
+  await h.store.createSend({
+    key,
+    fingerprint: 'friend-challenge-content',
+    request: { idempotencyKey: key, player: 'p-1', topic: 'friend-challenge' },
+    origin: { kind: 'reminder', key: 'k' },
+    scheduled: true,
+    rows: [
+      {
+        key: `${key}:install-p-1`,
+        provider: 'fcm',
+        installationId: 'install-p-1',
+        state: { status: 'deferred', reason: 'quiet-hours', until: '2026-10-19T23:00:00Z' },
+      },
+    ],
+    changedAt: fireAt,
+  });
+  h.time.set(fireAt);
+  await h.service.runScheduler();
+  h.time.set('2026-10-19T23:00:00Z');
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.topic.id),
+    ['match-ready'],
+  );
+}
+
 // A fired reminder whose send cannot be read is kept, not forgotten, and looked at again a minute later.
 {
   let failRead = false;
