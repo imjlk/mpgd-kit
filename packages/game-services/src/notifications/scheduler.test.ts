@@ -162,6 +162,8 @@ function harness(options: {
   readonly queue?: boolean;
   readonly failEnqueue?: () => boolean;
   readonly store?: (store: InMemoryNotificationStore) => NotificationStore;
+  /** Providers whose platform identity of the player is not known yet. */
+  readonly unresolved?: readonly string[];
 } = {}): Harness {
   const time = clock(options.start ?? '2026-10-19T03:00:00Z');
   const fcm = fakeProvider('fcm', options.answers ?? []);
@@ -181,7 +183,8 @@ function harness(options: {
       topicsFor: () => topics,
     },
     ...(options.deployment === undefined ? {} : { deployment: options.deployment }),
-    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    resolvePlatformRecipient: ({ provider, player }) =>
+      options.unresolved?.includes(provider) === true ? undefined : `user-${player}`,
     ...(options.queue === true
       ? {
           queue: {
@@ -265,6 +268,20 @@ const pending = (h: Harness) =>
     template.service.setReminder(session('p-1'), { ...base, templateData: { count: 1 } }),
     'NOTIFICATIONS_INVALID_INPUT',
   );
+  // Also while the player is reached only through a free-form provider: a
+  // host-template provider that declares the topic may reach them by the time it fires.
+  const mixed = harness({
+    topics: [{ ...energy, mapping: { templateSetCode: 'x', agreement: 'none' } }],
+    extra: [{ entry: templateEntry, delivery: fakeProvider('template'), targets: ['template'] }],
+    unresolved: ['template'],
+  });
+  await register(mixed, 'p-1');
+  await optIn(mixed, 'p-1');
+  await expectCode(
+    mixed.service.setReminder(session('p-1'), { ...base, templateData: { count: 1 } }),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  assert.equal((await mixed.service.setReminder(session('p-1'), base)).status, 'scheduled');
   await expectCode(
     h.service.cancelReminder(session('p-1'), { key: 'k', extra: true }),
     'NOTIFICATIONS_INVALID_INPUT',

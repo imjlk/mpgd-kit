@@ -2662,9 +2662,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const candidates: readonly Recipient[] = reached.length > 0
         ? reached
         : declaring.map((provider) => ({ provider, rowKey: sendKey, resolved: false }));
+      // Any declaring host-template provider, reached now or not: the player
+      // may become reachable through it before the reminder fires.
       if (
         reminder.templateData !== undefined
-        && candidates.some((recipient) => recipient.provider.entry.content === 'host-template')
+        && declaring.some((provider) => provider.entry.content === 'host-template')
       ) {
         throw invalidInput('A host-template provider keeps template context on the server; a reminder takes no templateData.');
       }
