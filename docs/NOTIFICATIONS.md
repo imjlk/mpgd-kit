@@ -41,7 +41,7 @@ fails until the advertising sender's contact placeholder is replaced.
 
 | Target | Consent UI | Remote | Local reminders | Opens | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Android (Capacitor) | OS dialog for the app, shown up to twice on Android 13+; after the second denial only settings can change it | FCM, all three purposes | yes, inexact | push data `route` | Channels per purpose; advertising has its own. |
+| Android (Capacitor) | OS dialog for the app; on Android 13+ two denials leave only settings (a dismissed dialog counts none) | FCM, all three purposes | yes, inexact | push data `route` | Channels per purpose; advertising has its own. |
 | iOS (Capacitor) | OS dialog, once; a denial leaves only settings | FCM (relayed to APNs), all three purposes | yes, at most 64 pending | push data `route` | Advertising pushes carry the opt-out action through the `mpgd-advertising` category. |
 | Apps in Toss | A Toss sheet per topic, from a tap | Functional messages (`service`, `requested`) through the partner API | no | landing URL per console template | No advertising, and functional messages may not carry benefits or retention content: check that a reminder qualifies before mapping it (the starter maps none). Each topic maps `targets.ait` to the console template code and `agreement`. Toss gives no read, so the backend record decides. |
 | Reddit (Devvit) | The game's own toggle, from a tap; the player must be logged in | Devvit notifications (`service`, `requested`), copy pre-approved by Devvit admins | no | the linked post | Gated beta: keep `integrations.notifications` at `approval-required` until Reddit approves the app. Each send needs a post or comment link. |
@@ -79,8 +79,8 @@ Rules the starter's settings screen follows, and your own screen must too:
   is optional; it is not phrased as a benefit alert.
 - **Never pay for consent.** No reward for turning notifications on and no
   feature held back without them (App Review Guideline 5.1.2(i)), and the
-  game keeps working when the player
-  declines (Apps in Toss game checklist).
+  game keeps working when the player declines (Apps in Toss game
+  checklist).
 - **Turn off where it was turned on.** The game-rendered Devvit opt-in has a
   *Turn off* in the game; advertising and night consent are withdrawn in the
   same screen. A blocked OS permission offers only *Open system settings*

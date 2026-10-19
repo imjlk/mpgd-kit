@@ -126,9 +126,11 @@ for the full configuration):
    send can be, and each run works only on what is due. On a plan with a low
    subrequest limit per run, lower `MPGD_NOTIFICATIONS_DUE_BATCH` as the
    deploy guide describes. `MPGD_NOTIFICATIONS_CATALOG` and
-   `MPGD_NOTIFICATIONS_DEPLOYMENT` are JSON vars: paste the files' contents
-   into `[vars]` (TOML inline tables) or the dashboard, and update them with
-   every catalog change.
+   `MPGD_NOTIFICATIONS_DEPLOYMENT` are JSON vars: in `wrangler.toml` write the
+   files' contents as TOML (one inline table on one line, or a
+   `[vars.MPGD_NOTIFICATIONS_CATALOG]` table), put them in `vars` of a
+   `wrangler.jsonc` as JSON, or paste them in the dashboard; update them
+   with every catalog change.
 5. The client routes (consent records, endpoint registration, reminders,
    notices) need the `GAME_SERVICES_NOTIFICATIONS_AUTH` session binding from
    the identity side, which the kit does not ship yet; a send-only Worker
@@ -139,8 +141,8 @@ for the full configuration):
 - `pnpm validate:notifications` in the game passes (it refuses the starter's
   sender contact placeholder).
 - On an Android 13+ device and an iPhone: the settings screen's *Turn on
-  notifications* shows the OS dialog from a tap (up to twice on Android 13+,
-  once on iOS); a denial on iOS, or a second one on Android 13+, offers only
+  notifications* shows the OS dialog from a tap. After one denial on iOS, or
+  two on Android 13+ (a dismissed dialog counts none), the screen offers only
   *Open system settings*.
 - A push that arrives with the app in the foreground is shown (it needs
   `presentationOptions`).

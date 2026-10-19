@@ -1,9 +1,12 @@
 # Notifications v2 contract (RFC)
 
-Status: **draft proposal (N1)**. This RFC describes a contract that does not
-exist yet. It is not confirmed runtime behavior, and it is outside the
-enforced [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope until
-N2 lands the types and a conformance runner that cite it. Baseline:
+Status: **draft**. N2 through C1 implemented this contract: the types, the
+conformance runner and vectors, the providers, the Worker and Devvit
+backends, and the CLI starter. The game-services client runtime and the
+identity-side session binding are follow-ups (see
+[What C1 landed](#pr-plan)). It is still outside the enforced
+[documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope, and a
+conformance vector is not device or release verification. Baseline:
 `main@2f70328e`, 2026-10-12, revised the same day after review. Draft
 protocol: `mpgd.notifications.v2`, version `2.0.0-draft.1`.
 
@@ -124,7 +127,7 @@ Every topic declares one **purpose**:
 
 | Purpose | Meaning | Consent needed besides delivery permission |
 | --- | --- | --- |
-| `service` | Information the player needs because of their own account, a transaction, or another real player's action: a purchase or refund result, a friend's challenge, a security notice | None. The player can still turn the topic off. |
+| `service` | Information the player needs because of their own account, a transaction, or (in the kit's reading, not a guide criterion) another real player's action: a purchase or refund result, a friend's challenge, a security notice | None. The player can still turn the topic off. |
 | `requested` | A reminder the player explicitly turned on for that topic: "tell me when my energy is full" | A recorded opt-in for that topic. Off until the player turns it on. |
 | `advertising` | Anything sent to promote use or sales: events, sales, new items, and the cases the Korean guide lists as advertising, such as benefits handed out unasked and deadline nudges | Advertising consent and an opt-out route; under the Korean rules also night consent for 21:00–08:00 KST and labelled content. See [Advertising rules](#advertising-rules). |
 
@@ -167,9 +170,10 @@ Rules for asking:
   The kit expects a game-rendered explanation first and calls the OS prompt
   only after the player accepts it. A `blocked` state only offers
   `openSettings`.
-- **Never pay for consent.** No reward for turning notifications on (App
-  Review Guideline 5.1.2(i)); the game must keep working when the player
-  declines (Apps in Toss game checklist).
+- **Never pay for consent.** No compensation for turning notifications on,
+  and no feature held back without them (App Review Guideline 5.1.2(i)); the
+  game must keep working when the player declines (Apps in Toss game
+  checklist).
 - **Never prompt as a side effect.** Scheduling a local notification without
   permission returns `permission-required`. It never opens the OS dialog,
   even though `@capacitor/local-notifications` 8.3 would if called directly.
@@ -2067,8 +2071,9 @@ item is consent scope (p.55, Q02-02). Its general criteria are:
   and abandoned-cart reminders (p.51 Q01-07). KISA's FAQ treats a for-profit
   sender's messages as advertising unless an exception applies.
 
-The purposes map onto these criteria: `service` is the transaction and
-real-player-action case, `requested` is the request case with its
+The purposes map onto these criteria: `service` is the transaction case (and,
+in the kit's reading rather than the guide's, another real player's action),
+`requested` is the request case with its
 repeated-send caveat, and everything else is `advertising`. Each game decides
 per topic, ideally with legal review before launch. The starter topics'
 purposes were decided for C1 (open question 1, resolved below): no starter
