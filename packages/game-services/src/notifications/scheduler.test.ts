@@ -282,6 +282,24 @@ const pending = (h: Harness) =>
     'NOTIFICATIONS_INVALID_INPUT',
   );
   assert.equal((await mixed.service.setReminder(session('p-1'), base)).status, 'scheduled');
+  // A host-template provider the gate refuses the topic on (its purposes leave it out) does not count.
+  const elsewhere = harness({
+    topics: [{ ...energy, mapping: { templateSetCode: 'x', agreement: 'none' } }],
+    extra: [
+      {
+        entry: { ...templateEntry, purposes: ['service'] },
+        delivery: fakeProvider('template'),
+        targets: ['template'],
+      },
+    ],
+    unresolved: ['template'],
+  });
+  await register(elsewhere, 'p-1');
+  await optIn(elsewhere, 'p-1');
+  assert.equal(
+    (await elsewhere.service.setReminder(session('p-1'), { ...base, templateData: { count: 1 } })).status,
+    'scheduled',
+  );
   await expectCode(
     h.service.cancelReminder(session('p-1'), { key: 'k', extra: true }),
     'NOTIFICATIONS_INVALID_INPUT',

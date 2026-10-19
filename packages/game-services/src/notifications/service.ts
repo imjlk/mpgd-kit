@@ -2665,12 +2665,19 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const candidates: readonly Recipient[] = reached.length > 0
         ? reached
         : declaring.map((provider) => ({ provider, rowKey: sendKey, resolved: false }));
-      // Any declaring host-template provider, reached now or not: the player
-      // may become reachable through it before the reminder fires.
-      if (
-        reminder.templateData !== undefined
-        && declaring.some((provider) => provider.entry.content === 'host-template')
-      ) {
+      // Any declaring host-template provider that could deliver the topic,
+      // reached now or not: the player may become reachable through it before
+      // the reminder fires, and it would take the reminder's templateData as
+      // its template context. One whose purposes leave the topic out (or an
+      // advertising topic, free-form only) is refused by the gate's first step.
+      const hostTemplate = declaring.some((provider) => {
+        if (provider.entry.content !== 'host-template') {
+          return false;
+        }
+        const purpose = topicFor(provider, undefined, reminder.topic, origin)?.purpose;
+        return purpose !== undefined && purpose !== 'advertising' && provider.entry.purposes.includes(purpose);
+      });
+      if (reminder.templateData !== undefined && hostTemplate) {
         throw invalidInput('A host-template provider keeps template context on the server; a reminder takes no templateData.');
       }
       // Gate steps 3 to 5 at set time: one candidate that passes is enough.

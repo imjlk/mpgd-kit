@@ -504,7 +504,7 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
     'prune: a later record is still dated after the latest one',
   );
 
-  // History counts per provider across players, from `since` on.
+  // History counts per provider across players, from `since` to `until`, both inclusive.
   for (const [sendKey, provider, player, offset] of [
     ['count-1', 'paced', 'p-a', 100],
     ['count-2', 'paced', 'p-b', 200],
