@@ -1,7 +1,7 @@
 {
   "vector": "reminder-server-set-checks",
   "protocol": "2.0.0-draft.1",
-  "summary": "A server reminder is checked against gate steps 3 to 5 when it is set: without a granted device it answers permission-required, without the player's request request-missing, after the player turns the topic off preference-off, and an advertising topic without consent advertising-consent-missing. A refusal stores nothing; the reminders that pass are stored.",
+  "summary": "A server reminder is checked against gate steps 3 to 5 when it is set: without a granted device it answers permission-required, without the player's request request-missing, after the player turns the topic off preference-off, and an advertising topic without consent advertising-consent-missing. Each refusal, under its own key, stores nothing; a reminder that passes is stored, and a cancel removes it.",
   "appliesTo": [
     {
       "path": "remote.supported",
@@ -117,7 +117,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "daily",
+        "key": "daily-0",
         "topic": "daily-puzzle",
         "fireAt": "2026-10-13T00:00:00Z"
       },
@@ -154,7 +154,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "daily",
+        "key": "daily-1",
         "topic": "daily-puzzle",
         "fireAt": "2026-10-13T00:00:00Z"
       },
@@ -186,6 +186,17 @@
     },
     {
       "actor": "game",
+      "action": "cancelReminder",
+      "input": {
+        "key": "daily"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "cancelled"
+      }
+    },
+    {
+      "actor": "game",
       "action": "setTopicPreference",
       "input": {
         "topic": "daily-puzzle",
@@ -209,7 +220,7 @@
       "actor": "game",
       "action": "setReminder",
       "input": {
-        "key": "weekend",
+        "key": "weekend-0",
         "topic": "weekend-event",
         "fireAt": "2026-10-13T01:00:00Z"
       },
@@ -242,12 +253,6 @@
   ],
   "expect": {
     "reminders": [
-      {
-        "player": "p-1",
-        "key": "daily",
-        "topic": "daily-puzzle",
-        "fireAt": "2026-10-13T00:00:00Z"
-      },
       {
         "player": "p-1",
         "key": "weekend",
