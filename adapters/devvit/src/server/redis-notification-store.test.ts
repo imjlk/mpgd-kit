@@ -357,9 +357,45 @@ describe('createDevvitRedisNotificationStore', () => {
     await scoped.invalidateEndpoint({ provider: 'fcm', installationId: 'mine', value: 'tok-mine', at: '2026-10-19T04:00:00Z' });
     await scoped.removeEndpoints({ installationId: 'mine', player: 't2_me' });
     expect(touched.length).toBeGreaterThan(0);
-    expect(touched.filter((key) => key.includes('other') || key.endsWith(':endpoints-all'))).toEqual([]);
+    expect(touched.filter((key) => key.includes('other') || /:endpoints-(?:registered|invalidated|session-end)$/u.test(key))).toEqual([]);
     // The other players' endpoints are untouched.
     expect(await store.listEndpoints({ player: 't2_other3', provider: 'fcm' })).toHaveLength(1);
+  });
+
+  it('keeps device tokens out of key names, purges endpoints in bounded batches, and drops dangling entries', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis, { purgeLimit: 2 });
+    for (let index = 0; index < 5; index += 1) {
+      await store.putEndpoint({
+        provider: 'fcm',
+        installationId: `i-${String(index)}`,
+        player: 't2_me',
+        address: { kind: 'fcm-token', value: `secret-token-${String(index)}` },
+        permission: 'granted',
+        sessionId: 's',
+        lastRegisteredAt: '2026-08-01T00:00:00Z',
+      });
+    }
+    expect(redis.keys().filter((key) => key.includes('secret-token'))).toEqual([]);
+    // A dangling index entry: its endpoint value is gone.
+    const index = await redis.watch();
+    await index.multi();
+    await index.zAdd('mpgd:notifications:endpoints-registered', { member: JSON.stringify(['fcm', 'gone']), score: 0 });
+    await index.exec();
+    const cutoffs = {
+      sendsChangedBefore: '2026-01-01T00:00:00Z',
+      historyBefore: '2026-01-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-01-01T00:00:00Z',
+      staleEndpointsBefore: '2026-10-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-01-01T00:00:00Z',
+    };
+    // At most two endpoint rows per cutoff and call; the dangling entry is one of them.
+    expect((await store.purge(cutoffs)).endpoints).toBe(1);
+    expect((await store.purge(cutoffs)).endpoints).toBe(2);
+    expect((await store.purge(cutoffs)).endpoints).toBe(2);
+    expect((await store.purge(cutoffs)).endpoints).toBe(0);
+    expect(await store.listEndpoints({ player: 't2_me', provider: 'fcm' })).toEqual([]);
+    expect(redis.keys().filter((key) => key.includes(':endpoint'))).toEqual([]);
   });
 
   it('keeps an address pointer that another installation took when the first moves on', async () => {

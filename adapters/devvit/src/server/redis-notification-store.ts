@@ -10,6 +10,7 @@ import {
   type NotificationVersionedSend,
 } from '@mpgd/game-services/notifications';
 import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
+import { createHash } from 'node:crypto';
 
 /**
  * A `NotificationStore` over Devvit Redis (notifications v2 RFC, "Delivery
@@ -32,8 +33,11 @@ import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
  *   and sorted-set indexes per player, session, and installation, all
  *   written in the endpoint's own transaction. A call reads and watches only
  *   the keys of the endpoints it touches, so reads and contention scale with
- *   one player's endpoints. Only `purge` walks every endpoint, through an
- *   index of all of them. A Devvit server serves only platform-user
+ *   one player's endpoints. `purge` reads, per cutoff, only the endpoints
+ *   past it from a time index. The address pointer's key holds a hash of
+ *   the address, so a device token never appears in a key name. Updates
+ *   to several endpoints (a session's) commit one endpoint at a time. A
+ *   Devvit server serves only platform-user
  *   providers, so it stores none in practice.
  * - **History** is a hash per player (one field per send and provider, so a
  *   repeat is ignored) with a sorted set by time.
@@ -111,7 +115,7 @@ export interface CreateDevvitRedisNotificationStoreOptions {
    */
   readonly backoff?: (attempt: number) => Promise<void>;
   /**
-   * Sends and history rows one `purge` call deletes at most, each; unbounded
+   * Sends, history rows, and endpoints (per cutoff) one `purge` call deletes at most, each; unbounded
    * by default, as `NotificationStore.purge` deletes every row past its
    * cutoff. Each row costs a few Redis round trips, so a deployment whose
    * purge runs in a time-bounded Devvit request or scheduler job sets it
@@ -167,13 +171,16 @@ export function createDevvitRedisNotificationStore(
     consent: (player: string) => `${namespace}:consent:${enc(player)}`,
     endpoint: (provider: string, installationId: string) =>
       `${namespace}:endpoint:${enc(provider)}:${enc(installationId)}`,
+    // The address is hashed: a device token never appears in a key name.
     endpointAddress: (provider: string, value: string) =>
-      `${namespace}:endpoint-address:${enc(provider)}:${enc(value)}`,
+      `${namespace}:endpoint-address:${enc(provider)}:${createHash('sha256').update(value).digest('hex')}`,
     endpointsByPlayer: (player: string) => `${namespace}:endpoints-player:${enc(player)}`,
     endpointsBySession: (sessionId: string) => `${namespace}:endpoints-session:${enc(sessionId)}`,
     endpointsByInstallation: (installationId: string) =>
       `${namespace}:endpoints-installation:${enc(installationId)}`,
-    endpointsAll: `${namespace}:endpoints-all`,
+    endpointsRegistered: `${namespace}:endpoints-registered`,
+    endpointsInvalidated: `${namespace}:endpoints-invalidated`,
+    endpointsSessionEnd: `${namespace}:endpoints-session-end`,
     registrations: `${namespace}:registrations`,
     notices: (player: string) => `${namespace}:notices:${enc(player)}`,
     send: (key: string) => `${namespace}:send:${enc(key)}`,
@@ -259,7 +266,7 @@ export function createDevvitRedisNotificationStore(
       }
     }
     throw new Error(
-      `Devvit Redis notification store: contention exceeded ${String(attempts)} attempts on ${lastWatched.join(', ')}.`,
+      `Devvit Redis notification store: contention exceeded ${String(attempts)} attempts on ${String(lastWatched.length)} watched key(s).`,
     );
   }
 
@@ -303,12 +310,14 @@ export function createDevvitRedisNotificationStore(
    * The commands that move an endpoint from `before` to `after` (either may
    * be absent) with its address pointer and indexes. `ownsOldAddress` says
    * whether `before`'s address pointer still names this installation, so a
-   * pointer another installation took is never deleted.
+   * pointer another installation took is never deleted; `writeAddress`
+   * false keeps the pointer as it is (an update that keeps the address).
    */
   function endpointCommands(
     before: NotificationStoredEndpoint | undefined,
     after: NotificationStoredEndpoint | undefined,
     ownsOldAddress: boolean,
+    writeAddress = true,
   ): Command[] {
     const subject = after ?? before;
     if (subject === undefined) {
@@ -332,7 +341,7 @@ export function createDevvitRedisNotificationStore(
       const oldAddress = keys.endpointAddress(provider, before.address.value);
       commands.push((transaction) => transaction.del(oldAddress));
     }
-    if (after !== undefined) {
+    if (after !== undefined && writeAddress) {
       const address = keys.endpointAddress(provider, after.address.value);
       commands.push((transaction) => transaction.set(address, installationId));
     }
@@ -351,21 +360,36 @@ export function createDevvitRedisNotificationStore(
     const byInstallation = keys.endpointsByInstallation(installationId);
     if (after === undefined) {
       commands.push((transaction) => transaction.zRem(byInstallation, [provider]));
-      commands.push((transaction) => transaction.zRem(keys.endpointsAll, [member]));
     } else {
       commands.push((transaction) =>
         transaction.zAdd(byInstallation, { member: provider, score: 0 }),
       );
-      commands.push((transaction) => transaction.zAdd(keys.endpointsAll, { member, score: 0 }));
     }
+    // The purge indexes, one per cutoff, scored by the time it compares.
+    const timed = (key: string, at: string | undefined): void => {
+      if (at === undefined) {
+        commands.push((transaction) => transaction.zRem(key, [member]));
+      } else {
+        const score = Date.parse(at);
+        commands.push((transaction) => transaction.zAdd(key, { member, score }));
+      }
+    };
+    timed(keys.endpointsRegistered, after?.lastRegisteredAt);
+    timed(keys.endpointsInvalidated, after?.status === 'invalid' ? after.invalidatedAt : undefined);
+    timed(keys.endpointsSessionEnd, after?.sessionExpiresAt);
     return commands;
   }
 
-  /** Removes one endpoint, atomically, while `matches` holds for it; answers whether it did. */
+  /**
+   * Removes one endpoint, atomically, while `matches` holds for it; answers
+   * whether it did. An index entry that names an endpoint whose value is
+   * gone is dropped from `prune` (`[key, member]` pairs).
+   */
   async function removeEndpointIf(
     provider: string,
     installationId: string,
     matches: (endpoint: NotificationStoredEndpoint) => boolean,
+    prune: readonly (readonly [string, string])[] = [],
   ): Promise<boolean> {
     return transactPrepared(async () => {
       const seen = await readEndpoint(provider, installationId);
@@ -379,7 +403,16 @@ export function createDevvitRedisNotificationStore(
           if (JSON.stringify(endpoint) !== JSON.stringify(seen)) {
             return { retry: true };
           }
-          if (endpoint === undefined || !matches(endpoint)) {
+          if (endpoint === undefined) {
+            return {
+              commands: prune.map(
+                ([key, member]) => (transaction: DevvitNotificationRedisTransaction) =>
+                  transaction.zRem(key, [member]),
+              ),
+              result: false,
+            };
+          }
+          if (!matches(endpoint)) {
             return { commands: [], result: false };
           }
           const owner = await redis.get(keys.endpointAddress(provider, endpoint.address.value));
@@ -568,9 +601,7 @@ export function createDevvitRedisNotificationStore(
           return { commands: [], result: undefined };
         }
         const invalid: NotificationStoredEndpoint = { ...endpoint, status: 'invalid', invalidatedAt: at };
-        const json = JSON.stringify(invalid);
-        const key = keys.endpoint(provider, installationId);
-        return { commands: [(transaction) => transaction.set(key, json)], result: undefined };
+        return { commands: endpointCommands(endpoint, invalid, true, false), result: undefined };
       });
     },
     async removeEndpoints({ installationId, player, provider }) {
@@ -579,7 +610,9 @@ export function createDevvitRedisNotificationStore(
           .map((entry) => entry.member)
         : [provider];
       for (const named of providers) {
-        await removeEndpointIf(named, installationId, (endpoint) => endpoint.player === player);
+        await removeEndpointIf(named, installationId, (endpoint) => endpoint.player === player, [
+          [keys.endpointsByInstallation(installationId), named],
+        ]);
       }
     },
     async removeSessionEndpoints({ sessionId }) {
@@ -606,8 +639,8 @@ export function createDevvitRedisNotificationStore(
             return { commands: [], result: false };
           }
           const { sessionExpiresAt: _earlier, ...kept } = endpoint;
-          const json = JSON.stringify(expiresAt === undefined ? kept : { ...kept, sessionExpiresAt: expiresAt });
-          return { commands: [(transaction) => transaction.set(key, json)], result: true };
+          const moved: NotificationStoredEndpoint = expiresAt === undefined ? kept : { ...kept, sessionExpiresAt: expiresAt };
+          return { commands: endpointCommands(endpoint, moved, true, false), result: true };
         });
         if (moved) {
           changed += 1;
@@ -882,15 +915,30 @@ export function createDevvitRedisNotificationStore(
 
       const before = (at: string | undefined, cutoff: string): boolean =>
         at !== undefined && Date.parse(at) < Date.parse(cutoff);
-      // The one walk over every endpoint, through their index.
+      // Each cutoff reads only the endpoints past it, from its time index.
       let endpointCount = 0;
-      for (const [provider, installationId] of await indexedEndpoints(keys.endpointsAll)) {
-        const removed = await removeEndpointIf(provider, installationId, (endpoint) =>
-          (endpoint.status === 'invalid' && before(endpoint.invalidatedAt, cutoffs.invalidEndpointsBefore))
-          || before(endpoint.lastRegisteredAt, cutoffs.staleEndpointsBefore)
-          || before(endpoint.sessionExpiresAt, cutoffs.sessionEndpointsBefore));
-        if (removed) {
-          endpointCount += 1;
+      const pastCutoff = (endpoint: NotificationStoredEndpoint): boolean =>
+        (endpoint.status === 'invalid' && before(endpoint.invalidatedAt, cutoffs.invalidEndpointsBefore))
+        || before(endpoint.lastRegisteredAt, cutoffs.staleEndpointsBefore)
+        || before(endpoint.sessionExpiresAt, cutoffs.sessionEndpointsBefore);
+      for (const [index, cutoff] of [
+        [keys.endpointsInvalidated, cutoffs.invalidEndpointsBefore],
+        [keys.endpointsRegistered, cutoffs.staleEndpointsBefore],
+        [keys.endpointsSessionEnd, cutoffs.sessionEndpointsBefore],
+      ] as const) {
+        const members = await scoreRange(index, '-inf', `(${String(Date.parse(cutoff))}`, purgeLimit);
+        for (const member of members) {
+          const named = tryParse<unknown>(member);
+          if (!Array.isArray(named) || typeof named[0] !== 'string' || typeof named[1] !== 'string') {
+            await transact([index], async () => ({
+              commands: [(transaction) => transaction.zRem(index, [member])],
+              result: undefined,
+            }));
+            continue;
+          }
+          if (await removeEndpointIf(named[0], named[1], pastCutoff, [[index, member]])) {
+            endpointCount += 1;
+          }
         }
       }
 
