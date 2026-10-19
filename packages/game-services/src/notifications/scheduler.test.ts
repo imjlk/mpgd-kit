@@ -522,12 +522,13 @@ const pending = (h: Harness) =>
     await register(h, player);
   }
   for (const [player, fireAt] of [
-    ['p-3', '2026-10-19T02:59:58Z'],
-    ['p-1', '2026-10-19T02:59:59Z'],
-    ['p-2', '2026-10-19T02:59:57Z'],
+    ['p-3', '2026-10-19T03:00:02Z'],
+    ['p-1', '2026-10-19T03:00:03Z'],
+    ['p-2', '2026-10-19T03:00:01Z'],
   ] as const) {
     await h.service.setReminder(session(player), { key: 'k', topic: 'friend-challenge', fireAt });
   }
+  h.time.advance(3);
   await h.service.runScheduler();
   assert.deepEqual(
     h.fcm.calls.map((call) => call.player),
@@ -1462,9 +1463,21 @@ const pending = (h: Harness) =>
   );
 }
 
-// A reminder set for a past time is due now, behind those already due; it keeps its send key.
+// A reminder set for a past time is due now, behind those already due, and so are its rows; it keeps its send key.
 {
-  const h = harness();
+  const leases: string[] = [];
+  const h = harness({
+    store: (inner) => ({
+      ...inner,
+      async updateSend(input) {
+        const row = input.send?.rows[0];
+        if (input.send?.origin.kind === 'reminder' && row?.state.status === 'in-flight' && !row.state.attempted) {
+          leases.push(row.state.leaseUntil);
+        }
+        return inner.updateSend(input);
+      },
+    }),
+  });
   await register(h, 'p-1');
   await h.service.setReminder(session('p-1'), {
     key: 'old',
@@ -1472,7 +1485,13 @@ const pending = (h: Harness) =>
     fireAt: '2026-01-01T00:00:00Z',
   });
   assert.equal(pending(h)[0]?.dueAt, '2026-10-19T03:00:00Z');
+  h.time.advance(60);
   await h.service.runScheduler();
+  assert.deepEqual(
+    leases,
+    ['2026-10-19T03:00:00Z'],
+    'the rows are due when the entry was, not at the past fireAt',
+  );
   assert.deepEqual(
     h.fcm.calls.map((call) => call.idempotencyKey),
     ['reminder:p-1:old:2026-01-01T00:00:00Z:install-p-1'],
@@ -1500,7 +1519,7 @@ const pending = (h: Harness) =>
   });
   assert.equal(record.kind, 'advertising');
   assert.equal(h.store.inspect().consent.length, 1);
-  assert.deepEqual(h.errors, ['notices.retry', 'notices.retry']);
+  assert.deepEqual(h.errors, ['notices.retry.before-consent', 'notices.retry.after-consent']);
   assert.equal(
     (await h.service.listNotices(session('p-1'))).length,
     1,

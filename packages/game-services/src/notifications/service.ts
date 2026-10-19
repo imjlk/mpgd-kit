@@ -1817,10 +1817,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     let made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
     if (made !== 'busy' && 'existing' in made && made.existing.fingerprint !== fingerprint) {
       // The key holds a send of other content. If this reminder is still
-      // the current one, that send is of a reminder it replaced at the same
-      // time: what still waits of it goes, and this reminder makes its own.
-      // If not, this run read a reminder a set has replaced since, and the
-      // send is the newer reminder's: it is left alone.
+      // the current one (as of the re-read), that send is of a reminder it
+      // replaced at the same time: what still waits of it goes, and this
+      // reminder makes its own. If not, this run read a reminder a set has
+      // replaced since, and the send is the newer reminder's: it is left
+      // alone. A set that lands between the re-read and the stop stops this
+      // reminder's own send and the next run repairs the rest.
       const current = await store.getScheduleEntry({ player, id: held.entry.id });
       if (current?.version !== held.version) {
         return undefined;
@@ -1852,7 +1854,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     let result: Awaited<ReturnType<typeof storeItemRows>>;
     try {
-      result = await storeItemRows(made.created, at, Date.parse(reminder.fireAt));
+      // The rows are due when the entry was: a past fireAt counts from its set time.
+      result = await storeItemRows(made.created, at, Date.parse(held.entry.dueAt ?? reminder.fireAt));
     } catch (error) {
       if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT') {
         // A send that cannot be made as asked fails once.
@@ -2209,11 +2212,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * registration only a check backing off after a refused push (the new
    * device may let it through), after a consent write any.
    */
-  const retryNoticePushes = async (player: string, onlyBackedOff = true): Promise<void> => {
+  const retryNoticePushes = async (
+    player: string,
+    onlyBackedOff = true,
+    phase: 'registration' | 'before-consent' | 'after-consent' = 'registration',
+  ): Promise<void> => {
     try {
       await markNoticesDue(player, nowMs(), onlyBackedOff);
     } catch (error) {
-      report(error, 'notices.retry');
+      report(error, phase === 'registration' ? 'notices.retry' : `notices.retry.${phase}`);
     }
   };
 
@@ -2292,12 +2299,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         // is harmless. Best effort, so the player's consent is recorded even
         // while the schedule cannot be written; the game still lists the
         // notice in game.
-        await retryNoticePushes(player, false);
+        await retryNoticePushes(player, false, 'before-consent');
       }
       const stored = await store.appendConsent({ player, record: withoutAt as NotificationConsentRecordInput, at });
       if (stored.kind === 'advertising' || stored.kind === 'night') {
         // Again after the write: a check that ran between the two found nothing new and settled.
-        await retryNoticePushes(player, false);
+        await retryNoticePushes(player, false, 'after-consent');
       }
       await compactConsent(player, [...history, stored], Date.parse(at));
       return stored;
