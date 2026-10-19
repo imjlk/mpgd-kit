@@ -10,8 +10,8 @@ protocol: `mpgd.notifications.v2`, version `2.0.0-draft.1`.
 Platform facts below were checked on 2026-10-12 against the sources listed in
 [References](#references); P1 re-checked the Apps in Toss facts on
 2026-10-19. P3 re-checked the Devvit facts the same day, through the
-Devvit MCP documentation search. Host policies change; re-check a fact before a provider pull
-request depends on it.
+Devvit MCP documentation search. Host policies change; re-check a fact
+before a provider pull request depends on it.
 
 ## Summary {#summary}
 
@@ -1493,7 +1493,7 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     starts with `{{`, so a filled text that still holds `{{` (from template
     data, or from a catalog brace outside a `{{name}}` placeholder) is
     `rejected` with reason `configuration` before anything is sent.
-  - **Length unit.** N2 left it open; P3 settles it.
+  - **Length unit.** N2 left it open; P3 picks the kit's rule.
     - Devvit's guidance says "titles ≤ 60 characters, body ≤ 100
       characters" without a unit. The SDK (`@devvit/notifications` 0.14.1)
       checks nothing before `Enqueue`, and Devvit admins approve the copy
@@ -1778,9 +1778,10 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `@mpgd/adapter-devvit/web`, over `showLoginPrompt()` from
     `@devvit/web/client`) makes `identity.requestUpgrade` open Reddit's login
     for such a player. It answers `{ status: 'completed', reloadExpected:
-    true }`, because Reddit reloads the post after login. A player who closes
-    the prompt is still a guest on the next read, so the game waits for the
-    reload and reads the session again.
+    true }`, because Reddit reloads the post after login, and the game reads
+    the session again then. A player who closes the prompt gets no reload and
+    is still a guest on the next read. A prompt that cannot open answers
+    `{ status: 'unavailable', reloadExpected: false }`.
   - A logged-in player gets the server's `completed` answer.
   - The reddit `identityUpgrade` integration stays `configuration-required`
     by default, as on the other targets whose upgrade the game must wire. A
@@ -2210,16 +2211,18 @@ that also removes commerce v1.
    The project owner decides before C1.
 2. **Devvit ledger.** Resolved in P3: the Redis-backed store meets the
    delivery ledger's fencing contract.
-   - **The fence** is the send's version. Every write names the version it
-     read. `createDevvitRedisNotificationStore` makes each write one
-     WATCH/MULTI/EXEC transaction on the send's key: it reads the stored
-     version after WATCH and writes only when it matches, so a write that
-     another worker's claim preceded aborts at EXEC.
+   - **The fence** is the send's version. Every update names the version it
+     read, and a create writes only an absent key.
+     `createDevvitRedisNotificationStore` makes each write one
+     WATCH/MULTI/EXEC transaction on the send's key, with the index writes
+     in it: it reads the stored version after WATCH and writes only when it
+     matches, so a write that another worker's claim preceded aborts at
+     EXEC.
    - **The claim token** is the service's own check. A holder settles its
      answer only while its token still holds the row, and it reads that
      under the same version fence.
-   - So a holder whose lease expired and was taken over cannot write its
-     answer back, and two claimers of one version cannot both win.
+   - **Result.** A holder whose lease expired and was taken over cannot
+     write its answer back, and two claimers of one version cannot both win.
    - **Indexes.** The due, in-flight, and retention indexes are written in
      the same transaction as the send, so a replay never finds a row the
      value disagrees with.

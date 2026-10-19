@@ -45,8 +45,8 @@ import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
  * aborted transaction as an empty array, never `null`, so a result shorter
  * than the commands queued would be a conflict in
  * `createDevvitRedisPostOperationStore`. Here every transaction ends with a
- * commit marker whose reply always maps, so only an empty result is an
- * abort, and a committed write is never retried as if it were lost.
+ * commit marker whose reply always maps, so only an empty or all-nil result
+ * is an abort, and a committed write is never retried as if it were lost.
  * Devvit allows 20 concurrent transactions per installation by default.
  *
  * Devvit Redis: <https://developers.reddit.com/docs/versioned_docs/version-0.14/capabilities/server/redis>
@@ -170,7 +170,7 @@ export function createDevvitRedisNotificationStore(
    * and resolves an aborted transaction as an empty array. So each
    * transaction ends with a SET of the namespace's commit marker, whose `OK`
    * always maps: a committed EXEC answers at least that reply, and only an
-   * empty (or `null`) result is an abort.
+   * empty, `null`, or all-nil result is an abort.
    */
   async function transact<Result>(
     watched: readonly string[],
