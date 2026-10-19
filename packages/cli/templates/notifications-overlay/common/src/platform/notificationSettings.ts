@@ -258,10 +258,13 @@ const messages = {
 
 type Messages = (typeof messages)['en' | 'ko'];
 
-const unavailableView = (message: string | undefined): StarterNotificationSettingsView => ({
+const unavailableView = (
+  message: string | undefined,
+  choices: StarterNotificationSettingsView['choices'],
+): StarterNotificationSettingsView => ({
   available: false,
   recording: false,
-  choices: 'no-server',
+  choices,
   permission: {
     state: 'unsupported',
     perTopic: false,
@@ -344,7 +347,10 @@ export function createStarterNotificationSettings(
       reminders: reminderTopics.map((topic) => ({
         topic: topic.id,
         label: strings.reminderLabels[topic.id] ?? topic.id,
-        enabled: granted('topic-preference', topic.id),
+        // On a per-topic host the agreement can be withdrawn in host settings,
+        // which leaves the preference on but stops every send.
+        enabled: granted('topic-preference', topic.id)
+          && (!perTopic || snapshot.topics[topic.id] === 'granted'),
       })),
       ...(advertisingTopics.length === 0
         ? {}
@@ -357,7 +363,7 @@ export function createStarterNotificationSettings(
   const view = async (): Promise<StarterNotificationSettingsView> => {
     const provider = input.provider;
     if (provider === undefined) {
-      return unavailableView(message);
+      return unavailableView(message, input.runtime === undefined ? 'no-server' : 'unreadable');
     }
     try {
       return await buildView(provider);
@@ -368,7 +374,10 @@ export function createStarterNotificationSettings(
       notices = [];
       rendered = [];
       // Only the message: the permission state is unknown.
-      return unavailableView(strings.readFailed);
+      return unavailableView(
+        strings.readFailed,
+        input.runtime === undefined ? 'no-server' : 'unreadable',
+      );
     }
   };
 
@@ -379,11 +388,22 @@ export function createStarterNotificationSettings(
    */
   const readChoices = async (): Promise<StarterNotificationSettingsView['choices']> => {
     records = undefined;
-    if (input.runtime === undefined || input.listConsent === undefined) {
-      return input.runtime === undefined ? 'no-server' : 'unreadable';
+    if (input.runtime === undefined) {
+      return 'no-server';
+    }
+    if (input.listConsent === undefined) {
+      // A wiring gap, not a passing failure: the backend must pass its reader.
+      console.error(
+        '[notifications] the runtime has no consent reader (listConsent); no switch is shown.',
+      );
+      return 'unreadable';
     }
     try {
-      records = [...(await input.listConsent())].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+      // The backend dates a player's records at least 1 ms apart; a record
+      // whose time does not parse cannot be ordered, so it is not read.
+      records = (await input.listConsent())
+        .filter((record) => Number.isFinite(Date.parse(record.at)))
+        .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
       return 'records';
     } catch (error) {
       console.warn('[notifications] the consent records could not be read.', error);
@@ -509,6 +529,10 @@ export function createStarterNotificationSettings(
         if (!reminderTopics.some((candidate) => candidate.id === topic)) {
           return strings.unavailable;
         }
+        if ((await readChoices()) !== 'records') {
+          // Without the player's records the screen shows no switch, and no change is made blind.
+          return strings.choicesUnreadable;
+        }
         if (enabled) {
           const snapshot = await input.runtime.getPermission({ topics: [topic] });
           const state = snapshot.app ?? snapshot.topics[topic] ?? 'unsupported';
@@ -532,7 +556,9 @@ export function createStarterNotificationSettings(
         if (advertisingTopics.length === 0 || (change.advertising === undefined && change.night === undefined)) {
           return strings.unavailable;
         }
-        if (records === undefined) {
+        // Decide from the records as they are now, not as the screen last
+        // showed them: another device may have changed them since.
+        if ((await readChoices()) !== 'records') {
           // The current consent is unknown, so a change could withdraw the wrong one.
           return strings.choicesUnreadable;
         }
@@ -543,24 +569,29 @@ export function createStarterNotificationSettings(
           // Night consent adds to advertising consent; alone it allows nothing.
           return strings.nightNeedsAdvertising;
         }
-        // Withdrawing advertising consent withdraws a granted night consent in
-        // the same call; a night consent never granted is not refused again.
-        const withdrawsNight = change.advertising === false && change.night === undefined && nightGranted;
-        const night = withdrawsNight ? false : change.night;
-        await input.runtime.setAdvertisingConsent({
-          ...(change.advertising === undefined
-            ? {}
-            : { advertising: change.advertising ? 'granted' : 'withdrawn' }),
-          ...(night === undefined ? {} : { night: night ? 'granted' : 'withdrawn' }),
-          textVersion: input.consentTextVersion,
-        });
-        if (withdrawsNight) {
+        // Withdrawing advertising consent withdraws a granted night consent too.
+        const nightAfter = advertisingAfter ? (change.night ?? nightGranted) : false;
+        // Only what changes is written: every advertising or night record is a
+        // player's act that may owe a notice, and a withdrawal of a consent
+        // never granted is a refusal.
+        const writeAdvertising = advertisingAfter === advertisingGranted ? undefined : advertisingAfter;
+        const writeNight = nightAfter === nightGranted ? undefined : nightAfter;
+        if (writeAdvertising !== undefined || writeNight !== undefined) {
+          await input.runtime.setAdvertisingConsent({
+            ...(writeAdvertising === undefined
+              ? {}
+              : { advertising: writeAdvertising ? 'granted' : 'withdrawn' }),
+            ...(writeNight === undefined ? {} : { night: writeNight ? 'granted' : 'withdrawn' }),
+            textVersion: input.consentTextVersion,
+          });
+        }
+        if (writeAdvertising === false && writeNight === false) {
           return strings.advertisingAndNightOff;
         }
         if (change.advertising !== undefined) {
-          return change.advertising ? strings.advertisingOn : strings.advertisingOff;
+          return advertisingAfter ? strings.advertisingOn : strings.advertisingOff;
         }
-        return change.night === true ? strings.nightOn : strings.nightOff;
+        return nightAfter ? strings.nightOn : strings.nightOff;
       });
     },
   };

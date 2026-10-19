@@ -757,8 +757,10 @@ products and ad placements.
     optional `consent-result.advertising.refused` and
     `consent-result.night.refused` give its text. Without one, a refusal is
     given in the withdrawal's text, which must then read for a refusal too.
-  - **Night re-confirmation.** A night consent stands, and is re-confirmed,
-    after the player withdraws advertising consent, so the
+  - **Night re-confirmation.** A night consent can stand, and is
+    re-confirmed, after the player withdraws advertising consent (one
+    recorded before the [night rule](#advertising-rules), or by a client that
+    does not withdraw it with advertising consent), so the
     `reconfirmation.night` text must not say the player still receives night
     advertising.
   - **One setting.** The backend takes the whole `notices` block as is: the
@@ -2047,19 +2049,21 @@ What the kit enforces for `advertising` topics under `kr`:
   separate night consent (§50③, p.18). Arrival, not sending, decides, so a
   message without night consent expires before the window opens (FAQ 05-01,
   p.60).
-  - Night consent adds to advertising consent: §50③ asks for it on top of
-    the prior consent to advertising, and the [gate](#policy-gate) sends no
-    advertising without the latest `advertising` record of `granted`
-    (step 5), whatever the `night` record says. A consent screen therefore
-    offers night consent only while advertising consent is granted (or is
-    granted in the same `setAdvertisingConsent` call).
+  - The kit treats night consent as an addition to advertising consent:
+    §50① requires advertising consent and §50③ adds a separate one for the
+    night window, and the [gate](#policy-gate) sends no advertising without
+    the latest `advertising` record of `granted` (step 5), whatever the
+    `night` record says. A consent screen therefore offers night consent only
+    while advertising consent is granted (or is granted in the same
+    `setAdvertisingConsent` call).
   - Withdrawing advertising consent withdraws a granted night consent in the
     same `setAdvertisingConsent` call. Both records are written, each with
     its result notice (`consent-result.advertising.withdrawn` and
     `consent-result.night.withdrawn`), so a later advertising consent does
     not revive an earlier night consent the player may not remember. A night
     consent that was never granted is not withdrawn again, which would be
-    recorded and noticed as a refusal.
+    recorded and noticed as a refusal. A screen decides from the records as
+    they are when the player taps, and writes only the kinds that change.
   - A night consent recorded before this rule, or by a client that does not
     follow it, still stands after an advertising withdrawal; the
     `reconfirmation.night` rule under [Topic catalog](#topic-catalog) covers

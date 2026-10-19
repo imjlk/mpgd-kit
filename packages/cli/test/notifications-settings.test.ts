@@ -240,11 +240,6 @@ const common = {
   const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
   const { runtime, append, listConsent } = fakeRuntime(provider);
   const settings = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
-  // A change needs the records it changes: the screen reads them first.
-  assert.match(
-    (await settings.setAdvertising({ advertising: true })).message ?? '',
-    /불러오지 못해/u,
-  );
   await settings.load();
   await settings.setAdvertising({ advertising: true, night: true });
   await settings.setReminder('daily-ready', true);
@@ -261,6 +256,58 @@ const common = {
   append({ kind: 'night', state: 'granted', textVersion: '1' });
   const standing = await settings.load();
   assert.deepEqual(standing.advertising, { granted: false, night: true, nightSelectable: true });
+}
+
+// A tap decides from the records as they are when it happens, not as the
+// screen last showed them, and writes only the kinds that change.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime, calls, append, listConsent } = fakeRuntime(provider);
+  const settings = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
+  await settings.load();
+  await settings.setAdvertising({ advertising: true });
+  // Another device grants night consent after this screen read the records.
+  append({ kind: 'night', state: 'granted', textVersion: '1' });
+  const off = await settings.setAdvertising({ advertising: false });
+  assert.equal(off.message, '광고성 정보 수신동의와 야간 광고성 정보 수신동의를 철회했어요.');
+  assert.deepEqual(calls.at(-1), {
+    advertising: { advertising: 'withdrawn', night: 'withdrawn', textVersion: '1' },
+  });
+  // Another device grants advertising again; a stale "off" screen asks for on:
+  // nothing is written twice, which would restart the re-confirmation count.
+  append({ kind: 'advertising', state: 'granted', textVersion: '1' });
+  const count = calls.length;
+  const again = await settings.setAdvertising({ advertising: true });
+  assert.equal(again.message, '광고성 정보 수신에 동의했어요.');
+  assert.equal(calls.length, count);
+  // An explicit night withdrawal of a night consent never granted writes
+  // nothing (it would be a refusal), and both off at once is one call.
+  await settings.setAdvertising({ night: false });
+  assert.equal(calls.length, count);
+  await settings.setAdvertising({ night: true });
+  const both = await settings.setAdvertising({ advertising: false, night: false });
+  assert.equal(both.message, '광고성 정보 수신동의와 야간 광고성 정보 수신동의를 철회했어요.');
+  assert.deepEqual(calls.at(-1), {
+    advertising: { advertising: 'withdrawn', night: 'withdrawn', textVersion: '1' },
+  });
+  // Night consent with advertising consent withdrawn in the same change is refused.
+  const refused = await settings.setAdvertising({ advertising: false, night: true });
+  assert.equal(
+    refused.message,
+    '야간 광고성 정보 수신은 광고성 정보 수신에 먼저 동의해야 켤 수 있어요.',
+  );
+}
+
+// On a per-topic host, a reminder whose host agreement was withdrawn in host
+// settings shows off, though the preference record is still on.
+{
+  const { provider } = fakeProvider(capabilities('topic', 'host', false), {
+    topics: { 'daily-ready': 'denied' },
+  });
+  const { runtime, append, listConsent } = fakeRuntime(provider);
+  append({ kind: 'topic-preference', topic: 'daily-ready', state: 'granted' });
+  const view = await createStarterNotificationSettings({ ...common, provider, runtime, listConsent }).load();
+  assert.equal(view.reminders[0]?.enabled, false);
 }
 
 // Nothing on the device stands in for a record: a new device, or one whose
@@ -328,8 +375,8 @@ const common = {
       outcomes: { 'daily-ready': 'denied' },
     },
   );
-  const { runtime, calls } = fakeRuntime(provider);
-  const settings = createStarterNotificationSettings({ ...common, provider, runtime });
+  const { runtime, calls, listConsent } = fakeRuntime(provider);
+  const settings = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
   const view = await settings.load();
   assert.equal(view.permission.perTopic, true);
   assert.equal(view.permission.canRequest, false);
