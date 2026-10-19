@@ -144,6 +144,8 @@ const consentCompactionMs = dayMs;
 /** Lists every notice still owed, now or later: the next re-confirmation of each consent. */
 const noticeHorizon = '9999-12-31T00:00:00Z';
 const noticesEntryId = 'notices';
+/** How much wall time one scheduler run may use by default. */
+const defaultSchedulerBudgetMs = 20_000;
 const reminderEntryPrefix = 'reminder:';
 const reminderEntryId = (key: string): string => `${reminderEntryPrefix}${key}`;
 /** How far through the gate a set-time refusal got: the furthest step is the one answered. */
@@ -232,6 +234,11 @@ export interface CreateNotificationServiceInput {
    */
   readonly queue?: NotificationDispatchQueue;
   readonly now?: () => string;
+  /**
+   * A monotonic clock in milliseconds that bounds one scheduler run's wall
+   * time (`runScheduler`'s `budgetMs`); `performance.now()` by default.
+   */
+  readonly elapsedMs?: () => number;
   /** Jitter for repeated rate-limit backoff, in [0, 1). */
   readonly random?: () => number;
   /** How long a claim holds a delivery before another worker may replay it; 300 by default. */
@@ -351,13 +358,15 @@ export interface NotificationService {
    */
   cancelReminder(session: NotificationSession, input: unknown): Promise<{ readonly cancelled: boolean }>;
   /**
-   * One scheduler run: up to `limit` due schedule entries (server reminders
-   * become `reminder:` sends; each player's notice check pushes the consent
-   * notices owed by now), then `dispatchDue` with the same `limit`. Answers
-   * each send it touched with its result after the run, in the order it first
-   * touched them.
+   * One scheduler run, in rounds: each takes up to `limit` due schedule
+   * entries (server reminders become `reminder:` sends; each player's notice
+   * check pushes the consent notices owed by now), then `dispatchDue` with
+   * the same `limit`. Rounds go on while a round filled a batch and got
+   * somewhere, until `budgetMs` of wall time (20 seconds by default) is used.
+   * Answers each send it touched with its result after the run, in the order
+   * it first touched them.
    */
-  runScheduler(input?: { readonly limit?: number }): Promise<{
+  runScheduler(input?: { readonly limit?: number; readonly budgetMs?: number }): Promise<{
     readonly results: readonly NotificationDueResult[];
     readonly failed: number;
   }>;
@@ -1554,6 +1563,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const dispatchDueRows = async (options: { readonly limit?: number } = {}) => {
     const limit = batchLimit(options.limit);
     const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
+    const listed = keys.length;
     const results: NotificationDueResult[] = [];
     const pace = paceBudgets();
     let failed = 0;
@@ -1601,7 +1611,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         report(error, 'dispatchDue', sendKey);
       }
     }
-    return { results, failed };
+    return { results, failed, listed };
   };
 
   // Scheduler items.
@@ -2246,6 +2256,59 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
+   * One round's schedule entries: up to `limit` due ones, each fired,
+   * checked, or forgotten, with each send it touched. A schedule that cannot
+   * be read is counted and reported, and the round's due rows still go out.
+   */
+  const runScheduleEntries = async (
+    limit: number,
+    touched: Map<string, NotificationDeliveryOutcome>,
+  ): Promise<{ readonly listed: number; readonly handled: number; readonly failed: number }> => {
+    let failed = 0;
+    let due: readonly { readonly player: string; readonly id: string }[] = [];
+    try {
+      due = await store.listDueScheduleEntries({ at: formatNotificationInstant(nowMs()), limit });
+    } catch (error) {
+      // The due rows still go out: a schedule that cannot be read must not hold them.
+      failed += 1;
+      report(error, 'scheduler.list');
+    }
+    let handled = 0;
+    for (const { player, id } of due) {
+      let held: NotificationVersionedScheduleEntry | undefined;
+      try {
+        held = await store.getScheduleEntry({ player, id });
+        if (held?.entry.dueAt === undefined || Date.parse(held.entry.dueAt) > nowMs()) {
+          continue;
+        }
+        handled += 1;
+        const { item } = held.entry;
+        if (item.kind === 'notices') {
+          for (const result of await checkNotices(held, item)) {
+            touched.set(result.sendKey, result.outcome);
+          }
+        } else if (item.firedAt !== undefined) {
+          await forgetFiredReminder(held, item);
+        } else {
+          const result = await fireReminder(held, item);
+          if (result !== undefined) {
+            touched.set(result.sendKey, result.outcome);
+          }
+        }
+      } catch (error) {
+        failed += 1;
+        report(error, 'scheduler', `${encodeURIComponent(player)}:${id}`);
+        // A failure that may pass waits a minute; one that already moved or
+        // removed the entry (its version changed) is left as it is.
+        if (held !== undefined && !(error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')) {
+          await deferEntry(held, nowMs());
+        }
+      }
+    }
+    return { listed: due.length, handled, failed };
+  };
+
+  /**
    * Each authenticated call carries the session's current end, and the
    * endpoints the session registered move to it when it is later, so a
    * session the identity service extended keeps its devices bound without a
@@ -2533,7 +2596,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await runRow(job.sendKey, job.provider, job.rowKey, 'job');
     },
 
-    dispatchDue: (options = {}) => dispatchDueRows(options),
+    async dispatchDue(options = {}) {
+      const { results, failed } = await dispatchDueRows(options);
+      return { results, failed };
+    },
 
     async setReminder(session, raw) {
       const { player } = await authenticated(session);
@@ -2712,53 +2778,32 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 
     async runScheduler(options = {}) {
       const limit = batchLimit(options.limit);
+      const budgetMs = typeof options.budgetMs === 'number' && Number.isFinite(options.budgetMs) && options.budgetMs > 0
+        ? options.budgetMs
+        : defaultSchedulerBudgetMs;
+      const elapsed = input.elapsedMs ?? (() => globalThis.performance.now());
+      const startedAt = elapsed();
       const touched = new Map<string, NotificationDeliveryOutcome>();
       let failed = 0;
-      let due: readonly { readonly player: string; readonly id: string }[] = [];
-      try {
-        due = await store.listDueScheduleEntries({ at: formatNotificationInstant(nowMs()), limit });
-      } catch (error) {
-        // The due rows still go out: a schedule that cannot be read must not hold them.
-        failed += 1;
-        report(error, 'scheduler.list');
-      }
-      for (const { player, id } of due) {
-        let held: NotificationVersionedScheduleEntry | undefined;
-        try {
-          held = await store.getScheduleEntry({ player, id });
-          if (held?.entry.dueAt === undefined || Date.parse(held.entry.dueAt) > nowMs()) {
-            continue;
-          }
-          const { item } = held.entry;
-          if (item.kind === 'notices') {
-            for (const result of await checkNotices(held, item)) {
-              touched.set(result.sendKey, result.outcome);
-            }
-          } else if (item.firedAt !== undefined) {
-            await forgetFiredReminder(held, item);
-          } else {
-            const result = await fireReminder(held, item);
-            if (result !== undefined) {
-              touched.set(result.sendKey, result.outcome);
-            }
-          }
-        } catch (error) {
-          failed += 1;
-          report(error, 'scheduler', `${encodeURIComponent(player)}:${id}`);
-          // A failure that may pass waits a minute; one that already moved or
-          // removed the entry (its version changed) is left as it is.
-          if (held !== undefined && !(error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')) {
-            await deferEntry(held, nowMs());
-          }
+      for (;;) {
+        const entries = await runScheduleEntries(limit, touched);
+        failed += entries.failed;
+        const dispatched = await dispatchDueRows({ limit });
+        failed += dispatched.failed;
+        for (const result of dispatched.results) {
+          touched.set(result.sendKey, result.outcome);
         }
-      }
-      const dispatched = await dispatchDueRows({ limit });
-      for (const result of dispatched.results) {
-        touched.set(result.sendKey, result.outcome);
+        // Another round only while one may be due (a batch came back full)
+        // and this round got somewhere, within the budget.
+        const more = entries.listed === limit || dispatched.listed === limit;
+        const progressed = entries.handled > 0 || dispatched.results.length > 0;
+        if (!more || !progressed || elapsed() - startedAt >= budgetMs) {
+          break;
+        }
       }
       return {
         results: [...touched].map(([sendKey, outcome]) => ({ sendKey, outcome })),
-        failed: failed + dispatched.failed,
+        failed,
       };
     },
 

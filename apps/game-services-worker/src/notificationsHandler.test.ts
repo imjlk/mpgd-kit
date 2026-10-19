@@ -360,6 +360,31 @@ try {
   await runScheduledNotifications(env);
   assert.equal(sends.length, sentBeforeCron + 2, 'a fired reminder is sent once');
 
+  // One cron run drains more than one batch: three reminders with a batch of one.
+  {
+    const batched = {
+      ...env,
+      MPGD_NOTIFICATIONS_DUE_BATCH: '1',
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+    };
+    const batchedFetch = createWorkerFetchHandler(batched);
+    const post = (path: string, body: unknown) =>
+      batchedFetch(
+        new Request(`${base}${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    await post('/endpoints', { registration: registration('tok-batch'), target: 'android' });
+    for (const key of ['b-1', 'b-2', 'b-3']) {
+      await post('/reminders', { reminder: { ...reminder(past), key } });
+    }
+    const before = sends.length;
+    await runScheduledNotifications(batched);
+    assert.equal(sends.length - before, 3, 'three batches in one cron run');
+  }
+
   // Ending a session unbinds what it registered; an explicit unbind removes the other.
   await endWorkerNotificationSession(env, { sessionId: 's-2' });
   assert.equal(

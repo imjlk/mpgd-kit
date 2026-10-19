@@ -89,11 +89,14 @@ export interface GameServicesNotificationsEnv {
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
   /**
-   * Items the cron takes per run, for each of its two steps (due reminders and
-   * notice checks, then due sends); 25 by default, at most 100 (each send
-   * costs several subrequests).
+   * Items one scheduler round takes, for each of its two steps (due
+   * reminders and notice checks, then due sends); 25 by default, at most
+   * 100. A cron run goes on in rounds until nothing is due or its time
+   * budget is used.
    */
   readonly MPGD_NOTIFICATIONS_DUE_BATCH?: string;
+  /** Wall time one cron run's scheduler may use, in seconds; 20 by default, 1 to 300. */
+  readonly MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS?: string;
 }
 
 export type WorkerNotifications =
@@ -595,7 +598,8 @@ export async function consumeNotificationDispatchBatch(
  * and consent notice checks, then due rows: deferred sends and expired
  * leases, paced by each provider's rate and sent through the queue when one
  * is bound), each step on its own so a failed purge never skips the
- * scheduler. The batch is small because each send costs several subrequests.
+ * scheduler. The run goes on in batches of MPGD_NOTIFICATIONS_DUE_BATCH
+ * until nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS is used.
  */
 export async function runScheduledNotifications(env: GameServicesNotificationsEnv): Promise<void> {
   const notifications = resolveWorkerNotifications(env);
@@ -605,13 +609,16 @@ export async function runScheduledNotifications(env: GameServicesNotificationsEn
   const declared = env.MPGD_NOTIFICATIONS_DUE_BATCH?.trim();
   const asked = declared === undefined || declared === '' ? 25 : Number(declared);
   const limit = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
+  const budget = env.MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS?.trim();
+  const seconds = budget === undefined || budget === '' ? 20 : Number(budget);
+  const budgetMs = (Number.isFinite(seconds) ? Math.min(Math.max(seconds, 1), 300) : 20) * 1000;
   try {
     await notifications.service.purge();
   } catch (error) {
     console.error('Notifications purge failed:', describeFailure(error));
   }
   try {
-    const { failed } = await notifications.service.runScheduler({ limit });
+    const { failed } = await notifications.service.runScheduler({ limit, budgetMs });
     if (failed > 0) {
       console.error('Notifications scheduler:', failed, 'item(s) failed; see the reports above.');
     }

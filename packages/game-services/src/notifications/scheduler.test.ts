@@ -1684,4 +1684,46 @@ const pending = (h: Harness) =>
   }
 }
 
+// One run goes on in rounds until nothing is due or its wall-time budget is used.
+{
+  for (const budget of ['drains', 'stops'] as const) {
+    let wall = 0;
+    const time = clock('2026-10-19T03:00:00Z');
+    const fcm = fakeProvider('fcm');
+    const store = createInMemoryNotificationStore();
+    const service = createNotificationService({
+      store,
+      registry: createNotificationProviderRegistry([{ entry: fcmEntry, delivery: fcm, targets: ['vector'] }]),
+      catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+      now: time.now,
+      // Each read of the wall clock is 6 seconds later, so a 20-second budget allows a few rounds.
+      elapsedMs: () => {
+        wall += budget === 'stops' ? 6_000 : 0;
+        return wall;
+      },
+    });
+    for (let index = 0; index < 25; index += 1) {
+      await service.registerEndpoint(session(`p-${index}`), {
+        registration: {
+          provider: 'fcm',
+          address: { kind: 'fcm-token', value: `tok-${index}`, permission: 'granted' },
+        },
+      });
+      await service.setReminder(session(`p-${index}`), {
+        key: 'k',
+        topic: 'friend-challenge',
+        fireAt: '2026-10-19T03:00:00Z',
+      });
+    }
+    const run = await service.runScheduler({ limit: 5 });
+    if (budget === 'drains') {
+      assert.equal(fcm.calls.length, 25, 'one run drains five batches');
+      assert.equal(run.results.length, 25);
+    } else {
+      // Started at 6 s; rounds end 6, 12, 18, and 24 s later: the fourth crosses the 20-second budget.
+      assert.equal(fcm.calls.length, 20, 'the run stops once its budget is used');
+    }
+  }
+}
+
 console.info('Notifications scheduler tests passed.');
