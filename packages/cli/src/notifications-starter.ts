@@ -470,8 +470,10 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
 
 /** Whether a Capacitor gateway already registers a notifications provider. */
 export function capacitorGatewayRegistersNotifications(source: string): boolean {
+  // Comments do not register anything.
+  const code = source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/[^\n]*/gu, '');
   return /\b(?:createStarterCapacitorNotifications|createCapacitorNotificationServiceProvider)\s*\(/u
-    .test(source);
+    .test(code);
 }
 
 /**

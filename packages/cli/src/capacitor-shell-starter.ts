@@ -423,6 +423,37 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         );
       }
     }
+    if (notifications === undefined) {
+      for (const name of notificationsShellPlugins) {
+        if (existingShellDependencies[name] !== undefined) {
+          warnings.push(
+            `The shell still lists ${name} although ${notificationsProviderId} is no longer `
+              + 'requested; the initializer never removes a plugin, so remove it from the shell '
+              + 'package and resync if the game stopped sending notifications.',
+          );
+        }
+      }
+    }
+  }
+  if (notifications !== undefined) {
+    // The starter exposes notifications on both platforms; the provider still
+    // reports its own readiness (no plugin, no Firebase files), which the
+    // target config follows. A state the game set itself is kept.
+    for (const targetName of ['android', 'ios'] as const) {
+      const target = requireObject(targetMap[targetName], `${targetName} target`);
+      const integrations = target.integrations === undefined
+        ? {}
+        : requireObject(target.integrations, `${targetName}.integrations`);
+      if (integrations.notifications === undefined) {
+        target.integrations = { ...integrations, notifications: 'available' };
+      } else if (integrations.notifications !== 'available') {
+        warnings.push(
+          `mpgd.targets.json keeps ${targetName}.integrations.notifications at `
+            + `${String(integrations.notifications)}, which hides notifications from the game; set it `
+            + 'to available once the shell is configured.',
+        );
+      }
+    }
   }
   const shellDependencies: Record<string, string> = {
     '@capacitor/android': capacitorVersion,
@@ -622,7 +653,10 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   const gameScripts = gamePackage.scripts === undefined
     ? {}
     : requireObject(gamePackage.scripts, 'game scripts');
-  const missingScripts = notifications === undefined || gameScripts['validate:notifications'] !== undefined
+  const validatorPresent = notifications !== undefined
+    && (notifications.files.some((file) => file.path === 'tools/validate-notifications.ts')
+      || readExisting(safeDestination(gameRoot, 'tools/validate-notifications.ts')) !== undefined);
+  const missingScripts = !validatorPresent || gameScripts['validate:notifications'] !== undefined
     ? {}
     : {
         'validate:notifications': 'ttsx --project tsconfig.tools.json tools/validate-notifications.ts',
@@ -3018,10 +3052,16 @@ export const androidInexactAlarmPermission =
 
 /** Whether an Android manifest already drops `SCHEDULE_EXACT_ALARM` from the merge. */
 export function androidManifestRemovesExactAlarm(manifest: string): boolean {
+  const code = withoutXmlComments(manifest);
   return /<uses-permission\b[^>]*android:name\s*=\s*"android\.permission\.SCHEDULE_EXACT_ALARM"[^>]*tools:node\s*=\s*"remove"/u
-    .test(manifest)
+    .test(code)
     || /<uses-permission\b[^>]*tools:node\s*=\s*"remove"[^>]*android:name\s*=\s*"android\.permission\.SCHEDULE_EXACT_ALARM"/u
-      .test(manifest);
+      .test(code);
+}
+
+/** The manifest with each XML comment blanked to spaces, so offsets stay the same. */
+function withoutXmlComments(manifest: string): string {
+  return manifest.replace(/<!--[\s\S]*?-->/gu, (comment) => comment.replace(/[^\n]/gu, ' '));
 }
 
 /**
@@ -3036,17 +3076,19 @@ export function applyAndroidManifestInexactAlarms(manifest: string): string {
   if (androidManifestRemovesExactAlarm(manifest)) {
     return manifest;
   }
-  const root = /<manifest\b[^>]*?>/u.exec(manifest);
-  const close = manifest.lastIndexOf('</manifest>');
-  if (root === null || close === -1) {
+  const code = withoutXmlComments(manifest);
+  const root = /<manifest\b[^>]*?>/u.exec(code);
+  const close = code.lastIndexOf('</manifest>');
+  if (root === null || close === -1 || root[0].endsWith('/>') || close < root.index) {
     return manifest;
   }
-  let rootTag = root[0];
+  const newline = manifest.includes('\r\n') ? '\r\n' : '\n';
+  let rootTag = manifest.slice(root.index, root.index + root[0].length);
   if (!/\sxmlns:tools\s*=/u.test(rootTag)) {
     rootTag = rootTag.replace(/^<manifest\b/u, `<manifest xmlns:tools="${androidToolsNamespace}"`);
   }
   const head = `${manifest.slice(0, root.index)}${rootTag}${manifest.slice(root.index + root[0].length, close)}`;
-  return `${head.trimEnd()}\n    ${androidInexactAlarmPermission}\n${manifest.slice(close)}`;
+  return `${head.trimEnd()}${newline}    ${androidInexactAlarmPermission}${newline}${manifest.slice(close)}`;
 }
 
 function materializeAndroidInexactAlarms(gameRoot: string): void {
@@ -3125,6 +3167,32 @@ function planNotificationsProvider(input: {
     packageName: name,
     version: versionOf(name),
   }));
+  // The wiring imports @mpgd/adapter-capacitor/notifications: the game's
+  // installed adapter must have it, and the plugins must satisfy its peers.
+  const adapter = readJsonObject(
+    path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/package.json'),
+  );
+  const adapterExports = adapter.exports;
+  if (typeof adapterExports !== 'object' || adapterExports === null
+    || (adapterExports as Readonly<Record<string, unknown>>)['./notifications'] === undefined) {
+    throw new Error(
+      `--providers notifications needs @mpgd/adapter-capacitor/notifications, which the game's `
+        + `@mpgd/adapter-capacitor ${String(adapter.version)} does not export; upgrade the game's kit `
+        + 'packages (mpgd kit upgrade) first.',
+    );
+  }
+  const adapterPeers = typeof adapter.peerDependencies === 'object' && adapter.peerDependencies !== null
+    ? adapter.peerDependencies as Readonly<Record<string, unknown>>
+    : {};
+  for (const plugin of shellPlugins) {
+    const range = adapterPeers[plugin.packageName];
+    if (typeof range === 'string' && !satisfies(plugin.version, range, { includePrerelease: true })) {
+      throw new Error(
+        `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `
+          + `but the game has ${plugin.version}; align the game's version before rerunning.`,
+      );
+    }
+  }
   const gamePackages = Object.fromEntries(
     Object.keys(notificationsGameDependencies).map((name) => [name, versionOf(name)]),
   );
@@ -3162,14 +3230,20 @@ function planNotificationsProvider(input: {
     const overlayRoot = path.join(path.dirname(input.templateRoot), 'notifications', 'common');
     const jsonTitle = JSON.stringify(input.displayName).slice(1, -1);
     for (const file of notificationsCapacitorSupportFiles) {
-      if (readExisting(safeDestination(gameRoot, file)) !== undefined) {
-        continue;
+      // A function replacer: `$&` or `$$` in a display name stays literal.
+      const title = file.endsWith('.json') ? jsonTitle : input.displayName;
+      const content = readTemplateFile(overlayRoot, file).replaceAll('__GAME_TITLE__', () => title);
+      const existing = readExisting(safeDestination(gameRoot, file));
+      if (existing === undefined) {
+        files.push({ path: file, content });
+      } else if (file.endsWith('.ts') && existing.replace(/\r\n/gu, '\n') !== content) {
+        // The wired gateway imports the starter's exports from these modules.
+        warnings.push(
+          `${file} is game-owned and differs from the notifications starter; the wired gateway `
+            + 'imports createStarterCapacitorNotifications and starterNotificationTopics from it, '
+            + 'so keep those exports.',
+        );
       }
-      files.push({
-        path: file,
-        content: readTemplateFile(overlayRoot, file)
-          .replaceAll('__GAME_TITLE__', file.endsWith('.json') ? jsonTitle : input.displayName),
-      });
     }
     warnings.push(
       'The notification settings screen is not added to an existing game; render one from '

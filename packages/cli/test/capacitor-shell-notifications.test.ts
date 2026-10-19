@@ -12,6 +12,7 @@ import {
   planCapacitorShellStarter,
 } from '../src/capacitor-shell-starter.js';
 import {
+  capacitorGatewayRegistersNotifications,
   notificationsCapacitorSupportFiles,
   notificationsGameDependencies,
   wireCapacitorGatewayNotifications,
@@ -47,9 +48,13 @@ const readTemplate = (relative: string): string => readFileSync(
   path.join(templateRoot, relative),
   'utf8',
 );
-const adapterVersion = (JSON.parse(
+const kitAdapter = JSON.parse(
   readFileSync(path.join(kitRoot, 'adapters/capacitor/package.json'), 'utf8'),
-) as { readonly version: string }).version;
+) as {
+  readonly version: string;
+  readonly exports: Record<string, unknown>;
+  readonly peerDependencies: Record<string, string>;
+};
 
 function createGame(gateways: { readonly android?: string; readonly ios?: string } = {}): string {
   const root = mkdtempSync(path.join(tmpdir(), 'mpgd-capacitor-notifications-'));
@@ -69,7 +74,9 @@ function createGame(gateways: { readonly android?: string; readonly ios?: string
   });
   writeJson('node_modules/@mpgd/adapter-capacitor/package.json', {
     name: '@mpgd/adapter-capacitor',
-    version: adapterVersion,
+    version: kitAdapter.version,
+    exports: kitAdapter.exports,
+    peerDependencies: kitAdapter.peerDependencies,
     dependencies: { '@mpgd/capacitor-game-services': 'workspace:*' },
   });
   writeJson(
@@ -180,6 +187,11 @@ try {
     assert.equal(shell.dependencies['@capacitor-firebase/messaging'], '8.5.2');
     assert.equal(shell.dependencies['@capacitor/local-notifications'], '8.3.1');
     assert.equal(shell.dependencies.firebase, undefined, 'the web SDK stays in the game');
+    const targets = readJson(root, 'mpgd.targets.json') as {
+      readonly targets: Record<string, { readonly integrations?: Record<string, string> }>;
+    };
+    assert.equal(targets.targets.android?.integrations?.notifications, 'available');
+    assert.equal(targets.targets.ios?.integrations?.notifications, 'available');
     const manifest = readJson(root, 'apps/mobile-capacitor/mpgd.native-shell.json');
     assert.deepEqual(manifest.requestedProviderIds, ['notifications']);
     assert.deepEqual(manifest.providers, {
@@ -208,6 +220,18 @@ try {
     assert.equal(
       rerun.warnings.some((warning) => /settings screen/u.test(warning)),
       false,
+    );
+    // Without --providers the recorded selection is planned again.
+    const { providerIds: _ignored, ...withoutProviders } = input(root, []);
+    const recorded = planCapacitorShellStarter(withoutProviders);
+    assert.equal(recorded.notificationPlugins.length, 2);
+    assert.deepEqual(recorded.changedFiles, ['apps/mobile-capacitor/ios/App/App/Info-Smoke.plist']);
+    // Dropping notifications never uninstalls the plugins, and says so.
+    const dropped = planCapacitorShellStarter(input(root, ['identity']));
+    assert.equal(dropped.notificationPlugins.length, 0);
+    assert.equal(
+      dropped.warnings.filter((warning) => /still lists @capacitor/u.test(warning)).length,
+      2,
     );
 
     // An installed version other than the shell's pin is refused.
@@ -259,7 +283,7 @@ try {
   // already wired gateway needs nothing.
   {
     const owned = `${readTemplate(androidGateway)}// game-owned change\n`;
-    const alreadyWired = `${readTemplate(iosGateway)}// createCapacitorNotificationServiceProvider(\n`;
+    const alreadyWired = `${readTemplate(iosGateway)}export const notify = createCapacitorNotificationServiceProvider(options);\n`;
     const root = createGame({ android: owned, ios: alreadyWired });
     roots.push(root);
     const ownCatalog = '{ "version": "game", "defaultLocale": "en", "topics": [] }\n';
@@ -284,8 +308,85 @@ try {
       plan.warnings.some((warning) => /capacitorIos\.ts/u.test(warning)),
       false,
     );
-    // The plugins are installed all the same.
+    // The plugins are installed all the same, but no validator script
+    // without the validator, and the game's catalog is untouched.
     assert.equal(plan.notificationPlugins.length, 2);
+    applyCapacitorShellStarter(plan);
+    const game = readJson(root, 'package.json') as { readonly scripts: Record<string, string> };
+    assert.equal(game.scripts['validate:notifications'], undefined);
+    assert.equal(readFileSync(path.join(root, 'notifications/topics.json'), 'utf8'), ownCatalog);
+    // A comment that names the factory registers nothing.
+    assert.equal(
+      capacitorGatewayRegistersNotifications(
+        '// createCapacitorNotificationServiceProvider(\n/* createStarterCapacitorNotifications( */',
+      ),
+      false,
+    );
+  }
+
+  // A game-owned starter module is kept, with a warning; a `$&` in the
+  // display name stays literal; a target state the game set itself is kept.
+  {
+    const root = createGame();
+    roots.push(root);
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(root, 'src/platform/notifications.ts'), 'export const own = true;\n');
+    const targets = readJson(root, 'mpgd.targets.json') as {
+      targets: Record<string, Record<string, unknown>>;
+    };
+    targets.targets.ios = {
+      ...targets.targets.ios,
+      integrations: { notifications: 'configuration-required' },
+    };
+    writeFileSync(path.join(root, 'mpgd.targets.json'), JSON.stringify(targets));
+    const plan = planCapacitorShellStarter({
+      ...input(root, ['notifications']),
+      displayName: 'Cash $& Co',
+    });
+    assert.equal(plan.changedFiles.includes('src/platform/notifications.ts'), false);
+    assert.ok(
+      plan.warnings.some((warning) =>
+        /src\/platform\/notifications\.ts is game-owned and differs/u.test(warning),
+      ),
+    );
+    assert.ok(
+      plan.warnings.some((warning) =>
+        /keeps ios\.integrations\.notifications at configuration-required/u.test(warning),
+      ),
+    );
+    applyCapacitorShellStarter(plan);
+    const deployment = readJson(root, 'notifications/deployment.json') as {
+      readonly advertisingSender: { readonly name: string };
+    };
+    assert.equal(deployment.advertisingSender.name, 'Cash $& Co');
+    assert.equal(
+      readFileSync(path.join(root, 'src/platform/notifications.ts'), 'utf8'),
+      'export const own = true;\n',
+    );
+  }
+
+  // The game's kit packages must have the notifications subpath and accept the plugins.
+  {
+    const root = createGame();
+    roots.push(root);
+    const adapterFile = path.join(root, 'node_modules/@mpgd/adapter-capacitor/package.json');
+    const adapter = JSON.parse(readFileSync(adapterFile, 'utf8')) as Record<string, unknown>;
+    writeFileSync(adapterFile, JSON.stringify({ ...adapter, exports: { '.': './dist/index.js' } }));
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /does not export; upgrade the game's kit packages/u,
+    );
+    writeFileSync(adapterFile, JSON.stringify(adapter));
+    const plugin = path.join(root, 'node_modules/@capacitor-firebase/messaging/package.json');
+    mkdirSync(path.dirname(plugin), { recursive: true });
+    writeFileSync(
+      plugin,
+      JSON.stringify({ name: '@capacitor-firebase/messaging', version: '7.0.0' }),
+    );
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /needs @capacitor-firebase\/messaging .* but the game has 7\.0\.0/u,
+    );
   }
 
   // @capacitor/push-notifications claims the same iOS push handler: refused.
@@ -358,6 +459,22 @@ try {
   assert.ok(androidManifestRemovesExactAlarm(
     '<uses-permission tools:node="remove" android:name="android.permission.SCHEDULE_EXACT_ALARM"/>',
   ));
+  // Comments do not count, CRLF and an existing tools namespace are kept,
+  // and a manifest without a closing root is left alone.
+  const commented = plain.replace(
+    '</manifest>',
+    `<!-- ${androidInexactAlarmPermission} </manifest> -->\n</manifest>`,
+  );
+  assert.equal(androidManifestRemovesExactAlarm(commented), false);
+  const fixed = applyAndroidManifestInexactAlarms(commented);
+  assert.ok(androidManifestRemovesExactAlarm(fixed));
+  assert.ok(fixed.endsWith(`    ${androidInexactAlarmPermission}\n</manifest>\n`));
+  const crlf = plain.replaceAll('\n', '\r\n')
+    .replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ');
+  const crlfFixed = applyAndroidManifestInexactAlarms(crlf);
+  assert.ok(crlfFixed.includes(`\r\n    ${androidInexactAlarmPermission}\r\n</manifest>`));
+  assert.equal(crlfFixed.match(/xmlns:tools=/gu)?.length, 1);
+  assert.equal(applyAndroidManifestInexactAlarms('<manifest/>'), '<manifest/>');
   // The kit's reference shell drops it already.
   assert.ok(
     androidManifestRemovesExactAlarm(
