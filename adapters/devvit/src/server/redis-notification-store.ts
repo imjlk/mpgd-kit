@@ -390,6 +390,7 @@ export function createDevvitRedisNotificationStore(
     installationId: string,
     matches: (endpoint: NotificationStoredEndpoint) => boolean,
     prune: readonly (readonly [string, string])[] = [],
+    reindex: (endpoint: NotificationStoredEndpoint) => Command[] = () => [],
   ): Promise<boolean> {
     return transactPrepared(async () => {
       const seen = await readEndpoint(provider, installationId);
@@ -413,7 +414,9 @@ export function createDevvitRedisNotificationStore(
             };
           }
           if (!matches(endpoint)) {
-            return { commands: [], result: false };
+            // An index entry that drifted from its endpoint is rewritten, so a
+            // purge never reads it again before its time.
+            return { commands: reindex(endpoint), result: false };
           }
           const owner = await redis.get(keys.endpointAddress(provider, endpoint.address.value));
           return {
@@ -639,8 +642,8 @@ export function createDevvitRedisNotificationStore(
             return { commands: [], result: false };
           }
           const { sessionExpiresAt: _earlier, ...kept } = endpoint;
-          const moved: NotificationStoredEndpoint = expiresAt === undefined ? kept : { ...kept, sessionExpiresAt: expiresAt };
-          return { commands: endpointCommands(endpoint, moved, true, false), result: true };
+          const extended: NotificationStoredEndpoint = expiresAt === undefined ? kept : { ...kept, sessionExpiresAt: expiresAt };
+          return { commands: endpointCommands(endpoint, extended, true, false), result: true };
         });
         if (moved) {
           changed += 1;
@@ -921,12 +924,21 @@ export function createDevvitRedisNotificationStore(
         (endpoint.status === 'invalid' && before(endpoint.invalidatedAt, cutoffs.invalidEndpointsBefore))
         || before(endpoint.lastRegisteredAt, cutoffs.staleEndpointsBefore)
         || before(endpoint.sessionExpiresAt, cutoffs.sessionEndpointsBefore);
-      for (const [index, cutoff] of [
-        [keys.endpointsInvalidated, cutoffs.invalidEndpointsBefore],
-        [keys.endpointsRegistered, cutoffs.staleEndpointsBefore],
-        [keys.endpointsSessionEnd, cutoffs.sessionEndpointsBefore],
+      for (const [index, cutoff, timeOf] of [
+        [
+          keys.endpointsInvalidated,
+          cutoffs.invalidEndpointsBefore,
+          (endpoint: NotificationStoredEndpoint) => (endpoint.status === 'invalid' ? endpoint.invalidatedAt : undefined),
+        ],
+        [keys.endpointsRegistered, cutoffs.staleEndpointsBefore, (endpoint: NotificationStoredEndpoint) => endpoint.lastRegisteredAt],
+        [keys.endpointsSessionEnd, cutoffs.sessionEndpointsBefore, (endpoint: NotificationStoredEndpoint) => endpoint.sessionExpiresAt],
       ] as const) {
-        const members = await scoreRange(index, '-inf', `(${String(Date.parse(cutoff))}`, purgeLimit);
+        const cutoffMs = Date.parse(cutoff);
+        if (Number.isNaN(cutoffMs)) {
+          // A cutoff that does not parse matches nothing, as in the in-memory store.
+          continue;
+        }
+        const members = await scoreRange(index, '-inf', `(${String(cutoffMs)}`, purgeLimit);
         for (const member of members) {
           const named = tryParse<unknown>(member);
           if (!Array.isArray(named) || typeof named[0] !== 'string' || typeof named[1] !== 'string') {
@@ -936,7 +948,15 @@ export function createDevvitRedisNotificationStore(
             }));
             continue;
           }
-          if (await removeEndpointIf(named[0], named[1], pastCutoff, [[index, member]])) {
+          const reindex = (endpoint: NotificationStoredEndpoint): Command[] => {
+            const at = timeOf(endpoint);
+            if (at === undefined) {
+              return [(transaction) => transaction.zRem(index, [member])];
+            }
+            const score = Date.parse(at);
+            return [(transaction) => transaction.zAdd(index, { member, score })];
+          };
+          if (await removeEndpointIf(named[0], named[1], pastCutoff, [[index, member]], reindex)) {
             endpointCount += 1;
           }
         }

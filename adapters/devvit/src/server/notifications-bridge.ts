@@ -41,7 +41,8 @@ import {
  * The user is the Devvit request context's (`context.userId`), never a
  * payload field. A logged-out viewer has none: reads answer
  * `action-required` with `requiredAction: 'login'`, and requests answer the
- * `action-required` outcome without reaching the plugin; the game then calls
+ * `action-required` outcome (`unavailable` for an unmapped topic) without
+ * reaching the plugin; the game then calls
  * `identity.requestUpgrade({ reason: 'notifications' })`.
  *
  * Notifications are a gated beta: an app Reddit has not approved is kept
@@ -156,7 +157,8 @@ export function createDevvitServerNotificationProvider(
   const loginRequired = (topics: readonly string[]): NotificationPermissionResult => ({
     snapshot: snapshotOf(topics, 'action-required'),
     outcomes: outcomesWith(topics, 'action-required'),
-    requiredAction: 'login',
+    // Logging in could not enable a topic the catalog does not map.
+    ...(topics.some((topic) => mapped.has(topic)) ? { requiredAction: 'login' as const } : {}),
   });
   const refused = (
     response: { readonly success?: unknown; readonly message?: unknown } | undefined,

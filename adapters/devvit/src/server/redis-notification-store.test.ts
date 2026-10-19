@@ -398,6 +398,52 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(redis.keys().filter((key) => key.includes(':endpoint'))).toEqual([]);
   });
 
+  it('keeps the purge time indexes in step with invalidation, session extension, and takeover', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    const zset = async (key: string) =>
+      (await redis.zRange(`mpgd:notifications:${key}`, '-inf', '+inf', { by: 'score' })).map((entry) => [entry.member, entry.score]);
+    const base = {
+      provider: 'fcm',
+      player: 't2_me',
+      permission: 'granted' as const,
+      lastRegisteredAt: '2026-10-19T03:00:00Z',
+    };
+    await store.putEndpoint({
+      ...base,
+      installationId: 'a',
+      address: { kind: 'fcm-token', value: 'tok-a' },
+      sessionId: 's',
+      sessionExpiresAt: '2026-10-20T00:00:00Z',
+    });
+    const a = JSON.stringify(['fcm', 'a']);
+    await store.invalidateEndpoint({ provider: 'fcm', installationId: 'a', value: 'tok-a', at: '2026-10-19T04:00:00Z' });
+    expect(await zset('endpoints-invalidated')).toEqual([[a, Date.parse('2026-10-19T04:00:00Z')]]);
+    await store.extendSessionEndpoints({ sessionId: 's', expiresAt: '2026-10-21T00:00:00Z' });
+    expect(await zset('endpoints-session-end')).toEqual([[a, Date.parse('2026-10-21T00:00:00Z')]]);
+    await store.extendSessionEndpoints({ sessionId: 's' });
+    expect(await zset('endpoints-session-end')).toEqual([]);
+    // A new address revives the endpoint: it leaves the invalidated index.
+    await store.putEndpoint({ ...base, installationId: 'a', address: { kind: 'fcm-token', value: 'tok-a2' }, sessionId: 's' });
+    expect(await zset('endpoints-invalidated')).toEqual([]);
+    // Another installation takes the address: the loser leaves every index.
+    await store.putEndpoint({ ...base, installationId: 'b', address: { kind: 'fcm-token', value: 'tok-a2' }, sessionId: 's' });
+    expect((await zset('endpoints-registered')).map(([member]) => member)).toEqual([JSON.stringify(['fcm', 'b'])]);
+    // A drifted index entry is rescored by the purge that reads it, not left at the head.
+    const drift = await redis.watch();
+    await drift.multi();
+    await drift.zAdd('mpgd:notifications:endpoints-registered', { member: JSON.stringify(['fcm', 'b']), score: 0 });
+    await drift.exec();
+    await store.purge({
+      sendsChangedBefore: '2026-01-01T00:00:00Z',
+      historyBefore: '2026-01-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-01-01T00:00:00Z',
+      staleEndpointsBefore: '2026-10-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-01-01T00:00:00Z',
+    });
+    expect(await zset('endpoints-registered')).toEqual([[JSON.stringify(['fcm', 'b']), Date.parse('2026-10-19T03:00:00Z')]]);
+  });
+
   it('keeps an address pointer that another installation took when the first moves on', async () => {
     const store = createDevvitRedisNotificationStore(createFakeNotificationRedis());
     const base = {

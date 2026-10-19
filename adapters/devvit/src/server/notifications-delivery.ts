@@ -210,7 +210,7 @@ function reasonOf(answer: NotificationRemoteDeliveryAnswer): Pick<DevvitEnqueueE
  *   are `rejected` with reason `configuration` (the recipient: `recipient`),
  *   because the same send would fail again.
  * - **Answers.** `successCount` above 0 is `accepted`. Otherwise an error for
- *   this recipient (or for no named user) proves nothing was queued for it:
+ *   this recipient (or for no named user) is a failure Devvit counted:
  *   a message that reads as a rate limit is `rate-limited` (deferred, for
  *   at most a day), one that reads as the user's refusal (not opted in, no
  *   such user) in an error that names this recipient is `rejected` with
@@ -300,7 +300,8 @@ export function createDevvitNotificationDeliveryProvider(
           // A failing classifier keeps the default answer; the report says so.
           note = ` (classifyEnqueueError threw: ${error instanceof Error ? error.message : String(error)})`;
         }
-        // The provider code follows the final answer, after any override.
+        // The provider code follows the final answer, after any override; a
+        // thrown call keeps DEVVIT_ENQUEUE_FAILED, which names its source.
         let providerCode: string = devvitNotificationProviderCodes.enqueueRejected;
         if (source === 'thrown') {
           providerCode = devvitNotificationProviderCodes.enqueueFailed;

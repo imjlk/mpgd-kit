@@ -61,9 +61,19 @@ describe('createDevvitServerNotificationProvider', () => {
       requiredAction: 'login',
     });
     for (const call of [provider.requestPermission, provider.revokePermission]) {
-      await expect(call?.call(provider, { topics: ['friend-challenge', 'unmapped'] })).resolves.toMatchObject({
+      await expect(call?.call(provider, { topics: ['friend-challenge', 'unmapped'] })).resolves.toEqual({
+        snapshot: {
+          app: 'action-required',
+          topics: { 'friend-challenge': 'action-required', unmapped: 'unsupported' },
+          requiredAction: 'login',
+        },
         outcomes: { 'friend-challenge': 'action-required', unmapped: 'unavailable' },
         requiredAction: 'login',
+      });
+      // Only unmapped topics: logging in could enable nothing, so no login is asked for.
+      await expect(call?.call(provider, { topics: ['unmapped'] })).resolves.toEqual({
+        snapshot: { app: 'action-required', topics: { unmapped: 'unsupported' }, requiredAction: 'login' },
+        outcomes: { unmapped: 'unavailable' },
       });
     }
   });
