@@ -1810,6 +1810,37 @@ describe('AIT production host bridge', () => {
     expect(grantPromotion).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['cached', 'resolved'] as const)('replays %s successful receipts to a restarted observer without native payout', async (kind) => {
+    const values = new Map<string, string>();
+    const grantPromotionReward = vi.fn(async () => ({ key: 'observed-receipt' }));
+    const storage = {
+      getItem: async (key: string) => values.get(key) ?? null,
+      setItem: async (key: string, value: string) => { values.set(key, value); },
+      removeItem: async (key: string) => { values.delete(key); },
+    };
+    const claim = { campaignId: 'DAILY', idempotencyKey: 'observer-recovery' };
+    const promotionRewards = { DAILY: { promotionCode: 'TEST_DAILY', amount: 1 } };
+    const failedObserver = vi.fn(async () => { throw new Error('authority unavailable'); });
+    const first = createAitHostBridge({ promotionRewards, observePromotionGrant: failedObserver,
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    await expect(request(first, 'promotions.grantReward', claim)).resolves.toEqual({ status: 'granted', receiptKey: 'observed-receipt' });
+    expect(failedObserver).toHaveBeenCalledTimes(1);
+    if (kind === 'resolved') {
+      for (const key of values.keys()) { values.set(key, JSON.stringify({ status: 'pending', pendingSince: new Date().toISOString() })); }
+    }
+    const observePromotionGrant = vi.fn(async () => {});
+    const resolvePendingPromotionGrant = vi.fn(async () => ({ status: 'granted' as const, receiptKey: 'observed-receipt' }));
+    const restarted = createAitHostBridge({ promotionRewards, observePromotionGrant, resolvePendingPromotionGrant,
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    await expect(request(restarted, 'promotions.grantReward', claim)).resolves.toEqual({ status: 'granted', receiptKey: 'observed-receipt' });
+    expect(observePromotionGrant).toHaveBeenCalledWith({ ...claim, status: 'granted', receiptKey: 'observed-receipt' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+    expect(resolvePendingPromotionGrant).toHaveBeenCalledTimes(kind === 'resolved' ? 1 : 0);
+  });
+
   it('retains provider failure codes and the dispatch fence across host restarts', async () => {
     const values = new Map<string, string>();
     const providerResponses: unknown[] = [

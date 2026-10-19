@@ -1106,7 +1106,13 @@ async function resolvePersistedPromotionGrant(
       && typeof state.receiptKey === 'string'
       && state.receiptKey.trim().length > 0
     ) {
-      return { result: { status: 'granted', receiptKey: state.receiptKey } };
+      const result = { status: 'granted', receiptKey: state.receiptKey } as const;
+      await observePromotion(input.observer, {
+        campaignId: input.campaignId,
+        idempotencyKey: input.idempotencyKey,
+        ...result,
+      });
+      return { result };
     }
     if (state.status === 'pending') {
       const errorCode = typeof state.errorCode === 'string'
@@ -1164,6 +1170,11 @@ async function resolvePersistedPromotionGrant(
             error,
           );
         }
+        await observePromotion(input.observer, {
+          campaignId: input.campaignId,
+          idempotencyKey: input.idempotencyKey,
+          ...result,
+        });
         return { result };
       }
 
