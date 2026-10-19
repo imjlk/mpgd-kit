@@ -332,7 +332,7 @@ const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const liteTemplateOverlayDir = path.resolve(packageRoot, 'templates/lite-overlay');
-const notificationsTemplateDir = path.resolve(packageRoot, 'templates/notifications');
+const notificationsTemplateDir = path.resolve(packageRoot, 'templates/notifications-overlay');
 const supportedGameTemplates = ['phaser', 'lite'] as const;
 type GameTemplate = (typeof supportedGameTemplates)[number];
 /** Lite renderers implemented today. dom/svg are reserved extension points in @mpgd/lite-shell. */

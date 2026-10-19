@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
  * repository root), or the source tree.
  */
 function resolveKitRoot(): string {
-  const marker = join('packages', 'cli', 'templates', 'notifications', 'common');
+  const marker = join('packages', 'cli', 'templates', 'notifications-overlay', 'common');
   const candidates = [
     process.env.MPGD_TOOLS_EMIT_SOURCE_ROOT,
     process.cwd(),

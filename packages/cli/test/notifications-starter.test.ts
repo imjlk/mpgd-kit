@@ -24,7 +24,7 @@ import {
  * package scripts run from the repository root), or the source tree.
  */
 function resolveTemplatesRoot(): string {
-  const relative = path.join('packages', 'cli', 'templates', 'notifications');
+  const relative = path.join('packages', 'cli', 'templates', 'notifications-overlay');
   const candidates = [
     process.env.MPGD_TOOLS_EMIT_SOURCE_ROOT,
     process.cwd(),
@@ -52,9 +52,9 @@ function collect(root: string, relative = ''): NotificationsStarterFile[] {
 const base = collect(path.join(templatesRoot, 'phaser-game'));
 const liteOverlay = collect(path.join(templatesRoot, 'lite-overlay'));
 const overlay = {
-  common: collect(path.join(templatesRoot, 'notifications/common')),
-  phaser: collect(path.join(templatesRoot, 'notifications/phaser')),
-  lite: collect(path.join(templatesRoot, 'notifications/lite')),
+  common: collect(path.join(templatesRoot, 'notifications-overlay/common')),
+  phaser: collect(path.join(templatesRoot, 'notifications-overlay/phaser')),
+  lite: collect(path.join(templatesRoot, 'notifications-overlay/lite')),
 };
 const liteBase = [
   ...base.map((file) => liteOverlay.find((candidate) => candidate.relativePath === file.relativePath) ?? file),

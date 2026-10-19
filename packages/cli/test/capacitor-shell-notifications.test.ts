@@ -33,7 +33,7 @@ function resolveKitRoot(): string {
   ];
   for (const root of candidates) {
     if (root !== undefined && root.length > 0
-      && existsSync(path.join(root, 'packages/cli/templates/notifications/common'))) {
+      && existsSync(path.join(root, 'packages/cli/templates/notifications-overlay/common'))) {
       return root;
     }
   }

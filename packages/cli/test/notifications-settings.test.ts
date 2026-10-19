@@ -12,8 +12,8 @@ import type {
   NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
 
-import { createStarterNotificationSettings } from '../templates/notifications/common/src/platform/notificationSettings.js';
-import { routeNotificationOpens } from '../templates/notifications/common/src/platform/notificationOpens.js';
+import { createStarterNotificationSettings } from '../templates/notifications-overlay/common/src/platform/notificationSettings.js';
+import { routeNotificationOpens } from '../templates/notifications-overlay/common/src/platform/notificationOpens.js';
 
 // The notification settings screen's model, which the generated Phaser scene
 // and lite panel drive (`--providers notifications`).

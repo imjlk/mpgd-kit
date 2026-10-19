@@ -3248,7 +3248,7 @@ function planNotificationsProvider(input: {
   const files: PlannedFile[] = [];
   const overlayRoot = input.templateRoot === undefined
     ? undefined
-    : path.join(path.dirname(input.templateRoot), 'notifications', 'common');
+    : path.join(path.dirname(input.templateRoot), 'notifications-overlay', 'common');
   const jsonTitle = JSON.stringify(input.displayName).slice(1, -1);
   const starterFile = (root: string, file: string): string => {
     // A function replacer: `$&` or `$$` in a display name stays literal.

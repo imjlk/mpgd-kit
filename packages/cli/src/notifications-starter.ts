@@ -1,6 +1,6 @@
 /**
  * The notifications starter (`mpgd game create --providers notifications`):
- * the files `templates/notifications` adds to a generated game, and the
+ * the files `templates/notifications-overlay` adds to a generated game, and the
  * anchored edits it makes to the base template, so a game without
  * notifications ships none of it (notifications v2 RFC, PR C1).
  *
