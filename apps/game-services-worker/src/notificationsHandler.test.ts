@@ -478,7 +478,11 @@ try {
     notificationFailureCause(leaky, { operation: 'provider.other', fromProvider: true }),
     'TypeError',
   );
-  assert.equal(notificationFailureCause(leaky, { operation: 'dispatch' }), 'TypeError');
+  assert.equal(notificationFailureCause(leaky, { operation: 'provider.send' }), 'TypeError');
+  assert.equal(
+    notificationFailureCause(new Error('D1 is unavailable.'), { operation: 'dispatch' }),
+    'Error: D1 is unavailable.',
+  );
   assert.equal(
     notificationFailureCause(new Error('no such table: notification_schedule'), {
       operation: 'scheduler.list',

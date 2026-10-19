@@ -6,6 +6,7 @@ import {
   createNotificationServiceCatalog,
   NotificationConsentRateLimitError,
   parseFcmServiceAccount,
+  type CreateNotificationServiceInput,
   type NotificationDispatchJob,
   type NotificationProviderRegistration,
   type NotificationService,
@@ -100,31 +101,28 @@ export type WorkerNotifications =
   | { readonly status: 'ready'; readonly service: NotificationService }
   | { readonly status: 'misconfigured'; readonly error: Error };
 
+/** The context the notifications service gives each failure it reports. */
+type NotificationReportContext = Parameters<NonNullable<CreateNotificationServiceInput['onError']>>[1];
+
 export const notificationsRoutePrefix = '/game-services/notifications';
 /** Largest request body a notifications route reads. */
 const maxBodyBytes = 64 * 1024;
 
-const redactedOperations: ReadonlySet<string> = new Set([
-  'provider.send',
-  'dispatch',
-  'dispatchDue',
-]);
-
 /**
  * What the Worker logs of a failure the notifications service reports. A
- * provider's own failure (the service marks it `fromProvider`; it reports
+ * provider's own failure (the service marks it `fromProvider`, and reports
  * it as `provider.send`) may quote a device token or a credential, so only
  * its name is logged. The service wraps every other provider-side error in
- * its own message before a report, so `dispatch` and `dispatchDue` are
- * redacted only as a second line. Any other failure is the store's or the
- * kit's (a missing table, a busy ledger), and its cause is logged cut to 120
- * characters, so it can be fixed.
+ * its own message before a report, so any other failure (`dispatch` and
+ * `dispatchDue` included) is the store's or the kit's, such as a missing
+ * table or a busy ledger, and its cause is logged cut to 120 characters, so
+ * it can be fixed.
  */
 export function notificationFailureCause(
   error: unknown,
-  context: { readonly operation: string; readonly fromProvider?: boolean },
+  context: Pick<NotificationReportContext, 'operation' | 'fromProvider'>,
 ): string {
-  return context.fromProvider === true || redactedOperations.has(context.operation)
+  return context.fromProvider === true || context.operation === 'provider.send'
     ? errorName(error)
     : describeFailure(error);
 }
