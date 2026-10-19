@@ -567,21 +567,67 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(await redis.zCard('mpgd:notifications:history-provider:devvit')).toBe(600);
   });
 
+  it('counts members at the same millisecond at either bound, by rank without paging', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    const at = (seconds: number) => new Date(Date.parse('2026-10-01T00:00:00Z') + seconds * 1_000).toISOString();
+    for (const [sendKey, seconds] of [['a', 0], ['b', 1], ['c', 1], ['d', 1], ['e', 2], ['f', 3], ['g', 3], ['h', 4]] as const) {
+      await store.addHistory({ sendKey, provider: 'devvit', player: `t2_${sendKey}`, topic: 't', at: at(seconds) });
+    }
+    const zRange = redis.zRange.bind(redis);
+    const ranges: unknown[] = [];
+    redis.zRange = async (key, start, stop, options) => {
+      ranges.push(options?.limit?.count);
+      return zRange(key, start, stop, options);
+    };
+    expect(await store.countHistory({ provider: 'devvit', since: at(1), until: at(3) })).toBe(6);
+    expect(await store.countHistory({ provider: 'devvit', since: at(3), until: at(3) })).toBe(2);
+    // Each read takes one member: no page of the range is read.
+    expect(ranges.every((count) => count === 1)).toBe(true);
+  });
+
+  it('reads the count again when a purge moves the ranks between the reads', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    for (const [sendKey, at] of [['old', '2026-09-01T00:00:00Z'], ['a', '2026-10-01T00:00:00Z'], ['b', '2026-10-01T00:00:01Z']] as const) {
+      await store.addHistory({ sendKey, provider: 'devvit', player: 'p', topic: 't', at });
+    }
+    const zRank = redis.zRank.bind(redis);
+    let purged = false;
+    redis.zRank = async (key, member) => {
+      const rank = await zRank(key, member);
+      if (!purged) {
+        // A purge removes the old row after the start rank was read.
+        purged = true;
+        await store.purge({
+          sendsChangedBefore: '2026-01-01T00:00:00Z',
+          historyBefore: '2026-09-15T00:00:00Z',
+          invalidEndpointsBefore: '2026-01-01T00:00:00Z',
+          staleEndpointsBefore: '2026-01-01T00:00:00Z',
+          sessionEndpointsBefore: '2026-01-01T00:00:00Z',
+        });
+      }
+      return rank;
+    };
+    expect(await store.countHistory({ provider: 'devvit', since: '2026-10-01T00:00:00Z', until: '2026-10-02T00:00:00Z' }))
+      .toBe(2);
+  });
+
   it('counts by pages when the first member keeps leaving between the reads', async () => {
     const redis = createFakeNotificationRedis();
     const store = createDevvitRedisNotificationStore(redis);
     await store.addHistory({ sendKey: 'a', provider: 'devvit', player: 'p', topic: 't', at: '2026-10-01T00:00:00Z' });
     await store.addHistory({ sendKey: 'b', provider: 'devvit', player: 'p', topic: 't', at: '2026-10-01T00:00:01Z' });
-    const zRank = redis.zRank.bind(redis);
     let ranks = 0;
-    redis.zRank = async (key, member) => {
+    redis.zRank = async () => {
       ranks += 1;
       // Another writer removed the member just read.
-      return ranks <= 8 ? undefined : zRank(key, member);
+      return undefined;
     };
     expect(await store.countHistory({ provider: 'devvit', since: '2026-10-01T00:00:00Z', until: '2026-10-01T00:00:01Z' }))
       .toBe(2);
-    expect(ranks).toBe(4);
+    // Four tries, each reading the start rank twice (the end has no member past it), then pages.
+    expect(ranks).toBe(8);
   });
 
   it('orders due schedule entries by code point with a member that holds no separator of its own', async () => {

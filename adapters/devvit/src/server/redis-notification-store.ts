@@ -54,8 +54,11 @@ import { createHash } from 'node:crypto';
  *   equal scores is code-point order by player, then id. A sorted set per
  *   player holds the ids of pending reminders, so `countPendingReminders`
  *   is one ZCARD.
- * - **Times.** A time that does not parse is refused with a `TypeError`
- *   before anything is read or written, as in the in-memory and D1 stores.
+ * - **Times.** A time the service passes to a schedule step, a due or
+ *   history listing, a history write or count, a pruning, or a purge is
+ *   refused with a `TypeError` when it does not parse, before anything is
+ *   read or written, as in the in-memory store. Other writes take the
+ *   service's times as given.
  * - **Order.** Lists come sorted (by time, then by key or installation),
  *   not in insertion order as in the in-memory store; the interface promises
  *   only "oldest first" and "earliest first", and the service sorts where
@@ -618,16 +621,21 @@ export function createDevvitRedisNotificationStore(
   }
 
   /**
-   * How many members score from `min` to `max`, both inclusive, by rank: a
-   * member another writer removes between the reads makes the count read
-   * again, and after a few tries the members are counted in pages.
+   * How many members score from `min` to `max`, both inclusive, by rank.
+   * The start rank is read again after the end rank: a write below `min`
+   * between the reads (a purge) moves both, so differing start ranks, or a
+   * member removed before its rank was read, make the count read again.
+   * After a few tries the members are counted in pages. A write inside the
+   * range during the reads may still be counted or not: pacing is
+   * approximate by contract.
    */
   async function countScores(key: string, min: number, max: number): Promise<number> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const start = await rankFrom(key, String(min));
       const end = await rankFrom(key, `(${String(max)}`);
-      if (start !== undefined && end !== undefined) {
-        return Math.max(0, end - start);
+      const again = await rankFrom(key, String(min));
+      if (start !== undefined && end !== undefined && again === start && end >= start) {
+        return end - start;
       }
     }
     return (await scoreRange(key, String(min), String(max))).length;
@@ -1024,6 +1032,8 @@ export function createDevvitRedisNotificationStore(
           by: 'score',
           limit: { offset, count: want },
         });
+        // Offset paging: an entry removed ahead of the offset during the
+        // listing shifts the rest, so one may be missed until the next run.
         for (const { member } of page) {
           const named = readScheduleMember(member);
           // Offsets move while other workers write the index: keep each entry once.
