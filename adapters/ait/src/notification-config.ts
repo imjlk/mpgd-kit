@@ -130,9 +130,11 @@ export function readAitNotificationTopicsFile(
   input: ReadAitNotificationTopicsFileInput,
   fs: AitNotificationTopicsFileSystem,
 ): Readonly<Record<string, AitNotificationTopicMapping>> {
-  const configured = input.configured?.trim();
+  const trimmed = input.configured?.trim();
+  // One predicate decides both the file and the error's label.
+  const configured = trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
   let file: string;
-  if (configured !== undefined && configured.length > 0) {
+  if (configured !== undefined) {
     file = fs.resolve(input.rootDir, configured);
   } else {
     file = fs.resolve(input.rootDir, input.defaultFile);
@@ -145,9 +147,7 @@ export function readAitNotificationTopicsFile(
   try {
     parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
   } catch (error) {
-    const source = configured !== undefined && configured.length > 0
-      ? ' (MPGD_NOTIFICATION_TOPICS_FILE)'
-      : '';
+    const source = configured === undefined ? '' : ' (MPGD_NOTIFICATION_TOPICS_FILE)';
     throw new Error(
       `AIT notification topic catalog is unreadable or invalid JSON: ${file}${source}`,
       {

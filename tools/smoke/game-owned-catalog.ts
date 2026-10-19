@@ -667,6 +667,37 @@ function assertTargetBuildCatalogEnvUsesCallerBase(): void {
     ),
     { MPGD_NOTIFICATION_TOPICS_FILE: resolve(shadowDir, 'missing-topics.json') },
   );
+  // Bases in order, with a bare name each base resolves differently: the
+  // targets directory first, then INIT_CWD, then PWD.
+  const topicsName = 'notification-topics.json';
+  const initCwdDir = join(tempDir, 'init-cwd');
+  mkdirSync(initCwdDir, { recursive: true });
+  for (const dir of [callerDir, shadowDir, initCwdDir]) {
+    writeFileSync(join(dir, topicsName), '{}\n');
+  }
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: topicsName, INIT_CWD: initCwdDir, PWD: shadowDir },
+      callerDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: join(callerDir, topicsName) },
+  );
+  const emptyBase = join(tempDir, 'empty-base');
+  mkdirSync(emptyBase, { recursive: true });
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: topicsName, INIT_CWD: initCwdDir, PWD: shadowDir },
+      emptyBase,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: join(initCwdDir, topicsName) },
+  );
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: topicsName, PWD: shadowDir },
+      emptyBase,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: join(shadowDir, topicsName) },
+  );
 }
 
 interface ViteUserConfig {
