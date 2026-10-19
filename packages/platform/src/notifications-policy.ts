@@ -420,9 +420,9 @@ export function resolveNotificationAdvertisingSettings(
  *
  * - the starter's `REPLACE-WITH-…` marker;
  * - a whole value that is an unreplaced `__TOKEN__`, `{{token}}`, or
- *   `${token}`, or words in angle or square brackets (`<phone number>`,
- *   `[전화번호]`), but not a bracketed address or number such as
- *   `<help@studio.kr>` or `[02-123-4567]`;
+ *   `${token}`, or only letters in angle or square brackets (`<phone
+ *   number>`, `[전화번호]`), but not a bracketed value with a digit or an
+ *   address, such as `[수신거부 080-123-4567]` or `<help@studio.kr>`;
  * - a reserved `example.com`, `example.org`, or `example.net` address
  *   (one followed by another label, such as `example.com.au`, is real);
  * - only `TODO`, `TBD`, `CHANGEME`, `PLACEHOLDER`, or `XXX`.
@@ -434,7 +434,7 @@ export function isNotificationPlaceholderText(value: string): boolean {
   const text = value.trim();
   return /^replace[-_]with[-_]/iu.test(text)
     || /^(?:__[A-Za-z]\w*__|\{\{[^{}]*\}\}|\$\{[^{}]*\})$/u.test(text)
-    || /^(?:<\p{L}[\p{L}\p{N} _-]*>|\[\p{L}[\p{L}\p{N} _-]*\])$/u.test(text)
+    || /^(?:<\p{L}[\p{L} _-]*>|\[\p{L}[\p{L} _-]*\])$/u.test(text)
     || /(?:^|[^\w-])example\.(?:com|org|net)(?![\w-]|\.[a-z0-9])/iu.test(text)
     || /^(?:todo|tbd|change[-_ ]?me|placeholder|x{3,})$/iu.test(text);
 }

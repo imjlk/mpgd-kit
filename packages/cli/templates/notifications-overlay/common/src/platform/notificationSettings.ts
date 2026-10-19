@@ -250,7 +250,7 @@ const messages = {
     advertisingOff: 'You withdrew your consent to promotional notifications.',
     advertisingAndNightOff: 'You withdrew your consent to promotional notifications, by day and at night.',
     advertisingOnStaleNightOff:
-      'You agreed to promotional notifications. An earlier consent for night-time ones was withdrawn; turn it on again if you want it.',
+      'You agreed to promotional notifications. An earlier consent to night-time promotional notifications was withdrawn; turn it on again if you want it.',
     nightNeedsAdvertising: 'Agree to promotional notifications first to get them at night.',
     choicesUnreadable: 'Your choices could not be read, so nothing was changed. Try again later.',
     nightOn: 'You agreed to promotional notifications at night.',
@@ -335,8 +335,8 @@ export function createStarterNotificationSettings(
       recording && records !== undefined && latestNotificationConsent(records, kind, topic)?.state === 'granted';
     const advertising = granted('advertising');
     // Night consent counts only alongside advertising consent: one an older
-    // client left standing after advertising was withdrawn shows off, and the
-    // next advertising consent withdraws it.
+    // client left standing after advertising was withdrawn is shown as off,
+    // and the next advertising consent withdraws it.
     const night = advertising && granted('night');
     return {
       available,
@@ -596,7 +596,11 @@ export function createStarterNotificationSettings(
         // player's act that may owe a notice, and a withdrawal of a consent
         // never granted is a refusal.
         const writeAdvertising = advertisingAfter === advertisingGranted ? undefined : advertisingAfter;
-        const writeNight = nightAfter === nightGranted ? undefined : nightAfter;
+        // Turning night on writes a fresh consent unless one already counts (a
+        // stale one does not); turning it off withdraws any granted record.
+        const writeNight = nightAfter
+          ? (nightEffective ? undefined : true)
+          : (nightGranted ? false : undefined);
         if (writeAdvertising !== undefined || writeNight !== undefined) {
           await input.runtime.setAdvertisingConsent({
             ...(writeAdvertising === undefined
