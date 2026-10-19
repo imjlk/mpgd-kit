@@ -890,9 +890,14 @@ the pending reminder, and cancelling removes it.
 - A send the provider may already have accepted cannot be recalled.
 - **Races with the scheduler.** The scheduler stores a reminder's send first
   and marks the reminder fired after, so a run that stops in between leaves
-  the reminder pending and the next run finds its send. A set or cancel
-  writes the reminder first and stops the previous reminder's send after,
-  so a run that fires the old reminder meanwhile loses its send either way.
+  the reminder pending and the next run finds its send. A set writes the
+  reminder first and stops the previous reminder's send after; a cancel
+  stops it both before and after it removes the reminder. A run that fires
+  the old reminder meanwhile loses its send either way.
+- **Same key and time.** The send key names the reminder's key and time,
+  not its content. Setting a reminder again with the same time and content
+  keeps the send the previous one made; with other content, the previous
+  send that waits is stopped, and the new reminder makes its own.
 - A fired reminder is kept, as its key, topic, `fireAt`, and `firedAt`, for
   the 30 days of a key's retention (a day at a time longer while its send
   still waits), so a later set or cancel can still stop that send.
@@ -1186,7 +1191,8 @@ If a notice is not recorded by the start of the day seven days before
   endpoint, or turned the notice topic off), or one the provider refused
   when it was sent, is the check's only reason to run, the check waits an
   hour, then two, four, and so on, at most a day. A check that runs sooner
-  for another notice tries the refused one again. A new device or platform
+  for another notice tries a push the gate refused again; a push the
+  provider refused waits for the check after. A new device or platform
   registration ends the wait; other changes, such as turning the notice
   topic back on, are seen at the next check, at most a day later.
 - **Recording.** Once delivered, the backend records the notice with channel
@@ -2199,10 +2205,10 @@ publishable package carries a Sampo changeset.
   the session routes `POST /reminders` and `POST /reminders/cancel`, and a
   cron that runs the scheduler after the purges.
 - Left for later: the Devvit scheduler path, after P3's Devvit delivery
-  provider and the Redis-backed store it runs on (open question 2); a game-services client that implements the runtime's
-  backend calls over the Worker routes; a per-player cap on server
-  reminders; and seeding notice checks for players whose records predate
-  the scheduler.
+  provider and the Redis-backed store it runs on (open question 2); a
+  game-services client that implements the runtime's backend calls over
+  the Worker routes; a per-player cap on server reminders; and seeding
+  notice checks for players whose records predate the scheduler.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
@@ -2224,11 +2230,10 @@ that also removes commerce v1.
    are inexact too), the cron's period bounds the lateness (the Worker's
    sample runs it every five minutes; a deployment that wants less runs it
    every minute), and the due indexes keep a run's cost to the items due,
-   not to every player. Alarms
-   would need a Durable Object per player or a sharded set, and a second
-   store for the ledger the gate reads in one place. Revisit when a game
-   needs reminders at second precision or a backlog outgrows one batch per
-   minute.
+   not to every player. Alarms would need a Durable Object per player or a
+   sharded set, and a second store for the ledger the gate reads in one
+   place. Revisit when a game needs reminders at second precision or a
+   backlog outgrows one batch per minute.
 4. **Remote copy on the server.** Whether the Worker reads localized copy from
    the catalog file or from a project-provided resolver.
 5. **Bulk sends.** The first wave sends one recipient per call. Bulk paths
