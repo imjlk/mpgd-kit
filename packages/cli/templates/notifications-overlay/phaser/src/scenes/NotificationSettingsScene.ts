@@ -224,6 +224,21 @@ export class NotificationSettingsScene extends Phaser.Scene {
         );
       }
     }
+    if (view.agreements.length > 0) {
+      // Per-topic hosts (Apps in Toss): service messages the player agrees to
+      // one by one; the host's settings withdraw them.
+      line(text.agreements, { ...textStyle, color: '#ffffff' });
+      for (const agreement of view.agreements) {
+        const state = agreement.state === 'granted' ? text.on : text.off;
+        if (agreement.canRequest) {
+          action(`${agreement.label}: ${state} - ${text.agree}`, () =>
+            this.settings.agree(agreement.topic),
+          );
+        } else {
+          line(`${agreement.label}: ${state}`);
+        }
+      }
+    }
     if (view.recording && view.advertising !== undefined) {
       const { granted, night, nightSelectable } = view.advertising;
       action(`${text.advertising}: ${granted ? text.on : text.off}`, () =>

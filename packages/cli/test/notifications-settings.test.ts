@@ -466,6 +466,58 @@ const common = {
   assert.deepEqual(calls, [{ request: { topics: ['daily-ready'], gesture: true } }]);
 }
 
+// A per-topic host: a service template that needs the player's agreement
+// gets its own agree action (no reminder switch covers it); one that needs
+// no agreement is not listed; an app-scope host lists none.
+{
+  const aitTopics: readonly NotificationTopicDeclaration[] = [
+    {
+      id: 'friend-challenge',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/',
+      mapping: { templateSetCode: 'challenge', agreement: 'required' },
+    },
+    {
+      id: 'purchase-result',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/',
+      mapping: { templateSetCode: 'purchase', agreement: 'none' },
+    },
+  ];
+  const { provider, calls } = fakeProvider(capabilities('topic', 'host', false), {
+    topics: { 'friend-challenge': 'prompt', 'purchase-result': 'granted' },
+  });
+  const settings = createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider,
+    runtime: undefined,
+  });
+  const view = await settings.load();
+  assert.deepEqual(view.agreements, [
+    { topic: 'friend-challenge', label: '친구의 도전 알림', state: 'prompt', canRequest: true },
+  ]);
+  const agreed = await settings.agree('friend-challenge');
+  assert.deepEqual(calls, ['request:friend-challenge']);
+  assert.equal(agreed.message, '알림 권한을 켰어요. 게임 서버가 연결되면 알림을 받을 수 있어요.');
+  // A topic that is not listed is not asked for.
+  assert.equal(
+    (await settings.agree('purchase-result')).message,
+    '이 기기에서는 알림을 켤 수 없어요.',
+  );
+  assert.equal(calls.length, 1);
+  const app = fakeProvider(capabilities('app', 'os'), { app: 'prompt' });
+  const appView = await createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider: app.provider,
+    runtime: undefined,
+  }).load();
+  assert.deepEqual(appView.agreements, []);
+}
+
 // A host that needs login first (Devvit), and a game-rendered consent the player can withdraw.
 {
   const { provider } = fakeProvider(

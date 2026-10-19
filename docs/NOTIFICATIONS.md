@@ -81,6 +81,12 @@ Rules the starter's settings screen follows, and your own screen must too:
   feature held back without them (App Review Guideline 5.1.2(i)), and the
   game keeps working when the player declines (Apps in Toss game
   checklist).
+- **Agree per topic where the host asks per topic.** On Apps in Toss each
+  template has its own agreement sheet. A reminder's sheet opens when the
+  player turns it on; a `service` template that needs an agreement (mapped
+  `agreement: "required"`) gets its own *Agree* action, since no reminder
+  switch covers it. Only a service template may be mapped
+  `agreement: "none"`.
 - **Night consent only with advertising consent.** Night consent adds to
   advertising consent, so the screen offers it only while advertising
   consent is granted. Turning advertising consent off withdraws a granted

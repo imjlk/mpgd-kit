@@ -3,6 +3,7 @@ import {
   findNotificationCopy,
   latestNotificationConsent,
   notificationNoticeVariantCopy,
+  notificationTopicNeedsNoAgreement,
   toSeoulCalendarDate,
   type NotificationCapabilities,
   type NotificationConsentRecord,
@@ -81,6 +82,19 @@ export interface StarterNotificationSettingsView {
      */
     readonly enabled: boolean;
   }[];
+  /**
+   * On a host that asks per topic (Apps in Toss): the `service` topics whose
+   * template needs the player's agreement, which no reminder switch covers.
+   * Each is agreed to from a tap (`agree`); the host's settings withdraw it.
+   * Empty on hosts that ask once for the app.
+   */
+  readonly agreements: readonly {
+    readonly topic: string;
+    readonly label: string;
+    readonly state: NotificationPermissionState;
+    /** Whether a tap may show the host's agreement sheet for this topic now. */
+    readonly canRequest: boolean;
+  }[];
   /** Present when this target delivers an advertising topic. */
   readonly advertising?: {
     /** The latest `advertising` record is `granted`. */
@@ -131,6 +145,8 @@ export interface StarterNotificationSettings {
   logIn(): Promise<StarterNotificationSettingsView>;
   /** From a tap: turns one reminder topic on (asking for its permission first) or off. */
   setReminder(topic: string, enabled: boolean): Promise<StarterNotificationSettingsView>;
+  /** From a tap: shows the host's agreement sheet for one of `view.agreements` (per-topic hosts). */
+  agree(topic: string): Promise<StarterNotificationSettingsView>;
   /**
    * From a tap: records advertising or night consent, or its withdrawal.
    * Night consent is turned on only while advertising consent is granted (or
@@ -159,6 +175,8 @@ export const starterNotificationLabels = {
     logIn: '로그인',
     openSettings: '시스템 설정 열기',
     reminders: '리마인더 (내가 켠 알림만 받아요)',
+    agreements: '받을 알림 (동의한 알림만 받아요)',
+    agree: '동의하기',
     advertising: '광고성 정보 수신동의 (선택)',
     advertisingHelp: '이벤트와 새 소식을 알림으로 받아요. 동의하지 않아도 게임을 그대로 이용할 수 있어요.',
     night: '야간(21시~다음 날 8시) 광고성 정보 수신동의 (선택)',
@@ -182,6 +200,8 @@ export const starterNotificationLabels = {
     logIn: 'Log in',
     openSettings: 'Open system settings',
     reminders: 'Reminders (only the ones you turn on)',
+    agreements: 'Notifications you agree to receive',
+    agree: 'Agree',
     advertising: 'Promotional notifications (optional)',
     advertisingHelp: 'Get event news as notifications. The game works the same without it.',
     night: 'Promotional notifications at night, 21:00-08:00 (optional)',
@@ -207,7 +227,11 @@ export function starterNotificationLabelsFor(locale: string): StarterNotificatio
 
 const messages = {
   ko: {
-    reminderLabels: { 'daily-ready': '오늘의 플레이 알림', 'streak-at-risk': '연속 기록 알림' } as Record<string, string>,
+    reminderLabels: {
+      'daily-ready': '오늘의 플레이 알림',
+      'streak-at-risk': '연속 기록 알림',
+      'friend-challenge': '친구의 도전 알림',
+    } as Record<string, string>,
     granted: '알림을 켰어요.',
     denied: '알림이 꺼져 있어요. 원하면 언제든 다시 켤 수 있어요.',
     revoked: '알림을 껐어요.',
@@ -233,7 +257,11 @@ const messages = {
     reminderOff: '리마인더를 껐어요.',
   },
   en: {
-    reminderLabels: { 'daily-ready': "Today's run reminder", 'streak-at-risk': 'Streak reminder' } as Record<string, string>,
+    reminderLabels: {
+      'daily-ready': "Today's run reminder",
+      'streak-at-risk': 'Streak reminder',
+      'friend-challenge': 'Friend challenges',
+    } as Record<string, string>,
     granted: 'Notifications are on.',
     denied: 'Notifications are off. You can turn them on any time.',
     revoked: 'Notifications are off.',
@@ -278,6 +306,7 @@ const unavailableView = (
     canLogin: false,
   },
   reminders: [],
+  agreements: [],
   notices: [],
   ...(message === undefined ? {} : { message }),
 });
@@ -288,6 +317,11 @@ export function createStarterNotificationSettings(
   const strings: Messages = input.locale.toLowerCase().startsWith('ko') ? messages.ko : messages.en;
   const reminderTopics = input.topics.filter((topic) => topic.purpose === 'requested');
   const advertisingTopics = input.topics.filter((topic) => topic.purpose === 'advertising');
+  // On a per-topic host, a service template that needs the player's
+  // agreement has no switch of its own: no preference turns it on.
+  const agreementTopics = input.topics.filter(
+    (topic) => topic.purpose === 'service' && !notificationTopicNeedsNoAgreement(topic),
+  );
   // Every topic but advertising asks for delivery permission up front; an
   // advertising topic needs the player's advertising consent first.
   const permissionTopics = input.topics
@@ -360,6 +394,17 @@ export function createStarterNotificationSettings(
         enabled: granted('topic-preference', topic.id)
           && (!perTopic || snapshot.topics[topic.id] === 'granted'),
       })),
+      agreements: perTopic
+        ? agreementTopics.map((topic) => {
+            const topicState = snapshot.topics[topic.id] ?? 'unsupported';
+            return {
+              topic: topic.id,
+              label: strings.reminderLabels[topic.id] ?? topic.id,
+              state: topicState,
+              canRequest: isRequestable(topicState),
+            };
+          })
+        : [],
       ...(advertisingTopics.length === 0
         ? {}
         : { advertising: { granted: advertising, night, nightSelectable: recording && advertising } }),
@@ -535,6 +580,16 @@ export function createStarterNotificationSettings(
         }
         await input.requestLogin();
         return undefined;
+      });
+    },
+    agree(topic) {
+      return run(async () => {
+        if (!agreementTopics.some((candidate) => candidate.id === topic)) {
+          return strings.unavailable;
+        }
+        // The host sheet for this topic, from the player's tap; the runtime
+        // records the acceptance, and the host enforces it on send.
+        return request([topic]);
       });
     },
     setReminder(topic, enabled) {
