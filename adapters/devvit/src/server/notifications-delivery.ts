@@ -602,10 +602,12 @@ export type DevvitNotificationTaskResult =
  * chunk that repeats a send or lists fewer sends than it asked for, and
  * once it has counted 10 failures. A send that fails after its claim backs
  * off for a minute; one that fails before its claim stays due, and each
- * chunk lists it again, so it is retried up to 10 times a run and again in
- * every later run. The cap bounds a run's `failed` count to under 20, and
- * many distinct failures end a run before its limit. `replayed` counts the sends that produced a result, each once;
- * `failed` counts failures, a send listed again counting again.
+ * chunk lists it again, so it is retried at most 10 times a run and again
+ * in every later run. The cap bounds a run's `failed` count to under 20
+ * (under 30 if a send's settle also fails), and many distinct failures end
+ * a run before its limit. `replayed` counts the sends that produced a
+ * result, each once; `failed` counts failures, a send listed again
+ * counting again.
  *
  * `purge` deletes at most the store's `purgeLimit` rows of each kind (200
  * for the store `createDevvitNotificationService` builds). A backlog
