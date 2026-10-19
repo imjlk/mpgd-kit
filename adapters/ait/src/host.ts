@@ -404,6 +404,22 @@ export function createAitHostBridge(
   );
   const commerceV2 = createAitCommerceV2BridgeHandler(commerceProvider);
   const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
+  // Keep terminal receipts available if native storage or the game frame temporarily fails.
+  // This cache is bridge-local, bounded, and never grants eligibility or authorizes payout.
+  const promotionReceipts = new Map<string, AitPromotionGrantObservation>();
+  const observePromotionGrant: AitPromotionGrantObserver = async (observation) => {
+    if (observation.status === 'granted') {
+      const key = JSON.stringify([observation.campaignId, observation.idempotencyKey]);
+      promotionReceipts.set(key, observation);
+      if (promotionReceipts.size > 256) {
+        const oldest = promotionReceipts.keys().next().value;
+        if (oldest !== undefined) {
+          promotionReceipts.delete(oldest);
+        }
+      }
+    }
+    await options.observePromotionGrant?.(observation);
+  };
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();
   const activeBannerAttachments = new Map<string, { readonly destroy: () => void }>();
@@ -600,6 +616,58 @@ export function createAitHostBridge(
         return ok(request, availability);
       }
 
+      case 'promotions.recoverReward': {
+        const campaignId = readCampaignId(request.payload);
+        const idempotencyKey = readRequiredIdempotencyKey(request.payload);
+        if (!promotionRewards.has(campaignId)) {
+          return ok(request, { status: 'unavailable' });
+        }
+        const remembered = promotionReceipts.get(JSON.stringify([campaignId, idempotencyKey]));
+        if (remembered?.status === 'granted' && remembered.receiptKey) {
+          await observePromotion(observePromotionGrant, remembered);
+          return ok(request, { status: 'granted', receiptKey: remembered.receiptKey });
+        }
+        try {
+          const persisted = await resolvePersistedPromotionGrant({
+            campaignId,
+            idempotencyKey,
+            storage: dependencies.storage,
+            observer: observePromotionGrant,
+            ...(resolvePendingPromotionGrant ? { resolver: resolvePendingPromotionGrant } : {}),
+            recoveryOnly: true,
+          });
+          if (persisted.result) {
+            return ok(request, persisted.result);
+          }
+        } catch { /* Unreadable local storage still permits a non-dispatching authority lookup. */ }
+        // A new installation may have no local marker. A server resolver can still supply a receipt.
+        if (resolvePendingPromotionGrant) {
+          try {
+            const resolution = await resolvePendingPromotionGrant({
+              campaignId,
+              idempotencyKey,
+            });
+            if (resolution.status === 'granted' && typeof resolution.receiptKey === 'string'
+              && resolution.receiptKey.trim().length > 0) {
+              const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
+              try {
+                await dependencies.storage.setItem(
+                  promotionGrantStorageKey(idempotencyKey),
+                  JSON.stringify(result),
+                );
+              } catch { /* The observer and bridge-local cache can still retain this terminal receipt. */ }
+              await observePromotion(observePromotionGrant, {
+                campaignId,
+                idempotencyKey,
+                ...result,
+              });
+              return ok(request, result);
+            }
+          } catch { /* Unknown remains pending. Recovery never dispatches a payment. */ }
+        }
+        return ok(request, { status: 'pending' });
+      }
+
       case 'promotions.grantReward': {
         const campaignId = readCampaignId(request.payload);
         const reward = promotionRewards.get(campaignId);
@@ -615,7 +683,7 @@ export function createAitHostBridge(
           campaignId,
           idempotencyKey,
           storage: dependencies.storage,
-          observer: options.observePromotionGrant,
+          observer: observePromotionGrant,
           ...(resolvePendingPromotionGrant === undefined
             ? {}
             : { resolver: resolvePendingPromotionGrant }),
@@ -634,7 +702,7 @@ export function createAitHostBridge(
           idempotencyKey,
           reward,
           dependencies,
-          observer: options.observePromotionGrant,
+          observer: observePromotionGrant,
           ...(authorizePromotionGrant === undefined
             ? {}
             : { authorizer: authorizePromotionGrant }),
@@ -963,13 +1031,24 @@ async function grantAitPromotionReward(
   observer?: AitPromotionGrantObserver,
 ): Promise<PromotionRewardResult> {
   const storageKey = promotionGrantStorageKey(idempotencyKey);
-  await dependencies.storage.setItem(
-    storageKey,
-    JSON.stringify({
+  const pendingSince = new Date().toISOString();
+  try {
+    await dependencies.storage.setItem(
+      storageKey,
+      JSON.stringify({
+        status: 'pending',
+        pendingSince,
+      }),
+    );
+  } catch {
+    await observePromotion(observer, {
+      campaignId,
+      idempotencyKey,
       status: 'pending',
-      pendingSince: new Date().toISOString(),
-    }),
-  );
+      errorCode: 'STORAGE_UNAVAILABLE',
+    });
+    return { status: 'pending' };
+  }
 
   try {
     const response: unknown = await dependencies.grantPromotionReward({
@@ -984,7 +1063,7 @@ async function grantAitPromotionReward(
       try {
         await dependencies.storage.setItem(
           storageKey,
-          JSON.stringify({ status: 'pending', pendingSince: new Date().toISOString(), errorCode }),
+          JSON.stringify({ status: 'pending', pendingSince, errorCode }),
         );
       } catch { /* The original pending marker still fences dispatch. */ }
       await observePromotion(observer, { campaignId, idempotencyKey, status: 'failed', errorCode });
@@ -997,16 +1076,21 @@ async function grantAitPromotionReward(
     ) {
       // An undocumented shape is ambiguous after native dispatch. Preserve the
       // marker so a backend resolver can determine whether a grant happened.
-      await observePromotion(observer, {
+      const errorCode = response === undefined ? 'UNSUPPORTED_VERSION' : 'UNKNOWN_RESPONSE';
+      const observed = observePromotion(observer, {
         campaignId,
         idempotencyKey,
         status: 'pending',
-        errorCode: 'UNKNOWN_RESPONSE',
+        errorCode,
       });
+      await persistPromotionDiagnostic(dependencies.storage, storageKey, errorCode, pendingSince);
+      await observed;
       return { status: 'pending' };
     }
 
     const result = { status: 'granted', receiptKey: response.key } as const;
+    // Start the observer before native storage: either path can preserve a late SDK success.
+    const observed = observePromotion(observer, { campaignId, idempotencyKey, ...result });
     try {
       await dependencies.storage.setItem(storageKey, JSON.stringify(result));
     } catch (error) {
@@ -1016,19 +1100,43 @@ async function grantAitPromotionReward(
         error,
       );
     }
-    await observePromotion(observer, { campaignId, idempotencyKey, ...result });
+    await observed;
     return result;
-  } catch {
-    await observePromotion(observer, {
+  } catch (error) {
+    const errorCode = isRecord(error) && typeof error.errorCode === 'string'
+      && /^[A-Za-z0-9_-]{1,80}$/u.test(error.errorCode) ? error.errorCode : 'NATIVE_EXCEPTION';
+    const observed = observePromotion(observer, {
       campaignId,
       idempotencyKey,
       status: 'pending',
-      errorCode: 'NATIVE_EXCEPTION',
+      errorCode,
     });
+    await persistPromotionDiagnostic(dependencies.storage, storageKey, errorCode, pendingSince);
+    await observed;
     // Keep the pending marker. A provider error after dispatch is ambiguous and
     // retrying the same promotion blindly can double-grant Toss points.
     return { status: 'pending' };
   }
+}
+
+/** Unknown native outcomes remain pending; preserve the diagnostic for a later recovery observer. */
+async function persistPromotionDiagnostic(
+  storage: Pick<typeof Storage, 'setItem'>,
+  storageKey: string,
+  errorCode: string,
+  pendingSince: string,
+): Promise<void> {
+  try {
+    await storage.setItem(
+      storageKey,
+      JSON.stringify({
+        status: 'pending',
+        outcome: 'pending',
+        pendingSince,
+        errorCode,
+      }),
+    );
+  } catch { /* The pre-dispatch marker still fences a duplicate payment. */ }
 }
 
 function isExplicitPromotionFailure(value: unknown): boolean {
@@ -1066,6 +1174,7 @@ async function observePromotion(observer: AitPromotionGrantObserver | undefined,
 }
 
 interface ResolvePersistedPromotionGrantInput {
+  readonly recoveryOnly?: boolean;
   readonly campaignId: string;
   readonly idempotencyKey: string;
   readonly storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>;
@@ -1122,11 +1231,13 @@ async function resolvePersistedPromotionGrant(
         await observePromotion(input.observer, {
           campaignId: input.campaignId,
           idempotencyKey: input.idempotencyKey,
-          status: 'failed',
+          status: state.outcome === 'pending' ? 'pending' : 'failed',
           errorCode,
         });
       }
-      const pendingResult: PromotionRewardResult = { status: errorCode ? 'failed' : 'pending' };
+      const pendingResult: PromotionRewardResult = {
+        status: errorCode && state.outcome !== 'pending' ? 'failed' : 'pending',
+      };
       const pendingSince = normalizePendingSince(state.pendingSince);
       if (pendingSince === undefined) {
         return { result: pendingResult };
@@ -1178,6 +1289,9 @@ async function resolvePersistedPromotionGrant(
         return { result };
       }
 
+      if (input.recoveryOnly || resolution.status !== 'retry') {
+        return { result: pendingResult };
+      }
       return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
     }
     console.warn(

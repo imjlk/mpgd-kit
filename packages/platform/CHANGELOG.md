@@ -1,5 +1,11 @@
 # @mpgd/platform
 
+## 0.25.0 — 2026-10-19
+
+### Minor changes
+
+- [96d8add4](https://github.com/imjlk/mpgd-kit/commit/96d8add43a4eff1f790b4cc8514a8839f7f7608c) Add optional recovery-only promotion calls that read persisted or authority-confirmed receipts without authorizing or starting a provider payment. Preserve pending markers even when the resolver permits a retry; a fresh explicit grant remains separate. — Thanks @imjlk!
+
 ## 0.24.0 — 2026-10-19
 
 ### Minor changes

@@ -1,5 +1,16 @@
 # @mpgd/adapter-ait
 
+## 0.19.0 — 2026-10-19
+
+### Minor changes
+
+- [96d8add4](https://github.com/imjlk/mpgd-kit/commit/96d8add43a4eff1f790b4cc8514a8839f7f7608c) Add optional recovery-only promotion calls that read persisted or authority-confirmed receipts without authorizing or starting a provider payment. Preserve pending markers even when the resolver permits a retry; a fresh explicit grant remains separate. — Thanks @imjlk!
+
+### Patch changes
+
+- [d6edd2c6](https://github.com/imjlk/mpgd-kit/commit/d6edd2c6c43e958a1d322a1d3581789d8ef611e6) Recover cached and authority-confirmed promotion receipts regardless of payout capability, retain markerless receipts, and consult the authority after storage read failure without inventing a dispatch timestamp. Preserve ambiguous SDK diagnostics across restarts and retain terminal receipts in a bounded bridge-local fallback when native storage fails. Recovery never authorizes a new payout. — Thanks @imjlk!
+- Updated dependencies: bridge@0.14.0, game-runtime@0.7.3, platform@0.25.0
+
 ## 0.18.0 — 2026-10-19
 
 ### Minor changes

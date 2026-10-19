@@ -222,6 +222,7 @@ export function createMpgdCloudflarePagesBridgeHandler<
       case 'promotions.getAvailability':
         return ok(input.bridgeRequest, 'configuration-required');
 
+      case 'promotions.recoverReward':
       case 'promotions.grantReward':
         return ok(input.bridgeRequest, {
           status: 'unavailable',

@@ -272,6 +272,7 @@ export function createAitPlatformGateway(input: {
       getAvailability: (payload) =>
         request<PromotionRewardAvailability>('promotions.getAvailability', payload),
       grantReward: (payload) => request<PromotionRewardResult>('promotions.grantReward', payload),
+      recoverReward: (payload) => request<PromotionRewardResult>('promotions.recoverReward', payload),
     },
     ...(commerce === undefined ? {} : { commerce }),
     ...(notificationsV2 === undefined ? {} : { notificationsV2 }),
@@ -574,6 +575,7 @@ export function createAitSandboxBridge(
         case 'promotions.getAvailability':
           return ok(input, 'configuration-required');
 
+        case 'promotions.recoverReward':
         case 'promotions.grantReward':
           return ok(input, { status: 'unavailable' });
 

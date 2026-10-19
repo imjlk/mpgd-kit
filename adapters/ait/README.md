@@ -107,3 +107,22 @@ only an explicit authority `retry` decision can remove the marker and reach auth
 A client-reported failure is **not** independent proof that no payment happened. Neither the observer
 nor a timeout should reset the server's monetary dispatch fence. A legacy failure whose marker was
 already removed cannot recover its old error code.
+
+`gateway.promotions.recoverReward({ campaignId, idempotencyKey })` is an optional recovery-only
+capability. It reads a persisted receipt or consults the configured authority resolver, including
+a new installation without local state. It never calls the authorizer or native payout API, and
+a resolver's `retry` result leaves pending storage untouched. An explicit `grantReward` request
+is still required for a newly authorized payment. An unknown provider outcome remains pending;
+this API cannot reconstruct a lost provider key or prove non-payment.
+
+Recovery does not require current native payout support. A missing local marker has no known
+`pendingSince`, so the resolver receives no invented timestamp. A failed local read can fall back
+to the authority; confirmed receipts are cached for later restarts. The receipt contract is the
+same for markerless and existing-marker resolution.
+
+Undefined/malformed SDK responses and exceptions retain a bounded diagnostic code in the pending
+marker. They remain ambiguous, not confirmed non-payment. Thrown provider codes are preserved when
+safe; raw messages are not persisted. Recovery replays these observations for an unavailable game
+server to catch up. Terminal receipts also have a bridge-local fallback (up to 256 entries) when
+native storage fails. This fallback does not survive host termination, never grants eligibility,
+and does not replace durable storage or the server ledger.

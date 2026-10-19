@@ -1704,6 +1704,161 @@ describe('AIT production host bridge', () => {
     ]);
   });
 
+  it('preserves the original dispatch timestamp when a delayed native exception is recorded', async () => {
+    vi.useFakeTimers();
+    try {
+      const start = '2026-10-19T00:00:00.000Z';
+      vi.setSystemTime(new Date(start));
+      const values = new Map<string, string>();
+      const bridge = createAitHostBridge({
+        promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+        authorizePromotionGrant: async () => ({ status: 'authorized' }),
+        dependencies: createDependencies({ grantPromotionReward: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 60_000));
+          throw new Error('native reply lost');
+        }, storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          setItem: async (key, value) => { values.set(key, value); },
+          removeItem: async (key) => { values.delete(key); },
+        } }),
+      });
+      const work = request(bridge, 'promotions.grantReward', { campaignId: 'DAILY', idempotencyKey: 'delayed' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await work).toEqual({ status: 'pending' });
+      for (const value of values.values()) {
+        expect(JSON.parse(value)).toMatchObject({ pendingSince: start, errorCode: 'NATIVE_EXCEPTION' });
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['undefined', 'malformed', 'exception', 'coded-exception'] as const)(
+    'replays %s diagnostics after restart without issuing another payment', async (kind) => {
+      const values = new Map<string, string>();
+      const grant = vi.fn(async () => {
+        if (kind === 'exception') { throw new Error('private native detail'); }
+        if (kind === 'coded-exception') { throw { errorCode: '4110', message: 'private detail' }; }
+        return kind === 'undefined' ? undefined : { key: '' };
+      });
+      const observation = vi.fn(async () => {});
+      const create = () => createAitHostBridge({
+        promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+        authorizePromotionGrant: async () => ({ status: 'authorized' }),
+        observePromotionGrant: observation,
+        dependencies: createDependencies({ grantPromotionReward: grant, storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          setItem: async (key, value) => { values.set(key, value); },
+          removeItem: async (key) => { values.delete(key); },
+        } }),
+      });
+      const payload = { campaignId: 'DAILY', idempotencyKey: `diagnostic-${kind}` };
+      expect(await request(create(), 'promotions.grantReward', payload)).toEqual({ status: 'pending' });
+      observation.mockClear();
+      expect(await request(create(), 'promotions.recoverReward', payload)).toEqual({ status: 'pending' });
+      const code = kind === 'undefined' ? 'UNSUPPORTED_VERSION' : kind === 'malformed' ? 'UNKNOWN_RESPONSE' : kind === 'coded-exception' ? '4110' : 'NATIVE_EXCEPTION';
+      expect(observation).toHaveBeenCalledWith({ ...payload, status: 'pending', errorCode: code });
+      expect(grant).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify([...values.values()])).not.toContain('private');
+    },
+  );
+
+  it('recovers a successful SDK response from bridge memory when receipt storage and observer fail', async () => {
+    const values = new Map<string, string>();
+    const grant = vi.fn(async () => ({ key: 'late-success' }));
+    const authorize = vi.fn(async () => ({ status: 'authorized' as const }));
+    const observer = vi.fn(async (): Promise<void> => { throw new Error('offline'); });
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: authorize, observePromotionGrant: observer,
+      dependencies: createDependencies({ grantPromotionReward: grant, storage: {
+        getItem: async (key) => values.get(key) ?? null,
+        setItem: async (key, value) => {
+          if (value.includes('late-success')) { throw new Error('storage full'); }
+          values.set(key, value);
+        },
+        removeItem: async (key) => { values.delete(key); },
+      } }),
+    });
+    const payload = { campaignId: 'DAILY', idempotencyKey: 'memory-success' };
+    expect(await request(bridge, 'promotions.grantReward', payload)).toEqual({ status: 'granted', receiptKey: 'late-success' });
+    observer.mockResolvedValue(undefined);
+    expect(await request(bridge, 'promotions.recoverReward', payload)).toEqual({ status: 'granted', receiptKey: 'late-success' });
+    expect(grant).toHaveBeenCalledTimes(1);
+    expect(authorize).toHaveBeenCalledTimes(1);
+    expect(observer).toHaveBeenLastCalledWith({ ...payload, status: 'granted', receiptKey: 'late-success' });
+  });
+
+  it('reads a persisted receipt even when native payout is currently unsupported', async () => {
+    const grant = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      dependencies: createDependencies({ grantPromotionReward: grant, isMinVersionSupported: () => false, storage: {
+        getItem: async () => JSON.stringify({ status: 'granted', receiptKey: 'cached-success' }),
+        setItem: async () => {}, removeItem: async () => {},
+      } }),
+    });
+    expect(await request(bridge, 'promotions.recoverReward', { campaignId: 'DAILY', idempotencyKey: 'cached' })).toEqual({ status: 'granted', receiptKey: 'cached-success' });
+    expect(grant).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('persists markerless authority receipts without inventing time (read failure: %s)', async (readFails) => {
+    const values = new Map<string, string>();
+    let failRead = readFails;
+    const receiptKey = 'r'.repeat(600);
+    const resolver = vi.fn(async () => ({ status: 'granted' as const, receiptKey }));
+    const grant = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const create = () => createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      resolvePendingPromotionGrant: resolver,
+      dependencies: createDependencies({ grantPromotionReward: grant, isMinVersionSupported: () => false, storage: {
+        getItem: async (key) => { if (failRead) { throw new Error('temporary storage failure'); } return values.get(key) ?? null; },
+        setItem: async (key, value) => { values.set(key, value); },
+        removeItem: async (key) => { values.delete(key); },
+      } }),
+    });
+    const payload = { campaignId: 'DAILY', idempotencyKey: 'markerless' };
+    expect(await request(create(), 'promotions.recoverReward', payload)).toEqual({ status: 'granted', receiptKey });
+    expect(resolver).toHaveBeenCalledWith(payload);
+    expect(values.size).toBe(1);
+    failRead = false;
+    resolver.mockRejectedValue(new Error('authority offline'));
+    expect(await request(create(), 'promotions.recoverReward', payload)).toEqual({ status: 'granted', receiptKey });
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(grant).not.toHaveBeenCalled();
+  });
+
+  it('recovers without storage by consulting the authority and never dispatches a new payment', async () => {
+    const grant = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const authorize = vi.fn(async () => ({ status: 'authorized' as const }));
+    const observer = vi.fn(async () => {});
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: authorize,
+      resolvePendingPromotionGrant: async () => ({ status: 'granted', receiptKey: 'server-receipt' }),
+      observePromotionGrant: observer,
+      dependencies: createDependencies({ grantPromotionReward: grant }),
+    });
+    expect(await request(bridge, 'promotions.recoverReward', { campaignId: 'DAILY', idempotencyKey: 'old-claim' })).toEqual({ status: 'granted', receiptKey: 'server-receipt' });
+    expect(grant).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ status: 'granted', receiptKey: 'server-receipt' }));
+  });
+  it('never turns a recovery-only retry resolution into a payout or removes its pending fence', async () => {
+    const grant = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const removeItem = vi.fn(async () => {});
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant: async () => ({ status: 'retry' }),
+      dependencies: createDependencies({ grantPromotionReward: grant, storage: {
+        getItem: async () => JSON.stringify({ status: 'pending', pendingSince: new Date().toISOString() }),
+        setItem: async () => {}, removeItem,
+      } }),
+    });
+    expect(await request(bridge, 'promotions.recoverReward', { campaignId: 'DAILY', idempotencyKey: 'pending' })).toEqual({ status: 'pending' });
+    expect(grant).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
+  });
+
   it('deduplicates promotion grants with the server-issued claim id', async () => {
     const values = new Map<string, string>();
     const grantPromotion = vi.fn(async () => ({ key: 'promotion-receipt-1' }));
