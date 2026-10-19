@@ -1641,4 +1641,44 @@ for (const claimLeaseSeconds of [1, 86_400]) {
   );
 }
 
+// Ambiguous replays through the scheduler: the first waits the claim lease to the
+// millisecond, and each later answer doubles the wait.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const fcm = fakeProvider(
+    'fcm',
+    Array.from({ length: 4 }, () => ({ status: 'ambiguous' }) as const),
+  );
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    now: time.now,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await service.deliver({ idempotencyKey: 'a-1', player: 'p-1', topic: 'friend-challenge' });
+  const dueIn = (): number =>
+    (Date.parse(notificationSendDueAt(store.inspect().sends[0] as NotificationStoredSend) ?? '') - Date.parse(time.now()))
+    / 1000;
+  const waits = [dueIn()];
+  time.advance(299);
+  assert.deepEqual((await service.dispatchDue()).results, [], 'not due a millisecond early');
+  time.advance(1);
+  for (let replay = 0; replay < 3; replay += 1) {
+    assert.equal((await service.dispatchDue()).results.length, 1);
+    waits.push(dueIn());
+    time.advance(waits[waits.length - 1] ?? 0);
+  }
+  assert.deepEqual(waits, [300, 600, 1200, 2400]);
+  assert.equal(fcm.calls.length, 4);
+}
+
 console.info('Notifications service unit tests passed.');
