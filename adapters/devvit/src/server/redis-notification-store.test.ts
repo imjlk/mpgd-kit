@@ -314,6 +314,73 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(await store.listDueSends({ at: '2026-11-01T00:00:00Z', limit: 10 })).toEqual([]);
   });
 
+  it("touches only one player's endpoint keys, never a key shared by every endpoint", async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    const endpoint = (installationId: string, player: string, value: string) => ({
+      provider: 'fcm',
+      installationId,
+      player,
+      address: { kind: 'fcm-token' as const, value },
+      permission: 'granted' as const,
+      sessionId: `s-${installationId}`,
+      lastRegisteredAt: '2026-10-19T03:00:00Z',
+    });
+    for (let index = 0; index < 20; index += 1) {
+      await store.putEndpoint(endpoint(`other-${String(index)}`, `t2_other${String(index)}`, `tok-${String(index)}`));
+    }
+    const touched: string[] = [];
+    const record = <Args extends unknown[], Value>(name: keyof typeof redis, call: (...args: Args) => Value) =>
+      (...args: Args): Value => {
+        const [first] = args;
+        touched.push(...(Array.isArray(first) ? first.map(String) : [String(first)]));
+        void name;
+        return call(...args);
+      };
+    const spied = {
+      ...redis,
+      get: record('get', redis.get.bind(redis)),
+      mGet: record('mGet', redis.mGet.bind(redis)),
+      hGet: record('hGet', redis.hGet.bind(redis)),
+      hGetAll: record('hGetAll', redis.hGetAll.bind(redis)),
+      zRange: record('zRange', redis.zRange.bind(redis)),
+      watch: (...watched: string[]) => {
+        touched.push(...watched);
+        return redis.watch(...watched);
+      },
+    };
+    const scoped = createDevvitRedisNotificationStore(spied);
+    await scoped.putEndpoint(endpoint('mine', 't2_me', 'tok-mine'));
+    await scoped.getEndpoint({ provider: 'fcm', installationId: 'mine' });
+    expect((await scoped.listEndpoints({ player: 't2_me', provider: 'fcm' })).map((row) => row.installationId))
+      .toEqual(['mine']);
+    await scoped.invalidateEndpoint({ provider: 'fcm', installationId: 'mine', value: 'tok-mine', at: '2026-10-19T04:00:00Z' });
+    await scoped.removeEndpoints({ installationId: 'mine', player: 't2_me' });
+    expect(touched.length).toBeGreaterThan(0);
+    expect(touched.filter((key) => key.includes('other') || key.endsWith(':endpoints-all'))).toEqual([]);
+    // The other players' endpoints are untouched.
+    expect(await store.listEndpoints({ player: 't2_other3', provider: 'fcm' })).toHaveLength(1);
+  });
+
+  it('keeps an address pointer that another installation took when the first moves on', async () => {
+    const store = createDevvitRedisNotificationStore(createFakeNotificationRedis());
+    const base = {
+      provider: 'fcm',
+      player: 't2_me',
+      permission: 'granted' as const,
+      lastRegisteredAt: '2026-10-19T03:00:00Z',
+    };
+    await store.putEndpoint({ ...base, installationId: 'a', address: { kind: 'fcm-token', value: 'tok' }, sessionId: 's-a' });
+    await store.putEndpoint({ ...base, installationId: 'b', address: { kind: 'fcm-token', value: 'tok' }, sessionId: 's-b' });
+    // b took the address; a is gone, and a new address for a does not free b's.
+    expect(await store.getEndpoint({ provider: 'fcm', installationId: 'a' })).toBeUndefined();
+    await store.putEndpoint({ ...base, installationId: 'a', address: { kind: 'fcm-token', value: 'tok-2' }, sessionId: 's-a' });
+    await store.putEndpoint({ ...base, installationId: 'c', address: { kind: 'fcm-token', value: 'tok' }, sessionId: 's-c' });
+    expect(await store.getEndpoint({ provider: 'fcm', installationId: 'b' })).toBeUndefined();
+    expect((await store.listEndpoints({ player: 't2_me', provider: 'fcm' })).map((row) => row.installationId))
+      .toEqual(['a', 'c']);
+  });
+
   it('rejects an empty namespace and out-of-range attempts', () => {
     const redis = createFakeNotificationRedis();
     expect(() => createDevvitRedisNotificationStore(redis, { namespace: '' })).toThrow(TypeError);

@@ -1545,6 +1545,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   - **Ledger.** The same delivery module and policy gate run there with a
     Redis-backed store, `createDevvitRedisNotificationStore`, which passes
     `runNotificationStoreConformance`; see open question 2 for its fencing.
+    Device endpoints are indexed per player, session, and installation, with
+    an address pointer for uniqueness, so a call touches only one player's
+    endpoints.
 
 ### Reminder scheduler {#scheduler}
 

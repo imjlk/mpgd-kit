@@ -27,10 +27,14 @@ import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
  * - **Consent records** are a sorted set per player scored by the record's
  *   millisecond; an append watches it, so parallel appends each take their
  *   own millisecond.
- * - **Device endpoints** are kept in one hash. A Devvit server serves only
- *   platform-user providers, which register no device address, so the hash
- *   stays empty in practice; it is correct for any provider but every
- *   endpoint call reads all of it.
+ * - **Device endpoints** are one JSON value per provider and installation,
+ *   with an address pointer per provider and address (the uniqueness check)
+ *   and sorted-set indexes per player, session, and installation, all
+ *   written in the endpoint's own transaction. A call reads and watches only
+ *   the keys of the endpoints it touches, so reads and contention scale with
+ *   one player's endpoints. Only `purge` walks every endpoint, through an
+ *   index of all of them. A Devvit server serves only platform-user
+ *   providers, so it stores none in practice.
  * - **History** is a hash per player (one field per send and provider, so a
  *   repeat is ignored) with a sorted set by time.
  * - **Order.** Lists come sorted (by time, then by key or installation),
@@ -125,6 +129,11 @@ const commitMarkerValue = '1';
 /** Sorted-set page size; `@devvit/redis` reads at most 1,000 members per score or lex range. */
 const pageSize = 500;
 
+/** A transaction's plan: commands and the step's answer, or `retry` when its preparing read is outdated. */
+type Plan<Result> =
+  | { readonly commands: readonly Command[]; readonly result: Result }
+  | { readonly retry: true };
+
 /** A queued command; each queues exactly one command after MULTI. */
 type Command = (transaction: DevvitNotificationRedisTransaction) => Promise<unknown>;
 
@@ -156,7 +165,15 @@ export function createDevvitRedisNotificationStore(
   const enc = encodeURIComponent;
   const keys = {
     consent: (player: string) => `${namespace}:consent:${enc(player)}`,
-    endpoints: `${namespace}:endpoints`,
+    endpoint: (provider: string, installationId: string) =>
+      `${namespace}:endpoint:${enc(provider)}:${enc(installationId)}`,
+    endpointAddress: (provider: string, value: string) =>
+      `${namespace}:endpoint-address:${enc(provider)}:${enc(value)}`,
+    endpointsByPlayer: (player: string) => `${namespace}:endpoints-player:${enc(player)}`,
+    endpointsBySession: (sessionId: string) => `${namespace}:endpoints-session:${enc(sessionId)}`,
+    endpointsByInstallation: (installationId: string) =>
+      `${namespace}:endpoints-installation:${enc(installationId)}`,
+    endpointsAll: `${namespace}:endpoints-all`,
     registrations: `${namespace}:registrations`,
     notices: (player: string) => `${namespace}:notices:${enc(player)}`,
     send: (key: string) => `${namespace}:send:${enc(key)}`,
@@ -183,19 +200,38 @@ export function createDevvitRedisNotificationStore(
    */
   async function transact<Result>(
     watched: readonly string[],
-    plan: () => Promise<{
-      readonly commands: readonly Command[];
-      readonly result: Result;
+    plan: () => Promise<Plan<Result>>,
+  ): Promise<Result> {
+    return transactPrepared(async () => ({ watched, plan }));
+  }
+
+  /**
+   * As `transact`, with the watched keys chosen from a read before WATCH:
+   * `prepare` reads what decides them, and a plan that finds that read
+   * outdated once the keys are watched answers `retry`.
+   */
+  async function transactPrepared<Result>(
+    prepare: () => Promise<{
+      readonly watched: readonly string[];
+      readonly plan: () => Promise<Plan<Result>>;
     }>,
   ): Promise<Result> {
+    let lastWatched: readonly string[] = [];
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (attempt > 0) {
         await backoff(attempt);
       }
+      const { watched, plan } = await prepare();
+      lastWatched = watched;
       const transaction = await redis.watch(...watched);
       let multiStarted = false;
       try {
-        const { commands, result } = await plan();
+        const planned = await plan();
+        if ('retry' in planned) {
+          await transaction.unwatch();
+          continue;
+        }
+        const { commands, result } = planned;
         if (commands.length === 0) {
           await transaction.unwatch();
           return result;
@@ -223,7 +259,7 @@ export function createDevvitRedisNotificationStore(
       }
     }
     throw new Error(
-      `Devvit Redis notification store: contention exceeded ${String(attempts)} attempts on ${watched.join(', ')}.`,
+      `Devvit Redis notification store: contention exceeded ${String(attempts)} attempts on ${lastWatched.join(', ')}.`,
     );
   }
 
@@ -251,38 +287,120 @@ export function createDevvitRedisNotificationStore(
     return members;
   }
 
-  async function readEndpoints(): Promise<NotificationStoredEndpoint[]> {
-    const all = await redis.hGetAll(keys.endpoints);
-    return Object.values(all)
-      .map((value) => parse<NotificationStoredEndpoint>(value, keys.endpoints))
-      .sort((left, right) =>
-        compareText(left.provider, right.provider)
-        || compareText(left.installationId, right.installationId));
-  }
-
-  const endpointField = (provider: string, installationId: string): string =>
+  const endpointMember = (provider: string, installationId: string): string =>
     JSON.stringify([provider, installationId]);
 
-  /** Rewrites the endpoint hash: `put` fields set, `remove` fields deleted. */
+  async function readEndpoint(
+    provider: string,
+    installationId: string,
+  ): Promise<NotificationStoredEndpoint | undefined> {
+    const key = keys.endpoint(provider, installationId);
+    const value = await redis.get(key);
+    return isMissing(value) ? undefined : parse<NotificationStoredEndpoint>(value, key);
+  }
+
+  /**
+   * The commands that move an endpoint from `before` to `after` (either may
+   * be absent) with its address pointer and indexes. `ownsOldAddress` says
+   * whether `before`'s address pointer still names this installation, so a
+   * pointer another installation took is never deleted.
+   */
   function endpointCommands(
-    put: readonly NotificationStoredEndpoint[],
-    remove: readonly NotificationStoredEndpoint[],
+    before: NotificationStoredEndpoint | undefined,
+    after: NotificationStoredEndpoint | undefined,
+    ownsOldAddress: boolean,
   ): Command[] {
-    const commands: Command[] = [];
-    if (remove.length > 0) {
-      const fields = remove.map((endpoint) =>
-        endpointField(endpoint.provider, endpoint.installationId),
-      );
-      commands.push((transaction) => transaction.hDel(keys.endpoints, fields));
+    const subject = after ?? before;
+    if (subject === undefined) {
+      return [];
     }
-    if (put.length > 0) {
-      const values: Record<string, string> = {};
-      for (const endpoint of put) {
-        values[endpointField(endpoint.provider, endpoint.installationId)] = JSON.stringify(endpoint);
+    const { provider, installationId } = subject;
+    const member = endpointMember(provider, installationId);
+    const commands: Command[] = [];
+    const valueKey = keys.endpoint(provider, installationId);
+    if (after === undefined) {
+      commands.push((transaction) => transaction.del(valueKey));
+    } else {
+      const value = JSON.stringify(after);
+      commands.push((transaction) => transaction.set(valueKey, value));
+    }
+    if (
+      before !== undefined
+      && ownsOldAddress
+      && (after === undefined || before.address.value !== after.address.value)
+    ) {
+      const oldAddress = keys.endpointAddress(provider, before.address.value);
+      commands.push((transaction) => transaction.del(oldAddress));
+    }
+    if (after !== undefined) {
+      const address = keys.endpointAddress(provider, after.address.value);
+      commands.push((transaction) => transaction.set(address, installationId));
+    }
+    const moved = (field: 'player' | 'sessionId', key: (value: string) => string): void => {
+      if (before !== undefined && (after === undefined || before[field] !== after[field])) {
+        const old = key(before[field]);
+        commands.push((transaction) => transaction.zRem(old, [member]));
       }
-      commands.push((transaction) => transaction.hSet(keys.endpoints, values));
+      if (after !== undefined) {
+        const next = key(after[field]);
+        commands.push((transaction) => transaction.zAdd(next, { member, score: 0 }));
+      }
+    };
+    moved('player', keys.endpointsByPlayer);
+    moved('sessionId', keys.endpointsBySession);
+    const byInstallation = keys.endpointsByInstallation(installationId);
+    if (after === undefined) {
+      commands.push((transaction) => transaction.zRem(byInstallation, [provider]));
+      commands.push((transaction) => transaction.zRem(keys.endpointsAll, [member]));
+    } else {
+      commands.push((transaction) =>
+        transaction.zAdd(byInstallation, { member: provider, score: 0 }),
+      );
+      commands.push((transaction) => transaction.zAdd(keys.endpointsAll, { member, score: 0 }));
     }
     return commands;
+  }
+
+  /** Removes one endpoint, atomically, while `matches` holds for it; answers whether it did. */
+  async function removeEndpointIf(
+    provider: string,
+    installationId: string,
+    matches: (endpoint: NotificationStoredEndpoint) => boolean,
+  ): Promise<boolean> {
+    return transactPrepared(async () => {
+      const seen = await readEndpoint(provider, installationId);
+      const valueKey = keys.endpoint(provider, installationId);
+      return {
+        watched: seen === undefined
+          ? [valueKey]
+          : [valueKey, keys.endpointAddress(provider, seen.address.value)],
+        plan: async (): Promise<Plan<boolean>> => {
+          const endpoint = await readEndpoint(provider, installationId);
+          if (JSON.stringify(endpoint) !== JSON.stringify(seen)) {
+            return { retry: true };
+          }
+          if (endpoint === undefined || !matches(endpoint)) {
+            return { commands: [], result: false };
+          }
+          const owner = await redis.get(keys.endpointAddress(provider, endpoint.address.value));
+          return {
+            commands: endpointCommands(endpoint, undefined, owner === installationId),
+            result: true,
+          };
+        },
+      };
+    });
+  }
+
+  /** Every endpoint an index names, as `[provider, installationId]`. */
+  async function indexedEndpoints(key: string): Promise<[string, string][]> {
+    const members = await redis.zRange(key, 0, -1, { by: 'rank' });
+    return members.flatMap((entry) => {
+      const named = tryParse<unknown>(entry.member);
+      return Array.isArray(named) && typeof named[0] === 'string' && typeof named[1] === 'string'
+        ? [[named[0], named[1]] as [string, string]]
+        : [];
+    });
   }
 
   /** The index commands that follow a send from `before` to `after` (either may be absent). */
@@ -383,79 +501,119 @@ export function createDevvitRedisNotificationStore(
     },
 
     async putEndpoint(write) {
-      return transact([keys.endpoints], async () => {
-        const endpoints = await readEndpoints();
-        const others = endpoints.filter((other) =>
-          other.provider === write.provider
-          && other.address.value === write.address.value
-          && other.installationId !== write.installationId);
-        const existing = endpoints.find((endpoint) =>
-          endpoint.provider === write.provider && endpoint.installationId === write.installationId);
-        const dead = existing?.status === 'invalid' && existing.address.value === write.address.value;
-        const stored: NotificationStoredEndpoint = {
-          ...structuredClone(write),
-          status: dead ? 'invalid' : 'valid',
-          ...(dead && existing.invalidatedAt !== undefined ? { invalidatedAt: existing.invalidatedAt } : {}),
+      const { provider, installationId } = write;
+      const valueKey = keys.endpoint(provider, installationId);
+      const addressKey = keys.endpointAddress(provider, write.address.value);
+      return transactPrepared(async () => {
+        // What decides the watched keys: this installation's endpoint, and
+        // the installation the new address points to now.
+        const seen = await readEndpoint(provider, installationId);
+        const seenOwner = await redis.get(addressKey);
+        const watched = [valueKey, addressKey];
+        if (seen !== undefined && seen.address.value !== write.address.value) {
+          watched.push(keys.endpointAddress(provider, seen.address.value));
+        }
+        if (!isMissing(seenOwner) && seenOwner !== installationId) {
+          watched.push(keys.endpoint(provider, seenOwner));
+        }
+        return {
+          watched,
+          plan: async (): Promise<Plan<NotificationStoredEndpoint>> => {
+            const existing = await readEndpoint(provider, installationId);
+            const owner = await redis.get(addressKey);
+            if (JSON.stringify(existing) !== JSON.stringify(seen) || owner !== seenOwner) {
+              return { retry: true };
+            }
+            const commands: Command[] = [];
+            if (!isMissing(owner) && owner !== installationId) {
+              // An address is unique per provider: the other installation loses it.
+              const other = await readEndpoint(provider, owner);
+              if (other !== undefined) {
+                commands.push(...endpointCommands(other, undefined, false));
+              }
+            }
+            const dead = existing?.status === 'invalid' && existing.address.value === write.address.value;
+            const stored: NotificationStoredEndpoint = {
+              ...structuredClone(write),
+              status: dead ? 'invalid' : 'valid',
+              ...(dead && existing.invalidatedAt !== undefined ? { invalidatedAt: existing.invalidatedAt } : {}),
+            };
+            const ownsOldAddress = existing !== undefined
+              && (await redis.get(keys.endpointAddress(provider, existing.address.value))) === installationId;
+            commands.push(...endpointCommands(existing, stored, ownsOldAddress));
+            return { commands, result: structuredClone(stored) };
+          },
         };
-        return { commands: endpointCommands([stored], others), result: structuredClone(stored) };
       });
     },
     async listEndpoints({ player, provider }) {
-      return (await readEndpoints()).filter((endpoint) =>
-        endpoint.player === player && endpoint.provider === provider);
+      const named = (await indexedEndpoints(keys.endpointsByPlayer(player)))
+        .filter(([indexed]) => indexed === provider);
+      if (named.length === 0) {
+        return [];
+      }
+      const values = await redis.mGet(named.map(([indexed, installation]) => keys.endpoint(indexed, installation)));
+      return values
+        .flatMap((value) => (isMissing(value) ? [] : [parse<NotificationStoredEndpoint>(value, keys.endpointsByPlayer(player))]))
+        .filter((endpoint) => endpoint.player === player && endpoint.provider === provider)
+        .sort((left, right) => compareText(left.installationId, right.installationId));
     },
     async getEndpoint({ provider, installationId }) {
-      const value = await redis.hGet(keys.endpoints, endpointField(provider, installationId));
-      return isMissing(value)
-        ? undefined
-        : parse<NotificationStoredEndpoint>(value, keys.endpoints);
+      return readEndpoint(provider, installationId);
     },
     async invalidateEndpoint({ provider, installationId, value, at }) {
-      await transact([keys.endpoints], async () => {
-        const stored = await redis.hGet(keys.endpoints, endpointField(provider, installationId));
-        const endpoint = isMissing(stored)
-          ? undefined
-          : parse<NotificationStoredEndpoint>(stored, keys.endpoints);
+      await transact([keys.endpoint(provider, installationId)], async () => {
+        const endpoint = await readEndpoint(provider, installationId);
         if (endpoint === undefined || endpoint.address.value !== value || endpoint.status !== 'valid') {
           return { commands: [], result: undefined };
         }
-        return {
-          commands: endpointCommands([{ ...endpoint, status: 'invalid', invalidatedAt: at }], []),
-          result: undefined,
-        };
+        const invalid: NotificationStoredEndpoint = { ...endpoint, status: 'invalid', invalidatedAt: at };
+        const json = JSON.stringify(invalid);
+        const key = keys.endpoint(provider, installationId);
+        return { commands: [(transaction) => transaction.set(key, json)], result: undefined };
       });
     },
     async removeEndpoints({ installationId, player, provider }) {
-      await transact([keys.endpoints], async () => {
-        const removed = (await readEndpoints()).filter((endpoint) =>
-          endpoint.installationId === installationId
-          && endpoint.player === player
-          && (provider === undefined || endpoint.provider === provider));
-        return { commands: endpointCommands([], removed), result: undefined };
-      });
+      const providers = provider === undefined
+        ? (await redis.zRange(keys.endpointsByInstallation(installationId), 0, -1, { by: 'rank' }))
+          .map((entry) => entry.member)
+        : [provider];
+      for (const named of providers) {
+        await removeEndpointIf(named, installationId, (endpoint) => endpoint.player === player);
+      }
     },
     async removeSessionEndpoints({ sessionId }) {
-      return transact([keys.endpoints], async () => {
-        const removed = (await readEndpoints()).filter((endpoint) => endpoint.sessionId === sessionId);
-        return { commands: endpointCommands([], removed), result: removed.length };
-      });
+      let removed = 0;
+      for (const [provider, installationId] of await indexedEndpoints(keys.endpointsBySession(sessionId))) {
+        if (await removeEndpointIf(provider, installationId, (endpoint) => endpoint.sessionId === sessionId)) {
+          removed += 1;
+        }
+      }
+      return removed;
     },
     async extendSessionEndpoints({ sessionId, expiresAt }) {
-      return transact([keys.endpoints], async () => {
-        const changed: NotificationStoredEndpoint[] = [];
-        for (const endpoint of await readEndpoints()) {
+      let changed = 0;
+      for (const [provider, installationId] of await indexedEndpoints(keys.endpointsBySession(sessionId))) {
+        const key = keys.endpoint(provider, installationId);
+        const moved = await transact([key], async () => {
+          const endpoint = await readEndpoint(provider, installationId);
           if (
-            endpoint.sessionId !== sessionId
+            endpoint === undefined
+            || endpoint.sessionId !== sessionId
             || endpoint.sessionExpiresAt === undefined
             || (expiresAt !== undefined && Date.parse(endpoint.sessionExpiresAt) >= Date.parse(expiresAt))
           ) {
-            continue;
+            return { commands: [], result: false };
           }
           const { sessionExpiresAt: _earlier, ...kept } = endpoint;
-          changed.push(expiresAt === undefined ? kept : { ...kept, sessionExpiresAt: expiresAt });
+          const json = JSON.stringify(expiresAt === undefined ? kept : { ...kept, sessionExpiresAt: expiresAt });
+          return { commands: [(transaction) => transaction.set(key, json)], result: true };
+        });
+        if (moved) {
+          changed += 1;
         }
-        return { commands: endpointCommands(changed, []), result: changed.length };
-      });
+      }
+      return changed;
     },
 
     async putPlatformRegistration(registration) {
@@ -724,13 +882,17 @@ export function createDevvitRedisNotificationStore(
 
       const before = (at: string | undefined, cutoff: string): boolean =>
         at !== undefined && Date.parse(at) < Date.parse(cutoff);
-      const endpointCount = await transact([keys.endpoints], async () => {
-        const removed = (await readEndpoints()).filter((endpoint) =>
+      // The one walk over every endpoint, through their index.
+      let endpointCount = 0;
+      for (const [provider, installationId] of await indexedEndpoints(keys.endpointsAll)) {
+        const removed = await removeEndpointIf(provider, installationId, (endpoint) =>
           (endpoint.status === 'invalid' && before(endpoint.invalidatedAt, cutoffs.invalidEndpointsBefore))
           || before(endpoint.lastRegisteredAt, cutoffs.staleEndpointsBefore)
           || before(endpoint.sessionExpiresAt, cutoffs.sessionEndpointsBefore));
-        return { commands: endpointCommands([], removed), result: removed.length };
-      });
+        if (removed) {
+          endpointCount += 1;
+        }
+      }
 
       return { sends: sendCount, history: historyCount, endpoints: endpointCount };
     },
