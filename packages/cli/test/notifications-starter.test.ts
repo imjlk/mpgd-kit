@@ -277,7 +277,11 @@ assert.equal(
 );
 // No advertising topic reaches Apps in Toss or Devvit, which cannot carry
 // it, or Android, whose FCM pushes cannot carry the opt-out action yet.
-for (const topic of validation.catalog.topics.filter((entry) => entry.purpose === 'advertising')) {
+const advertisingTopics = validation.catalog.topics.filter(
+  (entry) => entry.purpose === 'advertising',
+);
+assert.ok(advertisingTopics.length > 0);
+for (const topic of advertisingTopics) {
   assert.deepEqual(Object.keys(topic.targets ?? {}).sort(), ['ios'], topic.id);
 }
 

@@ -298,8 +298,10 @@ is created, which is how a cold-start open reaches it.
     in its `topic` data key; without that key it opens nothing.
   - An Android FCM notification message cannot carry actions, so an Android
     advertising push needs the shell to render it natively with the action,
-    which is not built yet (a follow-up after C1); until then the game's
-    settings screen is the Android opt-out route.
+    which is not built yet (a follow-up after C1). Until then map no
+    advertising topic to `android`: the push would arrive without the
+    opt-out action the Korean rules require (see the RFC's advertising
+    rules). The kit's starter maps its sample advertising topic to iOS only.
 - **Settings.** Neither plugin opens the notification settings, so the
   provider takes an `openSettings` opener; without one `permission.settings`
   is `false` and `openSettings` answers `unavailable`.

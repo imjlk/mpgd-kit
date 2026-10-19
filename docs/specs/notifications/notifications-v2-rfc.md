@@ -1542,7 +1542,8 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     category `mpgd-advertising` in `apns.payload.aps.category`, whose
     opt-out action the app registers. An Android FCM notification message
     cannot carry actions; rendering advertising natively in the shell is a
-    follow-up after C1. FCM's
+    follow-up after C1, and until then a catalog maps no advertising topic to
+    Android ([Capacitor](#profile-capacitor)). FCM's
     reserved data keys are refused before the send.
 - **Apps in Toss.**
   `createAitFunctionalMessageDeliveryProvider` in
@@ -2054,8 +2055,10 @@ What the kit enforces for `advertising` topics under `kr`:
     directly; describing a settings path is not enough (p.44). An Android FCM
     notification message cannot show actions, so an Android advertising push
     needs the Capacitor shell to render it natively with the action (see
-    [Capacitor](#profile-capacitor)). Until the shell does, a catalog maps
-    no advertising topic to Android; the starter's sample is iOS only.
+    [Capacitor](#profile-capacitor)). Until the shell does, a catalog
+    should map no advertising topic to Android. The kit does not enforce
+    this yet (the reference `fcm` entry serves both `android` and `ios`), so
+    it is a rule the game keeps; the starter's sample is iOS only.
 - **Notices.**
   - A result notice is due within 14 days of a consent, refusal, or
     withdrawal. It gives the sender's name, the act and its date, and the

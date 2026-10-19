@@ -37,8 +37,10 @@ export async function createStarterCapacitorNotifications(
       topics,
       ...sdks,
       // Android channel names the player sees in system settings, in the
-      // device language. Advertising keeps a channel of its own so the player
-      // can turn it off there.
+      // device language. The provider creates a channel only for the topics
+      // mapped to Android; `mpgd-advertising` is named for the day an
+      // advertising topic is mapped there, in a channel of its own the
+      // player can turn off.
       channels: korean
         ? {
             'mpgd-service': { name: '알림' },
