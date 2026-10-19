@@ -140,8 +140,14 @@ function readsAsRateLimit(message: string): boolean {
   if (/\b(?:characters?|length|long|title|body|link|size|bytes?)\b/iu.test(message)) {
     return false;
   }
-  return /\blimit\b/iu.test(message)
-    && /\b(?:exceeded|reached|hit)\b/iu.test(message)
+  // "Daily send limit", "per-user limits": the limit names what it counts.
+  if (/\b(?:daily|per[- ]?(?:user|app|day)|send(?:ing)?|notifications?) limits?\b/iu.test(
+    message,
+  )) {
+    return true;
+  }
+  return /\blimits?\b/iu.test(message)
+    && /\b(?:exceed(?:s|ed)?|reach(?:es|ed)?|hit)\b/iu.test(message)
     && /\b(?:notifications?|daily|per[- ]?(?:user|app|day)|user|app|send(?:s|ing)?)\b/iu.test(message);
 }
 
@@ -150,8 +156,26 @@ function readsAsRateLimit(message: string): boolean {
  * such user or account. It counts only for an error that names this
  * recipient.
  */
-const recipientMessage =
-  /\bopt(?:ed|ing)?[ -]?(?:in|out)\b|\b(?:user|account|recipient)\b[^.]*\b(?:not found|does not exist|deleted|suspended|banned)\b|\bnot subscribed\b|\bnotifications? (?:are )?disabled\b/iu;
+function readsAsUserRefusal(message: string): boolean {
+  // A message about the link, the post, or the comment is not the user's.
+  if (/\b(?:link|post|comment|t[13]_\w*)/iu.test(message)) {
+    return false;
+  }
+  return /\bopt(?:ed|ing)?[ -]?(?:in|out)\b|\bnot subscribed\b|\bnotifications? (?:are )?disabled\b/iu.test(message)
+    || /\b(?:user|account|recipient)\b(?:\s+\S+){0,2}?\s+(?:is |was |has been )?(?:not found|does not exist|deleted|suspended|banned)\b/iu
+      .test(message);
+}
+
+/** The reason a report names: only the two reasons this provider answers. */
+function reasonOf(answer: NotificationRemoteDeliveryAnswer): Pick<DevvitEnqueueErrorReport, 'reason'> {
+  if (answer.status !== 'rejected') {
+    return {};
+  }
+  if (answer.reason === 'recipient' || answer.reason === 'configuration') {
+    return { reason: answer.reason };
+  }
+  return {};
+}
 
 /**
  * The Devvit delivery provider (`{ id: 'devvit', send, readPermission }`).
@@ -235,7 +259,7 @@ export function createDevvitNotificationDeliveryProvider(
             source,
             message,
             answer: answer.status,
-            ...(answer.status === 'rejected' ? { reason: answer.reason === 'recipient' ? 'recipient' : 'configuration' } : {}),
+            ...reasonOf(answer),
           });
         } catch {
           // A failing log never changes the answer.
@@ -258,7 +282,11 @@ export function createDevvitNotificationDeliveryProvider(
         }
         let answer: NotificationRemoteDeliveryAnswer;
         if (kind === 'rate-limited') {
-          answer = { status: 'rate-limited' };
+          // A daily limit lifts no sooner than an hour from now; any other
+          // waits the service's default first delay.
+          answer = /\b(?:daily|per[- ]?day|today)\b/iu.test(message)
+            ? { status: 'rate-limited', retryAfterSeconds: 3600 }
+            : { status: 'rate-limited' };
         } else if (kind === 'ambiguous') {
           answer = { status: 'ambiguous', providerCode };
         } else {
@@ -304,7 +332,7 @@ export function createDevvitNotificationDeliveryProvider(
       let fallback: 'rate-limited' | 'recipient' | 'configuration' = 'configuration';
       if (readsAsRateLimit(message)) {
         fallback = 'rate-limited';
-      } else if (ours?.userId === userId && recipientMessage.test(message)) {
+      } else if (ours?.userId === userId && readsAsUserRefusal(message)) {
         // Only an error that names this recipient proves a refusal of the user.
         fallback = 'recipient';
       }

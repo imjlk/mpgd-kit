@@ -101,6 +101,12 @@ export interface CreateDevvitRedisNotificationStoreOptions {
   /** A fresh send version token; random by default. */
   readonly newVersion?: () => string;
   /**
+   * Waits before an aborted step is planned again, `attempt` from 1; a
+   * short jittered backoff by default, so contending writers spread out
+   * instead of retrying in lockstep.
+   */
+  readonly backoff?: (attempt: number) => Promise<void>;
+  /**
    * Sends and history rows one `purge` call deletes at most, each; unbounded
    * by default, as `NotificationStore.purge` deletes every row past its
    * cutoff. Each row costs a few Redis round trips, so a deployment whose
@@ -114,6 +120,8 @@ export const defaultDevvitNotificationNamespace = 'mpgd:notifications';
 const defaultTransactionAttempts = 16;
 const maximumTransactionAttempts = 64;
 const defaultPurgeLimit = Number.POSITIVE_INFINITY;
+/** The commit marker's value; its SET replies `OK`, which `@devvit/redis` always maps. */
+const commitMarkerValue = '1';
 /** Sorted-set page size; `@devvit/redis` reads at most 1,000 members per score or lex range. */
 const pageSize = 500;
 
@@ -140,6 +148,7 @@ export function createDevvitRedisNotificationStore(
     );
   }
   const newVersion = options.newVersion ?? (() => globalThis.crypto.randomUUID());
+  const backoff = options.backoff ?? defaultBackoff;
   const purgeLimit = options.purgeLimit ?? defaultPurgeLimit;
   if (purgeLimit !== defaultPurgeLimit && (!Number.isSafeInteger(purgeLimit) || purgeLimit < 1)) {
     throw new TypeError('purgeLimit must be a positive safe integer.');
@@ -180,6 +189,9 @@ export function createDevvitRedisNotificationStore(
     }>,
   ): Promise<Result> {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt > 0) {
+        await backoff(attempt);
+      }
       const transaction = await redis.watch(...watched);
       let multiStarted = false;
       try {
@@ -193,7 +205,7 @@ export function createDevvitRedisNotificationStore(
         for (const command of commands) {
           await command(transaction);
         }
-        await transaction.set(keys.commitMarker, '1');
+        await transaction.set(keys.commitMarker, commitMarkerValue);
         const results = await transaction.exec();
         if (results !== null && !Array.isArray(results)) {
           throw new Error('Devvit Redis transaction returned an unsupported response.');
@@ -201,7 +213,7 @@ export function createDevvitRedisNotificationStore(
         // An aborted WATCH transaction (another writer changed a watched
         // key) answers no reply; one that answers only nil is read the same
         // way, since no command queued here replies nil when it commits.
-        if (results === null || results.length === 0 || results.every((reply) => reply === null)) {
+        if (results === null || results.every((reply) => reply === null)) {
           continue;
         }
         return result;
@@ -322,13 +334,29 @@ export function createDevvitRedisNotificationStore(
       && typeof send.changedAt === 'string'
       && typeof send.request?.player === 'string'
       && Array.isArray(send.rows)
+      && send.rows.every((row: unknown) => {
+        const candidate = row as { readonly key?: unknown; readonly provider?: unknown; readonly state?: { readonly status?: unknown } } | null;
+        return typeof candidate === 'object' && candidate !== null
+          && typeof candidate.key === 'string'
+          && typeof candidate.provider === 'string'
+          && typeof candidate.state?.status === 'string';
+      })
       ? value as StoredSendValue
       : 'unreadable';
   }
 
   async function readSend(key: string): Promise<StoredSendValue | undefined> {
     const value = await redis.get(keys.send(key));
-    return isMissing(value) ? undefined : parse<StoredSendValue>(value, keys.send(key));
+    if (isMissing(value)) {
+      return undefined;
+    }
+    const stored = readSendValue(value);
+    if (stored === 'unreadable') {
+      throw new Error(
+        `Devvit Redis notification store: ${keys.send(key)} holds a value that is not a send.`,
+      );
+    }
+    return stored;
   }
 
   return {
@@ -627,8 +655,14 @@ export function createDevvitRedisNotificationStore(
             };
           }
           if (stored === undefined) {
-            // A stale index entry: drop it.
-            return { commands: [(transaction) => transaction.zRem(keys.changed, [key])], result: false };
+            // A stale index entry: drop it from the indexes that hold it by key.
+            return {
+              commands: [
+                (transaction) => transaction.zRem(keys.changed, [key]),
+                (transaction) => transaction.zRem(keys.due, [key]),
+              ],
+              result: false,
+            };
           }
           if (!(Date.parse(stored.send.changedAt) < sendsBefore)) {
             return { commands: [], result: false };
@@ -701,6 +735,14 @@ export function createDevvitRedisNotificationStore(
       return { sends: sendCount, history: historyCount, endpoints: endpointCount };
     },
   };
+}
+
+/** Up to about 2 ms per attempt, jittered: enough to break lockstep retries. */
+function defaultBackoff(attempt: number): Promise<void> {
+  const delayMs = Math.random() * 2 * Math.min(attempt, 8);
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }
 
 /** A missing key, field, or member: `@devvit/redis` answers `undefined`, a classic client `null`. */

@@ -25,6 +25,7 @@ import {
 
 import {
   createDevvitNotificationCapabilities,
+  devvitHostCodeCharacters,
   devvitNotificationProviderId,
   devvitUserIdPattern,
 } from '../notifications-contract.js';
@@ -106,8 +107,10 @@ export function createDevvitServerNotificationProvider(
     try {
       return await call();
     } catch (error) {
+      // The plugin's own text stays on the server (as the cause); the
+      // webview gets a fixed message.
       throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
-        message: `Devvit notifications ${what} failed: ${error instanceof Error ? error.message : String(error)}`,
+        message: `Devvit notifications ${what} failed.`,
         hostCode: devvitNotificationHostCodes.pluginFailed,
         cause: error,
       });
@@ -161,9 +164,9 @@ export function createDevvitServerNotificationProvider(
       }
       const askable = topics.filter((topic) => mapped.has(topic));
       const outcomesWith = (
-        granted: NotificationPermissionOutcome,
+        forMapped: NotificationPermissionOutcome,
       ): Record<string, NotificationPermissionOutcome> =>
-        Object.fromEntries(topics.map((topic) => [topic, mapped.has(topic) ? granted : 'unavailable']));
+        Object.fromEntries(topics.map((topic) => [topic, mapped.has(topic) ? forMapped : 'unavailable']));
       if (askable.length === 0) {
         return { snapshot: snapshotOf(topics, await read(userId)), outcomes: outcomesWith('unavailable') };
       }
@@ -183,10 +186,13 @@ export function createDevvitServerNotificationProvider(
       if (userId === undefined) {
         return loginRequired(topics);
       }
-      const response = await plugin(() => input.notifications.optOutCurrentUser(), 'optOutCurrentUser');
-      const failure = refused(response, devvitNotificationHostCodes.optOutRefused, 'the opt-out');
-      if (failure !== undefined) {
-        throw failure;
+      // A user who is already out needs no opt-out, which Devvit might refuse.
+      if ((await read(userId)) === 'granted') {
+        const response = await plugin(() => input.notifications.optOutCurrentUser(), 'optOutCurrentUser');
+        const failure = refused(response, devvitNotificationHostCodes.optOutRefused, 'the opt-out');
+        if (failure !== undefined) {
+          throw failure;
+        }
       }
       return {
         snapshot: snapshotOf(topics, await read(userId)),
@@ -313,7 +319,7 @@ function validResult<TMethod extends BridgeNotificationsV2Method>(
   }
 }
 
-const hostCodeValue = /^[A-Za-z0-9_.:-]{1,128}$/u;
+const hostCodeValue = new RegExp(`^${devvitHostCodeCharacters}$`, 'u');
 
 function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
   if (error instanceof InvalidPayloadError) {
@@ -339,10 +345,11 @@ function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
           error.retryable,
         );
   }
+  // An unexpected failure's text stays on the server.
   return createBridgeError(
     request.id,
     'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-    `${request.method} failed: ${error instanceof Error ? error.message : String(error)}`,
+    `${request.method} failed on the Devvit server.`,
     true,
   );
 }

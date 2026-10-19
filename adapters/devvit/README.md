@@ -39,7 +39,8 @@ Reddit approves. The profile follows the
   `optInCurrentUser` from `requestPermission`, out with `optOutCurrentUser`
   from `revokePermission`, and reads `isOptedIn`.
 - **The gateway.** `createDevvitPlatformGateway({ notifications: { topics } })`
-  exposes `notificationsV2` over that bridge (its client loads on first use)
+  exposes `notificationsV2` over that bridge (its client loads in its own
+  chunk, starting with the gateway)
   and serves the v1 `notifications` adapter from it. `topics` are the ids the
   catalog maps for `reddit`.
 - **Login.** A logged-out viewer reads `action-required` with

@@ -188,7 +188,8 @@ describe('createDevvitPlatformGateway notifications', () => {
         return import('./notifications-client.js');
       },
     });
-    expect(attempts).toBe(0);
+    // The game opted in: the chunk starts loading with the gateway.
+    expect(attempts).toBe(1);
     await expect(devvit.notificationsV2?.getPermission({ topics: ['friend-challenge'] })).rejects.toMatchObject({
       code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
       retryable: true,
@@ -197,6 +198,56 @@ describe('createDevvitPlatformGateway notifications', () => {
       app: 'prompt',
     });
     await devvit.notificationsV2?.getPermission({ topics: ['friend-challenge'] });
+    expect(attempts).toBe(2);
+  });
+});
+
+describe('createDevvitPlatformGateway notification chunk retries', () => {
+  it('loads the chunk once for concurrent first calls', async () => {
+    let attempts = 0;
+    const devvit = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: createServer(createFakeDevvitNotifications({ currentUserId: user })).bridge,
+      notifications: {
+        topics: ['friend-challenge'],
+        load: () => {
+          attempts += 1;
+          return import('./notifications-client.js');
+        },
+      },
+    });
+    await Promise.all([
+      devvit.notificationsV2?.getPermission({ topics: ['friend-challenge'] }),
+      devvit.notificationsV2?.getPermission({ topics: ['friend-challenge'] }),
+      devvit.notifications?.getStatus('friend-challenge'),
+    ]);
+    expect(attempts).toBe(1);
+  });
+
+  it('retries a loader that threw synchronously', async () => {
+    let attempts = 0;
+    const devvit = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: createServer(createFakeDevvitNotifications({ currentUserId: user })).bridge,
+      notifications: {
+        topics: ['friend-challenge'],
+        load: () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new Error('synchronous loader failure');
+          }
+          return import('./notifications-client.js');
+        },
+      },
+    });
+    await expect(devvit.notificationsV2?.getPermission({ topics: ['friend-challenge'] })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+    await expect(devvit.notificationsV2?.getPermission({ topics: ['friend-challenge'] })).resolves.toMatchObject({
+      app: 'prompt',
+    });
     expect(attempts).toBe(2);
   });
 });
@@ -304,6 +355,27 @@ describe('createDevvitPlatformGateway identity.requestUpgrade', () => {
       .resolves.toEqual({ status: 'completed', reloadExpected: false });
     await expect(upgrade(createFakeDevvitNotifications()))
       .resolves.toEqual({ status: 'unavailable', reloadExpected: false });
+    expect(shown).toBe(0);
+  });
+
+  it('passes a server answer other than unavailable through without a prompt', async () => {
+    let shown = 0;
+    const plugin = createFakeDevvitNotifications();
+    const server = createServer(plugin);
+    const devvit = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: {
+        async request(input) {
+          return input.method === 'identity.requestUpgrade'
+            ? { id: input.id, ok: true, data: { status: 'cancelled', reloadExpected: false } }
+            : server.bridge.request(input);
+        },
+      },
+      loginPrompt: { showLoginPrompt: () => { shown += 1; } },
+    });
+    await expect(devvit.identity.requestUpgrade?.({ reason: 'notifications' }))
+      .resolves.toEqual({ status: 'cancelled', reloadExpected: false });
     expect(shown).toBe(0);
   });
 

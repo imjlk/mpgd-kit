@@ -15,7 +15,10 @@ import {
   type NotificationProvider,
 } from '@mpgd/platform/notifications';
 
-import { devvitNotificationProviderId } from './notifications-contract.js';
+import {
+  devvitHostCodeCharacters,
+  devvitNotificationProviderId,
+} from './notifications-contract.js';
 
 /**
  * The webview side of notifications v2 on Devvit, loaded in its own chunk
@@ -158,7 +161,7 @@ function defaultLocale(): string | undefined {
   return typeof navigatorLike?.language === 'string' ? navigatorLike.language : undefined;
 }
 
-const hostCodePattern = /\(host code ([A-Za-z0-9_.:-]{1,128})\)$/u;
+const hostCodePattern = new RegExp(`\\(host code (${devvitHostCodeCharacters})\\)$`, 'u');
 
 function toNotificationError(error: unknown): NotificationError {
   if (error instanceof NotificationError) {

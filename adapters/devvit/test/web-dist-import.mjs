@@ -1,4 +1,16 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+// The main entry must not load notifications runtime code: its client and
+// validators come in their own chunk (`notifications-client.js`).
+const mainEntry = readFileSync(new URL('../dist/index.js', import.meta.url), 'utf8');
+for (const specifier of ['@mpgd/bridge/notifications', '@mpgd/platform/notifications']) {
+  assert.equal(
+    mainEntry.includes(`'${specifier}'`),
+    false,
+    `dist/index.js must not import ${specifier}`,
+  );
+}
 
 globalThis.addEventListener = () => {};
 

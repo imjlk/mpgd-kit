@@ -237,21 +237,20 @@ export function createDevvitPlatformGateway(
       }
       // The webview provider owns the block: the server snapshot stays honest
       // about the server, and a gateway without a provider sells nothing.
+      // The two provider reads are independent bridge calls.
+      const [commerceBlock, notifications] = await Promise.all([
+        commerce === undefined ? createUnsupportedCommerceCapabilities() : commerce.getCapabilities(),
+        notificationsV2 === undefined ? undefined : readNotificationCapabilities(notificationsV2),
+      ]);
       const {
         notifications: _serverNotifications,
         ...withCommerce
-      } = {
-        ...capabilities,
-        commerce: commerce === undefined
-          ? createUnsupportedCommerceCapabilities()
-          : await commerce.getCapabilities(),
-      } as PlatformCapabilities;
-      if (notificationsV2 === undefined) {
+      } = { ...capabilities, commerce: commerceBlock } as PlatformCapabilities;
+      if (notifications === undefined) {
         return withCommerce;
       }
       // The block is present exactly when the gateway exposes notificationsV2,
       // and the push readiness follows it.
-      const notifications = await readNotificationCapabilities(notificationsV2);
       return {
         ...withCommerce,
         providerAvailability: {
@@ -266,7 +265,9 @@ export function createDevvitPlatformGateway(
       getSession: () => request<IdentitySession>('identity.getSession', {}),
       requestUpgrade: async (payload) => {
         const answer = await request<IdentityUpgradeResult>('identity.requestUpgrade', payload);
-        if (input.loginPrompt === undefined || answer.status === 'completed') {
+        // The server answers `unavailable` for a logged-out viewer; any other
+        // answer is passed through.
+        if (input.loginPrompt === undefined || answer.status !== 'unavailable') {
           return answer;
         }
         // A logged-out viewer: Reddit's login flow reloads the post afterwards.
@@ -333,8 +334,9 @@ export function createDevvitPlatformGateway(
 
 /**
  * Notifications v2 and the v1 adapter served from it, with the client chunk
- * (the bridge provider and the `@mpgd/bridge/notifications` validators)
- * loaded on first use, so a game that does not opt in carries none of it. A
+ * (the bridge provider and the `@mpgd/bridge/notifications` validators) in
+ * its own chunk, so a game that does not opt in carries none of it. A game
+ * that opts in starts loading it with the gateway. A
  * chunk that fails to load rejects with a retryable
  * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the next call loads again.
  * Devvit pushes no notifications events, so `subscribe` attaches nothing.
@@ -350,9 +352,13 @@ function createLazyDevvitNotificationSurface(
     readonly v1: NotificationSubscriptionAdapter;
   }> | undefined;
   const load = () => {
+    if (loading !== undefined) {
+      return loading;
+    }
     // Any failure, a synchronous throw of the loader or one while the
-    // provider is built, is retried by the next call.
-    loading ??= (async () => {
+    // provider is built, is forgotten once settled, so the next call loads
+    // again; the reset runs after the attempt is stored, never before.
+    const attempt = (async () => {
       try {
         const module = await importClient();
         const provider = module.createDevvitBridgeNotificationProvider({
@@ -362,7 +368,6 @@ function createLazyDevvitNotificationSurface(
         });
         return { provider, v1: module.createDevvitNotificationSubscriptionAdapter(provider, topics) };
       } catch (error) {
-        loading = undefined;
         throw new PlatformOperationError({
           code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
           message: `The Devvit notifications client did not load: ${errorMessage(error)}`,
@@ -370,8 +375,17 @@ function createLazyDevvitNotificationSurface(
         });
       }
     })();
-    return loading;
+    loading = attempt;
+    attempt.catch(() => {
+      if (loading === attempt) {
+        loading = undefined;
+      }
+    });
+    return attempt;
   };
+  // The game opted in, so the chunk is needed: load it now rather than on the
+  // first capability read, which is bounded in time.
+  void load().catch(() => {});
   const provider = async (): Promise<NotificationProvider> => (await load()).provider;
   return {
     notificationsV2: {

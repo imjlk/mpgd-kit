@@ -128,8 +128,36 @@ describe('createDevvitServerNotificationProvider', () => {
     });
   });
 
+  it('opts out only a user who is opted in', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    plugin.optOutCurrentUser = () => Promise.resolve({ success: false });
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    await expect(provider.revokePermission?.({ topics })).resolves.toMatchObject({
+      outcomes: { 'friend-challenge': 'denied' },
+      snapshot: { app: 'prompt' },
+    });
+  });
+
+  it("keeps the plugin's error text on the server", async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    plugin.isOptedIn = () => Promise.reject(new Error('redis://internal-host:6379 timed out'));
+    const bridge = createDevvitNotificationsV2BridgeHandler({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    const response = await bridge.request(request('notifications.v2.getPermission', { topics: ['friend-challenge'] }));
+    expect(response.ok).toBe(false);
+    expect(JSON.stringify(response)).not.toContain('internal-host');
+  });
+
   it('refuses an opt-out Devvit refused', async () => {
     const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    plugin.optedIn.add(user);
     plugin.optOutCurrentUser = () => Promise.resolve({ success: false });
     const provider = createDevvitServerNotificationProvider({
       notifications: plugin,

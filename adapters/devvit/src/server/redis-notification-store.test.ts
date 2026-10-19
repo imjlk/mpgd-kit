@@ -273,6 +273,45 @@ describe('createDevvitRedisNotificationStore', () => {
     await store.createSend(send('bad', [claimed('a', '2026-10-19T03:05:00Z')]));
     redis.poke('mpgd:notifications:send:bad', JSON.stringify({ version: 'v', send: {} }));
     expect((await store.listInFlightSends('t2_player')).map((row) => row.key)).toEqual(['ok']);
+    // Rows that are not rows make the value unreadable too, and a read of it says so.
+    redis.poke('mpgd:notifications:send:bad', JSON.stringify({
+      version: 'v',
+      send: { ...send('bad', []), rows: ['x'] },
+    }));
+    expect((await store.listInFlightSends('t2_player')).map((row) => row.key)).toEqual(['ok']);
+    await expect(store.getSend('bad')).rejects.toThrow(/not a send/u);
+    redis.poke('mpgd:notifications:send:bad', 'null');
+    await expect(store.getSend('bad')).rejects.toThrow(/not a send/u);
+  });
+
+  it('discards a transaction whose EXEC throws, and keeps the error', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    redis.beforeExec = () => {
+      throw new Error('connection reset');
+    };
+    await expect(store.createSend(send('k', []))).rejects.toThrow('connection reset');
+    redis.beforeExec = undefined;
+    expect(await store.getSend('k')).toBeUndefined();
+    expect(await store.createSend(send('k', []))).toBeTypeOf('string');
+  });
+
+  it('drops a stale key from the due index when purge finds its value gone', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    const index = await redis.watch();
+    await index.multi();
+    await index.zAdd('mpgd:notifications:sends:changed', { member: 'gone', score: 0 });
+    await index.zAdd('mpgd:notifications:sends:due', { member: 'gone', score: 0 });
+    await index.exec();
+    await store.purge({
+      sendsChangedBefore: '2026-11-01T00:00:00Z',
+      historyBefore: '2026-11-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-11-01T00:00:00Z',
+      staleEndpointsBefore: '2026-11-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-11-01T00:00:00Z',
+    });
+    expect(await store.listDueSends({ at: '2026-11-01T00:00:00Z', limit: 10 })).toEqual([]);
   });
 
   it('rejects an empty namespace and out-of-range attempts', () => {

@@ -24,10 +24,10 @@ export const devvitNotificationProviderId = 'devvit' as const;
 /** The catalog target Devvit serves. */
 export const devvitNotificationTarget = 'reddit' as const;
 
-/** Longest title Devvit accepts, in Unicode code points of the filled text. */
+/** Longest title Devvit accepts, in Unicode code points of the filled text as the kit counts them. */
 export const devvitNotificationTitleMaxLength = 60;
 
-/** Longest body Devvit accepts, in Unicode code points of the filled text. */
+/** Longest body Devvit accepts, in Unicode code points of the filled text as the kit counts them. */
 export const devvitNotificationBodyMaxLength = 100;
 
 /** Sends per Reddit user per rolling day (a provider limit). */
@@ -54,6 +54,12 @@ export const devvitNotificationsPerAppPerDay = 25_000;
 export function devvitNotificationTextLength(text: string): number {
   return [...text].length;
 }
+
+/**
+ * The characters of a Devvit host code. The server bridge names a host code
+ * in an error message as `(host code <code>)`, and the webview reads it back.
+ */
+export const devvitHostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
 
 /** A post (`t3_`) or comment (`t1_`) id, the only links `enqueue` accepts. */
 export const devvitNotificationLinkPattern = /^t[13]_[A-Za-z0-9]+$/u;
