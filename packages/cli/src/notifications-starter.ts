@@ -514,10 +514,20 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
   'docs/NOTIFICATIONS.md',
 ]);
 
+/** The starter modules a wired Capacitor gateway imports, directly or through the other. */
+export const notificationsCapacitorGatewayModules: readonly string[] = Object.freeze([
+  'src/platform/capacitorNotifications.ts',
+  'src/platform/notifications.ts',
+]);
+
 /** Whether a Capacitor gateway already registers a notifications provider. */
 export function capacitorGatewayRegistersNotifications(source: string): boolean {
-  // Comments do not register anything.
-  const code = source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/[^\n]*/gu, '');
+  // One pass over strings and comments: neither registers anything, and a
+  // string that holds `//` or `/*` does not start a comment.
+  const code = source.replace(
+    /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
+    (token) => (token.startsWith('/') ? ' ' : '""'),
+  );
   return /\b(?:createStarterCapacitorNotifications|createCapacitorNotificationServiceProvider)\s*\(/u
     .test(code);
 }

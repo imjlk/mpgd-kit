@@ -315,17 +315,35 @@ try {
     const game = readJson(root, 'package.json') as { readonly scripts: Record<string, string> };
     assert.equal(game.scripts['validate:notifications'], undefined);
     assert.equal(readFileSync(path.join(root, 'notifications/topics.json'), 'utf8'), ownCatalog);
-    // A comment that names the factory registers nothing.
+    // A comment or a string that names the factory registers nothing; a call
+    // after a string holding `//` or `/*` still counts.
     assert.equal(
       capacitorGatewayRegistersNotifications(
         '// createCapacitorNotificationServiceProvider(\n/* createStarterCapacitorNotifications( */',
       ),
       false,
     );
+    assert.equal(
+      capacitorGatewayRegistersNotifications("const s = 'createStarterCapacitorNotifications(';"),
+      false,
+    );
+    assert.equal(
+      capacitorGatewayRegistersNotifications(
+        "const url = 'https://x/*'; createCapacitorNotificationServiceProvider(input);",
+      ),
+      true,
+    );
+    assert.equal(
+      capacitorGatewayRegistersNotifications(
+        '// see /* docs\ncreateStarterCapacitorNotifications(a);\n/* x */',
+      ),
+      true,
+    );
   }
 
-  // A game-owned starter module is kept, with a warning; a `$&` in the
-  // display name stays literal; a target state the game set itself is kept.
+  // A differing game-owned module the wired gateway imports keeps the
+  // gateway as it is; a target state the game set itself is kept; a `$&` in
+  // the display name stays literal.
   {
     const root = createGame();
     roots.push(root);
@@ -344,9 +362,12 @@ try {
       displayName: 'Cash $& Co',
     });
     assert.equal(plan.changedFiles.includes('src/platform/notifications.ts'), false);
+    assert.equal(plan.changedFiles.includes(androidGateway), false);
+    assert.equal(plan.changedFiles.includes(iosGateway), false);
     assert.ok(
       plan.warnings.some((warning) =>
-        /src\/platform\/notifications\.ts is game-owned and differs/u.test(warning),
+        /capacitorAndroid\.ts was not rewritten because the game-owned src\/platform\/notifications\.ts differs/u
+          .test(warning),
       ),
     );
     assert.ok(
@@ -355,13 +376,48 @@ try {
       ),
     );
     applyCapacitorShellStarter(plan);
+    const onDisk = readJson(root, 'mpgd.targets.json') as {
+      readonly targets: Record<string, { readonly integrations?: Record<string, string> }>;
+    };
+    assert.equal(onDisk.targets.ios?.integrations?.notifications, 'configuration-required');
+    assert.equal(onDisk.targets.android?.integrations?.notifications, 'available');
+    assert.equal(
+      readFileSync(path.join(root, 'src/platform/notifications.ts'), 'utf8'),
+      'export const own = true;\n',
+    );
+    // action-required is a callable state: no warning for it.
+    const actionRequired = readJson(root, 'mpgd.targets.json') as {
+      targets: Record<string, Record<string, unknown>>;
+    };
+    actionRequired.targets.ios = {
+      ...actionRequired.targets.ios,
+      integrations: { notifications: 'action-required' },
+    };
+    writeFileSync(path.join(root, 'mpgd.targets.json'), JSON.stringify(actionRequired));
+    // Without the game-owned module the gateways are wired and the catalog
+    // takes the display name literally.
+    rmSync(path.join(root, 'src/platform/notifications.ts'));
+    // The first run declared the packages in the game; install them.
+    for (const [name, version] of Object.entries(notificationsGameDependencies)) {
+      const file = path.join(root, 'node_modules', name, 'package.json');
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify({ name, version }));
+    }
+    const wired = planCapacitorShellStarter({
+      ...input(root, ['notifications']),
+      displayName: 'Cash $& Co',
+    });
+    assert.equal(
+      wired.warnings.some((warning) => /integrations\.notifications/u.test(warning)),
+      false,
+    );
+    applyCapacitorShellStarter(wired);
     const deployment = readJson(root, 'notifications/deployment.json') as {
       readonly advertisingSender: { readonly name: string };
     };
     assert.equal(deployment.advertisingSender.name, 'Cash $& Co');
-    assert.equal(
-      readFileSync(path.join(root, 'src/platform/notifications.ts'), 'utf8'),
-      'export const own = true;\n',
+    assert.ok(
+      capacitorGatewayRegistersNotifications(readFileSync(path.join(root, androidGateway), 'utf8')),
     );
   }
 
@@ -376,6 +432,21 @@ try {
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /does not export; upgrade the game's kit packages/u,
     );
+    // The adapter's peer range against the version this CLI would add.
+    writeFileSync(
+      adapterFile,
+      JSON.stringify({
+        ...adapter,
+        peerDependencies: {
+          ...(adapter.peerDependencies as Record<string, string>),
+          '@capacitor/local-notifications': '^9.0.0',
+        },
+      }),
+    );
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /needs @capacitor\/local-notifications \^9\.0\.0, but this CLI would add 8\.3\.1/u,
+    );
     writeFileSync(adapterFile, JSON.stringify(adapter));
     const plugin = path.join(root, 'node_modules/@capacitor-firebase/messaging/package.json');
     mkdirSync(path.dirname(plugin), { recursive: true });
@@ -386,6 +457,22 @@ try {
     assert.throws(
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /needs @capacitor-firebase\/messaging .* but the game has 7\.0\.0/u,
+    );
+    // A plugin whose own Capacitor peer the game's core does not satisfy.
+    writeFileSync(
+      plugin,
+      JSON.stringify({
+        name: '@capacitor-firebase/messaging',
+        version: '8.5.2',
+        peerDependencies: { '@capacitor/core': '>=9.0.0' },
+      }),
+    );
+    const core = path.join(root, 'node_modules/@capacitor/core/package.json');
+    mkdirSync(path.dirname(core), { recursive: true });
+    writeFileSync(core, JSON.stringify({ name: '@capacitor/core', version: '8.5.2' }));
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /@capacitor-firebase\/messaging@8\.5\.2 needs @capacitor\/core >=9\.0\.0, but the game has 8\.5\.2/u,
     );
   }
 
@@ -475,6 +562,9 @@ try {
   assert.ok(crlfFixed.includes(`\r\n    ${androidInexactAlarmPermission}\r\n</manifest>`));
   assert.equal(crlfFixed.match(/xmlns:tools=/gu)?.length, 1);
   assert.equal(applyAndroidManifestInexactAlarms('<manifest/>'), '<manifest/>');
+  // A self-closing root before a stray closing tag is left alone too.
+  const selfClosing = '<manifest xmlns:android="a"/>\n<!-- --></manifest>';
+  assert.equal(applyAndroidManifestInexactAlarms(selfClosing), selfClosing);
   // The kit's reference shell drops it already.
   assert.ok(
     androidManifestRemovesExactAlarm(

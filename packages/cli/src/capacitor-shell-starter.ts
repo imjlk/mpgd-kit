@@ -20,6 +20,7 @@ import { satisfies, valid } from 'semver';
 import {
   capacitorGatewayRegistersNotifications,
   conflictingPushPlugin,
+  notificationsCapacitorGatewayModules,
   notificationsCapacitorGateways,
   notificationsCapacitorSupportFiles,
   notificationsGameDependencies,
@@ -446,7 +447,10 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         : requireObject(target.integrations, `${targetName}.integrations`);
       if (integrations.notifications === undefined) {
         target.integrations = { ...integrations, notifications: 'available' };
-      } else if (integrations.notifications !== 'available') {
+      } else if (
+        integrations.notifications !== 'available'
+        && integrations.notifications !== 'action-required'
+      ) {
         warnings.push(
           `mpgd.targets.json keeps ${targetName}.integrations.notifications at `
             + `${String(integrations.notifications)}, which hides notifications from the game; set it `
@@ -3139,17 +3143,18 @@ function planNotificationsProvider(input: {
         + `${conflictingPushPlugin} from the game and the shell first.`,
     );
   }
-  const versionOf = (name: string): string => {
+  const versionOf = (name: string): { readonly version: string; readonly installed: boolean } => {
     const installedFile = path.join(gameRoot, 'node_modules', name, 'package.json');
     if (existsSync(installedFile)) {
-      const version = requireString(
-        readJsonObject(installedFile).version,
-        `installed ${name} version`,
-      );
+      const installed = readJsonObject(installedFile);
+      const version = requireString(installed.version, `installed ${name} version`);
       if (valid(version) === null) {
         throw new Error(`${name} must resolve to a concrete version, not ${version}.`);
       }
-      return version;
+      // The plugin's own peers (Capacitor core) must accept the game's
+      // installed copies, as a store plugin's must.
+      assertInstalledPeers(gameRoot, `${name}@${version}`, installed.peerDependencies);
+      return { version, installed: true };
     }
     if (gameDependencies[name] !== undefined) {
       throw new Error(
@@ -3161,11 +3166,11 @@ function planNotificationsProvider(input: {
     if (version === undefined) {
       throw new Error(`No starter version is known for ${name}.`);
     }
-    return version;
+    return { version, installed: false };
   };
   const shellPlugins = notificationsShellPlugins.map((name) => ({
     packageName: name,
-    version: versionOf(name),
+    ...versionOf(name),
   }));
   // The wiring imports @mpgd/adapter-capacitor/notifications: the game's
   // installed adapter must have it, and the plugins must satisfy its peers.
@@ -3188,19 +3193,41 @@ function planNotificationsProvider(input: {
     const range = adapterPeers[plugin.packageName];
     if (typeof range === 'string' && !satisfies(plugin.version, range, { includePrerelease: true })) {
       throw new Error(
-        `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `
-          + `but the game has ${plugin.version}; align the game's version before rerunning.`,
+        plugin.installed
+          ? `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `
+            + `but the game has ${plugin.version}; align the game's version before rerunning.`
+          : `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `
+            + `but this CLI would add ${plugin.version}; add a version in that range to the game `
+            + `(pnpm add ${plugin.packageName}) or upgrade the CLI, then rerun.`,
       );
     }
   }
   const gamePackages = Object.fromEntries(
-    Object.keys(notificationsGameDependencies).map((name) => [name, versionOf(name)]),
+    Object.keys(notificationsGameDependencies).map((name) => [name, versionOf(name).version]),
   );
 
   const register = 'register createStarterCapacitorNotifications (src/platform/capacitorNotifications.ts) '
     + 'or createCapacitorNotificationServiceProvider from @mpgd/adapter-capacitor/notifications in its '
     + 'providers';
   const files: PlannedFile[] = [];
+  const overlayRoot = input.templateRoot === undefined
+    ? undefined
+    : path.join(path.dirname(input.templateRoot), 'notifications', 'common');
+  const jsonTitle = JSON.stringify(input.displayName).slice(1, -1);
+  const starterFile = (root: string, file: string): string => {
+    // A function replacer: `$&` or `$$` in a display name stays literal.
+    const title = file.endsWith('.json') ? jsonTitle : input.displayName;
+    return readTemplateFile(root, file).replaceAll('__GAME_TITLE__', () => title);
+  };
+  // The wired gateway imports these starter modules; a game-owned copy that
+  // differs keeps the gateway as it is, as a differing store module does.
+  const keptModule = overlayRoot === undefined
+    ? undefined
+    : notificationsCapacitorGatewayModules.find((file) => {
+        const existing = readExisting(safeDestination(gameRoot, file));
+        return existing !== undefined
+          && existing.replace(/\r\n/gu, '\n') !== starterFile(overlayRoot, file);
+      });
   for (const gatewayFile of Object.values(notificationsCapacitorGateways)) {
     const current = input.plannedGateways.find((file) => file.path === gatewayFile)?.content
       ?? readExisting(safeDestination(gameRoot, gatewayFile));
@@ -3220,29 +3247,23 @@ function planNotificationsProvider(input: {
       );
       continue;
     }
+    if (keptModule !== undefined) {
+      warnings.push(
+        `${gatewayFile} was not rewritten because the game-owned ${keptModule} differs from the `
+          + `notifications starter; ${register}.`,
+      );
+      continue;
+    }
     files.push({
       path: gatewayFile,
       content: wireCapacitorGatewayNotifications(gatewayFile, template),
     });
   }
-  if (files.length > 0 && input.templateRoot !== undefined) {
-    // The wired gateways import the starter modules; a game that has one keeps its own.
-    const overlayRoot = path.join(path.dirname(input.templateRoot), 'notifications', 'common');
-    const jsonTitle = JSON.stringify(input.displayName).slice(1, -1);
+  if (files.length > 0 && overlayRoot !== undefined) {
+    // The starter modules and catalog the wired gateways read; the game keeps any it has.
     for (const file of notificationsCapacitorSupportFiles) {
-      // A function replacer: `$&` or `$$` in a display name stays literal.
-      const title = file.endsWith('.json') ? jsonTitle : input.displayName;
-      const content = readTemplateFile(overlayRoot, file).replaceAll('__GAME_TITLE__', () => title);
-      const existing = readExisting(safeDestination(gameRoot, file));
-      if (existing === undefined) {
-        files.push({ path: file, content });
-      } else if (file.endsWith('.ts') && existing.replace(/\r\n/gu, '\n') !== content) {
-        // The wired gateway imports the starter's exports from these modules.
-        warnings.push(
-          `${file} is game-owned and differs from the notifications starter; the wired gateway `
-            + 'imports createStarterCapacitorNotifications and starterNotificationTopics from it, '
-            + 'so keep those exports.',
-        );
+      if (readExisting(safeDestination(gameRoot, file)) === undefined) {
+        files.push({ path: file, content: starterFile(overlayRoot, file) });
       }
     }
     warnings.push(
@@ -3276,7 +3297,37 @@ function planNotificationsProvider(input: {
         + 'messaging plugin documents (see the mpgd-kit Firebase guide).',
     );
   }
-  return { shellPlugins, gameDependencies: gamePackages, files };
+  return {
+    shellPlugins: shellPlugins.map(({ packageName, version }) => ({ packageName, version })),
+    gameDependencies: gamePackages,
+    files,
+  };
+}
+
+/**
+ * Refuses a package whose declared peers the game's installed copies do not
+ * satisfy (Capacitor core, the kit packages), before anything is written.
+ */
+function assertInstalledPeers(gameRoot: string, label: string, peerDependencies: unknown): void {
+  if (typeof peerDependencies !== 'object' || peerDependencies === null) {
+    return;
+  }
+  for (const [peer, range] of Object.entries(
+    peerDependencies as Readonly<Record<string, unknown>>,
+  )) {
+    const peerFile = path.join(gameRoot, 'node_modules', peer, 'package.json');
+    if (typeof range !== 'string' || !existsSync(peerFile)) {
+      continue;
+    }
+    const peerVersion = readJsonObject(peerFile).version;
+    if (typeof peerVersion === 'string' && valid(peerVersion) !== null
+      && !satisfies(peerVersion, range, { includePrerelease: true })) {
+      throw new Error(
+        `${label} needs ${peer} ${range}, but the game has ${peerVersion}; align the game's `
+          + 'versions before rerunning.',
+      );
+    }
+  }
 }
 
 /** A regular file of the CLI's game template, read without leaving the template root. */
