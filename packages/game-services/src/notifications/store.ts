@@ -92,7 +92,7 @@ export interface NotificationStoredSendRequest {
   readonly link?: string;
 }
 
-/** Why the send exists: a direct send, or a scheduler item (S2 writes these). */
+/** Why the send exists: a direct send, or a scheduler item (a server reminder or a consent notice). */
 export type NotificationSendOrigin =
   | { readonly kind: 'send' }
   | { readonly kind: 'reminder'; readonly key: string }
@@ -158,8 +158,8 @@ export interface NotificationStoredSend {
   readonly origin: NotificationSendOrigin;
   /**
    * Whether a scheduler item (a reminder or a notice) or a due replay owns
-   * the send. Every in-flight row whose lease ended is due either way; S2's
-   * scheduler reads the flag for its own items.
+   * the send. Every in-flight row whose lease ended is due either way, so no
+   * rule reads it; it tells an operator who made the send.
    */
   readonly scheduled: boolean;
   readonly rows: readonly NotificationSendRow[];

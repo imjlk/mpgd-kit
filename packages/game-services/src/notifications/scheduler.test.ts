@@ -1291,6 +1291,45 @@ const pending = (h: Harness) =>
   assert.deepEqual(pending(h), []);
 }
 
+// A stale run that read a replaced reminder leaves alone the newer reminder's send at the same key.
+{
+  let interleave: (() => Promise<unknown>) | undefined;
+  const other: NotificationTopicDeclaration = { ...challenge, id: 'match-ready' };
+  // A queue keeps the newer reminder's rows waiting, where a stale stop could reach them.
+  const h = harness({
+    topics: [challenge, other],
+    queue: true,
+    store: (inner) => ({
+      ...inner,
+      async getSend(key) {
+        if (interleave !== undefined && key.startsWith('reminder:')) {
+          const run = interleave;
+          interleave = undefined;
+          await run();
+        }
+        return inner.getSend(key);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  // While the first run looks the key up, a set replaces the reminder, and another run fires it.
+  interleave = async () => {
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt });
+    await h.service.runScheduler();
+  };
+  await h.service.runScheduler();
+  for (const job of h.jobs) {
+    await h.service.dispatch(job);
+  }
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.topic.id),
+    ['match-ready'],
+  );
+  assert.deepEqual(pending(h), []);
+}
+
 // A delivered send of a replaced reminder at the same key and time keeps the key: the new one is reported, not sent.
 {
   const other: NotificationTopicDeclaration = { ...challenge, id: 'match-ready' };
@@ -1420,6 +1459,52 @@ const pending = (h: Harness) =>
   assert.deepEqual(
     contexts.map((context) => [context.operation, context.fromProvider]),
     [['provider.send', true]],
+  );
+}
+
+// A reminder set for a past time is due now, behind those already due; it keeps its send key.
+{
+  const h = harness();
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'old',
+    topic: 'friend-challenge',
+    fireAt: '2026-01-01T00:00:00Z',
+  });
+  assert.equal(pending(h)[0]?.dueAt, '2026-10-19T03:00:00Z');
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.idempotencyKey),
+    ['reminder:p-1:old:2026-01-01T00:00:00Z:install-p-1'],
+  );
+}
+
+// A consent is recorded even while the notice check cannot be written; the failure is reported.
+{
+  const h = harness({
+    topics: [weekend, noticeTopic],
+    deployment: kr,
+    notices: true,
+    store: (inner) => ({
+      ...inner,
+      async getScheduleEntry() {
+        throw new Error('no such table: notification_schedule');
+      },
+    }),
+  });
+  const record = await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.equal(record.kind, 'advertising');
+  assert.equal(h.store.inspect().consent.length, 1);
+  assert.deepEqual(h.errors, ['notices.retry', 'notices.retry']);
+  assert.equal(
+    (await h.service.listNotices(session('p-1'))).length,
+    1,
+    'the game still lists the notice',
   );
 }
 

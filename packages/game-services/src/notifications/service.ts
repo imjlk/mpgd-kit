@@ -1082,7 +1082,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       };
       const next: NotificationStoredSend = {
         ...held.send,
-        // A due replay marks the send as the scheduler's (S2 reads the flag).
+        // A due replay marks the send as the scheduler's.
         scheduled: held.send.scheduled || mode === 'due',
         rows: rowsWith(held.send, row, { kind: 'set', row: claimedRow }),
         changedAt: formatNotificationInstant(at),
@@ -1797,7 +1797,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     const request = reminderRequest(player, reminder);
     const fingerprint = notificationSendFingerprint(request);
-    // A fired reminder keeps only what names its send, and its content.
+    // A fired reminder keeps only what names its send, and the fingerprint
+    // of its own content (the canonical request, which the send also keeps).
     const fired: NotificationScheduleEntry = {
       player,
       id: held.entry.id,
@@ -1815,9 +1816,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       store.updateScheduleEntry({ player, id: held.entry.id, version: held.version, entry: fired });
     let made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
     if (made !== 'busy' && 'existing' in made && made.existing.fingerprint !== fingerprint) {
-      // The key holds the send of a reminder this one replaced at the same
-      // time with other content: what still waits of it goes, and this
-      // reminder makes its own send.
+      // The key holds a send of other content. If this reminder is still
+      // the current one, that send is of a reminder it replaced at the same
+      // time: what still waits of it goes, and this reminder makes its own.
+      // If not, this run read a reminder a set has replaced since, and the
+      // send is the newer reminder's: it is left alone.
+      const current = await store.getScheduleEntry({ player, id: held.entry.id });
+      if (current?.version !== held.version) {
+        return undefined;
+      }
       await stopReminderSend(player, reminder, made.existing.fingerprint);
       made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
       if (made !== 'busy' && 'existing' in made && made.existing.fingerprint !== fingerprint) {
@@ -2281,9 +2288,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       }
       const { at: _at, ...withoutAt } = checked;
       if (checked.kind === 'advertising' || checked.kind === 'night') {
-        // Before the write: a check that finds nothing new is harmless, and a
-        // record without its check would never be pushed.
-        await markNoticesDue(player, Date.parse(at));
+        // Before the write, and again after it: a check that finds nothing new
+        // is harmless. Best effort, so the player's consent is recorded even
+        // while the schedule cannot be written; the game still lists the
+        // notice in game.
+        await retryNoticePushes(player, false);
       }
       const stored = await store.appendConsent({ player, record: withoutAt as NotificationConsentRecordInput, at });
       if (stored.kind === 'advertising' || stored.kind === 'night') {
@@ -2584,7 +2593,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // its own send. A previous send of this reminder's content at its key
       // (an identical re-set) serves it and stays.
       const id = reminderEntryId(reminder.key);
-      const entry: NotificationScheduleEntry = { player, id, dueAt: reminder.fireAt, item: reminder };
+      // A reminder set for a time already past is due now, not at that time,
+      // so a burst of past-dated reminders queues behind those already due.
+      const entry: NotificationScheduleEntry = {
+        player,
+        id,
+        dueAt: formatNotificationInstant(Math.max(Date.parse(reminder.fireAt), at)),
+        item: reminder,
+      };
       const fingerprint = notificationSendFingerprint(request);
       let stopped = false;
       for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
