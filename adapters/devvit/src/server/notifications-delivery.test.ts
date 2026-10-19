@@ -707,18 +707,37 @@ describe('Devvit notification scheduler tasks', () => {
     expect(limits).toEqual([10, 10]);
   });
 
-  it('stops a dispatch run at the first chunk with a failure, which stays due for the next run', async () => {
+  it('stops a dispatch run at a chunk whose sends all threw, and keeps going past sends that backed off', async () => {
     const limits: number[] = [];
-    const service = {
+    const thrown = {
       dispatchDue: async (input?: { readonly limit?: number }) => {
         limits.push(input?.limit ?? 0);
-        // The failing send comes first every time: it is still due.
-        return { results: [], failed: 1 };
+        // Every listed send threw before its row was claimed: they stay due and come first again.
+        return { results: [], failed: input?.limit ?? 0 };
       },
       purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
     };
-    await expect(runDevvitNotificationTask(service, 'dispatch'))
-      .resolves.toEqual({ task: 'dispatch', replayed: 0, failed: 1 });
+    await expect(runDevvitNotificationTask(thrown, 'dispatch'))
+      .resolves.toEqual({ task: 'dispatch', replayed: 0, failed: 10 });
     expect(limits).toEqual([10]);
+    // A send that failed after its claim has a result and backs off: the run goes on.
+    limits.length = 0;
+    let next = 0;
+    const backedOff = {
+      dispatchDue: async (input?: { readonly limit?: number }) => {
+        limits.push(input?.limit ?? 0);
+        return {
+          results: Array.from({ length: input?.limit ?? 0 }, () => ({
+            sendKey: `k-${String((next += 1))}`,
+            outcome: { status: 'delivered' as const, alreadyProcessed: false },
+          })),
+          failed: 1,
+        };
+      },
+      purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
+    };
+    await expect(runDevvitNotificationTask(backedOff, 'dispatch', { clock: () => 0 }))
+      .resolves.toEqual({ task: 'dispatch', replayed: 100, failed: 10 });
+    expect(limits).toEqual(Array.from({ length: 10 }, () => 10));
   });
 });

@@ -596,9 +596,13 @@ export type DevvitNotificationTaskResult =
 /**
  * Runs one scheduler task with a bounded batch. `dispatch` replays at most
  * `dispatchLimit` (100, a positive integer) due sends in chunks of 10 and
- * starts no chunk after `budgetMs` (20 seconds). A chunk with a failed
- * send, a repeated send, or fewer sends than it asked for ends the run: a
- * failed send stays due and would come first again. `purge` deletes at
+ * starts no chunk after `budgetMs` (20 seconds). The run ends at a chunk
+ * that replays nothing new (nothing is due, or every send in it threw and
+ * stays due), repeats a send, or lists fewer sends than it asked for. A
+ * send that fails after its row was claimed backs off and does not end the
+ * run; one that throws is listed first again, so a chunk reports it at
+ * most once. `replayed` counts each send once, a failed one included, and
+ * `failed` the sends that failed. `purge` deletes at
  * most the store's `purgeLimit` rows of each kind (200 for the store
  * `createDevvitNotificationService` builds). A backlog drains over the
  * following runs.
@@ -636,9 +640,15 @@ export async function runDevvitNotificationTask(
       for (const result of fresh) {
         seen.add(result.sendKey);
       }
-      // A failed send stays due and would come first again: leave it, and
-      // anything after it, to the next run. So does a short or repeated chunk.
-      if (answer.failed > 0 || fresh.length < answer.results.length || answer.results.length < chunk) {
+      // No progress (nothing due, or every send threw and stays due), a
+      // repeated send, or a short listing: leave the rest to the next run.
+      // `failed` may count a send that also has a result, so a full chunk
+      // never reads as short; a skipped key can make one read short early.
+      if (
+        fresh.length === 0
+        || fresh.length < answer.results.length
+        || answer.results.length + answer.failed < chunk
+      ) {
         break;
       }
     }
