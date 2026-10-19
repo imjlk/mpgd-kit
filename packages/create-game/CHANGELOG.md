@@ -1,5 +1,16 @@
 # @mpgd/create-game
 
+## 0.50.0 — 2026-10-19
+
+### Changed
+
+- The generated Devvit server bridge (`apps/target-devvit/src/server/bridge.ts`) takes an optional `notifications` handler, `createDevvitNotificationsV2BridgeHandler` from `@mpgd/adapter-devvit/server`, which serves the `notifications.v2.*` methods. The generated entrypoint does not pass one yet, so every v2 method keeps answering `NOTIFICATIONS_V2_UNAVAILABLE` there; a handler that throws answers a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+- The Devvit notifications service's own work runs on the Devvit scheduler. `@mpgd/adapter-devvit/server` adds `devvitNotificationSchedulerTasks` (`mpgd-notifications-dispatch` every minute and `mpgd-notifications-purge` every five minutes, with their `/internal/scheduler/...` endpoints), `devvitNotificationTaskForEndpoint`, and `runDevvitNotificationTask(service, task)`. A dispatch run is one `runScheduler` run of the service, so server reminders fire on Devvit along with the due sends: rounds of at most 10 due schedule entries and 10 due sends, starting no round after 20 seconds; the result counts the sends the run `touched`. A purge run deletes at most the store's `purgeLimit` rows of each kind; `createDevvitNotificationService` now builds its Redis store with `purgeLimit` 200 unless `storeOptions` names one. The generated Devvit app declares both tasks in `devvit.json` and routes them through `src/server/notificationTasks.ts`; without a notifications service the tasks do no work.
+
+### Patch changes
+
+- Updated dependencies: cli@0.51.0
+
 ## 0.49.1 — 2026-10-17
 
 ### Patch changes

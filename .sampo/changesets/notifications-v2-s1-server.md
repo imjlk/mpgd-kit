@@ -1,9 +1,0 @@
----
-npm/@mpgd/game-services: minor
----
-
-Add the notifications v2 server as `@mpgd/game-services/notifications`: a provider registry whose entries are the policy gate's only capability input, with per-target topic mappings when two targets share a provider (FCM on `android` and `ios`); an endpoint registry bound to the game-services session, whose stored session end follows the end any authenticated call reports (a custom `NotificationStore` implements `extendSessionEndpoints` for it), with dead and stale endpoints; append-only consent records dated by the backend, where a repeat of the latest permission, agreement, or preference record is not written (an `advertising` or `night` record, a player's act that may owe a notice, always is) and a player may add `maxClientNotificationConsentRecordsPerDay` (200) client records per rolling day before `NotificationConsentRateLimitError`; the notices API; and sends through the idempotency ledger, `evaluateNotificationDelivery`, device fan-out (inline or through a dispatch queue that runs the gate at the provider call), the five provider answers with rate-limit backoff, due-row replays, and retention purges. `createInMemoryNotificationStore` is the reference store. The service passes every server conformance vector except those that need the S2 scheduler and the per-send allowance vector (the registry refuses per-send providers). The v1 `notification-delivery` module is unchanged.
-
-The FCM provider sends through HTTP v1 `messages:send` with an OAuth token minted from a service-account JWT signed with WebCrypto, so it runs on Cloudflare Workers. It caches the token in memory, maps FCM errors to the provider answers, and carries an expiry as `android.ttl` and `apns-expiration`.
-
-`@mpgd/game-services/notifications/store-conformance` exports `runNotificationStoreConformance`, the behavior every durable notifications store must have; the in-memory store and the game-services Worker's D1 store pass it.

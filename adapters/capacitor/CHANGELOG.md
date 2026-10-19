@@ -1,5 +1,21 @@
 # @mpgd/adapter-capacitor
 
+## 0.11.0 — 2026-10-19
+
+### Added
+
+- [b0fb0a5e](https://github.com/imjlk/mpgd-kit/commit/b0fb0a5efc861f0c8e17bf650acd1d00d50c23c7) Add the notifications v2 provider for Android and iOS as `@mpgd/adapter-capacitor/notifications`. `@capacitor-firebase/messaging` and `@capacitor/local-notifications` 8.x are optional peers that only this subpath loads, dynamically, and the provider fails closed for whichever the native shell lacks; a push-only shell whose catalog maps an advertising topic is `configuration-required`, because the opt-out action needs the local plugin. It reads the app-scope OS permission (OS `denied` reads `blocked`; `promptLimit` 2 on Android, 1 on iOS), registers FCM tokens (installation-id addresses are reserved), schedules inexact local reminders on per-purpose Android channels (at most 64 pending on iOS, keeping the nearest) without ever letting the plugin prompt, registers the advertising opt-out action, buffers opens until the first subscriber, and resolves `openSettings` once the player is back from the settings screen, or after a timeout.
+
+  Register it with `createCapacitorNotificationServiceProvider` (or `createNotificationServiceProvider`): the gateway then exposes `notificationsV2` over its validated in-process bridge, pauses the game under the permission dialog and the settings screen, serves the v1 `notifications` adapter from the same provider, and reports the `notifications` capability block with `providerAvailability.pushNotifications` equal to its availability. A v1 `pushNotifications` provider cannot be registered next to a notifications v2 service. — Thanks @imjlk!
+
+### Changed
+
+- [b0fb0a5e](https://github.com/imjlk/mpgd-kit/commit/b0fb0a5efc861f0c8e17bf650acd1d00d50c23c7) `createCapacitorPlatformGateway` drops any `notifications` block the native base answer sends. The block now comes only from a registered notifications v2 service. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: bridge@0.13.2, capacitor-game-services@0.7.2, game-runtime@0.7.2, game-services@0.25.0, platform@0.24.0, target-config@0.23.2
+
 ## 0.10.1 — 2026-10-16
 
 ### Changed

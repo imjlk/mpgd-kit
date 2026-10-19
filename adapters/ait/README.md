@@ -87,3 +87,19 @@ The server side is
 `createAitFunctionalMessageDeliveryProvider` in
 `@mpgd/game-services/notifications/ait-functional-delivery`, which sends
 functional messages over the partner API's mTLS certificate.
+
+## Promotion outcome observation
+
+Configure `observePromotionGrant` beside the existing authorizer and pending resolver to record a
+claim's outcome at your authenticated authority. Observations contain the logical campaign, the
+server-issued idempotency key and `status`; native success includes `receiptKey`, explicit failure
+includes a bounded `errorCode`. Raw provider messages are deliberately excluded. The observer is
+best effort and stops blocking the native response after three seconds. Its failure cannot turn a
+successful payment into a failure.
+
+Explicit failures now retain the pending marker with their code. A restarted host reports that code
+again and returns `failed` without another SDK call. The resolver may still return a verified receipt;
+only an explicit authority `retry` decision can remove the marker and reach authorization again.
+A client-reported failure is **not** independent proof that no payment happened. Neither the observer
+nor a timeout should reset the server's monetary dispatch fence. A legacy failure whose marker was
+already removed cannot recover its old error code.
