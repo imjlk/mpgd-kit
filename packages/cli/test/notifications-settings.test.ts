@@ -308,6 +308,74 @@ const common = {
   append({ kind: 'topic-preference', topic: 'daily-ready', state: 'granted' });
   const view = await createStarterNotificationSettings({ ...common, provider, runtime, listConsent }).load();
   assert.equal(view.reminders[0]?.enabled, false);
+  // With the agreement granted the same record shows on.
+  const agreed = fakeProvider(capabilities('topic', 'host', false), {
+    topics: { 'daily-ready': 'granted' },
+  });
+  const agreedRuntime = fakeRuntime(agreed.provider);
+  agreedRuntime.append({ kind: 'topic-preference', topic: 'daily-ready', state: 'granted' });
+  const agreedView = await createStarterNotificationSettings({
+    ...common,
+    provider: agreed.provider,
+    runtime: agreedRuntime.runtime,
+    listConsent: agreedRuntime.listConsent,
+  }).load();
+  assert.equal(agreedView.reminders[0]?.enabled, true);
+}
+
+// A night consent an older client left standing after advertising was
+// withdrawn: a new advertising consent does not revive it, and any change
+// withdraws it; messages say what was written.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime, calls, append, listConsent } = fakeRuntime(provider);
+  append({ kind: 'advertising', state: 'granted', textVersion: '1' });
+  append({ kind: 'night', state: 'granted', textVersion: '1' });
+  append({ kind: 'advertising', state: 'withdrawn', textVersion: '1' });
+  const settings = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
+  assert.deepEqual((await settings.load()).advertising, {
+    granted: false,
+    night: true,
+    nightSelectable: true,
+  });
+  const on = await settings.setAdvertising({ advertising: true });
+  assert.deepEqual(calls.at(-1), {
+    advertising: { advertising: 'granted', night: 'withdrawn', textVersion: '1' },
+  });
+  assert.deepEqual(on.advertising, { granted: true, night: false, nightSelectable: true });
+  // Advertising already off: only the standing night consent is withdrawn, and the message says so.
+  append({ kind: 'advertising', state: 'withdrawn', textVersion: '1' });
+  append({ kind: 'night', state: 'granted', textVersion: '1' });
+  const off = await settings.setAdvertising({ advertising: false });
+  assert.deepEqual(calls.at(-1), { advertising: { night: 'withdrawn', textVersion: '1' } });
+  assert.equal(off.message, '야간 광고성 정보 수신동의를 철회했어요.');
+}
+
+// A record whose time does not parse cannot be ordered: no switch is shown.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime, listConsent } = fakeRuntime(provider);
+  const original = console.warn;
+  console.warn = () => undefined;
+  try {
+    const view = await createStarterNotificationSettings({
+      ...common,
+      provider,
+      runtime,
+      listConsent: async () => [
+        ...(await listConsent()),
+        {
+          kind: 'advertising',
+          state: 'withdrawn',
+          source: 'player',
+          at: 'yesterday',
+        } as unknown as NotificationConsentRecord,
+      ],
+    }).load();
+    assert.equal(view.choices, 'unreadable');
+  } finally {
+    console.warn = original;
+  }
 }
 
 // Nothing on the device stands in for a record: a new device, or one whose

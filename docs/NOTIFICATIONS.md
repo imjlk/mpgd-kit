@@ -87,7 +87,8 @@ Rules the starter's settings screen follows, and your own screen must too:
   night consent in the same `setAdvertisingConsent` call.
 - **Show the records, not a guess.** Each switch shows the player's latest
   backend record of its kind, read when the screen opens and after every
-  change, so a withdrawal made on another device or from a notice shows. No
+    change, so a withdrawal made on another device or from a notice shows. A
+  tap reads the records again and writes only the kinds that change. No
   device-side copy stands in for a record, and when the records cannot be
   read the screen shows no switch.
 - **Turn off where it was turned on.** The game-rendered Devvit opt-in has a
@@ -154,10 +155,10 @@ locale, with the act's date as `{{consentDate}}`:
 - A result notice states the sender's name, the act (consent, refusal, or
   withdrawal) with its date, and that it was processed.
 - A re-confirmation states the sender's name, the consent and its date, and
-  how to keep or withdraw it. The night re-confirmation must not say the
-  player still receives night advertising: a night consent stands after
-  advertising consent is withdrawn unless the game withdraws it too (the
-  starter does).
+    how to keep or withdraw it. The night re-confirmation must not say the
+  player still receives night advertising: a night consent can stand after
+  advertising consent is withdrawn (one recorded by an older client, or by a
+  screen that does not withdraw both; the starter withdraws both).
 
 The starter's Korean copy follows that wording, with the game's title in
 brackets as the sender. The notice must name the same sender as

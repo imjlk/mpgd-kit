@@ -289,8 +289,9 @@ export function createStarterNotificationSettings(
   const permissionTopics = input.topics
     .filter((topic) => topic.purpose !== 'advertising')
     .map((topic) => topic.id);
-  /** The player's records as the last view read them; `undefined` when they could not be read. */
+    /** The player's records as the last read gave them; `undefined` when they could not be read. */
   let records: readonly NotificationConsentRecord[] | undefined;
+  let missingReaderReported = false;
   let capabilities: NotificationCapabilities | undefined;
   let message: string | undefined;
   let notices: StarterNotificationSettingsView['notices'] = [];
@@ -392,24 +393,32 @@ export function createStarterNotificationSettings(
       return 'no-server';
     }
     if (input.listConsent === undefined) {
-      // A wiring gap, not a passing failure: the backend must pass its reader.
-      console.error(
-        '[notifications] the runtime has no consent reader (listConsent); no switch is shown.',
-      );
+      if (!missingReaderReported) {
+        // A wiring gap, not a passing failure: the backend must pass its reader.
+        console.error(
+          '[notifications] the runtime has no consent reader (listConsent); no switch is shown.',
+        );
+        missingReaderReported = true;
+      }
       return 'unreadable';
     }
     try {
-      // The backend dates a player's records at least 1 ms apart; a record
-      // whose time does not parse cannot be ordered, so it is not read.
-      records = (await input.listConsent())
-        .filter((record) => Number.isFinite(Date.parse(record.at)))
-        .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+      const listed = await input.listConsent();
+      // The backend dates a player's records at least 1 ms apart. A record
+      // whose time does not parse cannot be ordered, and leaving it out could
+      // show an older consent as the latest, so nothing is shown instead.
+      if (!listed.every((record) => Number.isFinite(Date.parse(record.at)))) {
+        console.warn('[notifications] a consent record has no readable time; no switch is shown.');
+        return 'unreadable';
+      }
+      records = [...listed].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
       return 'records';
     } catch (error) {
       console.warn('[notifications] the consent records could not be read.', error);
       return 'unreadable';
     }
   };
+
   const latestState = (kind: 'advertising' | 'night'): string | undefined =>
     records === undefined ? undefined : latestNotificationConsent(records, kind)?.state;
 
@@ -569,8 +578,13 @@ export function createStarterNotificationSettings(
           // Night consent adds to advertising consent; alone it allows nothing.
           return strings.nightNeedsAdvertising;
         }
-        // Withdrawing advertising consent withdraws a granted night consent too.
-        const nightAfter = advertisingAfter ? (change.night ?? nightGranted) : false;
+                // Night consent counts only alongside advertising consent: a night
+        // consent left standing after advertising was withdrawn (by an older
+        // client) is not revived by a new advertising consent, and is
+        // withdrawn with the next change. Withdrawing advertising consent
+        // withdraws a granted night consent too.
+        const nightEffective = advertisingGranted && nightGranted;
+        const nightAfter = advertisingAfter ? (change.night ?? nightEffective) : false;
         // Only what changes is written: every advertising or night record is a
         // player's act that may owe a notice, and a withdrawal of a consent
         // never granted is a refusal.
@@ -585,8 +599,15 @@ export function createStarterNotificationSettings(
             textVersion: input.consentTextVersion,
           });
         }
+                // The message says what changed (or, when nothing had to, the state asked for).
         if (writeAdvertising === false && writeNight === false) {
           return strings.advertisingAndNightOff;
+        }
+        if (writeAdvertising !== undefined) {
+          return writeAdvertising ? strings.advertisingOn : strings.advertisingOff;
+        }
+        if (writeNight !== undefined) {
+          return writeNight ? strings.nightOn : strings.nightOff;
         }
         if (change.advertising !== undefined) {
           return advertisingAfter ? strings.advertisingOn : strings.advertisingOff;

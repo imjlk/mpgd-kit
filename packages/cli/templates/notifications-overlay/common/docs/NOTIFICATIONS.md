@@ -65,8 +65,9 @@ the notification routes, return its `NotificationRuntime` there with
 `listConsent`, which reads the signed-in player's consent records (the
 game-services Worker's `GET /consent`). The settings screen shows each
 switch from the latest record, read every time it opens and after every
-change, so a choice made on another device shows; it keeps nothing on the
-device, and shows no switch when the records cannot be read.
+change, so a choice made on another device shows. A tap reads the records
+again and writes only what changes. It keeps nothing on the device, and
+shows no switch when the records cannot be read.
 
 Night consent adds to 광고성 정보 수신동의: the screen offers it only while
 advertising consent is granted, and turning advertising consent off also
