@@ -47,9 +47,12 @@ The generated wrapper does not list them by hand: its build config reads the
 catalog with `readAitNotificationTopicsFile` from
 `@mpgd/adapter-ait/notification-config` (`MPGD_NOTIFICATION_TOPICS_FILE`, else
 the game's `notifications/topics.json`) and passes the `targets.ait`
-mappings, refusing a blank template code, an unknown agreement, and an
-advertising topic. `extractAitNotificationTopicConfig` does the same for an
-already parsed catalog.
+mappings. The catalog goes through `validateNotificationTopicCatalog` from
+`@mpgd/catalog` with the Apps in Toss registry entry (all but the deployment
+check, which `pnpm validate:notifications` makes with the backend's
+settings), and an advertising topic mapped for Apps in Toss is refused.
+`extractAitNotificationTopicConfig` does the same for an already parsed
+catalog.
 
 - **Agreement.** `Notification.requestAgreement` (Toss 5.255.0 or later) shows
   one sheet per topic that needs an agreement. `newAgreement`,

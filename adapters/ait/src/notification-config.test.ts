@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { posix } from 'node:path';
 
+import { validateNotificationTopicCatalog } from '@mpgd/catalog';
+import { referenceNotificationProviders } from '@mpgd/platform/notifications';
+
 import {
   extractAitNotificationTopicConfig,
   readAitNotificationTopicsFile,
@@ -24,6 +27,7 @@ const catalog = {
       purpose: 'service',
       channels: ['remote'],
       route: '/',
+      copy: { ko: { title: '구매 완료', body: '아이템이 도착했어요.' } },
       targets: { ait: { templateSetCode: 'game-purchase', agreement: 'none' }, android: {} },
     },
     {
@@ -37,6 +41,20 @@ const catalog = {
   ],
 };
 
+type Topic = (typeof catalog.topics)[number] | Readonly<Record<string, unknown>>;
+const withTopics = (...topics: readonly Topic[]) => ({ ...catalog, topics });
+const aitTopic = (fields: Readonly<Record<string, unknown>> = {}, mapping: unknown = {
+  templateSetCode: 'c',
+  agreement: 'required',
+}) => ({
+  id: 'a',
+  purpose: 'requested',
+  channels: ['remote'],
+  route: '/',
+  targets: { ait: mapping },
+  ...fields,
+});
+
 describe('extractAitNotificationTopicConfig', () => {
   it('maps every topic the target maps, trimming the template code', () => {
     expect(extractAitNotificationTopicConfig(catalog)).toEqual({
@@ -46,40 +64,101 @@ describe('extractAitNotificationTopicConfig', () => {
   });
 
   it('reads another target name when the deployment calls it differently', () => {
-    expect(extractAitNotificationTopicConfig({
-      topics: [{ id: 'daily-ready', purpose: 'requested', targets: { 'ait-kr': { templateSetCode: 'x', agreement: 'required' } } }],
-    }, { target: 'ait-kr' })).toEqual({ 'daily-ready': { templateSetCode: 'x', agreement: 'required' } });
+    expect(extractAitNotificationTopicConfig(withTopics({
+      id: 'daily-ready',
+      purpose: 'requested',
+      channels: ['remote'],
+      route: '/',
+      targets: { 'ait-kr': { templateSetCode: 'x', agreement: 'required' } },
+    }), { target: 'ait-kr' })).toEqual({ 'daily-ready': { templateSetCode: 'x', agreement: 'required' } });
   });
 
   it('answers no topics for a catalog without an Apps in Toss mapping', () => {
-    expect(extractAitNotificationTopicConfig({ topics: [] })).toEqual({});
+    expect(extractAitNotificationTopicConfig(withTopics())).toEqual({});
+  });
+
+  it('accepts a catalog with an advertising topic elsewhere without the deployment', () => {
+    // The deployment's checks are `pnpm validate:notifications`'s; the wrapper
+    // reads only the topics, and Apps in Toss is not offered the advertising one.
+    const advertising = {
+      id: 'events',
+      purpose: 'advertising',
+      channels: ['remote'],
+      route: '/',
+      optOutRoute: '/?entry=notification-settings',
+      copy: { ko: { title: '이벤트', body: '새 이벤트가 열렸어요.' } },
+      targets: { ios: {} },
+    };
+    const input = withTopics(catalog.topics[0]!, advertising);
+    expect(validateNotificationTopicCatalog(input).issues.map((issue) => issue.path))
+      .toEqual(['deployment.advertisingRules']);
+    expect(extractAitNotificationTopicConfig(input)).toEqual({
+      'daily-ready': { templateSetCode: 'game-daily-ready', agreement: 'required' },
+    });
   });
 
   it('refuses what would reach a player wrongly, naming the source', () => {
     const refusals: readonly [unknown, RegExp][] = [
       [null, /catalog is invalid: topics\.json/u],
-      [{ topics: 'x' }, /catalog is invalid/u],
-      [{ topics: [{ id: '' }] }, /index 0 is invalid/u],
-      [{ topics: [{ id: 'a' }, { id: 'a' }] }, /Duplicate notification topic "a"/u],
-      [JSON.parse('{"topics":[{"id":"__proto__","targets":{"ait":{"templateSetCode":"c","agreement":"required"}}}]}'), /index 0 is invalid/u],
-      [{ topics: [{ id: 'a', targets: 'ait' }] }, /"a" has invalid targets/u],
-      [{ topics: [{ id: 'a', targets: [] }] }, /"a" has invalid targets/u],
-      [{ topics: [{ id: 'a', targets: null }] }, /"a" has invalid targets/u],
-      [{ topics: [{ id: 'a', targets: { ait: 'code' } }] }, /invalid ait mapping/u],
-      [{ topics: [{ id: 'a', targets: { ait: { templateSetCode: ' ', agreement: 'required' } } }] }, /non-empty ait templateSetCode/u],
-      [{ topics: [{ id: 'a', targets: { ait: { templateSetCode: 'c', agreement: 'optional' } } }] }, /agreement 'required' or 'none'/u],
-      [{ topics: [{ id: 'a', purpose: 'advertising', targets: { ait: { templateSetCode: 'c', agreement: 'required' } } }] }, /advertising, which Apps in Toss cannot deliver/u],
+      [{ ...catalog, topics: 'x' }, /catalog is invalid/u],
+      [{ topics: [] }, /catalog is invalid: topics\.json\n- version/u],
+      [withTopics(aitTopic({ id: '' })), /catalog is invalid/u],
+      [withTopics(aitTopic(), aitTopic()), /duplicates the id of topics\[0\]: a/u],
+      [JSON.parse(JSON.stringify(withTopics(aitTopic())).replace('"id":"a"', '"id":"__proto__"')), /topics\[0\]\.id/u],
+      [withTopics(aitTopic({ targets: 'ait' })), /topics\[0\]\.targets/u],
+      [withTopics(aitTopic({ targets: [] })), /topics\[0\]\.targets/u],
+      [withTopics(aitTopic({ targets: null })), /topics\[0\]\.targets/u],
+      [withTopics(aitTopic({}, 'code')), /topics\[0\]\.targets\.ait/u],
+      [withTopics(aitTopic({}, { templateSetCode: ' ', agreement: 'required' })), /needs a non-empty templateSetCode/u],
+      [withTopics(aitTopic({}, { agreement: 'required' })), /templateSetCode/u],
+      [withTopics(aitTopic({}, { templateSetCode: 'c', agreement: 'optional' })), /agreement/u],
+      // Refused by the catalog's own rules, which the wrapper used to skip.
+      [withTopics(aitTopic({ route: 'https://evil.example/' })), /topics\[0\]\.route/u],
+      [withTopics(aitTopic({ channels: [] })), /topics\[0\]\.channels/u],
+      [withTopics(aitTopic({ copy: { en: { title: 't', body: 'b' } } })), /default locale ko/u],
+      [
+        withTopics(aitTopic({ purpose: 'advertising', optOutRoute: '/?entry=notification-settings' })),
+        /topics\[0\]\.targets\.ait/u,
+      ],
     ];
     for (const [input, message] of refusals) {
-      expect(() => extractAitNotificationTopicConfig(input, { sourceLabel: 'topics.json' })).toThrow(message);
+      expect(() => extractAitNotificationTopicConfig(input, { sourceLabel: 'topics.json' }), String(message))
+        .toThrow(message);
+    }
+  });
+
+  it('accepts and refuses the same catalogs as validateNotificationTopicCatalog with the Apps in Toss entry', () => {
+    const entry = referenceNotificationProviders['apps-in-toss'];
+    const inputs: readonly unknown[] = [
+      catalog,
+      withTopics(aitTopic({ route: '//evil.example' })),
+      withTopics(aitTopic({}, { templateSetCode: 'c' })),
+      withTopics(aitTopic({}, { templateSetCode: ' ', agreement: 'required' })),
+      withTopics(aitTopic({ quietHours: { start: '22:00', end: '22:00' } })),
+      { ...catalog, defaultLocale: '' },
+      withTopics(aitTopic(), { ...aitTopic(), id: 'b', targets: { android: {} } }),
+    ];
+    for (const input of inputs) {
+      const valid = validateNotificationTopicCatalog(input, { targetProviders: { ait: entry } }).valid;
+      let accepted = true;
+      try {
+        extractAitNotificationTopicConfig(input);
+      } catch {
+        accepted = false;
+      }
+      expect(accepted, JSON.stringify(input)).toBe(valid);
     }
   });
 });
 
 describe('readAitNotificationTopicsFile', () => {
-  const catalogText = JSON.stringify({
-    topics: [{ id: 'daily-ready', purpose: 'requested', targets: { ait: { templateSetCode: 'c', agreement: 'required' } } }],
-  });
+  const catalogText = JSON.stringify(withTopics({
+    id: 'daily-ready',
+    purpose: 'requested',
+    channels: ['remote'],
+    route: '/',
+    targets: { ait: { templateSetCode: 'c', agreement: 'required' } },
+  }));
   const mapped = { 'daily-ready': { templateSetCode: 'c', agreement: 'required' } };
   const fileSystem = (files: Readonly<Record<string, string>>): AitNotificationTopicsFileSystem => ({
     existsSync: (path) => Object.prototype.hasOwnProperty.call(files, path),

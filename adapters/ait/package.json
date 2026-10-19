@@ -84,6 +84,7 @@
   "dependencies": {
     "@ait-kit/sdk": "0.7.0",
     "@mpgd/bridge": "workspace:*",
+    "@mpgd/catalog": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },
   "peerDependencies": {

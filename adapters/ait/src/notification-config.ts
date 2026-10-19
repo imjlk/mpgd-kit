@@ -1,3 +1,11 @@
+import {
+  resolveNotificationTopicsForTarget,
+  validateNotificationTopicCatalog,
+  type NotificationTopicCatalog,
+} from '@mpgd/catalog';
+import { referenceNotificationProviders } from '@mpgd/platform/notifications';
+
+import { aitNotificationProviderId } from './notifications-provider-id.js';
 import type { AitNotificationTopicMapping } from './notifications-provider.js';
 
 export type { AitNotificationTopicMapping } from './notifications-provider.js';
@@ -21,14 +29,17 @@ export interface ExtractAitNotificationTopicConfigOptions {
  * a topic without a mapping for the target is not offered there, and the
  * host bridge then exposes no notifications at all when no topic is mapped.
  *
- * It checks only what the bridge needs and refuses, with the source label,
- * what would reach a player wrongly: a malformed catalog, a duplicate or
- * `__proto__` topic id, `targets` or a mapping that is not an object, a
- * blank `templateSetCode`, an `agreement` other than `required` or `none`,
- * and an `advertising` topic, which Apps in Toss cannot deliver. `pnpm validate:notifications` (or
- * `validateNotificationTopicCatalog` from `@mpgd/catalog`) checks the rest of
- * the catalog. Like `extractAitIapProductConfig`, this runs in the wrapper's
- * build config, so it imports no SDK.
+ * The catalog goes through `validateNotificationTopicCatalog` from
+ * `@mpgd/catalog`, with the Apps in Toss registry entry for `target` (which
+ * requires a non-blank `templateSetCode` and an `agreement` of `required` or
+ * `none`), and `resolveNotificationTopicsForTarget` picks the mapped topics,
+ * so the wrapper accepts the catalogs `pnpm validate:notifications` accepts.
+ * Only the deployment's check is left out: the wrapper builds without the
+ * backend's settings, which `pnpm validate:notifications` reads. On top of
+ * the validator it refuses, with the source label, an `advertising` topic
+ * mapped to the target, which Apps in Toss cannot deliver, and it trims the
+ * template code. Like `extractAitIapProductConfig`, this runs in the
+ * wrapper's build config, so it imports no SDK.
  */
 export function extractAitNotificationTopicConfig(
   input: unknown,
@@ -36,68 +47,52 @@ export function extractAitNotificationTopicConfig(
 ): Readonly<Record<string, AitNotificationTopicMapping>> {
   const target = options.target ?? defaultAitNotificationTarget;
   const sourceLabel = options.sourceLabel ?? 'notification topic catalog';
-  if (!isRecord(input) || !Array.isArray(input.topics)) {
-    throw new Error(`AIT notification topic catalog is invalid: ${sourceLabel}`);
+  const result = validateNotificationTopicCatalog(input, {
+    targetProviders: { [target]: referenceNotificationProviders[aitNotificationProviderId] },
+  });
+  // Without the deployment, a catalog with an advertising topic gets exactly
+  // one issue, `deployment.advertisingRules`; that check is
+  // `pnpm validate:notifications`'s, which reads the backend's settings.
+  const issues = result.issues.filter((issue) => issue.path !== missingDeploymentIssuePath);
+  if (issues.length > 0) {
+    throw new Error(
+      `AIT notification topic catalog is invalid: ${sourceLabel}\n${issues
+        .map((issue) => `- ${issue.path}: ${issue.message}`)
+        .join('\n')}`,
+    );
   }
-  const topics: readonly unknown[] = input.topics;
-  const seen = new Set<string>();
+  // The validator checks the deployment only once the shape passed, so a
+  // catalog whose one issue is the deployment has the catalog's type.
+  const catalog = result.valid ? result.catalog : (input as NotificationTopicCatalog);
   const mappings: Record<string, AitNotificationTopicMapping> = {};
-
-  for (const [index, topic] of topics.entries()) {
-    if (!isRecord(topic) || typeof topic.id !== 'string' || topic.id.trim().length === 0
-      || topic.id === '__proto__') {
-      throw new Error(`AIT notification topic at index ${index} is invalid: ${sourceLabel}`);
-    }
-    if (seen.has(topic.id)) {
-      throw new Error(
-        `Duplicate notification topic "${topic.id}" at index ${index}: ${sourceLabel}`,
-      );
-    }
-    seen.add(topic.id);
-    const targets = topic.targets;
-    if (targets === undefined) {
-      continue;
-    }
-    if (!isRecord(targets)) {
-      throw new Error(`Notification topic "${topic.id}" has invalid targets: ${sourceLabel}`);
-    }
-    if (!Object.prototype.hasOwnProperty.call(targets, target)) {
-      continue;
-    }
-    const mapping = targets[target];
-    if (!isRecord(mapping)) {
-      throw new Error(
-        `Notification topic "${topic.id}" has an invalid ${target} mapping: ${sourceLabel}`,
-      );
-    }
+  for (const topic of resolveNotificationTopicsForTarget(catalog, target)) {
     if (topic.purpose === 'advertising') {
       throw new Error(
         `Notification topic "${topic.id}" is advertising, which Apps in Toss cannot deliver; `
           + `remove its ${target} mapping: ${sourceLabel}`,
       );
     }
-    const templateSetCode = typeof mapping.templateSetCode === 'string'
-      ? mapping.templateSetCode.trim()
+    const templateSetCode = typeof topic.mapping?.templateSetCode === 'string'
+      ? topic.mapping.templateSetCode.trim()
       : '';
+    const agreement = topic.mapping?.agreement;
     if (templateSetCode.length === 0) {
       throw new Error(
         `Notification topic "${topic.id}" needs a non-empty ${target} templateSetCode: ${sourceLabel}`,
       );
     }
-    if (mapping.agreement !== 'required' && mapping.agreement !== 'none') {
+    // The registry entry's rules already passed; checked again for the type.
+    if (agreement !== 'required' && agreement !== 'none') {
       throw new Error(
         `Notification topic "${topic.id}" needs ${target} agreement 'required' or 'none': ${sourceLabel}`,
       );
     }
-    mappings[topic.id] = { templateSetCode, agreement: mapping.agreement };
+    mappings[topic.id] = { templateSetCode, agreement };
   }
-
   return mappings;
 }
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+const missingDeploymentIssuePath = 'deployment.advertisingRules';
 
 /** The file system and path calls `readAitNotificationTopicsFile` makes (node's in a build config). */
 export interface AitNotificationTopicsFileSystem {
