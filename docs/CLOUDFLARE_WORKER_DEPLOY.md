@@ -288,13 +288,13 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   inline sends. These are rough, unmeasured estimates: measure yours. The
   batch size, the provider pace, and the time budget are how a run stays
   under those limits; the budget only bounds the number of rounds, so the
-  batch decides one round's cost. The default batch of 25 is already about
-  250 queries in one round: on the free plan set
-  `MPGD_NOTIFICATIONS_DUE_BATCH` to about 3 to 5, and lower it or the
-  budget anywhere runs fail on the limits. With the queue bound, the cron only
-  writes the sends and takes their rows, and each consumer invocation makes
-  its own provider calls under its own limits, so large waves need the
-  queue. Keep the budget under the cron period (60 seconds for a
+  batch decides one round's cost. The default batch of 25 is already at
+  least about 250 queries in one round: on the free plan set
+  `MPGD_NOTIFICATIONS_DUE_BATCH` to about 2 to 3, and wherever runs fail on
+  the limits, lower the batch (lowering the budget only means fewer rounds
+  run). With the queue bound, the cron only writes the sends and takes
+  their rows, and each consumer invocation makes its own provider calls
+  under its own limits, so large waves need the queue. Keep the budget under the cron period (60 seconds for a
   one-minute cron), or runs overlap; the scheduler's compare-and-set writes
   keep overlapping runs correct, but they compete for the same items.
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
