@@ -91,9 +91,11 @@ function verifyNativeTarball(tarball) {
     'package/android/src/main/AndroidManifest.xml',
     'package/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
     'package/android/src/main/java/dev/mpgd/capacitor/LocalJsonStorage.java',
+    'package/android/src/main/java/dev/mpgd/capacitor/NotificationSettingsIntent.java',
     'package/android/src/main/java/dev/mpgd/capacitor/SecureCredentialStorage.java',
     'package/ios/Sources/CapacitorGameServices/CapacitorGameServicesPlugin.swift',
     'package/ios/Sources/CapacitorGameServices/LocalJsonStorage.swift',
+    'package/ios/Sources/CapacitorGameServices/NotificationSettingsURL.swift',
     'package/ios/Sources/CapacitorGameServices/SecureCredentialStorage.swift',
     'package/ios/Sources/CapacitorGameServices/PrivacyInfo.xcprivacy',
   ]) {

@@ -12,6 +12,7 @@ installAitHostBridge({
   adGroupIds: runtimeConfig.adGroupIds,
   adPlacementTypes: runtimeConfig.adPlacementTypes,
   ...iapBridgeOptions(),
+  ...notificationBridgeOptions(),
   ...identityBridgeOptions(),
 });
 
@@ -41,6 +42,20 @@ function iapBridgeOptions(): Pick<
   }
 
   return { iapProducts: runtimeConfig.iapProducts };
+}
+
+/**
+ * Notifications v2 topics come from the notification topic catalog's
+ * `targets.ait` mappings at build time. Without one the host bridge offers no
+ * notifications event channel, so the game exposes no `notificationsV2`; with
+ * them the bridge asks for each topic's agreement through
+ * `Notification.requestAgreement` and routes notification landings. Agreements
+ * are recorded by the game backend, never trusted from the wrapper.
+ */
+function notificationBridgeOptions(): Pick<InstallAitHostBridgeOptions, 'notificationTopics'> {
+  return Object.keys(runtimeConfig.notificationTopics).length === 0
+    ? {}
+    : { notificationTopics: runtimeConfig.notificationTopics };
 }
 
 function identityBridgeOptions(): Pick<InstallAitHostBridgeOptions, 'dependencies'> {

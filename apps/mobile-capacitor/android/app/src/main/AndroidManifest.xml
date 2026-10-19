@@ -41,4 +41,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Notification reminders are inexact: drop the exact-alarm permission
+         @capacitor/local-notifications adds (Android 14 denies it to new
+         installs, and Play restricts it to alarm and calendar apps). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
 </manifest>

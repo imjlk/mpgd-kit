@@ -10,7 +10,10 @@ import {
   loadEffectiveTargetConfigMatrix,
   validateEffectiveTargetConfigMatrix,
 } from '../target/effective-config';
-import { normalizeMonetizationCatalogEnv } from '../target/monetization-catalog-env';
+import {
+  normalizeMonetizationCatalogEnv,
+  normalizeNotificationTopicsEnv,
+} from '../target/monetization-catalog-env';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-game-catalog-'));
 // Import a rendered game, not the raw template's placeholder tsconfig. Keep the
@@ -633,6 +636,68 @@ function assertTargetBuildCatalogEnvUsesCallerBase(): void {
   assert.equal(normalizedEnvFromTargetsBase.MPGD_AD_PLACEMENTS_FILE, placementsFile);
   assert.equal(normalizedEnvFromConflictingBases.MPGD_PRODUCT_CATALOG_FILE, callerCatalogFile);
   assert.equal(normalizedEnvFromConflictingBases.MPGD_AD_PLACEMENTS_FILE, callerPlacementsFile);
+
+  // The notification topic catalog resolves the same way for the wrapper build.
+  assert.deepEqual(normalizeNotificationTopicsEnv({}), {});
+  assert.deepEqual(normalizeNotificationTopicsEnv({ MPGD_NOTIFICATION_TOPICS_FILE: '  ' }), {});
+  assert.deepEqual(normalizeNotificationTopicsEnv({ MPGD_NOTIFICATION_TOPICS_FILE: catalogFile }), {
+    MPGD_NOTIFICATION_TOPICS_FILE: catalogFile,
+  });
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: relative(callerDir, catalogFile), PWD: process.cwd() },
+      callerDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: catalogFile },
+  );
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      {
+        MPGD_NOTIFICATION_TOPICS_FILE: relative(callerDir, catalogFile),
+        PWD: callerDir,
+      },
+      shadowDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: catalogFile },
+  );
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: 'missing-topics.json' },
+      shadowDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: resolve(shadowDir, 'missing-topics.json') },
+  );
+  // Bases in order, with a bare name each base resolves differently: the
+  // targets directory first, then INIT_CWD, then PWD.
+  const topicsName = 'notification-topics.json';
+  const initCwdDir = join(tempDir, 'init-cwd');
+  mkdirSync(initCwdDir, { recursive: true });
+  for (const dir of [callerDir, shadowDir, initCwdDir]) {
+    writeFileSync(join(dir, topicsName), '{}\n');
+  }
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: topicsName, INIT_CWD: initCwdDir, PWD: shadowDir },
+      callerDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: join(callerDir, topicsName) },
+  );
+  const emptyBase = join(tempDir, 'empty-base');
+  mkdirSync(emptyBase, { recursive: true });
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: topicsName, INIT_CWD: initCwdDir, PWD: shadowDir },
+      emptyBase,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: join(initCwdDir, topicsName) },
+  );
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: topicsName, PWD: shadowDir },
+      emptyBase,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: join(shadowDir, topicsName) },
+  );
 }
 
 interface ViteUserConfig {

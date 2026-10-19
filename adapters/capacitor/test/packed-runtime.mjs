@@ -13,6 +13,7 @@ import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/ad
 import {
   createCapacitorNotificationServiceProvider,
   loadCapacitorNotificationSdks,
+  openCapacitorNotificationSettings,
 } from '@mpgd/adapter-capacitor/notifications';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
@@ -234,6 +235,13 @@ assert.equal(await credentials.load({ key: 'packed.refresh' }), 'opaque-token');
 await credentials.remove({ key: 'packed.refresh' });
 assert.equal(await credentials.load({ key: 'packed.refresh' }), null);
 assert.equal(secureValues.size, 0);
+
+// The settings opener resolves only when the plugin opened the screen.
+await openCapacitorNotificationSettings({ openNotificationSettings: async () => ({ opened: true }) });
+await assert.rejects(
+  openCapacitorNotificationSettings({ openNotificationSettings: async () => ({ opened: false }) }),
+  /could not be opened/u,
+);
 
 // The notifications subpath loads without its optional plugins, which this
 // consumer does not install: the loader leaves both out, the provider fails

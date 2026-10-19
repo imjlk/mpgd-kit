@@ -15,9 +15,19 @@ The Swift Package bundles `PrivacyInfo.xcprivacy` for that legacy
 `UserDefaults` access, declaring the CA92.1 storage-wrapper reason. Game apps
 must still review their own privacy disclosures and any additional SDKs.
 
-Native CI exercises the shipped storage helpers with JUnit on Android and a
-small Swift conformance executable on iOS. The TypeScript storage smoke covers
-the JavaScript bridge boundary separately.
+`openNotificationSettings()` opens this app's notification settings for the
+notifications v2 provider's `openSettings` (pass
+`openCapacitorNotificationSettings` from `@mpgd/adapter-capacitor/notifications`).
+Android 8 and later open `Settings.ACTION_APP_NOTIFICATION_SETTINGS` for the
+app; Android 7 opens the app details screen. iOS 16 and later open
+`UIApplication.openNotificationSettingsURLString`; iOS 15 opens the app's
+settings page. It answers `{ opened }` as soon as the screen is launched (the
+provider waits for the player to come back), with `opened: false` when the
+system could not open it.
+
+Native CI exercises the shipped storage helpers and the settings screen
+choice with JUnit on Android and small Swift conformance executables on iOS.
+The TypeScript storage smoke covers the JavaScript bridge boundary separately.
 
 `credentials.load`, `credentials.save`, and `credentials.remove` are a distinct
 opaque-string credential store for guest/session tokens. Android encrypts values

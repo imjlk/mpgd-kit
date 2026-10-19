@@ -45,6 +45,10 @@
       "types": "./dist/iap-config.d.ts",
       "default": "./dist/iap-config.js"
     },
+    "./notification-config": {
+      "types": "./dist/notification-config.d.ts",
+      "default": "./dist/notification-config.js"
+    },
     "./local-mock": {
       "types": "./dist/local-mock.d.ts",
       "default": "./dist/local-mock.js"
@@ -80,6 +84,7 @@
   "dependencies": {
     "@ait-kit/sdk": "0.7.0",
     "@mpgd/bridge": "workspace:*",
+    "@mpgd/catalog": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },
   "peerDependencies": {

@@ -1,5 +1,6 @@
 import Capacitor
 import Foundation
+import UIKit
 
 @objc(CapacitorGameServicesPlugin)
 public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -8,7 +9,8 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "CapacitorGameServicesPlugin"
     public let jsName = "CapacitorGameServices"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openNotificationSettings", returnType: CAPPluginReturnPromise)
     ]
     private lazy var localStorage = LocalJsonStorage(
         backend: MigratingFileLocalJsonStorageBackend(
@@ -17,6 +19,32 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         )
     )
     private lazy var secureCredentials = SecureCredentialStorage()
+
+    /// Opens this app's notification settings for the notifications v2
+    /// provider's `openSettings`. Resolves `{ opened }` once the system
+    /// accepted the URL; the provider waits for the player to come back.
+    @objc func openNotificationSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            let notificationSettings: String
+            if #available(iOS 16.0, *) {
+                notificationSettings = UIApplication.openNotificationSettingsURLString
+            } else {
+                notificationSettings = ""
+            }
+            let target = NotificationSettingsURL.string(
+                notificationSettingsAvailable: !notificationSettings.isEmpty,
+                notificationSettings: notificationSettings,
+                appSettings: UIApplication.openSettingsURLString
+            )
+            guard let url = URL(string: target) else {
+                call.resolve(["opened": false])
+                return
+            }
+            UIApplication.shared.open(url, options: [:]) { opened in
+                call.resolve(["opened": opened])
+            }
+        }
+    }
 
     @objc func request(_ call: CAPPluginCall) {
         guard let id = call.getString("id"), !id.isEmpty else {
