@@ -126,6 +126,9 @@ importers:
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
+      '@mpgd/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../../packages/platform

@@ -763,7 +763,7 @@ jobs:
         run: pnpm smoke:cli-android-signing
         env:
           MPGD_TEST_ANDROID_GRADLE_SIGNING: '1'
-      - name: Test Android native storage conformance
+      - name: Test Android native storage and settings conformance
         working-directory: apps/mobile-capacitor/android
         run: ./gradlew :mpgd-capacitor-game-services:testDebugUnitTest
       - name: Compile optional Google Play Billing provider
@@ -831,7 +831,7 @@ jobs:
       - run: pnpm build:target ios staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
-      - name: Test iOS native storage conformance
+      - name: Test iOS native storage and settings conformance
         run: |
           xcrun swiftc \
             native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/LocalJsonStorage.swift \
@@ -843,6 +843,11 @@ jobs:
             native-plugins/capacitor-game-services/ios/Tests/SecureCredentialStorageConformance/main.swift \
             -o "$RUNNER_TEMP/native-credential-conformance"
           "$RUNNER_TEMP/native-credential-conformance"
+          xcrun swiftc \
+            native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/NotificationSettingsURL.swift \
+            native-plugins/capacitor-game-services/ios/Tests/NotificationSettingsConformance/main.swift \
+            -o "$RUNNER_TEMP/native-notification-settings-conformance"
+          "$RUNNER_TEMP/native-notification-settings-conformance"
       - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

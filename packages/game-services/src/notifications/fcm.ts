@@ -23,9 +23,9 @@ import type { NotificationProviderRegistration } from './registry.js';
  * Android posts to the mapping's `channelId`, else to `mpgd-service`,
  * `mpgd-requested`, or `mpgd-advertising` by purpose. An advertising send
  * names the iOS category `mpgd-advertising`, whose opt-out action the app
- * registers; an Android FCM notification message cannot carry actions, so
- * the shell renders advertising natively (C1). An expiry becomes
- * `android.ttl` and the `apns-expiration` header.
+ * registers; an Android FCM notification message cannot carry actions, and
+ * the Capacitor shell does not render advertising natively yet. An expiry
+ * becomes `android.ttl` and the `apns-expiration` header.
  */
 
 export const fcmMessagingScope = 'https://www.googleapis.com/auth/firebase.messaging';

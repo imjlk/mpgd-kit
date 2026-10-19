@@ -24,12 +24,15 @@ To try `@mpgd/adapter-capacitor/notifications` here (see the
 - In `capacitor.config.ts`, set `plugins.FirebaseMessaging.presentationOptions`
   (for example `['badge', 'sound', 'alert']`) and
   `plugins.LocalNotifications.smallIcon`.
-- Remove the `SCHEDULE_EXACT_ALARM` permission that the local-notifications
-  plugin merges into the Android manifest
-  (`<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />`,
-  with `xmlns:tools="http://schemas.android.com/tools"` on `<manifest>`, which
-  this shell already declares): the provider schedules inexact reminders
-  only.
+- This shell's Android manifest already drops the `SCHEDULE_EXACT_ALARM`
+  permission that the local-notifications plugin merges into it
+  (`<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />`):
+  the provider schedules inexact reminders only.
+  `mpgd target init capacitor --providers notifications` adds the same line to
+  a game-owned shell's newly generated Android project, and warns about an
+  existing one that lacks it.
 
-The game template's wiring and the Firebase setup guide come with the CLI work
-(C1 in the [notifications RFC](../../docs/specs/notifications/notifications-v2-rfc.md#pr-plan)).
+A game created with `mpgd game create --providers notifications` is wired
+already, and `mpgd target init capacitor --providers notifications` installs
+the plugins into its game-owned shell; see the
+[Firebase setup guide](../../docs/FIREBASE_NOTIFICATIONS.md).

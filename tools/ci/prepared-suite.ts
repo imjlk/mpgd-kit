@@ -63,6 +63,8 @@ export const preparedGroups = Object.freeze({
     'smoke:cli-microsoft-store-package-acceptance',
     'smoke:cli-microsoft-store-starter-onboarding',
     'smoke:cli-capacitor-shell-starter',
+    'smoke:cli-notifications-starter',
+    'smoke:cli-notifications-game',
     'smoke:cli-deploy-planning',
     'smoke:cli-native-deploy-workflow',
     'smoke:cli-deploy-process',

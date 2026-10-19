@@ -1,0 +1,222 @@
+{
+  "version": "1",
+  "defaultLocale": "ko",
+  "notices": {
+    "topic": "consent-notice",
+    "copy": {
+      "ko": {
+        "consent-result.advertising.granted": {
+          "title": "[__GAME_TITLE__] 광고성 정보 수신동의 결과",
+          "body": "{{consentDate}}에 하신 광고성 정보 수신동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.advertising.refused": {
+          "title": "[__GAME_TITLE__] 광고성 정보 수신거부 결과",
+          "body": "{{consentDate}}에 하신 광고성 정보 수신거부가 처리됐어요."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "[__GAME_TITLE__] 광고성 정보 수신동의 철회 결과",
+          "body": "{{consentDate}}에 하신 광고성 정보 수신동의 철회가 처리됐어요."
+        },
+        "consent-result.night.granted": {
+          "title": "[__GAME_TITLE__] 야간 광고성 정보 수신동의 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~다음 날 8시) 광고성 정보 수신동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.night.refused": {
+          "title": "[__GAME_TITLE__] 야간 광고성 정보 수신거부 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~다음 날 8시) 광고성 정보 수신거부가 처리됐어요."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "[__GAME_TITLE__] 야간 광고성 정보 수신동의 철회 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~다음 날 8시) 광고성 정보 수신동의 철회가 처리됐어요."
+        },
+        "reconfirmation.advertising": {
+          "title": "[__GAME_TITLE__] 광고성 정보 수신동의 확인",
+          "body": "{{consentDate}}에 광고성 정보 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 게임의 알림 설정에서 광고성 정보 수신을 끄면 돼요."
+        },
+        "reconfirmation.night": {
+          "title": "[__GAME_TITLE__] 야간 광고성 정보 수신동의 확인",
+          "body": "{{consentDate}}에 야간(21시~다음 날 8시) 광고성 정보 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 게임의 알림 설정에서 야간 수신을 끄면 돼요."
+        }
+      },
+      "en": {
+        "consent-result.advertising.granted": {
+          "title": "[__GAME_TITLE__] Promotional notifications: consent processed",
+          "body": "Your consent to promotional notifications on {{consentDate}} has been processed. You can withdraw it any time in the game's notification settings."
+        },
+        "consent-result.advertising.refused": {
+          "title": "[__GAME_TITLE__] Promotional notifications: refusal processed",
+          "body": "Your refusal of promotional notifications on {{consentDate}} has been processed."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "[__GAME_TITLE__] Promotional notifications: withdrawal processed",
+          "body": "Your withdrawal of consent to promotional notifications on {{consentDate}} has been processed."
+        },
+        "consent-result.night.granted": {
+          "title": "[__GAME_TITLE__] Night-time promotional notifications: consent processed",
+          "body": "Your consent to promotional notifications between 21:00 and 08:00 on {{consentDate}} has been processed. You can withdraw it any time in the game's notification settings."
+        },
+        "consent-result.night.refused": {
+          "title": "[__GAME_TITLE__] Night-time promotional notifications: refusal processed",
+          "body": "Your refusal of promotional notifications between 21:00 and 08:00 on {{consentDate}} has been processed."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "[__GAME_TITLE__] Night-time promotional notifications: withdrawal processed",
+          "body": "Your withdrawal of consent to promotional notifications between 21:00 and 08:00 on {{consentDate}} has been processed."
+        },
+        "reconfirmation.advertising": {
+          "title": "[__GAME_TITLE__] Promotional notifications: your consent",
+          "body": "You agreed to promotional notifications on {{consentDate}}. To keep this consent you need do nothing; to withdraw it, turn promotional notifications off in the game's notification settings."
+        },
+        "reconfirmation.night": {
+          "title": "[__GAME_TITLE__] Night-time promotional notifications: your consent",
+          "body": "You agreed to promotional notifications between 21:00 and 08:00 on {{consentDate}}. To keep this consent you need do nothing; to withdraw it, turn night-time promotional notifications off in the game's notification settings."
+        }
+      }
+    }
+  },
+  "topics": [
+    {
+      "id": "daily-ready",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "오늘의 플레이",
+          "body": "오늘의 판이 준비됐어요."
+        },
+        "en": {
+          "title": "Today's run",
+          "body": "Today's run is ready."
+        }
+      },
+      "frequency": {
+        "maxPerDay": 1
+      },
+      "quietHours": {
+        "start": "21:00",
+        "end": "08:00"
+      },
+      "targets": {
+        "android": {
+          "channelId": "mpgd-requested"
+        },
+        "ios": {},
+        "reddit": {
+          "title": "Today's run is ready",
+          "body": "Today's run is ready when you are."
+        }
+      }
+    },
+    {
+      "id": "streak-at-risk",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "연속 플레이 기록",
+          "body": "오늘 플레이하면 연속 기록이 이어져요."
+        },
+        "en": {
+          "title": "Your streak",
+          "body": "Play today to keep your streak going."
+        }
+      },
+      "frequency": {
+        "maxPerDay": 1
+      },
+      "quietHours": {
+        "start": "21:00",
+        "end": "08:00"
+      },
+      "targets": {
+        "android": {
+          "channelId": "mpgd-requested"
+        },
+        "ios": {},
+        "reddit": {
+          "title": "Your streak",
+          "body": "Play today to keep your streak going."
+        }
+      }
+    },
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=challenge",
+      "copy": {
+        "ko": {
+          "title": "친구의 도전",
+          "body": "{{friend}} 님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "Friend challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "quietHours": {
+        "start": "22:00",
+        "end": "08:00"
+      },
+      "targets": {
+        "android": {
+          "channelId": "mpgd-service"
+        },
+        "ios": {},
+        "reddit": {
+          "title": "Friend challenge",
+          "body": "A friend sent you a challenge."
+        }
+      }
+    },
+    {
+      "id": "events",
+      "purpose": "advertising",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=events",
+      "optOutRoute": "/?entry=notification-settings",
+      "copy": {
+        "ko": {
+          "title": "이번 주 이벤트",
+          "body": "새 이벤트가 시작됐어요."
+        },
+        "en": {
+          "title": "This week's event",
+          "body": "A new event has started."
+        }
+      },
+      "frequency": {
+        "maxPerDay": 1
+      },
+      "targets": {
+        "ios": {}
+      }
+    },
+    {
+      "id": "consent-notice",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=notification-settings",
+      "targets": {
+        "android": {
+          "channelId": "mpgd-service"
+        },
+        "ios": {}
+      }
+    }
+  ]
+}

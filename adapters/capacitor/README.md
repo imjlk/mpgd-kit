@@ -194,6 +194,7 @@ import { resolveNotificationTopicsForTarget } from '@mpgd/catalog';
 import {
   createCapacitorNotificationServiceProvider,
   loadCapacitorNotificationSdks,
+  openCapacitorNotificationSettings,
 } from '@mpgd/adapter-capacitor/notifications';
 
 const sdks = await loadCapacitorNotificationSdks();
@@ -201,8 +202,8 @@ const notifications = createCapacitorNotificationServiceProvider({
   platform: 'android',
   topics: resolveNotificationTopicsForTarget(catalog, 'android'),
   ...sdks,
-  // Optional: opens this app's notification settings (see below).
-  openSettings,
+  // Opens this app's notification settings (see below).
+  openSettings: openCapacitorNotificationSettings,
 });
 const gateway = createCapacitorPlatformGateway({ ..., providers: [notifications] });
 ```
@@ -296,11 +297,21 @@ is created, which is how a cold-start open reaches it.
   - The action opens the `optOutRoute` of the advertising topic the push names
     in its `topic` data key; without that key it opens nothing.
   - An Android FCM notification message cannot carry actions, so an Android
-    advertising push needs the shell to render it natively with the action;
-    the template work for that is C1's.
-- **Settings.** Neither plugin opens the notification settings, so the shell
-  passes `openSettings` (for example a small native method); without it
-  `permission.settings` is `false` and `openSettings` answers `unavailable`.
+    advertising push needs the shell to render it natively with the action,
+    which is not built yet (a follow-up after C1). Until then map no
+    advertising topic to `android`: the push would arrive without the
+    opt-out action the Korean rules require (see the RFC's advertising
+    rules). The kit's starter maps its sample advertising topic to iOS only.
+- **Settings.** Neither plugin opens the notification settings, so the
+  provider takes an `openSettings` opener; without one `permission.settings`
+  is `false` and `openSettings` answers `unavailable`.
+  `openCapacitorNotificationSettings` is the kit's opener: it calls
+  `openNotificationSettings` of `@mpgd/capacitor-game-services` (Android 8+
+  `Settings.ACTION_APP_NOTIFICATION_SETTINGS`, iOS 16+
+  `UIApplication.openNotificationSettingsURLString`, and each app's settings
+  page on older versions) and throws when the screen did not open. A shell
+  built with a plugin older than the method rejects the call, and the
+  provider then answers `unavailable` and reports the error.
   The provider resolves `openSettings` only once the app is back in the
   foreground, after at most two minutes (`settingsReturnTimeoutMs`), or after
   five seconds when the app never left.

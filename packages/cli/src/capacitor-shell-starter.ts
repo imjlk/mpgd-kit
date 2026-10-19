@@ -15,8 +15,21 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
-import { satisfies, valid } from 'semver';
+import { satisfies, valid, validRange } from 'semver';
 
+import {
+  capacitorGatewayRegistersNotifications,
+  conflictingPushPlugin,
+  notificationsCapacitorGatewayModules,
+  notificationsCapacitorGateways,
+  notificationsCapacitorSupportFiles,
+  notificationsGameDependencies,
+  notificationsMessagingFirebaseRange,
+  notificationsMessagingPlugin,
+  notificationsProviderId,
+  notificationsShellPlugins,
+  wireCapacitorGatewayNotifications,
+} from './notifications-starter.js';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
@@ -163,6 +176,12 @@ export interface CapacitorShellStarterPlan {
   readonly files: readonly PlannedFile[];
   /** Native store plugins the plan installs into the shell and declares in the game. */
   readonly providerPlugins: readonly CapacitorShellPlannedProviderPlugin[];
+  /**
+   * The notifications plugins (`--providers notifications`) the plan installs
+   * into the shell, for Android and iOS, at the game's versions; empty when
+   * notifications are not requested.
+   */
+  readonly notificationPlugins: readonly { readonly packageName: string; readonly version: string }[];
   /**
    * Store wiring the plan could not write or confirm: a missing or game-owned
    * gateway that does not register the plugin, or a store plugin the shell
@@ -366,12 +385,30 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     .filter((plugin) => requestedProviderIds.includes(plugin.id))
     .map((plugin) => resolveProviderPlugin(gameRoot, gameDependencies, cliDevelopmentDependencies, plugin));
   const warnings: string[] = [];
-  const gatewayFiles = planProviderGatewayWiring(
+  const storeGatewayFiles = planProviderGatewayWiring(
     gameRoot,
     input.templateRoot,
     providerPlugins,
     warnings,
   );
+  const notifications = requestedProviderIds.includes(notificationsProviderId)
+    ? planNotificationsProvider({
+        gameRoot,
+        templateRoot: input.templateRoot,
+        displayName: input.displayName,
+        gameDependencies,
+        existingShellPackage: packageContent,
+        plannedGateways: storeGatewayFiles,
+        warnings,
+      })
+    : undefined;
+  // The notifications wiring builds on the store wiring of the same gateway.
+  const gatewayFiles = [
+    ...storeGatewayFiles.filter((file) =>
+      notifications?.files.some((planned) => planned.path === file.path) !== true),
+    ...(notifications?.files ?? []),
+  ];
+  const notificationPlugins = notifications?.shellPlugins ?? [];
   if (packageContent !== undefined) {
     const existingShellDependencies = requireObject(
       parseJsonObject(packageContent, 'existing shell package').dependencies,
@@ -389,6 +426,40 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         );
       }
     }
+    if (notifications === undefined) {
+      for (const name of notificationsShellPlugins) {
+        if (existingShellDependencies[name] !== undefined) {
+          warnings.push(
+            `The shell still lists ${name} although ${notificationsProviderId} is no longer `
+              + 'requested; the initializer never removes a plugin, so remove it from the shell '
+              + 'package and resync if the game stopped sending notifications.',
+          );
+        }
+      }
+    }
+  }
+  if (notifications !== undefined) {
+    // The starter exposes notifications on both platforms; the provider still
+    // reports its own readiness (no plugin, no Firebase files), which the
+    // target config follows. A state the game set itself is kept.
+    for (const targetName of ['android', 'ios'] as const) {
+      const target = requireObject(targetMap[targetName], `${targetName} target`);
+      const integrations = target.integrations === undefined
+        ? {}
+        : requireObject(target.integrations, `${targetName}.integrations`);
+      if (integrations.notifications === undefined) {
+        target.integrations = { ...integrations, notifications: 'available' };
+      } else if (
+        integrations.notifications !== 'available'
+        && integrations.notifications !== 'action-required'
+      ) {
+        warnings.push(
+          `mpgd.targets.json keeps ${targetName}.integrations.notifications at `
+            + `${String(integrations.notifications)}, which hides notifications from the game; set it `
+            + 'to available once the shell is configured.',
+        );
+      }
+    }
   }
   const shellDependencies: Record<string, string> = {
     '@capacitor/android': capacitorVersion,
@@ -397,6 +468,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     '@capacitor/ios': capacitorVersion,
     '@mpgd/capacitor-game-services': pluginVersion,
     ...Object.fromEntries(providerPlugins.map((plugin) => [plugin.packageName, plugin.version])),
+    ...Object.fromEntries(notificationPlugins.map((plugin) => [plugin.packageName, plugin.version])),
   };
   if (packageContent !== undefined) {
     assertCompatibleExistingPackage(
@@ -448,7 +520,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
               typescript: typescriptVersion,
             },
           })
-        : withPackageDependencies(packageContent, providerPlugins),
+        : withPackageDependencies(packageContent, [...providerPlugins, ...notificationPlugins]),
     },
     {
       path: `${shellPath}/capacitor.config.ts`,
@@ -475,17 +547,29 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         appId: input.appId,
         displayName: input.displayName,
         requestedProviderIds,
-        ...(providerPlugins.length === 0
+        ...(providerPlugins.length === 0 && notificationPlugins.length === 0
           ? {}
           : {
-              providers: Object.fromEntries(providerPlugins.map((plugin) => [
-                plugin.id,
-                {
-                  package: plugin.packageName,
-                  version: plugin.version,
-                  platform: plugin.platform,
-                },
-              ])),
+              providers: {
+                ...Object.fromEntries(providerPlugins.map((plugin) => [
+                  plugin.id,
+                  {
+                    package: plugin.packageName,
+                    version: plugin.version,
+                    platform: plugin.platform,
+                  },
+                ])),
+                ...(notificationPlugins.length === 0
+                  ? {}
+                  : {
+                      [notificationsProviderId]: {
+                        packages: Object.fromEntries(
+                          notificationPlugins.map((plugin) => [plugin.packageName, plugin.version]),
+                        ),
+                        platforms: ['android', 'ios'],
+                      },
+                    }),
+              },
             }),
         ...(requestedBackendUrl === undefined ? {} : { backendUrl: requestedBackendUrl }),
       }),
@@ -505,7 +589,12 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         '',
         'requestedProviderIds is selection metadata, except play-billing and',
         'storekit: those install the kit store plugin into this shell and the game',
-        'and register it with cap sync. A plugin never reports a feature as',
+        'and register it with cap sync; notifications installs',
+        '@capacitor-firebase/messaging and @capacitor/local-notifications (never',
+        `${conflictingPushPlugin}, which claims the same iOS push handler).`,
+        'Notifications also need the Firebase files (google-services.json,',
+        'GoogleService-Info.plist) and the iOS Push Notifications capability; see',
+        'the mpgd-kit Firebase guide. A plugin never reports a feature as',
         'available on its own; the gateway registers the store provider, and the',
         'store answers configuration-required until the plugin and products exist.',
         'Production builds require a real game-owned backend when grants are enabled.',
@@ -563,20 +652,33 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   // The game bundle imports the plugin from its gateway file, so the game
   // declares it too, at the shell's exact version; the materializer's game
   // install picks it up.
-  const missingGameDependencies = providerPlugins.filter(
-    (plugin) => gameDependencies[plugin.packageName] === undefined,
-  );
-  if (missingGameDependencies.length > 0) {
+  const missingGameDependencies = [
+    ...providerPlugins.map((plugin) => [plugin.packageName, plugin.version] as const),
+    ...Object.entries(notifications?.gameDependencies ?? {}),
+  ].filter(([name]) => gameDependencies[name] === undefined);
+  const gameScripts = gamePackage.scripts === undefined
+    ? {}
+    : requireObject(gamePackage.scripts, 'game scripts');
+  const validatorPresent = notifications !== undefined
+    && (notifications.files.some((file) => file.path === 'tools/validate-notifications.ts')
+      || readExisting(safeDestination(gameRoot, 'tools/validate-notifications.ts')) !== undefined);
+  const missingScripts = !validatorPresent || gameScripts['validate:notifications'] !== undefined
+    ? {}
+    : {
+        'validate:notifications': 'ttsx --project tsconfig.tools.json tools/validate-notifications.ts',
+      };
+  if (missingGameDependencies.length > 0 || Object.keys(missingScripts).length > 0) {
     safeDestination(gameRoot, 'package.json');
     requestedFiles.push({
       path: 'package.json',
       content: json({
         ...gamePackage,
+        ...(Object.keys(missingScripts).length === 0
+          ? {}
+          : { scripts: { ...gameScripts, ...missingScripts } }),
         dependencies: {
           ...gameDependencies,
-          ...Object.fromEntries(
-            missingGameDependencies.map((plugin) => [plugin.packageName, plugin.version]),
-          ),
+          ...Object.fromEntries(missingGameDependencies),
         },
       }),
     });
@@ -608,6 +710,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     changedFiles: files.map((file) => file.path),
     nativePlatformsToAdd,
     providerPlugins,
+    notificationPlugins,
     warnings,
   };
 }
@@ -740,6 +843,9 @@ export function materializeCapacitorShellStarter(
     const manifest = readJsonObject(path.join(plan.gameRoot, shellPath, 'mpgd.native-shell.json'));
     if (platform === 'android' && generatedNow) {
       materializeAndroidBackupPolicy(plan.gameRoot);
+      if (plan.notificationPlugins.length > 0) {
+        materializeAndroidInexactAlarms(plan.gameRoot);
+      }
     }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
@@ -764,7 +870,8 @@ export function materializeCapacitorShellStarter(
   // sync so the store plugin's native code joins the shell.
   for (const platform of ['android', 'ios'] as const) {
     if (
-      plan.providerPlugins.some((plugin) => plugin.platform === platform)
+      (plan.providerPlugins.some((plugin) => plugin.platform === platform)
+        || plan.notificationPlugins.length > 0)
       && !plan.nativePlatformsToAdd.includes(platform)
       && existsSync(path.join(plan.gameRoot, shellPath, platform))
     ) {
@@ -2469,9 +2576,10 @@ function assertCompatibleExistingPackage(
     throw new Error('Existing Capacitor shell package must stay private.');
   }
   const dependencies = requireObject(value.dependencies, 'existing shell dependencies');
-  const providerPackages = new Set(
-    capacitorShellProviderPlugins.map((plugin) => plugin.packageName),
-  );
+  const providerPackages = new Set([
+    ...capacitorShellProviderPlugins.map((plugin) => plugin.packageName),
+    ...notificationsShellPlugins,
+  ]);
   for (const [name, version] of Object.entries(shellDependencies)) {
     // A store plugin the shell does not list yet is added by the plan. One it
     // lists at another version would compile native code that does not match
@@ -2783,7 +2891,7 @@ function assertNotSymlink(file: string): void {
  */
 function withPackageDependencies(
   source: string,
-  plugins: readonly CapacitorShellPlannedProviderPlugin[],
+  plugins: readonly { readonly packageName: string; readonly version: string }[],
 ): string {
   const value = parseJsonObject(source, 'existing shell package');
   const dependencies = requireObject(value.dependencies, 'existing shell dependencies');
@@ -2935,6 +3043,362 @@ function planProviderGatewayWiring(
     }
   }
   return [...planned].map(([file, content]) => ({ path: file, content }));
+}
+
+interface PlannedNotificationsProvider {
+  readonly shellPlugins: readonly { readonly packageName: string; readonly version: string }[];
+  /** The packages the game declares for notifications, at the versions to add when missing. */
+  readonly gameDependencies: Readonly<Record<string, string>>;
+  readonly files: readonly PlannedFile[];
+}
+
+/** The permission line that drops `SCHEDULE_EXACT_ALARM` from the merged Android manifest. */
+export const androidInexactAlarmPermission =
+  '<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />';
+
+/** Whether an Android manifest already drops `SCHEDULE_EXACT_ALARM` from the merge. */
+export function androidManifestRemovesExactAlarm(manifest: string): boolean {
+  const code = withoutXmlComments(manifest);
+  return /<uses-permission\b[^>]*android:name\s*=\s*"android\.permission\.SCHEDULE_EXACT_ALARM"[^>]*tools:node\s*=\s*"remove"/u
+    .test(code)
+    || /<uses-permission\b[^>]*tools:node\s*=\s*"remove"[^>]*android:name\s*=\s*"android\.permission\.SCHEDULE_EXACT_ALARM"/u
+      .test(code);
+}
+
+/** The manifest with each XML comment blanked to spaces, so offsets stay the same. */
+function withoutXmlComments(manifest: string): string {
+  return manifest.replace(/<!--[\s\S]*?-->/gu, (comment) => comment.replace(/[^\n]/gu, ' '));
+}
+
+/**
+ * Drops `SCHEDULE_EXACT_ALARM`, which `@capacitor/local-notifications` adds
+ * to the merged manifest: reminders are inexact (notifications RFC
+ * "Reminders"), Android 14 denies the permission to new installs, and Play
+ * restricts it to alarm and calendar apps. The tools namespace is bound on
+ * the manifest root when missing. A manifest that already drops it is
+ * returned unchanged.
+ */
+export function applyAndroidManifestInexactAlarms(manifest: string): string {
+  if (androidManifestRemovesExactAlarm(manifest)) {
+    return manifest;
+  }
+  const code = withoutXmlComments(manifest);
+  const root = /<manifest\b[^>]*?>/u.exec(code);
+  const close = code.lastIndexOf('</manifest>');
+  if (root === null || close === -1 || root[0].endsWith('/>') || close < root.index) {
+    return manifest;
+  }
+  const newline = manifest.includes('\r\n') ? '\r\n' : '\n';
+  let rootTag = manifest.slice(root.index, root.index + root[0].length);
+  if (!/\sxmlns:tools\s*=/u.test(rootTag)) {
+    rootTag = rootTag.replace(/^<manifest\b/u, `<manifest xmlns:tools="${androidToolsNamespace}"`);
+  }
+  const head = `${manifest.slice(0, root.index)}${rootTag}${manifest.slice(root.index + root[0].length, close)}`;
+  return `${head.trimEnd()}${newline}    ${androidInexactAlarmPermission}${newline}${manifest.slice(close)}`;
+}
+
+function materializeAndroidInexactAlarms(gameRoot: string): void {
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/android/app/src/main/AndroidManifest.xml`,
+  );
+  if (!existsSync(manifestFile) || !lstatSync(manifestFile).isFile()) {
+    return;
+  }
+  const source = readFileSync(manifestFile, 'utf8');
+  const next = applyAndroidManifestInexactAlarms(source);
+  if (next !== source) {
+    writeFileSync(manifestFile, next);
+  }
+}
+
+/**
+ * Plans `--providers notifications` for the shell and the game: the two
+ * Capacitor plugins at the game's installed versions (or the starter's), the
+ * game's notifications packages, and, when a Capacitor gateway is still the
+ * template's, its notifications wiring with the starter modules it imports.
+ * A game-owned gateway is only checked. Native setup the initializer never
+ * writes (Firebase files, the iOS capability, an existing Android manifest)
+ * is reported as warnings.
+ */
+function planNotificationsProvider(input: {
+  readonly gameRoot: string;
+  readonly templateRoot: string | undefined;
+  readonly displayName: string;
+  readonly gameDependencies: Readonly<Record<string, unknown>>;
+  readonly existingShellPackage: string | undefined;
+  readonly plannedGateways: readonly PlannedFile[];
+  readonly warnings: string[];
+}): PlannedNotificationsProvider {
+  const { gameRoot, gameDependencies, warnings } = input;
+  const shellDependencies = input.existingShellPackage === undefined
+    ? {}
+    : requireObject(
+        parseJsonObject(input.existingShellPackage, 'existing shell package').dependencies,
+        'existing shell dependencies',
+      );
+  if (gameDependencies[conflictingPushPlugin] !== undefined
+    || shellDependencies[conflictingPushPlugin] !== undefined) {
+    throw new Error(
+      `--providers notifications installs @capacitor-firebase/messaging, which cannot run next to `
+        + `${conflictingPushPlugin}: on iOS both claim Capacitor's one push handler. Remove `
+        + `${conflictingPushPlugin} from the game and the shell first.`,
+    );
+  }
+  const versionOf = (name: string): { readonly version: string; readonly installed: boolean } => {
+    const installedFile = path.join(gameRoot, 'node_modules', name, 'package.json');
+    if (existsSync(installedFile)) {
+      const installed = readJsonObject(installedFile);
+      const version = requireString(installed.version, `installed ${name} version`);
+      if (valid(version) === null) {
+        throw new Error(`${name} must resolve to a concrete version, not ${version}.`);
+      }
+      // The plugin's own peers (Capacitor core) must accept the game's
+      // installed copies, as a store plugin's must.
+      assertInstalledPeers(gameRoot, `${name}@${version}`, installed.peerDependencies);
+      return { version, installed: true };
+    }
+    if (gameDependencies[name] !== undefined) {
+      throw new Error(
+        `The game declares ${name} but it is not installed; install game dependencies before `
+          + 'initializing the shell.',
+      );
+    }
+    const version = notificationsGameDependencies[name];
+    if (version === undefined) {
+      throw new Error(`No starter version is known for ${name}.`);
+    }
+    return { version, installed: false };
+  };
+  const shellPlugins = notificationsShellPlugins.map((name) => ({
+    packageName: name,
+    ...versionOf(name),
+  }));
+  // The wiring imports @mpgd/adapter-capacitor/notifications: the game's
+  // installed adapter must have it, and the plugins must satisfy its peers.
+  const adapter = readJsonObject(
+    path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/package.json'),
+  );
+  const adapterExports = adapter.exports;
+  if (typeof adapterExports !== 'object' || adapterExports === null
+    || (adapterExports as Readonly<Record<string, unknown>>)['./notifications'] === undefined) {
+    throw new Error(
+      `--providers notifications needs @mpgd/adapter-capacitor/notifications, which the game's `
+        + `@mpgd/adapter-capacitor ${String(adapter.version)} does not export; upgrade the game's kit `
+        + 'packages (mpgd kit upgrade) first.',
+    );
+  }
+  // The starter's provider module also imports the settings opener, which
+  // an adapter older than this CLI's notifications starter does not have.
+  // The subpath's declared types file (dist/notifications.d.ts today), and
+  // the module it re-exports the opener from.
+  const adapterRoot = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor');
+  const declaredTypes = (adapterExports as Readonly<Record<string, unknown>>)['./notifications'];
+  const typesPath = typeof declaredTypes === 'object' && declaredTypes !== null
+    && typeof (declaredTypes as { readonly types?: unknown }).types === 'string'
+    ? (declaredTypes as { readonly types: string }).types
+    : './dist/notifications.d.ts';
+  const adapterTypes = readExisting(path.join(adapterRoot, typesPath));
+  const openerTypes = readExisting(
+    path.join(adapterRoot, path.dirname(typesPath), 'notifications-settings.d.ts'),
+  );
+  // Refused only when the declarations show the opener is absent: an
+  // `export *` the check cannot follow passes, and the build then decides.
+  if (adapterTypes !== undefined && !/\bexport\s*\*/u.test(adapterTypes)
+    && !`${adapterTypes}\n${openerTypes ?? ''}`.includes('openCapacitorNotificationSettings')) {
+    throw new Error(
+      `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `
+        + 'openCapacitorNotificationSettings, which the notifications starter uses; upgrade the '
+        + "game's kit packages (mpgd kit upgrade) first.",
+    );
+  }
+  // The adapter's other peers (Capacitor core) must accept the game's
+  // installed copies too; the plugins get their own message below.
+  assertInstalledPeers(
+    gameRoot,
+    `@mpgd/adapter-capacitor@${String(adapter.version)}`,
+    typeof adapter.peerDependencies === 'object' && adapter.peerDependencies !== null
+      ? Object.fromEntries(Object.entries(adapter.peerDependencies as Record<string, unknown>)
+        .filter(([name]) => !notificationsShellPlugins.includes(name)))
+      : undefined,
+  );
+  const adapterPeers = typeof adapter.peerDependencies === 'object' && adapter.peerDependencies !== null
+    ? adapter.peerDependencies as Readonly<Record<string, unknown>>
+    : {};
+  for (const plugin of shellPlugins) {
+    const range = adapterPeers[plugin.packageName];
+    // A range semver cannot read (`workspace:*`, a tag) is not checked.
+    if (typeof range === 'string' && validRange(range) !== null
+      && !satisfies(plugin.version, range, { includePrerelease: true })) {
+      throw new Error(
+        plugin.installed
+          ? `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `
+            + `but the game has ${plugin.version}; align the game's version before rerunning.`
+          : `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `
+            + `but this CLI would add ${plugin.version}; add a version in that range to the game `
+            + `(pnpm add ${plugin.packageName}) or upgrade the CLI, then rerun.`,
+      );
+    }
+  }
+  // The messaging plugin's web fallback imports `firebase`: the game's own
+  // copy must be in the plugin's peer range. For the plugin the starter
+  // adds, the kit pins the range. An installed plugin names its own, which
+  // `versionOf` already checked against an installed firebase; this covers
+  // the firebase the CLI would add.
+  const messaging = shellPlugins.find(
+    (plugin) => plugin.packageName === notificationsMessagingPlugin,
+  );
+  const firebase = versionOf('firebase');
+  if (messaging !== undefined) {
+    const installedPeers = messaging.installed
+      ? readJsonObject(
+        path.join(gameRoot, 'node_modules', notificationsMessagingPlugin, 'package.json'),
+      ).peerDependencies
+      : undefined;
+    const declared = typeof installedPeers === 'object' && installedPeers !== null
+      ? (installedPeers as Readonly<Record<string, unknown>>)['firebase']
+      : undefined;
+    const firebaseRange = messaging.installed ? declared : notificationsMessagingFirebaseRange;
+    if (typeof firebaseRange === 'string' && validRange(firebaseRange) !== null
+      && !satisfies(firebase.version, firebaseRange, { includePrerelease: true })) {
+      throw new Error(
+        firebase.installed
+          ? `@capacitor-firebase/messaging ${messaging.version} needs firebase ${firebaseRange}, but the game `
+            + `has ${firebase.version}; align the game's firebase (pnpm add firebase@"${firebaseRange}") `
+            + 'before rerunning.'
+          : `@capacitor-firebase/messaging ${messaging.version} needs firebase ${firebaseRange}, but this `
+            + `CLI would add ${firebase.version}; add a version in that range to the game `
+            + `(pnpm add firebase@"${firebaseRange}") or upgrade the CLI, then rerun.`,
+      );
+    }
+  }
+  const gamePackages = Object.fromEntries(
+    Object.keys(notificationsGameDependencies).map((name) => [name, versionOf(name).version]),
+  );
+
+  const register = 'register createStarterCapacitorNotifications (src/platform/capacitorNotifications.ts) '
+    + 'or createCapacitorNotificationServiceProvider from @mpgd/adapter-capacitor/notifications in its '
+    + 'providers';
+  const files: PlannedFile[] = [];
+  const overlayRoot = input.templateRoot === undefined
+    ? undefined
+    : path.join(path.dirname(input.templateRoot), 'notifications-overlay', 'common');
+  const jsonTitle = JSON.stringify(input.displayName).slice(1, -1);
+  const starterFile = (root: string, file: string): string => {
+    // A function replacer: `$&` or `$$` in a display name stays literal.
+    const title = file.endsWith('.json') ? jsonTitle : input.displayName;
+    return readTemplateFile(root, file).replaceAll('__GAME_TITLE__', () => title);
+  };
+  // The wired gateway imports these starter modules; a game-owned copy that
+  // differs keeps the gateway as it is, as a differing store module does.
+  const keptModule = overlayRoot === undefined
+    ? undefined
+    : notificationsCapacitorGatewayModules.find((file) => {
+        const existing = readExisting(safeDestination(gameRoot, file));
+        return existing !== undefined
+          && existing.replace(/\r\n/gu, '\n') !== starterFile(overlayRoot, file);
+      });
+  for (const gatewayFile of Object.values(notificationsCapacitorGateways)) {
+    const current = input.plannedGateways.find((file) => file.path === gatewayFile)?.content
+      ?? readExisting(safeDestination(gameRoot, gatewayFile));
+    if (current !== undefined && capacitorGatewayRegistersNotifications(current)) {
+      continue;
+    }
+    if (current === undefined) {
+      warnings.push(`${gatewayFile} is missing; ${register}.`);
+      continue;
+    }
+    const template = input.templateRoot === undefined
+      ? undefined
+      : readTemplateFile(input.templateRoot, gatewayFile);
+    if (template === undefined || current.replace(/\r\n/gu, '\n') !== template) {
+      warnings.push(
+        `${gatewayFile} does not register notifications and is game-owned; ${register}.`,
+      );
+      continue;
+    }
+    if (keptModule !== undefined) {
+      warnings.push(
+        `${gatewayFile} was not rewritten because the game-owned ${keptModule} differs from the `
+          + `notifications starter; ${register}.`,
+      );
+      continue;
+    }
+    files.push({
+      path: gatewayFile,
+      content: wireCapacitorGatewayNotifications(gatewayFile, template),
+    });
+  }
+  if (files.length > 0 && overlayRoot !== undefined) {
+    // The starter modules and catalog the wired gateways read; the game keeps any it has.
+    for (const file of notificationsCapacitorSupportFiles) {
+      if (readExisting(safeDestination(gameRoot, file)) === undefined) {
+        files.push({ path: file, content: starterFile(overlayRoot, file) });
+      }
+    }
+    warnings.push(
+      'The notification settings screen is not added to an existing game; render one from '
+        + 'src/platform/notificationSettings.ts (see docs/NOTIFICATIONS.md) so players can turn '
+        + 'reminders and advertising consent on and off.',
+    );
+  }
+
+  const androidManifest = readExisting(
+    safeDestination(gameRoot, `${shellPath}/android/app/src/main/AndroidManifest.xml`),
+  );
+  if (androidManifest !== undefined && !androidManifestRemovesExactAlarm(androidManifest)) {
+    warnings.push(
+      `${shellPath}/android/app/src/main/AndroidManifest.xml keeps SCHEDULE_EXACT_ALARM, which `
+        + '@capacitor/local-notifications adds; reminders are inexact, so add '
+        + `${androidInexactAlarmPermission} to the manifest.`,
+    );
+  }
+  if (readExisting(safeDestination(gameRoot, `${shellPath}/android/app/google-services.json`)) === undefined) {
+    warnings.push(
+      `Android push needs ${shellPath}/android/app/google-services.json from the Firebase console `
+        + '(see the mpgd-kit Firebase guide); without it the push half fails closed.',
+    );
+  }
+  if (readExisting(safeDestination(gameRoot, `${shellPath}/ios/App/App/GoogleService-Info.plist`))
+    === undefined) {
+    warnings.push(
+      `iOS push needs ${shellPath}/ios/App/App/GoogleService-Info.plist, the Push Notifications `
+        + 'capability, an APNs key uploaded to Firebase, and the AppDelegate forwarding the '
+        + 'messaging plugin documents (see the mpgd-kit Firebase guide).',
+    );
+  }
+  return {
+    shellPlugins: shellPlugins.map(({ packageName, version }) => ({ packageName, version })),
+    gameDependencies: gamePackages,
+    files,
+  };
+}
+
+/**
+ * Refuses a package whose declared peers the game's installed copies do not
+ * satisfy (Capacitor core, the kit packages), before anything is written.
+ */
+function assertInstalledPeers(gameRoot: string, label: string, peerDependencies: unknown): void {
+  if (typeof peerDependencies !== 'object' || peerDependencies === null) {
+    return;
+  }
+  for (const [peer, range] of Object.entries(
+    peerDependencies as Readonly<Record<string, unknown>>,
+  )) {
+    const peerFile = path.join(gameRoot, 'node_modules', peer, 'package.json');
+    // A range semver cannot read (`workspace:*`, a tag) is not checked.
+    if (typeof range !== 'string' || validRange(range) === null || !existsSync(peerFile)) {
+      continue;
+    }
+    const peerVersion = readJsonObject(peerFile).version;
+    if (typeof peerVersion === 'string' && valid(peerVersion) !== null
+      && !satisfies(peerVersion, range, { includePrerelease: true })) {
+      throw new Error(
+        `${label} needs ${peer} ${range}, but the game has ${peerVersion}; align the game's `
+          + 'versions before rerunning.',
+      );
+    }
+  }
 }
 
 /** A regular file of the CLI's game template, read without leaving the template root. */
