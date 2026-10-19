@@ -77,6 +77,11 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
     }
     return entry.members;
   };
+  /** A sorted set's members in Redis order (score, then member bytes); zRange and zRank share it. */
+  const ordered = (key: string): { member: string; score: number }[] =>
+    [...(zset(key, false) ?? new Map<string, number>())]
+      .map(([member, score]) => ({ member, score }))
+      .sort((left, right) => left.score - right.score || compareMembers(left.member, right.member));
   const dropEmpty = (key: string): void => {
     const entry = data.get(key);
     if (
@@ -226,9 +231,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
     },
     async zRange(key, start, stop, options) {
       await tick();
-      const sorted = [...(zset(key, false) ?? new Map<string, number>())]
-        .map(([member, score]) => ({ member, score }))
-        .sort((left, right) => left.score - right.score || compareMembers(left.member, right.member));
+      const sorted = ordered(key);
       if (options === undefined || options.by === 'rank') {
         if (options?.limit !== undefined) {
           throw new Error("zRange parsing error: 'limit' only allowed when 'options.by' is 'lex' or 'score'");
@@ -255,10 +258,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
     },
     async zRank(key, member) {
       await tick();
-      const sorted = [...(zset(key, false) ?? new Map<string, number>())]
-        .map(([name, score]) => ({ member: name, score }))
-        .sort((left, right) => left.score - right.score || compareMembers(left.member, right.member));
-      const rank = sorted.findIndex((entry) => entry.member === member);
+      const rank = ordered(key).findIndex((entry) => entry.member === member);
       return rank === -1 ? undefined : rank;
     },
     async zCard(key) {

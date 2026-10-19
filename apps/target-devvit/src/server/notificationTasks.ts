@@ -8,7 +8,7 @@ import {
 /**
  * The notifications scheduler tasks of `devvit.json` (`scheduler.tasks`):
  * `mpgd-notifications-dispatch` runs the notifications scheduler every
- * minute (due server reminders and due sends, for at most about 20
+ * minute (due server reminders and due sends, starting no round after 20
  * seconds) and `mpgd-notifications-purge` purges old rows in bounded
  * batches every five minutes (`runDevvitNotificationTask` from
  * `@mpgd/adapter-devvit/server`).
