@@ -7,6 +7,7 @@ import {
   decodeBridgeStorageLoadData,
   isBridgeNotificationsV2Method,
   type BridgeMethod,
+  type BridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -24,6 +25,7 @@ import {
   type IdentityUpgradeResult,
   type InboundShare,
   type LaunchIntent,
+  type NotificationSubscriptionAdapter,
   type NotificationSubscriptionResult,
   type NotificationSubscriptionStatus,
   type PlatformCapabilities,
@@ -42,9 +44,14 @@ import {
   type CommerceErrorCode,
   type CommerceProvider,
 } from '@mpgd/platform/commerce';
+import type { NotificationCapabilities, NotificationProvider } from '@mpgd/platform/notifications';
 import { withShareIntentCheck } from '@mpgd/platform/routes';
 
 import { assertDevvitOrderEvidence, type DevvitPaidOrder } from './commerce-contract.js';
+import {
+  createDevvitDegradedNotificationCapabilities,
+  devvitNotificationProviderId,
+} from './notifications-contract.js';
 import {
   createDevvitCommerceProvider,
   type CreateDevvitCommerceProviderInput,
@@ -55,6 +62,7 @@ export * from './commerce-contract.js';
 export * from './commerce-provider.js';
 export * from './payments.js';
 export * from './catalog-products.js';
+export * from './notifications-contract.js';
 
 export const defaultDevvitRpcEndpoint = defaultBridgeRpcEndpoint;
 /** Bridge error of `createDevvitOrpcBridge` when the oRPC request itself failed. */
@@ -123,6 +131,47 @@ export interface DevvitPlatformGatewayOptions {
    * from the payments client.
    */
   readonly commerce?: DevvitGatewayCommerceOptions;
+  /**
+   * Exposes notifications v2 (`notificationsV2`) over the server bridge,
+   * which serves the game-rendered opt-in from
+   * `createDevvitNotificationsV2BridgeHandler` (`@mpgd/adapter-devvit/server`),
+   * and serves the v1 `notifications` adapter from the same provider.
+   * Absent, the gateway offers no `notificationsV2` and keeps the server's
+   * v1 answers. Notifications are a gated beta: the target config keeps
+   * `integrations.notifications` at `approval-required` until Reddit
+   * approves the app, which hides both from the game.
+   */
+  readonly notifications?: DevvitGatewayNotificationsOptions;
+  /**
+   * The webview's Reddit login prompt (`createDevvitWebLoginPrompt()` from
+   * `@mpgd/adapter-devvit/web`). With it, `identity.requestUpgrade` shows the
+   * prompt to a logged-out viewer and answers `reloadExpected: true`, since
+   * Reddit reloads the post after login; a logged-in viewer gets the
+   * server's `completed` answer. Without it, the server answers alone.
+   */
+  readonly loginPrompt?: DevvitLoginPrompt;
+}
+
+export interface DevvitGatewayNotificationsOptions {
+  /** The topic ids the catalog maps for the `reddit` target; v1 reads any other as `configuration-required`. */
+  readonly topics: readonly string[];
+  /** The webview's IANA zone for the registration; `Intl` by default. */
+  readonly timeZone?: () => string | undefined;
+  /** The webview's locale for the registration; `navigator.language` by default. */
+  readonly locale?: () => string | undefined;
+  /** Loads the notifications client chunk, when the gateway is created; the dynamic import by default. Tests inject it. */
+  readonly load?: () => Promise<DevvitNotificationClientModule>;
+}
+
+/** What the gateway uses from the notifications client chunk. */
+export type DevvitNotificationClientModule = Pick<
+  typeof import('./notifications-client.js'),
+  'createDevvitBridgeNotificationProvider' | 'createDevvitNotificationSubscriptionAdapter'
+>;
+
+/** Opens Reddit's login or sign-up flow (`showLoginPrompt` from `@devvit/web/client`). */
+export interface DevvitLoginPrompt {
+  showLoginPrompt(): void;
 }
 
 export function createDevvitPlatformGateway(
@@ -161,6 +210,13 @@ export function createDevvitPlatformGateway(
         orders: createDevvitBridgeOrderSource(request),
       });
 
+  const notificationSurface = input.notifications === undefined
+    ? undefined
+    : createLazyDevvitNotificationSurface(input.notifications, (method, payload) =>
+        request<unknown>(method, payload),
+      );
+  const notificationsV2 = notificationSurface?.notificationsV2;
+
   return {
     target: 'reddit',
     async getCapabilities() {
@@ -181,18 +237,47 @@ export function createDevvitPlatformGateway(
       }
       // The webview provider owns the block: the server snapshot stays honest
       // about the server, and a gateway without a provider sells nothing.
+      // The two provider reads are independent bridge calls.
+      const [commerceBlock, notifications] = await Promise.all([
+        commerce === undefined ? createUnsupportedCommerceCapabilities() : commerce.getCapabilities(),
+        notificationsV2 === undefined ? undefined : readNotificationCapabilities(notificationsV2),
+      ]);
+      const {
+        notifications: _serverNotifications,
+        ...withCommerce
+      } = { ...capabilities, commerce: commerceBlock } as PlatformCapabilities;
+      if (notifications === undefined) {
+        return withCommerce;
+      }
+      // The block is present exactly when the gateway exposes notificationsV2,
+      // and the push readiness follows it.
       return {
-        ...capabilities,
-        commerce: commerce === undefined
-          ? createUnsupportedCommerceCapabilities()
-          : await commerce.getCapabilities(),
+        ...withCommerce,
+        providerAvailability: {
+          ...withCommerce.providerAvailability,
+          pushNotifications: notifications.availability,
+        },
+        notifications,
       };
     },
     identity: {
       getPlayer: () => request<PlayerIdentity | null>('identity.getPlayer', {}),
       getSession: () => request<IdentitySession>('identity.getSession', {}),
-      requestUpgrade: (payload) =>
-        request<IdentityUpgradeResult>('identity.requestUpgrade', payload),
+      requestUpgrade: async (payload) => {
+        const answer = await request<IdentityUpgradeResult>('identity.requestUpgrade', payload);
+        // The server answers `unavailable` for a logged-out viewer; any other
+        // answer is passed through.
+        if (input.loginPrompt === undefined || answer.status !== 'unavailable') {
+          return answer;
+        }
+        // A logged-out viewer: Reddit's login flow reloads the post afterwards.
+        try {
+          input.loginPrompt.showLoginPrompt();
+        } catch {
+          return { status: 'unavailable', reloadExpected: false };
+        }
+        return { status: 'completed', reloadExpected: true };
+      },
     },
     presentation: {
       getLaunchIntent: () => request<LaunchIntent>('presentation.getLaunchIntent', {}),
@@ -205,13 +290,16 @@ export function createDevvitPlatformGateway(
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
     }),
-    notifications: {
+    // v1 is served from the v2 provider whenever the gateway exposes v2, so
+    // the two report the same readiness.
+    notifications: notificationSurface?.notifications ?? {
       getStatus: (topic) =>
         request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
       requestSubscription: (topic) =>
         request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
     },
     ...(commerce === undefined ? {} : { commerce }),
+    ...(notificationsV2 === undefined ? {} : { notificationsV2 }),
     ads: {
       preload: (payload) => request('ads.preload', payload),
       showRewarded: (payload) => request('ads.showRewarded', payload),
@@ -242,6 +330,138 @@ export function createDevvitPlatformGateway(
       },
     },
   };
+}
+
+/**
+ * Notifications v2 and the v1 adapter served from it, with the client chunk
+ * (the bridge provider and the `@mpgd/bridge/notifications` validators) in
+ * its own chunk, so a game that does not opt in carries none of it. A game
+ * that opts in starts loading it with the gateway. A
+ * chunk that fails to load rejects with a retryable
+ * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the next call loads again.
+ * Devvit pushes no notifications events, so `subscribe` attaches nothing.
+ */
+function createLazyDevvitNotificationSurface(
+  options: DevvitGatewayNotificationsOptions,
+  request: (method: BridgeNotificationsV2Method, payload: unknown) => Promise<unknown>,
+): { readonly notificationsV2: NotificationProvider; readonly notifications: NotificationSubscriptionAdapter } {
+  const importClient = options.load ?? (() => import('./notifications-client.js'));
+  const topics = [...options.topics];
+  let loading: Promise<{
+    readonly provider: NotificationProvider;
+    readonly v1: NotificationSubscriptionAdapter;
+  }> | undefined;
+  const load = () => {
+    if (loading !== undefined) {
+      return loading;
+    }
+    // Any failure, a synchronous throw of the loader or one while the
+    // provider is built, is forgotten once settled, so the next call loads
+    // again; the reset runs after the attempt is stored, never before.
+    const attempt = (async () => {
+      try {
+        const module = await importClient();
+        const provider = module.createDevvitBridgeNotificationProvider({
+          request,
+          ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
+          ...(options.locale === undefined ? {} : { locale: options.locale }),
+        });
+        return { provider, v1: module.createDevvitNotificationSubscriptionAdapter(provider, topics) };
+      } catch (error) {
+        throw new PlatformOperationError({
+          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          message: `The Devvit notifications client did not load: ${errorMessage(error)}`,
+          retryable: true,
+        });
+      }
+    })();
+    loading = attempt;
+    attempt.catch(() => {
+      if (loading === attempt) {
+        loading = undefined;
+      }
+    });
+    return attempt;
+  };
+  // The game opted in, so the chunk is needed: load it now rather than on the
+  // first capability read, which is bounded in time.
+  void load().catch(() => {});
+  const provider = async (): Promise<NotificationProvider> => (await load()).provider;
+  return {
+    notificationsV2: {
+      provider: devvitNotificationProviderId,
+      getCapabilities: async () => (await provider()).getCapabilities(),
+      getPermission: async (input) => (await provider()).getPermission(input),
+      requestPermission: async (input) => (await provider()).requestPermission(input),
+      revokePermission: async (input) => {
+        const loaded = await provider();
+        return (loaded.revokePermission as NonNullable<NotificationProvider['revokePermission']>)
+          .call(loaded, input);
+      },
+      register: async () => (await (await provider()).register?.()) ?? null,
+      subscribe: () => () => {},
+    },
+    notifications: {
+      getStatus: async (topic) => (await load()).v1.getStatus(topic),
+      // As v1 answers any failed request: `unavailable`, also when the chunk did not load.
+      requestSubscription: async (topic) => {
+        let v1: NotificationSubscriptionAdapter;
+        try {
+          v1 = (await load()).v1;
+        } catch {
+          return 'unavailable';
+        }
+        return v1.requestSubscription(topic);
+      },
+    },
+  };
+}
+
+/** Bound on one notifications capability read, as `withTargetAvailability` bounds it. */
+const notificationCapabilityReadTimeoutMs = 3_000;
+
+/** Failures the same server answers the same way again; `@mpgd/target-config` reads them as unsupported. */
+const unsupportedNotificationReadCodes: ReadonlySet<unknown> = new Set([
+  'NOTIFICATIONS_V2_UNAVAILABLE',
+  'NOTIFICATIONS_UNSUPPORTED',
+  'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED',
+]);
+
+/**
+ * One bounded read of the provider's block. The provider validated it, so
+ * it is a fresh, exact block; a read that fails or stalls yields a block
+ * that offers nothing, with the availability that explains why.
+ */
+async function readNotificationCapabilities(
+  provider: NotificationProvider,
+): Promise<NotificationCapabilities> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      provider.getCapabilities(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Notification capabilities read timed out.')),
+          notificationCapabilityReadTimeoutMs,
+        );
+      }),
+    ]);
+  } catch (error) {
+    const failure = typeof error === 'object' && error !== null
+      ? error as { readonly code?: unknown; readonly retryable?: unknown }
+      : {};
+    let availability: NotificationCapabilities['availability'] = 'temporarily-unavailable';
+    if (failure.code === 'NOTIFICATIONS_CONFIGURATION_REQUIRED') {
+      availability = 'configuration-required';
+    } else if (failure.retryable !== true && unsupportedNotificationReadCodes.has(failure.code)) {
+      availability = 'unsupported';
+    }
+    return createDevvitDegradedNotificationCapabilities(availability);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /**
@@ -439,8 +659,8 @@ export function createDevvitSandboxBridge(): DevvitBridge {
 
   return {
     async request(input) {
-      // Notifications v2 arrives with the Devvit provider (P3); until then
-      // every v2 method answers the dedicated code.
+      // Only the Devvit server can opt a user in: the sandbox serves no
+      // notifications v2, and every v2 method answers the dedicated code.
       if (isBridgeNotificationsV2Method(input.method)) {
         return createNotificationsV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
       }
