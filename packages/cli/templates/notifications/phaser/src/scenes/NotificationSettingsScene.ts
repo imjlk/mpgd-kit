@@ -8,61 +8,79 @@ import {
 } from '../platform/notificationSettings';
 import {
   createStarterNotificationSettingsModel,
-  subscribeStarterNotificationSettingsOpens,
+  subscribeStarterNotificationOpens,
 } from '../platform/notifications';
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
 
 export const notificationSettingsSceneKey = 'NotificationSettingsScene';
-/** Set when a settings open arrives before the lobby; the lobby opens the screen then. */
-const pendingOpenKey = 'pendingNotificationSettings';
 
 const textStyle = { color: '#d6dee8', fontFamily: 'Arial, sans-serif', fontSize: '18px' } as const;
 const buttonStyle = { ...textStyle, color: '#5eead4' } as const;
-const contentTop = 80;
-const contentBottom = 480;
+/** The list's viewport on the 960x540 game: between the title and the Back button. */
+const list = { top: 80, height: 400, width: 960 } as const;
 
 /**
- * Opens the settings screen for a notification open whose route is the
- * settings screen (the advertising opt-out action, a consent notice). While
- * the game is still booting the open waits for the lobby
- * (`takePendingNotificationSettings`).
+ * Routes notification opens: one whose route is the settings screen (the
+ * advertising opt-out action, a consent notice) shows the screen, after boot
+ * when the open started the game. Route your other topics' opens in `other`
+ * (see `subscribeStarterNotificationOpens`): this is the first subscriber,
+ * the one that receives a cold-start open. An open during play leaves the
+ * run; the play scene saves its checkpoint when it shuts down.
  */
 export function routeNotificationSettingsOpens(game: Phaser.Game, context: StarterContext): void {
-  const unsubscribe = subscribeStarterNotificationSettingsOpens(context.platform, () => {
-    const active = game.scene.getScenes(true).map((scene) => scene.scene.key);
-    if (active.length === 0 || active.includes('BootScene')) {
-      game.registry.set(pendingOpenKey, true);
-      return;
-    }
-    for (const key of active) {
+  const activeKeys = (): string[] => game.scene.getScenes(true).map((scene) => scene.scene.key);
+  const show = (): void => {
+    for (const key of activeKeys()) {
       if (key !== notificationSettingsSceneKey) {
         game.scene.stop(key);
       }
     }
     game.scene.start(notificationSettingsSceneKey);
+  };
+  let waiting = false;
+  const afterBoot = (): void => {
+    const active = activeKeys();
+    if (active.length === 0 || active.includes('BootScene')) {
+      return;
+    }
+    game.events.off('poststep', afterBoot);
+    waiting = false;
+    show();
+  };
+  const unsubscribe = subscribeStarterNotificationOpens(context.platform, {
+    settings: () => {
+      const active = activeKeys();
+      if (active.length > 0 && !active.includes('BootScene')) {
+        show();
+      } else if (!waiting) {
+        // Booting: show the screen once the first scene after boot runs.
+        waiting = true;
+        game.events.on('poststep', afterBoot);
+      }
+    },
   });
-  game.events.once('destroy', unsubscribe);
-}
-
-/** Whether a settings open waited for the lobby; clears it. */
-export function takePendingNotificationSettings(scene: Phaser.Scene): boolean {
-  const pending = scene.registry.get(pendingOpenKey) === true;
-  scene.registry.remove(pendingOpenKey);
-  return pending;
+  game.events.once('destroy', () => {
+    unsubscribe();
+    game.events.off('poststep', afterBoot);
+  });
 }
 
 /**
  * The game-rendered notification settings: the OS or host permission,
  * reminder topics, and the advertising and night consent the Korean rules
  * require before any advertising push (`notificationSettings.ts` holds the
- * logic). Every change is a tap; no switch starts on. The list scrolls by
- * dragging when it is taller than the screen.
+ * logic). Every change is a tap; no switch starts on. The list has a camera
+ * of its own, which clips it under WebGL and Canvas alike and keeps hidden
+ * rows from taking taps; it scrolls by dragging.
  */
 export class NotificationSettingsScene extends Phaser.Scene {
   private settings!: StarterNotificationSettings;
   private labels!: StarterNotificationLabels;
   private content!: Phaser.GameObjects.Container;
+  private listCamera!: Phaser.Cameras.Scene2D.Camera;
   private busy = false;
+  /** Each visit's token: a pending action from an earlier visit changes nothing. */
+  private visit = 0;
 
   constructor() {
     super(notificationSettingsSceneKey);
@@ -74,29 +92,26 @@ export class NotificationSettingsScene extends Phaser.Scene {
       throw new Error('Starter context is missing from Phaser registry.');
     }
     const context = rawContext as StarterContext;
-    // A visit that left while an action was pending starts fresh.
+    this.visit += 1;
     this.busy = false;
     this.labels = starterNotificationLabelsFor(context.locale);
     this.settings = createStarterNotificationSettingsModel(context.platform, {
       playerId: context.player.playerId,
       locale: context.locale,
     });
-    this.add
+    const title = this.add
       .text(480, 40, this.labels.title, { ...textStyle, color: '#ffffff', fontSize: '30px' })
       .setOrigin(0.5);
-    this.content = this.add.container(0, contentTop);
-    const mask = this.make.graphics({}, false).fillRect(
-      0,
-      contentTop,
-      960,
-      contentBottom - contentTop,
-    );
-    this.content.setMask(mask.createGeometryMask());
-    this.enableScroll();
-    this.button(480, 510, this.labels.back, () => {
+    const back = this.button(480, 510, this.labels.back, () => {
       this.scene.start('LobbyScene');
     }).setOrigin(0.5);
-    void this.apply(() => this.settings.load());
+    this.content = this.add.container(0, 0);
+    this.listCamera = this.cameras.add(0, list.top, list.width, list.height);
+    this.listCamera.ignore([title, back]);
+    this.cameras.main.ignore(this.content);
+    this.enableScroll();
+    const visit = this.visit;
+    void this.apply(visit, () => this.settings.load());
   }
 
   private enableScroll(): void {
@@ -111,38 +126,45 @@ export class NotificationSettingsScene extends Phaser.Scene {
       if (lastY === undefined || !pointer.isDown) {
         return;
       }
-      const height = this.content.getBounds().height;
-      const minY = Math.min(contentTop, contentBottom - height);
-      this.content.y = Phaser.Math.Clamp(this.content.y + pointer.y - lastY, minY, contentTop);
+      this.scrollTo(this.listCamera.scrollY - (pointer.y - lastY));
       lastY = pointer.y;
     });
   }
 
-  private async apply(action: () => Promise<StarterNotificationSettingsView>): Promise<void> {
+  private scrollTo(scrollY: number): void {
+    const height = this.content.getBounds().height;
+    this.listCamera.scrollY = Phaser.Math.Clamp(scrollY, 0, Math.max(0, height - list.height));
+  }
+
+  private async apply(visit: number, action: () => Promise<StarterNotificationSettingsView>): Promise<void> {
     if (this.busy) {
       return;
     }
     this.busy = true;
     try {
       const view = await action();
-      if (this.sys.isActive()) {
-        this.render(view);
-        if (view.notices.length > 0) {
-          await this.settings.recordNoticesShown();
-        }
+      if (visit !== this.visit || !this.sys.isActive()) {
+        return;
+      }
+      this.render(view);
+      if (view.notices.length > 0) {
+        // Recorded in the background: taps need not wait for it.
+        void this.settings.recordNoticesShown();
       }
     } catch (error) {
       // The model reports its own failures as messages; anything else is logged.
       console.error('[notifications] settings screen failed.', error);
     } finally {
-      this.busy = false;
+      if (visit === this.visit) {
+        this.busy = false;
+      }
     }
   }
 
   private render(view: StarterNotificationSettingsView): void {
     const text = this.labels;
     this.content.removeAll(true);
-    this.content.y = contentTop;
+    const visit = this.visit;
     let y = 0;
     const line = (value: string, style: Phaser.Types.GameObjects.Text.TextStyle = textStyle) => {
       const object = this.add.text(60, y, value, { ...style, wordWrap: { width: 840 } });
@@ -151,14 +173,21 @@ export class NotificationSettingsScene extends Phaser.Scene {
     };
     const action = (value: string, run: () => Promise<StarterNotificationSettingsView>) => {
       const object = this.button(60, y, `[ ${value} ]`, () => {
-        void this.apply(run);
+        void this.apply(visit, run);
       });
       this.content.add(object);
       y += object.height + 8;
     };
 
+    // The outcome of the last tap comes first, so it is seen without scrolling.
+    if (view.message !== undefined) {
+      line(view.message, { ...textStyle, color: '#f59e0b' });
+    }
     if (!view.available) {
-      line(view.message ?? text.unavailable);
+      if (view.message === undefined) {
+        line(text.unavailable);
+      }
+      this.scrollTo(0);
       return;
     }
     if (!view.permission.perTopic) {
@@ -202,9 +231,8 @@ export class NotificationSettingsScene extends Phaser.Scene {
         line(`${notice.title}\n${notice.body}`, { ...textStyle, fontSize: '15px' });
       }
     }
-    if (view.message !== undefined) {
-      line(view.message, { ...textStyle, color: '#f59e0b' });
-    }
+    // Keep the scroll position across a re-render, within the new height.
+    this.scrollTo(this.listCamera.scrollY);
   }
 
   private button(x: number, y: number, value: string, onTap: () => void): Phaser.GameObjects.Text {

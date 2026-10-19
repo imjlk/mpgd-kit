@@ -194,7 +194,10 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         'const notificationTopicCatalog = notificationTopicsJson as NotificationTopicCatalog;',
         "const redditNotificationTopics = resolveNotificationTopicsForTarget(notificationTopicCatalog, 'reddit')",
         '  .map((topic) => topic.id);',
-        'const notificationsBridge = redditNotificationTopics.length === 0',
+        "const notificationService: Parameters<typeof handleNotificationTask>[0]['notifications'] =",
+        '  redditNotificationTopics.length === 0 ? undefined : createNotificationService();',
+        '// The opt-in is served only with the service that sends; a refused catalog turns both off.',
+        'const notificationsBridge = notificationService === undefined',
         '  ? undefined',
         '  : createDevvitNotificationsV2BridgeHandler({',
         '      notifications,',
@@ -225,12 +228,10 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
       replacement: [
         '/**',
         ' * The notifications v2 service over Redis and the Devvit plugin; the',
-        ' * scheduler tasks below run its reminders and purges.',
+        ' * scheduler tasks below run its reminders and purges. A catalog or',
+        ' * deployment the service refuses turns notifications off, never the game',
+        ' * server.',
         ' */',
-        "const notificationService: Parameters<typeof handleNotificationTask>[0]['notifications'] =",
-        '  redditNotificationTopics.length === 0 ? undefined : createNotificationService();',
-        '',
-        '/** A catalog or deployment the service refuses turns notifications off, never the game server. */',
         "function createNotificationService(): Parameters<typeof handleNotificationTask>[0]['notifications'] {",
         '  try {',
         '    return createDevvitNotificationService({',
@@ -278,26 +279,6 @@ const phaserEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
     },
   ],
   'src/scenes/LobbyScene.ts': [
-    {
-      anchor: "import { starterContextKey, type StarterContext } from '../runtime/gameContext';\n",
-      replacement: [
-        "import { starterContextKey, type StarterContext } from '../runtime/gameContext';",
-        "import { takePendingNotificationSettings } from './NotificationSettingsScene';",
-        '',
-      ].join('\n'),
-    },
-    {
-      anchor: '    const context = rawContext as StarterContext;\n',
-      replacement: [
-        '    const context = rawContext as StarterContext;',
-        '    // A notification open for the settings screen that arrived while booting.',
-        '    if (takePendingNotificationSettings(this)) {',
-        "      this.scene.start('NotificationSettingsScene');",
-        '      return;',
-        '    }',
-        '',
-      ].join('\n'),
-    },
     {
       anchor: "    this.input.once('pointerdown', () => this.scene.start('PlayScene'));\n",
       replacement: [

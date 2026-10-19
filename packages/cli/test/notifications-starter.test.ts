@@ -107,14 +107,15 @@ assert.match(server, /notifications: notificationsBridge/u);
 assert.match(server, /createDevvitNotificationService\(\{/u);
 assert.doesNotMatch(server, /\['notifications'\] = undefined;/u);
 assert.match(server, /function createNotificationService\(\)/u);
+// The opt-in bridge is served only with the service that sends.
+assert.match(server, /const notificationsBridge = notificationService === undefined/u);
+assert.ok(
+  server.indexOf('const notificationService:') < server.indexOf('const notificationsBridge'),
+);
 assert.match(byPath(phaser, 'src/runtime/createGame.ts'), /NotificationSettingsScene\]/u);
 assert.match(
   byPath(phaser, 'src/runtime/createGame.ts'),
   /routeNotificationSettingsOpens\(game, input\.context\);/u,
-);
-assert.match(
-  byPath(phaser, 'src/scenes/LobbyScene.ts'),
-  /takePendingNotificationSettings\(this\)/u,
 );
 assert.match(
   byPath(phaser, 'src/scenes/LobbyScene.ts'),

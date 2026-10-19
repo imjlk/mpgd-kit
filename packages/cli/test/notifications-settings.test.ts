@@ -421,6 +421,42 @@ const common = {
   assert.deepEqual(hidden.calls, []);
 }
 
+// A provider that reports unsupported shows no notices, so records none, and
+// a new visit starts without the previous outcome.
+{
+  const notice: NotificationNotice = {
+    kind: 'reconfirmation',
+    record: {
+      kind: 'advertising',
+      state: 'granted',
+      at: '2024-10-18T00:00:00.000Z',
+      textVersion: '1',
+    },
+    dueBy: '2026-10-25',
+    variant: 'reconfirmation.advertising',
+  };
+  const caps = { ...capabilities('app', 'os'), availability: 'unsupported' as const };
+  const { provider } = fakeProvider(caps, { app: 'unsupported' });
+  const { runtime, calls } = fakeRuntime(provider, [notice]);
+  const settings = createStarterNotificationSettings({
+    ...common,
+    provider,
+    runtime,
+    noticeCopy: {
+      ko: { 'reconfirmation.advertising': { title: '확인', body: '{{consentDate}}' } } as never,
+    },
+  });
+  const view = await settings.load();
+  assert.equal(view.available, false);
+  assert.deepEqual(view.notices, []);
+  await settings.recordNoticesShown();
+  assert.deepEqual(calls, []);
+  const { provider: os } = fakeProvider(capabilities('app', 'os'), { app: 'prompt' });
+  const visits = createStarterNotificationSettings({ ...common, provider: os, runtime: undefined });
+  assert.ok((await visits.setReminder('daily-ready', true)).message);
+  assert.equal((await visits.load()).message, undefined);
+}
+
 // A failing action reports a message instead of throwing into the scene.
 {
   const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });

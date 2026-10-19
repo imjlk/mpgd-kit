@@ -1,4 +1,8 @@
-import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } from '@mpgd/catalog';
+import {
+  isRootRelativeNotificationRoute,
+  resolveNotificationTopicsForTarget,
+  type NotificationTopicCatalog,
+} from '@mpgd/catalog';
 import type { PlatformGateway } from '@mpgd/platform';
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
 import type {
@@ -92,28 +96,49 @@ export function createStarterNotificationSettingsModel(
 export const starterNotificationSettingsRoute = '/?entry=notification-settings';
 
 /**
- * Calls `open` for every notification open whose route is the settings
- * screen: the advertising opt-out action and the consent notices land there,
- * and the RFC requires the opt-out to open that screen directly. Opens are
- * read through the runtime when the game has one, else from the provider.
- * Returns the unsubscribe.
+ * The game's one listener for notification opens. It is the runtime's (or
+ * the provider's) first subscriber, which is the one that receives a
+ * cold-start open (RFC "Buffer before the first listener"), so route every
+ * topic's opens here rather than in a later subscriber. The starter routes
+ * the settings screen: the advertising opt-out action and the consent
+ * notices carry `/?entry=notification-settings`, and the RFC requires the
+ * opt-out to open that screen directly. `other` receives every other open,
+ * with a route only when it is a safe root-relative one. The data an open
+ * carries is untrusted and never grants anything. Returns the unsubscribe.
  */
-export function subscribeStarterNotificationSettingsOpens(
+export function subscribeStarterNotificationOpens(
   platform: PlatformGateway,
-  open: () => void,
+  routes: {
+    readonly settings: () => void;
+    readonly other?: (open: { readonly topic?: string; readonly route?: string }) => void;
+  },
 ): () => void {
   const source = starterNotificationRuntime(platform) ?? platform.notificationsV2;
   if (source === undefined) {
     return () => undefined;
   }
   return source.subscribe((event) => {
-    if (event.type === 'opened' && event.route !== undefined && isSettingsRoute(event.route)) {
-      open();
+    if (event.type !== 'opened') {
+      return;
     }
+    const route = event.route !== undefined && isRootRelativeNotificationRoute(event.route)
+      ? event.route
+      : undefined;
+    if (route !== undefined && isSettingsRoute(route)) {
+      routes.settings();
+      return;
+    }
+    routes.other?.({
+      ...(event.topic === undefined ? {} : { topic: event.topic }),
+      ...(route === undefined ? {} : { route }),
+    });
   });
 }
 
 function isSettingsRoute(route: string): boolean {
-  const url = new URL(route, 'https://game.invalid');
-  return url.searchParams.get('entry') === 'notification-settings';
+  try {
+    return new URL(route, 'https://game.invalid').searchParams.get('entry') === 'notification-settings';
+  } catch {
+    return false;
+  }
 }

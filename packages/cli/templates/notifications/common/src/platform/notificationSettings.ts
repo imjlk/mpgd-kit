@@ -276,8 +276,13 @@ export function createStarterNotificationSettings(
         )
       : (snapshot.app ?? 'unsupported');
     const recording = input.runtime !== undefined;
+    const available = capabilities.availability !== 'unsupported';
+    if (!available) {
+      // Nothing is shown, so no notice may be recorded as shown either.
+      rendered = [];
+    }
     return {
-      available: capabilities.availability !== 'unsupported',
+      available,
       recording,
       permission: {
         state,
@@ -302,7 +307,7 @@ export function createStarterNotificationSettings(
               night: recording && remembered.night,
             },
           }),
-      notices,
+      notices: available ? notices : [],
       ...(message === undefined ? {} : { message }),
     };
   };
@@ -317,6 +322,7 @@ export function createStarterNotificationSettings(
     } catch (error) {
       // A failed host or backend read is shown, never thrown into the screen.
       console.warn('[notifications] settings read failed.', error);
+      rendered = [];
       return { ...unavailableView(strings.readFailed), available: true };
     }
   };
@@ -378,6 +384,8 @@ export function createStarterNotificationSettings(
       }
       notices = [];
       rendered = [];
+      // A new visit starts without the previous visit's outcome.
+      message = undefined;
       if (input.runtime !== undefined && input.provider !== undefined) {
         try {
           const shown = renderNotices(await input.runtime.notices.list(), input);

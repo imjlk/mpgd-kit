@@ -5,7 +5,7 @@ import {
 } from '../platform/notificationSettings';
 import {
   createStarterNotificationSettingsModel,
-  subscribeStarterNotificationSettingsOpens,
+  subscribeStarterNotificationOpens,
 } from '../platform/notifications';
 import type { StarterContext } from '../runtime/gameContext';
 
@@ -53,9 +53,14 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
     busy = true;
     try {
       const view = await action();
+      // A panel closed or removed meanwhile shows nothing, so records nothing.
+      if (panel.style.display === 'none' || !panel.isConnected) {
+        return;
+      }
       render(view);
       if (view.notices.length > 0) {
-        await model().recordNoticesShown();
+        // Recorded in the background: taps need not wait for it.
+        void model().recordNoticesShown();
       }
     } catch (error) {
       // The model reports its own failures as messages; anything else is logged.
@@ -78,6 +83,8 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
   const paragraph = (value: string): HTMLParagraphElement => {
     const element = document.createElement('p');
     element.textContent = value;
+    // Notices put their title and body on two lines.
+    element.style.whiteSpace = 'pre-line';
     return element;
   };
   const render = (view: StarterNotificationSettingsView): void => {
@@ -155,7 +162,9 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
     void apply(() => current.load());
   };
   openButton.addEventListener('click', open);
-  const unsubscribe = subscribeStarterNotificationSettingsOpens(context.platform, open);
+  // The game's one listener for opens, which receives a cold-start open:
+  // route your other topics' opens in `other` here.
+  const unsubscribe = subscribeStarterNotificationOpens(context.platform, { settings: open });
   if (getComputedStyle(mount).position === 'static') {
     mount.style.position = 'relative';
   }
