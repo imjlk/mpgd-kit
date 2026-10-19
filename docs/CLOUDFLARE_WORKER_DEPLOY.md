@@ -167,7 +167,11 @@ The Worker serves the notifications v2 backend
 ([RFC](specs/notifications/notifications-v2-rfc.md#server)) once it has a
 topic catalog. It needs D1 for anything but local development: apply
 `0007_notifications.sql` and `0008_notification_scheduler.sql` with the
-other migrations. The memory store keeps
+other migrations, and apply 0008 before deploying a Worker version that
+has the scheduler: without its table the reminder routes, advertising and
+night consent writes under the Korean rules, and the cron's reminder and
+notice step fail (the cron logs the missing table and still sends due
+rows). The memory store keeps
 consent records and endpoints in one isolate only, and the Worker refuses
 it next to a queue, whose consumer runs in another isolate. The catalog,
 the deployment, and the providers are checked on first use; a broken one
@@ -196,9 +200,11 @@ max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
 # Purges and the scheduler: due reminders and notice checks, then due sends (25 of each per
-# run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise; each send costs several subrequests,
-# so larger batches need the paid plan's limit). A reminder fires at the first run at or after
-# its time, so the cron's period is a reminder's latest lateness.
+# run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise; each item costs several D1 queries
+# and subrequests, so the default suits the paid plan, and the free plan's limits need a
+# smaller batch). A reminder fires no earlier than its time: the first run at or after it takes
+# it unless more due items are ahead of it than one batch holds, and the gate may still defer
+# it (quiet hours, the night window, provider limits).
 [triggers]
 crons = ["*/5 * * * *"]
 ```
@@ -252,8 +258,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
 - **Scheduler.** Each cron run fires the due server reminders as sends
   through the policy gate, pushes the consent notices nobody recorded by
   seven days before they are due (Korean rules, through the catalog's
-  notice topic, FCM only: Apps in Toss sends host templates, which cannot
-  state the record), and then sends the due rows (deferred sends, expired
+  notice topic, through providers that send free-form content of the
+  notice's own text, which FCM does and Apps in Toss and Devvit do not:
+  their templates or mapped texts cannot state the record), and then sends the due rows (deferred sends, expired
   leases, and the scheduler's new sends), oldest first and at no more than
   each provider's rate. With the queue bound, the cron only takes those
   rows for the queue, and the consumer sends them; without it, the cron

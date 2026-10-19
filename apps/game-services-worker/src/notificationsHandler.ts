@@ -273,8 +273,12 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
           },
         }),
     onError(error, context) {
-      // Operation and keys only: an error never carries a token or a key here.
-      console.error('Notifications:', context.operation, context.sendKey ?? '', context.provider ?? '', errorName(error));
+      // Operation and keys only: a provider's error may quote a device token,
+      // so only its name is logged. A scheduler failure is the store's or
+      // the kit's (a missing table, a busy ledger), and its cause is logged
+      // cut to 120 characters, so it can be fixed.
+      const cause = context.operation.startsWith('scheduler') ? describeFailure(error) : errorName(error);
+      console.error('Notifications:', context.operation, context.sendKey ?? '', context.provider ?? '', cause);
     },
   });
   return { status: 'ready', service };
@@ -585,7 +589,7 @@ export async function runScheduledNotifications(env: GameServicesNotificationsEn
   try {
     const { failed } = await notifications.service.runScheduler({ limit });
     if (failed > 0) {
-      console.error('Notifications scheduler:', failed, 'item(s) failed and stay due.');
+      console.error('Notifications scheduler:', failed, 'item(s) failed; see the reports above.');
     }
   } catch (error) {
     console.error('Notifications scheduler failed:', describeFailure(error));

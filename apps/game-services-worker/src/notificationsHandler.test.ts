@@ -318,6 +318,21 @@ try {
     assert.deepEqual([refused.status, refused.body.error], [400, 'NOTIFICATIONS_INVALID_INPUT']);
   }
   assert.equal((await call('/reminders', { authorization: 'Bearer player-1' })).status, 405);
+  assert.equal((await call('/reminders', { body: { reminder: reminder(past) } })).status, 401);
+  assert.equal(
+    (await call('/reminders/cancel', { authorization: 'Bearer nobody', body: { key: 'k' } })).status,
+    401,
+  );
+  for (const body of [{ reminder: [] }, { reminder: { key: 1 } }, { reminder: null }]) {
+    assert.equal(
+      (await call('/reminders', { authorization: 'Bearer player-1', body })).status,
+      400,
+    );
+  }
+  assert.equal(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: { key: 5 } })).status,
+    400,
+  );
   assert.deepEqual(
     (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: { key: 'rematch' } })).body,
     { cancelled: true },
@@ -502,6 +517,52 @@ try {
     status: 'delivered',
     alreadyProcessed: true,
   });
+  // A server reminder over D1 with the queue: the cron fires it, takes its row for the queue, and the consumer sends it.
+  const remindAt = new Date(Date.now() - 60_000).toISOString();
+  const reminderSet = await queueFetch(
+    new Request(`${base}/reminders`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        reminder: {
+          key: 'd1-rematch',
+          topic: 'friend-challenge',
+          fireAt: remindAt,
+          templateData: { name: 'D1' },
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(await reminderSet.json(), { status: 'scheduled' });
+  const beforeReminder = { jobs: queued.length, sends: sends.length };
+  await runScheduledNotifications(queueEnv);
+  assert.equal(sends.length, beforeReminder.sends, 'nothing is sent inline with a queue bound');
+  const reminderJobs = queued.slice(beforeReminder.jobs);
+  assert.equal(reminderJobs.length, 1);
+  assert.match(reminderJobs[0]?.sendKey ?? '', /^reminder:p-1:d1-rematch:/u);
+  await consumeNotificationDispatchBatch(queueEnv, batch([{ body: reminderJobs[0] }]));
+  assert.deepEqual(acks.splice(0), ['ack']);
+  assert.equal(sends.length, beforeReminder.sends + 1);
+  assert.ok(sends.at(-1)?.body.includes('D1님이 도전했어요.'));
+  // A schedule table that cannot be read is logged, and the due rows still go out.
+  const errorsLogged: string[] = [];
+  const realError = console.error;
+  console.error = (...parts: unknown[]) => {
+    errorsLogged.push(parts.map(String).join(' '));
+  };
+  try {
+    await runScheduledNotifications(
+      { ...queueEnv, DB: brokenDb(db, /notification_schedule/u) } satisfies GameServicesWorkerEnv,
+    );
+  } finally {
+    console.error = realError;
+  }
+  assert.ok(
+    errorsLogged.some(
+      (line) => line.includes('scheduler.list') && line.includes('D1 is unavailable'),
+    ),
+    errorsLogged.join('\n'),
+  );
 
   // Without a catalog the routes are not mounted; a broken catalog fails closed at 500.
   assert.equal(
@@ -529,6 +590,14 @@ try {
   try {
     assert.equal(
       (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/consent`, { headers: { authorization: 'Bearer player-1' } }))).status,
+      404,
+    );
+    assert.equal(
+      (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/reminders`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer player-1' },
+        body: '{}',
+      }))).status,
       404,
     );
     assert.equal(
