@@ -850,6 +850,34 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
       'invalid: a refused pruning deletes nothing, not even the records and notices that parse',
     );
   }
+
+  // Pending reminders per player: reminders without firedAt, under the reminder: prefix.
+  equal(await store.countPendingReminders('p-count'), 0, 'count: none yet');
+  for (const id of ['reminder:a', 'reminder:b', 'reminder:c']) {
+    await store.createScheduleEntry(entry('p-count', id, t(9_000)));
+  }
+  await store.createScheduleEntry({
+    player: 'p-count',
+    id: 'notices',
+    dueAt: t(9_000),
+    item: { kind: 'notices', attempts: 0 },
+  });
+  await store.createScheduleEntry(entry('p-count-other', 'reminder:a', t(9_000)));
+  const firing = await store.getScheduleEntry({ player: 'p-count', id: 'reminder:c' });
+  ok(
+    firing !== undefined && await store.updateScheduleEntry({
+      player: 'p-count',
+      id: 'reminder:c',
+      version: firing.version,
+      entry: { ...firing.entry, item: { ...first.item, key: 'c', firedAt: t(9_000) } } as NotificationScheduleEntry,
+    }),
+    'count: a reminder is marked fired',
+  );
+  equal(
+    await store.countPendingReminders('p-count'),
+    2,
+    'count: pending reminders of the player only, not fired ones or the notice check',
+  );
 }
 
 /**

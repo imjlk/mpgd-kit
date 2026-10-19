@@ -372,6 +372,12 @@ export interface NotificationStore {
     readonly entry: NotificationScheduleEntry | undefined;
   }): Promise<boolean>;
   /**
+   * How many of the player's entries are pending server reminders: an id
+   * that starts with `reminder:` and an item of kind `reminder` without
+   * `firedAt`. The service caps a player's pending reminders with it.
+   */
+  countPendingReminders(player: string): Promise<number>;
+  /**
    * Up to `limit` entries whose `dueAt` is at or before `at`: earliest
    * first, then by player and id.
    */
@@ -830,6 +836,13 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
         schedule.set(key, { entry: storedEntry(entry, player, id), version: nextVersion() });
       }
       return true;
+    },
+    async countPendingReminders(player) {
+      return [...schedule.values()].filter(({ entry }) =>
+        entry.player === player
+        && entry.id.startsWith('reminder:')
+        && entry.item.kind === 'reminder'
+        && entry.item.firedAt === undefined).length;
     },
     async listDueScheduleEntries({ at, limit }) {
       const now = instantOf(at);

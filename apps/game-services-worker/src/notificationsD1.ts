@@ -355,6 +355,15 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
         .run();
       return result.meta.changes === 1;
     },
+    async countPendingReminders(player) {
+      const row = await db.prepare(`SELECT COUNT(*) AS count FROM notification_schedule
+        WHERE player_id = ? AND substr(entry_id, 1, 9) = 'reminder:'
+          AND json_extract(entry_json, '$.item.kind') = 'reminder'
+          AND json_extract(entry_json, '$.item.firedAt') IS NULL`)
+        .bind(player)
+        .first<{ readonly count: number }>();
+      return row?.count ?? 0;
+    },
     async listDueScheduleEntries({ at, limit }) {
       const rows = await db.prepare(`SELECT player_id, entry_id FROM notification_schedule
         WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms, player_id, entry_id LIMIT ?`)
