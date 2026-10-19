@@ -357,7 +357,7 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     },
     async countPendingReminders(player) {
       const row = await db.prepare(`SELECT COUNT(*) AS count FROM notification_schedule
-        WHERE player_id = ? AND substr(entry_id, 1, 9) = 'reminder:'
+        WHERE player_id = ? AND entry_id >= 'reminder:' AND entry_id < 'reminder;'
           AND json_extract(entry_json, '$.item.kind') = 'reminder'
           AND json_extract(entry_json, '$.item.firedAt') IS NULL`)
         .bind(player)

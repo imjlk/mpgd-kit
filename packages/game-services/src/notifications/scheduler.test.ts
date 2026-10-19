@@ -1554,12 +1554,12 @@ const pending = (h: Harness) =>
     { status: 'scheduled' },
   );
   // fireAt is bounded to the horizon.
-  await expectCode(set('far', '2027-01-18T03:00:01Z'), 'NOTIFICATIONS_INVALID_INPUT');
+  await expectCode(set('far', '2027-01-17T03:00:01Z'), 'NOTIFICATIONS_INVALID_INPUT');
   await expectCode(
     h.service.setReminder(session('p-2'), {
       key: 'far',
       topic: 'friend-challenge',
-      fireAt: '2027-01-18T03:00:01Z',
+      fireAt: '2027-01-17T03:00:01Z',
     }),
     'NOTIFICATIONS_INVALID_INPUT',
   );
@@ -1639,6 +1639,28 @@ const pending = (h: Harness) =>
     'a link the rule refuses',
   );
   assert.deepEqual(await set('t3_abc123'), { status: 'scheduled' });
+  // A link the topic mapping carries serves a reminder without one.
+  const mappedService = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: linkedEntry, delivery: linked, targets: ['vector'] },
+    ]),
+    catalog: {
+      defaultLocale: 'ko',
+      topicsFor: () => [{ ...challenge, mapping: { link: 't3_post' } }],
+    },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await mappedService.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  assert.deepEqual(
+    await mappedService.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt: '2026-10-19T04:00:00Z' }),
+    { status: 'scheduled' },
+  );
 }
 
 // Compaction keeps every acceptance record while a per-send provider is registered (it counts them).

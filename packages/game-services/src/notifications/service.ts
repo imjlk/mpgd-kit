@@ -165,7 +165,8 @@ export const maxClientNotificationConsentRecordsPerDay = 200;
 /**
  * Pending server reminders a player may keep, as many as iOS keeps local
  * notifications. Replacing a pending one is always allowed; a new key past
- * it answers `capacity-exceeded`.
+ * it answers `capacity-exceeded`. The count is read before the write, so
+ * sets that race may pass it by a few, as the daily consent cap may.
  */
 export const maxPendingNotificationReminders = 64;
 /** How far ahead a server reminder may be set; a later `fireAt` is refused. */
