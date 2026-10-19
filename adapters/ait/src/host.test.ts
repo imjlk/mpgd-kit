@@ -1810,7 +1810,38 @@ describe('AIT production host bridge', () => {
     expect(grantPromotion).toHaveBeenCalledTimes(2);
   });
 
-  it('returns failed for documented provider rejections and clears the pending marker', async () => {
+  it.each(['cached', 'resolved'] as const)('replays %s successful receipts to a restarted observer without native payout', async (kind) => {
+    const values = new Map<string, string>();
+    const grantPromotionReward = vi.fn(async () => ({ key: 'observed-receipt' }));
+    const storage = {
+      getItem: async (key: string) => values.get(key) ?? null,
+      setItem: async (key: string, value: string) => { values.set(key, value); },
+      removeItem: async (key: string) => { values.delete(key); },
+    };
+    const claim = { campaignId: 'DAILY', idempotencyKey: 'observer-recovery' };
+    const promotionRewards = { DAILY: { promotionCode: 'TEST_DAILY', amount: 1 } };
+    const failedObserver = vi.fn(async () => { throw new Error('authority unavailable'); });
+    const first = createAitHostBridge({ promotionRewards, observePromotionGrant: failedObserver,
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    await expect(request(first, 'promotions.grantReward', claim)).resolves.toEqual({ status: 'granted', receiptKey: 'observed-receipt' });
+    expect(failedObserver).toHaveBeenCalledTimes(1);
+    if (kind === 'resolved') {
+      for (const key of values.keys()) { values.set(key, JSON.stringify({ status: 'pending', pendingSince: new Date().toISOString() })); }
+    }
+    const observePromotionGrant = vi.fn(async () => {});
+    const resolvePendingPromotionGrant = vi.fn(async () => ({ status: 'granted' as const, receiptKey: 'observed-receipt' }));
+    const restarted = createAitHostBridge({ promotionRewards, observePromotionGrant, resolvePendingPromotionGrant,
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    await expect(request(restarted, 'promotions.grantReward', claim)).resolves.toEqual({ status: 'granted', receiptKey: 'observed-receipt' });
+    expect(observePromotionGrant).toHaveBeenCalledWith({ ...claim, status: 'granted', receiptKey: 'observed-receipt' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+    expect(resolvePendingPromotionGrant).toHaveBeenCalledTimes(kind === 'resolved' ? 1 : 0);
+  });
+
+  it('retains provider failure codes and the dispatch fence across host restarts', async () => {
     const values = new Map<string, string>();
     const providerResponses: unknown[] = [
       {
@@ -1820,7 +1851,9 @@ describe('AIT production host bridge', () => {
       'ERROR',
     ];
     const grantPromotionReward = vi.fn(async () => providerResponses.shift());
-    const bridge = createAitHostBridge({
+    const observePromotionGrant = vi.fn(async () => {});
+    const create = () => createAitHostBridge({
+      observePromotionGrant,
       promotionRewards: {
         SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
       },
@@ -1843,17 +1876,41 @@ describe('AIT production host bridge', () => {
       }),
     });
 
-    await expect(request(bridge, 'promotions.grantReward', {
+    await expect(request(create(), 'promotions.grantReward', {
       campaignId: 'SEVEN_DAY_STREAK',
       idempotencyKey: 'server-claim-provider-rejected',
     })).resolves.toEqual({ status: 'failed' });
-    expect(values.size).toBe(0);
-    await expect(request(bridge, 'promotions.grantReward', {
+    expect(values.size).toBe(1);
+    await expect(request(create(), 'promotions.grantReward', {
       campaignId: 'SEVEN_DAY_STREAK',
       idempotencyKey: 'server-claim-provider-rejected',
     })).resolves.toEqual({ status: 'failed' });
-    expect(values.size).toBe(0);
-    expect(grantPromotionReward).toHaveBeenCalledTimes(2);
+    expect(values.size).toBe(1);
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+    expect(observePromotionGrant).toHaveBeenCalledWith({ campaignId: 'SEVEN_DAY_STREAK', idempotencyKey: 'server-claim-provider-rejected', status: 'failed', errorCode: 'PROMOTION_NOT_ELIGIBLE' });
+    expect(JSON.stringify([...values.values()])).not.toContain('not available for this user');
+    expect(JSON.stringify(observePromotionGrant.mock.calls)).not.toContain('message');
+  });
+
+  it('does not lose a successful receipt when its observer rejects or stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const observer of [async () => { throw new Error('report offline'); }, () => new Promise<void>(() => {})]) {
+        const observePromotionGrant = vi.fn(observer);
+        const grantPromotionReward = vi.fn(async () => ({ key: 'safe-receipt' }));
+        const bridge = createAitHostBridge({
+          promotionRewards: { DAILY: { promotionCode: 'TEST_DAILY', amount: 1 } },
+          authorizePromotionGrant: async () => ({ status: 'authorized' }),
+          observePromotionGrant,
+          dependencies: createDependencies({ grantPromotionReward }),
+        });
+        const result = request(bridge, 'promotions.grantReward', { campaignId: 'DAILY', idempotencyKey: 'observer-claim' });
+        await vi.advanceTimersByTimeAsync(3_000);
+        await expect(result).resolves.toEqual({ status: 'granted', receiptKey: 'safe-receipt' });
+        expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+        expect(observePromotionGrant).toHaveBeenCalledWith({ campaignId: 'DAILY', idempotencyKey: 'observer-claim', status: 'granted', receiptKey: 'safe-receipt' });
+      }
+    } finally { vi.useRealTimers(); }
   });
 
   it('keeps an undocumented promotion response pending for server reconciliation', async () => {
@@ -1889,8 +1946,9 @@ describe('AIT production host bridge', () => {
     expect(values.size).toBe(1);
   });
 
-  it('keeps a rejected promotion pending when its marker cannot be cleared', async () => {
+  it('preserves the original dispatch marker if storing the failure code fails', async () => {
     const values = new Map<string, string>();
+    let writes = 0;
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const bridge = createAitHostBridge({
@@ -1908,6 +1966,7 @@ describe('AIT production host bridge', () => {
               throw new Error('storage unavailable');
             },
             setItem: async (key, value) => {
+              if (++writes > 1) { throw new Error('disk full'); }
               values.set(key, value);
             },
           },
@@ -1917,13 +1976,9 @@ describe('AIT production host bridge', () => {
       await expect(request(bridge, 'promotions.grantReward', {
         campaignId: 'SEVEN_DAY_STREAK',
         idempotencyKey: 'server-claim-provider-rejected-storage-error',
-      })).resolves.toEqual({ status: 'pending' });
+      })).resolves.toEqual({ status: 'failed' });
       expect(values.size).toBe(1);
-      expect(warning).toHaveBeenCalledWith(
-        'AIT failed promotion marker could not be cleared; keeping the claim pending.',
-        expect.stringContaining('server-claim-provider-rejected-storage-error'),
-        expect.any(Error),
-      );
+      expect(warning).not.toHaveBeenCalled();
     } finally {
       warning.mockRestore();
     }
