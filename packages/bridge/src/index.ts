@@ -61,6 +61,7 @@ export type BridgeMethod =
   | BridgeNotificationsV2Method
   | 'promotions.getAvailability'
   | 'promotions.grantReward'
+  | 'promotions.recoverReward'
   | BridgeCommerceV2Method
   | 'ads.preload'
   | 'ads.getAvailability'

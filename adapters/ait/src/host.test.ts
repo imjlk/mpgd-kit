@@ -1704,6 +1704,39 @@ describe('AIT production host bridge', () => {
     ]);
   });
 
+  it('recovers without storage by consulting the authority and never dispatches a new payment', async () => {
+    const grant = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const authorize = vi.fn(async () => ({ status: 'authorized' as const }));
+    const observer = vi.fn(async () => {});
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: authorize,
+      resolvePendingPromotionGrant: async () => ({ status: 'granted', receiptKey: 'server-receipt' }),
+      observePromotionGrant: observer,
+      dependencies: createDependencies({ grantPromotionReward: grant }),
+    });
+    expect(await request(bridge, 'promotions.recoverReward', { campaignId: 'DAILY', idempotencyKey: 'old-claim' })).toEqual({ status: 'granted', receiptKey: 'server-receipt' });
+    expect(grant).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ status: 'granted', receiptKey: 'server-receipt' }));
+  });
+  it('never turns a recovery-only retry resolution into a payout or removes its pending fence', async () => {
+    const grant = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const removeItem = vi.fn(async () => {});
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant: async () => ({ status: 'retry' }),
+      dependencies: createDependencies({ grantPromotionReward: grant, storage: {
+        getItem: async () => JSON.stringify({ status: 'pending', pendingSince: new Date().toISOString() }),
+        setItem: async () => {}, removeItem,
+      } }),
+    });
+    expect(await request(bridge, 'promotions.recoverReward', { campaignId: 'DAILY', idempotencyKey: 'pending' })).toEqual({ status: 'pending' });
+    expect(grant).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
+  });
+
   it('deduplicates promotion grants with the server-issued claim id', async () => {
     const values = new Map<string, string>();
     const grantPromotion = vi.fn(async () => ({ key: 'promotion-receipt-1' }));

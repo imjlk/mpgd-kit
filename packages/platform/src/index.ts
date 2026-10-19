@@ -243,6 +243,12 @@ export type PromotionRewardResult =
  * and receipt finalization remain server responsibilities.
  */
 export interface PromotionRewardAdapter {
+  /** Read cached/provider-confirmed results only. Must never authorize or start a native payout. */
+  recoverReward?(input: {
+    readonly campaignId: string;
+    readonly idempotencyKey: string;
+  }): Promise<PromotionRewardResult>;
+
   getAvailability(input: {
     readonly campaignId: string;
   }): Promise<PromotionRewardAvailability>;

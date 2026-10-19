@@ -600,6 +600,46 @@ export function createAitHostBridge(
         return ok(request, availability);
       }
 
+      case 'promotions.recoverReward': {
+        const campaignId = readCampaignId(request.payload);
+        const idempotencyKey = readRequiredIdempotencyKey(request.payload);
+        if (!promotionRewards.has(campaignId) || !isPromotionSupported(dependencies)) {
+          return ok(request, { status: 'unavailable' });
+        }
+        const persisted = await resolvePersistedPromotionGrant({
+          campaignId,
+          idempotencyKey,
+          storage: dependencies.storage,
+          observer: options.observePromotionGrant,
+          ...(resolvePendingPromotionGrant ? { resolver: resolvePendingPromotionGrant } : {}),
+          recoveryOnly: true,
+        });
+        if (persisted.result) {
+          return ok(request, persisted.result);
+        }
+        // A new installation may have no local marker. A server resolver can still supply a receipt.
+        if (resolvePendingPromotionGrant) {
+          try {
+            const resolution = await resolvePendingPromotionGrant({
+              campaignId,
+              idempotencyKey,
+              pendingSince: new Date().toISOString(),
+            });
+            if (resolution.status === 'granted' && typeof resolution.receiptKey === 'string'
+              && resolution.receiptKey.trim().length > 0 && resolution.receiptKey.length <= 512) {
+              const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
+              await observePromotion(options.observePromotionGrant, {
+                campaignId,
+                idempotencyKey,
+                ...result,
+              });
+              return ok(request, result);
+            }
+          } catch { /* Unknown remains pending. Recovery never dispatches a payment. */ }
+        }
+        return ok(request, { status: 'pending' });
+      }
+
       case 'promotions.grantReward': {
         const campaignId = readCampaignId(request.payload);
         const reward = promotionRewards.get(campaignId);
@@ -1066,6 +1106,7 @@ async function observePromotion(observer: AitPromotionGrantObserver | undefined,
 }
 
 interface ResolvePersistedPromotionGrantInput {
+  readonly recoveryOnly?: boolean;
   readonly campaignId: string;
   readonly idempotencyKey: string;
   readonly storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>;
@@ -1178,6 +1219,9 @@ async function resolvePersistedPromotionGrant(
         return { result };
       }
 
+      if (input.recoveryOnly || resolution.status !== 'retry') {
+        return { result: pendingResult };
+      }
       return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
     }
     console.warn(
