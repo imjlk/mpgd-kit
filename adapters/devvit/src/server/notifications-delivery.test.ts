@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type {
-  NotificationRemoteDeliveryAnswer,
-  NotificationRemoteDeliveryRequest,
+import {
+  createNotificationProviderRegistry,
+  type NotificationRemoteDeliveryAnswer,
+  type NotificationRemoteDeliveryRequest,
 } from '@mpgd/game-services/notifications';
-import { createNotificationProviderRegistry } from '@mpgd/game-services/notifications';
 import { referenceNotificationProviders } from '@mpgd/platform/notifications';
 
 import { createFakeNotificationRedis } from '../../test/fake-notification-redis.js';

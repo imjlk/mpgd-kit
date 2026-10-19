@@ -9,5 +9,6 @@ assert.equal(typeof webAdapter.startDevvitPreviewWebView, 'function');
 assert.equal(typeof webAdapter.startDevvitWebView, 'function');
 assert.equal(typeof webAdapter.requestDevvitExpandedMode, 'function');
 assert.equal(typeof webAdapter.presentDevvitShareSheet, 'function');
+assert.equal(typeof webAdapter.createDevvitWebLoginPrompt, 'function');
 
 console.log('@mpgd/adapter-devvit/web browser-condition ESM import passed.');

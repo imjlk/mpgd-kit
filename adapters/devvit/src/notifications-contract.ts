@@ -94,3 +94,28 @@ export function createDevvitNotificationCapabilities(
     open: 'host-link',
   };
 }
+
+/**
+ * A block that offers nothing, for a provider read that failed or stalled
+ * (`createUnsupportedNotificationCapabilities()` of `@mpgd/platform/notifications`
+ * with the given availability, kept equal by a test). A fresh object.
+ */
+export function createDevvitDegradedNotificationCapabilities(
+  availability: NotificationCapabilities['availability'],
+): NotificationCapabilities {
+  return {
+    availability,
+    permission: {
+      scope: 'app',
+      prompt: 'os',
+      readable: true,
+      serverReadable: false,
+      allowance: 'persistent',
+      userGesture: false,
+      settings: false,
+    },
+    remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
+    local: { supported: false },
+    open: 'none',
+  };
+}
