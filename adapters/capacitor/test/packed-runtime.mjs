@@ -236,14 +236,16 @@ await credentials.remove({ key: 'packed.refresh' });
 assert.equal(await credentials.load({ key: 'packed.refresh' }), null);
 assert.equal(secureValues.size, 0);
 
-// The notifications subpath loads without its optional plugins, which this
-// consumer does not install: the loader leaves both out, the provider fails
-// closed, and the gateway serves notifications v2 and v1 from it.
+// The settings opener resolves only when the plugin opened the screen.
 await openCapacitorNotificationSettings({ openNotificationSettings: async () => ({ opened: true }) });
 await assert.rejects(
   openCapacitorNotificationSettings({ openNotificationSettings: async () => ({ opened: false }) }),
   /could not be opened/u,
 );
+
+// The notifications subpath loads without its optional plugins, which this
+// consumer does not install: the loader leaves both out, the provider fails
+// closed, and the gateway serves notifications v2 and v1 from it.
 assert.deepEqual(await loadCapacitorNotificationSdks({
   runtime: { isNativePlatform: () => true, isPluginAvailable: () => true },
 }), {});

@@ -121,10 +121,24 @@ public class CapacitorGameServicesPlugin extends Plugin {
     @PluginMethod
     public void openNotificationSettings(PluginCall call) {
         Context context = getContext();
+        String packageName = context.getPackageName();
         NotificationSettingsIntent target = NotificationSettingsIntent.forPackage(
             Build.VERSION.SDK_INT,
-            context.getPackageName()
+            packageName
         );
+        if (startSettings(target)) {
+            call.resolve(new JSObject().put("opened", true));
+            return;
+        }
+        // Some OEM builds and restricted profiles cannot resolve the
+        // notification settings screen; the app details screen always exists.
+        boolean opened = !target.isAppDetails()
+            && startSettings(NotificationSettingsIntent.appDetails(packageName));
+        call.resolve(new JSObject().put("opened", opened));
+    }
+
+    /** Starts one settings screen; false when no activity handles it. */
+    private boolean startSettings(NotificationSettingsIntent target) {
         Intent intent = new Intent(target.action);
         if (target.appPackageExtra != null) {
             intent.putExtra(NotificationSettingsIntent.EXTRA_APP_PACKAGE, target.appPackageExtra);
@@ -135,18 +149,16 @@ public class CapacitorGameServicesPlugin extends Plugin {
         // From the activity the screen joins the app's task, so Back returns
         // to the game; only a context without an activity needs a new task.
         android.app.Activity activity = getActivity();
-        if (activity == null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        }
         try {
             if (activity == null) {
-                context.startActivity(intent);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(intent);
             } else {
                 activity.startActivity(intent);
             }
-            call.resolve(new JSObject().put("opened", true));
+            return true;
         } catch (ActivityNotFoundException error) {
-            call.resolve(new JSObject().put("opened", false));
+            return false;
         }
     }
 

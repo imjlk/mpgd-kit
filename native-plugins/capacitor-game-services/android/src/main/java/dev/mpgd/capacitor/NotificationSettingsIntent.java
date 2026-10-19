@@ -33,10 +33,27 @@ final class NotificationSettingsIntent {
         this.data = data;
     }
 
+    /**
+     * The app details screen, which every Android version has: the fallback
+     * when a device cannot resolve the notification settings screen (some
+     * OEM builds and restricted profiles).
+     */
+    static NotificationSettingsIntent appDetails(String packageName) {
+        requirePackage(packageName);
+        return new NotificationSettingsIntent(
+            ACTION_APPLICATION_DETAILS_SETTINGS,
+            null,
+            "package:" + packageName
+        );
+    }
+
+    /** Whether this is already the app details screen, which has no further fallback. */
+    boolean isAppDetails() {
+        return ACTION_APPLICATION_DETAILS_SETTINGS.equals(action);
+    }
+
     static NotificationSettingsIntent forPackage(int sdkInt, String packageName) {
-        if (packageName == null || packageName.isEmpty()) {
-            throw new IllegalArgumentException("The app package name is required.");
-        }
+        requirePackage(packageName);
         if (sdkInt >= APP_NOTIFICATION_SETTINGS_MIN_SDK) {
             return new NotificationSettingsIntent(
                 ACTION_APP_NOTIFICATION_SETTINGS,
@@ -44,10 +61,12 @@ final class NotificationSettingsIntent {
                 null
             );
         }
-        return new NotificationSettingsIntent(
-            ACTION_APPLICATION_DETAILS_SETTINGS,
-            null,
-            "package:" + packageName
-        );
+        return appDetails(packageName);
+    }
+
+    private static void requirePackage(String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            throw new IllegalArgumentException("The app package name is required.");
+        }
     }
 }

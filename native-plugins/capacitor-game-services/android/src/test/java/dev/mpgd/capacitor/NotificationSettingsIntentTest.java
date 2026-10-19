@@ -1,7 +1,9 @@
 package dev.mpgd.capacitor;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import android.provider.Settings;
@@ -31,6 +33,18 @@ public class NotificationSettingsIntentTest {
     }
 
     @Test
+    public void fallsBackToTheAppDetailsScreen() {
+        NotificationSettingsIntent fallback = NotificationSettingsIntent.appDetails("com.example.game");
+        assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, fallback.action);
+        assertNull(fallback.appPackageExtra);
+        assertEquals("package:com.example.game", fallback.data);
+        assertTrue(fallback.isAppDetails());
+        // The notification screen has a fallback; the details screen has none.
+        assertFalse(NotificationSettingsIntent.forPackage(36, "com.example.game").isAppDetails());
+        assertTrue(NotificationSettingsIntent.forPackage(25, "com.example.game").isAppDetails());
+    }
+
+    @Test
     public void keepsTheFrameworkConstants() {
         assertEquals(
             Settings.ACTION_APP_NOTIFICATION_SETTINGS,
@@ -51,6 +65,12 @@ public class NotificationSettingsIntentTest {
                 fail("Expected a missing package name to be refused.");
             } catch (IllegalArgumentException expected) {
                 // A settings intent without the package would open another screen.
+            }
+            try {
+                NotificationSettingsIntent.appDetails(packageName);
+                fail("Expected a missing package name to be refused by the fallback.");
+            } catch (IllegalArgumentException expected) {
+                // Same for the app details screen.
             }
         }
     }

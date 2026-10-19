@@ -1814,7 +1814,12 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   A route is kept only when `isRootRelativeNotificationRoute` accepts it, and
   a topic only when the catalog declares it.
 - **Settings link.** Neither plugin opens the notification settings, so the
-  shell supplies the opener; without one `permission.settings` is false. The
+  provider takes an opener; without one `permission.settings` is false. C1
+  added the kit's opener, `openCapacitorNotificationSettings`, over
+  `openNotificationSettings` in `@mpgd/capacitor-game-services` (Android 8+
+  `Settings.ACTION_APP_NOTIFICATION_SETTINGS`, falling back to the app details
+  screen; iOS 16+ `UIApplication.openNotificationSettingsURLString`, and the
+  app's settings page before it). The
   provider resolves `openSettings` once the app is back in the foreground, so
   the game stays paused while the settings screen is up: on Android the native
   call returns as soon as the screen launches. It stops waiting after two
