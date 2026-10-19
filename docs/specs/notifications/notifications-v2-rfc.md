@@ -1568,9 +1568,9 @@ the Devvit scheduler.
   next minute's). A run ends early at a chunk in which no send produced a
   result, at a chunk that repeats a send or lists fewer than it asked for,
   and once it has counted 10 failures. A send that fails after its claim
-  backs off for a minute; one that fails before its claim stays due and is
-  retried by each chunk. The cap bounds a run's failures and error reports
-  to under 20, not the retries of one stuck send.
+  backs off for a minute; one that fails before its claim stays due, so it
+  is retried by each chunk (up to 10 times a run) and again in every later
+  run. The cap bounds a run's `failed` count to under 20.
   `mpgd-notifications-purge` runs `purge` every five minutes, at most 200
   rows of each kind (57,600 a day, above the 25,000 sends a day Devvit
   allows). A backlog drains over the next runs. Both tasks run, and
