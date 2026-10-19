@@ -113,6 +113,13 @@ describe('extractAitNotificationTopicConfig', () => {
       [withTopics(aitTopic({}, { templateSetCode: ' ', agreement: 'required' })), /needs a non-empty templateSetCode/u],
       [withTopics(aitTopic({}, { agreement: 'required' })), /templateSetCode/u],
       [withTopics(aitTopic({}, { templateSetCode: 'c', agreement: 'optional' })), /agreement/u],
+      // Only a service template may go without the Toss agreement: a requested
+      // (or advertising) topic mapped `agreement: 'none'` would be reported as
+      // granted without the sheet ever being shown.
+      [
+        withTopics(aitTopic({}, { templateSetCode: 'c', agreement: 'none' })),
+        /topics\[0\]\.targets\.ait\.agreement: only a service topic's template may need no agreement/u,
+      ],
       // Refused by the catalog's own rules, which the wrapper used to skip.
       [withTopics(aitTopic({ route: 'https://evil.example/' })), /topics\[0\]\.route/u],
       [withTopics(aitTopic({ channels: [] })), /topics\[0\]\.channels/u],
