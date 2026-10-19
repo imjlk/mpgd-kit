@@ -862,10 +862,24 @@ past is due at once, behind the reminders already due, and keeps its
   to every provider the player has a recipient on when it fires. Otherwise
   the refusal of the furthest gate step answers: `advertising-consent-missing`,
   then `request-missing` or `preference-off`, then `permission-required`.
+  When no provider the player can be reached on maps the topic as remote for
+  the endpoint's target (an iOS device for an Android-only topic), the set
+  answers `unavailable`.
+- **Limits.** A player keeps at most 64 pending server reminders, as many as
+  iOS keeps local notifications; a new key past them answers
+  `capacity-exceeded`. Replacing a pending reminder is always allowed, and a
+  fired one does not count. The count is read before the write, so sets that
+  race may pass it by a few, as the daily consent cap may. A `fireAt` more
+  than 90 days ahead throws `NOTIFICATIONS_INVALID_INPUT`.
 - **Refused input.** A topic no served target delivers remotely, the notice
   topic, an advertising topic without the deployment's `advertisingRules`,
-  and `templateData` while a host-template provider would deliver it throw
-  `NOTIFICATIONS_INVALID_INPUT`.
+  `templateData` while a host-template provider would deliver it, and a
+  link the provider cannot take throw `NOTIFICATIONS_INVALID_INPUT`: the
+  gate's link step runs at set time, so a provider whose sends need a link
+  (Devvit) needs the reminder's or the topic mapping's, and a given link
+  must match the provider's mapping rule for `link`. A provider with a link
+  problem is not checked further, so another provider's refusal answers
+  first.
 
 Pending local reminders follow later changes. When a topic's preference
 becomes `withdrawn`, or the device's delivery permission stops being
@@ -1579,13 +1593,16 @@ scheduler (after P3).
 
 - **Each due item** becomes a normal send through the policy gate, and its
   key moves through the [key states](#key-states).
-- **One run.** Each run takes a batch of due schedule entries (server
-  reminders, and each player's notice check), turns them into sends whose
-  allowed rows are due at once, and then dispatches a batch of due rows:
-  deferred rows, expired leases, and the new sends. The new sends' rows
-  leave through the same paced path as every other due row. A schedule that
-  cannot be read does not hold the due rows, and a failed entry waits a
-  minute.
+- **One run.** A run goes on in rounds. Each round takes a batch of due
+  schedule entries (server reminders, and each player's notice check),
+  turns them into sends whose allowed rows are due at once, and then
+  dispatches a batch of due rows: deferred rows, expired leases, and the new
+  sends. Rounds go on while a round filled a batch and got somewhere, until
+  the run's wall-time budget (20 seconds by default) is used, so a wave of
+  reminders due together drains in one run rather than one batch per run.
+  The new sends' rows leave through the same paced path as every other due
+  row. A schedule that cannot be read does not hold the due rows, and a
+  failed entry waits a minute.
 - **Pacing.** The scheduler dispatches due rows per provider at no more than
   the registry entry's `rate`, oldest first. A backlog that comes due at 08:00
   therefore drains at the provider's pace, while `until` stays the earliest
@@ -1601,8 +1618,9 @@ scheduler (after P3).
   again when the lease ends. Without a queue the scheduler sends the rows
   itself. A job never replays an attempted row past its replay window.
 - **Lateness.** A reminder fires no earlier than its `fireAt`: the first run
-  at or after it takes it, unless more due items are ahead of it than one
-  batch holds; the pace and the gate may still delay its send.
+  at or after it takes it, unless more due items are ahead of it than the
+  run's budget gets through; the pace and the gate may still delay its
+  send.
 - **Reminder keys.** A reminder's idempotency key is
   `reminder:<player>:<key>:<fireAt>`, with the player and the key
   percent-encoded (`encodeURIComponent`) so ids that contain `:` cannot
@@ -2214,9 +2232,11 @@ publishable package carries a Sampo changeset.
   with the set-time checks above; `runScheduler`, which fires server
   reminders, pushes consent notices with their backoff, and dispatches due
   rows paced by each provider's `rate`, through the queue when one is
-  bound; consent compaction; and six more store steps, pinned by the store
-  conformance suite (`getScheduleEntry`, `createScheduleEntry`,
-  `updateScheduleEntry`, `listDueScheduleEntries`, `countHistory`,
+  bound, in rounds within a time budget; a cap of 64 pending server
+  reminders per player and a 90-day horizon; consent compaction; and seven
+  more store steps, pinned by the store conformance suite
+  (`getScheduleEntry`, `createScheduleEntry`, `updateScheduleEntry`,
+  `listDueScheduleEntries`, `countPendingReminders`, `countHistory`,
   `pruneConsent`). The client half was already the reference runtime's: the
   routing, the local route's gate steps (quiet hours included), and one key
   across both routes.
@@ -2226,8 +2246,8 @@ publishable package carries a Sampo changeset.
 - Left for later: the Devvit scheduler path, after P3's Devvit delivery
   provider and the Redis-backed store it runs on (open question 2); a
   game-services client that implements the runtime's backend calls over
-  the Worker routes; a per-player cap on server reminders; and seeding
-  notice checks for players whose records predate the scheduler.
+  the Worker routes; and seeding notice checks for players whose records
+  predate the scheduler.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
@@ -2247,12 +2267,12 @@ that also removes commerce v1.
    would give per-player precision at higher cost. S2 keeps D1 plus Cron for
    the first wave. A game reminder needs no minute precision (local reminders
    are inexact too), the cron's period bounds the lateness (the Worker's
-   sample runs it every five minutes; a deployment that wants less runs it
-   every minute), and the due indexes keep a run's cost to the items due,
-   not to every player. Alarms would need a Durable Object per player or a
+   sample and C1's template run it every minute), each run works through
+   the due items in batches for up to its time budget, and the due indexes
+   keep a run's cost to the items due, not to every player. Alarms would need a Durable Object per player or a
    sharded set, and a second store for the ledger the gate reads in one
    place. Revisit when a game needs reminders at second precision or a
-   backlog outgrows one batch per minute.
+   backlog outgrows what one run's budget gets through each minute.
 4. **Remote copy on the server.** Whether the Worker reads localized copy from
    the catalog file or from a project-provided resolver.
 5. **Bulk sends.** The first wave sends one recipient per call. Bulk paths

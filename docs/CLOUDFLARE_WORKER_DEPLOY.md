@@ -202,16 +202,15 @@ queue = "mpgd-notifications"
 max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
-# Purges and the scheduler: due reminders and notice checks, then due sends (25 of each per
-# run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise, at most 100; each item costs several
-# D1 queries and subrequests, so the default suits the paid plan's per-invocation limits, the
-# free plan needs a smaller batch, and a batch near 100 may pass even the paid ones). A reminder
-# fires no earlier than its time: the first run at or after it takes it unless more due items
-# are ahead of it than one batch holds (a failed one waits a minute), and its send then waits
-# for the due-send batch, the provider's rate, the queue's consumer when one is bound, and the
-# gate (quiet hours, the night window, provider limits).
+# Purges and the scheduler, every minute (recommended; C1's template does the same). Each run
+# goes on in rounds (a batch of due reminders and notice checks, then a batch of due sends) until
+# nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS (20 by default) is used.
+# MPGD_NOTIFICATIONS_DUE_BATCH sets each batch (25 by default, at most 100). A reminder fires no
+# earlier than its time: the first run at or after it takes it unless the run's budget runs out
+# first (a failed item waits a minute), and its send then waits for the provider's rate, the
+# queue's consumer when one is bound, and the gate (quiet hours, the night window, limits).
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 ```
 
 FCM sends for `android` and `ios` once the service-account key is a secret:
@@ -243,8 +242,11 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   mapping applies), `POST /endpoints/unregister`, `GET /notices`, and
   `POST /notices/shown`, `POST /reminders` (`{ reminder: { key, topic,
   fireAt, templateData?, link? } }`, answers `{ status }`: `scheduled`,
-  `replaced`, or the set-time refusal `permission-required`,
-  `request-missing`, `preference-off`, `advertising-consent-missing`), and
+  `replaced`, a set-time refusal (`permission-required`,
+  `request-missing`, `preference-off`, `advertising-consent-missing`),
+  `capacity-exceeded` past 64 pending reminders, or `unavailable` when no
+  device or account of the player maps the topic; a `fireAt` more than 90
+  days ahead or a link the provider cannot take is a 400), and
   `POST /reminders/cancel` (`{ key }`, answers `{ cancelled }`). The
   session routes need the
   `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
@@ -271,11 +273,21 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   rows for the queue, and the consumer sends them; without it, the cron
   sends them itself. A refused notice push is tried again after an hour,
   doubling to a day, or as soon as the player registers a device again.
-- **Reminder limits.** The backend does not cap how many server reminders
-  one player keeps yet (a follow-up); a reminder set for a past time is due
-  at once but queues behind those already due. A reminder the gate refuses
-  when it comes due, such as after the player's registering session ended,
-  is spent.
+- **Reminder limits.** A player keeps at most 64 pending server reminders,
+  and a `fireAt` at most 90 days ahead; a reminder set for a past time is
+  due at once but queues behind those already due. A reminder the gate
+  refuses when it comes due, such as after the player's registering session
+  ended, is spent.
+- **Throughput.** A run is bounded by time, not by count. The cost of one
+  reminder is about ten D1 queries plus the provider call, so a run
+  without a queue fires on the order of a hundred or more reminders in its
+  20 seconds (measure yours): a wave of 10,000 due together drains in
+  about an hour of one-minute runs. With the queue bound, the cron only
+  writes the sends and takes their rows, and the consumers make the
+  provider calls in parallel, so a run gets through several times more.
+  For larger waves, bind the queue, or raise
+  `MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS` (at most 300) within the time
+  Cloudflare allows a scheduled run on your plan and cron interval.
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
   other failure is retried with a growing delay (10 s, doubling, at most
   5 min). While the notifications configuration is broken (a catalog or

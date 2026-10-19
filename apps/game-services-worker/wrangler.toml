@@ -202,4 +202,4 @@ head_sampling_rate = 1
 # dead_letter_queue = "mpgd-notifications-dead"
 #
 # [triggers]
-# crons = ["*/5 * * * *"]
+# crons = ["* * * * *"]
