@@ -165,3 +165,17 @@ game-owned production credentials, deployment, signing, or store evidence.
 Use `@mpgd/adapter-browser/oneplay` through `PlatformGateway`. Build and smoke the `oneplay` target with the configured kit path. The adapter initializes the H5 SDK before gameplay; `completeLoading()` awaits host acknowledgement. Exit checkpoints must be synchronous through `storage.saveSync`. Use game-owned issued placement IDs and server verification before enabling ads or purchases. Check final HTTPS hosting headers for both ONE store domain families. See the [ONE play guide](https://github.com/imjlk/mpgd-kit/blob/main/docs/ONEPLAY.md) and [official SDK guide](https://onestore-dev.gitbook.io/dev/tools/web-sdk).
 
 Wire `rewardRequests` and `commerceServer` in `src/platform/buildGateways/oneplay.ts`. Server-only `@mpgd/game-services/oneplay-reward`, `oneplay-purchase-client`, `oneplay-purchase` and `oneplay-pns` provide signed SSV, authenticated checkout intents, API V7 verification, post-ledger consume/acknowledge and signed notification recovery. The game owns durable stores, routes, an encrypted client journal and atomic cancellation fencing. A completed PNS requires completed finalization. Missing ports keep capabilities unavailable; subscriptions are unsupported. See `commerce.checkout.verified-intent` in the game manifest and the ONE play acceptance notes before enabling policies.
+
+## ONEplay official SDK skill
+
+From this game's repository root, install or explicitly refresh the official instructions:
+
+```sh
+npx skills add ONE-store/onestore_web_sdk_skills --agent codex --yes
+```
+
+Review the resulting `.agents/skills/onestore-web-sdk` and `skills-lock.json` diff before committing.
+Use the skill's doctor and pre-release checklist alongside Kit's `docs/ONEPLAY.md`.
+Keep SDK imports in composition, game-services credentials on the server, and rewards behind
+purchase verification / signed SSV. The official standalone HTML template is reference material,
+not a replacement for the generated gateway. Do not refresh skills inside production builds.

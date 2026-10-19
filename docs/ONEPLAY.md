@@ -87,3 +87,31 @@ Register the test URL and test account, then open ONE store → My → Usage inf
 - [PNS](https://onestore-dev.gitbook.io/dev/tools/billing/v21/pns)
 - [Real-app testing](https://onestore-dev.gitbook.io/dev/tools/web-sdk/test)
 - [Release notes](https://onestore-dev.gitbook.io/dev/tools/web-sdk/releasenote)
+
+## Official SDK skill updates
+
+The official `ONE-store/onestore_web_sdk_skills` skill is installed at
+`.agents/skills/onestore-web-sdk` with provenance in `skills-lock.json`.
+For a game consuming Kit, run the following **from that game's repository root**;
+for Kit maintenance, run from this repository root:
+
+```sh
+npx skills add ONE-store/onestore_web_sdk_skills --agent codex --yes
+```
+
+Refresh explicitly before a ONEplay SDK upgrade, review the installed diff, then run
+`pnpm oneplay:skill:check` and `pnpm oneplay:skill:test` in Kit. The offline check detects
+SDK-version drift and an unexpected skill source; it does not fetch upstream, prove that
+upstream has not changed, or replace the skill's doctor and device acceptance checklist.
+Never run skill updates during production builds or silently adopt changed instructions.
+The Kit adapters and authoritative purchase/SSV boundaries take precedence over a standalone
+HTML sample's inline SDK calls: scenes continue using PlatformGateway and game-services.
+
+A game must additionally wire actual asset progress to `gameLoading.setProgress`, await
+`gameLoading.complete` before enabling gameplay, bind synchronous exit checkpoints and back
+handling, apply viewport safe-area insets, and respect `gameSettings` mute state. Existing
+SDK listeners alone do not complete those game-owned connections. SDK player IDs partition
+local state; they do not replace a server-authenticated account credential. Device-held
+installation credentials do not promise cross-device or post-reinstall recovery.
+
+Local sample corrections are tracked in `.agents/skills/onestore-web-sdk/LOCAL_PATCHES.md`; review them after each upstream skill refresh. The sample never marks a purchase verified until its game-owned reconciliation hook succeeds.
