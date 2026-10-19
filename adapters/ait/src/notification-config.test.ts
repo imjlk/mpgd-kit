@@ -90,6 +90,7 @@ describe('extractAitNotificationTopicConfig', () => {
       targets: { ios: {} },
     };
     const input = withTopics(catalog.topics[0]!, advertising);
+    // Alone, the validator asks for the deployment it would check.
     expect(validateNotificationTopicCatalog(input).issues.map((issue) => issue.path))
       .toEqual(['deployment.advertisingRules']);
     expect(extractAitNotificationTopicConfig(input)).toEqual({
@@ -127,7 +128,7 @@ describe('extractAitNotificationTopicConfig', () => {
     }
   });
 
-  it('accepts and refuses the same catalogs as validateNotificationTopicCatalog with the Apps in Toss entry', () => {
+  it('accepts and refuses the same catalogs as validateNotificationTopicCatalog with the Apps in Toss entry only', () => {
     const entry = referenceNotificationProviders['apps-in-toss'];
     const inputs: readonly unknown[] = [
       catalog,

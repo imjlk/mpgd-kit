@@ -48,9 +48,10 @@ catalog with `readAitNotificationTopicsFile` from
 `@mpgd/adapter-ait/notification-config` (`MPGD_NOTIFICATION_TOPICS_FILE`, else
 the game's `notifications/topics.json`) and passes the `targets.ait`
 mappings. The catalog goes through `validateNotificationTopicCatalog` from
-`@mpgd/catalog` with the Apps in Toss registry entry (all but the deployment
-check, which `pnpm validate:notifications` makes with the backend's
-settings), and an advertising topic mapped for Apps in Toss is refused.
+`@mpgd/catalog` with the Apps in Toss registry entry, which refuses an
+advertising topic mapped for Apps in Toss; other targets' mappings and the
+deployment are left to `pnpm validate:notifications`, which reads the
+backend's settings.
 `extractAitNotificationTopicConfig` does the same for an already parsed
 catalog.
 

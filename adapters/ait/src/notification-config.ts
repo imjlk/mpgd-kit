@@ -1,7 +1,6 @@
 import {
   resolveNotificationTopicsForTarget,
   validateNotificationTopicCatalog,
-  type NotificationTopicCatalog,
 } from '@mpgd/catalog';
 import { referenceNotificationProviders } from '@mpgd/platform/notifications';
 
@@ -33,12 +32,13 @@ export interface ExtractAitNotificationTopicConfigOptions {
  * `@mpgd/catalog`, with the Apps in Toss registry entry for `target` (which
  * requires a non-blank `templateSetCode` and an `agreement` of `required` or
  * `none`), and `resolveNotificationTopicsForTarget` picks the mapped topics,
- * so the wrapper accepts the catalogs `pnpm validate:notifications` accepts.
- * Only the deployment's check is left out: the wrapper builds without the
- * backend's settings, which `pnpm validate:notifications` reads. On top of
- * the validator it refuses, with the source label, an `advertising` topic
- * mapped to the target, which Apps in Toss cannot deliver, and it trims the
- * template code. Like `extractAitIapProductConfig`, this runs in the
+ * so for the Apps in Toss target the wrapper refuses what
+ * `pnpm validate:notifications` refuses: the shape, each topic's rules, the
+ * copy, the notices, and the target's mappings, including an `advertising`
+ * topic mapped to it, which Apps in Toss cannot deliver. It does not check
+ * other targets' mappings or the deployment, which the wrapper builds
+ * without (`pnpm validate:notifications` reads the backend's settings). It
+ * trims the template code. Like `extractAitIapProductConfig`, this runs in the
  * wrapper's build config, so it imports no SDK.
  */
 export function extractAitNotificationTopicConfig(
@@ -49,23 +49,22 @@ export function extractAitNotificationTopicConfig(
   const sourceLabel = options.sourceLabel ?? 'notification topic catalog';
   const result = validateNotificationTopicCatalog(input, {
     targetProviders: { [target]: referenceNotificationProviders[aitNotificationProviderId] },
+    // The deployment's own checks are `pnpm validate:notifications`'s, with
+    // the backend's settings. `none` adds no check here, and the Apps in
+    // Toss entry refuses an advertising topic under any rules.
+    deployment: { advertisingRules: 'none' },
   });
-  // Without the deployment, a catalog with an advertising topic gets exactly
-  // one issue, `deployment.advertisingRules`; that check is
-  // `pnpm validate:notifications`'s, which reads the backend's settings.
-  const issues = result.issues.filter((issue) => issue.path !== missingDeploymentIssuePath);
-  if (issues.length > 0) {
+  if (!result.valid) {
     throw new Error(
-      `AIT notification topic catalog is invalid: ${sourceLabel}\n${issues
+      `AIT notification topic catalog is invalid: ${sourceLabel}\n${result.issues
         .map((issue) => `- ${issue.path}: ${issue.message}`)
         .join('\n')}`,
     );
   }
-  // The validator checks the deployment only once the shape passed, so a
-  // catalog whose one issue is the deployment has the catalog's type.
-  const catalog = result.valid ? result.catalog : (input as NotificationTopicCatalog);
   const mappings: Record<string, AitNotificationTopicMapping> = {};
-  for (const topic of resolveNotificationTopicsForTarget(catalog, target)) {
+  for (const topic of resolveNotificationTopicsForTarget(result.catalog, target)) {
+    // Defence in depth: the registry entry above already refuses this, and
+    // the host bridge must never offer an advertising topic.
     if (topic.purpose === 'advertising') {
       throw new Error(
         `Notification topic "${topic.id}" is advertising, which Apps in Toss cannot deliver; `
@@ -91,8 +90,6 @@ export function extractAitNotificationTopicConfig(
   }
   return mappings;
 }
-
-const missingDeploymentIssuePath = 'deployment.advertisingRules';
 
 /** The file system and path calls `readAitNotificationTopicsFile` makes (node's in a build config). */
 export interface AitNotificationTopicsFileSystem {
