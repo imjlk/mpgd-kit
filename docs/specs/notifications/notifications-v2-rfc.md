@@ -876,8 +876,7 @@ past is due at once, behind the reminders already due, and keeps its
 - **Refused input.** A topic no served target delivers remotely, the notice
   topic, an advertising topic without the deployment's `advertisingRules`,
   `templateData` while any host-template provider would deliver the topic
-  (reached now or not; one whose purposes leave the topic out does not
-  count, nor does one for an advertising topic), and a
+  (reached now or not), and a
   link the provider cannot take throw `NOTIFICATIONS_INVALID_INPUT`: the
   gate's link step runs at set time, so a provider whose sends need a link
   (Devvit) needs the reminder's or the topic mapping's, and a given link

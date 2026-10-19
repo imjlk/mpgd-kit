@@ -2669,7 +2669,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // reached now or not: the player may become reachable through it before
       // the reminder fires, and it would take the reminder's templateData as
       // its template context. One whose purposes leave the topic out (or an
-      // advertising topic, free-form only) is refused by the gate's first step.
+      // advertising topic, free-form only) is refused by the gate's first
+      // step; the catalog validator refuses such a mapping, so this matters
+      // only for a hand-built service catalog.
       const hostTemplate = declaring.some((provider) => {
         if (provider.entry.content !== 'host-template') {
           return false;
