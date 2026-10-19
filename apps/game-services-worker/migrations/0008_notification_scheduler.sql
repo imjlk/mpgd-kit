@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS notification_schedule (
 );
 
 CREATE INDEX IF NOT EXISTS idx_notification_schedule_due
-  ON notification_schedule (due_at_ms)
+  ON notification_schedule (due_at_ms, player_id, entry_id)
   WHERE due_at_ms IS NOT NULL;
 
 -- Pacing counts a provider's deliveries in its rate window.

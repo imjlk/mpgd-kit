@@ -610,6 +610,11 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
     'schedule: the due index follows the write',
   );
   const notices = await store.getScheduleEntry({ player: 'p-s', id: 'notices' });
+  deepEqual(
+    notices?.entry,
+    { player: 'p-s', id: 'notices', item: { kind: 'notices', attempts: 2, failed: ['k'] } },
+    'schedule: an entry without a due time round-trips',
+  );
   ok(
     notices !== undefined && await store.updateScheduleEntry({
       player: 'p-s',
@@ -672,6 +677,91 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
     updated.filter(Boolean).length,
     1,
     'concurrency: one of parallel writes with one version wins',
+  );
+  const winner = updated.findIndex(Boolean);
+  equal(
+    (await store.getScheduleEntry({ player: 'p-race', id: 'reminder:r' }))?.entry.dueAt,
+    t(winner),
+    "concurrency: the stored entry is the winner's",
+  );
+
+  // Ties, a due time removed, stale deletes, and versions after a delete.
+  for (const [player, id] of [
+    ['p-tie-b', 'reminder:a'],
+    ['p-tie-a', 'reminder:b'],
+    ['p-tie-a', 'reminder:a'],
+  ] as const) {
+    await store.createScheduleEntry(entry(player, id, t(5_000)));
+  }
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(5_000), limit: 100 })).filter((due) =>
+      due.player.startsWith('p-tie'),
+    ),
+    [
+      { player: 'p-tie-a', id: 'reminder:a' },
+      { player: 'p-tie-a', id: 'reminder:b' },
+      { player: 'p-tie-b', id: 'reminder:a' },
+    ],
+    'schedule: ties by player, then id',
+  );
+  const tie = await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' });
+  const { dueAt: _due, ...waiting } = tie?.entry ?? first;
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-tie-b',
+      id: 'reminder:a',
+      version: tie?.version ?? '',
+      entry: { ...waiting, item: { ...first.item, firedAt: t(5_000) } } as NotificationScheduleEntry,
+    }),
+    'schedule: an entry loses its due time',
+  );
+  ok(
+    !(await store.listDueScheduleEntries({ at: t(10_000), limit: 100 })).some((due) =>
+      due.player === 'p-tie-b'),
+    'schedule: and is no longer listed',
+  );
+  const tieA = await store.getScheduleEntry({ player: 'p-tie-a', id: 'reminder:a' });
+  ok(
+    !await store.updateScheduleEntry({
+      player: 'p-tie-a',
+      id: 'reminder:a',
+      version: `${tieA?.version ?? ''}-stale`,
+      entry: undefined,
+    }),
+    'schedule: a delete with a stale version is refused',
+  );
+  ok(
+    (await store.getScheduleEntry({ player: 'p-tie-a', id: 'reminder:a' })) !== undefined,
+    'schedule: and the entry stays',
+  );
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-tie-a',
+      id: 'reminder:a',
+      version: tieA?.version ?? '',
+      entry: undefined,
+    }),
+    'schedule: deleted',
+  );
+  const again = await store.createScheduleEntry(entry('p-tie-a', 'reminder:a', t(5_000)));
+  ok(
+    typeof again === 'string' && again !== tieA?.version,
+    'schedule: a recreated entry has a new version',
+  );
+  ok(
+    !await store.updateScheduleEntry({
+      player: 'p-tie-a',
+      id: 'reminder:a',
+      version: tieA?.version ?? '',
+      entry: entry('p-tie-a', 'reminder:a', t(6_000)),
+    }),
+    "schedule: the deleted entry's version does not write the recreated one",
+  );
+  const noticeCheck = await store.getScheduleEntry({ player: 'p-s', id: 'notices' });
+  deepEqual(
+    noticeCheck?.entry,
+    { player: 'p-s', id: 'notices', dueAt: t(0), item: { kind: 'notices', attempts: 0 } },
+    'schedule: a notice check round-trips',
   );
 }
 

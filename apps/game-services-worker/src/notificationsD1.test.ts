@@ -61,6 +61,36 @@ try {
   });
   assert.equal(fresh, 1);
 
+  // Pruning more instants than one statement binds: chunked, counted, and the notices go too.
+  {
+    const store = createD1NotificationStore(db);
+    const written = [];
+    for (let index = 0; index < 205; index += 1) {
+      written.push(await store.appendConsent({
+        player: 'p-chunk',
+        record: { kind: 'advertising', state: index % 2 === 0 ? 'granted' : 'withdrawn', source: 'player', textVersion: 'v1' },
+        at: '2026-10-19T03:00:00Z',
+      }));
+    }
+    for (const record of written.slice(0, 3)) {
+      await store.addNoticeGiven({
+        kind: 'consent-result',
+        record: { kind: 'advertising', at: record.at },
+        dueBy: '2026-11-02',
+        player: 'p-chunk',
+        channel: 'in-game',
+        at: '2026-10-20T03:00:00Z',
+      });
+    }
+    const pruned = written.slice(0, 200).map((record) => record.at);
+    assert.equal(await store.pruneConsent({ player: 'p-chunk', at: [...pruned, ...pruned] }), 200);
+    assert.deepEqual(
+      (await store.listConsent('p-chunk')).map((record) => record.at),
+      written.slice(200).map((record) => record.at),
+    );
+    assert.deepEqual(await store.listNoticesGiven('p-chunk'), []);
+  }
+
   // The service over D1: fan-out, a dead token, the key states, and consent dating.
   for (const table of [
     'notification_consent_records',

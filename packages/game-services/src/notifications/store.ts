@@ -256,7 +256,9 @@ export interface NotificationStore {
    * Deletes the player's consent records dated at these instants (each of a
    * player's records has its own millisecond, so the instant names it), and
    * the notices given that report on them, in one atomic step. Answers how
-   * many records it deleted.
+   * many records it deleted. The service never prunes a player's latest
+   * record, so `appendConsent` keeps dating every new record after any record
+   * the player ever had, and an instant never names two records.
    */
   pruneConsent(input: { readonly player: string; readonly at: readonly string[] }): Promise<number>;
 
@@ -333,18 +335,28 @@ export interface NotificationStore {
     readonly player: string;
     readonly since: string;
   }): Promise<readonly NotificationHistoryEntry[]>;
-  /** How many deliveries every player received through `provider` at or after `since` (the scheduler's pacing). */
+  /**
+   * How many deliveries every player received through `provider` at or
+   * after `since`, for the scheduler's pacing. It counts delivered sends
+   * only, so pacing is approximate while other sends are in flight.
+   */
   countHistory(input: { readonly provider: string; readonly since: string }): Promise<number>;
 
   getScheduleEntry(input: {
     readonly player: string;
     readonly id: string;
   }): Promise<NotificationVersionedScheduleEntry | undefined>;
-  /** Stores a new entry; answers its version, or `undefined` when the player already has one with its id. */
+  /**
+   * Stores a new entry; answers its version, or `undefined` when the player
+   * already has one with its id. A version is never reused, also after the
+   * entry is deleted and created again. The store deletes no entry on its
+   * own: the service removes a reminder or a notice check it is done with.
+   */
   createScheduleEntry(entry: NotificationScheduleEntry): Promise<string | undefined>;
   /**
    * Replaces (or, with `entry: undefined`, deletes) the entry while it still
    * has `version`; answers whether it did. Every write gets a new version.
+   * The entry is stored under `player` and `id`, whatever it names.
    */
   updateScheduleEntry(input: {
     readonly player: string;
@@ -352,7 +364,10 @@ export interface NotificationStore {
     readonly version: string;
     readonly entry: NotificationScheduleEntry | undefined;
   }): Promise<boolean>;
-  /** Up to `limit` entries whose `dueAt` is at or before `at`, earliest first. */
+  /**
+   * Up to `limit` entries whose `dueAt` is at or before `at`: earliest
+   * first, then by player and id.
+   */
   listDueScheduleEntries(input: {
     readonly at: string;
     readonly limit: number;
@@ -479,6 +494,26 @@ export function notificationSendDueAt(send: NotificationStoredSend): string | un
   return due === undefined ? undefined : formatNotificationInstant(due);
 }
 
+/** Epoch milliseconds of a stored time; one that does not parse is a caller error, as in the D1 store. */
+function instantOf(at: string): number {
+  const millis = Date.parse(at);
+  if (!Number.isFinite(millis)) {
+    throw new TypeError(`Not a timestamp: ${JSON.stringify(at)}`);
+  }
+  return millis;
+}
+
+function dueOf(entry: NotificationScheduleEntry): number | undefined {
+  return entry.dueAt === undefined ? undefined : instantOf(entry.dueAt);
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
 export function formatNotificationInstant(millis: number): string {
   return normalizeNotificationTimestamp(new Date(millis).toISOString());
 }
@@ -559,7 +594,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       return copy(consent.filter((row) => row.player === player).map((row) => row.record));
     },
     async pruneConsent({ player, at }) {
-      const instants = new Set(at.map((instant) => Date.parse(instant)));
+      const instants = new Set(at.map(instantOf));
       let removed = 0;
       for (let index = consent.length - 1; index >= 0; index -= 1) {
         const row = consent[index];
@@ -735,7 +770,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       return copy(history.filter((sent) => sent.player === player && Date.parse(sent.at) >= from));
     },
     async countHistory({ provider, since }) {
-      const from = Date.parse(since);
+      const from = instantOf(since);
       return history.filter((sent) => sent.provider === provider && Date.parse(sent.at) >= from).length;
     },
     async getScheduleEntry({ player, id }) {
@@ -743,6 +778,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       return held === undefined ? undefined : copy(held);
     },
     async createScheduleEntry(entry) {
+      dueOf(entry);
       const key = scheduleKey(entry.player, entry.id);
       if (schedule.has(key)) {
         return undefined;
@@ -760,18 +796,20 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       if (entry === undefined) {
         schedule.delete(key);
       } else {
+        dueOf(entry);
         schedule.set(key, { entry: { ...copy(entry), player, id }, version: nextVersion() });
       }
       return true;
     },
     async listDueScheduleEntries({ at, limit }) {
-      const now = Date.parse(at);
+      const now = instantOf(at);
       return [...schedule.values()]
         .flatMap(({ entry }) => {
-          const due = entry.dueAt === undefined ? Number.NaN : Date.parse(entry.dueAt);
-          return due <= now ? [{ player: entry.player, id: entry.id, due }] : [];
+          const due = dueOf(entry);
+          return due !== undefined && due <= now ? [{ player: entry.player, id: entry.id, due }] : [];
         })
-        .sort((left, right) => left.due - right.due)
+        .sort((left, right) =>
+          left.due - right.due || compareCodeUnits(left.player, right.player) || compareCodeUnits(left.id, right.id))
         .slice(0, Math.max(0, limit))
         .map(({ player, id }) => ({ player, id }));
     },

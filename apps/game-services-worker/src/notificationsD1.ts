@@ -357,7 +357,7 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     },
     async listDueScheduleEntries({ at, limit }) {
       const rows = await db.prepare(`SELECT player_id, entry_id FROM notification_schedule
-        WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms LIMIT ?`)
+        WHERE due_at_ms IS NOT NULL AND due_at_ms <= ? ORDER BY due_at_ms, player_id, entry_id LIMIT ?`)
         .bind(millisOf(at), limitOf(limit))
         .all<{ readonly player_id: string; readonly entry_id: string }>();
       return rows.results.map((row) => ({ player: row.player_id, id: row.entry_id }));
@@ -402,7 +402,7 @@ interface HistoryRow {
   readonly at_ms: number;
 }
 
-/** Instants per pruning statement: two more parameters stay under D1's limit of 100. */
+/** Instants per pruning statement: with the player, under D1's limit of 100 bound parameters. */
 const pruneChunk = 90;
 
 function dueMillisOf(entry: NotificationScheduleEntry): number | null {
