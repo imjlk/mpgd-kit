@@ -8,9 +8,9 @@ import {
 /**
  * The notifications scheduler tasks of `devvit.json` (`scheduler.tasks`):
  * `mpgd-notifications-dispatch` runs the notifications scheduler every
- * minute (due server reminders, consent notice pushes, and due sends) and
- * `mpgd-notifications-purge` purges old rows every five minutes, each in a
- * bounded batch (`runDevvitNotificationTask` from
+ * minute (due server reminders and due sends, for at most about 20
+ * seconds) and `mpgd-notifications-purge` purges old rows in bounded
+ * batches every five minutes (`runDevvitNotificationTask` from
  * `@mpgd/adapter-devvit/server`).
  * A server without a notifications service (no topic catalog yet) answers
  * the tasks without work.
@@ -51,7 +51,7 @@ export async function handleNotificationTask(input: {
   try {
     const result = await runDevvitNotificationTask(input.notifications, input.task);
     if (
-      (result.task === 'dispatch' && (result.dispatched > 0 || result.failed > 0))
+      (result.task === 'dispatch' && (result.touched > 0 || result.failed > 0))
       || (result.task === 'purge' && result.sends + result.history + result.endpoints > 0)
     ) {
       log(`devvit notifications ${result.task}: ${JSON.stringify(result)}`);

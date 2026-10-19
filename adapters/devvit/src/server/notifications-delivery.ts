@@ -430,8 +430,10 @@ export interface DevvitNotificationService {
  * no Devvit recipient (`unavailable: no-endpoint`).
  *
  * Players' own calls take a `devvitNotificationSession(userId)`. Server
- * reminders (`setReminder`) and consent notice pushes fire through the
- * `dispatch` scheduler task (`runDevvitNotificationTask`).
+ * reminders (`setReminder`) fire through the `dispatch` scheduler task
+ * (`runDevvitNotificationTask`). The scheduler pushes no consent notices
+ * through Devvit: its entry fixes the title and body per topic, so it does
+ * not carry notices (`notificationProviderCarriesNotices`).
  */
 export function createDevvitNotificationService(
   input: CreateDevvitNotificationServiceInput,
@@ -521,9 +523,9 @@ export function devvitNotificationSession(userId: string): NotificationSession {
 /**
  * The Devvit scheduler tasks that keep the service's own work moving:
  * `dispatch` runs the service's scheduler (`runScheduler`) every minute,
- * which turns due server reminders into sends, pushes the consent notices
- * owed by now, and replays due rows (deferred sends, rate-limited ones, and
- * ambiguous answers once their lease ends), and `purge` forgets old keys,
+ * which turns due server reminders into sends and replays due rows
+ * (deferred sends, rate-limited ones, and ambiguous answers once their
+ * lease ends), and `purge` forgets old keys,
  * history, and dead endpoints every five minutes. They run, and use two of
  * the installation's recurring tasks, even while the game has no
  * notifications service; such a run does no work. A game declares both in
@@ -583,8 +585,11 @@ export function devvitNotificationTaskForEndpoint(pathname: string): DevvitNotif
 export type DevvitNotificationTaskResult =
   | {
       readonly task: 'dispatch';
-      /** The sends the run touched: fired reminders, notice pushes, and replayed rows. */
-      readonly dispatched: number;
+      /**
+       * The sends the run touched, whatever their outcome (delivered, in
+       * flight, deferred, or refused by the gate): fired reminders and due rows.
+       */
+      readonly touched: number;
       readonly failed: number;
     }
   | {
@@ -595,13 +600,15 @@ export type DevvitNotificationTaskResult =
     };
 
 /**
- * Runs one scheduler task with a bounded batch.
+ * Runs one scheduler task.
  *
- * `dispatch` is one `runScheduler` run: rounds of at most `dispatchLimit`
- * (10, a positive integer) due schedule entries and due sends, which go on
- * while a round filled its batch and got somewhere, and start no round
- * after `budgetMs` (20 seconds). Sends go out at no more than the Devvit
- * entry's `rate`, 25,000 a day. One failing send never stops the others.
+ * `dispatch` is one `runScheduler` run, bounded by time: rounds of at most
+ * `dispatchLimit` (10, a positive integer) due schedule entries and due
+ * sends, which go on while a round filled its batch and got somewhere, and
+ * start no round after `budgetMs` (20 seconds), so a run lasts the budget
+ * plus at most one round; the sends of a run are not otherwise capped. Due
+ * rows count against the Devvit entry's `rate`, 25,000 a day, a daily cap
+ * rather than a spread. One failing send never stops the others.
  *
  * `purge` deletes at most the store's `purgeLimit` rows of each kind (200
  * for the store `createDevvitNotificationService` builds). A backlog
@@ -625,7 +632,7 @@ export async function runDevvitNotificationTask(
       throw new RangeError('budgetMs must be a positive number of milliseconds');
     }
     const run = await service.runScheduler({ limit, budgetMs });
-    return { task, dispatched: run.results.length, failed: run.failed };
+    return { task, touched: run.results.length, failed: run.failed };
   }
   const counts = await service.purge();
   return { task, ...counts };

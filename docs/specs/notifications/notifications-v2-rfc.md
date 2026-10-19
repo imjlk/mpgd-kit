@@ -1665,12 +1665,14 @@ scheduler over its Redis store (P3).
 
 - **What P3 schedules on Devvit.** Two `devvit.json` scheduler tasks call
   the service's own work (`runDevvitNotificationTask` from
-  `@mpgd/adapter-devvit/server`), each with a bounded batch:
-  `mpgd-notifications-dispatch` is one `runScheduler` run every minute, in
-  rounds of at most 10 due schedule entries (server reminders and notice
-  checks) and 10 due sends, starting no round after 20 seconds (Devvit
-  documents no time limit for a task, so a run is kept well inside the
-  next minute's), paced at the Devvit entry's `rate` of 25,000 a day.
+  `@mpgd/adapter-devvit/server`): `mpgd-notifications-dispatch` is one
+  `runScheduler` run every minute, bounded by time, in rounds of at most 10
+  due schedule entries (server reminders) and 10 due sends, starting no
+  round after 20 seconds (Devvit documents no time limit for a task, so a
+  run is kept well inside the next minute's). Due rows count against the
+  Devvit entry's `rate`, a daily cap of 25,000. Devvit pushes no consent
+  notices: its entry fixes the title and body per topic, so it does not
+  carry them.
   `mpgd-notifications-purge` runs `purge` every five minutes, at most 200
   rows of each kind (57,600 a day, above the 25,000 sends a day Devvit
   allows). A backlog drains over the next runs. Both tasks run, and take
@@ -2379,20 +2381,20 @@ publishable package carries a Sampo changeset.
 - The game-services Worker: migration `0008_notification_scheduler.sql`,
   the session routes `POST /reminders` and `POST /reminders/cancel`, and a
   cron that runs the scheduler after the purges.
-- Left for later: the Devvit scheduler path, which landed with P3 over its
-  Redis-backed store (open question 2); a game-services client that implements the runtime's backend calls over
-  the Worker routes; and seeding notice checks for players whose records
-  predate the scheduler.
+- Left for later: a game-services client that implements the runtime's
+  backend calls over the Worker routes, and seeding notice checks for
+  players whose records predate the scheduler. The Devvit scheduler path
+  landed with P3.
 
 **What P3 landed.** The Devvit provider, server bridge handler, delivery
 provider, and Redis-backed store; see [Devvit](#profile-devvit),
 [Delivery providers](#remote-delivery), and open question 2.
 
 - The Devvit `dispatch` scheduler task runs S2's `runScheduler`, so server
-  reminders and notice pushes fire on Devvit, and the Redis store
-  implements S2's store steps.
-- Left to follow-ups: a shared host-side `notifications.v2` bridge handler for the Apps in Toss and
-  Devvit adapters, the runtime's backend client for a service the
+  reminders fire on Devvit, and the Redis store implements S2's store
+  steps.
+- Left to follow-ups: a shared host-side `notifications.v2` bridge
+  handler for the Apps in Toss and Devvit adapters, the runtime's backend client for a service the
   Devvit server hosts (the game-services client), and the wiring in the
   generated Devvit app (C1).
 

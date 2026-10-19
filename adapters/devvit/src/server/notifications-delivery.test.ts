@@ -591,10 +591,10 @@ describe('Devvit notification scheduler tasks', () => {
     });
     await expect(service.deliver({ idempotencyKey: 'rl-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
       .resolves.toMatchObject({ status: 'deferred', reason: 'provider-rate-limited' });
-    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', dispatched: 0, failed: 0 });
+    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', touched: 0, failed: 0 });
     now += 61_000;
     await expect(runDevvitNotificationTask(service, 'dispatch', { dispatchLimit: 1 }))
-      .resolves.toEqual({ task: 'dispatch', dispatched: 1, failed: 0 });
+      .resolves.toEqual({ task: 'dispatch', touched: 1, failed: 0 });
     expect(plugin.calls).toHaveLength(2);
     await expect(service.deliver({ idempotencyKey: 'rl-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
       .resolves.toMatchObject({ status: 'delivered', alreadyProcessed: true });
@@ -616,16 +616,51 @@ describe('Devvit notification scheduler tasks', () => {
       fireAt: '2026-10-19T04:00:00Z',
       templateData: { friend: 'M' },
     })).resolves.toEqual({ status: 'scheduled' });
-    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', dispatched: 0, failed: 0 });
+    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', touched: 0, failed: 0 });
     expect(plugin.calls).toEqual([]);
     now = Date.parse('2026-10-19T04:00:00Z');
-    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', dispatched: 1, failed: 0 });
+    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', touched: 1, failed: 0 });
     expect(plugin.calls).toEqual([
       expect.objectContaining({ title: 'New challenge', body: 'M sent you a challenge.', userId: user, link: 't3_daily' }),
     ]);
     // Fired once: the next run has nothing to do.
-    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', dispatched: 0, failed: 0 });
+    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', touched: 0, failed: 0 });
     expect(plugin.calls).toHaveLength(1);
+  });
+
+  it('starts no scheduler round after the time budget with the real service', async () => {
+    let now = Date.parse('2026-10-19T03:00:00Z');
+    let elapsed = 0;
+    const plugin = createFakePlugin();
+    const players = ['t2_a', 't2_b', 't2_c'] as const;
+    for (const player of players) {
+      plugin.optedIn.add(player);
+    }
+    const { service } = createDevvitNotificationService({
+      redis: createFakeNotificationRedis(),
+      notifications: plugin,
+      catalog: catalogFile,
+      now: () => new Date(now).toISOString(),
+      // Each read of the run's clock is 15 seconds later.
+      elapsedMs: () => (elapsed += 15_000),
+      random: () => 0,
+    });
+    for (const player of players) {
+      await service.setReminder(devvitNotificationSession(player), {
+        key: 'challenge',
+        topic: 'friend-challenge',
+        fireAt: '2026-10-19T04:00:00Z',
+        templateData: { friend: 'M' },
+      });
+    }
+    now = Date.parse('2026-10-19T04:00:00Z');
+    // Rounds of one: the first round ends 15 s in, the second 30 s in, past the budget.
+    await expect(runDevvitNotificationTask(service, 'dispatch', { dispatchLimit: 1 }))
+      .resolves.toEqual({ task: 'dispatch', touched: 2, failed: 0 });
+    expect(plugin.calls).toHaveLength(2);
+    await expect(runDevvitNotificationTask(service, 'dispatch', { dispatchLimit: 1 }))
+      .resolves.toEqual({ task: 'dispatch', touched: 1, failed: 0 });
+    expect(plugin.calls.map((call) => call.userId).sort()).toEqual([...players]);
   });
 
   it('runs one scheduler run with the round batch and the time budget, and refuses options that are not positive', async () => {
@@ -643,7 +678,7 @@ describe('Devvit notification scheduler tasks', () => {
       },
       purge: async () => ({ sends: 3, history: 2, endpoints: 1 }),
     };
-    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', dispatched: 2, failed: 1 });
+    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', touched: 2, failed: 1 });
     await runDevvitNotificationTask(service, 'dispatch', { dispatchLimit: 25, budgetMs: 5_000 });
     expect(calls).toEqual([{ limit: 10, budgetMs: 20_000 }, { limit: 25, budgetMs: 5_000 }]);
     await expect(runDevvitNotificationTask(service, 'purge')).resolves.toEqual({ task: 'purge', sends: 3, history: 2, endpoints: 1 });

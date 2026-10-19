@@ -48,7 +48,7 @@ test('a server without a notifications service answers the task without work', a
   });
 });
 
-test('a task runs one bounded batch and logs only when it did work', async () => {
+test('a task runs one bounded run and logs only when it did work', async () => {
   const runs: unknown[] = [];
   const logs: string[] = [];
   const notifications = {
@@ -69,7 +69,7 @@ test('a task runs one bounded batch and logs only when it did work', async () =>
     logs.push(message);
   };
   const dispatched = await handleNotificationTask({ task: 'dispatch', notifications, log });
-  assert.deepEqual(dispatched.result, { task: 'dispatch', dispatched: 1, failed: 0 });
+  assert.deepEqual(dispatched.result, { task: 'dispatch', touched: 1, failed: 0 });
   // One scheduler run, in rounds of ten within twenty seconds.
   assert.deepEqual(runs, [{ limit: 10, budgetMs: 20_000 }]);
   const purged = await handleNotificationTask({ task: 'purge', notifications, log });

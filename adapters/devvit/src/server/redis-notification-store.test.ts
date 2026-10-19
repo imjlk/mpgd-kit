@@ -583,6 +583,7 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(await store.countHistory({ provider: 'devvit', since: at(1), until: at(3) })).toBe(6);
     expect(await store.countHistory({ provider: 'devvit', since: at(3), until: at(3) })).toBe(2);
     // Each read takes one member: no page of the range is read.
+    expect(ranges.length).toBeGreaterThan(0);
     expect(ranges.every((count) => count === 1)).toBe(true);
   });
 

@@ -47,7 +47,8 @@ import { createHash } from 'node:crypto';
  *   players (purge), and per provider. `countHistory` counts the provider's
  *   set by rank (`@devvit/redis` has no ZCOUNT): a few reads, not a
  *   snapshot, which the scheduler's approximate pacing allows.
- * - **Schedule entries** (server reminders and notice checks) are one JSON
+ * - **Schedule entries** (server reminders, and notice checks for a
+ *   provider that carries notices) are one JSON
  *   value per player and id with a version token, written as sends are.
  *   The due index is one sorted set by `dueAt` whose member encodes the
  *   player and id with fixed-width code points, so Redis's byte order of
@@ -623,11 +624,12 @@ export function createDevvitRedisNotificationStore(
   /**
    * How many members score from `min` to `max`, both inclusive, by rank.
    * The start rank is read again after the end rank: a write below `min`
-   * between the reads (a purge) moves both, so differing start ranks, or a
-   * member removed before its rank was read, make the count read again.
-   * After a few tries the members are counted in pages. A write inside the
-   * range during the reads may still be counted or not: pacing is
-   * approximate by contract.
+   * between the reads moves both, so differing start ranks, or a member
+   * removed before its rank was read, make the count read again. After a
+   * few tries the members are counted in pages. A write in or above the
+   * range during the reads (a send delivered just now), or two opposite
+   * writes below it, may still be counted or not: pacing is approximate by
+   * contract.
    */
   async function countScores(key: string, min: number, max: number): Promise<number> {
     for (let attempt = 0; attempt < 4; attempt += 1) {

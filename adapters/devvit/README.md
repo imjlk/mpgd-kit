@@ -61,8 +61,9 @@ Reddit approves. The profile follows the
   per app per day. Players' own calls take `devvitNotificationSession(userId)`.
   Two `devvit.json` scheduler tasks keep its work moving:
   `mpgd-notifications-dispatch` (every minute, the service's `runScheduler`:
-  due server reminders, consent notice pushes, and due sends, in rounds of 10
-  that start no round after 20 seconds) and `mpgd-notifications-purge` (every
+  due server reminders and due sends, in rounds of 10, starting no round
+  after 20 seconds; Devvit carries no consent notices, since its entry fixes
+  the title and body per topic) and `mpgd-notifications-purge` (every
   five minutes, at most 200 rows of each kind). Route their endpoints
   (`devvitNotificationSchedulerTasks`) to
   `runDevvitNotificationTask(service, task)`, as the kit's
