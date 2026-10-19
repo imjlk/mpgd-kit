@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BridgeRequest } from '@mpgd/bridge';
+import { PlatformOperationError } from '@mpgd/platform';
 import { NotificationError } from '@mpgd/platform/notifications';
 
 import { createFakeDevvitNotifications } from '../../test/fake-devvit-notifications.js';
@@ -184,6 +185,22 @@ describe('createDevvitNotificationsV2BridgeHandler', () => {
           message: expect.stringContaining('(host code DEVVIT_OPT_IN_REFUSED)'),
           retryable: false,
         },
+      });
+  });
+
+  it('keeps the retryable flag of a failure that is not a notifications code', async () => {
+    const { plugin } = handler();
+    const raw = createDevvitNotificationsV2BridgeHandler({
+      notifications: plugin,
+      currentUserId: () => {
+        throw new PlatformOperationError({ code: 'CONTEXT_FAILED', message: 'no context', retryable: false });
+      },
+      topics,
+    });
+    await expect(raw.request(request('notifications.v2.getPermission', { topics: ['friend-challenge'] })))
+      .resolves.toMatchObject({
+        ok: false,
+        error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false },
       });
   });
 

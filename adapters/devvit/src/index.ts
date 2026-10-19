@@ -350,24 +350,26 @@ function createLazyDevvitNotificationSurface(
     readonly v1: NotificationSubscriptionAdapter;
   }> | undefined;
   const load = () => {
-    loading ??= importClient().then(
-      (module) => {
+    // Any failure, a synchronous throw of the loader or one while the
+    // provider is built, is retried by the next call.
+    loading ??= (async () => {
+      try {
+        const module = await importClient();
         const provider = module.createDevvitBridgeNotificationProvider({
           request,
           ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
           ...(options.locale === undefined ? {} : { locale: options.locale }),
         });
         return { provider, v1: module.createDevvitNotificationSubscriptionAdapter(provider, topics) };
-      },
-      (error: unknown) => {
+      } catch (error) {
         loading = undefined;
         throw new PlatformOperationError({
           code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
           message: `The Devvit notifications client did not load: ${errorMessage(error)}`,
           retryable: true,
         });
-      },
-    );
+      }
+    })();
     return loading;
   };
   const provider = async (): Promise<NotificationProvider> => (await load()).provider;
@@ -387,7 +389,16 @@ function createLazyDevvitNotificationSurface(
     },
     notifications: {
       getStatus: async (topic) => (await load()).v1.getStatus(topic),
-      requestSubscription: async (topic) => (await load()).v1.requestSubscription(topic),
+      // As v1 answers any failed request: `unavailable`, also when the chunk did not load.
+      requestSubscription: async (topic) => {
+        let v1: NotificationSubscriptionAdapter;
+        try {
+          v1 = (await load()).v1;
+        } catch {
+          return 'unavailable';
+        }
+        return v1.requestSubscription(topic);
+      },
     },
   };
 }
@@ -634,8 +645,8 @@ export function createDevvitSandboxBridge(): DevvitBridge {
 
   return {
     async request(input) {
-      // Notifications v2 arrives with the Devvit provider (P3); until then
-      // every v2 method answers the dedicated code.
+      // Only the Devvit server can opt a user in: the sandbox serves no
+      // notifications v2, and every v2 method answers the dedicated code.
       if (isBridgeNotificationsV2Method(input.method)) {
         return createNotificationsV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
       }

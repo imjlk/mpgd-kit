@@ -84,8 +84,9 @@ export const devvitNotificationHostCodes = Object.freeze({
  *   opt-in; otherwise `optInCurrentUser` answers `granted`. A refused opt-in
  *   (`success: false`, such as an app not yet approved) throws
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
- *   `DEVVIT_OPT_IN_REFUSED`; a plugin call that throws is
- *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+ *   `DEVVIT_OPT_IN_REFUSED`, which is not retryable: Devvit documents no
+ *   transient refusal, and a refusal the game retried would loop. A plugin
+ *   call that throws is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
  * - **Revocation.** `optOutCurrentUser`, the `denied` outcome for every
  *   topic, and a fresh read.
  * - **Registration.** A logged-in user registers `{ kind: 'platform-user' }`;
@@ -158,15 +159,13 @@ export function createDevvitServerNotificationProvider(
       if (userId === undefined) {
         return loginRequired(topics);
       }
-      const outcomes: Record<string, NotificationPermissionOutcome> = {};
       const askable = topics.filter((topic) => mapped.has(topic));
-      for (const topic of topics) {
-        if (!mapped.has(topic)) {
-          outcomes[topic] = 'unavailable';
-        }
-      }
+      const outcomesWith = (
+        granted: NotificationPermissionOutcome,
+      ): Record<string, NotificationPermissionOutcome> =>
+        Object.fromEntries(topics.map((topic) => [topic, mapped.has(topic) ? granted : 'unavailable']));
       if (askable.length === 0) {
-        return { snapshot: snapshotOf(topics, await read(userId)), outcomes };
+        return { snapshot: snapshotOf(topics, await read(userId)), outcomes: outcomesWith('unavailable') };
       }
       let outcome: NotificationPermissionOutcome = 'already-granted';
       if ((await read(userId)) !== 'granted') {
@@ -177,10 +176,7 @@ export function createDevvitServerNotificationProvider(
         }
         outcome = 'granted';
       }
-      for (const topic of askable) {
-        outcomes[topic] = outcome;
-      }
-      return { snapshot: snapshotOf(topics, 'granted'), outcomes };
+      return { snapshot: snapshotOf(topics, 'granted'), outcomes: outcomesWith(outcome) };
     },
     async revokePermission({ topics }) {
       const userId = user();
@@ -333,8 +329,15 @@ function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
       error.retryable,
     );
   }
-  if (error instanceof PlatformOperationError && isNotificationErrorCode(error.code)) {
-    return createBridgeError(request.id, error.code, error.message, error.retryable);
+  if (error instanceof PlatformOperationError) {
+    return isNotificationErrorCode(error.code)
+      ? createBridgeError(request.id, error.code, error.message, error.retryable)
+      : createBridgeError(
+          request.id,
+          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          `${request.method} failed: ${error.message}`,
+          error.retryable,
+        );
   }
   return createBridgeError(
     request.id,

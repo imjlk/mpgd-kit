@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createBridgeError,
@@ -45,9 +45,12 @@ function createServer(plugin: FakeDevvitNotifications, serves = true) {
             return {
               id: input.id,
               ok: true,
+              // A server snapshot with its own notifications block: the gateway
+              // owns the block and never passes this one through.
               data: {
                 cloudSave: true,
                 providerAvailability: { pushNotifications: 'approval-required' },
+                notifications: createDevvitNotificationCapabilities(),
               },
             };
           case 'identity.requestUpgrade':
@@ -102,6 +105,7 @@ describe('createDevvitPlatformGateway notifications', () => {
     await expect(devvit.notifications?.getStatus('friend-challenge')).resolves.toBe('approval-required');
     const capabilities = await devvit.getCapabilities();
     expect(capabilities.notifications).toBeUndefined();
+    expect(capabilities.providerAvailability?.pushNotifications).toBe('approval-required');
   });
 
   it('exposes notificationsV2 with its block, and serves v1 from it', async () => {
@@ -194,6 +198,86 @@ describe('createDevvitPlatformGateway notifications', () => {
     });
     await devvit.notificationsV2?.getPermission({ topics: ['friend-challenge'] });
     expect(attempts).toBe(2);
+  });
+});
+
+describe('createDevvitPlatformGateway notification capability reads', () => {
+  const failingGateway = (getCapabilities: () => Promise<never>) =>
+    createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: createServer(createFakeDevvitNotifications({ currentUserId: user })).bridge,
+      notifications: {
+        topics: ['friend-challenge'],
+        load: async () => {
+          const module = await import('./notifications-client.js');
+          return {
+            ...module,
+            createDevvitBridgeNotificationProvider: (input) => ({
+              ...module.createDevvitBridgeNotificationProvider(input),
+              getCapabilities,
+            }),
+          };
+        },
+      },
+    });
+
+  it('reads a configuration failure as configuration-required', async () => {
+    const devvit = failingGateway(() =>
+      Promise.reject(
+        Object.assign(new Error('bad'), {
+          code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+          retryable: false,
+        }),
+      ),
+    );
+    expect((await devvit.getCapabilities()).notifications?.availability).toBe(
+      'configuration-required',
+    );
+  });
+
+  it('reads a retryable failure as temporarily-unavailable, whatever its code', async () => {
+    const devvit = failingGateway(() =>
+      Promise.reject(
+        Object.assign(new Error('flaky'), {
+          code: 'NOTIFICATIONS_V2_UNAVAILABLE',
+          retryable: true,
+        }),
+      ),
+    );
+    expect((await devvit.getCapabilities()).notifications).toEqual(
+      createDevvitDegradedNotificationCapabilities('temporarily-unavailable'),
+    );
+  });
+
+  it('reads a chunk that does not load as temporarily-unavailable', async () => {
+    const devvit = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: createServer(createFakeDevvitNotifications({ currentUserId: user })).bridge,
+      notifications: {
+        topics: ['friend-challenge'],
+        load: () => {
+          throw new Error('synchronous loader failure');
+        },
+      },
+    });
+    expect((await devvit.getCapabilities()).notifications?.availability).toBe(
+      'temporarily-unavailable',
+    );
+    await expect(devvit.notifications?.requestSubscription('friend-challenge')).resolves.toBe('unavailable');
+  });
+
+  it('bounds a read that stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      const devvit = failingGateway(() => new Promise<never>(() => {}));
+      const read = devvit.getCapabilities();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect((await read).notifications?.availability).toBe('temporarily-unavailable');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
