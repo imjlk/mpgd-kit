@@ -23,9 +23,9 @@ export interface ExtractAitNotificationTopicConfigOptions {
  *
  * It checks only what the bridge needs and refuses, with the source label,
  * what would reach a player wrongly: a malformed catalog, a duplicate or
- * `__proto__` topic id, `targets` or a mapping that is not an object, a blank `templateSetCode`, an
- * `agreement` other than `required` or `none`, and an `advertising` topic,
- * which Apps in Toss cannot deliver. `pnpm validate:notifications` (or
+ * `__proto__` topic id, `targets` or a mapping that is not an object, a
+ * blank `templateSetCode`, an `agreement` other than `required` or `none`,
+ * and an `advertising` topic, which Apps in Toss cannot deliver. `pnpm validate:notifications` (or
  * `validateNotificationTopicCatalog` from `@mpgd/catalog`) checks the rest of
  * the catalog. Like `extractAitIapProductConfig`, this runs in the wrapper's
  * build config, so it imports no SDK.
@@ -145,9 +145,15 @@ export function readAitNotificationTopicsFile(
   try {
     parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
   } catch (error) {
-    throw new Error(`AIT notification topic catalog is unreadable or invalid JSON: ${file}`, {
-      cause: error,
-    });
+    const source = configured !== undefined && configured.length > 0
+      ? ' (MPGD_NOTIFICATION_TOPICS_FILE)'
+      : '';
+    throw new Error(
+      `AIT notification topic catalog is unreadable or invalid JSON: ${file}${source}`,
+      {
+        cause: error,
+      },
+    );
   }
 
   return extractAitNotificationTopicConfig(parsed, {

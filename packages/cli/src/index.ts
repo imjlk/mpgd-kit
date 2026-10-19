@@ -4220,8 +4220,15 @@ function createGameOwnedReleaseEnv(
   const appVersion = readOptionalString(baseEnv.APP_VERSION)
     ?? readGamePackageVersion(gameRoot);
 
+  const notificationTopicsFile = readConfiguredPath(baseEnv.MPGD_NOTIFICATION_TOPICS_FILE);
+
   return {
     ...monetizationFiles,
+    // The Apps in Toss wrapper builds in its own directory; a relative path
+    // names a file of the game, as `pnpm validate:notifications` reads it.
+    ...(notificationTopicsFile === undefined
+      ? {}
+      : { MPGD_NOTIFICATION_TOPICS_FILE: path.resolve(gameRoot, notificationTopicsFile) }),
     MPGD_SOURCE_GIT_SHA: sourceGitSha,
     ...(appVersion === undefined ? {} : { APP_VERSION: appVersion }),
   };

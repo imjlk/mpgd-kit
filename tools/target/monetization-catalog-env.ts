@@ -56,3 +56,31 @@ function resolveConfiguredBaseDir(
 function configuredFileExists(baseDir: string, file: string): boolean {
   return existsSync(isAbsolute(file) ? file : resolve(baseDir, file));
 }
+
+/**
+ * Makes a relative `MPGD_NOTIFICATION_TOPICS_FILE` absolute before it reaches
+ * the Apps in Toss wrapper build, which runs in the wrapper directory: it
+ * resolves against the first base, as the monetization files do, where the
+ * file exists (the targets file's directory, then the caller's directory),
+ * and against `fallbackBaseDir` when none has it, so the build reports that
+ * path. Unset or blank, nothing changes.
+ */
+export function normalizeNotificationTopicsEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  fallbackBaseDir = process.cwd(),
+): NodeJS.ProcessEnv {
+  const file = readConfiguredPath(baseEnv.MPGD_NOTIFICATION_TOPICS_FILE);
+  if (file === undefined) {
+    return {};
+  }
+  if (isAbsolute(file)) {
+    return { MPGD_NOTIFICATION_TOPICS_FILE: file };
+  }
+  const base = [
+    fallbackBaseDir,
+    readConfiguredPath(baseEnv.INIT_CWD),
+    readConfiguredPath(baseEnv.PWD),
+    process.cwd(),
+  ].find((candidate) => candidate !== undefined && existsSync(resolve(candidate, file)));
+  return { MPGD_NOTIFICATION_TOPICS_FILE: resolve(base ?? fallbackBaseDir, file) };
+}

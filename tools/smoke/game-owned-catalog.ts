@@ -10,7 +10,10 @@ import {
   loadEffectiveTargetConfigMatrix,
   validateEffectiveTargetConfigMatrix,
 } from '../target/effective-config';
-import { normalizeMonetizationCatalogEnv } from '../target/monetization-catalog-env';
+import {
+  normalizeMonetizationCatalogEnv,
+  normalizeNotificationTopicsEnv,
+} from '../target/monetization-catalog-env';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-game-catalog-'));
 // Import a rendered game, not the raw template's placeholder tsconfig. Keep the
@@ -633,6 +636,37 @@ function assertTargetBuildCatalogEnvUsesCallerBase(): void {
   assert.equal(normalizedEnvFromTargetsBase.MPGD_AD_PLACEMENTS_FILE, placementsFile);
   assert.equal(normalizedEnvFromConflictingBases.MPGD_PRODUCT_CATALOG_FILE, callerCatalogFile);
   assert.equal(normalizedEnvFromConflictingBases.MPGD_AD_PLACEMENTS_FILE, callerPlacementsFile);
+
+  // The notification topic catalog resolves the same way for the wrapper build.
+  assert.deepEqual(normalizeNotificationTopicsEnv({}), {});
+  assert.deepEqual(normalizeNotificationTopicsEnv({ MPGD_NOTIFICATION_TOPICS_FILE: '  ' }), {});
+  assert.deepEqual(normalizeNotificationTopicsEnv({ MPGD_NOTIFICATION_TOPICS_FILE: catalogFile }), {
+    MPGD_NOTIFICATION_TOPICS_FILE: catalogFile,
+  });
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: relative(callerDir, catalogFile), PWD: process.cwd() },
+      callerDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: catalogFile },
+  );
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      {
+        MPGD_NOTIFICATION_TOPICS_FILE: relative(callerDir, catalogFile),
+        PWD: callerDir,
+      },
+      shadowDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: catalogFile },
+  );
+  assert.deepEqual(
+    normalizeNotificationTopicsEnv(
+      { MPGD_NOTIFICATION_TOPICS_FILE: 'missing-topics.json' },
+      shadowDir,
+    ),
+    { MPGD_NOTIFICATION_TOPICS_FILE: resolve(shadowDir, 'missing-topics.json') },
+  );
 }
 
 interface ViteUserConfig {

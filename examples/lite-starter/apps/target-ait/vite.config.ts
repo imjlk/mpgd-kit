@@ -17,8 +17,8 @@ const aitAdConfig = readAitAdConfig(process.env.MPGD_AD_PLACEMENTS_FILE);
 const aitIapProducts = readAitIapProducts(process.env.MPGD_PRODUCT_CATALOG_FILE);
 // Notifications v2 topics come from the notification topic catalog
 // (`targets.ait`), so the wrapper and the backend share one source:
-// MPGD_NOTIFICATION_TOPICS_FILE (a relative path is read from the game
-// root), else notifications/topics.json when it exists. Without a catalog, or with
+// MPGD_NOTIFICATION_TOPICS_FILE (a relative path names a file of the game),
+// else notifications/topics.json when it exists. Without a catalog, or with
 // no topic mapped for Apps in Toss, the host bridge exposes no notifications.
 const aitNotificationTopics = readAitNotificationTopicsFile(
   {

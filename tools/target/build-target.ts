@@ -47,7 +47,10 @@ import {
 } from './microsoft-store-pwa';
 import { assembleMiniGameArtifact, assertDisjointMiniGameTargetOutputs } from './minigame-artifact';
 import { wechatStagingAppId, writeWechatMiniGameProjectFiles } from './minigame-project-files';
-import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
+import {
+  normalizeMonetizationCatalogEnv,
+  normalizeNotificationTopicsEnv,
+} from './monetization-catalog-env';
 import { beginNativeBuildAttempt } from './native-build-attempt';
 import { executeNativeTargetBuild } from './native-build-execution';
 import { resolveNativeCommandLaunch } from './native-command-launcher';
@@ -145,7 +148,10 @@ assertDisjointMiniGameTargetOutputs(config.targets, targetPath, [
   },
 ]);
 const runtimeTargetConfigMatrix = loadTargetConfigMatrix();
-const monetizationCatalogEnv = normalizeMonetizationCatalogEnv(process.env, configBaseDir);
+const monetizationCatalogEnv = {
+  ...normalizeMonetizationCatalogEnv(process.env, configBaseDir),
+  ...normalizeNotificationTopicsEnv(process.env, configBaseDir),
+};
 const targetScopedEnv = {
   ...process.env,
   ...monetizationCatalogEnv,

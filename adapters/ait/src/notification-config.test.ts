@@ -64,6 +64,7 @@ describe('extractAitNotificationTopicConfig', () => {
       [JSON.parse('{"topics":[{"id":"__proto__","targets":{"ait":{"templateSetCode":"c","agreement":"required"}}}]}'), /index 0 is invalid/u],
       [{ topics: [{ id: 'a', targets: 'ait' }] }, /"a" has invalid targets/u],
       [{ topics: [{ id: 'a', targets: [] }] }, /"a" has invalid targets/u],
+      [{ topics: [{ id: 'a', targets: null }] }, /"a" has invalid targets/u],
       [{ topics: [{ id: 'a', targets: { ait: 'code' } }] }, /invalid ait mapping/u],
       [{ topics: [{ id: 'a', targets: { ait: { templateSetCode: ' ', agreement: 'required' } } }] }, /non-empty ait templateSetCode/u],
       [{ topics: [{ id: 'a', targets: { ait: { templateSetCode: 'c', agreement: 'optional' } } }] }, /agreement 'required' or 'none'/u],
@@ -98,6 +99,10 @@ describe('readAitNotificationTopicsFile', () => {
       .toEqual(mapped);
     expect(readAitNotificationTopicsFile(input, fileSystem({}))).toEqual({});
     expect(readAitNotificationTopicsFile({ ...input, configured: '  ' }, fileSystem({}))).toEqual({});
+    // A default file that exists but cannot be read fails with its path.
+    const unreadable = { ...fileSystem({}), existsSync: () => true };
+    expect(() => readAitNotificationTopicsFile(input, unreadable))
+      .toThrow('unreadable or invalid JSON: /game/notifications/topics.json');
   });
 
   it('resolves a relative configured path against the game root, not the wrapper', () => {
@@ -114,7 +119,7 @@ describe('readAitNotificationTopicsFile', () => {
   it('throws for a configured file that is missing or not JSON, naming the resolved path', () => {
     const input = { configured: 'missing.json', rootDir: '/game', defaultFile: 'notifications/topics.json' };
     expect(() => readAitNotificationTopicsFile(input, fileSystem({})))
-      .toThrow('unreadable or invalid JSON: /game/missing.json');
+      .toThrow('unreadable or invalid JSON: /game/missing.json (MPGD_NOTIFICATION_TOPICS_FILE)');
     expect(() => readAitNotificationTopicsFile(input, fileSystem({ '/game/missing.json': '{' })))
       .toThrow('unreadable or invalid JSON: /game/missing.json');
     expect(() => readAitNotificationTopicsFile(input, fileSystem({ '/game/missing.json': '[]' })))
