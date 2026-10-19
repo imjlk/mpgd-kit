@@ -447,15 +447,26 @@ try {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (dropNext && String(input instanceof Request ? input.url : input).includes('messages:send')) {
       dropNext = false;
-      throw new TypeError('fetch failed');
+      throw new TypeError('fetch failed for tok-q');
     }
     return googleFetch(input, init);
   }) as typeof fetch;
-  await consumeNotificationDispatchBatch(
-    queueEnv,
-    batch([{ body: queued[0] }, { body: { nope: true } }]),
-  );
+  const dropLogs: string[] = [];
+  const errorBefore = console.error;
+  console.error = (...parts: unknown[]) => {
+    dropLogs.push(parts.map(String).join(' '));
+  };
+  try {
+    await consumeNotificationDispatchBatch(
+      queueEnv,
+      batch([{ body: queued[0] }, { body: { nope: true } }]),
+    );
+  } finally {
+    console.error = errorBefore;
+  }
   globalThis.fetch = googleFetch;
+  // A provider call's failure never reaches the logs with its message, which may quote the token.
+  assert.ok(!dropLogs.some((line) => line.includes('tok-q')), dropLogs.join('\n'));
   assert.deepEqual(acks.splice(0), ['ack', 'ack']);
   assert.equal(sends.length, sendCount);
   assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), { status: 'in-flight' });
@@ -550,6 +561,24 @@ try {
   console.error = (...parts: unknown[]) => {
     errorsLogged.push(parts.map(String).join(' '));
   };
+  // A due row waits too: a queued send whose lease is moved into the past.
+  await deliverWorkerNotification(queueEnv, {
+    ...queuedSend,
+    idempotencyKey: 'worker-due-while-broken',
+  });
+  const dueRow = await db.prepare('SELECT send_json FROM notification_sends WHERE send_key = ?')
+    .bind('worker-due-while-broken')
+    .first<{ readonly send_json: string }>();
+  const dueSend = JSON.parse(
+    dueRow?.send_json ?? '{}',
+  ) as { rows: { state: { leaseUntil?: string } }[] };
+  for (const row of dueSend.rows) {
+    row.state.leaseUntil = '2026-01-01T00:00:00Z';
+  }
+  await db.prepare('UPDATE notification_sends SET send_json = ?, due_at_ms = ? WHERE send_key = ?')
+    .bind(JSON.stringify(dueSend), Date.parse('2026-01-01T00:00:00Z'), 'worker-due-while-broken')
+    .run();
+  const jobsBeforeBroken = queued.length;
   try {
     await runScheduledNotifications(
       { ...queueEnv, DB: brokenDb(db, /notification_schedule/u) } satisfies GameServicesWorkerEnv,
@@ -557,6 +586,11 @@ try {
   } finally {
     console.error = realError;
   }
+  assert.deepEqual(
+    queued.slice(jobsBeforeBroken).map((job) => job.sendKey),
+    ['worker-due-while-broken'],
+    'the due row still goes out',
+  );
   assert.ok(
     errorsLogged.some(
       (line) => line.includes('scheduler.list') && line.includes('D1 is unavailable'),

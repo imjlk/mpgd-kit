@@ -104,6 +104,13 @@ export const notificationsRoutePrefix = '/game-services/notifications';
 /** Largest request body a notifications route reads. */
 const maxBodyBytes = 64 * 1024;
 
+/** The service's report operations whose error may come from a provider call; only the error's name is logged. */
+const redactedOperations: ReadonlySet<string> = new Set([
+  'provider.send',
+  'dispatch',
+  'dispatchDue',
+]);
+
 const servicesByEnv = new WeakMap<object, WorkerNotifications>();
 const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
 const reportedMisconfiguration = new WeakSet<object>();
@@ -273,11 +280,12 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
           },
         }),
     onError(error, context) {
-      // Operation and keys only: a provider's error may quote a device token,
-      // so only its name is logged. A scheduler failure is the store's or
-      // the kit's (a missing table, a busy ledger), and its cause is logged
-      // cut to 120 characters, so it can be fixed.
-      const cause = context.operation.startsWith('scheduler') ? describeFailure(error) : errorName(error);
+      // Operation and keys only: a provider call's error may quote a device
+      // token, so for the operations that wrap one only its name is logged.
+      // Any other failure is the store's or the kit's (a missing table, a
+      // busy ledger), and its cause is logged cut to 120 characters, so it
+      // can be fixed.
+      const cause = redactedOperations.has(context.operation) ? errorName(error) : describeFailure(error);
       console.error('Notifications:', context.operation, context.sendKey ?? '', context.provider ?? '', cause);
     },
   });

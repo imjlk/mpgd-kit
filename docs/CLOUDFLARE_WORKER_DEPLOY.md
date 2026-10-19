@@ -168,12 +168,13 @@ The Worker serves the notifications v2 backend
 topic catalog. It needs D1 for anything but local development: apply
 `0007_notifications.sql` and `0008_notification_scheduler.sql` with the
 other migrations, and apply 0008 before deploying a Worker version that
-has the scheduler: without its table the reminder routes, advertising and
-night consent writes under the Korean rules, and the cron's reminder and
-notice step fail (the cron logs the missing table and still sends due
-rows). The memory store keeps
-consent records and endpoints in one isolate only, and the Worker refuses
-it next to a queue, whose consumer runs in another isolate. The catalog,
+has the scheduler. Without its table the reminder routes fail, and so does
+the cron's reminder and notice step (the cron logs the missing table and
+still sends due rows); under the Korean rules with a notice topic and a
+provider that can carry notices (FCM), advertising and night consent writes
+fail too. The memory store keeps consent records and endpoints in one
+isolate only, and the Worker refuses it next to a queue, whose consumer
+runs in another isolate. The catalog,
 the deployment, and the providers are checked on first use; a broken one
 fails the notifications routes with 500 and is logged once.
 
@@ -200,11 +201,13 @@ max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
 # Purges and the scheduler: due reminders and notice checks, then due sends (25 of each per
-# run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise; each item costs several D1 queries
-# and subrequests, so the default suits the paid plan, and the free plan's limits need a
-# smaller batch). A reminder fires no earlier than its time: the first run at or after it takes
-# it unless more due items are ahead of it than one batch holds, and the gate may still defer
-# it (quiet hours, the night window, provider limits).
+# run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise, at most 100; each item costs several
+# D1 queries and subrequests, so the default suits the paid plan's per-invocation limits, the
+# free plan needs a smaller batch, and a batch near 100 may pass even the paid ones). A reminder
+# fires no earlier than its time: the first run at or after it takes it unless more due items
+# are ahead of it than one batch holds (a failed one waits a minute), and its send then waits
+# for the due-send batch, the provider's rate, the queue's consumer when one is bound, and the
+# gate (quiet hours, the night window, provider limits).
 [triggers]
 crons = ["*/5 * * * *"]
 ```
@@ -258,11 +261,11 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
 - **Scheduler.** Each cron run fires the due server reminders as sends
   through the policy gate, pushes the consent notices nobody recorded by
   seven days before they are due (Korean rules, through the catalog's
-  notice topic, through providers that send free-form content of the
-  notice's own text, which FCM does and Apps in Toss and Devvit do not:
-  their templates or mapped texts cannot state the record), and then sends the due rows (deferred sends, expired
-  leases, and the scheduler's new sends), oldest first and at no more than
-  each provider's rate. With the queue bound, the cron only takes those
+  notice topic and only providers that send the notice's own text as
+  free-form content: FCM does, while Apps in Toss and Devvit send templates
+  or mapped texts that cannot state the record), and then sends the due
+  rows (deferred sends, expired leases, and the scheduler's new sends),
+  oldest first and at no more than each provider's rate. With the queue bound, the cron only takes those
   rows for the queue, and the consumer sends them; without it, the cron
   sends them itself. A refused notice push is tried again after an hour,
   doubling to a day, or as soon as the player registers a device again.
