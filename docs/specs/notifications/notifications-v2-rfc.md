@@ -1520,7 +1520,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       names the messages it observes (`classifyEnqueueError`). The delivery
       provider's `onEnqueueError` sees every failure with Devvit's message;
       the service passes the ambiguous ones and the configuration
-      rejections to `onError`.
+      rejections to `onError`. A daily limit (daily, per day, per user, per
+      app) asks for a retry after an hour; any other rate limit waits the
+      backend's default first delay.
     - A call that throws, and an answer that counts neither a success nor a
       failure, are `ambiguous`: Devvit may have queued it. `enqueue` takes no
       idempotency key, so a replay after an ambiguous answer may show twice.
@@ -1778,7 +1780,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   - The gateway's `loginPrompt` option (`createDevvitWebLoginPrompt()` from
     `@mpgd/adapter-devvit/web`, over `showLoginPrompt()` from
     `@devvit/web/client`) makes `identity.requestUpgrade` open Reddit's login
-    for such a player. It answers `{ status: 'completed', reloadExpected:
+    when the server answers `unavailable`, as it does for such a player; any
+    other answer passes through. It answers `{ status: 'completed', reloadExpected:
     true }`, because Reddit reloads the post after login, and the game reads
     the session again then. A player who closes the prompt is expected to get
     no reload and is still a guest on the next read. A prompt that cannot open answers
@@ -1803,7 +1806,11 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
     `DEVVIT_OPT_IN_REFUSED`; a plugin call that throws is
     `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic outside the catalog's
-    `reddit` mappings answers `unavailable` without an opt-in.
+    `reddit` mappings answers `unavailable` without an opt-in, and a
+    revocation for a user who is already out calls no opt-out.
+  - Devvit's and the plugin's own error text stays on the server: the
+    webview gets a fixed message, and the handler's `onError` sees the
+    cause.
   - `createDevvitPlatformGateway({ notifications: { topics } })` exposes
     `notificationsV2` over that bridge, loads its client and validators in
     their own chunk (starting with the gateway), adds the capability block and
