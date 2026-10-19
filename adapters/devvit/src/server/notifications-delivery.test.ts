@@ -234,6 +234,27 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     expect(reports[0]?.message).toBe('internal error (classifyEnqueueError threw: broken classifier)');
   });
 
+  it('names the provider code of the final answer after an override', async () => {
+    const plugin = createFakePlugin();
+    plugin.answers.push(
+      { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] },
+      { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'user has opted out' }] },
+    );
+    const provider = createDevvitNotificationDeliveryProvider({
+      notifications: plugin,
+      classifyEnqueueError: (message) => (message === 'internal error' ? 'configuration' : 'ambiguous'),
+    });
+    await expect(provider.send(request())).resolves.toEqual({
+      status: 'rejected',
+      reason: 'configuration',
+      providerCode: devvitNotificationProviderCodes.enqueueRejected,
+    });
+    await expect(provider.send(request())).resolves.toEqual({
+      status: 'ambiguous',
+      providerCode: devvitNotificationProviderCodes.enqueueUnclassified,
+    });
+  });
+
   it('lets a deployment classify a thrown error that proves nothing was sent', async () => {
     const plugin = createFakePlugin();
     plugin.answers.push(() => Promise.reject(new Error('PERMISSION_DENIED: app not approved')));
@@ -505,8 +526,9 @@ describe('createDevvitNotificationService', () => {
       }
     }
     // Leases of 300, 600, 1200, 2400 s, then an hour each, until a day after the first attempt.
-    expect(callTimes.length).toBeGreaterThanOrEqual(20);
-    expect(callTimes.length).toBeLessThanOrEqual(29);
+    // Calls at 0, 600, 1800, 4200 s, then hourly; the lease after the call at
+    // 83,400 s would end a day after the first attempt, so replays stop.
+    expect(callTimes.length).toBe(26);
     expect((callTimes.at(-1) ?? 0) - (callTimes[0] ?? 0)).toBeLessThan(24 * 3_600_000);
   });
 

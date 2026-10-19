@@ -1512,18 +1512,19 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       refusal arrives as an `enqueue` error.
   - **Answers.** `failureCount` and `errors` map per recipient.
     - `successCount` above 0 is `accepted`.
-    - An error proves nothing was queued for the recipient. A message that
+    - An error for the recipient is a failure Devvit counted. A message that
       reads as a rate limit is `rate-limited`; one that names this recipient
       and reads as the user's refusal (opted out, no such user) is `rejected`
       with reason `recipient`.
     - Any other error is `ambiguous` (provider code
-      `DEVVIT_ENQUEUE_UNCLASSIFIED`), because an unknown message proves
-      neither a setup error nor a refusal. The backend reports it and
+      `DEVVIT_ENQUEUE_UNCLASSIFIED`). The ambiguity is in the classification:
+      an unknown message proves neither a setup error nor a refusal, nor
+      that the next attempt fails the same way. The backend reports it and
       replays it after each lease, which doubles from the claim lease up to
       an hour, until 24 hours after the first attempt
       (`notificationAmbiguousReplayHours`, see [Provider
       answers](#provider-answers)): with the default 300-second lease, at
-      most about 28 calls. Then the row stays in flight until its key's
+      most 26 calls. Then the row stays in flight until its key's
       retention ends, and the backend reports it.
     - Devvit documents no error messages (checked 2026-10-19), so a deployment
       names the messages it observes (`classifyEnqueueError`). The delivery

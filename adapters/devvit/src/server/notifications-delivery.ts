@@ -72,7 +72,8 @@ export interface DevvitNotificationsDeliveryClient {
 
 /**
  * How an `enqueue` failure is answered: a per-recipient error of the answer
- * (`source: 'answer'`, nothing was queued for the user) or a call that threw
+ * (`source: 'answer'`: Devvit counted a failure for the user, but an error
+ * the defaults cannot read is still `ambiguous`) or a call that threw
  * (`source: 'thrown'`, Devvit may have queued it, so `ambiguous` is the
  * default and the only safe answer unless the error proves nothing was
  * sent: a classifier must answer `undefined` or `ambiguous` for a thrown
@@ -219,7 +220,7 @@ function reasonOf(answer: NotificationRemoteDeliveryAnswer): Pick<DevvitEnqueueE
  *   service reports it to the operator and replays it after each lease,
  *   which doubles from the claim lease up to an hour, for at most 24 hours
  *   after the first attempt (`notificationAmbiguousReplayHours`): with the
- *   default 300-second lease, at most about 28 calls. A call that throws,
+ *   default 300-second lease, at most 26 calls. A call that throws,
  *   or an answer that counts neither a success nor a failure, is
  *   `ambiguous` too: Devvit may have queued it, and `enqueue` takes no
  *   idempotency key, so a replay may show twice.
@@ -290,7 +291,6 @@ export function createDevvitNotificationDeliveryProvider(
         source: 'answer' | 'thrown',
         message: string,
         fallback: 'rate-limited' | 'recipient' | 'configuration' | 'ambiguous',
-        providerCode: string,
       ): NotificationRemoteDeliveryAnswer => {
         let kind = fallback;
         let note = '';
@@ -299,6 +299,13 @@ export function createDevvitNotificationDeliveryProvider(
         } catch (error) {
           // A failing classifier keeps the default answer; the report says so.
           note = ` (classifyEnqueueError threw: ${error instanceof Error ? error.message : String(error)})`;
+        }
+        // The provider code follows the final answer, after any override.
+        let providerCode: string = devvitNotificationProviderCodes.enqueueRejected;
+        if (source === 'thrown') {
+          providerCode = devvitNotificationProviderCodes.enqueueFailed;
+        } else if (kind === 'ambiguous') {
+          providerCode = devvitNotificationProviderCodes.enqueueUnclassified;
         }
         let answer: NotificationRemoteDeliveryAnswer;
         if (kind === 'rate-limited') {
@@ -330,7 +337,6 @@ export function createDevvitNotificationDeliveryProvider(
           'thrown',
           error instanceof Error ? error.message : String(error),
           'ambiguous',
-          devvitNotificationProviderCodes.enqueueFailed,
         );
       }
       if (typeof response?.successCount === 'number' && response.successCount > 0) {
@@ -356,14 +362,7 @@ export function createDevvitNotificationDeliveryProvider(
         // Only an error that names this recipient proves a refusal of the user.
         fallback = 'recipient';
       }
-      return failure(
-        'answer',
-        message,
-        fallback,
-        fallback === 'ambiguous'
-          ? devvitNotificationProviderCodes.enqueueUnclassified
-          : devvitNotificationProviderCodes.enqueueRejected,
-      );
+      return failure('answer', message, fallback);
     },
     async readPermission({ player }): Promise<NotificationPermissionState> {
       const userId = userIdOf(player);
