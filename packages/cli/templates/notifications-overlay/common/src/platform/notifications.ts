@@ -73,6 +73,8 @@ export function createStarterNotificationBackend(
 }
 
 const backends = new WeakMap<PlatformGateway, StarterNotificationBackend | undefined>();
+/** Per gateway, for the process: agreements given on a host that gives no read. */
+const agreements = new WeakMap<PlatformGateway, Set<string>>();
 
 /** One backend per gateway: a runtime subscribes to its provider once, for the process. */
 function starterNotificationBackend(platform: PlatformGateway): StarterNotificationBackend | undefined {
@@ -89,6 +91,11 @@ export function createStarterNotificationSettingsModel(
 ): StarterNotificationSettings {
   const requestUpgrade = platform.identity.requestUpgrade?.bind(platform.identity);
   const backend = starterNotificationBackend(platform);
+  let agreed = agreements.get(platform);
+  if (agreed === undefined) {
+    agreed = new Set<string>();
+    agreements.set(platform, agreed);
+  }
   return createStarterNotificationSettings({
     provider: platform.notificationsV2,
     runtime: backend?.runtime,
@@ -99,6 +106,7 @@ export function createStarterNotificationSettingsModel(
       : { noticeCopy: starterNotificationCatalog.notices.copy }),
     defaultLocale: starterNotificationCatalog.defaultLocale,
     consentTextVersion: starterAdvertisingConsentTextVersion,
+    agreedThisSession: agreed,
     // Devvit: a logged-out player logs in before the opt-in (the gateway's loginPrompt).
     ...(requestUpgrade === undefined
       ? {}

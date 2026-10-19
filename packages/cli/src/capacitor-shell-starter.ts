@@ -3246,7 +3246,7 @@ function planNotificationsProvider(input: {
   // `versionOf` already checked against an installed firebase; this covers
   // the firebase the CLI would add.
   const messaging = shellPlugins.find(
-    (plugin) => plugin.packageName === '@capacitor-firebase/messaging',
+    (plugin) => plugin.packageName === notificationsMessagingPlugin,
   );
   const firebase = versionOf('firebase');
   if (messaging !== undefined) {

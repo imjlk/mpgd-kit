@@ -128,6 +128,12 @@ export interface StarterNotificationSettingsInput {
   readonly defaultLocale: string;
   /** The consent text version recorded with advertising and night consent. */
   readonly consentTextVersion: string;
+  /**
+   * The topics the player agreed to in this session, shared by every model
+   * for the same gateway so a screen opened again still shows them (a host
+   * such as Apps in Toss gives no read). A fresh set when absent.
+   */
+  readonly agreedThisSession?: Set<string>;
   /** Asks the host to log the player in (`identity.requestUpgrade`), for a host that needs it first. */
   readonly requestLogin?: () => Promise<unknown>;
   readonly locale: string;
@@ -331,7 +337,7 @@ export function createStarterNotificationSettings(
   let records: readonly NotificationConsentRecord[] | undefined;
   let missingReaderReported = false;
   /** Agreements the player gave in this session, for a host that gives no read. */
-  const agreedThisSession = new Set<string>();
+  const agreedThisSession = input.agreedThisSession ?? new Set<string>();
   let capabilities: NotificationCapabilities | undefined;
   let message: string | undefined;
   let notices: StarterNotificationSettingsView['notices'] = [];
@@ -399,9 +405,9 @@ export function createStarterNotificationSettings(
       agreements: perTopic
         ? agreementTopics.map((topic) => {
             const read = snapshot.topics[topic.id] ?? 'unsupported';
-            // A host that gives no read (Apps in Toss) answers `unknown`; without a
-            // runtime, whose records would decide, an agreement made in this
-            // session shows as on.
+            // A host that gives no read (Apps in Toss) answers `unknown` (a runtime
+            // resolves it from the records when it has one); an agreement made
+            // in this session shows as on.
             const topicState = read === 'unknown' && agreedThisSession.has(topic.id) ? 'granted' : read;
             return {
               topic: topic.id,
@@ -590,7 +596,10 @@ export function createStarterNotificationSettings(
     },
     agree(topic) {
       return run(async () => {
-        if (!agreementTopics.some((candidate) => candidate.id === topic)) {
+        // Only on a host that asks per topic, as the view lists them: elsewhere
+        // the app-wide permission covers every topic.
+        if (capabilities?.permission.scope !== 'topic'
+          || !agreementTopics.some((candidate) => candidate.id === topic)) {
           return strings.unavailable;
         }
         // The host sheet for this topic, from the player's tap; the runtime

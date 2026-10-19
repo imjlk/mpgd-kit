@@ -516,6 +516,19 @@ const common = {
     runtime: undefined,
   }).load();
   assert.deepEqual(appView.agreements, []);
+  // …and asks for nothing per topic there.
+  const appSettings = createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider: app.provider,
+    runtime: undefined,
+  });
+  await appSettings.load();
+  assert.equal(
+    (await appSettings.agree('friend-challenge')).message,
+    '이 기기에서는 알림을 켤 수 없어요.',
+  );
+  assert.deepEqual(app.calls, []);
   // A host that gives no read: an agreement made in this session shows as on.
   const unread = fakeProvider(capabilities('topic', 'host', false), {
     topics: { 'friend-challenge': 'unknown' },
@@ -533,6 +546,25 @@ const common = {
     state: 'granted',
     canRequest: false,
   });
+  // A screen opened again (a new model over the same gateway's set) still shows it.
+  const shared = new Set<string>();
+  const first = createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider: unread.provider,
+    runtime: undefined,
+    agreedThisSession: shared,
+  });
+  await first.load();
+  await first.agree('friend-challenge');
+  const reopened = await createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider: unread.provider,
+    runtime: undefined,
+    agreedThisSession: shared,
+  }).load();
+  assert.equal(reopened.agreements[0]?.state, 'granted');
   // With a runtime the sheet is asked for as the tap's, and a granted topic offers nothing.
   const hosted = fakeProvider(capabilities('topic', 'host', false), {
     topics: { 'friend-challenge': 'prompt' },

@@ -12,6 +12,9 @@
 /** The provider id that selects the notifications starter. */
 export const notificationsProviderId = 'notifications';
 
+/** The push plugin the notifications starter adds (FCM on Android and iOS). */
+export const notificationsMessagingPlugin = '@capacitor-firebase/messaging';
+
 /**
  * The npm packages a game with notifications declares. The two Capacitor
  * plugins are the optional peers `@mpgd/adapter-capacitor/notifications`
@@ -20,7 +23,7 @@ export const notificationsProviderId = 'notifications';
  * must resolve even though a native shell never loads it.
  */
 export const notificationsGameDependencies: Readonly<Record<string, string>> = Object.freeze({
-  '@capacitor-firebase/messaging': '8.5.2',
+  [notificationsMessagingPlugin]: '8.5.2',
   '@capacitor/local-notifications': '8.3.1',
   firebase: '12.19.0',
 });
@@ -32,9 +35,6 @@ export const notificationsGameDependencies: Readonly<Record<string, string>> = O
  * starter test pins it to the plugin's published metadata.
  */
 export const notificationsMessagingFirebaseRange = '^12.6.0';
-
-/** The push plugin the notifications starter adds (FCM on Android and iOS). */
-export const notificationsMessagingPlugin = '@capacitor-firebase/messaging';
 
 /** The plugins `mpgd target init capacitor --providers notifications` installs into the shell. */
 export const notificationsShellPlugins: readonly string[] = Object.freeze([
