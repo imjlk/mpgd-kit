@@ -76,9 +76,10 @@ export interface DevvitNotificationsDeliveryClient {
  * (`source: 'thrown'`, Devvit may have queued it, so `ambiguous` is the
  * default and the only safe answer unless the error proves nothing was
  * sent: a classifier must answer `undefined` or `ambiguous` for a thrown
- * error it does not know). An answer that names no error is not classified. Devvit documents no error messages (checked 2026-10-19); a
- * deployment that observes one (through `onEnqueueError`) names it here.
- * `undefined` keeps the default.
+ * error it does not know). An answer that counts neither a success nor a
+ * failure is not classified. Devvit documents no error messages (checked
+ * 2026-10-19); a deployment that observes one (through `onEnqueueError`)
+ * names it here. `undefined` keeps the default.
  */
 export type DevvitEnqueueErrorClassifier = (
   message: string,
@@ -91,6 +92,8 @@ export interface DevvitEnqueueErrorReport {
   readonly source: 'answer' | 'thrown';
   readonly message: string;
   readonly answer: NotificationRemoteDeliveryAnswer['status'];
+  /** The reason of a `rejected` answer. */
+  readonly reason?: 'configuration' | 'recipient';
 }
 
 export interface CreateDevvitNotificationDeliveryProviderInput {
@@ -105,7 +108,7 @@ export interface CreateDevvitNotificationDeliveryProviderInput {
   /**
    * Every `enqueue` failure and how it was answered, so an operator learns
    * Devvit's messages. `createDevvitNotificationService` forwards the
-   * `rejected` and `ambiguous` ones to `onError`.
+   * `ambiguous` ones and the `configuration` rejections to `onError`.
    */
   readonly onEnqueueError?: (report: DevvitEnqueueErrorReport) => void;
 }
@@ -124,15 +127,31 @@ export const devvitNotificationProviderCodes = Object.freeze({
   enqueueUnanswered: 'DEVVIT_ENQUEUE_UNANSWERED',
 } as const);
 
-/** A message that reads as a rate limit: per user (2 a day) or per app (25,000 a day). */
-const rateLimitedMessage =
-  /rate[ -]?limit|too many (?:requests|notifications)|quota|throttl|(?:daily|per[- ](?:user|app|day)|sending|send) limit|limit (?:exceeded|reached) (?:for|of|per)/iu;
 /**
- * A message that reads as this user's refusal: not opted in, opted out, or
- * no such user. It counts only for an error that names this recipient.
+ * Whether a message reads as a rate limit: per user (2 a day) or per app
+ * (25,000 a day). A limit counts only next to a word about sending and
+ * never next to one about the text, so "character limit exceeded" stays a
+ * configuration refusal.
+ */
+function readsAsRateLimit(message: string): boolean {
+  if (/rate[ -]?limit|too many (?:requests|notifications)|quota|throttl/iu.test(message)) {
+    return true;
+  }
+  if (/\b(?:characters?|length|long|title|body|link|size|bytes?)\b/iu.test(message)) {
+    return false;
+  }
+  return /\blimit\b/iu.test(message)
+    && /\b(?:exceeded|reached|hit)\b/iu.test(message)
+    && /\b(?:notifications?|daily|per[- ]?(?:user|app|day)|user|app|send(?:s|ing)?)\b/iu.test(message);
+}
+
+/**
+ * A message that reads as this user's refusal: not opted in, opted out, no
+ * such user or account. It counts only for an error that names this
+ * recipient.
  */
 const recipientMessage =
-  /opt(?:ed)?[ -]?(?:in|out)|user (?:is )?(?:not found|does not exist|deleted|suspended|banned)/iu;
+  /\bopt(?:ed|ing)?[ -]?(?:in|out)\b|\b(?:user|account|recipient)\b[^.]*\b(?:not found|does not exist|deleted|suspended|banned)\b|\bnot subscribed\b|\bnotifications? (?:are )?disabled\b/iu;
 
 /**
  * The Devvit delivery provider (`{ id: 'devvit', send, readPermission }`).
@@ -205,6 +224,24 @@ export function createDevvitNotificationDeliveryProvider(
         // placeholder: either way the operator should see it.
         return rejected('configuration', devvitNotificationProviderCodes.templateSyntax);
       }
+      const report = (
+        source: 'answer' | 'thrown',
+        message: string,
+        answer: NotificationRemoteDeliveryAnswer,
+      ): NotificationRemoteDeliveryAnswer => {
+        try {
+          input.onEnqueueError?.({
+            sendKey: request.sendKey,
+            source,
+            message,
+            answer: answer.status,
+            ...(answer.status === 'rejected' ? { reason: answer.reason === 'recipient' ? 'recipient' : 'configuration' } : {}),
+          });
+        } catch {
+          // A failing log never changes the answer.
+        }
+        return answer;
+      };
       const failure = (
         source: 'answer' | 'thrown',
         message: string,
@@ -212,10 +249,12 @@ export function createDevvitNotificationDeliveryProvider(
         providerCode: string,
       ): NotificationRemoteDeliveryAnswer => {
         let kind = fallback;
+        let note = '';
         try {
           kind = input.classifyEnqueueError?.(message, source) ?? fallback;
-        } catch {
-          // A failing classifier keeps the default answer.
+        } catch (error) {
+          // A failing classifier keeps the default answer; the report says so.
+          note = ` (classifyEnqueueError threw: ${error instanceof Error ? error.message : String(error)})`;
         }
         let answer: NotificationRemoteDeliveryAnswer;
         if (kind === 'rate-limited') {
@@ -225,12 +264,7 @@ export function createDevvitNotificationDeliveryProvider(
         } else {
           answer = rejected(kind === 'recipient' ? 'recipient' : 'configuration', providerCode);
         }
-        try {
-          input.onEnqueueError?.({ sendKey: request.sendKey, source, message, answer: answer.status });
-        } catch {
-          // A failing log never changes the answer.
-        }
-        return answer;
+        return report(source, `${message}${note}`, answer);
       };
       let response: DevvitEnqueueResponse;
       try {
@@ -261,25 +295,14 @@ export function createDevvitNotificationDeliveryProvider(
       if (ours === undefined && !failed) {
         // Neither queued nor refused: Devvit may still have queued it. No
         // error exists to classify, so the answer stays ambiguous.
-        const answer: NotificationRemoteDeliveryAnswer = {
+        return report('answer', '(no success and no error in the answer)', {
           status: 'ambiguous',
           providerCode: devvitNotificationProviderCodes.enqueueUnanswered,
-        };
-        try {
-          input.onEnqueueError?.({
-            sendKey: request.sendKey,
-            source: 'answer',
-            message: '(no success and no error in the answer)',
-            answer: answer.status,
-          });
-        } catch {
-          // A failing log never changes the answer.
-        }
-        return answer;
+        });
       }
       const message = typeof ours?.message === 'string' ? ours.message : '';
       let fallback: 'rate-limited' | 'recipient' | 'configuration' = 'configuration';
-      if (rateLimitedMessage.test(message)) {
+      if (readsAsRateLimit(message)) {
         fallback = 'rate-limited';
       } else if (ours?.userId === userId && recipientMessage.test(message)) {
         // Only an error that names this recipient proves a refusal of the user.
@@ -389,7 +412,7 @@ export function createDevvitNotificationService(
         ...(classifyEnqueueError === undefined ? {} : { classifyEnqueueError }),
         onEnqueueError: (report) => {
           // Routine answers (a rate limit, a user's refusal) are not errors.
-          if (report.answer !== 'ambiguous' && report.answer !== 'rejected') {
+          if (report.answer !== 'ambiguous' && report.reason !== 'configuration') {
             return;
           }
           options.onError?.(

@@ -144,6 +144,11 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     ['a refusal of the link, not the user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'post not found' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['a user refusal that names no user', { successCount: 0, failureCount: 1, errors: [{ userId: undefined, message: 'user has opted out' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['a deleted user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'User not found' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a notification limit at the end of the message', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'User notification limit reached' }] }, { status: 'rate-limited' }],
+    ['a length limit with a preposition', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'character limit exceeded for body' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a bare limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Limit reached' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a named account refusal', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Account t2_alice has been suspended' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['adopting is not opting', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'adoption in progress' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['throttling', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Throttled: try later' }] }, { status: 'rate-limited' }],
     ['a malformed answer', null as unknown as DevvitEnqueueResponse, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
     ['an answer that counts nothing', { successCount: 0, failureCount: 0, errors: [] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
@@ -172,7 +177,7 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     await expect(provider.send(request())).resolves.toMatchObject({ status: 'rejected', reason: 'recipient' });
     await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
     expect(reports).toEqual([
-      { sendKey: 'k-1', source: 'answer', message: 'user has opted out', answer: 'rejected' },
+      { sendKey: 'k-1', source: 'answer', message: 'user has opted out', answer: 'rejected', reason: 'recipient' },
       { sendKey: 'k-1', source: 'thrown', message: 'deadline exceeded', answer: 'ambiguous' },
     ]);
   });
@@ -194,6 +199,23 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     await expect(provider.send(request())).resolves.toMatchObject({ status: 'rejected', reason: 'recipient' });
     await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
     expect(seen).toEqual(['user has opted out']);
+  });
+
+  it('says in the report when the classifier threw', async () => {
+    const plugin = createFakePlugin();
+    plugin.answers.push({ successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] });
+    const reports: { message: string }[] = [];
+    const provider = createDevvitNotificationDeliveryProvider({
+      notifications: plugin,
+      classifyEnqueueError: () => {
+        throw new Error('broken classifier');
+      },
+      onEnqueueError: (report) => {
+        reports.push(report);
+      },
+    });
+    await provider.send(request());
+    expect(reports[0]?.message).toBe('internal error (classifyEnqueueError threw: broken classifier)');
   });
 
   it('lets a deployment classify a thrown error that proves nothing was sent', async () => {
@@ -437,6 +459,29 @@ describe('createDevvitNotificationService', () => {
     await expect(service.deliver({ idempotencyKey: 'e-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
       .resolves.toMatchObject({ status: 'unavailable', reason: 'provider-rejected' });
     expect(errors).toContainEqual({ operation: 'devvit.enqueue', sendKey: 'e-1', provider: 'devvit' });
+  });
+
+  it("does not report a user's refusal or a rate limit through onError", async () => {
+    const errors: unknown[] = [];
+    const plugin = createFakePlugin();
+    plugin.answers.push(
+      { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'User not found' }] },
+      { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'rate limit exceeded' }] },
+    );
+    const { service } = createDevvitNotificationService({
+      redis: createFakeNotificationRedis(),
+      notifications: plugin,
+      catalog: catalogFile,
+      now: () => '2026-10-19T03:00:00Z',
+      onError: (_error, context) => {
+        errors.push(context);
+      },
+    });
+    const send = (key: string) =>
+      service.deliver({ idempotencyKey: key, player: user, topic: 'friend-challenge', templateData: { friend: 'M' } });
+    await expect(send('r-1')).resolves.toMatchObject({ status: 'unavailable', reason: 'provider-rejected' });
+    await expect(send('r-2')).resolves.toMatchObject({ status: 'deferred' });
+    expect(errors.filter((context) => (context as { operation: string }).operation === 'devvit.enqueue')).toEqual([]);
   });
 
   it('builds a session only for a Reddit user id', () => {

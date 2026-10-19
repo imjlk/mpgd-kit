@@ -25,6 +25,8 @@ export interface FakeNotificationRedis extends DevvitNotificationRedis {
    * transaction commits, and its result is short.
    */
   dropZeroReplies: boolean;
+  /** How an aborted EXEC answers: no reply (as `@devvit/redis`), or one nil per queued command. */
+  abortReply: 'empty' | 'nulls';
   /** Marks a key as written by another client without changing it, as a WATCH sees it. */
   touch(key: string): void;
   keys(): readonly string[];
@@ -174,6 +176,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
 
   const redis: FakeNotificationRedis = {
     dropZeroReplies: false,
+    abortReply: 'empty',
     get aborted() {
       return aborted;
     },
@@ -285,7 +288,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
           const changed = [...seen].some(([key, version]) => (versions.get(key) ?? 0) !== version);
           if (changed) {
             aborted += 1;
-            return [];
+            return redis.abortReply === 'nulls' ? commands.map(() => null) : [];
           }
           const replies = commands.map((command) => command());
           return redis.dropZeroReplies ? replies.filter((reply) => reply !== 0) : replies;

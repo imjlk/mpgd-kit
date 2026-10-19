@@ -94,6 +94,13 @@ describe('createDevvitRedisNotificationStore', () => {
     expect((await store.getSend('k'))?.send.rows[0]?.state).toMatchObject({ claim: 'holder-b' });
   });
 
+  it('reads an abort that answers only nil as an abort', async () => {
+    const redis = createFakeNotificationRedis();
+    redis.abortReply = 'nulls';
+    await runNotificationStoreConformance(() => createDevvitRedisNotificationStore(redis));
+    expect(redis.aborted).toBeGreaterThan(0);
+  });
+
   it('keeps the due and in-flight indexes in the transaction that writes the send', async () => {
     const redis = createFakeNotificationRedis();
     const store = createDevvitRedisNotificationStore(redis);
@@ -264,7 +271,7 @@ describe('createDevvitRedisNotificationStore', () => {
     const store = createDevvitRedisNotificationStore(redis);
     await store.createSend(send('ok', [claimed('a', '2026-10-19T03:05:00Z')]));
     await store.createSend(send('bad', [claimed('a', '2026-10-19T03:05:00Z')]));
-    redis.poke('mpgd:notifications:send:bad', '{}');
+    redis.poke('mpgd:notifications:send:bad', JSON.stringify({ version: 'v', send: {} }));
     expect((await store.listInFlightSends('t2_player')).map((row) => row.key)).toEqual(['ok']);
   });
 

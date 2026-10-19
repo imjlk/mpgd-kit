@@ -100,7 +100,13 @@ export interface CreateDevvitRedisNotificationStoreOptions {
   readonly transactionAttempts?: number;
   /** A fresh send version token; random by default. */
   readonly newVersion?: () => string;
-  /** Sends and history rows one `purge` call deletes at most, each; unbounded by default. */
+  /**
+   * Sends and history rows one `purge` call deletes at most, each; unbounded
+   * by default, as `NotificationStore.purge` deletes every row past its
+   * cutoff. Each row costs a few Redis round trips, so a deployment whose
+   * purge runs in a time-bounded Devvit request or scheduler job sets it
+   * (say 500) and runs the purge again while a count equals it.
+   */
   readonly purgeLimit?: number;
 }
 
@@ -187,13 +193,15 @@ export function createDevvitRedisNotificationStore(
         for (const command of commands) {
           await command(transaction);
         }
-        await transaction.set(keys.commitMarker, newVersion());
+        await transaction.set(keys.commitMarker, '1');
         const results = await transaction.exec();
         if (results !== null && !Array.isArray(results)) {
           throw new Error('Devvit Redis transaction returned an unsupported response.');
         }
-        if (results === null || results.length === 0) {
-          // An aborted WATCH transaction: another writer changed a watched key.
+        // An aborted WATCH transaction (another writer changed a watched
+        // key) answers no reply; one that answers only nil is read the same
+        // way, since no command queued here replies nil when it commits.
+        if (results === null || results.length === 0 || results.every((reply) => reply === null)) {
           continue;
         }
         return result;
@@ -304,10 +312,16 @@ export function createDevvitRedisNotificationStore(
 
   /** A stored send value, or `'unreadable'` for one that is not a send. */
   function readSendValue(raw: string): StoredSendValue | 'unreadable' {
-    const value = tryParse<Partial<StoredSendValue> | null>(raw);
-    return typeof value === 'object' && value !== null
-      && typeof value.version === 'string'
-      && typeof value.send === 'object' && value.send !== null
+    const value = tryParse<{ readonly version?: unknown; readonly send?: Partial<NotificationStoredSend> } | null>(
+      raw,
+    );
+    const send = typeof value === 'object' && value !== null ? value.send : undefined;
+    return typeof value?.version === 'string'
+      && typeof send === 'object' && send !== null
+      && typeof send.key === 'string'
+      && typeof send.changedAt === 'string'
+      && typeof send.request?.player === 'string'
+      && Array.isArray(send.rows)
       ? value as StoredSendValue
       : 'unreadable';
   }
@@ -510,7 +524,7 @@ export function createDevvitRedisNotificationStore(
       }
       const values = await redis.mGet(index.map((entry) => keys.send(entry.member)));
       const sends: NotificationStoredSend[] = [];
-      for (const [position, value] of values.entries()) {
+      for (const value of values) {
         if (isMissing(value)) {
           continue;
         }
