@@ -104,12 +104,30 @@ export const notificationsRoutePrefix = '/game-services/notifications';
 /** Largest request body a notifications route reads. */
 const maxBodyBytes = 64 * 1024;
 
-/** The service's report operations whose error may come from a provider call; only the error's name is logged. */
 const redactedOperations: ReadonlySet<string> = new Set([
   'provider.send',
   'dispatch',
   'dispatchDue',
 ]);
+
+/**
+ * What the Worker logs of a failure the notifications service reports. A
+ * provider's own failure (the service marks it `fromProvider`; it reports
+ * it as `provider.send`) may quote a device token or a credential, so only
+ * its name is logged. The service wraps every other provider-side error in
+ * its own message before a report, so `dispatch` and `dispatchDue` are
+ * redacted only as a second line. Any other failure is the store's or the
+ * kit's (a missing table, a busy ledger), and its cause is logged cut to 120
+ * characters, so it can be fixed.
+ */
+export function notificationFailureCause(
+  error: unknown,
+  context: { readonly operation: string; readonly fromProvider?: boolean },
+): string {
+  return context.fromProvider === true || redactedOperations.has(context.operation)
+    ? errorName(error)
+    : describeFailure(error);
+}
 
 const servicesByEnv = new WeakMap<object, WorkerNotifications>();
 const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
@@ -280,13 +298,13 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
           },
         }),
     onError(error, context) {
-      // Operation and keys only: a provider call's error may quote a device
-      // token, so for the operations that wrap one only its name is logged.
-      // Any other failure is the store's or the kit's (a missing table, a
-      // busy ledger), and its cause is logged cut to 120 characters, so it
-      // can be fixed.
-      const cause = redactedOperations.has(context.operation) ? errorName(error) : describeFailure(error);
-      console.error('Notifications:', context.operation, context.sendKey ?? '', context.provider ?? '', cause);
+      console.error(
+        'Notifications:',
+        context.operation,
+        context.sendKey ?? '',
+        context.provider ?? '',
+        notificationFailureCause(error, context),
+      );
     },
   });
   return { status: 'ready', service };

@@ -9,6 +9,7 @@ import {
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
   endWorkerNotificationSession,
+  notificationFailureCause,
   resolveWorkerNotifications,
   runScheduledNotifications,
 } from './notificationsHandler.js';
@@ -465,8 +466,25 @@ try {
     console.error = errorBefore;
   }
   globalThis.fetch = googleFetch;
-  // A provider call's failure never reaches the logs with its message, which may quote the token.
+  // A dropped provider call is an ambiguous answer, not a report: nothing quotes the token.
   assert.ok(!dropLogs.some((line) => line.includes('tok-q')), dropLogs.join('\n'));
+  // A provider's own failure is logged by name only; a store's with its cause.
+  const leaky = new TypeError('fetch failed for tok-q');
+  assert.equal(
+    notificationFailureCause(leaky, { operation: 'provider.send', fromProvider: true }),
+    'TypeError',
+  );
+  assert.equal(
+    notificationFailureCause(leaky, { operation: 'provider.other', fromProvider: true }),
+    'TypeError',
+  );
+  assert.equal(notificationFailureCause(leaky, { operation: 'dispatch' }), 'TypeError');
+  assert.equal(
+    notificationFailureCause(new Error('no such table: notification_schedule'), {
+      operation: 'scheduler.list',
+    }),
+    'Error: no such table: notification_schedule',
+  );
   assert.deepEqual(acks.splice(0), ['ack', 'ack']);
   assert.equal(sends.length, sendCount);
   assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), { status: 'in-flight' });
