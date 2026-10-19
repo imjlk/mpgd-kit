@@ -669,7 +669,7 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
         player: 'p-race',
         id: 'reminder:r',
         version: raced?.version ?? '',
-        entry: entry('p-race', 'reminder:r', t(index)),
+        entry: entry('p-race', 'reminder:r', t(index + 1)),
       }),
     ),
   );
@@ -681,7 +681,7 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
   const winner = updated.findIndex(Boolean);
   equal(
     (await store.getScheduleEntry({ player: 'p-race', id: 'reminder:r' }))?.entry.dueAt,
-    t(winner),
+    t(winner + 1),
     "concurrency: the stored entry is the winner's",
   );
 
@@ -719,6 +719,31 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
     !(await store.listDueScheduleEntries({ at: t(10_000), limit: 100 })).some((due) =>
       due.player === 'p-tie-b'),
     'schedule: and is no longer listed',
+  );
+  deepEqual(
+    (await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' }))?.entry,
+    { ...waiting, item: { ...first.item, firedAt: t(5_000) } },
+    'schedule: the entry stays without its due time',
+  );
+  const named = await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' });
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-tie-b',
+      id: 'reminder:a',
+      version: named?.version ?? '',
+      entry: entry('p-elsewhere', 'reminder:elsewhere', undefined),
+    }),
+    'schedule: a write that names another player and id',
+  );
+  const renamed = await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' });
+  deepEqual(
+    [
+      renamed?.entry.player,
+      renamed?.entry.id,
+      await store.getScheduleEntry({ player: 'p-elsewhere', id: 'reminder:elsewhere' }),
+    ],
+    ['p-tie-b', 'reminder:a', undefined],
+    'schedule: is stored under the player and id it was written to',
   );
   const tieA = await store.getScheduleEntry({ player: 'p-tie-a', id: 'reminder:a' });
   ok(

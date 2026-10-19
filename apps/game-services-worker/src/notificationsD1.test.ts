@@ -8,7 +8,10 @@ import {
   type NotificationRemoteDeliveryRequest,
 } from '@mpgd/game-services/notifications';
 import { runNotificationStoreConformance } from '@mpgd/game-services/notifications/store-conformance';
-import { referenceNotificationProviders } from '@mpgd/platform/notifications';
+import {
+  referenceNotificationProviders,
+  type NotificationConsentRecord,
+} from '@mpgd/platform/notifications';
 import { Miniflare } from 'miniflare';
 
 import { createD1NotificationStore } from './notificationsD1.js';
@@ -64,7 +67,7 @@ try {
   // Pruning more instants than one statement binds: chunked, counted, and the notices go too.
   {
     const store = createD1NotificationStore(db);
-    const written = [];
+    const written: NotificationConsentRecord[] = [];
     for (let index = 0; index < 205; index += 1) {
       written.push(await store.appendConsent({
         player: 'p-chunk',
@@ -72,7 +75,10 @@ try {
         at: '2026-10-19T03:00:00Z',
       }));
     }
-    for (const record of written.slice(0, 3)) {
+    // Notices about records in the first, second, and third statement, and one about a kept record.
+    for (const record of [0, 95, 199, 204].map((index) => written[index]).filter(
+      (record) => record !== undefined,
+    )) {
       await store.addNoticeGiven({
         kind: 'consent-result',
         record: { kind: 'advertising', at: record.at },
@@ -88,7 +94,10 @@ try {
       (await store.listConsent('p-chunk')).map((record) => record.at),
       written.slice(200).map((record) => record.at),
     );
-    assert.deepEqual(await store.listNoticesGiven('p-chunk'), []);
+    assert.deepEqual(
+      (await store.listNoticesGiven('p-chunk')).map((notice) => notice.record.at),
+      [written[204]?.at],
+    );
   }
 
   // The service over D1: fan-out, a dead token, the key states, and consent dating.

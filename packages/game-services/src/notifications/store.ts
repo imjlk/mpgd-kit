@@ -256,9 +256,9 @@ export interface NotificationStore {
    * Deletes the player's consent records dated at these instants (each of a
    * player's records has its own millisecond, so the instant names it), and
    * the notices given that report on them, in one atomic step. Answers how
-   * many records it deleted. The service never prunes a player's latest
-   * record, so `appendConsent` keeps dating every new record after any record
-   * the player ever had, and an instant never names two records.
+   * many records it deleted. Callers never prune a player's latest record:
+   * `appendConsent` dates a new record after the latest one that is left, so
+   * an instant names one record for good only while the latest one stays.
    */
   pruneConsent(input: { readonly player: string; readonly at: readonly string[] }): Promise<number>;
 
@@ -507,11 +507,31 @@ function dueOf(entry: NotificationScheduleEntry): number | undefined {
   return entry.dueAt === undefined ? undefined : instantOf(entry.dueAt);
 }
 
-function compareCodeUnits(left: string, right: string): number {
+/** The entry as a JSON store keeps it: under its key's player and id, without an undefined `dueAt`. */
+function storedEntry(entry: NotificationScheduleEntry, player: string, id: string): NotificationScheduleEntry {
+  const { dueAt, ...rest } = structuredClone(entry);
+  return { ...rest, player, id, ...(dueAt === undefined ? {} : { dueAt }) };
+}
+
+/** Refuses an entry whose `dueAt` does not parse before anything is written. */
+function assertDue(entry: NotificationScheduleEntry): void {
+  dueOf(entry);
+}
+
+/** Code-point order, which is UTF-8 byte order: the order of SQLite's BINARY collation. */
+function compareCodePoints(left: string, right: string): number {
   if (left === right) {
     return 0;
   }
-  return left < right ? -1 : 1;
+  const a = Array.from(left);
+  const b = Array.from(right);
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    const difference = (a[index]?.codePointAt(0) ?? 0) - (b[index]?.codePointAt(0) ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return a.length - b.length;
 }
 
 export function formatNotificationInstant(millis: number): string {
@@ -749,7 +769,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
           send.request.player === player && send.rows.some((row) => row.state.status === 'in-flight')));
     },
     async listDueSends({ at, limit }) {
-      const now = Date.parse(at);
+      const now = instantOf(at);
       return [...sends.values()]
         .flatMap(({ send }) => {
           const due = notificationSendDueAt(send);
@@ -760,13 +780,14 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
         .map((entry) => entry.key);
     },
     async addHistory(entry) {
+      instantOf(entry.at);
       if (!history.some((sent) => sent.sendKey === entry.sendKey && sent.provider === entry.provider)) {
         history.push(copy(entry));
         history.sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
       }
     },
     async listHistory({ player, since }) {
-      const from = Date.parse(since);
+      const from = instantOf(since);
       return copy(history.filter((sent) => sent.player === player && Date.parse(sent.at) >= from));
     },
     async countHistory({ provider, since }) {
@@ -778,16 +799,19 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       return held === undefined ? undefined : copy(held);
     },
     async createScheduleEntry(entry) {
-      dueOf(entry);
+      assertDue(entry);
       const key = scheduleKey(entry.player, entry.id);
       if (schedule.has(key)) {
         return undefined;
       }
       const version = nextVersion();
-      schedule.set(key, { entry: copy(entry), version });
+      schedule.set(key, { entry: storedEntry(entry, entry.player, entry.id), version });
       return version;
     },
     async updateScheduleEntry({ player, id, version, entry }) {
+      if (entry !== undefined) {
+        assertDue(entry);
+      }
       const key = scheduleKey(player, id);
       const held = schedule.get(key);
       if (held === undefined || held.version !== version) {
@@ -796,8 +820,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       if (entry === undefined) {
         schedule.delete(key);
       } else {
-        dueOf(entry);
-        schedule.set(key, { entry: { ...copy(entry), player, id }, version: nextVersion() });
+        schedule.set(key, { entry: storedEntry(entry, player, id), version: nextVersion() });
       }
       return true;
     },
@@ -809,11 +832,14 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
           return due !== undefined && due <= now ? [{ player: entry.player, id: entry.id, due }] : [];
         })
         .sort((left, right) =>
-          left.due - right.due || compareCodeUnits(left.player, right.player) || compareCodeUnits(left.id, right.id))
+          left.due - right.due || compareCodePoints(left.player, right.player) || compareCodePoints(left.id, right.id))
         .slice(0, Math.max(0, limit))
         .map(({ player, id }) => ({ player, id }));
     },
     async purge(cutoffs) {
+      for (const cutoff of Object.values(cutoffs)) {
+        instantOf(cutoff);
+      }
       const before = (at: string | undefined, cutoff: string): boolean =>
         at !== undefined && Date.parse(at) < Date.parse(cutoff);
       let sendCount = 0;
