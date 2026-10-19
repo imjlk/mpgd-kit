@@ -137,26 +137,33 @@ function readsAsRateLimit(message: string): boolean {
   if (/rate[ -]?limit|too many (?:requests|notifications)|quota|throttl/iu.test(message)) {
     return true;
   }
-  // A limit that names a period ("daily", "per user") counts sends; without
-  // one, a word about the text marks a length or content refusal.
-  const counted = /\b(?:daily|per[- ]?(?:user|app|day)|today)\b/iu.test(message);
-  if (
-    !counted
-    && /\b(?:characters?|length|long|title|body|link|size|bytes?|text|message|content|payload|template)\b/iu
-      .test(message)
-  ) {
+  // A word about size or about the text marks a length or content refusal,
+  // whatever period it names. "Message" may count sends ("daily message
+  // limit"), so it marks one only when the message names no period.
+  if (/\b(?:characters?|length|long|size|bytes?|title|body|link|text|content|payload|template)\b/iu.test(
+    message,
+  )) {
+    return false;
+  }
+  if (!dailyLimitWords.test(message) && /\bmessages?\b/iu.test(message)) {
     return false;
   }
   // "Daily send limit", "per-user limits": the limit names what it counts.
-  if (/\b(?:daily|per[- ]?(?:user|app|day)|send(?:ing)?|notifications?) limits?\b/iu.test(
-    message,
-  )) {
+  if (adjacentCountedLimit.test(message)) {
     return true;
   }
   return /\blimits?\b/iu.test(message)
     && /\b(?:exceed(?:s|ed)?|reach(?:es|ed)?|hit)\b/iu.test(message)
-    && /\b(?:notifications?|daily|per[- ]?(?:user|app|day)|user|app|send(?:s|ing)?)\b/iu.test(message);
+    && (dailyLimitWords.test(message) || /\b(?:notifications?|user|app|send(?:s|ing)?)\b/iu.test(message));
 }
+
+/** The words that name a daily period, once: Devvit's limits are per user per day and per app per day. */
+const dailyPeriodSource = String.raw`daily|per[- ]?(?:day|user|app)|today'?s?`;
+const dailyLimitWords = new RegExp(String.raw`\b(?:${dailyPeriodSource})\b`, 'iu');
+const adjacentCountedLimit = new RegExp(
+  String.raw`\b(?:${dailyPeriodSource}|send(?:ing)?|notifications?) limits?\b`,
+  'iu',
+);
 
 /**
  * A message that reads as this user's refusal: not opted in, opted out, no
@@ -291,7 +298,7 @@ export function createDevvitNotificationDeliveryProvider(
         if (kind === 'rate-limited') {
           // A daily limit lifts no sooner than an hour from now; any other
           // waits the service's default first delay.
-          answer = /\b(?:daily|per[- ]?(?:day|user|app)|today)\b/iu.test(message)
+          answer = dailyLimitWords.test(message)
             ? { status: 'rate-limited', retryAfterSeconds: 3600 }
             : { status: 'rate-limited' };
         } else if (kind === 'ambiguous') {
