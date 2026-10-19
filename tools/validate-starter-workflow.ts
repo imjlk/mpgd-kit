@@ -1717,6 +1717,17 @@ function validatePhaserTemplateDevvitBridge(): void {
     }
   }
 
+  // The notifications scheduler tasks module ships as a byte-identical copy.
+  const kitTasksPath = 'apps/target-devvit/src/server/notificationTasks.ts';
+  for (const copyPath of [
+    'packages/cli/templates/phaser-game/apps/target-devvit/src/server/notificationTasks.ts',
+    'examples/lite-starter/apps/target-devvit/src/server/notificationTasks.ts',
+  ]) {
+    if (!existsSync(copyPath) || !existsSync(kitTasksPath) || readText(copyPath) !== readText(kitTasksPath)) {
+      failures.push(`${copyPath}: must stay in parity with ${kitTasksPath}.`);
+    }
+  }
+
   if (!existsSync(templateIndexPath)) {
     failures.push(`${templateIndexPath}: required for the generated Devvit server entrypoint.`);
   } else {

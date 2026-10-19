@@ -43,5 +43,17 @@
   "scripts": {
     "dev": "vite build --mode staging --watch",
     "build": "pnpm build"
+  },
+  "scheduler": {
+    "tasks": {
+      "mpgd-notifications-dispatch": {
+        "endpoint": "/internal/scheduler/mpgd-notifications-dispatch",
+        "cron": "* * * * *"
+      },
+      "mpgd-notifications-purge": {
+        "endpoint": "/internal/scheduler/mpgd-notifications-purge",
+        "cron": "17 * * * *"
+      }
+    }
   }
 }

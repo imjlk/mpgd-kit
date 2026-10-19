@@ -13,7 +13,10 @@ import {
   createDevvitNotificationProviderEntry,
   createDevvitNotificationService,
   devvitNotificationProviderCodes,
+  devvitNotificationSchedulerTasks,
   devvitNotificationSession,
+  devvitNotificationTaskForEndpoint,
+  runDevvitNotificationTask,
   type DevvitEnqueueResponse,
   type DevvitNotificationsDeliveryClient,
 } from './notifications-delivery.js';
@@ -562,5 +565,66 @@ describe('createDevvitNotificationService', () => {
       installationId: `devvit:${user}`,
     });
     expect(() => devvitNotificationSession('guest')).toThrow(TypeError);
+  });
+});
+
+describe('Devvit notification scheduler tasks', () => {
+  it('names an /internal endpoint per task and finds the task from its endpoint', () => {
+    for (const [task, declared] of Object.entries(devvitNotificationSchedulerTasks)) {
+      expect(declared.endpoint).toMatch(/^\/internal\/.+/u);
+      expect(devvitNotificationTaskForEndpoint(declared.endpoint)).toBe(task);
+    }
+    expect(devvitNotificationTaskForEndpoint('/internal/menu/create-post')).toBeUndefined();
+  });
+
+  it('replays a rate-limited send once it is due, in a bounded batch', async () => {
+    let now = Date.parse('2026-10-19T03:00:00Z');
+    const plugin = createFakePlugin();
+    plugin.answers.push({ successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'rate limit exceeded' }] });
+    const { service } = createDevvitNotificationService({
+      redis: createFakeNotificationRedis(),
+      notifications: plugin,
+      catalog: catalogFile,
+      now: () => new Date(now).toISOString(),
+      random: () => 0,
+    });
+    await expect(service.deliver({ idempotencyKey: 'rl-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
+      .resolves.toMatchObject({ status: 'deferred', reason: 'provider-rate-limited' });
+    await expect(runDevvitNotificationTask(service, 'dispatch')).resolves.toEqual({ task: 'dispatch', replayed: 0, failed: 0 });
+    now += 61_000;
+    await expect(runDevvitNotificationTask(service, 'dispatch', { dispatchLimit: 1 }))
+      .resolves.toEqual({ task: 'dispatch', replayed: 1, failed: 0 });
+    expect(plugin.calls).toHaveLength(2);
+    await expect(service.deliver({ idempotencyKey: 'rl-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
+      .resolves.toMatchObject({ status: 'delivered', alreadyProcessed: true });
+  });
+
+  it('purges with the Redis store bounded to the purge batch', async () => {
+    const calls: unknown[] = [];
+    const service = {
+      dispatchDue: async (input?: { readonly limit?: number }) => {
+        calls.push(input);
+        return { results: [], failed: 0 };
+      },
+      purge: async () => ({ sends: 3, history: 2, endpoints: 1 }),
+    };
+    await expect(runDevvitNotificationTask(service, 'purge')).resolves.toEqual({ task: 'purge', sends: 3, history: 2, endpoints: 1 });
+    await runDevvitNotificationTask(service, 'dispatch');
+    expect(calls).toEqual([{ limit: 100 }]);
+    // The service builds its Redis store with purgeLimit 500.
+    const redis = createFakeNotificationRedis();
+    const { store } = createDevvitNotificationService({ redis, notifications: createFakePlugin(), catalog: catalogFile });
+    for (let index = 0; index < 501; index += 1) {
+      await store.addHistory({ sendKey: `h-${String(index)}`, provider: 'devvit', player: user, topic: 't', at: '2026-01-01T00:00:00Z' });
+    }
+    const cutoffs = {
+      sendsChangedBefore: '2026-06-01T00:00:00Z',
+      historyBefore: '2026-06-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-06-01T00:00:00Z',
+      staleEndpointsBefore: '2026-06-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-06-01T00:00:00Z',
+    };
+    expect((await store.purge(cutoffs)).history).toBe(500);
+    expect((await store.purge(cutoffs)).history).toBe(1);
   });
 });

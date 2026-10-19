@@ -1293,9 +1293,8 @@ Statuses are `delivered`, `suppressed`, `deferred`, `unavailable`, and
 player's state changes is evaluated again. A replay that ends `suppressed` or
 `unavailable` deletes the row and leaves no entry, exactly like a first
 evaluation. Entries are kept for 30 days after their last change. Callers
-must not retry an older key. D1 purges on a schedule, and the Devvit Redis
-ledger when its `purge` runs (on a schedule once the Devvit scheduler is
-wired).
+must not retry an older key. D1 purges on a schedule, and so does the
+Devvit Redis ledger, through the Devvit scheduler (hourly, in batches).
 
 #### Device fan-out {#fan-out}
 
@@ -1556,10 +1555,18 @@ Server reminders, deferred sends (night window, quiet hours, provider limits,
 rate limits), sends in flight after an ambiguous answer, and overdue consent
 notices are stored with a lease and processed when due. The default is a D1
 table plus a Cron trigger on the game-services Worker; the Devvit server uses
-the Devvit scheduler. P3 ships the service inside the Devvit server, with
-`dispatchDue` for due rows and `purge`; nothing calls them on a schedule
-until the Devvit scheduler path (listed under S2) is wired, in a follow-up
-once S2 and P3 have merged.
+the Devvit scheduler.
+
+- **What P3 schedules on Devvit.** Two `devvit.json` scheduler tasks call
+  the service's own work (`runDevvitNotificationTask` from
+  `@mpgd/adapter-devvit/server`), each with a bounded batch:
+  `mpgd-notifications-dispatch` runs `dispatchDue` every minute for at most
+  100 due sends (deferred, rate-limited, and ambiguous rows past their
+  lease), and `mpgd-notifications-purge` runs `purge` hourly, at most 500
+  rows of each kind. A backlog drains over the next runs.
+- **Left to a follow-up.** S2's reminder scheduler on Devvit (its server
+  reminders and notice pushes) is wired once S2 and P3 have merged; it can
+  take over the dispatch task then.
 
 - **Each due item** becomes a normal send through the policy gate, and its
   key moves through the [key states](#key-states).
@@ -2220,8 +2227,10 @@ publishable package carries a Sampo changeset.
 provider, and Redis-backed store; see [Devvit](#profile-devvit),
 [Delivery providers](#remote-delivery), and open question 2.
 
-- Left to follow-ups: the Devvit scheduler path (listed under S2, wired once
-  S2 and P3 have merged), the runtime's backend client for a service the
+- Left to follow-ups: S2's reminder scheduler on Devvit (wired once S2 and
+  P3 have merged; P3 already schedules `dispatchDue` and `purge`), a shared
+  host-side `notifications.v2` bridge handler for the Apps in Toss and
+  Devvit adapters, the runtime's backend client for a service the
   Devvit server hosts (the game-services client), and the wiring in the
   generated Devvit app (C1).
 
