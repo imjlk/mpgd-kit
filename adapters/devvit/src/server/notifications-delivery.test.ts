@@ -707,37 +707,48 @@ describe('Devvit notification scheduler tasks', () => {
     expect(limits).toEqual([10, 10]);
   });
 
-  it('stops a dispatch run at a chunk whose sends all threw, and keeps going past sends that backed off', async () => {
-    const limits: number[] = [];
-    const thrown = {
-      dispatchDue: async (input?: { readonly limit?: number }) => {
-        limits.push(input?.limit ?? 0);
-        // Every listed send threw before its row was claimed: they stay due and come first again.
-        return { results: [], failed: input?.limit ?? 0 };
-      },
-      purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
+  it('ends a dispatch run without progress, at a short listing, or after a chunk of failures', async () => {
+    const run = async (answer: (limit: number) => { results: number; failed: number }) => {
+      const limits: number[] = [];
+      let next = 0;
+      const service = {
+        dispatchDue: async (input?: { readonly limit?: number }) => {
+          const limit = input?.limit ?? 0;
+          limits.push(limit);
+          const { results, failed } = answer(limit);
+          return {
+            results: Array.from({ length: results }, () => ({
+              sendKey: `k-${String((next += 1))}`,
+              outcome: { status: 'delivered' as const, alreadyProcessed: false },
+            })),
+            failed,
+          };
+        },
+        purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
+      };
+      const result = await runDevvitNotificationTask(service, 'dispatch', { clock: () => 0 });
+      return { result, limits };
     };
-    await expect(runDevvitNotificationTask(thrown, 'dispatch'))
-      .resolves.toEqual({ task: 'dispatch', replayed: 0, failed: 10 });
-    expect(limits).toEqual([10]);
-    // A send that failed after its claim has a result and backs off: the run goes on.
-    limits.length = 0;
-    let next = 0;
-    const backedOff = {
-      dispatchDue: async (input?: { readonly limit?: number }) => {
-        limits.push(input?.limit ?? 0);
-        return {
-          results: Array.from({ length: input?.limit ?? 0 }, () => ({
-            sendKey: `k-${String((next += 1))}`,
-            outcome: { status: 'delivered' as const, alreadyProcessed: false },
-          })),
-          failed: 1,
-        };
-      },
-      purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
-    };
-    await expect(runDevvitNotificationTask(backedOff, 'dispatch', { clock: () => 0 }))
-      .resolves.toEqual({ task: 'dispatch', replayed: 100, failed: 10 });
-    expect(limits).toEqual(Array.from({ length: 10 }, () => 10));
+    // Every listed send failed: no progress, so the run ends.
+    expect(await run((limit) => ({ results: 0, failed: limit }))).toEqual({
+      result: { task: 'dispatch', replayed: 0, failed: 10 },
+      limits: [10],
+    });
+    // A listing shorter than the chunk: nothing more is due.
+    expect(await run(() => ({ results: 3, failed: 0 }))).toEqual({
+      result: { task: 'dispatch', replayed: 3, failed: 0 },
+      limits: [10],
+    });
+    // One send failed after its claim and backed off, with no result: the run goes on.
+    expect(await run((limit) => ({ results: limit - 1, failed: 1 }))).toEqual({
+      result: { task: 'dispatch', replayed: 90, failed: 10 },
+      limits: Array.from({ length: 10 }, () => 10),
+    });
+    // Nine sends fail before their claim and are listed again by each chunk:
+    // the run ends once it has counted a chunk's worth of failures.
+    expect(await run(() => ({ results: 1, failed: 9 }))).toEqual({
+      result: { task: 'dispatch', replayed: 2, failed: 18 },
+      limits: [10, 10],
+    });
   });
 });
