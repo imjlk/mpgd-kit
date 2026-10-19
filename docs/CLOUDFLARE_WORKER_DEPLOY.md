@@ -279,11 +279,16 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   refuses when it comes due, such as after the player's registering session
   ended, is spent.
 - **Throughput.** A run is bounded by its time budget, but its real ceiling
-  is the platform's per-invocation limits: each reminder costs roughly ten
-  D1 queries, and a send without the queue costs its provider calls too,
-  so the free plan's subrequest and D1 query limits allow only a few items
-  per run, and the paid plan's limits a few hundred. These are rough,
-  unmeasured estimates: measure yours. With the queue bound, the cron only
+  is the platform's per-invocation limits (check Cloudflare's current
+  figures; at the time of writing, subrequests are capped around 50 per
+  invocation on the free plan and around 1,000 on the paid one). Each
+  reminder costs roughly ten D1 queries, and a send without the queue costs
+  its provider calls too, so a run gets through a handful of items on the
+  free plan and on the order of a hundred on the paid one, fewer with
+  inline sends. These are rough, unmeasured estimates: measure yours. The
+  batch size, the provider pace, and the time budget are how a run stays
+  under those limits: lower `MPGD_NOTIFICATIONS_DUE_BATCH` or the budget if
+  runs fail on them. With the queue bound, the cron only
   writes the sends and takes their rows, and each consumer invocation makes
   its own provider calls under its own limits, so large waves need the
   queue. Keep the budget under the cron period (60 seconds for a
