@@ -26,15 +26,18 @@ Devvit push notifications are a gated beta: an app must
 [apply](https://developers.reddit.com/docs/versioned_docs/version-0.14/capabilities/notifications/notifications-overview)
 and Devvit admins pre-approve every title and body. Until Reddit approves the
 app, keep `integrations.notifications` at `approval-required` (the default for
-`reddit`), which hides notifications from the game. The profile follows the
+`reddit`), which hides notifications from the game; set it to `available` once
+Reddit approves. The profile follows the
 [notifications v2 RFC](../../docs/specs/notifications/notifications-v2-rfc.md#profile-devvit):
 
 - **Consent the game renders.** Reddit shows no consent screen. The game draws
   an on/off control with its current state and offers both directions.
+- **The server bridge.** Pass
   `createDevvitNotificationsV2BridgeHandler({ notifications, currentUserId, topics })`
-  on the server bridge (its `notifications` dependency) opts the request's
-  logged-in user in with `optInCurrentUser` from `requestPermission`, out with
-  `optOutCurrentUser` from `revokePermission`, and reads `isOptedIn`.
+  as the bridge's `notifications` dependency; it takes the Devvit plugin as
+  `notifications`. It opts the request's logged-in user in with
+  `optInCurrentUser` from `requestPermission`, out with `optOutCurrentUser`
+  from `revokePermission`, and reads `isOptedIn`.
 - **The gateway.** `createDevvitPlatformGateway({ notifications: { topics } })`
   exposes `notificationsV2` over that bridge (its client loads on first use)
   and serves the v1 `notifications` adapter from it. `topics` are the ids the
@@ -55,6 +58,8 @@ app, keep `integrations.notifications` at `approval-required` (the default for
   topic's mapping. Titles are at most 60 and bodies at most 100 Unicode code
   points of the filled text. Devvit allows 2 sends per user per day and 25,000
   per app per day. Players' own calls take `devvitNotificationSession(userId)`.
+  The service's `dispatchDue` and `purge` need a schedule; the Devvit
+  scheduler path comes with the reminder scheduler.
 - **Opens.** A notification opens its post; the game routes from that post's
   data.
 
