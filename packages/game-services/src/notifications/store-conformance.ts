@@ -788,6 +788,58 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
     { player: 'p-s', id: 'notices', dueAt: t(0), item: { kind: 'notices', attempts: 0 } },
     'schedule: a notice check round-trips',
   );
+
+  // Ties compare by code point (SQLite's BINARY order), not by UTF-16 code unit.
+  await store.createScheduleEntry(entry('p-cp', 'reminder:\u{1F600}', t(7_000)));
+  await store.createScheduleEntry(entry('p-cp', 'reminder:\uFFEE', t(7_000)));
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(7_000), limit: 100 }))
+      .filter((due) => due.player === 'p-cp')
+      .map((due) => due.id),
+    ['reminder:\uFFEE', 'reminder:\u{1F600}'],
+    'schedule: ties by code point',
+  );
+
+  // A time that does not parse is refused, before any version check.
+  const bad = { ...entry('p-bad', 'reminder:bad', t(0)), dueAt: 'not-a-time' };
+  await rejects(() => store.createScheduleEntry(bad), 'invalid: a due time that does not parse');
+  const valid = await store.createScheduleEntry(entry('p-bad', 'reminder:bad', t(0)));
+  await rejects(
+    () =>
+      store.updateScheduleEntry({
+        player: 'p-bad',
+        id: 'reminder:bad',
+        version: `${valid ?? ''}-stale`,
+        entry: bad,
+      }),
+    'invalid: checked before the version',
+  );
+  await rejects(
+    () => store.listDueScheduleEntries({ at: 'not-a-time', limit: 1 }),
+    'invalid: a due listing time',
+  );
+  await rejects(
+    () => store.countHistory({ provider: 'paced', since: 'not-a-time' }),
+    'invalid: a count start',
+  );
+  await rejects(
+    () => store.pruneConsent({ player: 'p-prune', at: ['not-a-time'] }),
+    'invalid: a pruned instant',
+  );
+  equal(
+    (await store.listConsent('p-prune')).length,
+    3,
+    'invalid: a refused pruning deletes nothing',
+  );
+}
+
+async function rejects(work: () => Promise<unknown>, message: string): Promise<void> {
+  try {
+    await work();
+  } catch {
+    return;
+  }
+  fail(message, 'resolved', 'a rejection');
 }
 
 /**
