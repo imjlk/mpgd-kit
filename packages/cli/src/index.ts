@@ -77,6 +77,11 @@ import {
   prepareBaseGameTemplateFile,
   resolveMicrosoftStoreAdapterDependencyVersion,
 } from './microsoft-store-starter.js';
+import {
+  applyNotificationsStarter,
+  notificationsProviderId,
+  readGameCreateProviders,
+} from './notifications-starter.js';
 import { applyKitUpgrade, planKitUpgrade } from './kit-upgrade.js';
 import { applyToolingMigration, planToolingMigration } from './tooling-migration.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
@@ -327,6 +332,7 @@ const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const liteTemplateOverlayDir = path.resolve(packageRoot, 'templates/lite-overlay');
+const notificationsTemplateDir = path.resolve(packageRoot, 'templates/notifications');
 const supportedGameTemplates = ['phaser', 'lite'] as const;
 type GameTemplate = (typeof supportedGameTemplates)[number];
 /** Lite renderers implemented today. dom/svg are reserved extension points in @mpgd/lite-shell. */
@@ -869,6 +875,10 @@ const gameCommand = defineI18n({
             en: 'Lite template renderer. Only canvas is implemented today.',
             ko: 'lite 템플릿 렌더러. 현재는 canvas만 지원합니다.',
           },
+          providers: {
+            en: 'Comma-separated game providers. notifications adds the notifications v2 starter: the topic catalog, the backend settings, the Android, iOS, Apps in Toss, and Devvit wiring, and a notification settings screen.',
+            ko: '쉼표로 구분한 게임 provider. notifications는 알림 v2 스타터(토픽 카탈로그, 백엔드 설정, Android·iOS·앱인토스·Devvit 연결, 알림 설정 화면)를 추가합니다.',
+          },
         },
       ),
       args: {
@@ -922,6 +932,11 @@ const gameCommand = defineI18n({
           required: false,
           description: 'Include the Microsoft Store PWA target and release workflow.',
         },
+        providers: {
+          type: 'string',
+          required: false,
+          description: 'Comma-separated game providers. notifications adds the notifications v2 starter.',
+        },
       },
       run: (ctx) => {
         const positionals = readLocalPositionals(ctx.positionals, ['game', 'create']);
@@ -949,6 +964,7 @@ const gameCommand = defineI18n({
           ...(kitPath === undefined ? {} : { kitPath }),
           dryRun: ctx.values['dry-run'] === true,
           microsoftStore: ctx.values['microsoft-store'] === true,
+          providers: readGameCreateProviders(readOptionalString(ctx.values.providers)),
         });
       },
     }),
@@ -3591,6 +3607,7 @@ function createGameApp(input: {
   readonly kitPath?: string;
   readonly dryRun: boolean;
   readonly microsoftStore: boolean;
+  readonly providers?: readonly string[];
 }): void {
   const appDir = resolveAppDirectory(input.directory);
   const gameName = path.basename(appDir);
@@ -3618,9 +3635,17 @@ function createGameApp(input: {
     microsoftStore: input.microsoftStore,
   });
   const baseTemplateFiles = collectTemplateFiles(gameTemplateDir);
-  const selectedTemplateFiles = input.template === 'lite'
+  const templateFiles = input.template === 'lite'
     ? applyLiteTemplateOverlay(baseTemplateFiles, collectTemplateFiles(liteTemplateOverlayDir))
     : baseTemplateFiles;
+  const selectedTemplateFiles = input.providers?.includes(notificationsProviderId) === true
+    ? applyNotificationsStarter(templateFiles, {
+        template: input.template === 'lite' ? 'lite' : 'phaser',
+        common: collectTemplateFiles(path.join(notificationsTemplateDir, 'common')),
+        phaser: collectTemplateFiles(path.join(notificationsTemplateDir, 'phaser')),
+        lite: collectTemplateFiles(path.join(notificationsTemplateDir, 'lite')),
+      })
+    : templateFiles;
   const files = selectedTemplateFiles.flatMap((file) => {
     const prepared = prepareBaseGameTemplateFile({
       relativePath: file.relativePath,
