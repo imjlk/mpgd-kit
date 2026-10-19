@@ -843,6 +843,21 @@ records (or the host read for a server-readable provider). They answer
 `advertising-consent-missing`, and store nothing on failure. The scheduler
 runs the whole gate again at send time.
 
+- **Where.** The backend checks every provider that delivers the topic
+  remotely and that the player can be reached on now: each usable endpoint
+  of a device provider with the permission its latest registration
+  reported, or the platform identity. When the player can be reached on
+  none, it checks each such provider without a recipient, so a device
+  provider answers `permission-required`.
+- **Which answer.** One provider that passes stores the reminder, which goes
+  to every provider the player has a recipient on when it fires. Otherwise
+  the refusal of the furthest gate step answers: `advertising-consent-missing`,
+  then `request-missing` or `preference-off`, then `permission-required`.
+- **Refused input.** A topic no served target delivers remotely, the notice
+  topic, an advertising topic without the deployment's `advertisingRules`,
+  and `templateData` while a host-template provider would deliver it throw
+  `NOTIFICATIONS_INVALID_INPUT`.
+
 Pending local reminders follow later changes. When a topic's preference
 becomes `withdrawn`, or the device's delivery permission stops being
 `granted`, the runtime cancels that topic's (or every) pending local
@@ -869,6 +884,14 @@ the pending reminder, and cancelling removes it.
   (`deferred`) or whose provider answer was `ambiguous` (`in-flight`); the
   scheduler replays neither, and `cancel` answers `remote`.
 - A send the provider may already have accepted cannot be recalled.
+- **Races with the scheduler.** The scheduler stores a reminder's send first
+  and marks the reminder fired after, so a run that stops in between leaves
+  the reminder pending and the next run finds its send. A set or cancel
+  writes the reminder first and stops the previous reminder's send after,
+  so a run that fires the old reminder meanwhile loses its send either way.
+- A fired reminder is kept, as its key, topic, and times, until its send's
+  key retention ends (longer while the send still waits), so a later set or
+  cancel can still stop that send.
 
 ## Opens {#opens}
 
@@ -1036,7 +1059,19 @@ Every send reads the player's whole history, so client writes are bounded:
   repeat is still answered, since it writes nothing.
 - **Concurrency.** Both rules read the history before the write, so writes
   that race may store a repeat or pass the cap by a few records.
-- **Compaction.** Pruning old records is left to S2.
+- **Compaction.** Each client write deletes the player's records that no rule
+  reads any more, once they are a day old, so every send reads at most a day
+  of capped writes and the records the rules keep:
+  - the latest record of each kind and scope (the gate reads only those);
+  - everything from the last 24 hours, which the daily cap counts;
+  - under the Korean rules, every `advertising` or `night` record whose
+    result notice is still owed, and the record of its kind before it, which
+    decides whether it reports a refusal. The latest consent of a kind is
+    its latest record, so re-confirmations always keep theirs.
+
+  A notice given about a deleted record is deleted with it. A per-send
+  provider would count every accepted prompt, so compaction must keep those
+  records before the registry serves one.
 
 When the deployment enables the Korean rules, each `advertising` or `night`
 record also yields the notices the law requires. The due dates are pure
@@ -1132,9 +1167,17 @@ If a notice is not recorded by the start of the day seven days before
   to it, as to any `service` topic.
 - **Failed renders.** A push that cannot render fails once, whether it is
   the first send or a replay, and is not tried again. The game still owes
-  the notice.
+  the notice. The backend remembers the failure while the notice is owed.
+- **Refused pushes.** A push the gate refuses (the player has no endpoint,
+  or turned the notice topic off), or that the provider refuses when it is
+  sent, is tried again after an hour, then after two, four, and so on, at
+  most a day apart. A new device or platform registration, or a new
+  advertising or night record, ends the wait. Each player has one notice
+  check, due at the next notice's first send day, so the scheduler reads
+  only the players a notice is due for.
 - **Recording.** Once delivered, the backend records the notice with channel
-  `push`.
+  `push`. A delivered push whose record failed is recorded at the next
+  check, never pushed again.
 - **A waiting push.** A push that waits, deferred or in flight, is dropped
   once the game records the notice. The player is not told twice.
 
@@ -1368,10 +1411,10 @@ Every provider answer maps to one of five kinds:
   - The scheduler also replays a direct send's row once its lease expired,
     so a send whose caller never retries still settles, and so does a row
     whose holder failed before the provider call.
-  - Each ambiguous answer doubles the lease before the next replay (from
-    the claim lease up to an hour), and so does a replay of a row whose
-    holder never answered, because a provider without an idempotency key
-    may show every replay. Replays stop a day after the
+  - The first replay waits the claim lease, and each later ambiguous answer
+    doubles the wait, up to an hour; so does a replay of a row whose holder
+    never answered, because a provider without an idempotency key may show
+    every replay. Replays stop a day after the
     first attempt: the row stays `in-flight` until its key's retention
     ends, and the backend reports it.
   - One rule covers every claimer. `deferred` would also claim that nothing
@@ -1494,10 +1537,29 @@ the Devvit scheduler.
 
 - **Each due item** becomes a normal send through the policy gate, and its
   key moves through the [key states](#key-states).
+- **One run.** Each run takes a batch of due schedule entries (server
+  reminders, and each player's notice check), turns them into sends whose
+  allowed rows are due at once, and then dispatches a batch of due rows:
+  deferred rows, expired leases, and the new sends. The new sends' rows
+  leave through the same paced path as every other due row. A schedule that
+  cannot be read does not hold the due rows, and a failed entry waits a
+  minute.
 - **Pacing.** The scheduler dispatches due rows per provider at no more than
   the registry entry's `rate`, oldest first. A backlog that comes due at 08:00
   therefore drains at the provider's pace, while `until` stays the earliest
-  send time.
+  send time. The pace counts the provider's delivered sends in the rate
+  window, so sends still in flight may pass it by a few, and a batch whose
+  rows all wait for one provider's pace holds the rows behind it until the
+  window frees.
+- **Through the queue.** With a dispatch queue bound, the scheduler takes
+  each due row for one claim lease (it becomes a queued row no holder
+  claims, so the next run does not take it again) and enqueues it; the
+  consumer runs the gate and the provider call. A lost job's row is due
+  again when the lease ends. Without a queue the scheduler sends the rows
+  itself. A job never replays an attempted row past its replay window.
+- **Lateness.** A reminder fires no earlier than its `fireAt`: the first run
+  at or after it takes it, unless more due items are ahead of it than one
+  batch holds, and the gate may still defer it.
 - **Reminder keys.** A reminder's idempotency key is
   `reminder:<player>:<key>:<fireAt>`, with the player and the key
   percent-encoded (`encodeURIComponent`) so ids that contain `:` cannot
@@ -1906,8 +1968,8 @@ How a real provider is judged:
   another one, such as the production service over an in-memory store. It
   receives the fake's inputs: the derived registry entry, the vector's
   catalog, deployment, and notices, the clock, and the host's send-time
-  permission read. The S1 service passes every vector except those that
-  need S2's server reminders or notice pushes, and the per-send vector.
+  permission read. The production service (S1 and S2) passes every vector
+  except the per-send one, which its registry refuses.
 
 ### Vector format {#vector-format}
 
@@ -2004,6 +2066,9 @@ listed fields of each item asserted:
 | `local-reminder-cancelled-on-withdrawal` | Turning a topic off cancels its pending local reminder |
 | `reminder-server-route` | Server route after the agreement, cancel, re-set, delivery at the due time through the gate |
 | `reminder-cancel-across-routes` | A key names one reminder across routes; cancel after a restart finds the server reminder |
+| `reminder-local-quiet-hours` | On the local route a reminder inside quiet hours is scheduled for their end; a `deferrable: false` topic answers `quiet-hours` and schedules nothing |
+| `reminder-server-set-checks` | A server reminder answers gate steps 3 to 5 when it is set (`permission-required`, `request-missing`, `preference-off`, `advertising-consent-missing`), and a refusal stores nothing |
+| `reminder-server-deferred-cancel` | A server reminder deferred by quiet hours when it comes due is stopped by a cancel, which answers `remote`; nothing is sent when the quiet hours end |
 | `landing-open-before-listener` | On a `landing-url` host the cold open reaches the first subscriber once with the landing route; a later subscriber receives nothing |
 | `open-before-listener` | A cold-start open reaches the game's first subscriber once |
 | `endpoint-lifecycle` | Authentication alone moves a device address to the newly authenticated player; `UNREGISTERED` invalidates it |
@@ -2071,7 +2136,7 @@ publishable package carries a Sampo changeset.
 | P2 | `@mpgd/adapter-capacitor/notifications`: `PushSdk` and `LocalNotificationSdk` over the plugins as optional peers, the provider, channels, the native opt-out action, cold-start buffering, settings link | |
 | P3 | `@mpgd/adapter-devvit`: game-rendered opt-in and opt-out through the server bridge, a client-side `identity.requestUpgrade` over `showLoginPrompt()`, and a delivery provider over `enqueue` with per-send links inside the Devvit server | |
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
-| S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending, Devvit scheduler path | No reminders |
+| S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path follows P3 | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
 
 **What S1 landed.**
@@ -2099,6 +2164,28 @@ publishable package carries a Sampo changeset.
   registry's `rate`; the replay of deferred rows is in S1 so that rate
   limits and windows settle.
 
+**What S2 landed.**
+
+- `@mpgd/game-services/notifications`: the backend half of
+  `reminders.set` and `reminders.cancel` (`setReminder`, `cancelReminder`)
+  with the set-time checks above; `runScheduler`, which fires server
+  reminders, pushes consent notices with their backoff, and dispatches due
+  rows paced by each provider's `rate`, through the queue when one is
+  bound; consent compaction; and six more store steps, pinned by the store
+  conformance suite (`getScheduleEntry`, `createScheduleEntry`,
+  `updateScheduleEntry`, `listDueScheduleEntries`, `countHistory`,
+  `pruneConsent`). The client half was already the reference runtime's: the
+  routing, the local route's gate steps (quiet hours included), and one key
+  across both routes.
+- The game-services Worker: migration `0008_notification_scheduler.sql`,
+  the session routes `POST /reminders` and `POST /reminders/cancel`, and a
+  cron that runs the scheduler after the purges.
+- Left for later: the Devvit scheduler path, after P3's Redis store and
+  delivery provider; a game-services client that implements the runtime's
+  backend calls over the Worker routes; a per-player cap on server
+  reminders; and seeding notice checks for players whose records predate
+  the scheduler.
+
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
 that also removes commerce v1.
@@ -2114,7 +2201,14 @@ that also removes commerce v1.
 2. **Devvit ledger.** Confirm that a Redis-backed claim/lease ledger inside the
    Devvit server meets the delivery ledger's fencing contract.
 3. **Scheduler backend.** D1 plus Cron is the default; Durable Object alarms
-   would give per-player precision at higher cost.
+   would give per-player precision at higher cost. S2 keeps D1 plus Cron for
+   the first wave. A game reminder needs no minute precision (local reminders
+   are inexact too), a one-minute cron bounds the lateness, and the due
+   indexes keep a run's cost to the items due, not to every player. Alarms
+   would need a Durable Object per player or a sharded set, and a second
+   store for the ledger the gate reads in one place. Revisit when a game
+   needs reminders at second precision or a backlog outgrows one batch per
+   minute.
 4. **Remote copy on the server.** Whether the Worker reads localized copy from
    the catalog file or from a project-provided resolver.
 5. **Bulk sends.** The first wave sends one recipient per call. Bulk paths
