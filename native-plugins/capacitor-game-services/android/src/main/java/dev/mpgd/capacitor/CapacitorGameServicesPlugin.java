@@ -1,7 +1,11 @@
 package dev.mpgd.capacitor;
 
+import android.content.ActivityNotFoundException;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.Build;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -105,6 +109,44 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 return;
             default:
                 call.resolve(errorResponse(id, "UNSUPPORTED_METHOD", "Unsupported bridge method: " + method));
+        }
+    }
+
+    /**
+     * Opens this app's notification settings for the notifications v2
+     * provider's {@code openSettings}. Resolves {@code { opened }} as soon as
+     * the screen is launched; the provider waits for the player to come back.
+     * {@code opened} is false when no activity handles the screen.
+     */
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        Context context = getContext();
+        NotificationSettingsIntent target = NotificationSettingsIntent.forPackage(
+            Build.VERSION.SDK_INT,
+            context.getPackageName()
+        );
+        Intent intent = new Intent(target.action);
+        if (target.appPackageExtra != null) {
+            intent.putExtra(NotificationSettingsIntent.EXTRA_APP_PACKAGE, target.appPackageExtra);
+        }
+        if (target.data != null) {
+            intent.setData(Uri.parse(target.data));
+        }
+        // From the activity the screen joins the app's task, so Back returns
+        // to the game; only a context without an activity needs a new task.
+        android.app.Activity activity = getActivity();
+        if (activity == null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        try {
+            if (activity == null) {
+                context.startActivity(intent);
+            } else {
+                activity.startActivity(intent);
+            }
+            call.resolve(new JSObject().put("opened", true));
+        } catch (ActivityNotFoundException error) {
+            call.resolve(new JSObject().put("opened", false));
         }
     }
 

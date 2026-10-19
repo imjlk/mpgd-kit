@@ -13,6 +13,7 @@ import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/ad
 import {
   createCapacitorNotificationServiceProvider,
   loadCapacitorNotificationSdks,
+  openCapacitorNotificationSettings,
 } from '@mpgd/adapter-capacitor/notifications';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
@@ -238,6 +239,11 @@ assert.equal(secureValues.size, 0);
 // The notifications subpath loads without its optional plugins, which this
 // consumer does not install: the loader leaves both out, the provider fails
 // closed, and the gateway serves notifications v2 and v1 from it.
+await openCapacitorNotificationSettings({ openNotificationSettings: async () => ({ opened: true }) });
+await assert.rejects(
+  openCapacitorNotificationSettings({ openNotificationSettings: async () => ({ opened: false }) }),
+  /could not be opened/u,
+);
 assert.deepEqual(await loadCapacitorNotificationSdks({
   runtime: { isNativePlatform: () => true, isPluginAvailable: () => true },
 }), {});

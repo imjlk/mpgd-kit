@@ -51,6 +51,10 @@ export {
   type CreateNotificationServiceProviderInput,
   type NotificationProviderBridge,
 } from './notifications-bridge.js';
+export {
+  openCapacitorNotificationSettings,
+  type CapacitorNotificationSettingsPlugin,
+} from './notifications-settings.js';
 export type {
   CapacitorNotificationServiceProvider,
   CapacitorNotificationsV2Service,
