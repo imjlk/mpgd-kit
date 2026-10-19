@@ -330,6 +330,8 @@ export function createStarterNotificationSettings(
   /** The player's records as the last read gave them; `undefined` when they could not be read. */
   let records: readonly NotificationConsentRecord[] | undefined;
   let missingReaderReported = false;
+  /** Agreements the player gave in this session, for a host that gives no read. */
+  const agreedThisSession = new Set<string>();
   let capabilities: NotificationCapabilities | undefined;
   let message: string | undefined;
   let notices: StarterNotificationSettingsView['notices'] = [];
@@ -396,7 +398,11 @@ export function createStarterNotificationSettings(
       })),
       agreements: perTopic
         ? agreementTopics.map((topic) => {
-            const topicState = snapshot.topics[topic.id] ?? 'unsupported';
+            const read = snapshot.topics[topic.id] ?? 'unsupported';
+            // A host that gives no read (Apps in Toss) answers `unknown`; without a
+            // runtime, whose records would decide, an agreement made in this
+            // session shows as on.
+            const topicState = read === 'unknown' && agreedThisSession.has(topic.id) ? 'granted' : read;
             return {
               topic: topic.id,
               label: strings.reminderLabels[topic.id] ?? topic.id,
@@ -589,7 +595,11 @@ export function createStarterNotificationSettings(
         }
         // The host sheet for this topic, from the player's tap; the runtime
         // records the acceptance, and the host enforces it on send.
-        return request([topic]);
+        const answer = await request([topic]);
+        if (answer === strings.granted || answer === strings.grantedNoServer) {
+          agreedThisSession.add(topic);
+        }
+        return answer;
       });
     },
     setReminder(topic, enabled) {

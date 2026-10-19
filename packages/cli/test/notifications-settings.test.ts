@@ -516,6 +516,48 @@ const common = {
     runtime: undefined,
   }).load();
   assert.deepEqual(appView.agreements, []);
+  // A host that gives no read: an agreement made in this session shows as on.
+  const unread = fakeProvider(capabilities('topic', 'host', false), {
+    topics: { 'friend-challenge': 'unknown' },
+  });
+  const session = createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider: unread.provider,
+    runtime: undefined,
+  });
+  assert.equal((await session.load()).agreements[0]?.canRequest, true);
+  assert.deepEqual((await session.agree('friend-challenge')).agreements[0], {
+    topic: 'friend-challenge',
+    label: '친구의 도전 알림',
+    state: 'granted',
+    canRequest: false,
+  });
+  // With a runtime the sheet is asked for as the tap's, and a granted topic offers nothing.
+  const hosted = fakeProvider(capabilities('topic', 'host', false), {
+    topics: { 'friend-challenge': 'prompt' },
+  });
+  const { runtime, calls: runtimeCalls, listConsent } = fakeRuntime(hosted.provider);
+  const withRuntime = createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider: hosted.provider,
+    runtime,
+    listConsent,
+  });
+  await withRuntime.load();
+  assert.equal((await withRuntime.agree('friend-challenge')).message, '알림을 켰어요.');
+  assert.deepEqual(runtimeCalls, [{ request: { topics: ['friend-challenge'], gesture: true } }]);
+  const granted = fakeProvider(capabilities('topic', 'host', false), {
+    topics: { 'friend-challenge': 'granted' },
+  });
+  const grantedView = await createStarterNotificationSettings({
+    ...common,
+    topics: aitTopics,
+    provider: granted.provider,
+    runtime: undefined,
+  }).load();
+  assert.equal(grantedView.agreements[0]?.canRequest, false);
 }
 
 // A host that needs login first (Devvit), and a game-rendered consent the player can withdraw.

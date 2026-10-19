@@ -86,7 +86,8 @@ Rules the starter's settings screen follows, and your own screen must too:
   player turns it on; a `service` template that needs an agreement (mapped
   `agreement: "required"`) gets its own *Agree* action, since no reminder
   switch covers it. Only a service template may be mapped
-  `agreement: "none"`.
+  `agreement: "none"`. Name each such topic in the settings model's
+  `reminderLabels`, or the screen shows its id.
 - **Night consent only with advertising consent.** Night consent adds to
   advertising consent, so the screen offers it only while advertising
   consent is granted. Turning advertising consent off withdraws a granted

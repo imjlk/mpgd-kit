@@ -33,9 +33,12 @@ export const notificationsGameDependencies: Readonly<Record<string, string>> = O
  */
 export const notificationsMessagingFirebaseRange = '^12.6.0';
 
+/** The push plugin the notifications starter adds (FCM on Android and iOS). */
+export const notificationsMessagingPlugin = '@capacitor-firebase/messaging';
+
 /** The plugins `mpgd target init capacitor --providers notifications` installs into the shell. */
 export const notificationsShellPlugins: readonly string[] = Object.freeze([
-  '@capacitor-firebase/messaging',
+  notificationsMessagingPlugin,
   '@capacitor/local-notifications',
 ]);
 

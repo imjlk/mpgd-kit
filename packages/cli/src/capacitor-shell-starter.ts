@@ -25,6 +25,7 @@ import {
   notificationsCapacitorSupportFiles,
   notificationsGameDependencies,
   notificationsMessagingFirebaseRange,
+  notificationsMessagingPlugin,
   notificationsProviderId,
   notificationsShellPlugins,
   wireCapacitorGatewayNotifications,
@@ -3251,7 +3252,7 @@ function planNotificationsProvider(input: {
   if (messaging !== undefined) {
     const installedPeers = messaging.installed
       ? readJsonObject(
-        path.join(gameRoot, 'node_modules/@capacitor-firebase/messaging/package.json'),
+        path.join(gameRoot, 'node_modules', notificationsMessagingPlugin, 'package.json'),
       ).peerDependencies
       : undefined;
     const declared = typeof installedPeers === 'object' && installedPeers !== null
