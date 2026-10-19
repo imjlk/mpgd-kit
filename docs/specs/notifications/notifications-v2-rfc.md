@@ -528,7 +528,8 @@ Runtime rules:
   without a limit reports `denied`. A `dismissed` answer leaves the state as
   it was and counts no denial.
 - **Revocation.** `revokePermission` withdraws a game-rendered consent at the
-  host (Devvit `optOutCurrentUser`), answers the `denied` outcome for each
+  host (Devvit `optOutCurrentUser`, for a player who is opted in), answers
+  the `denied` outcome for each
   topic, reads again, and records the result as a player action
   (`source: 'player'`). Other providers do not offer it: their
   consent changes in OS or host settings.
@@ -1521,8 +1522,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       provider's `onEnqueueError` sees every failure with Devvit's message;
       the service passes the ambiguous ones and the configuration
       rejections to `onError`. A daily limit (daily, per day, per user, per
-      app) asks for a retry after an hour; any other rate limit waits the
-      backend's default first delay.
+      app, today) asks for a retry after an hour, since it lifts no sooner;
+      any other rate limit waits the backend's default first delay. The
+      backoff then grows for at most a day.
     - A call that throws, and an answer that counts neither a success nor a
       failure, are `ambiguous`: Devvit may have queued it. `enqueue` takes no
       idempotency key, so a replay after an ambiguous answer may show twice.
@@ -1771,7 +1773,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 - **Consent.** There is no Reddit consent screen.
   - The game renders its own on/off toggle. The server bridge calls
     `optInCurrentUser` from `requestPermission` and `optOutCurrentUser` from
-    `revokePermission` for the logged-in requester, and reads `isOptedIn`.
+    `revokePermission` for the logged-in requester (each only when the state
+    would change), and reads `isOptedIn`.
   - Devvit's guidance requires the game to offer both directions.
 - **Login.** A logged-out player needs login first.
   - The provider reports `action-required` availability and state with
@@ -1809,8 +1812,10 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `reddit` mappings answers `unavailable` without an opt-in, and a
     revocation for a user who is already out calls no opt-out.
   - Devvit's and the plugin's own error text stays on the server: the
-    webview gets a fixed message, and the handler's `onError` sees the
-    cause.
+    webview gets a fixed message, and the handler's `onError` option sees
+    the cause (`console.warn` by default, which skips the expected
+    `NOTIFICATIONS_UNSUPPORTED` of the local methods; invalid payloads are
+    the caller's and are not reported).
   - `createDevvitPlatformGateway({ notifications: { topics } })` exposes
     `notificationsV2` over that bridge, loads its client and validators in
     their own chunk (starting with the gateway), adds the capability block and
