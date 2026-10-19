@@ -1,0 +1,210 @@
+{
+  "vector": "reminder-local-quiet-hours",
+  "protocol": "2.0.0-draft.1",
+  "summary": "On the local route the runtime applies a topic's quiet hours as the gate would: a reminder set inside them is scheduled for their end, and a reminder of a topic with deferrable false answers quiet-hours and schedules nothing.",
+  "appliesTo": [
+    {
+      "path": "local.supported",
+      "equals": true
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "quietHours": {
+        "start": "22:00",
+        "end": "08:00"
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    },
+    {
+      "id": "match-ready",
+      "purpose": "service",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=match",
+      "copy": {
+        "ko": {
+          "title": "대전 준비 완료",
+          "body": "대전 상대를 찾았어요."
+        },
+        "en": {
+          "title": "Match ready",
+          "body": "Your opponent is ready."
+        }
+      },
+      "quietHours": {
+        "start": "22:00",
+        "end": "08:00"
+      },
+      "deferrable": false,
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full",
+          "match-ready"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "energy-full",
+        "enabled": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T13:30:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "match",
+        "topic": "match-ready",
+        "fireAt": "2026-10-12T13:30:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "quiet-hours"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "match",
+        "topic": "match-ready",
+        "fireAt": "2026-10-12T05:00:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "scheduled"
+      }
+    }
+  ],
+  "expect": {
+    "local": {
+      "operations": [
+        {
+          "op": "schedule",
+          "key": "energy",
+          "topic": "energy-full",
+          "fireAt": "2026-10-12T23:00:00Z",
+          "exact": false
+        },
+        {
+          "op": "schedule",
+          "key": "match",
+          "topic": "match-ready",
+          "fireAt": "2026-10-12T05:00:00Z",
+          "exact": false
+        }
+      ],
+      "pending": [
+        {
+          "key": "match",
+          "topic": "match-ready",
+          "fireAt": "2026-10-12T05:00:00Z"
+        },
+        {
+          "key": "energy",
+          "topic": "energy-full",
+          "fireAt": "2026-10-12T23:00:00Z"
+        }
+      ]
+    },
+    "reminders": [],
+    "providerCalls": []
+  }
+}

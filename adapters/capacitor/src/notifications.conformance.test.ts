@@ -192,7 +192,10 @@ describe('Capacitor notifications provider conformance', () => {
       'os-permission-revoked-in-settings',
       'provider-rate-limited',
       'reminder-cancel-across-routes',
+      'reminder-local-quiet-hours',
       'reminder-local-route',
+      'reminder-server-deferred-cancel',
+      'reminder-server-set-checks',
       'requested-topic-needs-opt-in',
     ];
     expect(passed).toEqual([...expected].sort());
@@ -210,6 +213,7 @@ describe('Capacitor notifications provider conformance', () => {
     expect(passed).toEqual([
       'local-reminder-cancelled-on-withdrawal',
       'local-schedule-never-prompts',
+      'reminder-local-quiet-hours',
       'reminder-local-route',
     ]);
   });
