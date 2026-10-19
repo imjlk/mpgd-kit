@@ -166,7 +166,8 @@ mounts a public verified-attempt write route.
 The Worker serves the notifications v2 backend
 ([RFC](specs/notifications/notifications-v2-rfc.md#server)) once it has a
 topic catalog. It needs D1 for anything but local development: apply
-`0007_notifications.sql` with the other migrations. The memory store keeps
+`0007_notifications.sql` and `0008_notification_scheduler.sql` with the
+other migrations. The memory store keeps
 consent records and endpoints in one isolate only, and the Worker refuses
 it next to a queue, whose consumer runs in another isolate. The catalog,
 the deployment, and the providers are checked on first use; a broken one
@@ -194,8 +195,10 @@ queue = "mpgd-notifications"
 max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
-# Purges and due replays (25 sends per run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise;
-# each send costs several subrequests, so larger batches need the paid plan's limit).
+# Purges and the scheduler: due reminders and notice checks, then due sends (25 of each per
+# run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise; each send costs several subrequests,
+# so larger batches need the paid plan's limit). A reminder fires at the first run at or after
+# its time, so the cron's period is a reminder's latest lateness.
 [triggers]
 crons = ["*/5 * * * *"]
 ```
@@ -227,7 +230,12 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
   (`{ registration, target }`; `target` is `android` or `ios`, whose catalog
   mapping applies), `POST /endpoints/unregister`, `GET /notices`, and
-  `POST /notices/shown`. The session routes need the
+  `POST /notices/shown`, `POST /reminders` (`{ reminder: { key, topic,
+  fireAt, templateData?, link? } }`, answers `{ status }`: `scheduled`,
+  `replaced`, or the set-time refusal `permission-required`,
+  `request-missing`, `preference-off`, `advertising-consent-missing`), and
+  `POST /reminders/cancel` (`{ key }`, answers `{ cancelled }`). The
+  session routes need the
   `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
   only `GET /providers` is served, and the Worker logs one warning naming
   the missing binding the first time a session route is asked for (a
@@ -241,6 +249,16 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   code, message, retryable } }`, because an error's fields do not cross the
   RPC boundary. Any Worker bound to this one can send to any player, as
   with the other service-binding methods.
+- **Scheduler.** Each cron run fires the due server reminders as sends
+  through the policy gate, pushes the consent notices nobody recorded by
+  seven days before they are due (Korean rules, through the catalog's
+  notice topic, FCM only: Apps in Toss sends host templates, which cannot
+  state the record), and then sends the due rows (deferred sends, expired
+  leases, and the scheduler's new sends), oldest first and at no more than
+  each provider's rate. With the queue bound, the cron only takes those
+  rows for the queue, and the consumer sends them; without it, the cron
+  sends them itself. A refused notice push is tried again after an hour,
+  doubling to a day, or as soon as the player registers a device again.
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
   other failure is retried with a growing delay (10 s, doubling, at most
   5 min). While the notifications configuration is broken (a catalog or

@@ -163,10 +163,10 @@ head_sampling_rate = 1
 # service = "game-devvit-payments-authority"
 #
 # Notifications v2 (docs/CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2): set the
-# game's topic catalog and deployment settings as JSON vars, apply migration
-# 0007_notifications.sql, bind the session authenticator, and put the Firebase
-# service-account key in a secret (wrangler secret put FCM_SERVICE_ACCOUNT).
-# Never commit the key.
+# game's topic catalog and deployment settings as JSON vars, apply migrations
+# 0007_notifications.sql and 0008_notification_scheduler.sql, bind the session
+# authenticator, and put the Firebase service-account key in a secret
+# (wrangler secret put FCM_SERVICE_ACCOUNT). Never commit the key.
 #
 # MPGD_NOTIFICATIONS_CATALOG = { version = "...", defaultLocale = "ko", topics = [] }
 # MPGD_NOTIFICATIONS_DEPLOYMENT = { advertisingRules = "kr", advertisingSender = { contact = "..." } }

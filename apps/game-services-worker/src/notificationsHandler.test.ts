@@ -297,6 +297,53 @@ try {
     }),
     { code: 'NOTIFICATIONS_IDEMPOTENCY_CONFLICT' },
   );
+  // Server reminders: set and cancel by key over the session routes; the cron fires them.
+  const reminder = (fireAt: string) => ({
+    key: 'rematch',
+    topic: 'friend-challenge',
+    fireAt,
+    templateData: { name: 'Jun' },
+  });
+  const past = new Date(Date.now() - 60_000).toISOString();
+  assert.deepEqual(
+    (await call('/reminders', { authorization: 'Bearer player-1', body: { reminder: reminder(past) } })).body,
+    { status: 'scheduled' },
+  );
+  assert.deepEqual(
+    (await call('/reminders', { authorization: 'Bearer player-1', body: { reminder: reminder(past) } })).body,
+    { status: 'replaced' },
+  );
+  for (const body of [{ reminder: { ...reminder(past), fireAt: 'soon' } }, { reminder: 'x' }, {}]) {
+    const refused = await call('/reminders', { authorization: 'Bearer player-1', body });
+    assert.deepEqual([refused.status, refused.body.error], [400, 'NOTIFICATIONS_INVALID_INPUT']);
+  }
+  assert.equal((await call('/reminders', { authorization: 'Bearer player-1' })).status, 405);
+  assert.deepEqual(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: { key: 'rematch' } })).body,
+    { cancelled: true },
+  );
+  assert.deepEqual(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: { key: 'rematch' } })).body,
+    { cancelled: false },
+  );
+  assert.equal(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: {} })).status,
+    400,
+  );
+  await call('/reminders', {
+    authorization: 'Bearer player-1',
+    body: { reminder: reminder(past) },
+  });
+  const sentBeforeCron = sends.length;
+  await runScheduledNotifications(env);
+  assert.deepEqual(
+    sends.slice(sentBeforeCron).map((send) => send.token),
+    ['tok-a', 'tok-b'],
+  );
+  assert.ok(sends.at(-1)?.body.includes('Jun님이 도전했어요.'));
+  await runScheduledNotifications(env);
+  assert.equal(sends.length, sentBeforeCron + 2, 'a fired reminder is sent once');
+
   // Ending a session unbinds what it registered; an explicit unbind removes the other.
   await endWorkerNotificationSession(env, { sessionId: 's-2' });
   assert.equal(
@@ -320,10 +367,10 @@ try {
 
   // With a queue, the fan-out runs in the consumer.
   const db = await miniflare.getD1Database('DB') as unknown as D1Database;
-  const migration = await readFile(
-    new URL('../migrations/0007_notifications.sql', import.meta.url),
-    'utf8',
-  );
+  const migration = (await Promise.all(
+    ['0007_notifications.sql', '0008_notification_scheduler.sql'].map((file) =>
+      readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')),
+  )).join('\n');
   const statements = migration
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('--'))
@@ -510,7 +557,7 @@ try {
     warnings.filter((line) => line.includes('GAME_SERVICES_NOTIFICATIONS_AUTH')),
     [
       'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
-        + 'the client session routes (consent, endpoints, notices) are off and answer 404. '
+        + 'the client session routes (consent, endpoints, notices, reminders) are off and answer 404. '
         + 'A send-only Worker can ignore this.',
     ],
   );

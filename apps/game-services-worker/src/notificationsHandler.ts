@@ -28,8 +28,8 @@ import { createD1NotificationStore } from './notificationsD1.js';
 /**
  * Notifications v2 in the game-services Worker (RFC "Server"): the
  * authenticated routes a game client calls, the service-binding RPC a game
- * server sends through, the dispatch queue consumer, and the scheduled purge
- * and due-row replay.
+ * server sends through, the dispatch queue consumer, and the cron: purges,
+ * then the scheduler (server reminders, consent notice pushes, and due rows).
  */
 
 /** Resolves a game-services session from the Authorization header. */
@@ -87,7 +87,11 @@ export interface GameServicesNotificationsEnv {
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
-  /** Sends the cron replays per run; 25 by default, at most 100 (each send costs several subrequests). */
+  /**
+   * Items the cron takes per run, for each of its two steps (due reminders and
+   * notice checks, then due sends); 25 by default, at most 100 (each send
+   * costs several subrequests).
+   */
   readonly MPGD_NOTIFICATIONS_DUE_BATCH?: string;
 }
 
@@ -319,7 +323,9 @@ function parseJsonVar(value: unknown, name: string): unknown {
  * - `GET /providers`: the registry entries and served targets (public).
  * - With a session (the `GAME_SERVICES_NOTIFICATIONS_AUTH` binding): `GET` and
  *   `POST /consent`, `POST /endpoints`, `POST /endpoints/unregister`,
- *   `GET /notices`, `POST /notices/shown`. Without the binding they are not
+ *   `GET /notices`, `POST /notices/shown`, `POST /reminders` (`{ reminder }`,
+ *   answers `{ status }`), and `POST /reminders/cancel` (`{ key }`, answers
+ *   `{ cancelled }`). Without the binding they are not
  *   mounted (404): binding a device to a player needs an authenticated
  *   session. A Worker with a catalog but no binding logs that once, when a
  *   session route is first asked for.
@@ -364,6 +370,8 @@ export function createNotificationsFetchHandler(
       '/endpoints/unregister': ['POST'],
       '/notices': ['GET'],
       '/notices/shown': ['POST'],
+      '/reminders': ['POST'],
+      '/reminders/cancel': ['POST'],
     };
     const methods = allowed[route];
     const auth = env.GAME_SERVICES_NOTIFICATIONS_AUTH;
@@ -374,7 +382,7 @@ export function createNotificationsFetchHandler(
       reportedMissingSessionBinding.add(env);
       console.warn(
         'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
-          + 'the client session routes (consent, endpoints, notices) are off and answer 404. '
+          + 'the client session routes (consent, endpoints, notices, reminders) are off and answer 404. '
           + 'A send-only Worker can ignore this.',
       );
     }
@@ -446,6 +454,14 @@ export function createNotificationsFetchHandler(
             body.channel === undefined ? {} : { channel: body.channel as 'in-game' },
           );
           return json({}, 200, privateHeaders);
+        case 'POST /reminders':
+          return json(await service.setReminder(session, body.reminder), 200, privateHeaders);
+        case 'POST /reminders/cancel':
+          return json(
+            await service.cancelReminder(session, { key: body.key }),
+            200,
+            privateHeaders,
+          );
         default:
           return json({ error: 'UNKNOWN_ENDPOINT' }, 404, privateHeaders);
       }
@@ -547,9 +563,11 @@ export async function consumeNotificationDispatchBatch(
 }
 
 /**
- * The cron: retention purges, then a batch of due rows (deferred sends,
- * expired leases), each step on its own so a failed purge never skips the
- * replays. The batch is small because each send costs several subrequests.
+ * The cron: retention purges, then one scheduler run (due server reminders
+ * and consent notice checks, then due rows: deferred sends and expired
+ * leases, paced by each provider's rate and sent through the queue when one
+ * is bound), each step on its own so a failed purge never skips the
+ * scheduler. The batch is small because each send costs several subrequests.
  */
 export async function runScheduledNotifications(env: GameServicesNotificationsEnv): Promise<void> {
   const notifications = resolveWorkerNotifications(env);
@@ -565,12 +583,12 @@ export async function runScheduledNotifications(env: GameServicesNotificationsEn
     console.error('Notifications purge failed:', describeFailure(error));
   }
   try {
-    const { failed } = await notifications.service.dispatchDue({ limit });
+    const { failed } = await notifications.service.runScheduler({ limit });
     if (failed > 0) {
-      console.error('Notifications due replay:', failed, 'send(s) failed and stay due.');
+      console.error('Notifications scheduler:', failed, 'item(s) failed and stay due.');
     }
   } catch (error) {
-    console.error('Notifications due replay failed:', describeFailure(error));
+    console.error('Notifications scheduler failed:', describeFailure(error));
   }
 }
 
