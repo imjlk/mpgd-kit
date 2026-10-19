@@ -3,7 +3,10 @@ import {
   assertNotificationDeployment,
   assertNotificationEndpointRegistration,
   assertRecordNotificationNoticeInput,
+  createNotificationNoticeIdempotencyKey,
+  createNotificationReminderIdempotencyKey,
   evaluateNotificationDelivery,
+  evaluateNotificationReminderConsent,
   isNotificationTimestamp,
   isSameNotificationNotice,
   isValidNotificationTimeZone,
@@ -13,10 +16,13 @@ import {
   NotificationError,
   notificationKeyIssue,
   notificationNoticeCopyIssues,
+  notificationNoticeSendFrom,
   notificationNoticeTopic,
+  notificationProviderCarriesNotices,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationTemplateDataIssue,
+  toSeoulCalendarDate,
   type NotificationConsentRecord,
   type NotificationDeliveryDecision,
   type NotificationDeliveryHistoryEntry,
@@ -26,6 +32,7 @@ import {
   type NotificationNotice,
   type NotificationNoticeIdentity,
   type NotificationPermissionState,
+  type NotificationTemplateData,
   type NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
 
@@ -51,14 +58,18 @@ import {
   notificationSendOutcome,
   type NotificationConsentRecordInput,
   type NotificationNoticeChannel,
+  type NotificationNoticeCheck,
   type NotificationPurgeCounts,
   type NotificationRateLimitState,
+  type NotificationScheduleEntry,
   type NotificationSendOrigin,
   type NotificationSendRow,
   type NotificationStore,
   type NotificationStoredEndpoint,
+  type NotificationStoredReminder,
   type NotificationStoredSend,
   type NotificationStoredSendRequest,
+  type NotificationVersionedScheduleEntry,
 } from './store.js';
 import { describeError as describe } from './text.js';
 
@@ -86,6 +97,15 @@ import { describeError as describe } from './text.js';
  *   holder that failed before the call, an ambiguous answer). Ambiguous
  *   replays stop a day after the first attempt. A direct caller may also
  *   replay its own platform rows by sending the key again after the lease.
+ *   Due rows go out at no more than each provider's registry `rate`, through
+ *   the queue when one is bound and inline otherwise.
+ * - **Scheduler.** `runScheduler` turns due server reminders into
+ *   `reminder:` sends and, under the Korean rules, pushes each consent notice
+ *   nobody recorded by seven days before its `dueBy` as a `notice:` send of
+ *   the catalog's notice topic; both then leave as due rows. A refused
+ *   notice push backs off, doubling from an hour to a day.
+ * - **Consent history.** Each write compacts the player's history: records
+ *   no rule reads any more are deleted a day after they were written.
  */
 
 const secondMs = 1000;
@@ -111,6 +131,26 @@ const maxAddressLength = 4096;
 const maxRowKeyLength = maxTextLength + 1 + 9 * maxTextLength;
 /** Largest consent evidence envelope, as JSON. */
 const maxEvidenceBytes = 16_384;
+/** How long a scheduler item waits after a failure that may pass. */
+const schedulerRetryMs = 60 * secondMs;
+/** How often a notice check looks again while a push of it waits in the ledger. */
+const noticeRecheckMs = 3_600_000;
+/** The first wait after a refused notice push; it doubles, up to a day. */
+const noticeBackoffMs = 3_600_000;
+/** Records no rule reads are kept this long, for the daily cap, and then deleted. */
+const consentCompactionMs = dayMs;
+/** Lists every notice still owed, now or later: the next re-confirmation of each consent. */
+const noticeHorizon = '9999-12-31T00:00:00Z';
+const noticesEntryId = 'notices';
+const reminderEntryPrefix = 'reminder:';
+const reminderEntryId = (key: string): string => `${reminderEntryPrefix}${key}`;
+/** How far through the gate a set-time refusal got: the furthest step is the one answered. */
+const reminderRefusalRank = {
+  'permission-required': 1,
+  'request-missing': 2,
+  'preference-off': 2,
+  'advertising-consent-missing': 3,
+} as const;
 /**
  * Client-written consent records a player may add per rolling day. It is
  * generous: it only stops a client that writes in a loop, since every send
@@ -204,6 +244,26 @@ export interface NotificationDueResult {
   readonly outcome: NotificationDeliveryOutcome;
 }
 
+/** A server reminder as a game sets it (RFC `reminders.set`, with the time already in the request). */
+export interface NotificationReminderInput {
+  readonly key: string;
+  readonly topic: string;
+  /** RFC 3339 with an explicit offset. */
+  readonly fireAt: string;
+  readonly templateData?: NotificationTemplateData;
+  /** A post or comment id for providers whose sends need a link (Devvit). */
+  readonly link?: string;
+}
+
+/** What setting a server reminder answers: stored, or the refusal of gate steps 3 to 5. */
+export type NotificationReminderSetStatus =
+  | 'scheduled'
+  | 'replaced'
+  | 'permission-required'
+  | 'request-missing'
+  | 'preference-off'
+  | 'advertising-consent-missing';
+
 export interface NotificationService {
   /** The registry entries and served targets the backend publishes. */
   providers(): NotificationProviderRegistrySnapshot;
@@ -244,8 +304,41 @@ export interface NotificationService {
   deliver(input: unknown): Promise<NotificationDeliveryOutcome>;
   /** Runs one queued dispatch job; a job that is no longer due does nothing. */
   dispatch(job: NotificationDispatchJob): Promise<void>;
-  /** Replays up to `limit` sends with a due row; one failing send never stops the others. */
+  /**
+   * Replays up to `limit` sends with a due row, at no more than each
+   * provider's registry `rate`: through the queue when one is bound (each
+   * row is taken for its lease and enqueued), inline otherwise. One failing
+   * send never stops the others.
+   */
   dispatchDue(input?: { readonly limit?: number }): Promise<{
+    readonly results: readonly NotificationDueResult[];
+    readonly failed: number;
+  }>;
+  /**
+   * Sets the session player's server reminder (RFC "Reminders"). Gate steps
+   * 3 to 5 run first against the backend's records, the device permission
+   * each endpoint reported, or the host read, for any provider the player
+   * can be reached on; a refusal stores nothing. Otherwise the reminder with
+   * this key is stored or replaced, and a send of the previous one that
+   * still waits (deferred or in flight) is stopped.
+   */
+  setReminder(
+    session: NotificationSession,
+    input: unknown,
+  ): Promise<{ readonly status: NotificationReminderSetStatus }>;
+  /**
+   * Removes the session player's reminder with this key and stops a send of
+   * it that still waits; answers whether either existed.
+   */
+  cancelReminder(session: NotificationSession, input: unknown): Promise<{ readonly cancelled: boolean }>;
+  /**
+   * One scheduler run: up to `limit` due schedule entries (server reminders
+   * become `reminder:` sends; each player's notice check pushes the consent
+   * notices owed by now), then `dispatchDue` with the same `limit`. Answers
+   * each send it touched with its result after the run, in the order it first
+   * touched them.
+   */
+  runScheduler(input?: { readonly limit?: number }): Promise<{
     readonly results: readonly NotificationDueResult[];
     readonly failed: number;
   }>;
@@ -468,16 +561,21 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * platform-user provider, over the named provider or every provider. When
    * no provider has a recipient, one unresolved recipient per provider, so
    * the gate still answers its earlier steps (`topic-unknown` before
-   * `no-endpoint`).
+   * `no-endpoint`). A consent notice goes only through providers that can
+   * carry it (`notificationProviderCarriesNotices`).
    */
   const recipientsOf = async (
     request: NotificationStoredSendRequest,
     at: number,
+    origin: NotificationSendOrigin,
   ): Promise<readonly Recipient[]> => {
     let scope: readonly RegisteredNotificationProvider[] = registry.providers;
     if (request.provider !== undefined) {
       const named = registry.provider(request.provider);
       scope = named === undefined ? [] : [named];
+    }
+    if (origin.kind === 'notice') {
+      scope = scope.filter((provider) => notificationProviderCarriesNotices(provider.entry));
     }
     // Providers are independent: resolve them together, then keep the order.
     const perProvider = await Promise.all(scope.map(async (provider): Promise<readonly Recipient[]> => {
@@ -773,14 +871,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * The rows a new send stores, after a first gate check per recipient:
    * allowed recipients become queued rows, deferred ones deferred rows, and
    * refusals are answered but not stored. A caller error throws before
-   * anything is stored.
+   * anything is stored. A queued row's lease ends a claim lease from now, or
+   * at `queuedUntil` for a scheduler item, whose rows are due at once and
+   * leave through the paced due path.
    */
   const plan = async (
     request: NotificationStoredSendRequest,
     origin: NotificationSendOrigin,
     at: number,
+    queuedUntil?: number,
   ): Promise<{ readonly rows: NotificationSendRow[]; readonly refusals: NotificationDeliveryRefusal[] }> => {
-    const recipients = await recipientsOf(request, at);
+    const recipients = await recipientsOf(request, at, origin);
     if (recipients.length === 0) {
       return { rows: [], refusals: [noEndpoint()] };
     }
@@ -820,7 +921,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           ...row,
           state: {
             status: 'in-flight',
-            leaseUntil: formatNotificationInstant(at + leaseMs),
+            leaseUntil: formatNotificationInstant(queuedUntil ?? at + leaseMs),
             attempted: false,
           },
         });
@@ -834,8 +935,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const eligible = (mode: RunMode, row: NotificationSendRow, at: number): boolean => {
     switch (mode) {
       case 'job':
-        // A queued delivery runs once; an attempted one is replayed only after its lease.
-        return row.state.status === 'in-flight' && !row.state.attempted;
+        // A queued delivery runs once: a row no holder claims, either never
+        // sent or taken from the due rows for the queue. An attempted row
+        // keeps its claim, so it is replayed only after its lease.
+        return row.state.status === 'in-flight' && row.state.claim === undefined;
       case 'retry':
         // A direct caller replays its own platform rows once their lease ended.
         return row.state.status === 'in-flight'
@@ -1351,6 +1454,577 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     return settle(send.key, [...refusals, ...ran.refusals]);
   };
 
+  // Due rows (the scheduler's dispatch).
+
+  /**
+   * Takes due rows for the queue: each becomes a queued row (in flight, no
+   * holder) for one claim lease, so the next run does not take it again
+   * while its job waits, and a lost job is due again when the lease ends.
+   * An attempted row stays attempted (its provider call may have happened),
+   * and the take never closes its replay window early. Answers the rows it
+   * took; a row that is no longer due is left.
+   */
+  const takeRows = async (
+    sendKey: string,
+    wanted: readonly NotificationSendRow[],
+  ): Promise<NotificationSendRow[]> => {
+    const names = new Set(wanted.map((row) => JSON.stringify([row.key, row.provider])));
+    for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+      const held = await store.getSend(sendKey);
+      if (held === undefined) {
+        return [];
+      }
+      const at = nowMs();
+      const taken: NotificationSendRow[] = [];
+      const rows = held.send.rows.map((row) => {
+        if (!names.has(JSON.stringify([row.key, row.provider])) || !isNotificationRowDue(row, at)) {
+          return row;
+        }
+        const next = takenRow(row, at, leaseMs);
+        taken.push(next);
+        return next;
+      });
+      if (taken.length === 0) {
+        return [];
+      }
+      if (
+        await store.updateSend({
+          key: sendKey,
+          version: held.version,
+          send: { ...held.send, scheduled: true, rows, changedAt: formatNotificationInstant(at) },
+        })
+      ) {
+        return taken;
+      }
+    }
+    throw busy(sendKey);
+  };
+
+  /**
+   * The remaining dispatches each provider allows this run: its registry
+   * `rate` less the deliveries in the rate window (`t − window < s ≤ t`). It
+   * counts delivered sends, so sends in flight may pass it by a few.
+   */
+  const paceBudgets = () => {
+    const budgets = new Map<string, number>();
+    return {
+      async take(provider: string): Promise<boolean> {
+        let left = budgets.get(provider);
+        if (left === undefined) {
+          const rate = registry.provider(provider)?.entry.rate;
+          left = rate === undefined
+            ? Number.POSITIVE_INFINITY
+            : rate.count - await store.countHistory({
+              provider,
+              since: formatNotificationInstant(nowMs() - rate.windowSeconds * secondMs + 1),
+            });
+        }
+        budgets.set(provider, left - 1);
+        return left > 0;
+      },
+    };
+  };
+
+  const dispatchDueRows = async (options: { readonly limit?: number } = {}) => {
+    const limit = batchLimit(options.limit);
+    const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
+    const results: NotificationDueResult[] = [];
+    const pace = paceBudgets();
+    let failed = 0;
+    for (const sendKey of keys) {
+      try {
+        const held = await store.getSend(sendKey);
+        if (held === undefined) {
+          continue;
+        }
+        const at = nowMs();
+        // Oldest first within each provider's pace: a row over it stays due for the next run.
+        const due: NotificationSendRow[] = [];
+        for (const row of held.send.rows) {
+          if (isNotificationRowDue(row, at) && await pace.take(row.provider)) {
+            due.push(row);
+          }
+        }
+        if (due.length === 0) {
+          continue;
+        }
+        if (input.queue !== undefined) {
+          const taken = await takeRows(sendKey, due);
+          if (taken.length === 0) {
+            continue;
+          }
+          try {
+            await input.queue.enqueue(
+              taken.map((row) => ({ sendKey, provider: row.provider, rowKey: row.key })),
+            );
+          } catch (error) {
+            // The rows are taken for one lease: the next run takes them again after it.
+            failed += 1;
+            report(error, 'queue.enqueue', sendKey);
+          }
+          results.push({ sendKey, outcome: await settle(sendKey, []) });
+          continue;
+        }
+        const ran = await runInline(sendKey, due, 'due');
+        if (ran.failed > 0) {
+          failed += 1;
+        }
+        results.push({ sendKey, outcome: await settle(sendKey, ran.refusals) });
+      } catch (error) {
+        failed += 1;
+        report(error, 'dispatchDue', sendKey);
+      }
+    }
+    return { results, failed };
+  };
+
+  // Scheduler items.
+
+  /** A send a scheduler item creates: its key held by a first-evaluation claim, before any row. */
+  const createItemSend = async (
+    request: NotificationStoredSendRequest,
+    origin: NotificationSendOrigin,
+    at: number,
+  ): Promise<{ readonly send: NotificationStoredSend; readonly version: string } | 'exists'> => {
+    for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+      const existing = await store.getSend(request.idempotencyKey);
+      if (existing !== undefined) {
+        const { send } = existing;
+        const stranded = send.rows.length === 0
+          && (send.claim === undefined || Date.parse(send.claim.leaseUntil) <= at);
+        if (!stranded) {
+          return 'exists';
+        }
+        // A run that stopped before it stored any row: its key starts over.
+        await store.updateSend({ key: send.key, version: existing.version, send: undefined });
+        continue;
+      }
+      const send: NotificationStoredSend = {
+        key: request.idempotencyKey,
+        fingerprint: notificationSendFingerprint(request),
+        request,
+        origin,
+        scheduled: true,
+        rows: [],
+        claim: { token: newToken(), leaseUntil: formatNotificationInstant(at + leaseMs) },
+        changedAt: formatNotificationInstant(at),
+      };
+      const version = await store.createSend(send);
+      if (version !== undefined) {
+        return { send, version };
+      }
+    }
+    throw busy(request.idempotencyKey);
+  };
+
+  const releaseQuietly = async (key: string, version: string): Promise<void> => {
+    try {
+      await store.updateSend({ key, version, send: undefined });
+    } catch (error) {
+      report(error, 'ledger.release', key);
+    }
+  };
+
+  /**
+   * Plans the rows of a send `createItemSend` made, and stores them due at
+   * `dueAt` once `claim` answers that the item still wants the send. Answers
+   * the send's result and whether rows were stored; `undefined` when the
+   * item changed meanwhile, so nothing was stored. A caller error releases
+   * the key and throws `NOTIFICATIONS_INVALID_INPUT`; any other failure
+   * releases it and rethrows.
+   */
+  const storeItemRows = async (
+    created: { readonly send: NotificationStoredSend; readonly version: string },
+    at: number,
+    dueAt: number,
+    claim: () => Promise<boolean>,
+  ): Promise<{ readonly outcome: NotificationDeliveryOutcome; readonly stored: boolean } | undefined> => {
+    const { send, version } = created;
+    let planned: Awaited<ReturnType<typeof plan>>;
+    try {
+      planned = await plan(send.request, send.origin, at, Math.min(dueAt, at));
+    } catch (error) {
+      await releaseQuietly(send.key, version);
+      if (error instanceof NotificationSendInputError) {
+        throw invalidInput(error.message, error);
+      }
+      throw error;
+    }
+    if (planned.rows.length === 0) {
+      await releaseQuietly(send.key, version);
+      return { outcome: bestNotificationOutcome(planned.refusals) ?? noEndpoint(), stored: false };
+    }
+    if (!await claim()) {
+      await releaseQuietly(send.key, version);
+      return undefined;
+    }
+    const { claim: _claim, ...unclaimed } = send;
+    const stored: NotificationStoredSend = {
+      ...unclaimed,
+      rows: planned.rows,
+      changedAt: formatNotificationInstant(at),
+    };
+    // A cancel since the claim removed the key: nothing is stored or sent.
+    if (!await store.updateSend({ key: send.key, version, send: stored })) {
+      return undefined;
+    }
+    return { outcome: notificationSendOutcome(stored) ?? { status: 'in-flight' }, stored: true };
+  };
+
+  /**
+   * Stops a fired reminder's send that still waits: the rows not delivered
+   * yet (deferred, queued, or in flight) are dropped, and a send the
+   * scheduler is still making loses its key, so no row of it is ever
+   * stored. A send the provider may already have accepted cannot be
+   * recalled. Answers whether anything waited.
+   */
+  const stopReminderSend = async (player: string, reminder: NotificationStoredReminder): Promise<boolean> => {
+    let key: string;
+    try {
+      key = createNotificationReminderIdempotencyKey({ player, key: reminder.key, fireAt: reminder.fireAt });
+    } catch {
+      return false;
+    }
+    for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+      const held = await store.getSend(key);
+      if (held === undefined || held.send.origin.kind !== 'reminder') {
+        return false;
+      }
+      const { send } = held;
+      const kept = send.rows.filter((row) => row.state.status === 'delivered');
+      if (send.rows.length > 0 && kept.length === send.rows.length) {
+        return false;
+      }
+      const next = kept.length === 0
+        ? undefined
+        : { ...send, rows: kept, changedAt: formatNotificationInstant(nowMs()) };
+      if (await store.updateSend({ key, version: held.version, send: next })) {
+        return true;
+      }
+    }
+    throw busy(key);
+  };
+
+  /** Moves an entry's due time later after a failure, so a broken item does not fill every run. */
+  const deferEntry = async (held: NotificationVersionedScheduleEntry, at: number): Promise<void> => {
+    try {
+      await store.updateScheduleEntry({
+        player: held.entry.player,
+        id: held.entry.id,
+        version: held.version,
+        entry: { ...held.entry, dueAt: formatNotificationInstant(at + schedulerRetryMs) },
+      });
+    } catch (error) {
+      report(error, 'scheduler.defer');
+    }
+  };
+
+  const removeEntry = (held: NotificationVersionedScheduleEntry): Promise<boolean> =>
+    store.updateScheduleEntry({
+      player: held.entry.player,
+      id: held.entry.id,
+      version: held.version,
+      entry: undefined,
+    });
+
+  /**
+   * A due reminder becomes its `reminder:<player>:<key>:<fireAt>` send to
+   * every provider the player has a recipient on, through the gate. The
+   * reminder is marked fired (and kept until its key's retention ends, so a
+   * set or cancel can still stop the send) in the same step that keeps the
+   * send; a refused send consumes it. A cancel or replace since it was read
+   * wins.
+   */
+  const fireReminder = async (
+    held: NotificationVersionedScheduleEntry,
+    reminder: NotificationStoredReminder,
+  ): Promise<NotificationDueResult | undefined> => {
+    const { player } = held.entry;
+    const at = nowMs();
+    let key: string;
+    try {
+      key = createNotificationReminderIdempotencyKey({ player, key: reminder.key, fireAt: reminder.fireAt });
+    } catch (error) {
+      // A reminder whose send cannot be keyed fails once.
+      await removeEntry(held);
+      throw invalidInput(describe(error), error);
+    }
+    const request: NotificationStoredSendRequest = {
+      idempotencyKey: key,
+      player,
+      topic: reminder.topic,
+      ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
+      ...(reminder.link === undefined ? {} : { link: reminder.link }),
+    };
+    const fired: NotificationScheduleEntry = {
+      player,
+      id: held.entry.id,
+      dueAt: formatNotificationInstant(at + keyRetentionMs),
+      item: { ...reminder, firedAt: formatNotificationInstant(at) },
+    };
+    const markFired = () =>
+      store.updateScheduleEntry({ player, id: held.entry.id, version: held.version, entry: fired });
+    const created = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
+    if (created === 'exists') {
+      // Its send was made (an identical reminder, or a run that stopped after
+      // storing rows): the stored rows carry it from here.
+      await markFired();
+      return undefined;
+    }
+    let result: Awaited<ReturnType<typeof storeItemRows>>;
+    try {
+      result = await storeItemRows(created, at, Date.parse(reminder.fireAt), markFired);
+    } catch (error) {
+      if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT') {
+        // A send that cannot be made as asked fails once.
+        await removeEntry(held);
+      } else {
+        await deferEntry(held, at);
+      }
+      throw error;
+    }
+    if (result === undefined) {
+      return undefined;
+    }
+    if (!result.stored) {
+      // Refused by the gate: the reminder is spent, as a send would be.
+      await removeEntry(held);
+    }
+    return { sendKey: key, outcome: result.outcome };
+  };
+
+  /** A fired reminder whose send key's retention ended: nothing can stop that send any more. */
+  const forgetFiredReminder = async (held: NotificationVersionedScheduleEntry): Promise<void> => {
+    await removeEntry(held);
+  };
+
+  /** The instant an Asia/Seoul calendar date starts. */
+  const seoulMidnight = (date: string): number => Date.parse(`${date}T00:00:00+09:00`);
+  const noticeIdentity = (notice: NotificationNotice): NotificationNoticeIdentity => ({
+    kind: notice.kind,
+    record: { kind: notice.record.kind, at: normalizeNotificationTimestamp(notice.record.at) },
+    dueBy: notice.dueBy,
+  });
+  const carriesNotices = (): boolean =>
+    rules === 'kr'
+    && noticeTopic !== undefined
+    && registry.providers.some((provider) => notificationProviderCarriesNotices(provider.entry));
+
+  /**
+   * The player's notice check: each listed notice nobody recorded by the
+   * start of the Asia/Seoul day seven days before its `dueBy` becomes its
+   * `notice:` send through the notice topic, in the variant it is listed
+   * with, filled with `consentDate`. Then the check is due again at the
+   * earliest of: the next notice's first send day (a later result notice or
+   * re-confirmation), an hour while a push waits in the ledger, and the
+   * backoff after a refused push (an hour, doubling to a day). With nothing
+   * owed it is removed.
+   */
+  const checkNotices = async (
+    held: NotificationVersionedScheduleEntry,
+    check: NotificationNoticeCheck,
+  ): Promise<NotificationDueResult[]> => {
+    const { player } = held.entry;
+    if (!carriesNotices() || noticeTopic === undefined) {
+      await removeEntry(held);
+      return [];
+    }
+    const at = nowMs();
+    const now = formatNotificationInstant(at);
+    const today = toSeoulCalendarDate(now);
+    const records = await store.listConsent(player);
+    const given = await store.listNoticesGiven(player);
+    const owed = listNotificationNotices(records, given, now);
+    const failed = new Set(check.failed ?? []);
+    const results: NotificationDueResult[] = [];
+    let waiting = false;
+    let refused = false;
+    for (const notice of owed) {
+      const sendFrom = notificationNoticeSendFrom(notice.dueBy);
+      const identity = noticeIdentity(notice);
+      const key = createNotificationNoticeIdempotencyKey({ ...identity, player });
+      if (sendFrom > today || failed.has(key)) {
+        continue;
+      }
+      const request: NotificationStoredSendRequest = {
+        idempotencyKey: key,
+        player,
+        topic: noticeTopic,
+        templateData: { consentDate: toSeoulCalendarDate(identity.record.at) },
+      };
+      const created = await createItemSend(
+        request,
+        { kind: 'notice', notice: identity, variant: notice.variant },
+        at,
+      );
+      if (created === 'exists') {
+        waiting = true;
+        continue;
+      }
+      try {
+        const result = await storeItemRows(created, at, seoulMidnight(sendFrom), async () => true);
+        if (result !== undefined) {
+          results.push({ sendKey: key, outcome: result.outcome });
+          waiting ||= result.stored;
+          refused ||= !result.stored;
+        }
+      } catch (error) {
+        if (!(error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')) {
+          await deferEntry(held, at);
+          throw error;
+        }
+        // A push that cannot render fails once; the game still owes the notice.
+        failed.add(key);
+        report(error, 'scheduler.notice', key);
+      }
+    }
+    // Every notice still owed, now or later (the next re-confirmation of each consent).
+    const ahead = listNotificationNotices(records, given, noticeHorizon);
+    const owedKeys = new Set(
+      ahead.map((notice) =>
+        createNotificationNoticeIdempotencyKey({ ...noticeIdentity(notice), player }),
+      ),
+    );
+    const stillFailed = [...failed].filter((key) => owedKeys.has(key));
+    let next: number | undefined;
+    const consider = (time: number): void => {
+      next = next === undefined ? time : Math.min(next, time);
+    };
+    for (const notice of ahead) {
+      const sendFrom = notificationNoticeSendFrom(notice.dueBy);
+      if (sendFrom > today) {
+        consider(seoulMidnight(sendFrom));
+      }
+    }
+    if (waiting) {
+      consider(at + noticeRecheckMs);
+    }
+    const attempts = refused ? check.attempts + 1 : 0;
+    if (refused) {
+      consider(at + Math.min(noticeBackoffMs * 2 ** Math.min(attempts - 1, 16), dayMs));
+    }
+    const settled: NotificationScheduleEntry | undefined = next === undefined
+      ? undefined
+      : {
+          player,
+          id: noticesEntryId,
+          dueAt: formatNotificationInstant(next),
+          item: {
+            kind: 'notices',
+            attempts,
+            ...(stillFailed.length === 0 ? {} : { failed: stillFailed }),
+          },
+        };
+    // A record written since the check began made it due again: that stands.
+    await store.updateScheduleEntry({
+      player,
+      id: noticesEntryId,
+      version: held.version,
+      entry: settled,
+    });
+    return results;
+  };
+
+  /**
+   * Makes the player's notice check due at `at`, and clears its backoff. With
+   * `onlyBackedOff`, it acts only on a check that is backing off after a
+   * refused push (a new registration may let the push through).
+   */
+  const markNoticesDue = async (player: string, at: number, onlyBackedOff = false): Promise<void> => {
+    if (!carriesNotices()) {
+      return;
+    }
+    for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+      const held = await store.getScheduleEntry({ player, id: noticesEntryId });
+      const check: NotificationNoticeCheck = held?.entry.item.kind === 'notices'
+        ? held.entry.item
+        : { kind: 'notices', attempts: 0 };
+      if (onlyBackedOff && (held === undefined || check.attempts === 0)) {
+        return;
+      }
+      const dueAt = held?.entry.dueAt === undefined
+        ? at
+        : Math.min(Date.parse(held.entry.dueAt), at);
+      if (held !== undefined && check.attempts === 0 && held.entry.dueAt !== undefined && Date.parse(held.entry.dueAt) <= at) {
+        return;
+      }
+      const entry: NotificationScheduleEntry = {
+        player,
+        id: noticesEntryId,
+        dueAt: formatNotificationInstant(dueAt),
+        item: { ...check, attempts: 0 },
+      };
+      if (
+        held === undefined
+          ? (await store.createScheduleEntry(entry)) !== undefined
+          : await store.updateScheduleEntry({ player, id: noticesEntryId, version: held.version, entry })
+      ) {
+        return;
+      }
+    }
+    throw busy(noticesEntryId);
+  };
+
+  /**
+   * Deletes the records no rule reads any more, once they are a day old (the
+   * daily cap still counts younger ones): every record but the latest of its
+   * kind and scope, except, under the Korean rules, an advertising or night
+   * record whose result notice is still owed and the record of its kind
+   * before it, which decides whether it reports a refusal. The latest
+   * consent of a kind is the latest record of it, so re-confirmations keep
+   * their record. A failure is reported; the history only stays longer.
+   */
+  const compactConsent = async (
+    player: string,
+    records: readonly NotificationConsentRecord[],
+    at: number,
+  ): Promise<void> => {
+    try {
+      const keep = new Set<number>();
+      const latest = new Map<string, NotificationConsentRecord>();
+      for (const record of records) {
+        latest.set(JSON.stringify([record.kind, record.topic ?? null]), record);
+      }
+      for (const record of latest.values()) {
+        keep.add(Date.parse(record.at));
+      }
+      if (rules === 'kr' && records.some((record) => record.kind === 'advertising' || record.kind === 'night')) {
+        const owed = new Set(
+          listNotificationNotices(records, await store.listNoticesGiven(player), formatNotificationInstant(at))
+            .map((notice) => Date.parse(notice.record.at)),
+        );
+        for (const kind of ['advertising', 'night'] as const) {
+          const series = records.filter((record) => record.kind === kind);
+          series.forEach((record, index) => {
+            if (owed.has(Date.parse(record.at))) {
+              keep.add(Date.parse(record.at));
+              const before = series[index - 1];
+              if (before !== undefined) {
+                keep.add(Date.parse(before.at));
+              }
+            }
+          });
+        }
+      }
+      const prunable = records.filter((record) =>
+        Date.parse(record.at) <= at - consentCompactionMs && !keep.has(Date.parse(record.at)));
+      if (prunable.length > 0) {
+        await store.pruneConsent({ player, at: prunable.map((record) => record.at) });
+      }
+    } catch (error) {
+      report(error, 'consent.compact');
+    }
+  };
+
+  /** A registration may let a refused notice push through: its backoff ends now. Best effort. */
+  const retryNoticePushes = async (player: string): Promise<void> => {
+    try {
+      await markNoticesDue(player, nowMs(), true);
+    } catch (error) {
+      report(error, 'notices.retry');
+    }
+  };
+
   /**
    * Each authenticated call carries the session's current end, and the
    * endpoints the session registered move to it when it is later, so a
@@ -1421,7 +2095,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         );
       }
       const { at: _at, ...withoutAt } = checked;
-      return store.appendConsent({ player, record: withoutAt as NotificationConsentRecordInput, at });
+      if (checked.kind === 'advertising' || checked.kind === 'night') {
+        // Before the write: a check that finds nothing new is harmless, and a
+        // record without its check would never be pushed.
+        await markNoticesDue(player, Date.parse(at));
+      }
+      const stored = await store.appendConsent({ player, record: withoutAt as NotificationConsentRecordInput, at });
+      await compactConsent(player, [...history, stored], Date.parse(at));
+      return stored;
     },
 
     async listConsent(session) {
@@ -1459,6 +2140,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           ...(registration.timeZone === undefined ? {} : { timeZone: registration.timeZone }),
           registeredAt,
         });
+        await retryNoticePushes(current.player);
         return;
       }
       if (provider.entry.addressing !== 'device') {
@@ -1500,6 +2182,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         ...(current.expiresAt === undefined ? {} : { sessionExpiresAt: normalizeNotificationTimestamp(current.expiresAt) }),
         lastRegisteredAt: registeredAt,
       });
+      await retryNoticePushes(current.player);
     },
 
     async unregisterEndpoint(session, request = {}) {
@@ -1624,37 +2307,178 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await runRow(job.sendKey, job.provider, job.rowKey, 'job');
     },
 
-    async dispatchDue(options = {}) {
-      // The batch size is clamped to 1 to 1000; anything that is not a number is the default, 100.
-      const asked = typeof options.limit === 'number' && Number.isFinite(options.limit)
-        ? Math.floor(options.limit)
-        : 100;
-      const limit = Math.min(Math.max(asked, 1), 1000);
-      const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
-      const results: NotificationDueResult[] = [];
-      let failed = 0;
-      for (const sendKey of keys) {
-        try {
-          const held = await store.getSend(sendKey);
-          if (held === undefined) {
-            continue;
-          }
-          const at = nowMs();
-          const due = held.send.rows.filter((row) => isNotificationRowDue(row, at));
-          if (due.length === 0) {
-            continue;
-          }
-          const ran = await runInline(sendKey, due, 'due');
-          if (ran.failed > 0) {
-            failed += 1;
-          }
-          results.push({ sendKey, outcome: await settle(sendKey, ran.refusals) });
-        } catch (error) {
-          failed += 1;
-          report(error, 'dispatchDue', sendKey);
+    dispatchDue: (options = {}) => dispatchDueRows(options),
+
+    async setReminder(session, raw) {
+      const { player } = await authenticated(session);
+      const reminder = reminderOf(raw);
+      refuseNoticeTopic(reminder.topic);
+      let sendKey: string;
+      try {
+        sendKey = createNotificationReminderIdempotencyKey({ player, key: reminder.key, fireAt: reminder.fireAt });
+      } catch (error) {
+        throw invalidInput(`Invalid reminder: ${describe(error)}`, error);
+      }
+      const origin: NotificationSendOrigin = { kind: 'reminder', key: reminder.key };
+      // The providers that would deliver the topic remotely, for some target they serve.
+      const declaring = registry.providers.filter((provider) =>
+        provider.targets.some((target) =>
+          catalog.topicsFor(target).some((topic) => topic.id === reminder.topic && topic.channels.includes('remote'))));
+      if (declaring.length === 0) {
+        throw invalidInput(`Topic ${reminder.topic} is not delivered remotely by this backend.`);
+      }
+      const advertising = declaring.some((provider) =>
+        topicFor(provider, undefined, reminder.topic, origin)?.purpose === 'advertising');
+      if (advertising && deployment?.advertisingRules === undefined) {
+        // The gate would refuse every send of it, so it is refused now.
+        throw invalidInput(`Advertising topic ${reminder.topic} needs the deployment's advertisingRules.`);
+      }
+      const request: NotificationStoredSendRequest = {
+        idempotencyKey: sendKey,
+        player,
+        topic: reminder.topic,
+        ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
+        ...(reminder.link === undefined ? {} : { link: reminder.link }),
+      };
+      const at = nowMs();
+      // Where the player can be reached now, else every declaring provider unresolved.
+      const reached = (await recipientsOf(request, at, origin)).filter((recipient) =>
+        recipient.resolved && declaring.includes(recipient.provider));
+      const candidates: readonly Recipient[] = reached.length > 0
+        ? reached
+        : declaring.map((provider) => ({ provider, rowKey: sendKey, resolved: false }));
+      if (
+        reminder.templateData !== undefined
+        && candidates.some((recipient) => recipient.provider.entry.content === 'host-template')
+      ) {
+        throw invalidInput('A host-template provider keeps template context on the server; a reminder takes no templateData.');
+      }
+      // Gate steps 3 to 5 at set time: one candidate that passes is enough.
+      const consent = await store.listConsent(player);
+      const permissions = new Map<string, Promise<NotificationPermissionState | undefined>>();
+      let refusal: Exclude<NotificationReminderSetStatus, 'scheduled' | 'replaced'> | undefined;
+      let passed = false;
+      for (const recipient of candidates) {
+        const topic = topicFor(recipient.provider, recipient.target, reminder.topic, origin);
+        if (topic === undefined || !topic.channels.includes('remote')) {
+          continue;
+        }
+        const id = recipient.provider.entry.provider;
+        let permission = permissions.get(id);
+        if (permission === undefined) {
+          permission = readServerPermission(recipient.provider, request);
+          permissions.set(id, permission);
+        }
+        const serverPermission = await permission;
+        const refused = evaluateNotificationReminderConsent({
+          entry: recipient.provider.entry,
+          topic,
+          consent,
+          ...(serverPermission === undefined ? {} : { serverPermission }),
+          ...(recipient.endpoint === undefined ? {} : { endpointPermission: recipient.endpoint.permission }),
+          history: [],
+        });
+        if (refused === undefined) {
+          passed = true;
+          break;
+        }
+        if (refusal === undefined || reminderRefusalRank[refused] > reminderRefusalRank[refusal]) {
+          refusal = refused;
         }
       }
-      return { results, failed };
+      if (!passed) {
+        return { status: refusal ?? 'permission-required' };
+      }
+      // One reminder per key: setting it replaces the pending one and stops its send that waits.
+      const id = reminderEntryId(reminder.key);
+      const entry: NotificationScheduleEntry = { player, id, dueAt: reminder.fireAt, item: reminder };
+      let stopped = false;
+      for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+        const held = await store.getScheduleEntry({ player, id });
+        let replaced = false;
+        if (held !== undefined && held.entry.item.kind === 'reminder') {
+          if (held.entry.item.firedAt === undefined) {
+            replaced = true;
+          } else {
+            stopped = (await stopReminderSend(player, held.entry.item)) || stopped;
+          }
+        }
+        const written = held === undefined
+          ? (await store.createScheduleEntry(entry)) !== undefined
+          : await store.updateScheduleEntry({ player, id, version: held.version, entry });
+        if (written) {
+          return { status: replaced || stopped ? 'replaced' : 'scheduled' };
+        }
+      }
+      throw busy(id);
+    },
+
+    async cancelReminder(session, raw) {
+      const { player } = await authenticated(session);
+      if (!isPlainObject(raw) || Object.keys(raw).some((name) => name !== 'key') || typeof raw.key !== 'string') {
+        throw invalidInput('A reminder cancel names only its key.');
+      }
+      const issue = notificationKeyIssue(raw.key);
+      if (issue !== undefined) {
+        throw invalidInput(`key: ${issue}.`);
+      }
+      const id = reminderEntryId(raw.key);
+      let stopped = false;
+      for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+        const held = await store.getScheduleEntry({ player, id });
+        if (held === undefined || held.entry.item.kind !== 'reminder') {
+          return { cancelled: stopped };
+        }
+        const pending = held.entry.item.firedAt === undefined;
+        if (!pending) {
+          stopped = (await stopReminderSend(player, held.entry.item)) || stopped;
+        }
+        if (await removeEntry(held)) {
+          return { cancelled: pending || stopped };
+        }
+      }
+      throw busy(id);
+    },
+
+    async runScheduler(options = {}) {
+      const limit = batchLimit(options.limit);
+      const touched = new Map<string, NotificationDeliveryOutcome>();
+      let failed = 0;
+      for (const { player, id } of await store.listDueScheduleEntries({
+        at: formatNotificationInstant(nowMs()),
+        limit,
+      })) {
+        try {
+          const held = await store.getScheduleEntry({ player, id });
+          if (held?.entry.dueAt === undefined || Date.parse(held.entry.dueAt) > nowMs()) {
+            continue;
+          }
+          const { item } = held.entry;
+          if (item.kind === 'notices') {
+            for (const result of await checkNotices(held, item)) {
+              touched.set(result.sendKey, result.outcome);
+            }
+          } else if (item.firedAt !== undefined) {
+            await forgetFiredReminder(held);
+          } else {
+            const result = await fireReminder(held, item);
+            if (result !== undefined) {
+              touched.set(result.sendKey, result.outcome);
+            }
+          }
+        } catch (error) {
+          failed += 1;
+          report(error, 'scheduler', id.startsWith(reminderEntryPrefix) ? 'reminder' : id);
+        }
+      }
+      const dispatched = await dispatchDueRows({ limit });
+      for (const result of dispatched.results) {
+        touched.set(result.sendKey, result.outcome);
+      }
+      return {
+        results: [...touched].map(([sendKey, outcome]) => ({ sendKey, outcome })),
+        failed: failed + dispatched.failed,
+      };
     },
 
     async purge() {
@@ -1667,6 +2491,82 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         sessionEndpointsBefore: formatNotificationInstant(at),
       });
     },
+  };
+}
+
+/** A scheduler batch: clamped to 1 to 1000; anything that is not a number is the default, 100. */
+function batchLimit(limit: unknown): number {
+  const asked = typeof limit === 'number' && Number.isFinite(limit) ? Math.floor(limit) : 100;
+  return Math.min(Math.max(asked, 1), 1000);
+}
+
+/**
+ * A due row taken for the queue: queued (in flight, no holder) for one claim
+ * lease. An attempted row stays attempted, and its lease ends before its
+ * replay window does, so the take alone never abandons it.
+ */
+function takenRow(row: NotificationSendRow, at: number, leaseMs: number): NotificationSendRow {
+  const leaseUntil = at + leaseMs;
+  if (row.state.status !== 'in-flight' || !row.state.attempted) {
+    return {
+      ...row,
+      state: {
+        status: 'in-flight',
+        leaseUntil: formatNotificationInstant(leaseUntil),
+        attempted: false,
+      },
+    };
+  }
+  const windowEnd = row.firstAttemptedAt === undefined
+    ? Number.POSITIVE_INFINITY
+    : Date.parse(row.firstAttemptedAt) + notificationAmbiguousReplayHours * 3_600_000 - 1;
+  return {
+    ...row,
+    state: {
+      status: 'in-flight',
+      leaseUntil: formatNotificationInstant(
+        windowEnd > at ? Math.min(leaseUntil, windowEnd) : leaseUntil,
+      ),
+      attempted: true,
+      ...(row.state.attemptedAt === undefined ? {} : { attemptedAt: row.state.attemptedAt }),
+    },
+  };
+}
+
+/** A well-formed server reminder, with `fireAt` in the canonical form, or `NOTIFICATIONS_INVALID_INPUT`. */
+function reminderOf(raw: unknown): NotificationStoredReminder {
+  if (!isPlainObject(raw)) {
+    throw invalidInput('A reminder is an object.');
+  }
+  const known = new Set(['key', 'topic', 'fireAt', 'templateData', 'link']);
+  const unknown = Object.keys(raw).find((name) => !known.has(name));
+  let issue: string | undefined;
+  if (unknown !== undefined) {
+    issue = `${unknown}: not a reminder field`;
+  } else if (typeof raw.key !== 'string') {
+    issue = 'key: expected a string';
+  } else if (notificationKeyIssue(raw.key) !== undefined) {
+    issue = `key: ${notificationKeyIssue(raw.key) ?? ''}`;
+  } else if (!isBoundedText(raw.topic)) {
+    issue = 'topic: expected a non-empty string';
+  } else if (typeof raw.fireAt !== 'string' || raw.fireAt.length > 64 || !isNotificationTimestamp(raw.fireAt)) {
+    issue = 'fireAt: expected RFC 3339 with an explicit offset';
+  } else if (raw.templateData !== undefined && notificationTemplateDataIssue(raw.templateData) !== undefined) {
+    issue = `templateData: ${notificationTemplateDataIssue(raw.templateData) ?? ''}`;
+  } else if (raw.link !== undefined && !isBoundedText(raw.link)) {
+    issue = 'link: expected a non-empty string';
+  }
+  if (issue !== undefined) {
+    throw invalidInput(`Invalid reminder: ${issue}.`);
+  }
+  const input = raw as unknown as NotificationReminderInput;
+  return {
+    kind: 'reminder',
+    key: input.key,
+    topic: input.topic,
+    fireAt: normalizeNotificationTimestamp(input.fireAt),
+    ...(input.templateData === undefined ? {} : { templateData: input.templateData }),
+    ...(input.link === undefined ? {} : { link: input.link }),
   };
 }
 

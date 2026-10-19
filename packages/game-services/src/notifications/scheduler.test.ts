@@ -1,0 +1,834 @@
+import assert from 'node:assert/strict';
+
+import {
+  notificationNoticeVariants,
+  referenceNotificationProviders,
+  type NotificationDeliveryProviderEntry,
+  type NotificationDeployment,
+  type NotificationNoticeCopy,
+  type NotificationTopicDeclaration,
+} from '@mpgd/platform/notifications';
+
+import type {
+  NotificationRemoteDeliveryAnswer,
+  NotificationRemoteDeliveryProvider,
+  NotificationRemoteDeliveryRequest,
+} from './delivery-provider.js';
+import {
+  createNotificationProviderRegistry,
+  type NotificationProviderRegistration,
+} from './registry.js';
+import {
+  createNotificationService,
+  type NotificationDispatchJob,
+  type NotificationService,
+  type NotificationSession,
+} from './service.js';
+import {
+  createInMemoryNotificationStore,
+  type InMemoryNotificationStore,
+  type NotificationStore,
+} from './store.js';
+
+/**
+ * S2's scheduler over the in-memory store: server reminders (set-time
+ * checks, replace and cancel, firing through the gate), pacing by the
+ * registry's `rate`, due rows through the queue, consent notice pushes with
+ * their backoff, and consent compaction.
+ */
+
+const fcmEntry: NotificationDeliveryProviderEntry = referenceNotificationProviders.fcm;
+const platformEntry: NotificationDeliveryProviderEntry = {
+  provider: 'platform',
+  purposes: ['service', 'requested'],
+  addressing: 'platform-user',
+  content: 'free-form',
+  permission: { scope: 'app', serverReadable: false, allowance: 'persistent' },
+  expiry: false,
+  actions: false,
+  link: false,
+  mappingFields: [],
+};
+const templateEntry: NotificationDeliveryProviderEntry = {
+  ...platformEntry,
+  provider: 'template',
+  content: 'host-template',
+  permission: { scope: 'topic', serverReadable: false, allowance: 'persistent' },
+  mappingFields: ['templateSetCode', 'agreement'],
+};
+
+function fakeProvider(id: string, answers: NotificationRemoteDeliveryAnswer[] = []) {
+  const calls: NotificationRemoteDeliveryRequest[] = [];
+  const provider: NotificationRemoteDeliveryProvider & { readonly calls: typeof calls } = {
+    id,
+    calls,
+    async send(request) {
+      calls.push(request);
+      return answers.shift() ?? { status: 'accepted' };
+    },
+  };
+  return provider;
+}
+
+function clock(start: string) {
+  let at = Date.parse(start);
+  return {
+    now: () => new Date(at).toISOString(),
+    advance(seconds: number) {
+      at += seconds * 1000;
+    },
+    set(instant: string) {
+      at = Date.parse(instant);
+    },
+  };
+}
+
+const session = (player: string, installationId = `install-${player}`): NotificationSession => ({
+  player,
+  sessionId: `s-${player}-${installationId}`,
+  installationId,
+});
+
+async function expectCode(promise: Promise<unknown>, code: string, message?: string): Promise<void> {
+  await assert.rejects(promise, (error: unknown) => {
+    assert.equal((error as { readonly code?: unknown }).code, code, message);
+    return true;
+  });
+}
+
+const copy = { ko: { title: 'T', body: 'B' } };
+const energy: NotificationTopicDeclaration = {
+  id: 'energy-full',
+  purpose: 'requested',
+  channels: ['remote'],
+  route: '/?entry=continue',
+  copy,
+};
+const challenge: NotificationTopicDeclaration = {
+  id: 'friend-challenge',
+  purpose: 'service',
+  channels: ['remote'],
+  route: '/?entry=challenge',
+  copy,
+};
+const weekend: NotificationTopicDeclaration = {
+  id: 'weekend-event',
+  purpose: 'advertising',
+  channels: ['remote'],
+  route: '/events',
+  optOutRoute: '/settings',
+  copy,
+};
+const localOnly: NotificationTopicDeclaration = {
+  ...energy,
+  id: 'local-only',
+  channels: ['local'],
+};
+const noticeTopic: NotificationTopicDeclaration = {
+  id: 'consent-notice',
+  purpose: 'service',
+  channels: ['remote'],
+  route: '/settings',
+};
+const noticeCopy: NotificationNoticeCopy = {
+  ko: Object.fromEntries(notificationNoticeVariants.map((variant) => [
+    variant,
+    { title: `[Game] ${variant}`, body: `{{consentDate}} ${variant}` },
+  ])) as unknown as NotificationNoticeCopy[string],
+};
+const kr: NotificationDeployment = {
+  advertisingRules: 'kr',
+  advertisingSender: { contact: '080-000-0000' },
+};
+
+interface Harness {
+  readonly service: NotificationService;
+  readonly store: InMemoryNotificationStore;
+  readonly time: ReturnType<typeof clock>;
+  readonly fcm: ReturnType<typeof fakeProvider>;
+  readonly jobs: NotificationDispatchJob[];
+  readonly errors: string[];
+}
+
+function harness(options: {
+  readonly start?: string;
+  readonly topics?: readonly NotificationTopicDeclaration[];
+  readonly deployment?: NotificationDeployment;
+  readonly notices?: boolean;
+  readonly answers?: NotificationRemoteDeliveryAnswer[];
+  readonly fcmEntry?: NotificationDeliveryProviderEntry;
+  readonly extra?: readonly NotificationProviderRegistration[];
+  readonly queue?: boolean;
+  readonly failEnqueue?: () => boolean;
+  readonly store?: (store: InMemoryNotificationStore) => NotificationStore;
+} = {}): Harness {
+  const time = clock(options.start ?? '2026-10-19T03:00:00Z');
+  const fcm = fakeProvider('fcm', options.answers ?? []);
+  const store = createInMemoryNotificationStore();
+  const jobs: NotificationDispatchJob[] = [];
+  const errors: string[] = [];
+  const topics = options.topics ?? [energy, challenge];
+  const service = createNotificationService({
+    store: options.store?.(store) ?? store,
+    registry: createNotificationProviderRegistry([
+      { entry: options.fcmEntry ?? fcmEntry, delivery: fcm, targets: ['vector'] },
+      ...(options.extra ?? []),
+    ]),
+    catalog: {
+      defaultLocale: 'ko',
+      ...(options.notices === true ? { notices: { topic: noticeTopic.id, copy: noticeCopy } } : {}),
+      topicsFor: () => topics,
+    },
+    ...(options.deployment === undefined ? {} : { deployment: options.deployment }),
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    ...(options.queue === true
+      ? {
+          queue: {
+            async enqueue(batch) {
+              if (options.failEnqueue?.() === true) {
+                throw new Error('queue down');
+              }
+              jobs.push(...batch);
+            },
+          },
+        }
+      : {}),
+    now: time.now,
+    random: () => 0,
+    onError: (_error, context) => errors.push(context.operation),
+  });
+  return { service, store, time, fcm, jobs, errors };
+}
+
+async function register(h: Harness, player: string, permission: 'granted' | 'blocked' = 'granted'): Promise<void> {
+  await h.service.registerEndpoint(session(player), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: `tok-${player}`, permission },
+    },
+  });
+}
+
+async function optIn(h: Harness, player: string, topic = 'energy-full'): Promise<void> {
+  await h.service.recordConsent(session(player), {
+    kind: 'topic-preference',
+    topic,
+    state: 'granted',
+    source: 'player',
+  });
+}
+
+const pending = (h: Harness) =>
+  h.store.inspect().schedule.filter(
+    (entry) => entry.item.kind === 'reminder' && entry.item.firedAt === undefined,
+  );
+
+// Reminder input and topic checks throw before anything is stored.
+{
+  const h = harness({
+    topics: [energy, challenge, localOnly, weekend, noticeTopic],
+    notices: true,
+    deployment: kr,
+  });
+  const set = (input: unknown) => h.service.setReminder(session('p-1'), input);
+  const base = { key: 'energy', topic: 'energy-full', fireAt: '2026-10-19T06:00:00Z' };
+  for (const input of [
+    null,
+    { ...base, extra: 1 },
+    { ...base, key: '' },
+    { ...base, key: 'a\u0000b' },
+    { ...base, topic: '' },
+    { ...base, fireAt: '2026-10-19T06:00:00' },
+    { ...base, fireAt: '2026-04-31T06:00:00Z' },
+    { ...base, templateData: { nested: {} } },
+    { ...base, link: '' },
+    { ...base, topic: 'consent-notice' },
+    { ...base, topic: 'local-only' },
+    { ...base, topic: 'unknown' },
+  ]) {
+    await expectCode(set(input), 'NOTIFICATIONS_INVALID_INPUT', JSON.stringify(input));
+  }
+  assert.deepEqual(h.store.inspect().schedule, []);
+  // Advertising needs the deployment's rules.
+  const none = harness({ topics: [weekend] });
+  await expectCode(
+    none.service.setReminder(session('p-1'), { ...base, topic: 'weekend-event' }),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  // A host-template provider keeps template context on the server.
+  const template = harness({
+    topics: [{ ...energy, mapping: { templateSetCode: 'x', agreement: 'required' } }],
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  await expectCode(
+    template.service.setReminder(session('p-1'), { ...base, templateData: { count: 1 } }),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  await expectCode(
+    h.service.cancelReminder(session('p-1'), { key: 'k', extra: true }),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  await expectCode(
+    h.service.cancelReminder(session('p-1'), { key: '' }),
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+}
+
+// Gate steps 3 to 5 at set time: a refusal stores nothing; the furthest step answers.
+{
+  const h = harness({ topics: [energy, challenge, weekend], deployment: kr });
+  const set = (topic: string, player = 'p-1') =>
+    h.service.setReminder(session(player), { key: topic, topic, fireAt: '2026-10-19T06:00:00Z' });
+  // No endpoint: the device permission is missing.
+  assert.deepEqual(await set('friend-challenge'), { status: 'permission-required' });
+  await register(h, 'p-1', 'blocked');
+  assert.deepEqual(await set('friend-challenge'), { status: 'permission-required' });
+  await register(h, 'p-1');
+  assert.deepEqual(await set('energy-full'), { status: 'request-missing' });
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'topic-preference',
+    topic: 'energy-full',
+    state: 'withdrawn',
+    source: 'player',
+  });
+  assert.deepEqual(await set('energy-full'), { status: 'preference-off' });
+  assert.deepEqual(await set('weekend-event'), { status: 'advertising-consent-missing' });
+  assert.deepEqual(pending(h), []);
+  assert.deepEqual(await set('friend-challenge'), { status: 'scheduled' });
+
+  // Two providers: the one that gets further through the gate answers.
+  const two = harness({
+    topics: [energy],
+    extra: [{ entry: platformEntry, delivery: fakeProvider('platform'), targets: ['platform'] }],
+  });
+  // The platform user resolves (permission is a record), the device has no endpoint.
+  await two.service.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  assert.deepEqual(
+    await two.service.setReminder(session('p-1'), { key: 'e', topic: 'energy-full', fireAt: '2026-10-19T06:00:00Z' }),
+    { status: 'request-missing' },
+  );
+}
+
+// Set, replace, cancel by key; the scheduler fires the reminder through the gate and keeps it fired.
+{
+  const h = harness();
+  await register(h, 'p-1');
+  await optIn(h, 'p-1');
+  const set = (fireAt: string) => h.service.setReminder(session('p-1'), {
+    key: 'energy',
+    topic: 'energy-full',
+    fireAt,
+  });
+  assert.deepEqual(await set('2026-10-19T05:00:00Z'), { status: 'scheduled' });
+  assert.deepEqual(await set('2026-10-19T15:00:00+09:00'), { status: 'replaced' });
+  assert.deepEqual(
+    pending(h).map((entry) => entry.dueAt),
+    ['2026-10-19T06:00:00Z'],
+  );
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'energy' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'energy' }), {
+    cancelled: false,
+  });
+  // Another player's key is its own.
+  await register(h, 'p-2');
+  await optIn(h, 'p-2');
+  assert.deepEqual(await set('2026-10-19T06:00:00Z'), { status: 'scheduled' });
+  assert.deepEqual(
+    await h.service.setReminder(session('p-2'), {
+      key: 'energy',
+      topic: 'energy-full',
+      fireAt: '2026-10-19T06:00:00Z',
+      templateData: { count: 3 },
+    }),
+    { status: 'scheduled' },
+  );
+  h.time.set('2026-10-19T05:59:59Z');
+  assert.deepEqual((await h.service.runScheduler()).results, []);
+  h.time.set('2026-10-19T06:00:00Z');
+  const run = await h.service.runScheduler();
+  assert.equal(run.failed, 0);
+  assert.deepEqual(run.results.map((result) => [result.sendKey, result.outcome.status]).sort(), [
+    ['reminder:p-1:energy:2026-10-19T06:00:00Z', 'delivered'],
+    ['reminder:p-2:energy:2026-10-19T06:00:00Z', 'delivered'],
+  ]);
+  assert.deepEqual(h.fcm.calls.map((call) => [call.idempotencyKey, call.templateData]).sort(), [
+    ['reminder:p-1:energy:2026-10-19T06:00:00Z:install-p-1', undefined],
+    ['reminder:p-2:energy:2026-10-19T06:00:00Z:install-p-2', { count: 3 }],
+  ]);
+  assert.deepEqual(pending(h), []);
+  // Fired reminders are kept until their key's retention ends, then forgotten.
+  assert.equal(h.store.inspect().schedule.length, 2);
+  assert.deepEqual((await h.service.runScheduler()).results, []);
+  assert.equal(h.fcm.calls.length, 2);
+  h.time.advance(30 * 86_400);
+  await h.service.runScheduler();
+  assert.deepEqual(h.store.inspect().schedule, []);
+}
+
+// A fired reminder's send that still waits is stopped by a replace or a cancel.
+{
+  const quiet: NotificationTopicDeclaration = {
+    ...challenge,
+    quietHours: { start: '22:00', end: '08:00' },
+  };
+  const h = harness({ topics: [quiet] });
+  await register(h, 'p-1');
+  // 22:30 in Seoul: the send is deferred to 08:00.
+  const fireAt = '2026-10-19T13:30:00Z';
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt }),
+    { status: 'scheduled' },
+  );
+  h.time.set(fireAt);
+  const run = await h.service.runScheduler();
+  assert.deepEqual(
+    run.results.map((result) => result.outcome),
+    [{ status: 'deferred', reason: 'quiet-hours', until: '2026-10-19T23:00:00Z' }],
+  );
+  assert.equal(h.fcm.calls.length, 0);
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt: '2026-10-20T13:30:00Z' }),
+    { status: 'replaced' },
+    'a replace stops the waiting send',
+  );
+  assert.deepEqual(
+    h.store.inspect().sends.map((send) => send.key),
+    [],
+    'the deferred send is gone',
+  );
+  h.time.set('2026-10-19T23:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 0, 'nothing is sent at 08:00');
+  // The new one fires, waits, and a cancel stops it.
+  h.time.set('2026-10-20T13:30:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.store.inspect().sends.length, 1);
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(h.store.inspect().schedule, []);
+  h.time.set('2026-10-20T23:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 0);
+}
+
+// A reminder the gate refuses when it comes due is spent; a delivered one is not recalled by a cancel.
+{
+  const h = harness();
+  await register(h, 'p-1');
+  await optIn(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'energy-full',
+    fireAt: '2026-10-19T04:00:00Z',
+  });
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'topic-preference',
+    topic: 'energy-full',
+    state: 'withdrawn',
+    source: 'player',
+  });
+  h.time.set('2026-10-19T04:00:00Z');
+  assert.deepEqual((await h.service.runScheduler()).results, [
+    {
+      sendKey: 'reminder:p-1:k:2026-10-19T04:00:00Z',
+      outcome: { status: 'suppressed', reason: 'preference-off' },
+    },
+  ]);
+  assert.deepEqual(h.store.inspect().schedule, []);
+  assert.deepEqual(h.store.inspect().sends, []);
+  await optIn(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'energy-full',
+    fireAt: '2026-10-19T04:00:00Z',
+  });
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1);
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: false,
+  });
+  assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'delivered');
+}
+
+// A cancel that lands while the scheduler makes the send: nothing is stored or sent.
+{
+  let cancelOnFire: (() => Promise<unknown>) | undefined;
+  const h = harness({
+    store: (inner) => ({
+      ...inner,
+      async updateScheduleEntry(input) {
+        const done = await inner.updateScheduleEntry(input);
+        if (done && input.entry?.item.kind === 'reminder' && input.entry.item.firedAt !== undefined && cancelOnFire) {
+          const cancel = cancelOnFire;
+          cancelOnFire = undefined;
+          await cancel();
+        }
+        return done;
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  cancelOnFire = async () => {
+    assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), { cancelled: true });
+  };
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 0);
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(h.store.inspect().schedule, []);
+}
+
+// A run that stopped after creating the send's key and before any row starts over.
+{
+  const h = harness();
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  const key = 'reminder:p-1:k:2026-10-19T03:00:00Z';
+  await h.store.createSend({
+    key,
+    fingerprint: 'stale',
+    request: { idempotencyKey: key, player: 'p-1', topic: 'friend-challenge' },
+    origin: { kind: 'reminder', key: 'k' },
+    scheduled: true,
+    rows: [],
+    claim: { token: 'gone', leaseUntil: '2026-10-19T02:59:00Z' },
+    changedAt: '2026-10-19T02:54:00Z',
+  });
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1);
+  assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'delivered');
+}
+
+// Pacing: due rows leave at no more than the provider's rate, oldest first, across players.
+{
+  const h = harness({ fcmEntry: { ...fcmEntry, rate: { count: 2, windowSeconds: 60 } } });
+  for (const player of ['p-1', 'p-2', 'p-3']) {
+    await register(h, player);
+  }
+  for (const [player, fireAt] of [
+    ['p-3', '2026-10-19T02:59:58Z'],
+    ['p-1', '2026-10-19T02:59:59Z'],
+    ['p-2', '2026-10-19T02:59:57Z'],
+  ] as const) {
+    await h.service.setReminder(session(player), { key: 'k', topic: 'friend-challenge', fireAt });
+  }
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.player),
+    ['p-2', 'p-3'],
+  );
+  h.time.advance(59);
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 2, 'the window still holds two');
+  h.time.advance(1);
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.player),
+    ['p-2', 'p-3', 'p-1'],
+  );
+}
+
+// With a queue, due rows are taken for one lease and enqueued; jobs deliver them.
+{
+  let failNext = false;
+  const h = harness({
+    queue: true,
+    answers: [{ status: 'ambiguous' }],
+    failEnqueue: () => {
+      const fail = failNext;
+      failNext = false;
+      return fail;
+    },
+  });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  const run = await h.service.runScheduler();
+  assert.deepEqual(
+    run.results.map((result) => result.outcome),
+    [{ status: 'in-flight' }],
+  );
+  assert.equal(h.fcm.calls.length, 0, 'nothing is sent inline');
+  assert.equal(h.jobs.length, 1);
+  // Taken rows are not taken again while their jobs wait.
+  await h.service.runScheduler();
+  assert.equal(h.jobs.length, 1);
+  await h.service.dispatch(h.jobs[0] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 1, 'the job sends; the answer is ambiguous');
+  // The ambiguous row comes due after the claim lease and is taken again for a job.
+  h.time.advance(300);
+  failNext = true;
+  const lost = await h.service.runScheduler();
+  assert.equal(lost.failed, 1, 'an enqueue that fails is counted');
+  assert.deepEqual(h.errors, ['queue.enqueue']);
+  assert.equal(h.jobs.length, 1);
+  // The taken row is due again once its lease ends.
+  h.time.advance(299);
+  await h.service.runScheduler();
+  assert.equal(h.jobs.length, 1);
+  h.time.advance(1);
+  await h.service.runScheduler();
+  assert.equal(h.jobs.length, 2);
+  const row = h.store.inspect().sends[0]?.rows[0];
+  assert.equal(
+    row?.state.status === 'in-flight' && row.state.attempted && row.state.claim === undefined,
+    true,
+  );
+  await h.service.dispatch(h.jobs[1] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 2);
+  assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'delivered');
+  // A redelivered job does nothing.
+  await h.service.dispatch(h.jobs[1] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 2);
+}
+
+// Consent notices: pushed seven days before they are due, recorded as given, then the next one is scheduled.
+{
+  const h = harness({ topics: [weekend, noticeTopic], deployment: kr, notices: true });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const check = () => h.store.inspect().schedule.find((entry) => entry.id === 'notices');
+  assert.equal(check()?.dueAt, '2026-10-19T03:00:00Z', 'a consent makes the check due');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 0, 'not before seven days ahead of dueBy');
+  // dueBy 2026-11-02: from the start of 2026-10-26 in Seoul.
+  assert.equal(check()?.dueAt, '2026-10-25T15:00:00Z');
+  h.time.set('2026-10-25T15:00:00Z');
+  const run = await h.service.runScheduler();
+  assert.deepEqual(run.results, [
+    {
+      sendKey: 'notice:p-1:consent-result:advertising:2026-10-19T03:00:00Z:2026-11-02',
+      outcome: { status: 'delivered', alreadyProcessed: false },
+    },
+  ]);
+  assert.deepEqual(
+    h.fcm.calls.map((call) => [call.topic.id, call.content.title, call.content.body]),
+    [
+      [
+        'consent-notice',
+        '[Game] consent-result.advertising.granted',
+        '2026-10-19 consent-result.advertising.granted',
+      ],
+    ],
+  );
+  assert.deepEqual(
+    h.store.inspect().noticesGiven.map((given) => [given.kind, given.channel]),
+    [['consent-result', 'push']],
+  );
+  assert.deepEqual(await h.service.listNotices(session('p-1')), []);
+  // An hour later the check sees the push given and waits for the re-confirmation: dueBy 2028-10-18.
+  h.time.advance(3600);
+  await h.service.runScheduler();
+  assert.equal(check()?.dueAt, '2028-10-10T15:00:00Z');
+  assert.equal(h.fcm.calls.length, 1);
+  h.time.set('2028-10-10T15:00:00Z');
+  // The device registered again since (an endpoint goes stale after 60 days).
+  await register(h, 'p-1');
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.idempotencyKey),
+    [
+      'notice:p-1:consent-result:advertising:2026-10-19T03:00:00Z:2026-11-02:install-p-1',
+      'notice:p-1:reconfirmation:advertising:2026-10-19T03:00:00Z:2028-10-18:install-p-1',
+    ],
+  );
+  // A withdrawal ends the series once its own result is pushed.
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'withdrawn',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.advance(8 * 86_400);
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.at(-1)?.content.title, '[Game] consent-result.advertising.withdrawn');
+  h.time.advance(3600);
+  await h.service.runScheduler();
+  assert.equal(check(), undefined, 'nothing is owed any more');
+}
+
+// A refused notice push backs off, doubling from an hour; a registration lets it through.
+{
+  const h = harness({ topics: [weekend, noticeTopic], deployment: kr, notices: true });
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'night',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2026-10-26T00:00:00Z');
+  const check = () => h.store.inspect().schedule.find((entry) => entry.id === 'notices');
+  const first = await h.service.runScheduler();
+  assert.deepEqual(
+    first.results.map((result) => result.outcome),
+    [{ status: 'unavailable', reason: 'no-endpoint' }],
+  );
+  assert.deepEqual(
+    [check()?.dueAt, check()?.item],
+    ['2026-10-26T01:00:00Z', { kind: 'notices', attempts: 1 }],
+  );
+  h.time.set('2026-10-26T01:00:00Z');
+  await h.service.runScheduler();
+  assert.deepEqual(
+    [check()?.dueAt, check()?.item],
+    ['2026-10-26T03:00:00Z', { kind: 'notices', attempts: 2 }],
+  );
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    h.time.set(check()?.dueAt ?? '');
+    await h.service.runScheduler();
+  }
+  const waited = Date.parse(check()?.dueAt ?? '') - Date.parse(h.time.now());
+  assert.equal(waited, 86_400_000, 'the backoff stops at a day');
+  await register(h, 'p-1');
+  assert.equal(
+    Date.parse(check()?.dueAt ?? ''),
+    Date.parse(h.time.now()),
+    'a registration ends the backoff',
+  );
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.content.title),
+    ['[Game] consent-result.night.granted'],
+  );
+  assert.equal(h.fcm.calls[0]?.content.body, '2026-10-19 consent-result.night.granted');
+}
+
+// Notices go only through providers that carry them, and only under the Korean rules.
+{
+  const template = fakeProvider('template');
+  const h = harness({
+    topics: [weekend, { ...noticeTopic, mapping: { templateSetCode: 'n', agreement: 'none' } }],
+    deployment: kr,
+    notices: true,
+    extra: [{ entry: templateEntry, delivery: template, targets: ['template'] }],
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2026-10-26T00:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1);
+  assert.equal(template.calls.length, 0, 'a host template cannot state the record');
+
+  const onlyTemplate = harness({
+    topics: [weekend, noticeTopic],
+    deployment: kr,
+    notices: true,
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  await onlyTemplate.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.deepEqual(
+    onlyTemplate.store.inspect().schedule,
+    [],
+    'no check where no provider carries notices',
+  );
+
+  const none = harness({
+    topics: [weekend, noticeTopic],
+    deployment: { advertisingRules: 'none' },
+    notices: true,
+  });
+  await none.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.deepEqual(none.store.inspect().schedule, [], 'no check without the Korean rules');
+}
+
+// Compaction: records no rule reads are deleted a day after they were written.
+{
+  const h = harness({ topics: [energy, weekend, noticeTopic], deployment: kr, notices: true });
+  const prefer = (state: 'granted' | 'withdrawn') =>
+    h.service.recordConsent(session('p-1'), {
+      kind: 'topic-preference',
+      topic: 'energy-full',
+      state,
+      source: 'player',
+    });
+  const advertise = (state: 'granted' | 'withdrawn') =>
+    h.service.recordConsent(session('p-1'), {
+      kind: 'advertising',
+      state,
+      source: 'player',
+      textVersion: 'v1',
+    });
+  await prefer('granted');
+  await prefer('withdrawn');
+  await advertise('granted');
+  await advertise('withdrawn');
+  await advertise('withdrawn');
+  const kinds = () => h.store.inspect().consent.map((record) => `${record.kind}:${record.state}`);
+  h.time.advance(86_400 - 1);
+  await prefer('granted');
+  assert.equal(kinds().length, 6, 'nothing is a day old yet');
+  // Two seconds later the first five records are over a day old (each is dated 1 ms after the one before).
+  h.time.advance(2);
+  await prefer('withdrawn');
+  // The two earlier preferences go; every advertising record still owes its result notice.
+  assert.deepEqual(kinds(), [
+    'advertising:granted',
+    'advertising:withdrawn',
+    'advertising:withdrawn',
+    'topic-preference:granted',
+    'topic-preference:withdrawn',
+  ]);
+  // The game shows the first two results; the refusal's notice is still owed, so the record before it stays.
+  for (const notice of (await h.service.listNotices(session('p-1'))).slice(0, 2)) {
+    await h.service.recordNoticeShown(session('p-1'), notice);
+  }
+  await prefer('granted');
+  assert.deepEqual(kinds(), [
+    'advertising:withdrawn',
+    'advertising:withdrawn',
+    'topic-preference:granted',
+    'topic-preference:withdrawn',
+    'topic-preference:granted',
+  ]);
+  assert.deepEqual(
+    (await h.service.listNotices(session('p-1'))).map((notice) => notice.variant),
+    ['consent-result.advertising.refused'],
+    'the refusal still reads as one',
+  );
+  assert.equal(
+    h.store.inspect().noticesGiven.length,
+    1,
+    'the notice about the pruned record goes with it',
+  );
+}
+
+console.info('Notifications scheduler tests passed.');

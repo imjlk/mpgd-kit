@@ -441,9 +441,16 @@ try {
   await db.prepare('UPDATE notification_sends SET send_json = ?, due_at_ms = ? WHERE send_key = ?')
     .bind(JSON.stringify(expired), Date.parse('2026-01-01T00:00:00Z'), 'worker-queued')
     .run();
+  const jobsBefore = queued.length;
   await runScheduledNotifications(
     { ...queueEnv, DB: brokenDb(db, /^\s*DELETE/u) } satisfies GameServicesWorkerEnv,
   );
+  // With a queue bound, the cron takes the due row for the queue; the consumer sends it.
+  assert.deepEqual(queued.slice(jobsBefore), [
+    { sendKey: 'worker-queued', provider: 'fcm', rowKey: 'worker-queued:install-1' },
+  ]);
+  await consumeNotificationDispatchBatch(queueEnv, batch([{ body: queued.at(-1) }]));
+  assert.deepEqual(acks.splice(0), ['ack']);
   assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), {
     status: 'delivered',
     alreadyProcessed: true,
