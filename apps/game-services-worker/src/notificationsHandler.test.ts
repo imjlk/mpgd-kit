@@ -821,6 +821,17 @@ try {
       { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', baseUrl: 'not a url' } },
       /^MPGD_AIT_NOTIFICATIONS: /u,
     ],
+    // The starter's sender placeholder fails closed: the Worker does not start.
+    [
+      {
+        ...aitEnv,
+        MPGD_NOTIFICATIONS_DEPLOYMENT: {
+          advertisingRules: 'kr',
+          advertisingSender: { name: 'Studio', contact: 'REPLACE-WITH-SENDER-PHONE-OR-ADDRESS' },
+        },
+      },
+      /placeholder in advertisingSender\.contact/u,
+    ],
   ] as const) {
     assert.equal(
       (await createWorkerFetchHandler(broken)(new Request(`${base}/providers`))).status,

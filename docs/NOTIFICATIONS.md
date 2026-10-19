@@ -129,7 +129,10 @@ The deployment setting `advertisingRules` in
 Under `kr` the deployment names the **advertising sender**: its name (left
 out only when it equals the app's name) and a phone number or address. The
 starter's contact is the placeholder `REPLACE-WITH-SENDER-PHONE-OR-ADDRESS`,
-which `pnpm validate:notifications` refuses.
+which `pnpm validate:notifications` refuses. The backend refuses it too:
+`assertNotificationDeployment` rejects a placeholder sender name, contact, or
+opt-out line, so a game-services Worker given the starter file as is reports
+its notifications as misconfigured and sends nothing.
 
 **Notices.** The server sends, through the catalog's `notices.topic`
 (`consent-notice` in the starter), a result notice within 14 days of each

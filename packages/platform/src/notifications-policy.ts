@@ -414,6 +414,24 @@ export function resolveNotificationAdvertisingSettings(
   };
 }
 
+/**
+ * Whether a deployment text is still a template placeholder rather than a
+ * real value: a `REPLACE-WITH-…` marker (the starter's), an unreplaced
+ * `__TOKEN__`, a value in angle brackets, a reserved `example.com`,
+ * `example.org`, or `example.net` address, or only `TODO`, `TBD`,
+ * `CHANGEME`, `PLACEHOLDER`, or `XXX`. `assertNotificationDeployment`
+ * refuses one in the advertising sender and the opt-out line, so a backend
+ * never starts with a sender line no recipient can use.
+ */
+export function isNotificationPlaceholderText(value: string): boolean {
+  const text = value.trim();
+  return /replace[-_ ]?with/iu.test(text)
+    || /__[A-Z][A-Z0-9_]*__/u.test(text)
+    || /^<[^<>]*>$/u.test(text)
+    || /(?:^|[@./\s])example\.(?:com|org|net)(?:$|[/\s>])/iu.test(text)
+    || /^(?:todo|tbd|change[-_ ]?me|placeholder|x{3,})$/iu.test(text);
+}
+
 /** A deployment text trimmed, or `undefined` when it is absent or blank. */
 function deploymentText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();

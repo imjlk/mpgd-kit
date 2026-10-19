@@ -26,6 +26,7 @@ import type {
   NotificationTopicsInput,
 } from './notifications-contract.js';
 import {
+  isNotificationPlaceholderText,
   isValidNotificationTimeZone,
   notificationPermissionStateOf,
   notificationRouteError,
@@ -99,6 +100,7 @@ export {
   fillNotificationTemplate,
   findNotificationCopy,
   isNotificationCalendarDate,
+  isNotificationPlaceholderText,
   isNotificationTimestamp,
   isRecordableNotificationPermissionState,
   isRootRelativeNotificationRoute,
@@ -608,11 +610,31 @@ export const assertNotificationDeliveryProviderEntry =
   typia.createAssertEquals<NotificationDeliveryProviderEntry>();
 const assertNotificationDeploymentShape = typia.createAssertEquals<NotificationDeployment>();
 
-/** Validates deployment settings, including a `timeZone` that `Intl` knows, which quiet hours read. */
+/**
+ * Validates deployment settings: a `timeZone` that `Intl` knows, which quiet
+ * hours read, and an advertising sender and opt-out line that are not
+ * template placeholders (`isNotificationPlaceholderText`). A backend built
+ * from a refused deployment does not start, so a starter's placeholder
+ * contact never reaches an advertising push.
+ */
 export function assertNotificationDeployment(input: unknown): NotificationDeployment {
   const deployment = assertNotificationDeploymentShape(input);
   if (deployment.timeZone !== undefined && !isValidNotificationTimeZone(deployment.timeZone)) {
     throw new TypeError(`Unknown time zone in the deployment: ${deployment.timeZone}`);
+  }
+  const texts: readonly (readonly [string, string | undefined])[] = [
+    ['advertisingSender.name', deployment.advertisingSender?.name],
+    ['advertisingSender.contact', deployment.advertisingSender?.contact],
+    ['advertisingOptOutLine', deployment.advertisingOptOutLine],
+  ];
+  const placeholders = texts.filter(
+    ([, value]) => value !== undefined && isNotificationPlaceholderText(value),
+  );
+  if (placeholders.length > 0) {
+    throw new TypeError(
+      `The deployment still has a placeholder in ${placeholders.map(([field]) => field).join(', ')}: `
+        + 'replace it with the real value before the backend starts.',
+    );
   }
   return deployment;
 }

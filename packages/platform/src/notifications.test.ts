@@ -380,6 +380,34 @@ describe('notifications contract', () => {
     expect(() => assertNotificationDeployment({ advertisingRules: 'eu' })).toThrow();
     expect(() => assertNotificationDeployment({ timeZone: 'Mars/Olympus_Mons' })).toThrow(/Unknown time zone/u);
     expect(() => assertNotificationDeployment({ advertisingSender: { name: 'Studio' } })).toThrow();
+    // A starter's placeholder fails closed: the backend that asserts it does not start.
+    for (const placeholder of [
+      'REPLACE-WITH-SENDER-PHONE-OR-ADDRESS',
+      ' replace_with phone ',
+      '__GAME_TITLE__',
+      '<phone number>',
+      'help@example.com',
+      'TODO',
+      'tbd',
+      'XXXX',
+    ]) {
+      expect(() => assertNotificationDeployment({
+        advertisingRules: 'kr',
+        advertisingSender: { name: 'Studio', contact: placeholder },
+      }), placeholder).toThrow(/placeholder in advertisingSender\.contact/u);
+    }
+    expect(() => assertNotificationDeployment({
+      advertisingRules: 'kr',
+      advertisingSender: { name: '__GAME_TITLE__', contact: '080-1234-5678' },
+      advertisingOptOutLine: 'REPLACE-WITH-OPT-OUT',
+    })).toThrow(/advertisingSender\.name, advertisingOptOutLine/u);
+    // Real values pass, including ones that merely contain the words.
+    for (const contact of ['080-1234-5678', 'Seoul, Teheran-ro 1', 'help@studio.example.kr', 'todo-games.kr']) {
+      expect(assertNotificationDeployment({
+        advertisingRules: 'kr',
+        advertisingSender: { name: 'Studio', contact },
+      }).advertisingSender?.contact, contact).toBe(contact);
+    }
     const topic = {
       id: 'energy-full',
       purpose: 'requested',

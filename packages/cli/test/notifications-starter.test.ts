@@ -194,9 +194,22 @@ assert.throws(
 // advertising rules: starter topic purposes (RFC open question 1), the
 // notice topic, and every notices.copy variant with {{consentDate}}.
 const catalog = JSON.parse(byPath(phaser, 'notifications/topics.json')) as unknown;
-const deployment = assertNotificationDeployment(
-  JSON.parse(byPath(phaser, 'notifications/deployment.json')),
+// `game create` fills the title; the contact stays the starter's placeholder.
+const starterDeployment = JSON.parse(
+  byPath(phaser, 'notifications/deployment.json').replaceAll('__GAME_TITLE__', 'Starter Game'),
+) as {
+  readonly advertisingSender: { readonly name: string; readonly contact: string };
+};
+// The shipped sender contact is a placeholder the backend refuses, so a
+// Worker given the starter file as is does not start.
+assert.throws(
+  () => assertNotificationDeployment(starterDeployment),
+  /placeholder in advertisingSender\.contact:/u,
 );
+const deployment = assertNotificationDeployment({
+  ...starterDeployment,
+  advertisingSender: { ...starterDeployment.advertisingSender, contact: '080-1234-5678' },
+});
 assert.equal(deployment.advertisingRules, 'kr');
 const validation = validateNotificationTopicCatalog(catalog, {
   targetProviders: Object.fromEntries(

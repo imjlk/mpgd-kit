@@ -23,7 +23,9 @@ left for you.
 1. Replace `REPLACE-WITH-SENDER-PHONE-OR-ADDRESS` in
    `notifications/deployment.json` with the sender's phone number or
    address. Every advertising push carries it under the Korean rules, and
-   `pnpm validate:notifications` fails until you do.
+   `pnpm validate:notifications` fails until you do. The game backend
+   refuses the placeholder as well: a Worker given this file as is does not
+   start its notifications.
 2. Keep the sender in `notices.copy` (`[__GAME_TITLE__]` in every variant) the
    same as `advertisingSender.name` in `notifications/deployment.json`: a
    consent notice must name the sender.
