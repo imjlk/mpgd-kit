@@ -82,12 +82,9 @@ export interface StarterNotificationSettingsView {
   readonly advertising?: {
     /** The latest `advertising` record is `granted`. */
     readonly granted: boolean;
-    /** The latest `night` record is `granted`. */
+        /** The latest `night` record is `granted`, and so is the latest `advertising` record. */
     readonly night: boolean;
-    /**
-     * Whether the night switch can be tapped: to turn it on, advertising
-     * consent must be granted; a granted night consent can always be withdrawn.
-     */
+        /** Whether the night switch can be tapped: only while advertising consent is granted. */
     readonly nightSelectable: boolean;
   };
   /** Consent notices the server says are due, in the player's language. */
@@ -289,7 +286,7 @@ export function createStarterNotificationSettings(
   const permissionTopics = input.topics
     .filter((topic) => topic.purpose !== 'advertising')
     .map((topic) => topic.id);
-    /** The player's records as the last read gave them; `undefined` when they could not be read. */
+  /** The player's records as the last read gave them; `undefined` when they could not be read. */
   let records: readonly NotificationConsentRecord[] | undefined;
   let missingReaderReported = false;
   let capabilities: NotificationCapabilities | undefined;
@@ -330,7 +327,10 @@ export function createStarterNotificationSettings(
     const granted = (kind: 'topic-preference' | 'advertising' | 'night', topic?: string): boolean =>
       recording && records !== undefined && latestNotificationConsent(records, kind, topic)?.state === 'granted';
     const advertising = granted('advertising');
-    const night = granted('night');
+    // Night consent counts only alongside advertising consent: one an older
+    // client left standing after advertising was withdrawn shows off, and the
+    // next advertising consent withdraws it.
+    const night = advertising && granted('night');
     return {
       available,
       recording,
@@ -355,7 +355,7 @@ export function createStarterNotificationSettings(
       })),
       ...(advertisingTopics.length === 0
         ? {}
-        : { advertising: { granted: advertising, night, nightSelectable: recording && (advertising || night) } }),
+        : { advertising: { granted: advertising, night, nightSelectable: recording && advertising } }),
       notices: available ? notices : [],
       ...(message === undefined ? {} : { message }),
     };
@@ -578,7 +578,7 @@ export function createStarterNotificationSettings(
           // Night consent adds to advertising consent; alone it allows nothing.
           return strings.nightNeedsAdvertising;
         }
-                // Night consent counts only alongside advertising consent: a night
+        // Night consent counts only alongside advertising consent: a night
         // consent left standing after advertising was withdrawn (by an older
         // client) is not revived by a new advertising consent, and is
         // withdrawn with the next change. Withdrawing advertising consent
@@ -599,7 +599,7 @@ export function createStarterNotificationSettings(
             textVersion: input.consentTextVersion,
           });
         }
-                // The message says what changed (or, when nothing had to, the state asked for).
+        // The message says what changed (or, when nothing had to, the state asked for).
         if (writeAdvertising === false && writeNight === false) {
           return strings.advertisingAndNightOff;
         }

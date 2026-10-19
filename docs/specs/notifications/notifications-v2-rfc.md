@@ -1942,8 +1942,11 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   mappings to `installAitHostBridge` as `notificationTopics`. Since C1 the
   kit's, the template's, and the lite starter's wrappers read them at build
   time with `readAitNotificationTopicsFile` from
-  `@mpgd/adapter-ait/notification-config`, which refuses an advertising
-  topic, a blank template code, and an unknown agreement.
+    `@mpgd/adapter-ait/notification-config`, which checks the catalog with
+  `validateNotificationTopicCatalog` and the Apps in Toss registry entry (so
+  an advertising topic, a blank template code, and an unknown agreement are
+  refused) and leaves other targets and the deployment to
+  `validate:notifications`.
 - **No advertising.** Functional messages may not carry benefits or retention
   content, and promotional campaigns are console-only, so `remote.purposes`
   excludes `advertising`. Console recurring sends (daily or weekly, name

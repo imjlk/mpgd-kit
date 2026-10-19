@@ -416,9 +416,10 @@ export function resolveNotificationAdvertisingSettings(
 
 /**
  * Whether a deployment text is still a template placeholder rather than a
- * real value: the starter's `REPLACE-WITH-…` marker, or a whole value that is
- * an unreplaced `__TOKEN__`, `{{token}}`, `${token}`, `<token>`, or
- * `[token]`, a reserved `example.com`, `example.org`, or `example.net`
+  * real value: the starter's `REPLACE-WITH-…` marker, or a whole value that is
+ * an unreplaced `__TOKEN__`, `{{token}}`, `${token}`, or a word or words in
+ * angle or square brackets (`<phone number>`, `[PHONE]`, but not a bracketed
+ * address or number such as `<help@studio.kr>` or `[02-123-4567]`), a reserved `example.com`, `example.org`, or `example.net`
  * address anywhere in it, or only `TODO`, `TBD`, `CHANGEME`, `PLACEHOLDER`,
  * or `XXX`. It catches common template markers, not every made-up value.
  * `assertNotificationDeployment` refuses one in the advertising sender and
@@ -427,7 +428,7 @@ export function resolveNotificationAdvertisingSettings(
 export function isNotificationPlaceholderText(value: string): boolean {
   const text = value.trim();
   return /^replace[-_]with[-_]/iu.test(text)
-    || /^(?:__[A-Za-z][\w]*__|\{\{[^{}]*\}\}|\$\{[^{}]*\}|<[^<>]*>|\[[^[\]]*\])$/u.test(text)
+        || /^(?:__[A-Za-z]\w*__|\{\{[^{}]*\}\}|\$\{[^{}]*\}|<[A-Za-z][A-Za-z _-]*>|\[[A-Za-z][A-Za-z _-]*\])$/u.test(text)
     || /(?:^|[^\w-])example\.(?:com|org|net)(?![\w-]|\.[a-z0-9])/iu.test(text)
     || /^(?:todo|tbd|change[-_ ]?me|placeholder|x{3,})$/iu.test(text);
 }

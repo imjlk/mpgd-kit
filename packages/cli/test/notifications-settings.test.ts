@@ -252,10 +252,11 @@ const common = {
   const off = await settings.load();
   assert.deepEqual(off.advertising, { granted: false, night: false, nightSelectable: false });
   assert.equal(off.reminders[0]?.enabled, false);
-  // A night consent left standing by another client stays withdrawable.
+  // A night consent left standing by another client counts for nothing
+  // without advertising consent, so it shows off.
   append({ kind: 'night', state: 'granted', textVersion: '1' });
   const standing = await settings.load();
-  assert.deepEqual(standing.advertising, { granted: false, night: true, nightSelectable: true });
+  assert.deepEqual(standing.advertising, { granted: false, night: false, nightSelectable: false });
 }
 
 // A tap decides from the records as they are when it happens, not as the
@@ -335,8 +336,8 @@ const common = {
   const settings = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
   assert.deepEqual((await settings.load()).advertising, {
     granted: false,
-    night: true,
-    nightSelectable: true,
+    night: false,
+    nightSelectable: false,
   });
   const on = await settings.setAdvertising({ advertising: true });
   assert.deepEqual(calls.at(-1), {
