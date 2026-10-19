@@ -100,7 +100,7 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     ['a link that is not a post or comment', { link: 't5_subreddit' }, 'configuration', devvitNotificationProviderCodes.linkInvalid],
     ['a title over 60 code points', { content: { ...request().content, title: 'x'.repeat(61), body: 'b' } }, 'configuration', devvitNotificationProviderCodes.titleTooLong],
     ['a body over 100 code points', { content: { ...request().content, title: 't', body: 'x'.repeat(101) } }, 'configuration', devvitNotificationProviderCodes.bodyTooLong],
-    ['a filled text with a mustache tag', { content: { ...request().content, title: 't', body: '{{evil}} sent you a challenge.' } }, 'recipient', devvitNotificationProviderCodes.templateSyntax],
+    ['a filled text with a mustache tag', { content: { ...request().content, title: 't', body: '{{evil}} sent you a challenge.' } }, 'configuration', devvitNotificationProviderCodes.templateSyntax],
     ['a content without a body', { content: { route: '/', source: 'host-template', title: 't' } }, 'configuration', devvitNotificationProviderCodes.textMissing],
     ['a blank title', { content: { ...request().content, title: ' ' } }, 'configuration', devvitNotificationProviderCodes.textMissing],
   ] as const)('refuses %s before enqueue', async (_name, overrides, reason, providerCode) => {
@@ -140,6 +140,11 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     ['the daily app limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'App reached the daily limit' }] }, { status: 'rate-limited' }],
     ['a success next to an error', { successCount: 1, failureCount: 1, errors: [{ userId: 't2_other', message: 'x' }] }, { status: 'accepted' }],
     ['an error for another user only', { successCount: 0, failureCount: 0, errors: [{ userId: 't2_other', message: 'x' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
+    ['a length refusal that mentions a limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'title exceeds the character limit' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a refusal of the link, not the user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'post not found' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a user refusal that names no user', { successCount: 0, failureCount: 1, errors: [{ userId: undefined, message: 'user has opted out' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a deleted user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'User not found' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['throttling', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Throttled: try later' }] }, { status: 'rate-limited' }],
     ['a malformed answer', null as unknown as DevvitEnqueueResponse, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
     ['an answer that counts nothing', { successCount: 0, failureCount: 0, errors: [] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
     ['a call that throws', () => Promise.reject(new Error('twirp unavailable')), { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueFailed }],
@@ -170,6 +175,25 @@ describe('createDevvitNotificationDeliveryProvider', () => {
       { sendKey: 'k-1', source: 'answer', message: 'user has opted out', answer: 'rejected' },
       { sendKey: 'k-1', source: 'thrown', message: 'deadline exceeded', answer: 'ambiguous' },
     ]);
+  });
+
+  it('keeps the default answer when the classifier throws, and never classifies an empty answer', async () => {
+    const plugin = createFakePlugin();
+    plugin.answers.push(
+      { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'user has opted out' }] },
+      { successCount: 0, failureCount: 0, errors: [] },
+    );
+    const seen: string[] = [];
+    const provider = createDevvitNotificationDeliveryProvider({
+      notifications: plugin,
+      classifyEnqueueError: (message) => {
+        seen.push(message);
+        throw new Error('broken classifier');
+      },
+    });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'rejected', reason: 'recipient' });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
+    expect(seen).toEqual(['user has opted out']);
   });
 
   it('lets a deployment classify a thrown error that proves nothing was sent', async () => {
