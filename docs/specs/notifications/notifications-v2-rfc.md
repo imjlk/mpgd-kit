@@ -816,8 +816,10 @@ Inputs follow the v1 bounds:
 - `templateData` holds at most 128 entries of strings, numbers, or booleans,
   and each string is at most 16,384 characters.
 
-On a host-template provider `set` rejects `templateData`, because template
-context stays on the server as in v1. Invalid input throws
+`set` rejects `templateData` while any provider that would deliver the
+topic is host-template, whether or not the player is reached through it
+now, because template context stays on the server as in v1 and the
+reminder may reach the player there when it fires. Invalid input throws
 `NOTIFICATIONS_INVALID_INPUT`.
 
 Before scheduling locally, the runtime applies, in this order, the parts of
@@ -873,7 +875,9 @@ past is due at once, behind the reminders already due, and keeps its
   than 90 days ahead throws `NOTIFICATIONS_INVALID_INPUT`.
 - **Refused input.** A topic no served target delivers remotely, the notice
   topic, an advertising topic without the deployment's `advertisingRules`,
-  `templateData` while a host-template provider would deliver it, and a
+  `templateData` while any host-template provider would deliver the topic
+  (reached now or not; one whose purposes leave the topic out does not
+  count, nor does one for an advertising topic), and a
   link the provider cannot take throw `NOTIFICATIONS_INVALID_INPUT`: the
   gate's link step runs at set time, so a provider whose sends need a link
   (Devvit) needs the reminder's or the topic mapping's, and a given link
@@ -1607,7 +1611,8 @@ scheduler (after P3).
   the registry entry's `rate`, oldest first. A backlog that comes due at 08:00
   therefore drains at the provider's pace, while `until` stays the earliest
   send time. The pace counts the provider's delivered sends in the rate
-  window (one per send, however many devices it reached) and spends one per
+  window (one per send, however many devices it reached; a send dated after
+  the run's time, after the clock went back, is outside it) and spends one per
   dispatched row, so sends in flight and device fan-out may pass it by a
   few; and a batch whose rows all wait for one provider's pace holds the
   rows behind it until the window frees.
