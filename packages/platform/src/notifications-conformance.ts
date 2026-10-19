@@ -712,14 +712,21 @@ export interface NotificationConformanceSession {
   readonly installationId: string;
 }
 
-/** What setting a server reminder answers: stored, or the gate step 3 to 5 refusal. */
+/**
+ * What setting a server reminder answers: stored, the gate step 3 to 5
+ * refusal, `capacity-exceeded` past a backend's cap on a player's pending
+ * reminders, or `unavailable` when no provider the player can be reached on
+ * maps the topic. The fake backend answers only the first six.
+ */
 export type NotificationConformanceReminderSetStatus =
   | 'scheduled'
   | 'replaced'
   | 'permission-required'
   | 'request-missing'
   | 'preference-off'
-  | 'advertising-consent-missing';
+  | 'advertising-consent-missing'
+  | 'capacity-exceeded'
+  | 'unavailable';
 
 export type NotificationConformanceNoticeChannel = 'in-game' | 'push' | 'other';
 

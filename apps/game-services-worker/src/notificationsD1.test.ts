@@ -8,7 +8,10 @@ import {
   type NotificationRemoteDeliveryRequest,
 } from '@mpgd/game-services/notifications';
 import { runNotificationStoreConformance } from '@mpgd/game-services/notifications/store-conformance';
-import { referenceNotificationProviders } from '@mpgd/platform/notifications';
+import {
+  referenceNotificationProviders,
+  type NotificationConsentRecord,
+} from '@mpgd/platform/notifications';
 import { Miniflare } from 'miniflare';
 
 import { createD1NotificationStore } from './notificationsD1.js';
@@ -20,10 +23,10 @@ const miniflare = new Miniflare({
 });
 
 async function applyMigration(db: D1Database): Promise<void> {
-  const sql = await readFile(
-    new URL('../migrations/0007_notifications.sql', import.meta.url),
-    'utf8',
-  );
+  const sql = (await Promise.all(
+    ['0007_notifications.sql', '0008_notification_scheduler.sql'].map((file) =>
+      readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')),
+  )).join('\n');
   // Strip comments, then run each statement.
   const statements = sql
     .split('\n')
@@ -53,12 +56,49 @@ try {
       'notification_notices_given',
       'notification_sends',
       'notification_delivery_history',
+      'notification_schedule',
     ]) {
       await db.prepare(`DELETE FROM ${table}`).run();
     }
     return createD1NotificationStore(db);
   });
   assert.equal(fresh, 1);
+
+  // Pruning more instants than one statement binds: chunked, counted, and the notices go too.
+  {
+    const store = createD1NotificationStore(db);
+    const written: NotificationConsentRecord[] = [];
+    for (let index = 0; index < 205; index += 1) {
+      written.push(await store.appendConsent({
+        player: 'p-chunk',
+        record: { kind: 'advertising', state: index % 2 === 0 ? 'granted' : 'withdrawn', source: 'player', textVersion: 'v1' },
+        at: '2026-10-19T03:00:00Z',
+      }));
+    }
+    // Notices about records in the first, second, and third statement, and one about a kept record.
+    for (const record of [0, 95, 199, 204].map((index) => written[index]).filter(
+      (record) => record !== undefined,
+    )) {
+      await store.addNoticeGiven({
+        kind: 'consent-result',
+        record: { kind: 'advertising', at: record.at },
+        dueBy: '2026-11-02',
+        player: 'p-chunk',
+        channel: 'in-game',
+        at: '2026-10-20T03:00:00Z',
+      });
+    }
+    const pruned = written.slice(0, 200).map((record) => record.at);
+    assert.equal(await store.pruneConsent({ player: 'p-chunk', at: [...pruned, ...pruned] }), 200);
+    assert.deepEqual(
+      (await store.listConsent('p-chunk')).map((record) => record.at),
+      written.slice(200).map((record) => record.at),
+    );
+    assert.deepEqual(
+      (await store.listNoticesGiven('p-chunk')).map((notice) => notice.record.at),
+      [written[204]?.at],
+    );
+  }
 
   // The service over D1: fan-out, a dead token, the key states, and consent dating.
   for (const table of [

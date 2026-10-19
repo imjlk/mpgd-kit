@@ -323,7 +323,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   );
   assert.equal(fcm.calls[0]?.content.body, 'Mina님이 도전했어요.');
   assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: true });
-  // A queue that refuses keeps the rows; dispatchDue runs them once the lease ends.
+  // A queue that refuses keeps the rows; once the lease ends, dispatchDue takes them for the queue again.
   refuse = true;
   assert.deepEqual(await service.deliver({ ...send, idempotencyKey: 'q-2' }), {
     status: 'in-flight',
@@ -331,10 +331,18 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   assert.deepEqual(errors, ['queue.enqueue']);
   assert.deepEqual((await service.dispatchDue()).results, []);
   time.advance(301);
+  refuse = false;
   const due = await service.dispatchDue();
   assert.deepEqual(due, {
-    results: [{ sendKey: 'q-2', outcome: { status: 'delivered', alreadyProcessed: false } }],
+    results: [{ sendKey: 'q-2', outcome: { status: 'in-flight' } }],
     failed: 0,
+  });
+  assert.equal(fcm.calls.length, 1, 'with a queue bound, due rows are not sent inline');
+  assert.deepEqual(jobs.at(-1), { sendKey: 'q-2', provider: 'fcm', rowKey: 'q-2:i-1' });
+  await service.dispatch(jobs.at(-1) as NotificationDispatchJob);
+  assert.deepEqual(await service.deliver({ ...send, idempotencyKey: 'q-2' }), {
+    status: 'delivered',
+    alreadyProcessed: true,
   });
   // Retrying with another request under the key is a conflict.
   await expectCode(
@@ -566,9 +574,10 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     source: 'player',
     textVersion: 'v1',
   });
+  // The write also compacts: the first preference, now a day old and superseded, is deleted.
   assert.equal(
     (await capService.listConsent(session('p-1'))).length,
-    maxClientNotificationConsentRecordsPerDay + 2,
+    maxClientNotificationConsentRecordsPerDay + 1,
   );
 }
 
@@ -894,8 +903,10 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   };
   assert.deepEqual(await service.deliver(only), { status: 'in-flight' });
   assert.deepEqual(errors, ['provider.send']);
+  // The first replay waits the claim lease (300 s), not more.
+  time.advance(299);
   assert.deepEqual(await service.deliver(only), { status: 'in-flight' });
-  time.advance(600); // the lease after an ambiguous answer doubles
+  time.advance(1);
   assert.deepEqual(await service.deliver(only), { status: 'delivered', alreadyProcessed: false });
   assert.deepEqual(
     platform.calls.map((call) => call.idempotencyKey),
@@ -920,8 +931,8 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
       ['platform', 'in-flight'],
     ],
   );
-  assert.equal(notificationSendDueAt(pending as NotificationStoredSend), '2026-10-19T03:20:00Z');
-  time.advance(600);
+  assert.equal(notificationSendDueAt(pending as NotificationStoredSend), '2026-10-19T03:10:00Z');
+  time.advance(300);
   await service.dispatchDue();
   assert.deepEqual(
     platform.calls.map((call) => call.idempotencyKey),
@@ -1065,7 +1076,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     }
     answers.length = 0;
   }
-  // Leases double from five minutes to an hour: about 26 replays in the day.
+  // Leases double from five minutes (the claim lease) to an hour: about 26 replays in the day.
   assert.ok(replays >= 20 && replays <= 30, `replayed with backoff for about a day: ${replays}`);
   assert.deepEqual((await service.dispatchDue()).results, []);
   // The row whose replays end is reported once, with where it is.
@@ -1254,14 +1265,21 @@ for (const claimLeaseSeconds of [1, 86_400]) {
   assert.equal(platform.calls.length, 0);
   await service.dispatch(jobs[0] as NotificationDispatchJob);
   assert.equal(platform.calls.length, 1);
-  // A redelivered job does not replay an attempted (ambiguous) row; the lease does.
+  // A redelivered job does not replay an attempted (ambiguous) row; the lease does,
+  // through a new job, since a queue is bound.
   await service.dispatch(jobs[0] as NotificationDispatchJob);
   assert.equal(platform.calls.length, 1);
-  time.advance(600); // the lease after an ambiguous answer doubles
+  time.advance(300); // the first replay waits the claim lease
   assert.deepEqual((await service.dispatchDue()).results, [
-    { sendKey: 'f-1', outcome: { status: 'delivered', alreadyProcessed: false } },
+    { sendKey: 'f-1', outcome: { status: 'in-flight' } },
   ]);
+  assert.equal(platform.calls.length, 1);
+  await service.dispatch(jobs.at(-1) as NotificationDispatchJob);
   assert.equal(platform.calls.length, 2);
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'f-1', player: 'p-1', topic: 'friend-challenge' }),
+    { status: 'delivered', alreadyProcessed: true },
+  );
   assert.deepEqual(errors, []);
 }
 
@@ -1390,7 +1408,7 @@ for (const claimLeaseSeconds of [1, 86_400]) {
   });
   const send = { idempotencyKey: 'mix-1', player: 'p-1', topic: 'friend-challenge' };
   assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: false });
-  time.advance(600); // the lease after an ambiguous answer doubles
+  time.advance(300); // the first replay waits the claim lease
   assert.deepEqual(await service.deliver(send), { status: 'delivered', alreadyProcessed: true });
   assert.deepEqual([fcm.calls.length, platform.calls.length], [1, 2]);
   assert.deepEqual((await service.dispatchDue()).results, []);
@@ -1569,7 +1587,7 @@ for (const claimLeaseSeconds of [1, 86_400]) {
   await service.deliver({ idempotencyKey: 'w-1', player: 'p-1', topic: 'friend-challenge' });
   const first = store.inspect().sends[0]?.rows[0]?.firstAttemptedAt;
   assert.equal(first, '2026-10-19T03:00:00Z');
-  time.advance(600); // the lease after an ambiguous answer doubles
+  time.advance(300); // the first replay waits the claim lease
   await service.dispatchDue();
   assert.equal(store.inspect().sends[0]?.rows[0]?.state.status, 'deferred');
   time.advance(60);
@@ -1637,6 +1655,46 @@ for (const claimLeaseSeconds of [1, 86_400]) {
     ),
     'NOTIFICATIONS_INVALID_INPUT',
   );
+}
+
+// Ambiguous replays through the scheduler: the first waits the claim lease to the
+// millisecond, and each later answer doubles the wait.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const fcm = fakeProvider(
+    'fcm',
+    Array.from({ length: 4 }, () => ({ status: 'ambiguous' }) as const),
+  );
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    now: time.now,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await service.deliver({ idempotencyKey: 'a-1', player: 'p-1', topic: 'friend-challenge' });
+  const dueIn = (): number =>
+    (Date.parse(notificationSendDueAt(store.inspect().sends[0] as NotificationStoredSend) ?? '') - Date.parse(time.now()))
+    / 1000;
+  const waits = [dueIn()];
+  time.advance(299);
+  assert.deepEqual((await service.dispatchDue()).results, [], 'not due a millisecond early');
+  time.advance(1);
+  for (let replay = 0; replay < 3; replay += 1) {
+    assert.equal((await service.dispatchDue()).results.length, 1);
+    waits.push(dueIn());
+    time.advance(waits[waits.length - 1] ?? 0);
+  }
+  assert.deepEqual(waits, [300, 600, 1200, 2400]);
+  assert.equal(fcm.calls.length, 4);
 }
 
 console.info('Notifications service unit tests passed.');
