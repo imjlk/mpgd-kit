@@ -63,11 +63,12 @@ function starterNotificationRuntime(platform: PlatformGateway): NotificationRunt
   return runtimes.get(platform);
 }
 
-/** The settings screen's model for this gateway and locale. */
+/** The settings screen's model for this gateway, player, and locale. */
 export function createStarterNotificationSettingsModel(
   platform: TargetConfiguredGateway,
-  locale: string,
+  input: { readonly playerId: string; readonly locale: string },
 ): StarterNotificationSettings {
+  const requestUpgrade = platform.identity.requestUpgrade?.bind(platform.identity);
   return createStarterNotificationSettings({
     provider: platform.notificationsV2,
     runtime: starterNotificationRuntime(platform),
@@ -78,6 +79,41 @@ export function createStarterNotificationSettingsModel(
     defaultLocale: starterNotificationCatalog.defaultLocale,
     consentTextVersion: starterAdvertisingConsentTextVersion,
     storage: platform.storage,
-    locale,
+    playerId: input.playerId,
+    // Devvit: a logged-out player logs in before the opt-in (the gateway's loginPrompt).
+    ...(requestUpgrade === undefined
+      ? {}
+      : { requestLogin: () => requestUpgrade({ reason: 'notifications' }) }),
+    locale: input.locale,
   });
+}
+
+/** The route the advertising opt-out action and the consent notices open. */
+export const starterNotificationSettingsRoute = '/?entry=notification-settings';
+
+/**
+ * Calls `open` for every notification open whose route is the settings
+ * screen: the advertising opt-out action and the consent notices land there,
+ * and the RFC requires the opt-out to open that screen directly. Opens are
+ * read through the runtime when the game has one, else from the provider.
+ * Returns the unsubscribe.
+ */
+export function subscribeStarterNotificationSettingsOpens(
+  platform: PlatformGateway,
+  open: () => void,
+): () => void {
+  const source = starterNotificationRuntime(platform) ?? platform.notificationsV2;
+  if (source === undefined) {
+    return () => undefined;
+  }
+  return source.subscribe((event) => {
+    if (event.type === 'opened' && event.route !== undefined && isSettingsRoute(event.route)) {
+      open();
+    }
+  });
+}
+
+function isSettingsRoute(route: string): boolean {
+  const url = new URL(route, 'https://game.invalid');
+  return url.searchParams.get('entry') === 'notification-settings';
 }

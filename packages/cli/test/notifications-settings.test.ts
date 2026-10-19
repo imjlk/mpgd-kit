@@ -125,7 +125,13 @@ const memoryStorage = () => {
   };
 };
 
-const common = { topics, defaultLocale: 'ko', consentTextVersion: '1', locale: 'ko' } as const;
+const common = {
+  topics,
+  defaultLocale: 'ko',
+  consentTextVersion: '1',
+  locale: 'ko',
+  playerId: 'player-1',
+} as const;
 
 // A target without notifications shows nothing to switch.
 {
@@ -243,6 +249,105 @@ const common = { topics, defaultLocale: 'ko', consentTextVersion: '1', locale: '
   assert.deepEqual(calls.at(-1), { revoke: ['daily-ready', 'friend-challenge'] });
 }
 
+// A logged-out Devvit player reads action-required: the screen offers the
+// login, which asks the host, and then reads again.
+{
+  const { provider } = fakeProvider(capabilities('app', 'game'), { app: 'action-required' });
+  const loggedOut: NotificationProvider = {
+    ...provider,
+    getPermission: async () => ({ app: 'action-required', topics: {}, requiredAction: 'login' }),
+  };
+  let logins = 0;
+  const settings = createStarterNotificationSettings({
+    ...common,
+    provider: loggedOut,
+    runtime: undefined,
+    requestLogin: async () => {
+      logins += 1;
+    },
+  });
+  const view = await settings.load();
+  assert.equal(view.permission.canRequest, false);
+  assert.equal(view.permission.canLogin, true);
+  await settings.logIn();
+  assert.equal(logins, 1);
+  // Without a login prompt the screen offers none.
+  const noPrompt = await createStarterNotificationSettings({ ...common, provider: loggedOut, runtime: undefined }).load();
+  assert.equal(noPrompt.permission.canLogin, false);
+}
+
+// Without a runtime a game-rendered consent is still withdrawn in the game,
+// through the provider (RFC "Turn off where it was turned on").
+{
+  const { provider } = fakeProvider(capabilities('app', 'game'), { app: 'granted' });
+  const revoked: string[][] = [];
+  const devvit: NotificationProvider = {
+    ...provider,
+    revokePermission: async (input) => {
+      revoked.push([...input.topics]);
+      return { snapshot: { topics: {} }, outcomes: {} };
+    },
+  };
+  const settings = createStarterNotificationSettings({
+    ...common,
+    provider: devvit,
+    runtime: undefined,
+  });
+  assert.equal((await settings.load()).permission.canRevoke, true);
+  assert.equal((await settings.turnOff()).message, '알림을 껐어요.');
+  assert.deepEqual(revoked, [['daily-ready', 'friend-challenge']]);
+  // A provider without revocation offers no turn-off without a runtime.
+  const os = await createStarterNotificationSettings({
+    ...common,
+    provider: fakeProvider(capabilities('app', 'os'), { app: 'granted' }).provider,
+    runtime: undefined,
+  }).load();
+  assert.equal(os.permission.canRevoke, false);
+}
+
+// The remembered switches belong to one player on the device.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime } = fakeRuntime(provider);
+  const { storage } = memoryStorage();
+  await createStarterNotificationSettings({ ...common, provider, runtime, storage })
+    .setAdvertising({ advertising: true });
+  const other = await createStarterNotificationSettings({
+    ...common,
+    provider,
+    runtime,
+    storage,
+    playerId: 'player-2',
+  }).load();
+  assert.deepEqual(other.advertising, { granted: false, night: false });
+  // An empty change records nothing.
+  const { runtime: quiet, calls } = fakeRuntime(provider);
+  const empty = await createStarterNotificationSettings({ ...common, provider, runtime: quiet })
+    .setAdvertising({});
+  assert.equal(empty.message, '이 기기에서는 알림을 켤 수 없어요.');
+  assert.deepEqual(calls, []);
+}
+
+// A host read that fails is shown as a message, never thrown into the screen.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const failing: NotificationProvider = {
+    ...provider,
+    getPermission: async () => {
+      throw new Error('bridge down');
+    },
+  };
+  const original = console.warn;
+  console.warn = () => undefined;
+  try {
+    const view = await createStarterNotificationSettings({ ...common, provider: failing, runtime: undefined }).load();
+    assert.equal(view.available, true);
+    assert.equal(view.message, '알림 설정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
+  } finally {
+    console.warn = original;
+  }
+}
+
 // A blocked OS permission offers only the system settings.
 {
   const { provider, calls } = fakeProvider(capabilities('app', 'os'), { app: 'blocked' });
@@ -278,16 +383,42 @@ const common = { topics, defaultLocale: 'ko', consentTextVersion: '1', locale: '
     'reconfirmation.night': text('야간 확인'),
   };
   const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
-  const { runtime, calls } = fakeRuntime(provider, [notice]);
-  const view = await createStarterNotificationSettings({
+  // A second notice whose variant this copy lacks: it is not shown, so not recorded.
+  const unknown: NotificationNotice = {
+    ...notice,
+    variant: 'reconfirmation.night',
+    dueBy: '2026-11-03',
+  };
+  const partialCopy = Object.fromEntries(
+    Object.entries(localeCopy).filter(([key]) => key !== 'reconfirmation.night'),
+  ) as never;
+  const { runtime, calls } = fakeRuntime(provider, [notice, unknown]);
+  const settings = createStarterNotificationSettings({
     ...common,
     provider,
     runtime,
-    noticeCopy: { ko: localeCopy },
-  }).load();
+    noticeCopy: { ko: partialCopy },
+  });
+  const view = await settings.load();
   // A refusal without its own text is given in the withdrawal's, dated in Seoul.
   assert.deepEqual(view.notices, [{ title: '철회', body: '2026-10-19 처리' }]);
+  // Loading records nothing; the screen records what it showed, once.
+  assert.deepEqual(calls, []);
+  await settings.recordNoticesShown();
   assert.deepEqual(calls, [{ shown: notice }]);
+  await settings.recordNoticesShown();
+  assert.equal(calls.length, 1);
+  // Without a provider (a target without notifications) nothing is listed or recorded.
+  const hidden = fakeRuntime(provider, [notice]);
+  const unavailable = createStarterNotificationSettings({
+    ...common,
+    provider: undefined,
+    runtime: hidden.runtime,
+    noticeCopy: { ko: localeCopy },
+  });
+  assert.deepEqual((await unavailable.load()).notices, []);
+  await unavailable.recordNoticesShown();
+  assert.deepEqual(hidden.calls, []);
 }
 
 // A failing action reports a message instead of throwing into the scene.

@@ -30,19 +30,27 @@ export async function createStarterCapacitorNotifications(
     return [];
   }
   const sdks = await loadCapacitorNotificationSdks();
+  const korean = (globalThis.navigator?.language ?? '').toLowerCase().startsWith('ko');
   return [
     createCapacitorNotificationServiceProvider({
       platform,
       topics,
       ...sdks,
-      // Android channel names the player sees in system settings. Advertising
-      // keeps a channel of its own so the player can turn it off there.
-      channels: {
-        'mpgd-service': { name: '알림' },
-        'mpgd-requested': { name: '리마인더' },
-        'mpgd-advertising': { name: '광고성 정보' },
-      },
-      advertisingOptOutTitle: '수신거부',
+      // Android channel names the player sees in system settings, in the
+      // device language. Advertising keeps a channel of its own so the player
+      // can turn it off there.
+      channels: korean
+        ? {
+            'mpgd-service': { name: '알림' },
+            'mpgd-requested': { name: '리마인더' },
+            'mpgd-advertising': { name: '광고성 정보' },
+          }
+        : {
+            'mpgd-service': { name: 'Notifications' },
+            'mpgd-requested': { name: 'Reminders' },
+            'mpgd-advertising': { name: 'Promotions' },
+          },
+      advertisingOptOutTitle: korean ? '수신거부' : 'Unsubscribe',
       openSettings: openCapacitorNotificationSettings,
     }),
   ];

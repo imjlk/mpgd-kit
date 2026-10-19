@@ -89,13 +89,18 @@ Rules the starter's settings screen follows, and your own screen must too:
 > backend needs a game-services client for the Worker's notification routes,
 > and those routes need the identity side's session binding. Until both ship,
 > `createStarterNotificationRuntime` in the starter returns `undefined`. The
-> settings screen then asks only for the OS or host permission, keeps the
-> reminder, advertising, and night switches off, and says the choices cannot
-> be saved. Return your own `NotificationRuntime` there if your backend
+> settings screen then asks for the OS or host permission (and withdraws a
+> Devvit opt-in the game rendered), keeps the reminder, advertising, and night
+> switches off, and says the choices cannot be saved. Return your own `NotificationRuntime` there if your backend
 > implements the routes.
 
 Notification opens are hints, never grants: an open carries a route and
-untrusted data, and anything worth claiming goes through the server.
+untrusted data, and anything worth claiming goes through the server. The
+starter routes one kind of open itself: the advertising opt-out action and
+the consent notices carry `/?entry=notification-settings`, and an open with
+that route shows the settings screen (after boot, when the game was just
+started by it), because the opt-out must open that screen directly. Route
+your other topics' opens the same way.
 
 ## Korean advertising rules
 

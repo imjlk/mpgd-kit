@@ -1,82 +1,124 @@
 import Phaser from 'phaser';
 
-import type {
-  StarterNotificationSettings,
-  StarterNotificationSettingsView,
+import {
+  starterNotificationLabelsFor,
+  type StarterNotificationLabels,
+  type StarterNotificationSettings,
+  type StarterNotificationSettingsView,
 } from '../platform/notificationSettings';
-import { createStarterNotificationSettingsModel } from '../platform/notifications';
+import {
+  createStarterNotificationSettingsModel,
+  subscribeStarterNotificationSettingsOpens,
+} from '../platform/notifications';
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
 
-const labels = {
-  ko: {
-    title: '알림 설정',
-    unavailable: '이 플랫폼에서는 알림을 쓸 수 없어요.',
-    permission: { granted: '알림: 켜짐', other: '알림: 꺼짐' },
-    turnOn: '[ 알림 켜기 ]',
-    turnOff: '[ 알림 끄기 ]',
-    openSettings: '[ 시스템 설정 열기 ]',
-    reminders: '리마인더 (내가 켠 알림만 받아요)',
-    advertising: '광고성 정보 수신동의 (선택)',
-    advertisingHelp: '이벤트와 새 소식을 알림으로 받아요. 동의하지 않아도 게임을 그대로 이용할 수 있어요.',
-    night: '야간(21시~다음 날 8시) 광고성 정보 수신동의 (선택)',
-    on: '켜짐',
-    off: '꺼짐',
-    notices: '수신동의 안내',
-    back: '[ 돌아가기 ]',
-  },
-  en: {
-    title: 'Notifications',
-    unavailable: 'Notifications are not available on this platform.',
-    permission: { granted: 'Notifications: on', other: 'Notifications: off' },
-    turnOn: '[ Turn on notifications ]',
-    turnOff: '[ Turn off notifications ]',
-    openSettings: '[ Open system settings ]',
-    reminders: 'Reminders (only the ones you turn on)',
-    advertising: 'Promotional notifications (optional)',
-    advertisingHelp: 'Get event news as notifications. The game works the same without it.',
-    night: 'Promotional notifications at night, 21:00-08:00 (optional)',
-    on: 'on',
-    off: 'off',
-    notices: 'Consent notices',
-    back: '[ Back ]',
-  },
-} as const;
+export const notificationSettingsSceneKey = 'NotificationSettingsScene';
+/** Set when a settings open arrives before the lobby; the lobby opens the screen then. */
+const pendingOpenKey = 'pendingNotificationSettings';
 
 const textStyle = { color: '#d6dee8', fontFamily: 'Arial, sans-serif', fontSize: '18px' } as const;
 const buttonStyle = { ...textStyle, color: '#5eead4' } as const;
+const contentTop = 80;
+const contentBottom = 480;
+
+/**
+ * Opens the settings screen for a notification open whose route is the
+ * settings screen (the advertising opt-out action, a consent notice). While
+ * the game is still booting the open waits for the lobby
+ * (`takePendingNotificationSettings`).
+ */
+export function routeNotificationSettingsOpens(game: Phaser.Game, context: StarterContext): void {
+  const unsubscribe = subscribeStarterNotificationSettingsOpens(context.platform, () => {
+    const active = game.scene.getScenes(true).map((scene) => scene.scene.key);
+    if (active.length === 0 || active.includes('BootScene')) {
+      game.registry.set(pendingOpenKey, true);
+      return;
+    }
+    for (const key of active) {
+      if (key !== notificationSettingsSceneKey) {
+        game.scene.stop(key);
+      }
+    }
+    game.scene.start(notificationSettingsSceneKey);
+  });
+  game.events.once('destroy', unsubscribe);
+}
+
+/** Whether a settings open waited for the lobby; clears it. */
+export function takePendingNotificationSettings(scene: Phaser.Scene): boolean {
+  const pending = scene.registry.get(pendingOpenKey) === true;
+  scene.registry.remove(pendingOpenKey);
+  return pending;
+}
 
 /**
  * The game-rendered notification settings: the OS or host permission,
  * reminder topics, and the advertising and night consent the Korean rules
  * require before any advertising push (`notificationSettings.ts` holds the
- * logic). Every change is a tap; no switch starts on.
+ * logic). Every change is a tap; no switch starts on. The list scrolls by
+ * dragging when it is taller than the screen.
  */
 export class NotificationSettingsScene extends Phaser.Scene {
   private settings!: StarterNotificationSettings;
-  private content: Phaser.GameObjects.GameObject[] = [];
+  private labels!: StarterNotificationLabels;
+  private content!: Phaser.GameObjects.Container;
   private busy = false;
 
   constructor() {
-    super('NotificationSettingsScene');
+    super(notificationSettingsSceneKey);
   }
 
   create(): void {
-    const context = this.registry.get(starterContextKey) as StarterContext;
-    const text = context.locale === 'ko' ? labels.ko : labels.en;
-    this.settings = createStarterNotificationSettingsModel(context.platform, context.locale);
-    this.add.text(480, 40, text.title, { ...textStyle, color: '#ffffff', fontSize: '30px' }).setOrigin(
-      0.5,
+    const rawContext = this.registry.get(starterContextKey);
+    if (rawContext === undefined || rawContext === null) {
+      throw new Error('Starter context is missing from Phaser registry.');
+    }
+    const context = rawContext as StarterContext;
+    // A visit that left while an action was pending starts fresh.
+    this.busy = false;
+    this.labels = starterNotificationLabelsFor(context.locale);
+    this.settings = createStarterNotificationSettingsModel(context.platform, {
+      playerId: context.player.playerId,
+      locale: context.locale,
+    });
+    this.add
+      .text(480, 40, this.labels.title, { ...textStyle, color: '#ffffff', fontSize: '30px' })
+      .setOrigin(0.5);
+    this.content = this.add.container(0, contentTop);
+    const mask = this.make.graphics({}, false).fillRect(
+      0,
+      contentTop,
+      960,
+      contentBottom - contentTop,
     );
-    this.button(480, 510, text.back, () => {
+    this.content.setMask(mask.createGeometryMask());
+    this.enableScroll();
+    this.button(480, 510, this.labels.back, () => {
       this.scene.start('LobbyScene');
     }).setOrigin(0.5);
-    void this.apply(() => this.settings.load(), text);
+    void this.apply(() => this.settings.load());
   }
 
-  private async apply(
-    action: () => Promise<StarterNotificationSettingsView>,
-    text: (typeof labels)['ko' | 'en'],
-  ): Promise<void> {
+  private enableScroll(): void {
+    let lastY: number | undefined;
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      lastY = pointer.y;
+    });
+    this.input.on('pointerup', () => {
+      lastY = undefined;
+    });
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (lastY === undefined || !pointer.isDown) {
+        return;
+      }
+      const height = this.content.getBounds().height;
+      const minY = Math.min(contentTop, contentBottom - height);
+      this.content.y = Phaser.Math.Clamp(this.content.y + pointer.y - lastY, minY, contentTop);
+      lastY = pointer.y;
+    });
+  }
+
+  private async apply(action: () => Promise<StarterNotificationSettingsView>): Promise<void> {
     if (this.busy) {
       return;
     }
@@ -84,40 +126,50 @@ export class NotificationSettingsScene extends Phaser.Scene {
     try {
       const view = await action();
       if (this.sys.isActive()) {
-        this.render(view, text);
+        this.render(view);
+        if (view.notices.length > 0) {
+          await this.settings.recordNoticesShown();
+        }
       }
+    } catch (error) {
+      // The model reports its own failures as messages; anything else is logged.
+      console.error('[notifications] settings screen failed.', error);
     } finally {
       this.busy = false;
     }
   }
 
-  private render(view: StarterNotificationSettingsView, text: (typeof labels)['ko' | 'en']): void {
-    for (const object of this.content) {
-      object.destroy();
-    }
-    this.content = [];
-    let y = 90;
+  private render(view: StarterNotificationSettingsView): void {
+    const text = this.labels;
+    this.content.removeAll(true);
+    this.content.y = contentTop;
+    let y = 0;
     const line = (value: string, style: Phaser.Types.GameObjects.Text.TextStyle = textStyle) => {
-      this.content.push(this.add.text(60, y, value, { ...style, wordWrap: { width: 840 } }));
-      y += 30;
+      const object = this.add.text(60, y, value, { ...style, wordWrap: { width: 840 } });
+      this.content.add(object);
+      y += object.height + 10;
     };
     const action = (value: string, run: () => Promise<StarterNotificationSettingsView>) => {
-      this.content.push(
-        this.button(60, y, value, () => {
-          void this.apply(run, text);
-        }),
-      );
-      y += 32;
+      const object = this.button(60, y, `[ ${value} ]`, () => {
+        void this.apply(run);
+      });
+      this.content.add(object);
+      y += object.height + 8;
     };
 
     if (!view.available) {
-      line(text.unavailable);
+      line(view.message ?? text.unavailable);
       return;
     }
     if (!view.permission.perTopic) {
-      line(view.permission.state === 'granted' ? text.permission.granted : text.permission.other);
+      line(view.permission.state === 'granted' ? text.permissionOn : text.permissionOff);
       if (view.permission.canRequest) {
+        // Explain before the one-shot OS prompt; the prompt runs only from the tap below.
+        line(text.explanation, { ...textStyle, fontSize: '15px' });
         action(text.turnOn, () => this.settings.turnOn());
+      }
+      if (view.permission.canLogin) {
+        action(text.logIn, () => this.settings.logIn());
       }
       if (view.permission.canOpenSettings) {
         action(text.openSettings, () => this.settings.openSettings());
@@ -127,7 +179,6 @@ export class NotificationSettingsScene extends Phaser.Scene {
       }
     }
     if (view.reminders.length > 0) {
-      y += 6;
       line(text.reminders, { ...textStyle, color: '#ffffff' });
       for (const reminder of view.reminders) {
         action(`${reminder.label}: ${reminder.enabled ? text.on : text.off}`, () =>
@@ -137,7 +188,6 @@ export class NotificationSettingsScene extends Phaser.Scene {
     }
     if (view.advertising !== undefined) {
       const { granted, night } = view.advertising;
-      y += 6;
       action(`${text.advertising}: ${granted ? text.on : text.off}`, () =>
         this.settings.setAdvertising({ advertising: !granted }),
       );
@@ -147,14 +197,12 @@ export class NotificationSettingsScene extends Phaser.Scene {
       );
     }
     if (view.notices.length > 0) {
-      y += 6;
       line(text.notices, { ...textStyle, color: '#ffffff' });
       for (const notice of view.notices) {
-        line(`${notice.title} - ${notice.body}`, { ...textStyle, fontSize: '15px' });
+        line(`${notice.title}\n${notice.body}`, { ...textStyle, fontSize: '15px' });
       }
     }
     if (view.message !== undefined) {
-      y = Math.max(y + 6, 460);
       line(view.message, { ...textStyle, color: '#f59e0b' });
     }
   }
@@ -162,7 +210,13 @@ export class NotificationSettingsScene extends Phaser.Scene {
   private button(x: number, y: number, value: string, onTap: () => void): Phaser.GameObjects.Text {
     return this.add
       .text(x, y, value, buttonStyle)
+      .setPadding(0, 8, 24, 8)
       .setInteractive({ useHandCursor: true })
-      .on('pointerup', onTap);
+      // A drag that scrolls the list and ends on a button is not a tap.
+      .on('pointerup', (pointer: Phaser.Input.Pointer) => {
+        if (pointer.getDistance() < 12) {
+          onTap();
+        }
+      });
   }
 }

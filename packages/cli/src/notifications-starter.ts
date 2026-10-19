@@ -228,14 +228,22 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         ' * scheduler tasks below run its reminders and purges.',
         ' */',
         "const notificationService: Parameters<typeof handleNotificationTask>[0]['notifications'] =",
-        '  redditNotificationTopics.length === 0',
-        '    ? undefined',
-        '    : createDevvitNotificationService({',
-        '        redis,',
-        '        notifications,',
-        '        catalog: notificationTopicCatalog,',
-        '        deployment: assertNotificationDeployment(notificationDeploymentJson),',
-        '      }).service;',
+        '  redditNotificationTopics.length === 0 ? undefined : createNotificationService();',
+        '',
+        '/** A catalog or deployment the service refuses turns notifications off, never the game server. */',
+        "function createNotificationService(): Parameters<typeof handleNotificationTask>[0]['notifications'] {",
+        '  try {',
+        '    return createDevvitNotificationService({',
+        '      redis,',
+        '      notifications,',
+        '      catalog: notificationTopicCatalog,',
+        '      deployment: assertNotificationDeployment(notificationDeploymentJson),',
+        '    }).service;',
+        '  } catch (error) {',
+        '    console.error(`devvit notifications disabled: ${errorMessage(error)}`);',
+        '    return undefined;',
+        '  }',
+        '}',
         '',
       ].join('\n'),
     },
@@ -248,7 +256,10 @@ const phaserEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
       anchor: "import { LobbyScene } from '../scenes/LobbyScene';\n",
       replacement: [
         "import { LobbyScene } from '../scenes/LobbyScene';",
-        "import { NotificationSettingsScene } from '../scenes/NotificationSettingsScene';",
+        'import {',
+        '  NotificationSettingsScene,',
+        '  routeNotificationSettingsOpens,',
+        "} from '../scenes/NotificationSettingsScene';",
         '',
       ].join('\n'),
     },
@@ -256,23 +267,56 @@ const phaserEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
       anchor: '    scene: [BootScene, LobbyScene, PlayScene],\n',
       replacement: '    scene: [BootScene, LobbyScene, PlayScene, NotificationSettingsScene],\n',
     },
+    {
+      anchor: '        ownGameAudio(game, input.context);\n',
+      replacement: [
+        '        ownGameAudio(game, input.context);',
+        '        // The advertising opt-out action and consent notices open the settings screen.',
+        '        routeNotificationSettingsOpens(game, input.context);',
+        '',
+      ].join('\n'),
+    },
   ],
   'src/scenes/LobbyScene.ts': [
     {
+      anchor: "import { starterContextKey, type StarterContext } from '../runtime/gameContext';\n",
+      replacement: [
+        "import { starterContextKey, type StarterContext } from '../runtime/gameContext';",
+        "import { takePendingNotificationSettings } from './NotificationSettingsScene';",
+        '',
+      ].join('\n'),
+    },
+    {
+      anchor: '    const context = rawContext as StarterContext;\n',
+      replacement: [
+        '    const context = rawContext as StarterContext;',
+        '    // A notification open for the settings screen that arrived while booting.',
+        '    if (takePendingNotificationSettings(this)) {',
+        "      this.scene.start('NotificationSettingsScene');",
+        '      return;',
+        '    }',
+        '',
+      ].join('\n'),
+    },
+    {
       anchor: "    this.input.once('pointerdown', () => this.scene.start('PlayScene'));\n",
       replacement: [
-        '    const notificationsButton = this.add',
-        "      .text(930, 24, locale === 'ko' ? '알림 설정' : 'Notifications', {",
-        "        color: '#5eead4',",
-        "        fontFamily: 'Arial, sans-serif',",
-        "        fontSize: '18px',",
-        '      })',
-        '      .setOrigin(1, 0)',
-        '      .setInteractive({ useHandCursor: true });',
-        "    notificationsButton.on('pointerup', () => this.scene.start('NotificationSettingsScene'));",
+        '    // The settings button shows only where this target has notifications.',
+        '    const notificationsButton = context.platform.notificationsV2 === undefined',
+        '      ? undefined',
+        '      : this.add',
+        "          .text(940, 16, locale === 'ko' ? '알림 설정' : 'Notifications', {",
+        "            color: '#5eead4',",
+        "            fontFamily: 'Arial, sans-serif',",
+        "            fontSize: '22px',",
+        '          })',
+        '          .setOrigin(1, 0)',
+        '          .setPadding(16, 12, 16, 12)',
+        '          .setInteractive({ useHandCursor: true });',
+        "    notificationsButton?.on('pointerup', () => this.scene.start('NotificationSettingsScene'));",
         '    // A tap anywhere else starts the game; the scene drops this listener on shutdown.',
         "    this.input.on('pointerdown', (_pointer: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]) => {",
-        '      if (!over.includes(notificationsButton)) {',
+        '      if (notificationsButton === undefined || !over.includes(notificationsButton)) {',
         "        this.scene.start('PlayScene');",
         '      }',
         '    });',
@@ -438,9 +482,11 @@ export function applyNotificationsStarter<File extends NotificationsStarterFile>
   ];
   const existing = new Set(edited.map((file) => file.relativePath));
   for (const file of added) {
+    // Also refuses a path the overlay's parts both carry, so neither wins silently.
     if (existing.has(file.relativePath)) {
       throw new Error(`The notifications starter would overwrite ${file.relativePath}.`);
     }
+    existing.add(file.relativePath);
   }
   return [...edited, ...added];
 }

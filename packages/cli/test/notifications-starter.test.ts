@@ -105,8 +105,21 @@ assert.match(reddit, /\{ notifications: \{ topics \} \}/u);
 const server = byPath(phaser, 'apps/target-devvit/src/server/index.ts');
 assert.match(server, /notifications: notificationsBridge/u);
 assert.match(server, /createDevvitNotificationService\(\{/u);
-assert.doesNotMatch(server, /= undefined;\n/u);
+assert.doesNotMatch(server, /\['notifications'\] = undefined;/u);
+assert.match(server, /function createNotificationService\(\)/u);
 assert.match(byPath(phaser, 'src/runtime/createGame.ts'), /NotificationSettingsScene\]/u);
+assert.match(
+  byPath(phaser, 'src/runtime/createGame.ts'),
+  /routeNotificationSettingsOpens\(game, input\.context\);/u,
+);
+assert.match(
+  byPath(phaser, 'src/scenes/LobbyScene.ts'),
+  /takePendingNotificationSettings\(this\)/u,
+);
+assert.match(
+  byPath(phaser, 'src/scenes/LobbyScene.ts'),
+  /context\.platform\.notificationsV2 === undefined/u,
+);
 assert.match(
   byPath(phaser, 'src/scenes/LobbyScene.ts'),
   /scene\.start\('NotificationSettingsScene'\)/u,
@@ -203,15 +216,37 @@ assert.deepEqual(purposes, {
   events: 'advertising',
   'consent-notice': 'service',
 });
-// Starter reminder copy states the player's own progress, never a benefit.
+// Starter reminder copy states the player's own progress, never a benefit,
+// in the catalog copy and in every target mapping's own text (Devvit).
 for (const topic of validation.catalog.topics.filter((entry) => entry.purpose === 'requested')) {
-  for (const text of Object.values(topic.copy ?? {})) {
-    assert.doesNotMatch(
-      `${text.title} ${text.body}`,
-      /보상|혜택|이벤트|할인|무료|reward|bonus|free|sale/iu,
-    );
+  const texts = [
+    ...Object.values(topic.copy ?? {}).map((text) => `${text.title} ${text.body}`),
+    ...Object.values(topic.targets ?? {}).map((mapping) =>
+      `${String(mapping.title ?? '')} ${String(mapping.body ?? '')}`),
+  ];
+  for (const text of texts) {
+    assert.doesNotMatch(text, /보상|혜택|이벤트|할인|무료|reward|bonus|free|sale|event/iu);
   }
 }
+// The starter's plugin versions are the ones the Capacitor adapter is tested with.
+const adapterManifest = JSON.parse(
+  readFileSync(path.join(templatesRoot, '../../../adapters/capacitor/package.json'), 'utf8'),
+) as { readonly devDependencies: Record<string, string> };
+for (const name of ['@capacitor-firebase/messaging', '@capacitor/local-notifications']) {
+  assert.equal(notificationsGameDependencies[name], adapterManifest.devDependencies[name], name);
+}
+// An overlay path that two parts carry fails loudly instead of one winning.
+const duplicated = overlay.common[0];
+assert.ok(duplicated);
+assert.throws(
+  () =>
+    applyNotificationsStarter(base, {
+      template: 'phaser',
+      ...overlay,
+      phaser: [...overlay.phaser, duplicated],
+    }),
+  /would overwrite/u,
+);
 // No advertising topic reaches Apps in Toss or Devvit, which cannot carry it.
 const events = validation.catalog.topics.find((topic) => topic.id === 'events');
 assert.deepEqual(Object.keys(events?.targets ?? {}).sort(), ['android', 'ios']);
