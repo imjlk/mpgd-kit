@@ -6,6 +6,13 @@ for (const exportName of [
   'createDevvitPostOperationCoordinator',
   'createDevvitRedisPostOperationStore',
   'defineDevvitPostOperation',
+  'createDevvitRedisNotificationStore',
+  'createDevvitNotificationDeliveryProvider',
+  'createDevvitNotificationProviderEntry',
+  'createDevvitNotificationService',
+  'devvitNotificationSession',
+  'createDevvitServerNotificationProvider',
+  'createDevvitNotificationsV2BridgeHandler',
 ]) {
   if (typeof server[exportName] !== 'function') {
     throw new Error(`Missing @mpgd/adapter-devvit/server export: ${exportName}`);

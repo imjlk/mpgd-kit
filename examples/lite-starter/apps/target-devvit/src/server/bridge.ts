@@ -59,6 +59,15 @@ export interface DevvitBridgeCommerceHandler {
   request(input: BridgeRequest): Promise<BridgeResponse>;
 }
 
+/**
+ * Serves the nine `notifications.v2.*` bridge methods:
+ * `createDevvitNotificationsV2BridgeHandler` from `@mpgd/adapter-devvit/server`
+ * over the Devvit `notifications` plugin and the request's logged-in user.
+ */
+export interface DevvitBridgeNotificationsHandler {
+  request(input: BridgeRequest): Promise<BridgeResponse>;
+}
+
 export interface DevvitBridgeHandlerDependencies {
   readonly redis: DevvitBridgeRedisLike;
   /** Authenticated Reddit user ID from the Devvit request context, never from the payload. */
@@ -75,6 +84,13 @@ export interface DevvitBridgeHandlerDependencies {
    * plugin wired never lists orders or products.
    */
   readonly commerce?: DevvitBridgeCommerceHandler | undefined;
+  /**
+   * Notifications v2: the game-rendered opt-in and opt-out. Absent, every
+   * `notifications.v2.*` method answers `NOTIFICATIONS_V2_UNAVAILABLE`, and
+   * the v1 `notifications.*` answers stay `approval-required` and
+   * `unavailable`.
+   */
+  readonly notifications?: DevvitBridgeNotificationsHandler | undefined;
   readonly warn?: ((message: string) => void) | undefined;
 }
 
@@ -93,11 +109,25 @@ export function createDevvitBridgeHandler(
   }
 
   return async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse> {
-    // Notifications v2 arrives with the Devvit provider (P3), which serves the
-    // game-rendered opt-in from this bridge; until then every v2 method
-    // answers the dedicated code, and the v1 `notifications.*` answers stay.
+    // Notifications v2: the configured handler serves the game-rendered
+    // opt-in; without one every v2 method answers the dedicated code. The v1
+    // `notifications.*` answers below stay; a gateway that exposes v2 serves
+    // v1 from it instead.
     if (isBridgeNotificationsV2Method(input.method)) {
-      return createNotificationsV2UnavailableBridgeError(input, 'Devvit server bridge');
+      if (dependencies.notifications === undefined) {
+        return createNotificationsV2UnavailableBridgeError(input, 'Devvit server bridge');
+      }
+      try {
+        return await dependencies.notifications.request(input);
+      } catch (error) {
+        warn(`devvit notifications ${input.method} failed: ${errorMessage(error)}`);
+        return createBridgeError(
+          input.id,
+          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          `${input.method} failed on the Devvit server.`,
+          true,
+        );
+      }
     }
     switch (input.method) {
       case 'runtime.getCapabilities':

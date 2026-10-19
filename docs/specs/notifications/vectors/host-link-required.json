@@ -1,0 +1,216 @@
+{
+  "vector": "host-link-required",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A provider whose sends open a post or comment needs a link for each send: without one from the send or the mapping the send is unavailable (link-missing) and the provider is not called; the send's link wins over the mapping's default.",
+  "appliesTo": [
+    {
+      "path": "open",
+      "equals": "host-link"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.game-opt-in",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "game",
+        "readable": true,
+        "serverReadable": true,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "host-link"
+    }
+  },
+  "catalog": [
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=friend-challenge",
+      "copy": {
+        "ko": {
+          "title": "새 도전장",
+          "body": "{{friend}}님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "New challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "mapping": {
+        "title": "New challenge",
+        "body": "{{friend}} sent you a challenge."
+      }
+    },
+    {
+      "id": "event-start",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=event",
+      "copy": {
+        "ko": {
+          "title": "이벤트 시작",
+          "body": "이벤트가 시작됐어요."
+        },
+        "en": {
+          "title": "Event started",
+          "body": "The event has started."
+        }
+      },
+      "mapping": {
+        "title": "Event started",
+        "body": "The event has started.",
+        "link": "t3_event"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "friend-challenge",
+          "event-start"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "friend-challenge": "granted",
+          "event-start": "granted"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "l-1",
+        "templateData": {
+          "friend": "Mina"
+        }
+      },
+      "returns": {
+        "status": "unavailable",
+        "reason": "link-missing"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "l-2",
+        "templateData": {
+          "friend": "Mina"
+        },
+        "link": "t1_comment"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "event-start",
+        "idempotencyKey": "l-3"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "event-start",
+        "idempotencyKey": "l-4",
+        "link": "t3_other"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "l-1",
+        "status": "unavailable",
+        "reason": "link-missing"
+      },
+      {
+        "idempotencyKey": "l-2",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "l-3",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "l-4",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "friend-challenge",
+        "link": "t1_comment",
+        "content": {
+          "title": "New challenge",
+          "body": "Mina sent you a challenge."
+        }
+      },
+      {
+        "topic": "event-start",
+        "link": "t3_event"
+      },
+      {
+        "topic": "event-start",
+        "link": "t3_other"
+      }
+    ]
+  }
+}
