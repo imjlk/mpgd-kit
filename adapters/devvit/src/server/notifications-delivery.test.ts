@@ -611,7 +611,7 @@ describe('Devvit notification scheduler tasks', () => {
     await expect(runDevvitNotificationTask(service, 'purge')).resolves.toEqual({ task: 'purge', sends: 3, history: 2, endpoints: 1 });
     await runDevvitNotificationTask(service, 'dispatch');
     // The first chunk came back short: nothing more is due.
-    expect(calls).toEqual([{ limit: 20 }]);
+    expect(calls).toEqual([{ limit: 10 }]);
     // The service builds its Redis store with purgeLimit 200, also when the options name none.
     const redis = createFakeNotificationRedis();
     const { store } = createDevvitNotificationService({
@@ -636,6 +636,7 @@ describe('Devvit notification scheduler tasks', () => {
 
   it('dispatches in chunks within the batch and the time budget', async () => {
     let now = 0;
+    let next = 0;
     const limits: number[] = [];
     const service = {
       dispatchDue: async (input?: { readonly limit?: number }) => {
@@ -643,8 +644,8 @@ describe('Devvit notification scheduler tasks', () => {
         limits.push(limit);
         now += 6_000;
         return {
-          results: Array.from({ length: limit }, (_, index) => ({
-            sendKey: `k-${String(index)}`,
+          results: Array.from({ length: limit }, () => ({
+            sendKey: `k-${String((next += 1))}`,
             outcome: { status: 'delivered' as const, alreadyProcessed: false },
           })),
           failed: 0,
@@ -654,12 +655,70 @@ describe('Devvit notification scheduler tasks', () => {
     };
     // Every chunk is full: 20s of budget allows four chunks (at 0, 6, 12, 18 s).
     await expect(runDevvitNotificationTask(service, 'dispatch', { clock: () => now }))
-      .resolves.toEqual({ task: 'dispatch', replayed: 80, failed: 0 });
-    expect(limits).toEqual([20, 20, 20, 20]);
+      .resolves.toEqual({ task: 'dispatch', replayed: 40, failed: 0 });
+    expect(limits).toEqual([10, 10, 10, 10]);
+    // No chunk starts once the clock reaches the deadline (at 0 and 6 s for a 12 s budget).
     limits.length = 0;
     now = 0;
-    await expect(runDevvitNotificationTask(service, 'dispatch', { clock: () => now, dispatchLimit: 30, budgetMs: 60_000 }))
-      .resolves.toEqual({ task: 'dispatch', replayed: 30, failed: 0 });
-    expect(limits).toEqual([20, 10]);
+    await runDevvitNotificationTask(service, 'dispatch', { clock: () => now, budgetMs: 12_000 });
+    expect(limits).toEqual([10, 10]);
+    limits.length = 0;
+    now = 0;
+    await expect(runDevvitNotificationTask(service, 'dispatch', { clock: () => now, dispatchLimit: 25, budgetMs: 60_000 }))
+      .resolves.toEqual({ task: 'dispatch', replayed: 25, failed: 0 });
+    expect(limits).toEqual([10, 10, 5]);
+  });
+
+  it('refuses a dispatch limit or budget that is not positive', async () => {
+    const service = {
+      dispatchDue: async () => ({ results: [], failed: 0 }),
+      purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
+    };
+    for (const options of [
+      { dispatchLimit: 0 },
+      { dispatchLimit: -1 },
+      { dispatchLimit: 2.5 },
+      { dispatchLimit: Number.NaN },
+      { budgetMs: 0 },
+      { budgetMs: Number.NaN },
+    ]) {
+      await expect(runDevvitNotificationTask(service, 'dispatch', options)).rejects.toThrow(RangeError);
+    }
+  });
+
+  it('stops a dispatch run at a chunk that repeats a send it already replayed', async () => {
+    const limits: number[] = [];
+    const service = {
+      dispatchDue: async (input?: { readonly limit?: number }) => {
+        limits.push(input?.limit ?? 0);
+        // The same ten sends every time, as a store that still lists them would.
+        return {
+          results: Array.from({ length: input?.limit ?? 0 }, (_, index) => ({
+            sendKey: `k-${String(index)}`,
+            outcome: { status: 'delivered' as const, alreadyProcessed: false },
+          })),
+          failed: 0,
+        };
+      },
+      purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
+    };
+    await expect(runDevvitNotificationTask(service, 'dispatch'))
+      .resolves.toEqual({ task: 'dispatch', replayed: 10, failed: 0 });
+    expect(limits).toEqual([10, 10]);
+  });
+
+  it('stops a dispatch run at the first chunk with a failure, which stays due for the next run', async () => {
+    const limits: number[] = [];
+    const service = {
+      dispatchDue: async (input?: { readonly limit?: number }) => {
+        limits.push(input?.limit ?? 0);
+        // The failing send comes first every time: it is still due.
+        return { results: [], failed: 1 };
+      },
+      purge: async () => ({ sends: 0, history: 0, endpoints: 0 }),
+    };
+    await expect(runDevvitNotificationTask(service, 'dispatch'))
+      .resolves.toEqual({ task: 'dispatch', replayed: 0, failed: 1 });
+    expect(limits).toEqual([10]);
   });
 });

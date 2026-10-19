@@ -558,10 +558,16 @@ export const devvitNotificationDispatchBatch = 100;
  */
 export const devvitNotificationPurgeBatch = 200;
 
-/** Due sends one `dispatchDue` call of a dispatch task replays. */
-const dispatchChunk = 20;
+/**
+ * Due sends one `dispatchDue` call of a dispatch task replays. The budget is
+ * checked between chunks, so a run lasts the budget plus at most one chunk.
+ */
+const dispatchChunk = 10;
 
-/** A dispatch task stops starting chunks after this long, within Devvit's task time limit. */
+/**
+ * A dispatch task starts no chunk after this long. Devvit documents no time
+ * limit for a scheduler task; this keeps a run well inside the next minute's.
+ */
 export const devvitNotificationDispatchBudgetMs = 20_000;
 
 /** The task an internal scheduler endpoint names, or `undefined` for any other path. */
@@ -588,12 +594,14 @@ export type DevvitNotificationTaskResult =
     };
 
 /**
- * Runs one scheduler task with a bounded batch: `dispatch` replays at most
- * `dispatchLimit` (100) due sends, in chunks of 20, and starts no chunk
- * after `budgetMs` (20 seconds), one failing send never stopping the
- * others; `purge` deletes at most the store's `purgeLimit` rows of each
- * kind (200 for the store `createDevvitNotificationService` builds). A
- * backlog drains over the following runs.
+ * Runs one scheduler task with a bounded batch. `dispatch` replays at most
+ * `dispatchLimit` (100, a positive integer) due sends in chunks of 10 and
+ * starts no chunk after `budgetMs` (20 seconds). A chunk with a failed
+ * send, a repeated send, or fewer sends than it asked for ends the run: a
+ * failed send stays due and would come first again. `purge` deletes at
+ * most the store's `purgeLimit` rows of each kind (200 for the store
+ * `createDevvitNotificationService` builds). A backlog drains over the
+ * following runs.
  */
 export async function runDevvitNotificationTask(
   service: Pick<NotificationService, 'dispatchDue' | 'purge'>,
@@ -607,20 +615,34 @@ export async function runDevvitNotificationTask(
 ): Promise<DevvitNotificationTaskResult> {
   if (task === 'dispatch') {
     const limit = options.dispatchLimit ?? devvitNotificationDispatchBatch;
+    const budgetMs = options.budgetMs ?? devvitNotificationDispatchBudgetMs;
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new RangeError('dispatchLimit must be a positive integer');
+    }
+    if (!Number.isFinite(budgetMs) || budgetMs <= 0) {
+      throw new RangeError('budgetMs must be a positive number of milliseconds');
+    }
     const clock = options.clock ?? Date.now;
-    const deadline = clock() + (options.budgetMs ?? devvitNotificationDispatchBudgetMs);
-    let replayed = 0;
+    const deadline = clock() + budgetMs;
+    const seen = new Set<string>();
     let failed = 0;
-    while (replayed + failed < limit && clock() < deadline) {
-      const chunk = Math.min(dispatchChunk, limit - replayed - failed);
+    let asked = 0;
+    while (asked < limit && clock() < deadline) {
+      const chunk = Math.min(dispatchChunk, limit - asked);
+      asked += chunk;
       const answer = await service.dispatchDue({ limit: chunk });
-      replayed += answer.results.length;
       failed += answer.failed;
-      if (answer.results.length + answer.failed < chunk) {
+      const fresh = answer.results.filter((result) => !seen.has(result.sendKey));
+      for (const result of fresh) {
+        seen.add(result.sendKey);
+      }
+      // A failed send stays due and would come first again: leave it, and
+      // anything after it, to the next run. So does a short or repeated chunk.
+      if (answer.failed > 0 || fresh.length < answer.results.length || answer.results.length < chunk) {
         break;
       }
     }
-    return { task, replayed, failed };
+    return { task, replayed: seen.size, failed };
   }
   const counts = await service.purge();
   return { task, ...counts };

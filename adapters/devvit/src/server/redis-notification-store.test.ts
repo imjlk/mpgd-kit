@@ -264,6 +264,58 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(await store.listHistory({ player: 't2_p', since: '2026-11-15T00:00:00Z' })).toHaveLength(1);
     const left = await redis.zRange('mpgd:notifications:history-all', '-inf', '+inf', { by: 'score' });
     expect(left.map((entry) => entry.member)).not.toContain('not json');
+    // The misdated entry is rescored to its time, no longer at the head of the next purge.
+    expect(left).toEqual([
+      { member: JSON.stringify(['t2_p', JSON.stringify(['h-1', 'devvit'])]), score: Date.parse('2026-12-01T00:00:00Z') },
+    ]);
+  });
+
+  it('rescores a misdated send entry, drops one whose time does not parse, and ignores cutoffs that do not parse', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    const zset = async (key: string) =>
+      (await redis.zRange(`mpgd:notifications:${key}`, '-inf', '+inf', { by: 'score' })).map((entry) => [entry.member, entry.score]);
+    await store.createSend({ ...send('new', []), changedAt: '2026-12-01T00:00:00Z' });
+    await store.createSend(send('odd', []));
+    redis.poke('mpgd:notifications:send:odd', JSON.stringify({ version: 'v', send: { ...send('odd', []), changedAt: 'x' } }));
+    await store.putEndpoint({
+      provider: 'fcm',
+      installationId: 'a',
+      player: 't2_me',
+      address: { kind: 'fcm-token', value: 'tok' },
+      permission: 'granted',
+      sessionId: 's',
+      lastRegisteredAt: '2026-08-01T00:00:00Z',
+    });
+    redis.poke('mpgd:notifications:endpoint:fcm:a', JSON.stringify({
+      ...(await store.getEndpoint({ provider: 'fcm', installationId: 'a' })),
+      lastRegisteredAt: 'x',
+    }));
+    const drift = await redis.watch();
+    await drift.multi();
+    await drift.zAdd('mpgd:notifications:sends:changed', { member: 'new', score: 0 }, { member: 'odd', score: 0 });
+    await drift.exec();
+    const garbage = {
+      sendsChangedBefore: 'garbage',
+      historyBefore: 'garbage',
+      invalidEndpointsBefore: 'garbage',
+      staleEndpointsBefore: 'garbage',
+      sessionEndpointsBefore: 'garbage',
+    };
+    // A cutoff that does not parse matches nothing and leaves every index alone.
+    expect(await store.purge(garbage)).toEqual({ sends: 0, history: 0, endpoints: 0 });
+    expect(await zset('sends:changed')).toEqual([['new', 0], ['odd', 0]]);
+    expect((await zset('endpoints-registered')).map(([member]) => member)).toEqual([JSON.stringify(['fcm', 'a'])]);
+    expect(await store.purge({
+      ...garbage,
+      sendsChangedBefore: '2026-11-01T00:00:00Z',
+      staleEndpointsBefore: '2026-10-01T00:00:00Z',
+    })).toEqual({ sends: 0, history: 0, endpoints: 0 });
+    expect(await zset('sends:changed')).toEqual([['new', Date.parse('2026-12-01T00:00:00Z')]]);
+    // An endpoint whose time does not parse is never purged; it leaves the time index.
+    expect(await zset('endpoints-registered')).toEqual([]);
+    expect(await store.getSend('odd')).toBeDefined();
+    expect(await store.getEndpoint({ provider: 'fcm', installationId: 'a' })).toBeDefined();
   });
 
   it("skips an unreadable in-flight row instead of failing the player's list", async () => {

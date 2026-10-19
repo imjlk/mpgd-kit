@@ -865,8 +865,19 @@ export function createDevvitRedisNotificationStore(
               result: false,
             };
           }
-          if (!(Date.parse(stored.send.changedAt) < sendsBefore)) {
-            return { commands: [], result: false };
+          const changedAt = Date.parse(stored.send.changedAt);
+          if (!(changedAt < sendsBefore)) {
+            // Not old after all: rescore the index entry to the value's time so
+            // it stops coming first in every purge. A time that does not parse
+            // is never purged (as in the in-memory store), so it leaves the index.
+            return {
+              commands: [
+                Number.isNaN(changedAt)
+                  ? (transaction) => transaction.zRem(keys.changed, [key])
+                  : (transaction) => transaction.zAdd(keys.changed, { member: key, score: changedAt }),
+              ],
+              result: false,
+            };
           }
           return {
             commands: [
@@ -906,8 +917,15 @@ export function createDevvitRedisNotificationStore(
           const entry = isMissing(value) ? undefined : tryParse<Partial<NotificationHistoryEntry> | null>(value);
           const at = typeof entry?.at === 'string' ? Date.parse(entry.at) : Number.NaN;
           if (!isMissing(value) && Number.isFinite(at) && at >= historyBefore) {
-            // Not old after all (never written so): keep the entry and its indexes.
-            return { commands: [], result: false };
+            // Not old after all (never written so): keep the entry, and rescore
+            // its indexes to its time so it stops coming first in every purge.
+            return {
+              commands: [
+                (transaction) => transaction.zAdd(keys.historyAt(player), { member: field, score: at }),
+                (transaction) => transaction.zAdd(keys.historyAll, { member, score: at }),
+              ],
+              result: false,
+            };
           }
           return {
             commands: [

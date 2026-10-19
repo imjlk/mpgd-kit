@@ -1563,8 +1563,10 @@ the Devvit scheduler.
   `@mpgd/adapter-devvit/server`), each with a bounded batch:
   `mpgd-notifications-dispatch` runs `dispatchDue` every minute for at most
   100 due sends (deferred, rate-limited, and ambiguous rows past their
-  lease), in chunks of 20 that stop after 20 seconds, within Devvit's task
-  time limit; `mpgd-notifications-purge` runs `purge` every five minutes,
+  lease), in chunks of 10, starting no chunk after 20 seconds (Devvit
+  documents no time limit for a task, so a run is kept well inside the
+  next minute's). A chunk with a failed send ends the run, since a failed
+  send stays due and would come first again; `mpgd-notifications-purge` runs `purge` every five minutes,
   at most 200 rows of each kind (57,600 a day, above the 25,000 sends a day
   Devvit allows). A backlog drains over the next runs. Both tasks run, and
   take two of the installation's recurring tasks, even while a game has no
