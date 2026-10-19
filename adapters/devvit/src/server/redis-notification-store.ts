@@ -121,7 +121,7 @@ export interface CreateDevvitRedisNotificationStoreOptions {
    * purge runs in a time-bounded Devvit request or scheduler job sets it
    * (say 500) and runs the purge again while a count equals it.
    */
-  readonly purgeLimit?: number;
+  readonly purgeLimit?: number | undefined;
 }
 
 export const defaultDevvitNotificationNamespace = 'mpgd:notifications';
@@ -383,7 +383,9 @@ export function createDevvitRedisNotificationStore(
   /**
    * Removes one endpoint, atomically, while `matches` holds for it; answers
    * whether it did. An index entry that names an endpoint whose value is
-   * gone is dropped from `prune` (`[key, member]` pairs).
+   * gone is dropped from `prune` (`[key, member]` pairs); one whose endpoint
+   * exists but does not match is rewritten by `reindex` (a time index's
+   * caller rescores a drifted entry).
    */
   async function removeEndpointIf(
     provider: string,
@@ -588,9 +590,11 @@ export function createDevvitRedisNotificationStore(
       if (named.length === 0) {
         return [];
       }
-      const values = await redis.mGet(named.map(([indexed, installation]) => keys.endpoint(indexed, installation)));
+      const valueKeys = named.map(([indexed, installation]) => keys.endpoint(indexed, installation));
+      const values = await redis.mGet(valueKeys);
       return values
-        .flatMap((value) => (isMissing(value) ? [] : [parse<NotificationStoredEndpoint>(value, keys.endpointsByPlayer(player))]))
+        .flatMap((value, position) =>
+          (isMissing(value) ? [] : [parse<NotificationStoredEndpoint>(value, valueKeys[position] ?? '')]))
         .filter((endpoint) => endpoint.player === player && endpoint.provider === provider)
         .sort((left, right) => compareText(left.installationId, right.installationId));
     },
@@ -829,7 +833,10 @@ export function createDevvitRedisNotificationStore(
       // rows per call, and the next scheduled purge continues.
       let sendCount = 0;
       const sendsBefore = Date.parse(cutoffs.sendsChangedBefore);
-      for (const key of await scoreRange(keys.changed, '-inf', `(${String(sendsBefore)}`, purgeLimit)) {
+      // A cutoff that does not parse matches nothing, as in the in-memory store.
+      for (const key of Number.isNaN(sendsBefore)
+        ? []
+        : await scoreRange(keys.changed, '-inf', `(${String(sendsBefore)}`, purgeLimit)) {
         const valueKey = keys.send(key);
         const deleted = await transact([valueKey], async () => {
           // A Redis failure here fails the purge; only a value that does not
@@ -876,7 +883,9 @@ export function createDevvitRedisNotificationStore(
 
       let historyCount = 0;
       const historyBefore = Date.parse(cutoffs.historyBefore);
-      for (const member of await scoreRange(keys.historyAll, '-inf', `(${String(historyBefore)}`, purgeLimit)) {
+      for (const member of Number.isNaN(historyBefore)
+        ? []
+        : await scoreRange(keys.historyAll, '-inf', `(${String(historyBefore)}`, purgeLimit)) {
         const named = tryParse<unknown>(member);
         if (
           !Array.isArray(named)
@@ -954,6 +963,9 @@ export function createDevvitRedisNotificationStore(
               return [(transaction) => transaction.zRem(index, [member])];
             }
             const score = Date.parse(at);
+            if (Number.isNaN(score)) {
+              return [(transaction) => transaction.zRem(index, [member])];
+            }
             return [(transaction) => transaction.zAdd(index, { member, score })];
           };
           if (await removeEndpointIf(named[0], named[1], pastCutoff, [[index, member]], reindex)) {
