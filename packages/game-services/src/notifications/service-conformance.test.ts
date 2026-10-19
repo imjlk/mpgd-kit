@@ -4,7 +4,6 @@ import { join } from 'node:path';
 
 import {
   listNotificationNotices,
-  NotificationError,
   type NotificationDeliveryOutcome,
 } from '@mpgd/platform/notifications';
 import {
@@ -65,18 +64,12 @@ const vectors: NotificationConformanceVector[] = readdirSync(vectorsDir)
   ));
 
 /**
- * Vectors this backend does not run yet, each with the reason. Server
- * reminders and scheduled notice pushes are S2's scheduler; per-send
+ * Vectors this backend does not run, each with the reason: per-send
  * providers need an atomic acceptance reservation the registry refuses to
  * serve without.
  */
 const skipped: Readonly<Record<string, string>> = {
-  'advertising-notice-variants': 'S2: the scheduler pushes notices',
-  'advertising-notices': 'S2: the scheduler pushes notices',
   'per-send-allowance': 'per-send providers are refused by the registry',
-  'provider-ambiguous-replay': 'S2: server reminders',
-  'reminder-cancel-across-routes': 'S2: server reminders',
-  'reminder-server-route': 'S2: server reminders',
 };
 
 function createServiceBackend(input: CreateNotificationConformanceBackendInput): NotificationConformanceBackend {
@@ -178,7 +171,19 @@ function createServiceBackend(input: CreateNotificationConformanceBackendInput):
     get providerCalls() {
       return providerCalls;
     },
-    reminders: [],
+    get reminders() {
+      return store.inspect().schedule.flatMap((entry) =>
+        entry.item.kind === 'reminder' && entry.item.firedAt === undefined
+          ? [{
+              player: entry.player,
+              key: entry.item.key,
+              topic: entry.item.topic,
+              fireAt: entry.item.fireAt,
+              ...(entry.item.templateData === undefined ? {} : { templateData: entry.item.templateData }),
+              ...(entry.item.link === undefined ? {} : { link: entry.item.link }),
+            }]
+          : []);
+    },
     get notices() {
       const state = store.inspect();
       if (rules !== 'kr') {
@@ -251,13 +256,11 @@ function createServiceBackend(input: CreateNotificationConformanceBackendInput):
       }
       await service.unregisterEndpoint(sessionOf(current, player), { provider });
     },
-    async setReminder() {
-      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
-        message: 'Server reminders are S2.',
-      });
+    async setReminder(reminder) {
+      return (await service.setReminder(sessionOf(requireSession('setReminder')), reminder)).status;
     },
-    async cancelReminder() {
-      return false;
+    async cancelReminder(request) {
+      return (await service.cancelReminder(sessionOf(requireSession('cancelReminder')), request)).cancelled;
     },
     async listNotices() {
       return service.listNotices(sessionOf(requireSession('listNotices')));
@@ -279,14 +282,14 @@ function createServiceBackend(input: CreateNotificationConformanceBackendInput):
     },
     async runScheduler() {
       const before = new Map(store.inspect().sends.map((send) => [send.key, JSON.stringify(send.rows)]));
-      const { results, failed } = await service.dispatchDue({ limit: 1000 });
-      assert.equal(failed, 0, 'every due send replays');
+      const { results, failed } = await service.runScheduler({ limit: 1000 });
+      assert.equal(failed, 0, 'every due item runs');
       for (const { sendKey, outcome } of results) {
         const send = store.inspect().sends.find((candidate) => candidate.key === sendKey);
         const request = send?.request;
         if (request !== undefined || before.has(sendKey)) {
           const previous = [...deliveries].reverse().find((delivered) => delivered.idempotencyKey === sendKey);
-          // As the fake backend: a replay records the send's result when it changed.
+          // As the fake backend: a scheduler item or a replay records the send's result when it changed.
           if (previous === undefined || JSON.stringify(stripMeta(previous)) !== JSON.stringify(outcome)) {
             record(outcome, sendKey, request?.topic ?? previous?.topic ?? '', request?.player ?? previous?.player ?? '');
           }
@@ -323,5 +326,5 @@ for (const name of Object.keys(skipped)) {
 }
 assert.equal(ran, vectors.length - Object.keys(skipped).length);
 console.info(
-  `notifications service conformance: ${ran} vectors passed, ${Object.keys(skipped).length} left to S2 or refused`,
+  `notifications service conformance: ${ran} vectors passed, ${Object.keys(skipped).length} refused by the registry`,
 );

@@ -6,6 +6,7 @@ import {
   createNotificationServiceCatalog,
   NotificationConsentRateLimitError,
   parseFcmServiceAccount,
+  type CreateNotificationServiceInput,
   type NotificationDispatchJob,
   type NotificationProviderRegistration,
   type NotificationService,
@@ -28,8 +29,8 @@ import { createD1NotificationStore } from './notificationsD1.js';
 /**
  * Notifications v2 in the game-services Worker (RFC "Server"): the
  * authenticated routes a game client calls, the service-binding RPC a game
- * server sends through, the dispatch queue consumer, and the scheduled purge
- * and due-row replay.
+ * server sends through, the dispatch queue consumer, and the cron: purges,
+ * then the scheduler (server reminders, consent notice pushes, and due rows).
  */
 
 /** Resolves a game-services session from the Authorization header. */
@@ -87,8 +88,15 @@ export interface GameServicesNotificationsEnv {
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
-  /** Sends the cron replays per run; 25 by default, at most 100 (each send costs several subrequests). */
+  /**
+   * Items one scheduler round takes, for each of its two steps (due
+   * reminders and notice checks, then due sends); 25 by default, at most
+   * 100. A cron run goes on in rounds until nothing is due or its time
+   * budget is used.
+   */
   readonly MPGD_NOTIFICATIONS_DUE_BATCH?: string;
+  /** Wall time one cron run's scheduler may use, in seconds; 20 by default, 1 to 300. */
+  readonly MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS?: string;
 }
 
 export type WorkerNotifications =
@@ -96,9 +104,31 @@ export type WorkerNotifications =
   | { readonly status: 'ready'; readonly service: NotificationService }
   | { readonly status: 'misconfigured'; readonly error: Error };
 
+/** The context the notifications service gives each failure it reports. */
+type NotificationReportContext = Parameters<NonNullable<CreateNotificationServiceInput['onError']>>[1];
+
 export const notificationsRoutePrefix = '/game-services/notifications';
 /** Largest request body a notifications route reads. */
 const maxBodyBytes = 64 * 1024;
+
+/**
+ * What the Worker logs of a failure the notifications service reports. A
+ * provider's own failure (the service marks it `fromProvider`, and reports
+ * it as `provider.send`) may quote a device token or a credential, so only
+ * its name is logged. The service wraps every other provider-side error in
+ * its own message before a report, so any other failure (`dispatch` and
+ * `dispatchDue` included) is the store's or the kit's, such as a missing
+ * table or a busy ledger, and its cause is logged cut to 120 characters, so
+ * it can be fixed.
+ */
+export function notificationFailureCause(
+  error: unknown,
+  context: Pick<NotificationReportContext, 'operation' | 'fromProvider'>,
+): string {
+  return context.fromProvider === true || context.operation === 'provider.send'
+    ? errorName(error)
+    : describeFailure(error);
+}
 
 const servicesByEnv = new WeakMap<object, WorkerNotifications>();
 const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
@@ -269,8 +299,13 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
           },
         }),
     onError(error, context) {
-      // Operation and keys only: an error never carries a token or a key here.
-      console.error('Notifications:', context.operation, context.sendKey ?? '', context.provider ?? '', errorName(error));
+      console.error(
+        'Notifications:',
+        context.operation,
+        context.sendKey ?? '',
+        context.provider ?? '',
+        notificationFailureCause(error, context),
+      );
     },
   });
   return { status: 'ready', service };
@@ -319,7 +354,9 @@ function parseJsonVar(value: unknown, name: string): unknown {
  * - `GET /providers`: the registry entries and served targets (public).
  * - With a session (the `GAME_SERVICES_NOTIFICATIONS_AUTH` binding): `GET` and
  *   `POST /consent`, `POST /endpoints`, `POST /endpoints/unregister`,
- *   `GET /notices`, `POST /notices/shown`. Without the binding they are not
+ *   `GET /notices`, `POST /notices/shown`, `POST /reminders` (`{ reminder }`,
+ *   answers `{ status }`), and `POST /reminders/cancel` (`{ key }`, answers
+ *   `{ cancelled }`). Without the binding they are not
  *   mounted (404): binding a device to a player needs an authenticated
  *   session. A Worker with a catalog but no binding logs that once, when a
  *   session route is first asked for.
@@ -364,6 +401,8 @@ export function createNotificationsFetchHandler(
       '/endpoints/unregister': ['POST'],
       '/notices': ['GET'],
       '/notices/shown': ['POST'],
+      '/reminders': ['POST'],
+      '/reminders/cancel': ['POST'],
     };
     const methods = allowed[route];
     const auth = env.GAME_SERVICES_NOTIFICATIONS_AUTH;
@@ -374,7 +413,7 @@ export function createNotificationsFetchHandler(
       reportedMissingSessionBinding.add(env);
       console.warn(
         'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
-          + 'the client session routes (consent, endpoints, notices) are off and answer 404. '
+          + 'the client session routes (consent, endpoints, notices, reminders) are off and answer 404. '
           + 'A send-only Worker can ignore this.',
       );
     }
@@ -446,6 +485,14 @@ export function createNotificationsFetchHandler(
             body.channel === undefined ? {} : { channel: body.channel as 'in-game' },
           );
           return json({}, 200, privateHeaders);
+        case 'POST /reminders':
+          return json(await service.setReminder(session, body.reminder), 200, privateHeaders);
+        case 'POST /reminders/cancel':
+          return json(
+            await service.cancelReminder(session, { key: body.key }),
+            200,
+            privateHeaders,
+          );
         default:
           return json({ error: 'UNKNOWN_ENDPOINT' }, 404, privateHeaders);
       }
@@ -547,9 +594,12 @@ export async function consumeNotificationDispatchBatch(
 }
 
 /**
- * The cron: retention purges, then a batch of due rows (deferred sends,
- * expired leases), each step on its own so a failed purge never skips the
- * replays. The batch is small because each send costs several subrequests.
+ * The cron: retention purges, then one scheduler run (due server reminders
+ * and consent notice checks, then due rows: deferred sends and expired
+ * leases, paced by each provider's rate and sent through the queue when one
+ * is bound), each step on its own so a failed purge never skips the
+ * scheduler. The run goes on in batches of MPGD_NOTIFICATIONS_DUE_BATCH
+ * until nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS is used.
  */
 export async function runScheduledNotifications(env: GameServicesNotificationsEnv): Promise<void> {
   const notifications = resolveWorkerNotifications(env);
@@ -559,18 +609,21 @@ export async function runScheduledNotifications(env: GameServicesNotificationsEn
   const declared = env.MPGD_NOTIFICATIONS_DUE_BATCH?.trim();
   const asked = declared === undefined || declared === '' ? 25 : Number(declared);
   const limit = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
+  const budget = env.MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS?.trim();
+  const seconds = budget === undefined || budget === '' ? 20 : Number(budget);
+  const budgetMs = (Number.isFinite(seconds) ? Math.min(Math.max(seconds, 1), 300) : 20) * 1000;
   try {
     await notifications.service.purge();
   } catch (error) {
     console.error('Notifications purge failed:', describeFailure(error));
   }
   try {
-    const { failed } = await notifications.service.dispatchDue({ limit });
+    const { failed } = await notifications.service.runScheduler({ limit, budgetMs });
     if (failed > 0) {
-      console.error('Notifications due replay:', failed, 'send(s) failed and stay due.');
+      console.error('Notifications scheduler:', failed, 'item(s) failed; see the reports above.');
     }
   } catch (error) {
-    console.error('Notifications due replay failed:', describeFailure(error));
+    console.error('Notifications scheduler failed:', describeFailure(error));
   }
 }
 

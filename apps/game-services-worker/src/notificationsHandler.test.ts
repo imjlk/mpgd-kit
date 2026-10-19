@@ -9,6 +9,7 @@ import {
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
   endWorkerNotificationSession,
+  notificationFailureCause,
   resolveWorkerNotifications,
   runScheduledNotifications,
 } from './notificationsHandler.js';
@@ -297,6 +298,93 @@ try {
     }),
     { code: 'NOTIFICATIONS_IDEMPOTENCY_CONFLICT' },
   );
+  // Server reminders: set and cancel by key over the session routes; the cron fires them.
+  const reminder = (fireAt: string) => ({
+    key: 'rematch',
+    topic: 'friend-challenge',
+    fireAt,
+    templateData: { name: 'Jun' },
+  });
+  const past = new Date(Date.now() - 60_000).toISOString();
+  assert.deepEqual(
+    (await call('/reminders', { authorization: 'Bearer player-1', body: { reminder: reminder(past) } })).body,
+    { status: 'scheduled' },
+  );
+  assert.deepEqual(
+    (await call('/reminders', { authorization: 'Bearer player-1', body: { reminder: reminder(past) } })).body,
+    { status: 'replaced' },
+  );
+  for (const body of [{ reminder: { ...reminder(past), fireAt: 'soon' } }, { reminder: 'x' }, {}]) {
+    const refused = await call('/reminders', { authorization: 'Bearer player-1', body });
+    assert.deepEqual([refused.status, refused.body.error], [400, 'NOTIFICATIONS_INVALID_INPUT']);
+  }
+  assert.equal((await call('/reminders', { authorization: 'Bearer player-1' })).status, 405);
+  assert.equal((await call('/reminders', { body: { reminder: reminder(past) } })).status, 401);
+  assert.equal(
+    (await call('/reminders/cancel', { authorization: 'Bearer nobody', body: { key: 'k' } })).status,
+    401,
+  );
+  for (const body of [{ reminder: [] }, { reminder: { key: 1 } }, { reminder: null }]) {
+    assert.equal(
+      (await call('/reminders', { authorization: 'Bearer player-1', body })).status,
+      400,
+    );
+  }
+  assert.equal(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: { key: 5 } })).status,
+    400,
+  );
+  assert.deepEqual(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: { key: 'rematch' } })).body,
+    { cancelled: true },
+  );
+  assert.deepEqual(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: { key: 'rematch' } })).body,
+    { cancelled: false },
+  );
+  assert.equal(
+    (await call('/reminders/cancel', { authorization: 'Bearer player-1', body: {} })).status,
+    400,
+  );
+  await call('/reminders', {
+    authorization: 'Bearer player-1',
+    body: { reminder: reminder(past) },
+  });
+  const sentBeforeCron = sends.length;
+  await runScheduledNotifications(env);
+  assert.deepEqual(
+    sends.slice(sentBeforeCron).map((send) => send.token),
+    ['tok-a', 'tok-b'],
+  );
+  assert.ok(sends.at(-1)?.body.includes('Jun님이 도전했어요.'));
+  await runScheduledNotifications(env);
+  assert.equal(sends.length, sentBeforeCron + 2, 'a fired reminder is sent once');
+
+  // One cron run drains more than one batch: three reminders with a batch of one.
+  {
+    const batched = {
+      ...env,
+      MPGD_NOTIFICATIONS_DUE_BATCH: '1',
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+    };
+    const batchedFetch = createWorkerFetchHandler(batched);
+    const post = (path: string, body: unknown) =>
+      batchedFetch(
+        new Request(`${base}${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    await post('/endpoints', { registration: registration('tok-batch'), target: 'android' });
+    for (const key of ['b-1', 'b-2', 'b-3']) {
+      await post('/reminders', { reminder: { ...reminder(past), key } });
+    }
+    const before = sends.length;
+    await runScheduledNotifications(batched);
+    assert.equal(sends.length - before, 3, 'three batches in one cron run');
+  }
+
   // Ending a session unbinds what it registered; an explicit unbind removes the other.
   await endWorkerNotificationSession(env, { sessionId: 's-2' });
   assert.equal(
@@ -320,10 +408,10 @@ try {
 
   // With a queue, the fan-out runs in the consumer.
   const db = await miniflare.getD1Database('DB') as unknown as D1Database;
-  const migration = await readFile(
-    new URL('../migrations/0007_notifications.sql', import.meta.url),
-    'utf8',
-  );
+  const migration = (await Promise.all(
+    ['0007_notifications.sql', '0008_notification_scheduler.sql'].map((file) =>
+      readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')),
+  )).join('\n');
   const statements = migration
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('--'))
@@ -385,15 +473,47 @@ try {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (dropNext && String(input instanceof Request ? input.url : input).includes('messages:send')) {
       dropNext = false;
-      throw new TypeError('fetch failed');
+      throw new TypeError('fetch failed for tok-q');
     }
     return googleFetch(input, init);
   }) as typeof fetch;
-  await consumeNotificationDispatchBatch(
-    queueEnv,
-    batch([{ body: queued[0] }, { body: { nope: true } }]),
-  );
+  const dropLogs: string[] = [];
+  const errorBefore = console.error;
+  console.error = (...parts: unknown[]) => {
+    dropLogs.push(parts.map(String).join(' '));
+  };
+  try {
+    await consumeNotificationDispatchBatch(
+      queueEnv,
+      batch([{ body: queued[0] }, { body: { nope: true } }]),
+    );
+  } finally {
+    console.error = errorBefore;
+  }
   globalThis.fetch = googleFetch;
+  // A dropped provider call is an ambiguous answer, not a report: nothing quotes the token.
+  assert.ok(!dropLogs.some((line) => line.includes('tok-q')), dropLogs.join('\n'));
+  // A provider's own failure is logged by name only; a store's with its cause.
+  const leaky = new TypeError('fetch failed for tok-q');
+  assert.equal(
+    notificationFailureCause(leaky, { operation: 'provider.send', fromProvider: true }),
+    'TypeError',
+  );
+  assert.equal(
+    notificationFailureCause(leaky, { operation: 'provider.other', fromProvider: true }),
+    'TypeError',
+  );
+  assert.equal(notificationFailureCause(leaky, { operation: 'provider.send' }), 'TypeError');
+  assert.equal(
+    notificationFailureCause(new Error('D1 is unavailable.'), { operation: 'dispatch' }),
+    'Error: D1 is unavailable.',
+  );
+  assert.equal(
+    notificationFailureCause(new Error('no such table: notification_schedule'), {
+      operation: 'scheduler.list',
+    }),
+    'Error: no such table: notification_schedule',
+  );
   assert.deepEqual(acks.splice(0), ['ack', 'ack']);
   assert.equal(sends.length, sendCount);
   assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), { status: 'in-flight' });
@@ -441,13 +561,89 @@ try {
   await db.prepare('UPDATE notification_sends SET send_json = ?, due_at_ms = ? WHERE send_key = ?')
     .bind(JSON.stringify(expired), Date.parse('2026-01-01T00:00:00Z'), 'worker-queued')
     .run();
+  const jobsBefore = queued.length;
   await runScheduledNotifications(
     { ...queueEnv, DB: brokenDb(db, /^\s*DELETE/u) } satisfies GameServicesWorkerEnv,
   );
+  // With a queue bound, the cron takes the due row for the queue; the consumer sends it.
+  assert.deepEqual(queued.slice(jobsBefore), [
+    { sendKey: 'worker-queued', provider: 'fcm', rowKey: 'worker-queued:install-1' },
+  ]);
+  await consumeNotificationDispatchBatch(queueEnv, batch([{ body: queued.at(-1) }]));
+  assert.deepEqual(acks.splice(0), ['ack']);
   assert.deepEqual(await deliverWorkerNotification(queueEnv, queuedSend), {
     status: 'delivered',
     alreadyProcessed: true,
   });
+  // A server reminder over D1 with the queue: the cron fires it, takes its row for the queue, and the consumer sends it.
+  const remindAt = new Date(Date.now() - 60_000).toISOString();
+  const reminderSet = await queueFetch(
+    new Request(`${base}/reminders`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        reminder: {
+          key: 'd1-rematch',
+          topic: 'friend-challenge',
+          fireAt: remindAt,
+          templateData: { name: 'D1' },
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(await reminderSet.json(), { status: 'scheduled' });
+  const beforeReminder = { jobs: queued.length, sends: sends.length };
+  await runScheduledNotifications(queueEnv);
+  assert.equal(sends.length, beforeReminder.sends, 'nothing is sent inline with a queue bound');
+  const reminderJobs = queued.slice(beforeReminder.jobs);
+  assert.equal(reminderJobs.length, 1);
+  assert.match(reminderJobs[0]?.sendKey ?? '', /^reminder:p-1:d1-rematch:/u);
+  await consumeNotificationDispatchBatch(queueEnv, batch([{ body: reminderJobs[0] }]));
+  assert.deepEqual(acks.splice(0), ['ack']);
+  assert.equal(sends.length, beforeReminder.sends + 1);
+  assert.ok(sends.at(-1)?.body.includes('D1님이 도전했어요.'));
+  // A schedule table that cannot be read is logged, and the due rows still go out.
+  const errorsLogged: string[] = [];
+  const realError = console.error;
+  console.error = (...parts: unknown[]) => {
+    errorsLogged.push(parts.map(String).join(' '));
+  };
+  // A due row waits too: a queued send whose lease is moved into the past.
+  await deliverWorkerNotification(queueEnv, {
+    ...queuedSend,
+    idempotencyKey: 'worker-due-while-broken',
+  });
+  const dueRow = await db.prepare('SELECT send_json FROM notification_sends WHERE send_key = ?')
+    .bind('worker-due-while-broken')
+    .first<{ readonly send_json: string }>();
+  const dueSend = JSON.parse(
+    dueRow?.send_json ?? '{}',
+  ) as { rows: { state: { leaseUntil?: string } }[] };
+  for (const row of dueSend.rows) {
+    row.state.leaseUntil = '2026-01-01T00:00:00Z';
+  }
+  await db.prepare('UPDATE notification_sends SET send_json = ?, due_at_ms = ? WHERE send_key = ?')
+    .bind(JSON.stringify(dueSend), Date.parse('2026-01-01T00:00:00Z'), 'worker-due-while-broken')
+    .run();
+  const jobsBeforeBroken = queued.length;
+  try {
+    await runScheduledNotifications(
+      { ...queueEnv, DB: brokenDb(db, /notification_schedule/u) } satisfies GameServicesWorkerEnv,
+    );
+  } finally {
+    console.error = realError;
+  }
+  assert.deepEqual(
+    queued.slice(jobsBeforeBroken).map((job) => job.sendKey),
+    ['worker-due-while-broken'],
+    'the due row still goes out',
+  );
+  assert.ok(
+    errorsLogged.some(
+      (line) => line.includes('scheduler.list') && line.includes('D1 is unavailable'),
+    ),
+    errorsLogged.join('\n'),
+  );
 
   // Without a catalog the routes are not mounted; a broken catalog fails closed at 500.
   assert.equal(
@@ -478,6 +674,14 @@ try {
       404,
     );
     assert.equal(
+      (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/reminders`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer player-1' },
+        body: '{}',
+      }))).status,
+      404,
+    );
+    assert.equal(
       (await createWorkerFetchHandler(unauthenticated)(new Request(`${base}/providers`))).status,
       200,
     );
@@ -503,7 +707,7 @@ try {
     warnings.filter((line) => line.includes('GAME_SERVICES_NOTIFICATIONS_AUTH')),
     [
       'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
-        + 'the client session routes (consent, endpoints, notices) are off and answer 404. '
+        + 'the client session routes (consent, endpoints, notices, reminders) are off and answer 404. '
         + 'A send-only Worker can ignore this.',
     ],
   );

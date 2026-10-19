@@ -166,9 +166,17 @@ mounts a public verified-attempt write route.
 The Worker serves the notifications v2 backend
 ([RFC](specs/notifications/notifications-v2-rfc.md#server)) once it has a
 topic catalog. It needs D1 for anything but local development: apply
-`0007_notifications.sql` with the other migrations. The memory store keeps
-consent records and endpoints in one isolate only, and the Worker refuses
-it next to a queue, whose consumer runs in another isolate. The catalog,
+`0007_notifications.sql` and `0008_notification_scheduler.sql` with the
+other migrations, and apply 0008 before deploying a Worker version that
+has the scheduler. Without its table the reminder routes fail, and so does
+the cron's reminder and notice step (the cron logs the missing table and
+still sends due rows). Under the Korean rules, with a notice topic and a
+provider that can carry notices (for example FCM), advertising and night consent writes
+are still recorded, but their notice pushes are not scheduled (the failure
+is logged), and records written before 0008 get a notice check only at the
+player's next advertising or night record. The memory store keeps consent records and endpoints in one
+isolate only, and the Worker refuses it next to a queue, whose consumer
+runs in another isolate. The catalog,
 the deployment, and the providers are checked on first use; a broken one
 fails the notifications routes with 500 and is logged once.
 
@@ -194,10 +202,15 @@ queue = "mpgd-notifications"
 max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
-# Purges and due replays (25 sends per run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise;
-# each send costs several subrequests, so larger batches need the paid plan's limit).
+# Purges and the scheduler, every minute (the recommended period; the purges run each time too).
+# Each run goes on in rounds (a batch of due reminders and notice checks, then a batch of due
+# sends) until nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS (20 by default) is used.
+# MPGD_NOTIFICATIONS_DUE_BATCH sets each batch (25 by default, at most 100). A reminder fires no
+# earlier than its time: the first run at or after it takes it unless the run's budget runs out
+# first (a failed item waits a minute), and its send then waits for the provider's rate, the
+# queue's consumer when one is bound, and the gate (quiet hours, the night window, limits).
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 ```
 
 FCM sends for `android` and `ios` once the service-account key is a secret:
@@ -227,7 +240,15 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   (public), and with a session `GET`/`POST /consent`, `POST /endpoints`
   (`{ registration, target }`; `target` is `android` or `ios`, whose catalog
   mapping applies), `POST /endpoints/unregister`, `GET /notices`, and
-  `POST /notices/shown`. The session routes need the
+  `POST /notices/shown`, `POST /reminders` (`{ reminder: { key, topic,
+  fireAt, templateData?, link? } }`, answers `{ status }`: `scheduled`,
+  `replaced`, a set-time refusal (`permission-required`,
+  `request-missing`, `preference-off`, `advertising-consent-missing`),
+  `capacity-exceeded` past 64 pending reminders, or `unavailable` when no
+  device or account of the player maps the topic; a `fireAt` more than 90
+  days ahead or a link the provider cannot take is a 400), and
+  `POST /reminders/cancel` (`{ key }`, answers `{ cancelled }`). The
+  session routes need the
   `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
   only `GET /providers` is served, and the Worker logs one warning naming
   the missing binding the first time a session route is asked for (a
@@ -241,6 +262,41 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   code, message, retryable } }`, because an error's fields do not cross the
   RPC boundary. Any Worker bound to this one can send to any player, as
   with the other service-binding methods.
+- **Scheduler.** Each cron run fires the due server reminders as sends
+  through the policy gate, pushes the consent notices nobody recorded by
+  seven days before they are due (Korean rules, through the catalog's
+  notice topic and only providers that send the notice's own text as
+  free-form content: FCM does, while Apps in Toss and Devvit send templates
+  or mapped texts that cannot state the record), and then sends the due
+  rows (deferred sends, expired leases, and the scheduler's new sends),
+  oldest first and at no more than each provider's rate. With the queue bound, the cron only takes those
+  rows for the queue, and the consumer sends them; without it, the cron
+  sends them itself. A refused notice push is tried again after an hour,
+  doubling to a day, or as soon as the player registers a device again.
+- **Reminder limits.** A player keeps at most 64 pending server reminders,
+  and a `fireAt` at most 90 days ahead; a reminder set for a past time is
+  due at once but queues behind those already due. A reminder the gate
+  refuses when it comes due, such as after the player's registering session
+  ended, is spent.
+- **Throughput.** A run is bounded by its time budget, but its real ceiling
+  is the platform's per-invocation limits (check Cloudflare's current
+  figures; at the time of writing, subrequests are capped around 50 per
+  invocation on the free plan and around 1,000 on the paid one). Each
+  reminder costs roughly ten D1 queries, and a send without the queue costs
+  its provider calls too, so a run gets through a handful of items on the
+  free plan and on the order of a hundred on the paid one, fewer with
+  inline sends. These are rough, unmeasured estimates: measure yours. The
+  batch size, the provider pace, and the time budget are how a run stays
+  under those limits; the budget only bounds the number of rounds, so the
+  batch decides one round's cost. The default batch of 25 is already at
+  least about 250 queries in one round: on the free plan set
+  `MPGD_NOTIFICATIONS_DUE_BATCH` to about 2 to 3, and wherever runs fail on
+  the limits, lower the batch (lowering the budget only means fewer rounds
+  run). With the queue bound, the cron only writes the sends and takes
+  their rows, and each consumer invocation makes its own provider calls
+  under its own limits, so large waves need the queue. Keep the budget under the cron period (60 seconds for a
+  one-minute cron), or runs overlap; the scheduler's compare-and-set writes
+  keep overlapping runs correct, but they compete for the same items.
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
   other failure is retried with a growing delay (10 s, doubling, at most
   5 min). While the notifications configuration is broken (a catalog or

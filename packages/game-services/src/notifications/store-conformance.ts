@@ -1,6 +1,9 @@
+import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
+
 import type {
   NotificationConsentRecordInput,
   NotificationEndpointWrite,
+  NotificationScheduleEntry,
   NotificationStore,
   NotificationStoredSend,
 } from './store.js';
@@ -8,8 +11,9 @@ import type {
 /**
  * The behavior every `NotificationStore` must have, run against a fresh
  * store: the atomic steps the service relies on (consent dating, endpoint
- * address uniqueness and dead addresses, versioned compare-and-set on sends,
- * idempotent notices and history) and the purge cutoffs. A durable store
+ * address uniqueness and dead addresses, versioned compare-and-set on sends
+ * and schedule entries, idempotent notices and history, consent pruning,
+ * provider-wide history counts) and the purge cutoffs. A durable store
  * (the Worker's D1 store, a Redis store) runs it in its own tests. Throws on
  * the first difference.
  */
@@ -415,6 +419,487 @@ export async function runNotificationStoreConformance(
   );
 
   await runConcurrencyAndEdgeClauses(store, at, endpoint, send);
+  await runSchedulerClauses(store, at);
+}
+
+/**
+ * The steps S2's scheduler adds: schedule entries (create once,
+ * compare-and-set, the due index), provider-wide history counts for
+ * pacing, and consent pruning with the notices that name pruned records.
+ */
+async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: number) => string): Promise<void> {
+  const base = 40 * 86_400_000;
+  const t = (offsetMs: number): string => at(base + offsetMs);
+
+  // Consent pruning: by instant, per player, with the notices given that report on a pruned record.
+  const records: NotificationConsentRecord[] = [];
+  for (const record of [
+    { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v1' },
+    { kind: 'advertising', state: 'withdrawn', source: 'player', textVersion: 'v1' },
+    { kind: 'topic-preference', topic: 'energy-full', state: 'granted', source: 'player' },
+    { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v2' },
+  ] as const) {
+    records.push(await store.appendConsent({ player: 'p-prune', record, at: t(0) }));
+  }
+  const other = await store.appendConsent({
+    player: 'p-prune-other',
+    record: { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v1' },
+    at: t(0),
+  });
+  const [granted, withdrawn, preference, regranted] = records;
+  const given = (recordAt: string, dueBy: string, player = 'p-prune') => ({
+    kind: 'consent-result' as const,
+    record: { kind: 'advertising' as const, at: recordAt },
+    dueBy,
+    player,
+    channel: 'push' as const,
+    at: t(10),
+  });
+  await store.addNoticeGiven(given(granted?.at ?? '', '2026-12-12'));
+  await store.addNoticeGiven(given(regranted?.at ?? '', '2026-12-13'));
+  await store.addNoticeGiven(given(other.at, '2026-12-12', 'p-prune-other'));
+  equal(
+    await store.pruneConsent({
+      player: 'p-prune',
+      // The same instant in another spelling names the same record.
+      at: [
+        granted?.at ?? '',
+        new Date(Date.parse(withdrawn?.at ?? '')).toISOString().replace('Z', '+00:00'),
+        // An instant with no record of this player.
+        t(-5),
+      ],
+    }),
+    2,
+    'prune: deletes the records at those instants',
+  );
+  deepEqual(
+    (await store.listConsent('p-prune')).map((record) => record.at),
+    [preference?.at, regranted?.at],
+    'prune: the other records stay, oldest first',
+  );
+  deepEqual(
+    (await store.listNoticesGiven('p-prune')).map((notice) => notice.record.at),
+    [regranted?.at],
+    'prune: a notice given about a pruned record goes with it',
+  );
+  equal((await store.listConsent('p-prune-other')).length, 1, 'prune: per player');
+  equal(
+    (await store.listNoticesGiven('p-prune-other')).length,
+    1,
+    'prune: another player keeps its notices',
+  );
+  equal(
+    await store.pruneConsent({ player: 'p-prune', at: [] }),
+    0,
+    'prune: nothing named, nothing deleted',
+  );
+  const next = await store.appendConsent({
+    player: 'p-prune',
+    record: { kind: 'night', state: 'granted', source: 'player', textVersion: 'v1' },
+    at: t(0),
+  });
+  equal(
+    Date.parse(next.at),
+    Date.parse(regranted?.at ?? '') + 1,
+    'prune: a later record is still dated after the latest one',
+  );
+
+  // History counts per provider across players, from `since` to `until`, both inclusive.
+  for (const [sendKey, provider, player, offset] of [
+    ['count-1', 'paced', 'p-a', 100],
+    ['count-2', 'paced', 'p-b', 200],
+    ['count-3', 'paced', 'p-a', 300],
+    ['count-4', 'other-paced', 'p-a', 300],
+  ] as const) {
+    await store.addHistory({ sendKey, provider, player, topic: 't', at: t(offset) });
+  }
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(0), until: t(300) }),
+    3,
+    'count: every player',
+  );
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(200), until: t(300) }),
+    2,
+    'count: since is inclusive',
+  );
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(301), until: t(400) }),
+    0,
+    'count: none after',
+  );
+  equal(
+    await store.countHistory({ provider: 'other-paced', since: t(0), until: t(300) }),
+    1,
+    'count: per provider',
+  );
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(0), until: t(299) }),
+    2,
+    'count: nothing after until (a clock that went back)',
+  );
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(100), until: t(100) }),
+    1,
+    'count: until is inclusive',
+  );
+
+  // Schedule entries: create once, compare-and-set, the due index.
+  const entry = (player: string, id: string, dueAt: string | undefined): NotificationScheduleEntry => ({
+    player,
+    id,
+    ...(dueAt === undefined ? {} : { dueAt }),
+    item: {
+      kind: 'reminder',
+      key: id.slice('reminder:'.length),
+      topic: 'energy-full',
+      fireAt: dueAt ?? t(0),
+      templateData: { count: 3, ready: true, name: 'x' },
+      link: 't3_x',
+    },
+  });
+  const first = entry('p-s', 'reminder:energy', t(1_000));
+  const version = await store.createScheduleEntry(first);
+  ok(typeof version === 'string', 'schedule: created');
+  equal(
+    await store.createScheduleEntry(first),
+    undefined,
+    'schedule: an id is created once per player',
+  );
+  const held = await store.getScheduleEntry({ player: 'p-s', id: 'reminder:energy' });
+  deepEqual(held?.entry, first, 'schedule: read back as written');
+  equal(held?.version, version, 'schedule: with its version');
+  equal(
+    await store.getScheduleEntry({ player: 'p-s2', id: 'reminder:energy' }),
+    undefined,
+    'schedule: per player',
+  );
+  ok(
+    typeof await store.createScheduleEntry(entry('p-s2', 'reminder:energy', t(500))) === 'string',
+    'schedule: another player has its own ids',
+  );
+  await store.createScheduleEntry({
+    player: 'p-s',
+    id: 'notices',
+    item: { kind: 'notices', attempts: 2, failed: ['k'] },
+  });
+  await store.createScheduleEntry(entry('p-s3', 'reminder:later', t(2_000)));
+  deepEqual(
+    await store.listDueScheduleEntries({ at: t(999), limit: 10 }),
+    [{ player: 'p-s2', id: 'reminder:energy' }],
+    'schedule: not due before dueAt',
+  );
+  deepEqual(
+    await store.listDueScheduleEntries({ at: t(2_000), limit: 10 }),
+    [
+      { player: 'p-s2', id: 'reminder:energy' },
+      { player: 'p-s', id: 'reminder:energy' },
+      { player: 'p-s3', id: 'reminder:later' },
+    ],
+    'schedule: due at dueAt, earliest first; an entry without dueAt is never due',
+  );
+  deepEqual(
+    await store.listDueScheduleEntries({ at: t(2_000), limit: 1 }),
+    [{ player: 'p-s2', id: 'reminder:energy' }],
+    'schedule: limited',
+  );
+  const moved = {
+    ...first,
+    dueAt: t(3_000),
+    item: { ...first.item, fireAt: t(3_000) },
+  } as NotificationScheduleEntry;
+  ok(
+    await store.updateScheduleEntry({ player: 'p-s', id: 'reminder:energy', version: version ?? '', entry: moved }),
+    'schedule: a write with the version succeeds',
+  );
+  ok(
+    !await store.updateScheduleEntry({ player: 'p-s', id: 'reminder:energy', version: version ?? '', entry: first }),
+    'schedule: a stale version is refused',
+  );
+  const current = await store.getScheduleEntry({ player: 'p-s', id: 'reminder:energy' });
+  deepEqual(current?.entry, moved, 'schedule: the write is stored');
+  ok(
+    current !== undefined && current.version !== version,
+    'schedule: every write changes the version',
+  );
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(2_999), limit: 10 })).map((due) => due.player),
+    ['p-s2', 'p-s3'],
+    'schedule: the due index follows the write',
+  );
+  const notices = await store.getScheduleEntry({ player: 'p-s', id: 'notices' });
+  deepEqual(
+    notices?.entry,
+    { player: 'p-s', id: 'notices', item: { kind: 'notices', attempts: 2, failed: ['k'] } },
+    'schedule: an entry without a due time round-trips',
+  );
+  ok(
+    notices !== undefined && await store.updateScheduleEntry({
+      player: 'p-s',
+      id: 'notices',
+      version: notices.version,
+      entry: { player: 'p-s', id: 'notices', dueAt: t(0), item: { kind: 'notices', attempts: 0 } },
+    }),
+    'schedule: an entry gains a due time',
+  );
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(0), limit: 10 })).map((due) => due.id),
+    ['notices'],
+    'schedule: and is listed from then',
+  );
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-s',
+      id: 'reminder:energy',
+      version: current?.version ?? '',
+      entry: undefined,
+    }),
+    'schedule: deleted with the version',
+  );
+  equal(
+    await store.getScheduleEntry({ player: 'p-s', id: 'reminder:energy' }),
+    undefined,
+    'schedule: gone',
+  );
+  ok(
+    !await store.updateScheduleEntry({
+      player: 'p-s',
+      id: 'reminder:energy',
+      version: current?.version ?? '',
+      entry: first,
+    }),
+    'schedule: a deleted entry is not written back',
+  );
+
+  // Parallel callers.
+  const created = await Promise.all(
+    Array.from({ length: 6 }, () => store.createScheduleEntry(entry('p-race', 'reminder:r', t(0)))),
+  );
+  equal(
+    created.filter((value) => value !== undefined).length,
+    1,
+    'concurrency: one of parallel creates wins',
+  );
+  const raced = await store.getScheduleEntry({ player: 'p-race', id: 'reminder:r' });
+  const updated = await Promise.all(
+    Array.from({ length: 6 }, (_, index) =>
+      store.updateScheduleEntry({
+        player: 'p-race',
+        id: 'reminder:r',
+        version: raced?.version ?? '',
+        entry: entry('p-race', 'reminder:r', t(index + 1)),
+      }),
+    ),
+  );
+  equal(
+    updated.filter(Boolean).length,
+    1,
+    'concurrency: one of parallel writes with one version wins',
+  );
+  const winner = updated.findIndex(Boolean);
+  equal(
+    (await store.getScheduleEntry({ player: 'p-race', id: 'reminder:r' }))?.entry.dueAt,
+    t(winner + 1),
+    "concurrency: the stored entry is the winner's",
+  );
+
+  // Ties, a due time removed, stale deletes, and versions after a delete.
+  for (const [player, id] of [
+    ['p-tie-b', 'reminder:a'],
+    ['p-tie-a', 'reminder:b'],
+    ['p-tie-a', 'reminder:a'],
+  ] as const) {
+    await store.createScheduleEntry(entry(player, id, t(5_000)));
+  }
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(5_000), limit: 100 })).filter((due) =>
+      due.player.startsWith('p-tie'),
+    ),
+    [
+      { player: 'p-tie-a', id: 'reminder:a' },
+      { player: 'p-tie-a', id: 'reminder:b' },
+      { player: 'p-tie-b', id: 'reminder:a' },
+    ],
+    'schedule: ties by player, then id',
+  );
+  const tie = await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' });
+  const { dueAt: _due, ...waiting } = tie?.entry ?? first;
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-tie-b',
+      id: 'reminder:a',
+      version: tie?.version ?? '',
+      entry: { ...waiting, item: { ...first.item, firedAt: t(5_000) } } as NotificationScheduleEntry,
+    }),
+    'schedule: an entry loses its due time',
+  );
+  ok(
+    !(await store.listDueScheduleEntries({ at: t(10_000), limit: 100 })).some((due) =>
+      due.player === 'p-tie-b'),
+    'schedule: and is no longer listed',
+  );
+  deepEqual(
+    (await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' }))?.entry,
+    { ...waiting, item: { ...first.item, firedAt: t(5_000) } },
+    'schedule: the entry stays without its due time',
+  );
+  const named = await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' });
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-tie-b',
+      id: 'reminder:a',
+      version: named?.version ?? '',
+      entry: entry('p-elsewhere', 'reminder:elsewhere', undefined),
+    }),
+    'schedule: a write that names another player and id',
+  );
+  const renamed = await store.getScheduleEntry({ player: 'p-tie-b', id: 'reminder:a' });
+  deepEqual(
+    [
+      renamed?.entry.player,
+      renamed?.entry.id,
+      await store.getScheduleEntry({ player: 'p-elsewhere', id: 'reminder:elsewhere' }),
+    ],
+    ['p-tie-b', 'reminder:a', undefined],
+    'schedule: is stored under the player and id it was written to',
+  );
+  const tieA = await store.getScheduleEntry({ player: 'p-tie-a', id: 'reminder:a' });
+  ok(
+    !await store.updateScheduleEntry({
+      player: 'p-tie-a',
+      id: 'reminder:a',
+      version: `${tieA?.version ?? ''}-stale`,
+      entry: undefined,
+    }),
+    'schedule: a delete with a stale version is refused',
+  );
+  ok(
+    (await store.getScheduleEntry({ player: 'p-tie-a', id: 'reminder:a' })) !== undefined,
+    'schedule: and the entry stays',
+  );
+  ok(
+    await store.updateScheduleEntry({
+      player: 'p-tie-a',
+      id: 'reminder:a',
+      version: tieA?.version ?? '',
+      entry: undefined,
+    }),
+    'schedule: deleted',
+  );
+  const again = await store.createScheduleEntry(entry('p-tie-a', 'reminder:a', t(5_000)));
+  ok(
+    typeof again === 'string' && again !== tieA?.version,
+    'schedule: a recreated entry has a new version',
+  );
+  ok(
+    !await store.updateScheduleEntry({
+      player: 'p-tie-a',
+      id: 'reminder:a',
+      version: tieA?.version ?? '',
+      entry: entry('p-tie-a', 'reminder:a', t(6_000)),
+    }),
+    "schedule: the deleted entry's version does not write the recreated one",
+  );
+  const noticeCheck = await store.getScheduleEntry({ player: 'p-s', id: 'notices' });
+  deepEqual(
+    noticeCheck?.entry,
+    { player: 'p-s', id: 'notices', dueAt: t(0), item: { kind: 'notices', attempts: 0 } },
+    'schedule: a notice check round-trips',
+  );
+
+  // Ties compare by code point (SQLite's BINARY order), not by UTF-16 code unit,
+  // for the id and for the player.
+  await store.createScheduleEntry(entry('p-cp', 'reminder:\u{1F600}', t(7_000)));
+  await store.createScheduleEntry(entry('p-cp', 'reminder:\uFFEE', t(7_000)));
+  await store.createScheduleEntry(entry('p-cp-\u{1F600}', 'reminder:x', t(7_000)));
+  await store.createScheduleEntry(entry('p-cp-\uFFEE', 'reminder:x', t(7_000)));
+  deepEqual(
+    (await store.listDueScheduleEntries({ at: t(7_000), limit: 100 }))
+      .filter((due) => due.player.startsWith('p-cp'))
+      .map((due) => [due.player, due.id]),
+    [
+      ['p-cp', 'reminder:\uFFEE'],
+      ['p-cp', 'reminder:\u{1F600}'],
+      ['p-cp-\uFFEE', 'reminder:x'],
+      ['p-cp-\u{1F600}', 'reminder:x'],
+    ],
+    'schedule: ties by code point',
+  );
+
+  // A time that does not parse is refused before anything is written or compared.
+  const bad = { ...entry('p-bad', 'reminder:bad', t(0)), dueAt: 'not-a-time' };
+  await rejects(() => store.createScheduleEntry(bad), 'invalid: a due time that does not parse');
+  const valid = await store.createScheduleEntry(entry('p-bad', 'reminder:bad', t(0)));
+  ok(typeof valid === 'string', 'invalid: a refused create writes nothing');
+  await rejects(
+    () =>
+      store.updateScheduleEntry({
+        player: 'p-bad',
+        id: 'reminder:bad',
+        version: `${valid ?? ''}-stale`,
+        entry: bad,
+      }),
+    'invalid: a due time that does not parse is refused before the version is compared',
+  );
+  await rejects(
+    () => store.listDueScheduleEntries({ at: 'not-a-time', limit: 1 }),
+    'invalid: a due listing time that does not parse',
+  );
+  await rejects(
+    () => store.countHistory({ provider: 'paced', since: 'not-a-time', until: t(0) }),
+    'invalid: a count start that does not parse',
+  );
+  await rejects(
+    () => store.countHistory({ provider: 'paced', since: t(0), until: 'not-a-time' }),
+    'invalid: a count end that does not parse',
+  );
+  const consentBefore = await store.listConsent('p-prune');
+  const givenBefore = await store.listNoticesGiven('p-prune');
+  ok(consentBefore.length > 0 && givenBefore.length > 0, 'invalid: records and a notice to keep');
+  const instants = consentBefore.map((record) => record.at);
+  // Every record (one with a notice given) named next to an instant that does not parse, last and first.
+  for (const pruneAt of [
+    [...instants, 'not-a-time'],
+    ['not-a-time', ...instants],
+  ]) {
+    await rejects(
+      () => store.pruneConsent({ player: 'p-prune', at: pruneAt }),
+      'invalid: a pruned instant that does not parse',
+    );
+    deepEqual(
+      [await store.listConsent('p-prune'), await store.listNoticesGiven('p-prune')],
+      [consentBefore, givenBefore],
+      'invalid: a refused pruning deletes nothing, not even the records and notices that parse',
+    );
+  }
+
+  // Pending reminders per player: reminders without firedAt, under the reminder: prefix.
+  equal(await store.countPendingReminders('p-count'), 0, 'count: none yet');
+  for (const id of ['reminder:a', 'reminder:b', 'reminder:c']) {
+    await store.createScheduleEntry(entry('p-count', id, t(9_000)));
+  }
+  await store.createScheduleEntry({
+    player: 'p-count',
+    id: 'notices',
+    dueAt: t(9_000),
+    item: { kind: 'notices', attempts: 0 },
+  });
+  await store.createScheduleEntry(entry('p-count-other', 'reminder:a', t(9_000)));
+  const firing = await store.getScheduleEntry({ player: 'p-count', id: 'reminder:c' });
+  ok(
+    firing !== undefined && await store.updateScheduleEntry({
+      player: 'p-count',
+      id: 'reminder:c',
+      version: firing.version,
+      entry: { ...firing.entry, item: { ...first.item, key: 'c', firedAt: t(9_000) } } as NotificationScheduleEntry,
+    }),
+    'count: a reminder is marked fired',
+  );
+  equal(
+    await store.countPendingReminders('p-count'),
+    2,
+    'count: pending reminders of the player only, not fired ones or the notice check',
+  );
 }
 
 /**
@@ -741,6 +1226,20 @@ async function runConcurrencyAndEdgeClauses(
     (await store.getPlatformRegistration({ player: 'p-edge', provider: 'ait' })) !== undefined,
     'purge: registrations are not purged',
   );
+}
+
+/** Expects `work` to reject with an error (any store's own error type and wording). */
+async function rejects(work: () => Promise<unknown>, message: string): Promise<void> {
+  let outcome: unknown = 'resolved';
+  try {
+    await work();
+  } catch (error) {
+    if (error instanceof Error) {
+      return;
+    }
+    outcome = error;
+  }
+  fail(message, outcome, 'a rejection with an Error');
 }
 
 function fail(message: string, actual: unknown, expected: unknown): never {

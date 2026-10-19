@@ -33,7 +33,7 @@ function readVector(file: string): unknown {
 }
 
 describe('notifications conformance vectors', () => {
-  it('ships the forty-five RFC vectors', () => {
+  it('ships the forty-eight RFC vectors', () => {
     expect(vectorFiles).toEqual([
       'action-required-login.json',
       'advertising-needs-consent.json',
@@ -76,8 +76,11 @@ describe('notifications conformance vectors', () => {
       'provider-rejected.json',
       'quiet-hours-player-zone.json',
       'reminder-cancel-across-routes.json',
+      'reminder-local-quiet-hours.json',
       'reminder-local-route.json',
+      'reminder-server-deferred-cancel.json',
       'reminder-server-route.json',
+      'reminder-server-set-checks.json',
       'requested-topic-needs-opt-in.json',
       'unsupported-target.json',
     ]);

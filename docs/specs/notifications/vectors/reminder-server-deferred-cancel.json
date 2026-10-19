@@ -1,0 +1,178 @@
+{
+  "vector": "reminder-server-deferred-cancel",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A server reminder that comes due inside its topic's quiet hours is deferred to their end; cancelling the reminder then stops the waiting send, so the scheduler sends nothing when the quiet hours end, and cancel answers the remote route.",
+  "appliesTo": [
+    {
+      "path": "remote.supported",
+      "equals": true
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "match-ready",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=match",
+      "copy": {
+        "ko": {
+          "title": "대전 준비 완료",
+          "body": "대전 상대를 찾았어요."
+        },
+        "en": {
+          "title": "Match ready",
+          "body": "Your opponent is ready."
+        }
+      },
+      "quietHours": {
+        "start": "22:00",
+        "end": "08:00"
+      },
+      "mapping": {
+        "channelId": "social"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "match-ready"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "match",
+        "topic": "match-ready",
+        "fireAt": "2026-10-12T13:30:00Z"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T13:30:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "game",
+      "action": "cancelReminder",
+      "input": {
+        "key": "match"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "cancelled"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "cancelReminder",
+      "input": {
+        "key": "match"
+      },
+      "returns": {
+        "route": "none",
+        "status": "cancelled"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T23:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "reminder:p-1:match:2026-10-12T13:30:00Z",
+        "topic": "match-ready",
+        "status": "deferred",
+        "reason": "quiet-hours",
+        "until": "2026-10-12T23:00:00Z"
+      }
+    ],
+    "providerCalls": [],
+    "reminders": []
+  }
+}
