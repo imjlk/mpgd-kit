@@ -125,6 +125,7 @@ export const devvitNotificationProviderCodes = Object.freeze({
   enqueueFailed: 'DEVVIT_ENQUEUE_FAILED',
   enqueueRejected: 'DEVVIT_ENQUEUE_REJECTED',
   enqueueUnanswered: 'DEVVIT_ENQUEUE_UNANSWERED',
+  enqueueUnclassified: 'DEVVIT_ENQUEUE_UNCLASSIFIED',
 } as const);
 
 /**
@@ -212,11 +213,16 @@ function reasonOf(answer: NotificationRemoteDeliveryAnswer): Pick<DevvitEnqueueE
  *   a message that reads as a rate limit is `rate-limited` (deferred, for
  *   at most a day), one that reads as the user's refusal (not opted in, no
  *   such user) in an error that names this recipient is `rejected` with
- *   reason `recipient`, and any other message
- *   is `rejected` with reason `configuration`, which the service reports to
- *   the operator. A call that throws, or an answer that counts neither a
- *   success nor a failure, is `ambiguous`: Devvit may have queued it, and
- *   `enqueue` takes no idempotency key, so a replay may show twice.
+ *   reason `recipient`. Any other error is `ambiguous` (provider code
+ *   `DEVVIT_ENQUEUE_UNCLASSIFIED`): Devvit documents no error messages, so
+ *   an unknown one is neither proof of a setup error nor of a refusal. The
+ *   service reports it to the operator and replays it after each lease,
+ *   which doubles from the claim lease up to an hour, for at most 24 hours
+ *   after the first attempt (`notificationAmbiguousReplayHours`): with the
+ *   default 300-second lease, at most about 28 calls. A call that throws,
+ *   or an answer that counts neither a success nor a failure, is
+ *   `ambiguous` too: Devvit may have queued it, and `enqueue` takes no
+ *   idempotency key, so a replay may show twice.
  *   `classifyEnqueueError` overrides each default, and `onEnqueueError`
  *   sees every failure with Devvit's message.
  * - **Opt-in at send time.** `readPermission` reads `isOptedIn`, since no
@@ -343,14 +349,21 @@ export function createDevvitNotificationDeliveryProvider(
         });
       }
       const message = typeof ours?.message === 'string' ? ours.message : '';
-      let fallback: 'rate-limited' | 'recipient' | 'configuration' = 'configuration';
+      let fallback: 'rate-limited' | 'recipient' | 'ambiguous' = 'ambiguous';
       if (readsAsRateLimit(message)) {
         fallback = 'rate-limited';
       } else if (ours?.userId === userId && readsAsUserRefusal(message)) {
         // Only an error that names this recipient proves a refusal of the user.
         fallback = 'recipient';
       }
-      return failure('answer', message, fallback, devvitNotificationProviderCodes.enqueueRejected);
+      return failure(
+        'answer',
+        message,
+        fallback,
+        fallback === 'ambiguous'
+          ? devvitNotificationProviderCodes.enqueueUnclassified
+          : devvitNotificationProviderCodes.enqueueRejected,
+      );
     },
     async readPermission({ player }): Promise<NotificationPermissionState> {
       const userId = userIdOf(player);

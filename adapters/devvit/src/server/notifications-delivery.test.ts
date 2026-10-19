@@ -135,35 +135,35 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     ['a rate-limit error', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Rate limit exceeded for user' }] }, { status: 'rate-limited' }],
     ['another per-user error', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'user has not opted in' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['an error without a user', { successCount: 0, failureCount: 1, errors: [{ userId: undefined, message: 'too many requests' }] }, { status: 'rate-limited' }],
-    ['a failure count without errors', { successCount: 0, failureCount: 1, errors: [] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a per-user error nothing names', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a failure count without errors', { successCount: 0, failureCount: 1, errors: [] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a per-user error nothing names', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
     ['the daily app limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'App reached the daily limit' }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
     ['a success next to an error', { successCount: 1, failureCount: 1, errors: [{ userId: 't2_other', message: 'x' }] }, { status: 'accepted' }],
     ['an error for another user only', { successCount: 0, failureCount: 0, errors: [{ userId: 't2_other', message: 'x' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
-    ['a length refusal that mentions a limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'title exceeds the character limit' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a refusal of the link, not the user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'post not found' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a user refusal that names no user', { successCount: 0, failureCount: 1, errors: [{ userId: undefined, message: 'user has opted out' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a length refusal that mentions a limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'title exceeds the character limit' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a refusal of the link, not the user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'post not found' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a user refusal that names no user', { successCount: 0, failureCount: 1, errors: [{ userId: undefined, message: 'user has opted out' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
     ['a deleted user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'User not found' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['a notification limit at the end of the message', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'User notification limit reached' }] }, { status: 'rate-limited' }],
-    ['a length limit with a preposition', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'character limit exceeded for body' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a bare limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Limit reached' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a length limit with a preposition', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'character limit exceeded for body' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a bare limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Limit reached' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
     ['a named account refusal', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Account t2_alice has been suspended' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['adopting is not opting', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'adoption in progress' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['adopting is not opting', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'adoption in progress' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
     ['a daily send limit without a verb', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Daily send limit' }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
     ['a per-user limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Per-user limit' }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
     ['a daily message limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Daily message limit reached' }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
     ['a send failure that names a daily limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Failed to send message: daily limit exceeded' }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
-    ['a user named in another clause', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Unable to find user in app; subreddit not found' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a link field name', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Invalid linkId for user t2_alice: does not exist' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a length refusal that names a period', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Message too long: exceeds the 100 character limit per user' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a per-user title limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Per-user title limit exceeded' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a user named in another clause', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Unable to find user in app; subreddit not found' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a link field name', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Invalid linkId for user t2_alice: does not exist' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a length refusal that names a period', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Message too long: exceeds the 100 character limit per user' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a per-user title limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Per-user title limit exceeded' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
     ['a limit for today', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: "Today's message limit reached" }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
     ['a per-user message limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Per-user message limit exceeded' }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
-    ['a text that exceeds a limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Notification text exceeds the limit' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a text that exceeds a limit', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Notification text exceeds the limit' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
     ['a user named three words before the refusal', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'The user with id t2_alice does not exist' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['plural limits', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Daily notification limits exceeded' }] }, { status: 'rate-limited', retryAfterSeconds: 3600 }],
-    ['a missing link that names the user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Link t3_abc for user t2_alice does not exist' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
-    ['a recipient link', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Recipient link not found' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a missing link that names the user', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Link t3_abc for user t2_alice does not exist' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a recipient link', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Recipient link not found' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
     ['a named user not found', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'User t2_alice not found' }] }, { status: 'rejected', reason: 'recipient', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
     ['throttling', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'Throttled: try later' }] }, { status: 'rate-limited' }],
     ['a malformed answer', null as unknown as DevvitEnqueueResponse, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
@@ -472,9 +472,42 @@ describe('createDevvitNotificationService', () => {
         errors.push(context);
       },
     });
+    // An unknown error is ambiguous: the row stays in flight for a replay.
     await expect(service.deliver({ idempotencyKey: 'e-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
-      .resolves.toMatchObject({ status: 'unavailable', reason: 'provider-rejected' });
+      .resolves.toMatchObject({ status: 'in-flight' });
     expect(errors).toContainEqual({ operation: 'devvit.enqueue', sendKey: 'e-1', provider: 'devvit' });
+  });
+
+  it('replays an unknown enqueue error after each lease for at most 24 hours', async () => {
+    const plugin = createFakePlugin();
+    const unknown = { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] };
+    for (let index = 0; index < 100; index += 1) {
+      plugin.answers.push(unknown);
+    }
+    let now = Date.parse('2026-10-19T03:00:00Z');
+    const { service } = createDevvitNotificationService({
+      redis: createFakeNotificationRedis(),
+      notifications: plugin,
+      catalog: catalogFile,
+      now: () => new Date(now).toISOString(),
+      random: () => 0,
+    });
+    await expect(service.deliver({ idempotencyKey: 'u-1', player: user, topic: 'friend-challenge', templateData: { friend: 'M' } }))
+      .resolves.toMatchObject({ status: 'in-flight' });
+    const callTimes = [now];
+    const end = now + 30 * 3_600_000;
+    while (now < end) {
+      now += 60_000;
+      const before = plugin.calls.length;
+      await service.dispatchDue();
+      if (plugin.calls.length > before) {
+        callTimes.push(now);
+      }
+    }
+    // Leases of 300, 600, 1200, 2400 s, then an hour each, until a day after the first attempt.
+    expect(callTimes.length).toBeGreaterThanOrEqual(20);
+    expect(callTimes.length).toBeLessThanOrEqual(29);
+    expect((callTimes.at(-1) ?? 0) - (callTimes[0] ?? 0)).toBeLessThan(24 * 3_600_000);
   });
 
   it("does not report a user's refusal or a rate limit through onError", async () => {
