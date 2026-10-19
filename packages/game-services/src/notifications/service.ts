@@ -1088,11 +1088,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       case 'ambiguous': {
         // The provider may have sent it: the claim is kept for the lease.
         const kept = row.state.status === 'in-flight' ? row.state : undefined;
-        // Each ambiguous answer doubles the wait before the next replay, up to
-        // an hour: a provider without an idempotency key may show every replay.
-        // The next claim counts the replay.
+        // The first replay waits the claim lease, and each later ambiguous
+        // answer doubles the wait, up to an hour: a provider without an
+        // idempotency key may show every replay. The next claim counts the replay.
         const ambiguousAttempts = row.ambiguousAttempts ?? 0;
-        const leaseUntil = answeredAt + ambiguousLeaseMs(ambiguousAttempts + 1);
+        const leaseUntil = answeredAt + ambiguousLeaseMs(ambiguousAttempts);
         // The replay window started at the claim that reached the provider (or an earlier one).
         const firstAttemptedAt = row.firstAttemptedAt ?? formatNotificationInstant(at);
         if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
