@@ -2321,9 +2321,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           const result = await fireReminder(held, item);
           if (result === 'busy') {
             // Another run holds its send: it waits a minute, so the next
-            // round does not list it again, and it is not progress. A run
-            // that marks it fired meanwhile loses to this version, finds the
-            // same reminder, and its rows still serve it.
+            // round does not list it again, and it is not progress. The run
+            // holding the send then loses its mark to this version, re-reads
+            // the same reminder, and keeps its rows; the next run marks it.
             await deferEntry(held, nowMs());
             continue;
           }
