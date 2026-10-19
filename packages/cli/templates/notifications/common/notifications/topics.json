@@ -201,9 +201,6 @@
         "maxPerDay": 1
       },
       "targets": {
-        "android": {
-          "channelId": "mpgd-advertising"
-        },
         "ios": {}
       }
     },

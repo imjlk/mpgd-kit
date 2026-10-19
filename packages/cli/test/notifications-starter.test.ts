@@ -275,8 +275,10 @@ assert.equal(
   validation.catalog.topics.find((topic) => topic.id === 'consent-notice')?.route,
   settingsRoute,
 );
-// No advertising topic reaches Apps in Toss or Devvit, which cannot carry it.
-const events = validation.catalog.topics.find((topic) => topic.id === 'events');
-assert.deepEqual(Object.keys(events?.targets ?? {}).sort(), ['android', 'ios']);
+// No advertising topic reaches Apps in Toss or Devvit, which cannot carry
+// it, or Android, whose FCM pushes cannot carry the opt-out action yet.
+for (const topic of validation.catalog.topics.filter((entry) => entry.purpose === 'advertising')) {
+  assert.deepEqual(Object.keys(topic.targets ?? {}).sort(), ['ios'], topic.id);
+}
 
 console.info('Notifications starter checks passed.');

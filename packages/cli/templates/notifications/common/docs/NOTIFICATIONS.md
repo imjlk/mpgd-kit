@@ -40,11 +40,17 @@ left for you.
    `mpgd target init capacitor --providers notifications` to install the two
    plugins into the game-owned shell. Never install
    `@capacitor/push-notifications` next to them.
-6. Apps in Toss: register each functional-message template in the console and
+6. Advertising on Android: the sample `events` topic is mapped to iOS only.
+   An Android FCM notification cannot carry the opt-out action that the
+   Korean rules require on every advertising push (a settings path in the
+   text does not replace it), and the kit does not render Android
+   advertising natively yet. Do not add an `android` mapping to an
+   advertising topic until it does.
+7. Apps in Toss: register each functional-message template in the console and
    add its code to the topic's `targets.ait` mapping
    (`{ "templateSetCode": "...", "agreement": "required" }`). Apps in Toss
    cannot deliver advertising topics.
-7. Reddit: apply for Devvit notifications; keep `integrations.notifications`
+8. Reddit: apply for Devvit notifications; keep `integrations.notifications`
    at `approval-required` until Reddit approves the app and its copy.
 
 ## The notifications runtime

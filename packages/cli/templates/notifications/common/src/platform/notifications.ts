@@ -22,7 +22,8 @@ import {
  * The starter topics' purposes follow the notifications RFC (open question 1):
  * `daily-ready` and `streak-at-risk` are `requested` reminders the player
  * turns on, `friend-challenge` is `service`, and `events` is the sample
- * `advertising` topic. A topic whose copy offers a reward, a benefit, or a
+ * `advertising` topic, mapped to iOS only: an Android FCM push cannot carry
+ * the opt-out action the Korean rules require yet. A topic whose copy offers a reward, a benefit, or a
  * promotion is advertising: declare it so, never `requested`.
  */
 export const starterNotificationCatalog = notificationTopicsJson as NotificationTopicCatalog;

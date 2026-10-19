@@ -68,11 +68,12 @@ initializer refuses a game or shell that lists it; remove it first.
    add that line to an existing project's
    `android/app/src/main/AndroidManifest.xml` (the initializer warns while it
    is missing).
-4. An Android FCM notification message cannot carry action buttons, so the
-   advertising opt-out action does not appear on Android advertising pushes
-   yet; rendering them natively in the shell is a planned follow-up. Until
-   then the advertising topic's `optOutRoute` must stay reachable from the
-   game's own settings screen, which the starter's screen is.
+4. An Android FCM notification message cannot carry action buttons, so an
+   Android advertising push would arrive without the opt-out action the
+   Korean rules require (a settings path in the body is not enough).
+   Rendering them natively in the shell is a planned follow-up; until then
+   map no advertising topic to `android`. The starter's sample `events`
+   topic is mapped to iOS only.
 
 ## 4. iOS
 

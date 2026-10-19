@@ -1812,8 +1812,12 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `apns.payload.aps.category`. Firebase Messaging has no category API.
   - An Android FCM notification message cannot carry actions. An Android
     advertising push needs the shell to render it natively with the action,
-    which is a follow-up after C1; until then the game's settings screen is
-    the Android opt-out route.
+    which is a follow-up after C1. Until then, under the Korean rules, map
+    no advertising topic to Android: the push would arrive without the
+    opt-out action the rules require, and a settings path described in the
+    body does not replace it ([Advertising rules](#advertising-rules)). The
+    starter maps its sample advertising topic to iOS only. The game's
+    settings screen stays the in-game opt-out on every target.
   - Tapping the action opens the declared `optOutRoute` of the advertising
     topic the push names in its `topic` data key, never a route from the
     payload.
@@ -2050,7 +2054,8 @@ What the kit enforces for `advertising` topics under `kr`:
     directly; describing a settings path is not enough (p.44). An Android FCM
     notification message cannot show actions, so an Android advertising push
     needs the Capacitor shell to render it natively with the action (see
-    [Capacitor](#profile-capacitor)).
+    [Capacitor](#profile-capacitor)). Until the shell does, a catalog maps
+    no advertising topic to Android; the starter's sample is iOS only.
 - **Notices.**
   - A result notice is due within 14 days of a consent, refusal, or
     withdrawal. It gives the sender's name, the act and its date, and the
@@ -2432,7 +2437,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
 - `mpgd game create --providers notifications` (and `@mpgd/create-game`)
   adds a notifications starter to a new Phaser or lite game: the topic
   catalog `notifications/topics.json` with the starter purposes of open
-  question 1, a sample advertising topic, and the notice topic with every
+  question 1, a sample advertising topic (iOS only, until Android
+  advertising pushes can carry the opt-out action), and the notice topic with every
   `notices.copy` variant in Korean and English; the deployment settings
   `notifications/deployment.json` with `advertisingRules: "kr"`; the wiring
   for Android and iOS (the Capacitor provider with named channels, the
@@ -2462,8 +2468,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
     screen asks for the permission but records no reminder, advertising, or
     night consent, and says so.
   - Native rendering of Android advertising pushes with the opt-out action
-    in the Capacitor shell; until then the game's settings screen is the
-    Android opt-out route.
+    in the Capacitor shell; until then the starter maps no advertising topic
+    to Android.
   - The shared host-side `notifications.v2` bridge handler, and bulk sends
     (open question 5).
 
