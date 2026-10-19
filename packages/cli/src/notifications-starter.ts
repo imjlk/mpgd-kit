@@ -192,8 +192,7 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         ' * shows them only once `integrations.notifications` is `available`.',
         ' */',
         'const notificationTopicCatalog = notificationTopicsJson as NotificationTopicCatalog;',
-        "const redditNotificationTopics = resolveNotificationTopicsForTarget(notificationTopicCatalog, 'reddit')",
-        '  .map((topic) => topic.id);',
+        'const redditNotificationTopics = readRedditNotificationTopics();',
         "const notificationService: Parameters<typeof handleNotificationTask>[0]['notifications'] =",
         '  redditNotificationTopics.length === 0 ? undefined : createNotificationService();',
         '// The opt-in is served only with the service that sends; a refused catalog turns both off.',
@@ -232,6 +231,16 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         ' * deployment the service refuses turns notifications off, never the game',
         ' * server.',
         ' */',
+        '/** The topic ids the catalog maps for Reddit; none when the catalog cannot be read. */',
+        'function readRedditNotificationTopics(): readonly string[] {',
+        '  try {',
+        "    return resolveNotificationTopicsForTarget(notificationTopicCatalog, 'reddit').map((topic) => topic.id);",
+        '  } catch (error) {',
+        '    console.error(`devvit notifications disabled: ${errorMessage(error)}`);',
+        '    return [];',
+        '  }',
+        '}',
+        '',
         "function createNotificationService(): Parameters<typeof handleNotificationTask>[0]['notifications'] {",
         '  try {',
         '    return createDevvitNotificationService({',
@@ -488,11 +497,6 @@ export const notificationsCapacitorGateways: Readonly<Record<'android' | 'ios', 
   },
 );
 
-/**
- * The game modules the wired Capacitor gateways import (from the overlay's
- * `common` part), and the catalog files they read. A game that already has
- * one keeps its own.
- */
 /** The starter modules a wired Capacitor gateway imports, directly or through one another. */
 export const notificationsCapacitorGatewayModules: readonly string[] = Object.freeze([
   'src/platform/capacitorNotifications.ts',

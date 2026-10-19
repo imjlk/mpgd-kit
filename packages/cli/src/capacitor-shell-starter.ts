@@ -3186,6 +3186,18 @@ function planNotificationsProvider(input: {
         + 'packages (mpgd kit upgrade) first.',
     );
   }
+  // The starter's provider module also imports the settings opener, which
+  // an adapter older than this CLI's notifications starter does not have.
+  const adapterTypes = readExisting(
+    path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/dist/notifications.d.ts'),
+  );
+  if (adapterTypes !== undefined && !adapterTypes.includes('openCapacitorNotificationSettings')) {
+    throw new Error(
+      `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `
+        + 'openCapacitorNotificationSettings, which the notifications starter uses; upgrade the '
+        + "game's kit packages (mpgd kit upgrade) first.",
+    );
+  }
   // The adapter's other peers (Capacitor core) must accept the game's
   // installed copies too; the plugins get their own message below.
   assertInstalledPeers(
@@ -3201,6 +3213,7 @@ function planNotificationsProvider(input: {
     : {};
   for (const plugin of shellPlugins) {
     const range = adapterPeers[plugin.packageName];
+    // A range semver cannot read (`workspace:*`, a tag) is not checked.
     if (typeof range === 'string' && validRange(range) !== null
       && !satisfies(plugin.version, range, { includePrerelease: true })) {
       throw new Error(

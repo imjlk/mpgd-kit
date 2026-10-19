@@ -120,7 +120,10 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
         children.push(button(text.turnOff, () => current.turnOff()));
       }
     }
-    if (view.reminders.length > 0) {
+    if (!view.recording && (view.reminders.length > 0 || view.advertising !== undefined)) {
+      // Nothing could record these choices: no switches that cannot work.
+      children.push(paragraph(text.notConnected));
+    } else if (view.reminders.length > 0) {
       children.push(paragraph(text.reminders));
       for (const reminder of view.reminders) {
         children.push(
@@ -130,7 +133,7 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
         );
       }
     }
-    if (view.advertising !== undefined) {
+    if (view.recording && view.advertising !== undefined) {
       const { granted, night } = view.advertising;
       children.push(
         button(`${text.advertising}: ${granted ? text.on : text.off}`, () =>

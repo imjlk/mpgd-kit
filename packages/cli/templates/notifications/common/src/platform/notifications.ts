@@ -32,7 +32,13 @@ export const starterAdvertisingConsentTextVersion = '1';
 
 /** The topics this deployment target maps, each with its mapping, as providers read them. */
 export function starterNotificationTopics(configTarget: string): readonly NotificationTopicDeclaration[] {
-  return resolveNotificationTopicsForTarget(starterNotificationCatalog, configTarget);
+  try {
+    return resolveNotificationTopicsForTarget(starterNotificationCatalog, configTarget);
+  } catch (error) {
+    // A catalog that cannot be read turns notifications off, never the game.
+    console.error('[notifications] the topic catalog could not be read.', error);
+    return [];
+  }
 }
 
 /**

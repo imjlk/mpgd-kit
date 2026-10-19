@@ -463,6 +463,18 @@ try {
       /needs @capacitor\/local-notifications \^9\.0\.0, but this CLI would add 8\.3\.1/u,
     );
     writeFileSync(adapterFile, JSON.stringify(adapter));
+    // An adapter whose notifications subpath predates the settings opener.
+    const types = path.join(root, 'node_modules/@mpgd/adapter-capacitor/dist/notifications.d.ts');
+    mkdirSync(path.dirname(types), { recursive: true });
+    writeFileSync(types, 'export declare function loadCapacitorNotificationSdks(): void;\n');
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /has no openCapacitorNotificationSettings/u,
+    );
+    writeFileSync(
+      types,
+      'export { openCapacitorNotificationSettings } from "./notifications-settings.js";\n',
+    );
     const plugin = path.join(root, 'node_modules/@capacitor-firebase/messaging/package.json');
     mkdirSync(path.dirname(plugin), { recursive: true });
     writeFileSync(
@@ -471,7 +483,7 @@ try {
     );
     assert.throws(
       () => planCapacitorShellStarter(input(root, ['notifications'])),
-      /needs @capacitor-firebase\/messaging .* but the game has 7\.0\.0/u,
+      /@mpgd\/adapter-capacitor \S+ needs @capacitor-firebase\/messaging .* but the game has 7\.0\.0; align the game's version before rerunning/u,
     );
     // A plugin whose own Capacitor peer the game's core does not satisfy.
     writeFileSync(

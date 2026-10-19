@@ -16,7 +16,7 @@ export const notificationSettingsSceneKey = 'NotificationSettingsScene';
 
 const textStyle = { color: '#d6dee8', fontFamily: 'Arial, sans-serif', fontSize: '18px' } as const;
 const buttonStyle = { ...textStyle, color: '#5eead4' } as const;
-/** The list's viewport on the 960x540 game: between the title and the Back button. */
+/** The list's viewport on the 960x540 game: below the title and the outcome strip, above Back. */
 const list = { top: 110, height: 370, width: 960 } as const;
 
 /**
@@ -211,7 +211,10 @@ export class NotificationSettingsScene extends Phaser.Scene {
         action(text.turnOff, () => this.settings.turnOff());
       }
     }
-    if (view.reminders.length > 0) {
+    if (!view.recording && (view.reminders.length > 0 || view.advertising !== undefined)) {
+      // Nothing could record these choices: no switches that cannot work.
+      line(text.notConnected, { ...textStyle, fontSize: '15px' });
+    } else if (view.reminders.length > 0) {
       line(text.reminders, { ...textStyle, color: '#ffffff' });
       for (const reminder of view.reminders) {
         action(`${reminder.label}: ${reminder.enabled ? text.on : text.off}`, () =>
@@ -219,7 +222,7 @@ export class NotificationSettingsScene extends Phaser.Scene {
         );
       }
     }
-    if (view.advertising !== undefined) {
+    if (view.recording && view.advertising !== undefined) {
       const { granted, night } = view.advertising;
       action(`${text.advertising}: ${granted ? text.on : text.off}`, () =>
         this.settings.setAdvertising({ advertising: !granted }),

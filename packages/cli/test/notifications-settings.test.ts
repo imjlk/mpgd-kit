@@ -156,7 +156,11 @@ const common = {
   );
   assert.deepEqual(view.advertising, { granted: false, night: false });
   // The permission asked up front leaves the advertising topic out.
-  assert.equal((await settings.turnOn()).message, '알림을 켰어요.');
+  // Without a runtime the OS permission is on, but nothing is sent yet: the message says so.
+  assert.equal(
+    (await settings.turnOn()).message,
+    '알림 권한을 켰어요. 게임 서버가 연결되면 알림을 받을 수 있어요.',
+  );
   assert.deepEqual(calls, ['request:daily-ready,friend-challenge']);
   const refused = await settings.setAdvertising({ advertising: true });
   assert.match(refused.message ?? '', /서버가 연결되지 않아/u);
@@ -459,6 +463,52 @@ const common = {
   assert.equal((await visits.load()).message, undefined);
 }
 
+// A runtime whose recordShown throws synchronously is a logged rejection.
+{
+  const notice: NotificationNotice = {
+    kind: 'reconfirmation',
+    record: {
+      kind: 'advertising',
+      state: 'granted',
+      at: '2024-10-18T00:00:00.000Z',
+      textVersion: '1',
+    },
+    dueBy: '2026-10-25',
+    variant: 'reconfirmation.advertising',
+  };
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime } = fakeRuntime(provider, [notice]);
+  const throwing: NotificationRuntime = {
+    ...runtime,
+    notices: {
+      list: async () => [notice],
+      recordShown: () => {
+        throw new Error('sync');
+      },
+    },
+  };
+  const warnings: unknown[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  try {
+    const settings = createStarterNotificationSettings({
+      ...common,
+      provider,
+      runtime: throwing,
+      noticeCopy: {
+        ko: { 'reconfirmation.advertising': { title: '확인', body: '{{consentDate}}' } } as never,
+      },
+    });
+    assert.equal((await settings.load()).notices.length, 1);
+    await settings.recordNoticesShown();
+    assert.equal(warnings.length, 1);
+  } finally {
+    console.warn = original;
+  }
+}
+
 // A failing action reports a message instead of throwing into the scene.
 {
   const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
@@ -531,7 +581,7 @@ const common = {
   ]);
   unsubscribe();
   assert.equal(listener, undefined);
-  // A route with no `entry` is not the settings screen.
+  // A route with no `entry` is another open, not the settings screen.
   const plainListeners: ((event: NotificationEvent) => void)[] = [];
   let plain = 0;
   routeNotificationOpens(

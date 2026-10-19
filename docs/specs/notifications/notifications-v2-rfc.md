@@ -183,7 +183,7 @@ Rules for asking:
 ## Capabilities {#capabilities}
 
 ```ts
-// packages/platform/src/notifications (pure) — proposed for N2
+// packages/platform/src/notifications (pure); N2 implemented it
 
 export interface NotificationCapabilities {
   readonly availability: PlatformProviderAvailability;
@@ -254,8 +254,9 @@ two at start.
 
 ## Client contract {#client-contract}
 
-The types below are a sketch for N2. Names are proposed; field sets are the
-substance of this RFC.
+The types below were the sketch for N2, which implemented them in
+`@mpgd/platform/notifications`; the field sets are the substance of this
+RFC, and the package is the reference for exact names.
 
 ```ts
 export type NotificationTopicId = string & Record<never, never>;

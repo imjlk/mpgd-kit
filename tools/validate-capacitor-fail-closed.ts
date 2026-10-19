@@ -399,6 +399,30 @@ assert.doesNotMatch(
   'Capacitor local reminders must never ask for exact alarms',
 );
 
+// The settings opener exists on every side of the plugin: its TypeScript
+// definition, the Android @PluginMethod, and the iOS method table and @objc
+// method, so a shell never rejects it as unimplemented.
+for (const [path, requiredText] of [
+  [
+    'native-plugins/capacitor-game-services/src/definitions.ts',
+    'openNotificationSettings(): Promise<',
+  ],
+  [
+    'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
+    'public void openNotificationSettings(PluginCall call)',
+  ],
+  [
+    'native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/CapacitorGameServicesPlugin.swift',
+    'CAPPluginMethod(name: "openNotificationSettings", returnType: CAPPluginReturnPromise)',
+  ],
+  [
+    'native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/CapacitorGameServicesPlugin.swift',
+    '@objc func openNotificationSettings(_ call: CAPPluginCall)',
+  ],
+] as const) {
+  assert.ok(read(path).includes(requiredText), `${path} must keep ${requiredText}`);
+}
+
 console.info(
   'Capacitor reference native services fail closed without providers, and store and notification providers stay opt-in.',
 );

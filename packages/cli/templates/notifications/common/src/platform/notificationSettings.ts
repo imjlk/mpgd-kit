@@ -132,6 +132,7 @@ export const starterNotificationLabels = {
     on: '켜짐',
     off: '꺼짐',
     notices: '수신동의 안내',
+    notConnected: '게임 서버가 연결되면 리마인더와 광고성 정보 수신동의를 여기서 켜고 끌 수 있어요.',
     back: '돌아가기',
     close: '닫기',
   },
@@ -152,6 +153,7 @@ export const starterNotificationLabels = {
     on: 'on',
     off: 'off',
     notices: 'Consent notices',
+    notConnected: 'Once the game server is connected, reminders and promotional consent are set here.',
     back: 'Back',
     close: 'Close',
   },
@@ -186,6 +188,7 @@ const messages = {
     hostSettings: '앱의 개인화 약관에 동의해야 알림을 켤 수 있어요.',
     unavailable: '이 기기에서는 알림을 켤 수 없어요.',
     noRecording: '서버가 연결되지 않아 수신 설정을 저장할 수 없어요.',
+    grantedNoServer: '알림 권한을 켰어요. 게임 서버가 연결되면 알림을 받을 수 있어요.',
     failed: '설정을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.',
     readFailed: '알림 설정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.',
     advertisingOn: '광고성 정보 수신에 동의했어요.',
@@ -206,6 +209,7 @@ const messages = {
     hostSettings: "Agree to the app's personalization terms to turn notifications on.",
     unavailable: 'Notifications are not available on this device.',
     noRecording: 'The game server is not connected, so these choices cannot be saved.',
+    grantedNoServer: 'Notifications are allowed. They arrive once the game server is connected.',
     failed: 'The setting could not be changed. Try again later.',
     readFailed: 'The notification settings could not be read. Try again later.',
     advertisingOn: 'You agreed to promotional notifications.',
@@ -360,7 +364,8 @@ export function createStarterNotificationSettings(
       : await input.runtime.requestPermission({ topics, gesture: true });
     const outcomes = Object.values(result.outcomes);
     if (outcomes.some((outcome) => outcome === 'granted' || outcome === 'already-granted')) {
-      return strings.granted;
+      // Without a runtime nothing registers the device, so nothing is sent yet.
+      return input.runtime === undefined ? strings.grantedNoServer : strings.granted;
     }
     if (result.requiredAction === 'host-settings') {
       return strings.hostSettings;
