@@ -1,5 +1,11 @@
 # @mpgd/bridge
 
+## 0.13.2 — 2026-10-19
+
+### Patch changes
+
+- Updated dependencies: platform@0.24.0
+
 ## 0.13.1 — 2026-10-16
 
 ### Changed
