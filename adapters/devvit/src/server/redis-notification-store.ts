@@ -4,9 +4,11 @@ import {
   type NotificationHistoryEntry,
   type NotificationNoticeGiven,
   type NotificationPlatformRegistration,
+  type NotificationScheduleEntry,
   type NotificationStore,
   type NotificationStoredEndpoint,
   type NotificationStoredSend,
+  type NotificationVersionedScheduleEntry,
   type NotificationVersionedSend,
 } from '@mpgd/game-services/notifications';
 import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
@@ -27,7 +29,8 @@ import { createHash } from 'node:crypto';
  *   in the same transaction as the value, so they never disagree with it.
  * - **Consent records** are a sorted set per player scored by the record's
  *   millisecond; an append watches it, so parallel appends each take their
- *   own millisecond.
+ *   own millisecond. `pruneConsent` deletes records and the notices given
+ *   about them in one transaction over the player's two keys.
  * - **Device endpoints** are one JSON value per provider and installation,
  *   with an address pointer per provider and address (the uniqueness check)
  *   and sorted-set indexes per player, session, and installation, all
@@ -40,7 +43,19 @@ import { createHash } from 'node:crypto';
  *   Devvit server serves only platform-user
  *   providers, so it stores none in practice.
  * - **History** is a hash per player (one field per send and provider, so a
- *   repeat is ignored) with a sorted set by time.
+ *   repeat is ignored) with sorted sets by time: per player, for all
+ *   players (purge), and per provider. `countHistory` counts the provider's
+ *   set by rank (`@devvit/redis` has no ZCOUNT): a few reads, not a
+ *   snapshot, which the scheduler's approximate pacing allows.
+ * - **Schedule entries** (server reminders and notice checks) are one JSON
+ *   value per player and id with a version token, written as sends are.
+ *   The due index is one sorted set by `dueAt` whose member encodes the
+ *   player and id with fixed-width code points, so Redis's byte order of
+ *   equal scores is code-point order by player, then id. A sorted set per
+ *   player holds the ids of pending reminders, so `countPendingReminders`
+ *   is one ZCARD.
+ * - **Times.** A time that does not parse is refused with a `TypeError`
+ *   before anything is read or written, as in the in-memory and D1 stores.
  * - **Order.** Lists come sorted (by time, then by key or installation),
  *   not in insertion order as in the in-memory store; the interface promises
  *   only "oldest first" and "earliest first", and the service sorts where
@@ -98,6 +113,8 @@ export interface DevvitNotificationRedis {
       readonly limit?: { readonly offset: number; readonly count: number };
     },
   ): Promise<{ member: string; score: number }[]>;
+  zRank(key: string, member: string): Promise<number | undefined>;
+  zCard(key: string): Promise<number>;
   watch(...keys: string[]): Promise<DevvitNotificationRedisTransaction>;
 }
 
@@ -146,6 +163,11 @@ interface StoredSendValue {
   readonly version: string;
 }
 
+interface StoredScheduleValue {
+  readonly entry: NotificationScheduleEntry;
+  readonly version: string;
+}
+
 export function createDevvitRedisNotificationStore(
   redis: DevvitNotificationRedis,
   options: CreateDevvitRedisNotificationStoreOptions = {},
@@ -190,6 +212,10 @@ export function createDevvitRedisNotificationStore(
     history: (player: string) => `${namespace}:history:${enc(player)}`,
     historyAt: (player: string) => `${namespace}:history-at:${enc(player)}`,
     historyAll: `${namespace}:history-all`,
+    historyByProvider: (provider: string) => `${namespace}:history-provider:${enc(provider)}`,
+    schedule: (player: string, id: string) => `${namespace}:schedule:${enc(player)}:${enc(id)}`,
+    scheduleDue: `${namespace}:schedule-due`,
+    pendingReminders: (player: string) => `${namespace}:schedule-pending:${enc(player)}`,
     commitMarker: `${namespace}:commit`,
   };
 
@@ -515,6 +541,98 @@ export function createDevvitRedisNotificationStore(
     return stored;
   }
 
+  async function readSchedule(player: string, id: string): Promise<StoredScheduleValue | undefined> {
+    const key = keys.schedule(player, id);
+    const value = await redis.get(key);
+    if (isMissing(value)) {
+      return undefined;
+    }
+    const stored = tryParse<Partial<StoredScheduleValue> | null>(value);
+    if (
+      typeof stored !== 'object' || stored === null
+      || typeof stored.version !== 'string'
+      || typeof stored.entry !== 'object' || stored.entry === null
+      || typeof stored.entry.item !== 'object' || stored.entry.item === null
+    ) {
+      throw new Error(
+        `Devvit Redis notification store: ${key} holds a value that is not a schedule entry.`,
+      );
+    }
+    return stored as StoredScheduleValue;
+  }
+
+  /**
+   * The value and index commands that store `after` under `player` and `id`
+   * (whatever it names) with a new version, or delete the entry.
+   */
+  function scheduleCommands(
+    player: string,
+    id: string,
+    after: NotificationScheduleEntry | undefined,
+  ): { readonly commands: readonly Command[]; readonly version: string | undefined } {
+    const valueKey = keys.schedule(player, id);
+    const member = scheduleMember(player, id);
+    if (after === undefined) {
+      return {
+        commands: [
+          (transaction) => transaction.del(valueKey),
+          (transaction) => transaction.zRem(keys.scheduleDue, [member]),
+          (transaction) => transaction.zRem(keys.pendingReminders(player), [id]),
+        ],
+        version: undefined,
+      };
+    }
+    const { dueAt, ...rest } = after;
+    const entry: NotificationScheduleEntry = {
+      ...rest,
+      player,
+      id,
+      ...(dueAt === undefined ? {} : { dueAt }),
+    };
+    const version = newVersion();
+    const value = JSON.stringify({ entry, version } satisfies StoredScheduleValue);
+    const score = dueAt === undefined ? undefined : instantOf(dueAt);
+    const pending = id.startsWith('reminder:') && entry.item.kind === 'reminder' && entry.item.firedAt === undefined;
+    return {
+      commands: [
+        (transaction) => transaction.set(valueKey, value),
+        score === undefined
+          ? (transaction) => transaction.zRem(keys.scheduleDue, [member])
+          : (transaction) => transaction.zAdd(keys.scheduleDue, { member, score }),
+        pending
+          ? (transaction) =>
+              transaction.zAdd(keys.pendingReminders(player), { member: id, score: 0 })
+          : (transaction) => transaction.zRem(keys.pendingReminders(player), [id]),
+      ],
+      version,
+    };
+  }
+
+  /** The rank of the first member at or after `min` (a score bound), the set's size when none is. */
+  async function rankFrom(key: string, min: string): Promise<number | undefined> {
+    const [first] = await redis.zRange(key, min, '+inf', {
+      by: 'score',
+      limit: { offset: 0, count: 1 },
+    });
+    return first === undefined ? redis.zCard(key) : redis.zRank(key, first.member);
+  }
+
+  /**
+   * How many members score from `min` to `max`, both inclusive, by rank: a
+   * member another writer removes between the reads makes the count read
+   * again, and after a few tries the members are counted in pages.
+   */
+  async function countScores(key: string, min: number, max: number): Promise<number> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const start = await rankFrom(key, String(min));
+      const end = await rankFrom(key, `(${String(max)}`);
+      if (start !== undefined && end !== undefined) {
+        return Math.max(0, end - start);
+      }
+    }
+    return (await scoreRange(key, String(min), String(max))).length;
+  }
+
   return {
     async appendConsent({ player, record, at }) {
       const key = keys.consent(player);
@@ -536,6 +654,33 @@ export function createDevvitRedisNotificationStore(
       const key = keys.consent(player);
       const members = await redis.zRange(key, 0, -1, { by: 'rank' });
       return members.map((entry) => parse<NotificationConsentRecord>(entry.member, key));
+    },
+    async pruneConsent({ player, at }) {
+      // Every instant parses before anything is read or deleted.
+      const instants = new Set(at.map(instantOf));
+      if (instants.size === 0) {
+        return 0;
+      }
+      const consentKey = keys.consent(player);
+      const noticesKey = keys.notices(player);
+      return transact([consentKey, noticesKey], async () => {
+        const records = (await redis.zRange(consentKey, 0, -1, { by: 'rank' }))
+          .filter((entry) => instants.has(entry.score))
+          .map((entry) => entry.member);
+        const notices = Object.entries(await redis.hGetAll(noticesKey))
+          .filter(([, value]) => {
+            const notice = tryParse<{ readonly record?: { readonly at?: unknown } } | null>(value);
+            return typeof notice?.record?.at === 'string' && instants.has(Date.parse(notice.record.at));
+          })
+          .map(([field]) => field);
+        return {
+          commands: [
+            ...(records.length === 0 ? [] : [(transaction: DevvitNotificationRedisTransaction) => transaction.zRem(consentKey, records)]),
+            ...(notices.length === 0 ? [] : [(transaction: DevvitNotificationRedisTransaction) => transaction.hDel(noticesKey, notices)]),
+          ],
+          result: records.length,
+        };
+      });
     },
 
     async putEndpoint(write) {
@@ -767,6 +912,7 @@ export function createDevvitRedisNotificationStore(
       return sends;
     },
     async listDueSends({ at, limit }) {
+      const now = instantOf(at);
       const count = Math.max(0, Math.floor(limit));
       if (count === 0) {
         return [];
@@ -776,7 +922,7 @@ export function createDevvitRedisNotificationStore(
       let offset = 0;
       while (due.length < count) {
         const want = Math.min(pageSize, count - due.length);
-        const page = await redis.zRange(keys.due, '-inf', String(Date.parse(at)), {
+        const page = await redis.zRange(keys.due, '-inf', String(now), {
           by: 'score',
           limit: { offset, count: want },
         });
@@ -796,6 +942,7 @@ export function createDevvitRedisNotificationStore(
     },
 
     async addHistory(entry) {
+      const score = instantOf(entry.at);
       const key = keys.history(entry.player);
       const field = JSON.stringify([entry.sendKey, entry.provider]);
       await transact([key], async () => {
@@ -803,20 +950,20 @@ export function createDevvitRedisNotificationStore(
           return { commands: [], result: undefined };
         }
         const value = JSON.stringify(entry);
-        const score = Date.parse(entry.at);
         const everywhere = JSON.stringify([entry.player, field]);
         return {
           commands: [
             (transaction) => transaction.hSet(key, { [field]: value }),
             (transaction) => transaction.zAdd(keys.historyAt(entry.player), { member: field, score }),
             (transaction) => transaction.zAdd(keys.historyAll, { member: everywhere, score }),
+            (transaction) => transaction.zAdd(keys.historyByProvider(entry.provider), { member: everywhere, score }),
           ],
           result: undefined,
         };
       });
     },
     async listHistory({ player, since }) {
-      const fields = await scoreRange(keys.historyAt(player), String(Date.parse(since)), '+inf');
+      const fields = await scoreRange(keys.historyAt(player), String(instantOf(since)), '+inf');
       if (fields.length === 0) {
         return [];
       }
@@ -827,16 +974,82 @@ export function createDevvitRedisNotificationStore(
         .map((value) => parse<NotificationHistoryEntry>(value, key))
         .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
     },
+    async countHistory({ provider, since, until }) {
+      const from = instantOf(since);
+      const to = instantOf(until);
+      return to < from ? 0 : countScores(keys.historyByProvider(provider), from, to);
+    },
+
+    async getScheduleEntry({ player, id }): Promise<NotificationVersionedScheduleEntry | undefined> {
+      const stored = await readSchedule(player, id);
+      return stored === undefined ? undefined : { entry: stored.entry, version: stored.version };
+    },
+    async createScheduleEntry(entry) {
+      if (entry.dueAt !== undefined) {
+        instantOf(entry.dueAt);
+      }
+      const valueKey = keys.schedule(entry.player, entry.id);
+      return transact([valueKey], async () => {
+        if (!isMissing(await redis.get(valueKey))) {
+          return { commands: [], result: undefined };
+        }
+        const { commands, version } = scheduleCommands(entry.player, entry.id, entry);
+        return { commands, result: version };
+      });
+    },
+    async updateScheduleEntry({ player, id, version, entry }) {
+      if (entry?.dueAt !== undefined) {
+        instantOf(entry.dueAt);
+      }
+      return transact([keys.schedule(player, id)], async () => {
+        const stored = await readSchedule(player, id);
+        if (stored === undefined || stored.version !== version) {
+          return { commands: [], result: false };
+        }
+        return { commands: scheduleCommands(player, id, entry).commands, result: true };
+      });
+    },
+    async countPendingReminders(player) {
+      return redis.zCard(keys.pendingReminders(player));
+    },
+    async listDueScheduleEntries({ at, limit }) {
+      const now = instantOf(at);
+      const count = Math.max(0, Math.floor(limit));
+      const due: { player: string; id: string }[] = [];
+      const seen = new Set<string>();
+      let offset = 0;
+      while (due.length < count) {
+        const want = Math.min(pageSize, count - due.length);
+        const page = await redis.zRange(keys.scheduleDue, '-inf', String(now), {
+          by: 'score',
+          limit: { offset, count: want },
+        });
+        for (const { member } of page) {
+          const named = readScheduleMember(member);
+          // Offsets move while other workers write the index: keep each entry once.
+          if (named !== undefined && !seen.has(member)) {
+            seen.add(member);
+            due.push(named);
+          }
+        }
+        if (page.length < want) {
+          break;
+        }
+        offset += page.length;
+      }
+      return due;
+    },
 
     async purge(cutoffs) {
+      // Every cutoff parses before anything is read or deleted.
+      for (const cutoff of Object.values(cutoffs)) {
+        instantOf(cutoff);
+      }
       // Oldest first; with `purgeLimit`, at most that many sends and history
       // rows per call, and the next scheduled purge continues.
       let sendCount = 0;
-      const sendsBefore = Date.parse(cutoffs.sendsChangedBefore);
-      // A cutoff that does not parse matches nothing, as in the in-memory store.
-      for (const key of Number.isNaN(sendsBefore)
-        ? []
-        : await scoreRange(keys.changed, '-inf', `(${String(sendsBefore)}`, purgeLimit)) {
+      const sendsBefore = instantOf(cutoffs.sendsChangedBefore);
+      for (const key of await scoreRange(keys.changed, '-inf', `(${String(sendsBefore)}`, purgeLimit)) {
         const valueKey = keys.send(key);
         const deleted = await transact([valueKey], async () => {
           // A Redis failure here fails the purge; only a value that does not
@@ -893,10 +1106,8 @@ export function createDevvitRedisNotificationStore(
       }
 
       let historyCount = 0;
-      const historyBefore = Date.parse(cutoffs.historyBefore);
-      for (const member of Number.isNaN(historyBefore)
-        ? []
-        : await scoreRange(keys.historyAll, '-inf', `(${String(historyBefore)}`, purgeLimit)) {
+      const historyBefore = instantOf(cutoffs.historyBefore);
+      for (const member of await scoreRange(keys.historyAll, '-inf', `(${String(historyBefore)}`, purgeLimit)) {
         const named = tryParse<unknown>(member);
         if (
           !Array.isArray(named)
@@ -912,6 +1123,11 @@ export function createDevvitRedisNotificationStore(
         }
         const [player, field] = named as [string, string];
         const key = keys.history(player);
+        // The field names the send and provider; the provider's index holds the same member.
+        const fieldNames = tryParse<unknown>(field);
+        const byProvider = Array.isArray(fieldNames) && typeof fieldNames[1] === 'string'
+          ? keys.historyByProvider(fieldNames[1])
+          : undefined;
         const removed = await transact([key], async () => {
           const value = await redis.hGet(key, field);
           const entry = isMissing(value) ? undefined : tryParse<Partial<NotificationHistoryEntry> | null>(value);
@@ -923,6 +1139,9 @@ export function createDevvitRedisNotificationStore(
               commands: [
                 (transaction) => transaction.zAdd(keys.historyAt(player), { member: field, score: at }),
                 (transaction) => transaction.zAdd(keys.historyAll, { member, score: at }),
+                ...(byProvider === undefined
+                  ? []
+                  : [(transaction: DevvitNotificationRedisTransaction) => transaction.zAdd(byProvider, { member, score: at })]),
               ],
               result: false,
             };
@@ -934,6 +1153,9 @@ export function createDevvitRedisNotificationStore(
                 : [(transaction: DevvitNotificationRedisTransaction) => transaction.hDel(key, [field])]),
               (transaction) => transaction.zRem(keys.historyAt(player), [field]),
               (transaction) => transaction.zRem(keys.historyAll, [member]),
+              ...(byProvider === undefined
+                ? []
+                : [(transaction: DevvitNotificationRedisTransaction) => transaction.zRem(byProvider, [member])]),
             ],
             result: !isMissing(value),
           };
@@ -960,11 +1182,7 @@ export function createDevvitRedisNotificationStore(
         [keys.endpointsRegistered, cutoffs.staleEndpointsBefore, (endpoint: NotificationStoredEndpoint) => endpoint.lastRegisteredAt],
         [keys.endpointsSessionEnd, cutoffs.sessionEndpointsBefore, (endpoint: NotificationStoredEndpoint) => endpoint.sessionExpiresAt],
       ] as const) {
-        const cutoffMs = Date.parse(cutoff);
-        if (Number.isNaN(cutoffMs)) {
-          // A cutoff that does not parse matches nothing, as in the in-memory store.
-          continue;
-        }
+        const cutoffMs = instantOf(cutoff);
         const members = await scoreRange(index, '-inf', `(${String(cutoffMs)}`, purgeLimit);
         for (const member of members) {
           const named = tryParse<unknown>(member);
@@ -995,6 +1213,58 @@ export function createDevvitRedisNotificationStore(
       return { sends: sendCount, history: historyCount, endpoints: endpointCount };
     },
   };
+}
+
+/** Epoch milliseconds of a time; one that does not parse is a caller error, as in the in-memory store. */
+function instantOf(at: string): number {
+  const millis = Date.parse(at);
+  if (!Number.isFinite(millis)) {
+    throw new TypeError(`Not a timestamp: ${JSON.stringify(at)}`);
+  }
+  return millis;
+}
+
+/**
+ * Code points as fixed-width hex, so byte order is code-point order (lone
+ * surrogates included, as `Array.from` iterates them).
+ */
+function encodeCodePoints(value: string): string {
+  return Array.from(value, (char) => (char.codePointAt(0) ?? 0).toString(16).padStart(6, '0')).join(
+    '',
+  );
+}
+
+function decodeCodePoints(encoded: string): string | undefined {
+  if (encoded.length % 6 !== 0 || !/^[0-9a-f]*$/u.test(encoded)) {
+    return undefined;
+  }
+  let value = '';
+  for (let index = 0; index < encoded.length; index += 6) {
+    const codePoint = Number.parseInt(encoded.slice(index, index + 6), 16);
+    if (codePoint > 0x10ffff) {
+      return undefined;
+    }
+    value += String.fromCodePoint(codePoint);
+  }
+  return value;
+}
+
+/**
+ * A due-index member: the player, `.`, and the id, each as fixed-width code
+ * points. `.` sorts before every hex digit, so equal scores order by player
+ * (a prefix first), then by id, in code-point order.
+ */
+function scheduleMember(player: string, id: string): string {
+  return `${encodeCodePoints(player)}.${encodeCodePoints(id)}`;
+}
+
+function readScheduleMember(member: string): { player: string; id: string } | undefined {
+  const [player, id, ...rest] = member.split('.');
+  const decodedPlayer = player === undefined ? undefined : decodeCodePoints(player);
+  const decodedId = id === undefined ? undefined : decodeCodePoints(id);
+  return rest.length > 0 || decodedPlayer === undefined || decodedId === undefined
+    ? undefined
+    : { player: decodedPlayer, id: decodedId };
 }
 
 /** Up to about 2 ms per attempt, jittered: enough to break lockstep retries. */

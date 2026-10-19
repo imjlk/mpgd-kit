@@ -1624,7 +1624,7 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       an hour, until 24 hours after the first attempt
       (`notificationAmbiguousReplayHours`, see [Provider
       answers](#provider-answers)): with the default 300-second lease, at
-      most 26 calls. Then the row stays in flight until its key's
+      most 27 calls. Then the row stays in flight until its key's
       retention ends, and the backend reports it.
     - Devvit documents no error messages (checked 2026-10-19), so a deployment
       names the messages it observes (`classifyEnqueueError`). The delivery
@@ -1648,7 +1648,10 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `runNotificationStoreConformance`; see open question 2 for its fencing.
     Device endpoints are indexed per player, session, and installation, with
     an address pointer for uniqueness, so a call touches only one player's
-    endpoints.
+    endpoints. Schedule entries have a due index whose members encode the
+    player and id as fixed-width code points, so equal due times order by
+    player, then id, in code-point order; `countHistory` counts a
+    per-provider index by rank, since Devvit Redis has no ZCOUNT.
 
 ### Reminder scheduler {#scheduler}
 

@@ -253,6 +253,18 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
       const count = options.limit?.count ?? 1000;
       return inRange.slice(offset, offset + count);
     },
+    async zRank(key, member) {
+      await tick();
+      const sorted = [...(zset(key, false) ?? new Map<string, number>())]
+        .map(([name, score]) => ({ member: name, score }))
+        .sort((left, right) => left.score - right.score || compareMembers(left.member, right.member));
+      const rank = sorted.findIndex((entry) => entry.member === member);
+      return rank === -1 ? undefined : rank;
+    },
+    async zCard(key) {
+      await tick();
+      return zset(key, false)?.size ?? 0;
+    },
     async watch(...watched) {
       await tick();
       const seen = new Map(watched.map((key) => [key, versions.get(key) ?? 0]));

@@ -528,10 +528,11 @@ describe('createDevvitNotificationService', () => {
         callTimes.push(now);
       }
     }
-    // Leases of 300, 600, 1200, 2400 s, then an hour each, until a day after the first attempt.
-    // Calls at 0, 600, 1800, 4200 s, then hourly; the lease after the call at
-    // 83,400 s would end a day after the first attempt, so replays stop.
-    expect(callTimes.length).toBe(26);
+    // Waits of 300, 600, 1200, 2400 s, then an hour each, until a day after the first attempt.
+    // Calls at 0, 300, 900, 2100, 4500 s, then hourly; the lease after the call at
+    // 83,700 s would end a day after the first attempt, so replays stop.
+    expect(callTimes.length).toBe(27);
+    expect(callTimes.slice(0, 5).map((at) => (at - (callTimes[0] ?? 0)) / 1_000)).toEqual([0, 300, 900, 2_100, 4_500]);
     expect((callTimes.at(-1) ?? 0) - (callTimes[0] ?? 0)).toBeLessThan(24 * 3_600_000);
   });
 

@@ -220,7 +220,7 @@ function reasonOf(answer: NotificationRemoteDeliveryAnswer): Pick<DevvitEnqueueE
  *   service reports it to the operator and replays it after each lease,
  *   which doubles from the claim lease up to an hour, for at most 24 hours
  *   after the first attempt (`notificationAmbiguousReplayHours`): with the
- *   default 300-second lease, at most 26 calls. A call that throws,
+ *   default 300-second lease, at most 27 calls. A call that throws,
  *   or an answer that counts neither a success nor a failure, is
  *   `ambiguous` too: Devvit may have queued it, and `enqueue` takes no
  *   idempotency key, so a replay may show twice.

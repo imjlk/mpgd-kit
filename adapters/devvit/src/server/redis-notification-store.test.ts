@@ -270,7 +270,7 @@ describe('createDevvitRedisNotificationStore', () => {
     ]);
   });
 
-  it('rescores a misdated send entry, drops one whose time does not parse, and ignores cutoffs that do not parse', async () => {
+  it('rescores a misdated send entry, drops one whose time does not parse, and refuses cutoffs that do not parse', async () => {
     const redis = createFakeNotificationRedis();
     const store = createDevvitRedisNotificationStore(redis);
     const zset = async (key: string) =>
@@ -302,15 +302,19 @@ describe('createDevvitRedisNotificationStore', () => {
       staleEndpointsBefore: 'garbage',
       sessionEndpointsBefore: 'garbage',
     };
-    // A cutoff that does not parse matches nothing and leaves every index alone.
-    expect(await store.purge(garbage)).toEqual({ sends: 0, history: 0, endpoints: 0 });
+    // A cutoff that does not parse is refused before anything is read or deleted, even beside good ones.
+    const good = {
+      sendsChangedBefore: '2026-11-01T00:00:00Z',
+      historyBefore: '2026-01-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-01-01T00:00:00Z',
+      staleEndpointsBefore: '2026-10-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-01-01T00:00:00Z',
+    };
+    await expect(store.purge(garbage)).rejects.toThrow(TypeError);
+    await expect(store.purge({ ...good, historyBefore: 'garbage' })).rejects.toThrow(TypeError);
     expect(await zset('sends:changed')).toEqual([['new', 0], ['odd', 0]]);
     expect((await zset('endpoints-registered')).map(([member]) => member)).toEqual([JSON.stringify(['fcm', 'a'])]);
-    expect(await store.purge({
-      ...garbage,
-      sendsChangedBefore: '2026-11-01T00:00:00Z',
-      staleEndpointsBefore: '2026-10-01T00:00:00Z',
-    })).toEqual({ sends: 0, history: 0, endpoints: 0 });
+    expect(await store.purge(good)).toEqual({ sends: 0, history: 0, endpoints: 0 });
     expect(await zset('sends:changed')).toEqual([['new', Date.parse('2026-12-01T00:00:00Z')]]);
     // An endpoint whose time does not parse is never purged; it leaves the time index.
     expect(await zset('endpoints-registered')).toEqual([]);
@@ -513,6 +517,136 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(await store.getEndpoint({ provider: 'fcm', installationId: 'b' })).toBeUndefined();
     expect((await store.listEndpoints({ player: 't2_me', provider: 'fcm' })).map((row) => row.installationId))
       .toEqual(['a', 'c']);
+  });
+
+  it('refuses send, history, and due times that do not parse before anything is written', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    await expect(store.listDueSends({ at: 'x', limit: 1 })).rejects.toThrow(TypeError);
+    await expect(store.listHistory({ player: 'p', since: 'x' })).rejects.toThrow(TypeError);
+    await expect(store.addHistory({ sendKey: 'k', provider: 'devvit', player: 'p', topic: 't', at: 'x' }))
+      .rejects.toThrow(TypeError);
+    await expect(store.countHistory({ provider: 'devvit', since: 'x', until: '2026-10-19T00:00:00Z' }))
+      .rejects.toThrow(TypeError);
+    await expect(store.listDueScheduleEntries({ at: 'x', limit: 1 })).rejects.toThrow(TypeError);
+    await expect(store.pruneConsent({ player: 'p', at: ['x'] })).rejects.toThrow(TypeError);
+    expect(redis.keys()).toEqual([]);
+  });
+
+  it('counts provider history by rank, keeps the provider index through purge, and reads a reversed range as none', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    for (let index = 0; index < 1_200; index += 1) {
+      await store.addHistory({
+        sendKey: `k-${String(index)}`,
+        provider: 'devvit',
+        player: `t2_${String(index % 7)}`,
+        topic: 't',
+        at: new Date(Date.parse('2026-10-01T00:00:00Z') + index * 1_000).toISOString(),
+      });
+    }
+    // More than one page of members, and equal bounds count a member at that instant.
+    expect(await store.countHistory({ provider: 'devvit', since: '2026-10-01T00:00:00Z', until: '2026-10-02T00:00:00Z' }))
+      .toBe(1_200);
+    expect(await store.countHistory({ provider: 'devvit', since: '2026-10-01T00:00:10Z', until: '2026-10-01T00:00:10Z' }))
+      .toBe(1);
+    expect(await store.countHistory({ provider: 'devvit', since: '2026-10-01T00:00:10Z', until: '2026-10-01T00:00:09Z' }))
+      .toBe(0);
+    expect(await store.countHistory({ provider: 'fcm', since: '2026-10-01T00:00:00Z', until: '2026-10-02T00:00:00Z' }))
+      .toBe(0);
+    // Purge deletes the provider's index entries with the rows.
+    expect((await store.purge({
+      sendsChangedBefore: '2026-01-01T00:00:00Z',
+      historyBefore: '2026-10-01T00:10:00Z',
+      invalidEndpointsBefore: '2026-01-01T00:00:00Z',
+      staleEndpointsBefore: '2026-01-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-01-01T00:00:00Z',
+    })).history).toBe(600);
+    expect(await store.countHistory({ provider: 'devvit', since: '2026-10-01T00:00:00Z', until: '2026-10-02T00:00:00Z' }))
+      .toBe(600);
+    expect(await redis.zCard('mpgd:notifications:history-provider:devvit')).toBe(600);
+  });
+
+  it('counts by pages when the first member keeps leaving between the reads', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    await store.addHistory({ sendKey: 'a', provider: 'devvit', player: 'p', topic: 't', at: '2026-10-01T00:00:00Z' });
+    await store.addHistory({ sendKey: 'b', provider: 'devvit', player: 'p', topic: 't', at: '2026-10-01T00:00:01Z' });
+    const zRank = redis.zRank.bind(redis);
+    let ranks = 0;
+    redis.zRank = async (key, member) => {
+      ranks += 1;
+      // Another writer removed the member just read.
+      return ranks <= 8 ? undefined : zRank(key, member);
+    };
+    expect(await store.countHistory({ provider: 'devvit', since: '2026-10-01T00:00:00Z', until: '2026-10-01T00:00:01Z' }))
+      .toBe(2);
+    expect(ranks).toBe(4);
+  });
+
+  it('orders due schedule entries by code point with a member that holds no separator of its own', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    const reminder = (player: string, id: string) => ({
+      player,
+      id,
+      dueAt: '2026-10-19T03:00:00Z',
+      item: { kind: 'reminder' as const, key: id, topic: 't', fireAt: '2026-10-19T03:00:00Z' },
+    });
+    // A player that is a prefix of another sorts first, though a space sorts before a quote in JSON.
+    for (const [player, id] of [['a b', 'reminder:x'], ['a', 'reminder:y'], ['a.b', 'reminder:.'], ['', 'reminder:']] as const) {
+      await store.createScheduleEntry(reminder(player, id));
+    }
+    expect(await store.listDueScheduleEntries({ at: '2026-10-19T03:00:00Z', limit: 10 })).toEqual([
+      { player: '', id: 'reminder:' },
+      { player: 'a', id: 'reminder:y' },
+      { player: 'a b', id: 'reminder:x' },
+      { player: 'a.b', id: 'reminder:.' },
+    ]);
+    // An index member that is not one this store writes is skipped.
+    const index = await redis.watch();
+    await index.multi();
+    await index.zAdd('mpgd:notifications:schedule-due', { member: 'zz.not-hex', score: 0 });
+    await index.exec();
+    expect(await store.listDueScheduleEntries({ at: '2026-10-19T03:00:00Z', limit: 10 })).toHaveLength(4);
+    expect(await store.countPendingReminders('a')).toBe(1);
+    redis.poke('mpgd:notifications:schedule:a:reminder%3Ay', 'not json');
+    await expect(store.getScheduleEntry({ player: 'a', id: 'reminder:y' })).rejects.toThrow(/not a schedule entry/u);
+  });
+
+  it('prunes consent records and their notices in one transaction', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    const record = await store.appendConsent({
+      player: 'p',
+      record: { kind: 'advertising', state: 'granted', source: 'player', textVersion: 'v1' },
+      at: '2026-10-19T03:00:00Z',
+    });
+    await store.appendConsent({
+      player: 'p',
+      record: { kind: 'advertising', state: 'withdrawn', source: 'player', textVersion: 'v1' },
+      at: '2026-10-19T03:00:00Z',
+    });
+    await store.addNoticeGiven({
+      kind: 'consent-result',
+      record: { kind: 'advertising', at: record.at },
+      dueBy: '2026-11-01',
+      player: 'p',
+      channel: 'push',
+      at: '2026-10-19T04:00:00Z',
+    });
+    // A writer touches the notices between the read and EXEC: the step reads again and still deletes both.
+    let touched = false;
+    redis.beforeExec = (watched) => {
+      if (!touched && watched.includes('mpgd:notifications:notices:p')) {
+        touched = true;
+        redis.touch('mpgd:notifications:notices:p');
+      }
+    };
+    expect(await store.pruneConsent({ player: 'p', at: [record.at] })).toBe(1);
+    expect(redis.aborted).toBe(1);
+    expect(await store.listNoticesGiven('p')).toEqual([]);
+    expect(await store.listConsent('p')).toHaveLength(1);
   });
 
   it('rejects an empty namespace and out-of-range attempts', () => {
