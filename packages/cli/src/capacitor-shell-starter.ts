@@ -24,6 +24,7 @@ import {
   notificationsCapacitorGateways,
   notificationsCapacitorSupportFiles,
   notificationsGameDependencies,
+  notificationsMessagingFirebaseRange,
   notificationsProviderId,
   notificationsShellPlugins,
   wireCapacitorGatewayNotifications,
@@ -3235,6 +3236,32 @@ function planNotificationsProvider(input: {
           : `@mpgd/adapter-capacitor ${String(adapter.version)} needs ${plugin.packageName} ${range}, `
             + `but this CLI would add ${plugin.version}; add a version in that range to the game `
             + `(pnpm add ${plugin.packageName}) or upgrade the CLI, then rerun.`,
+      );
+    }
+  }
+  // The messaging plugin's web fallback imports `firebase`: the game's own
+  // copy must be in the plugin's peer range. An installed plugin names its
+  // range; for the plugin the starter adds, the kit pins it.
+  const messaging = shellPlugins.find(
+    (plugin) => plugin.packageName === '@capacitor-firebase/messaging',
+  );
+  const firebase = versionOf('firebase');
+  if (messaging !== undefined) {
+    const installedPeers = messaging.installed
+      ? readJsonObject(
+        path.join(gameRoot, 'node_modules/@capacitor-firebase/messaging/package.json'),
+      ).peerDependencies
+      : undefined;
+    const declared = typeof installedPeers === 'object' && installedPeers !== null
+      ? (installedPeers as Readonly<Record<string, unknown>>)['firebase']
+      : undefined;
+    const firebaseRange = messaging.installed ? declared : notificationsMessagingFirebaseRange;
+    if (typeof firebaseRange === 'string' && validRange(firebaseRange) !== null
+      && !satisfies(firebase.version, firebaseRange, { includePrerelease: true })) {
+      throw new Error(
+        `@capacitor-firebase/messaging ${messaging.version} needs firebase ${firebaseRange}, but `
+          + (firebase.installed ? `the game has ${firebase.version}` : `this CLI would add ${firebase.version}`)
+          + '; align the game\'s firebase (pnpm add firebase@"' + firebaseRange + '") before rerunning.',
       );
     }
   }

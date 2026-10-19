@@ -25,6 +25,14 @@ export const notificationsGameDependencies: Readonly<Record<string, string>> = O
   firebase: '12.19.0',
 });
 
+/**
+ * The `firebase` range the starter's `@capacitor-firebase/messaging` version
+ * declares as its peer (its web fallback imports the SDK). A game that keeps
+ * its own `firebase` must be in it before the starter adds the plugin; the
+ * starter test pins it to the plugin's published metadata.
+ */
+export const notificationsMessagingFirebaseRange = '^12.6.0';
+
 /** The plugins `mpgd target init capacitor --providers notifications` installs into the shell. */
 export const notificationsShellPlugins: readonly string[] = Object.freeze([
   '@capacitor-firebase/messaging',

@@ -3,6 +3,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { satisfies } from 'semver';
+
 import { validateNotificationTopicCatalog } from '@mpgd/catalog';
 import {
   assertNotificationDeployment,
@@ -13,6 +15,7 @@ import {
 import {
   applyNotificationsStarter,
   notificationsGameDependencies,
+  notificationsMessagingFirebaseRange,
   readGameCreateProviders,
   type NotificationsStarterFile,
 } from '../src/notifications-starter.js';
@@ -250,6 +253,25 @@ const adapterManifest = JSON.parse(
 for (const name of ['@capacitor-firebase/messaging', '@capacitor/local-notifications']) {
   assert.equal(notificationsGameDependencies[name], adapterManifest.devDependencies[name], name);
 }
+// The firebase range the shell starter checks a game's own copy against is
+// the starter messaging plugin's published peer, and the starter's firebase is in it.
+const messagingManifest = JSON.parse(
+  readFileSync(
+    path.join(
+      templatesRoot,
+      '../../../adapters/capacitor/node_modules/@capacitor-firebase/messaging/package.json',
+    ),
+    'utf8',
+  ),
+) as { readonly version: string; readonly peerDependencies: Record<string, string> };
+assert.equal(
+  messagingManifest.version,
+  notificationsGameDependencies['@capacitor-firebase/messaging'],
+);
+assert.equal(messagingManifest.peerDependencies.firebase, notificationsMessagingFirebaseRange);
+assert.ok(
+  satisfies(notificationsGameDependencies.firebase ?? '', notificationsMessagingFirebaseRange),
+);
 // An overlay path that two parts carry fails loudly instead of one winning.
 const duplicated = overlay.common[0];
 assert.ok(duplicated);

@@ -505,6 +505,40 @@ try {
     );
   }
 
+  // The game's own firebase must be in the messaging plugin's peer range:
+  // the kit's pinned range for the plugin the starter adds, else the
+  // installed plugin's.
+  {
+    const root = createGame();
+    const firebase = path.join(root, 'node_modules/firebase/package.json');
+    mkdirSync(path.dirname(firebase), { recursive: true });
+    writeFileSync(firebase, JSON.stringify({ name: 'firebase', version: '11.10.0' }));
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /@capacitor-firebase\/messaging 8\.5\.2 needs firebase \^12\.6\.0, but the game has 11\.10\.0/u,
+    );
+    writeFileSync(firebase, JSON.stringify({ name: 'firebase', version: '12.7.0' }));
+    // In range: the plan goes ahead with the game's copy.
+    assert.equal(
+      planCapacitorShellStarter(input(root, ['notifications'])).notificationPlugins.length,
+      2,
+    );
+    const plugin = path.join(root, 'node_modules/@capacitor-firebase/messaging/package.json');
+    mkdirSync(path.dirname(plugin), { recursive: true });
+    writeFileSync(
+      plugin,
+      JSON.stringify({
+        name: '@capacitor-firebase/messaging',
+        version: '8.5.2',
+        peerDependencies: { firebase: '^13.0.0' },
+      }),
+    );
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /needs firebase \^13\.0\.0, but the game has 12\.7\.0/u,
+    );
+  }
+
   // @capacitor/push-notifications claims the same iOS push handler: refused.
   {
     const root = createGame();
