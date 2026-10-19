@@ -1766,4 +1766,48 @@ const pending = (h: Harness) =>
   assert.equal(h.jobs.length, 3, 'no more than the rate in one run, across its rounds');
 }
 
+// A run whose remaining due rows the pace holds back ends; a round that throws keeps what came before.
+{
+  const h = harness({ fcmEntry: { ...fcmEntry, rate: { count: 1, windowSeconds: 60 } } });
+  for (let index = 0; index < 5; index += 1) {
+    await register(h, `p-${index}`);
+    await h.service.setReminder(session(`p-${index}`), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T03:00:00Z',
+    });
+  }
+  await h.service.runScheduler({ limit: 1 });
+  assert.equal(h.fcm.calls.length, 1, 'one send within the pace; the run ends while the rest wait');
+  assert.equal(pending(h).length, 0, 'every reminder fired into a waiting send');
+}
+{
+  let listings = 0;
+  const h = harness({
+    store: (inner) => ({
+      ...inner,
+      async listDueSends(input) {
+        listings += 1;
+        if (listings === 2) {
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.listDueSends(input);
+      },
+    }),
+  });
+  for (let index = 0; index < 3; index += 1) {
+    await register(h, `p-${index}`);
+    await h.service.setReminder(session(`p-${index}`), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T03:00:00Z',
+    });
+  }
+  const run = await h.service.runScheduler({ limit: 1 });
+  assert.equal(h.fcm.calls.length, 1, 'the first round sent');
+  assert.equal(run.results.length, 2, "its results and the failed round's fired reminder are kept");
+  assert.equal(run.failed, 1);
+  assert.deepEqual(h.errors, ['scheduler.round']);
+}
+
 console.info('Notifications scheduler tests passed.');

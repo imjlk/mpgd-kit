@@ -1538,8 +1538,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 
   /**
    * The remaining dispatches each provider allows this run: its registry
-   * `rate` less the deliveries in the rate window (`t − window < s ≤ t`). It
-   * counts delivered sends, so sends in flight may pass it by a few.
+   * `rate` less the deliveries in the rate window (`t − window < s ≤ t`),
+   * read once per run, less every row this run took since. Sends still in
+   * flight from earlier runs are not counted, so they may pass it by a few.
    */
   const paceBudgets = () => {
     const budgets = new Map<string, number>();
@@ -2827,7 +2828,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           // Another round only while one may be due (a batch came back
           // full, and not only with rows the pace holds back, nor with a
           // schedule that cannot be read) and this round got somewhere.
-          more = (entries.listed === limit && !entries.unreadable)
+          more = entries.listed === limit
             || (dispatched.listed === limit && dispatched.paced < dispatched.listed);
           progressed = entries.handled > 0 || dispatched.results.length > 0;
         } catch (error) {
