@@ -416,19 +416,19 @@ export function resolveNotificationAdvertisingSettings(
 
 /**
  * Whether a deployment text is still a template placeholder rather than a
- * real value: a `REPLACE-WITH-…` marker (the starter's), an unreplaced
- * `__TOKEN__`, a value in angle brackets, a reserved `example.com`,
- * `example.org`, or `example.net` address, or only `TODO`, `TBD`,
- * `CHANGEME`, `PLACEHOLDER`, or `XXX`. `assertNotificationDeployment`
- * refuses one in the advertising sender and the opt-out line, so a backend
- * never starts with a sender line no recipient can use.
+ * real value: the starter's `REPLACE-WITH-…` marker, or a whole value that is
+ * an unreplaced `__TOKEN__`, `{{token}}`, `${token}`, `<token>`, or
+ * `[token]`, a reserved `example.com`, `example.org`, or `example.net`
+ * address anywhere in it, or only `TODO`, `TBD`, `CHANGEME`, `PLACEHOLDER`,
+ * or `XXX`. It catches common template markers, not every made-up value.
+ * `assertNotificationDeployment` refuses one in the advertising sender and
+ * the opt-out line under the Korean rules.
  */
 export function isNotificationPlaceholderText(value: string): boolean {
   const text = value.trim();
-  return /replace[-_ ]?with/iu.test(text)
-    || /__[A-Z][A-Z0-9_]*__/u.test(text)
-    || /^<[^<>]*>$/u.test(text)
-    || /(?:^|[@./\s])example\.(?:com|org|net)(?:$|[/\s>])/iu.test(text)
+  return /^replace[-_]with[-_]/iu.test(text)
+    || /^(?:__[A-Za-z][\w]*__|\{\{[^{}]*\}\}|\$\{[^{}]*\}|<[^<>]*>|\[[^[\]]*\])$/u.test(text)
+    || /(?:^|[^\w-])example\.(?:com|org|net)(?![\w-])/iu.test(text)
     || /^(?:todo|tbd|change[-_ ]?me|placeholder|x{3,})$/iu.test(text);
 }
 

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { validateNotificationTopicCatalog } from '@mpgd/catalog';
 import {
   assertNotificationDeployment,
+  notificationDeploymentPlaceholders,
   referenceNotificationProviders,
   referenceNotificationTargetProviders,
   type NotificationDeployment,
@@ -15,33 +16,37 @@ import {
 // release: `pnpm validate:notifications`.
 
 const gameRoot = new URL('../', import.meta.url);
-const placeholder = 'REPLACE-WITH-';
 
 function readJson(relative: string): unknown {
   return JSON.parse(readFileSync(new URL(relative, gameRoot), 'utf8')) as unknown;
 }
 
 const problems: string[] = [];
-const declaredDeployment = readJson('notifications/deployment.json');
-// Under the Korean rules every advertising push names its sender's phone
-// number or address; the starter ships a placeholder that must be replaced.
-// The backend refuses it too (`assertNotificationDeployment`), so a Worker
-// given this file would not start.
-if (JSON.stringify(declaredDeployment).includes(placeholder)) {
-  problems.push(
-    `notifications/deployment.json: replace the ${placeholder}... value with the sender's real contact `
-      + '(a phone number or an address), which every advertising push carries.',
-  );
-}
 let deployment: NotificationDeployment | undefined;
 try {
-  deployment = assertNotificationDeployment(declaredDeployment);
+  // Placeholders are reported below, so the catalog is still checked against
+  // the deployment's rules in the same run.
+  deployment = assertNotificationDeployment(readJson('notifications/deployment.json'), {
+    allowPlaceholders: true,
+  });
 } catch (error) {
-  if (problems.length === 0) {
-    problems.push(
-      `notifications/deployment.json: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  problems.push(
+    `notifications/deployment.json: ${error instanceof Error ? error.message : String(error)}`,
+  );
+}
+// Under the Korean rules every advertising push names its sender and their
+// phone number or address; the starter ships a placeholder contact. The game
+// backend refuses a placeholder too (`assertNotificationDeployment`), so a
+// Worker given this file would not start its notifications.
+for (const field of deployment === undefined
+  ? []
+  : notificationDeploymentPlaceholders(deployment)) {
+  problems.push(
+    field === 'advertisingSender.contact'
+      ? `notifications/deployment.json: replace the ${field} placeholder with the sender's real contact `
+        + '(a phone number or an address), which every advertising push carries.'
+      : `notifications/deployment.json: replace the ${field} placeholder with the real value.`,
+  );
 }
 const result = validateNotificationTopicCatalog(readJson('notifications/topics.json'), {
   targetProviders: Object.fromEntries(

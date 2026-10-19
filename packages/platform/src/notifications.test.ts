@@ -33,8 +33,10 @@ import {
   isNotificationErrorCode,
   isNotificationEvent,
   isNotificationEventEnvelope,
+  isNotificationPlaceholderText,
   isNotificationTimestamp,
   notificationBridgeMethods,
+  notificationDeploymentPlaceholders,
   NotificationError,
   notificationErrorCodes,
   notificationsProtocol,
@@ -380,13 +382,19 @@ describe('notifications contract', () => {
     expect(() => assertNotificationDeployment({ advertisingRules: 'eu' })).toThrow();
     expect(() => assertNotificationDeployment({ timeZone: 'Mars/Olympus_Mons' })).toThrow(/Unknown time zone/u);
     expect(() => assertNotificationDeployment({ advertisingSender: { name: 'Studio' } })).toThrow();
-    // A starter's placeholder fails closed: the backend that asserts it does not start.
+    // A starter's placeholder fails closed under the Korean rules: the backend
+    // that asserts it does not start.
     for (const placeholder of [
       'REPLACE-WITH-SENDER-PHONE-OR-ADDRESS',
-      ' replace_with phone ',
+      ' replace_with_phone ',
       '__GAME_TITLE__',
+      '{{contact}}',
+      '${CONTACT}',
       '<phone number>',
+      '[PHONE]',
       'help@example.com',
+      'help@example.com, 02-1',
+      'https://example.org/contact',
       'TODO',
       'tbd',
       'XXXX',
@@ -394,19 +402,46 @@ describe('notifications contract', () => {
       expect(() => assertNotificationDeployment({
         advertisingRules: 'kr',
         advertisingSender: { name: 'Studio', contact: placeholder },
-      }), placeholder).toThrow(/placeholder in advertisingSender\.contact/u);
+      }), placeholder).toThrow(/placeholder in advertisingSender\.contact:/u);
+      expect(isNotificationPlaceholderText(placeholder), placeholder).toBe(true);
     }
-    expect(() => assertNotificationDeployment({
+    const starter = {
       advertisingRules: 'kr',
       advertisingSender: { name: '__GAME_TITLE__', contact: '080-1234-5678' },
       advertisingOptOutLine: 'REPLACE-WITH-OPT-OUT',
-    })).toThrow(/advertisingSender\.name, advertisingOptOutLine/u);
+    } as const;
+    expect(() => assertNotificationDeployment(starter)).toThrow(/advertisingSender\.name, advertisingOptOutLine/u);
+    // A validator that reports placeholders itself reads the rest of the deployment.
+    expect(assertNotificationDeployment(starter, { allowPlaceholders: true })).toEqual(starter);
+    expect(notificationDeploymentPlaceholders(starter)).toEqual(['advertisingSender.name', 'advertisingOptOutLine']);
+    expect(() => assertNotificationDeployment({ ...starter, timeZone: 'Mars/Base' }, { allowPlaceholders: true }))
+      .toThrow(/Unknown time zone/u);
+    // Without the Korean rules no push carries the sender line, so it is not read.
+    for (const advertisingRules of ['none', undefined] as const) {
+      const deployment = { ...starter, ...(advertisingRules === undefined ? {} : { advertisingRules }) };
+      const { advertisingRules: _rules, ...withoutRules } = deployment;
+      const declared = advertisingRules === undefined ? withoutRules : deployment;
+      expect(assertNotificationDeployment(declared)).toEqual(declared);
+      expect(notificationDeploymentPlaceholders(declared)).toEqual([]);
+    }
     // Real values pass, including ones that merely contain the words.
-    for (const contact of ['080-1234-5678', 'Seoul, Teheran-ro 1', 'help@studio.example.kr', 'todo-games.kr']) {
+    for (const contact of [
+      '080-1234-5678',
+      '02-123-4567',
+      '서울특별시 강남구 테헤란로 123',
+      'Seoul, Teheran-ro 1',
+      'help@studio.example.kr',
+      'help@my-example.com',
+      'todo-games.kr',
+      '[주] 02-123-4567',
+    ]) {
       expect(assertNotificationDeployment({
         advertisingRules: 'kr',
         advertisingSender: { name: 'Studio', contact },
       }).advertisingSender?.contact, contact).toBe(contact);
+    }
+    for (const name of ['Replace With Love Studio', '__DIRNAME__ Games', '(주)엑스엑스엑스']) {
+      expect(isNotificationPlaceholderText(name), name).toBe(false);
     }
     const topic = {
       id: 'energy-full',

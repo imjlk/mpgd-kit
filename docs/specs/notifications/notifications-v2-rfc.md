@@ -2026,11 +2026,12 @@ Given the deployment settings, `validate:notifications` requires this setting
 when the catalog has an `advertising` topic. Under `kr` it also requires the
 notice topic with its `notices.copy` and the advertising sender, and it
 reports a blank sender contact, sender name, or opt-out line, which
-[gate step 8](#policy-gate) would read as missing or absent. The backend
-fails closed on a template placeholder in those fields (such as the
-starter's `REPLACE-WITH-…` contact, an unreplaced `__TOKEN__`, or a reserved
-`example.com` address): `assertNotificationDeployment` refuses the
-deployment, so a backend built from it does not start.
+[gate step 8](#policy-gate) would read as missing or absent. Under `kr` the
+backend also fails closed on a common template marker in those fields (such
+as the starter's `REPLACE-WITH-…` contact, an unreplaced `__TOKEN__`, or a
+reserved `example.com` address): `assertNotificationDeployment` refuses the
+deployment, so a backend built from it does not start. Under `none` no push
+carries them, so they are not read.
 
 What the kit enforces for `advertising` topics under `kr`:
 

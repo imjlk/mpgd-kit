@@ -610,29 +610,61 @@ export const assertNotificationDeliveryProviderEntry =
   typia.createAssertEquals<NotificationDeliveryProviderEntry>();
 const assertNotificationDeploymentShape = typia.createAssertEquals<NotificationDeployment>();
 
+/** Options of `assertNotificationDeployment`. */
+export interface AssertNotificationDeploymentOptions {
+  /**
+   * Accept placeholders, for a validator that reports them itself
+   * (`notificationDeploymentPlaceholders`) next to the catalog's issues. A
+   * backend never sets it.
+   */
+  readonly allowPlaceholders?: boolean;
+}
+
+/**
+ * The fields of a deployment under the Korean rules that still hold a
+ * template placeholder (`isNotificationPlaceholderText`): the advertising
+ * sender's name and contact and the opt-out line, which every advertising
+ * push carries there. Under `none`, or without `advertisingRules`, no push
+ * carries them, so none is reported.
+ */
+export function notificationDeploymentPlaceholders(
+  deployment: NotificationDeployment,
+): readonly ('advertisingSender.name' | 'advertisingSender.contact' | 'advertisingOptOutLine')[] {
+  if (deployment.advertisingRules !== 'kr') {
+    return [];
+  }
+  const texts = [
+    ['advertisingSender.name', deployment.advertisingSender?.name],
+    ['advertisingSender.contact', deployment.advertisingSender?.contact],
+    ['advertisingOptOutLine', deployment.advertisingOptOutLine],
+  ] as const;
+  return texts
+    .filter(([, value]) => value !== undefined && isNotificationPlaceholderText(value))
+    .map(([field]) => field);
+}
+
 /**
  * Validates deployment settings: a `timeZone` that `Intl` knows, which quiet
- * hours read, and an advertising sender and opt-out line that are not
- * template placeholders (`isNotificationPlaceholderText`). A backend built
- * from a refused deployment does not start, so a starter's placeholder
- * contact never reaches an advertising push.
+ * hours read, and under the Korean rules an advertising sender and opt-out
+ * line that are not template placeholders
+ * (`notificationDeploymentPlaceholders`). A backend built from a refused
+ * deployment does not start, so a starter's placeholder contact never
+ * reaches an advertising push.
  */
-export function assertNotificationDeployment(input: unknown): NotificationDeployment {
+export function assertNotificationDeployment(
+  input: unknown,
+  options: AssertNotificationDeploymentOptions = {},
+): NotificationDeployment {
   const deployment = assertNotificationDeploymentShape(input);
   if (deployment.timeZone !== undefined && !isValidNotificationTimeZone(deployment.timeZone)) {
     throw new TypeError(`Unknown time zone in the deployment: ${deployment.timeZone}`);
   }
-  const texts: readonly (readonly [string, string | undefined])[] = [
-    ['advertisingSender.name', deployment.advertisingSender?.name],
-    ['advertisingSender.contact', deployment.advertisingSender?.contact],
-    ['advertisingOptOutLine', deployment.advertisingOptOutLine],
-  ];
-  const placeholders = texts.filter(
-    ([, value]) => value !== undefined && isNotificationPlaceholderText(value),
-  );
+  const placeholders = options.allowPlaceholders === true
+    ? []
+    : notificationDeploymentPlaceholders(deployment);
   if (placeholders.length > 0) {
     throw new TypeError(
-      `The deployment still has a placeholder in ${placeholders.map(([field]) => field).join(', ')}: `
+      `The deployment still has a placeholder in ${placeholders.join(', ')}: `
         + 'replace it with the real value before the backend starts.',
     );
   }
