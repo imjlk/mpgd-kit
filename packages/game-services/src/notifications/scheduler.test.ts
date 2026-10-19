@@ -831,4 +831,251 @@ const pending = (h: Harness) =>
   );
 }
 
+// A send another run holds without rows yet leaves the reminder pending; the key frees after the lease.
+{
+  const h = harness();
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  const key = 'reminder:p-1:k:2026-10-19T03:00:00Z';
+  await h.store.createSend({
+    key,
+    fingerprint: 'other-run',
+    request: { idempotencyKey: key, player: 'p-1', topic: 'friend-challenge' },
+    origin: { kind: 'reminder', key: 'k' },
+    scheduled: true,
+    rows: [],
+    claim: { token: 'live', leaseUntil: '2026-10-19T03:05:00Z' },
+    changedAt: '2026-10-19T03:00:00Z',
+  });
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 0);
+  assert.equal(pending(h).length, 1, 'the reminder is not marked fired');
+  h.time.set('2026-10-19T03:05:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1, 'the next run after the lease sends it');
+  assert.deepEqual(pending(h), []);
+}
+
+// A run that stops after storing the rows and before marking the reminder: the next run finds the rows.
+{
+  let failMark = true;
+  const h = harness({
+    store: (inner) => ({
+      ...inner,
+      async updateScheduleEntry(input) {
+        if (failMark && input.entry?.item.kind === 'reminder' && input.entry.item.firedAt !== undefined) {
+          failMark = false;
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.updateScheduleEntry(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  const first = await h.service.runScheduler();
+  assert.equal(first.failed, 1);
+  assert.deepEqual(h.errors, ['scheduler']);
+  // The rows were stored, so the dispatch step of the same run sends them; the reminder stays pending.
+  assert.equal(h.fcm.calls.length, 1);
+  assert.equal(pending(h).length, 1);
+  assert.equal(pending(h)[0]?.dueAt, '2026-10-19T03:01:00Z', 'a failed item waits a minute');
+  h.time.advance(60);
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1, 'its stored send carries it: nothing is sent twice');
+  assert.deepEqual(pending(h), []);
+}
+
+// A schedule that cannot be listed does not hold the due rows; a reminder fired past retention waits for its send.
+{
+  let failList = false;
+  const quiet: NotificationTopicDeclaration = {
+    ...challenge,
+    quietHours: { start: '22:00', end: '08:00' },
+  };
+  const h = harness({
+    topics: [quiet],
+    answers: [{ status: 'rate-limited', retryAfterSeconds: 60 }],
+    store: (inner) => ({
+      ...inner,
+      async listDueScheduleEntries(input) {
+        if (failList) {
+          throw new Error('no such table: notification_schedule');
+        }
+        return inner.listDueScheduleEntries(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  await h.service.runScheduler();
+  assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'deferred', 'rate-limited');
+  failList = true;
+  h.time.advance(60);
+  const run = await h.service.runScheduler();
+  assert.equal(run.failed, 1);
+  assert.equal(h.fcm.calls.length, 2, 'the deferred row is still replayed');
+  failList = false;
+  // Retention: a fired reminder whose send still waits is kept a day more.
+  await h.service.setReminder(session('p-1'), {
+    key: 'q',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T13:30:00Z',
+  });
+  h.time.set('2026-10-19T13:30:00Z');
+  await h.service.runScheduler();
+  const fired = () => h.store.inspect().schedule.find((entry) => entry.id === 'reminder:q');
+  assert.equal(
+    'templateData' in (fired()?.item ?? {}),
+    false,
+    'a fired reminder keeps only what names its send',
+  );
+  const deferred = h.store.inspect().sends.find(
+    (send) => send.key === 'reminder:p-1:q:2026-10-19T13:30:00Z',
+  );
+  assert.equal(deferred?.rows[0]?.state.status, 'deferred');
+  // Hold the deferred row past the retention end by pushing its until out.
+  await h.store.updateSend({
+    key: deferred?.key ?? '',
+    version: (await h.store.getSend(deferred?.key ?? ''))?.version ?? '',
+    send: {
+      ...(deferred as NonNullable<typeof deferred>),
+      rows: [
+        {
+          ...(deferred?.rows[0] as NonNullable<NonNullable<typeof deferred>['rows'][number]>),
+          state: { status: 'deferred', reason: 'quiet-hours', until: '2026-12-01T00:00:00Z' },
+        },
+      ],
+      changedAt: '2026-11-18T13:30:00Z',
+    },
+  });
+  h.time.set('2026-11-18T13:30:00Z');
+  await h.service.runScheduler();
+  assert.equal(fired()?.dueAt, '2026-11-19T13:30:00Z', 'kept a day more while its send waits');
+}
+
+// A job for a taken attempted row does not replay it once its replays ended a day after the first attempt.
+{
+  const h = harness({ queue: true, answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  await h.service.deliver({ idempotencyKey: 'late', player: 'p-1', topic: 'friend-challenge' });
+  await h.service.dispatch(h.jobs[0] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 1);
+  h.time.advance(300);
+  await h.service.runScheduler();
+  assert.equal(h.jobs.length, 2, 'taken for a replay');
+  h.time.advance(86_400);
+  await h.service.dispatch(h.jobs[1] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 1, 'a job a day late replays nothing');
+}
+
+// Notice pushes the provider refuses when they are sent back off too; a delivered push without its record is recorded.
+{
+  const answers: NotificationRemoteDeliveryAnswer[] = Array.from({ length: 100 }, () => ({
+    status: 'rejected',
+    reason: 'recipient',
+  }));
+  const h = harness({ topics: [weekend, noticeTopic], deployment: kr, notices: true, answers });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2026-10-26T00:00:00Z');
+  for (let hour = 0; hour < 72; hour += 1) {
+    await h.service.runScheduler();
+    h.time.advance(3600);
+    // Keep the endpoint fresh without ending the backoff: it reports the same permission.
+  }
+  assert.ok(
+    h.fcm.calls.length >= 4 && h.fcm.calls.length <= 8,
+    `pushes in 72 hours: ${h.fcm.calls.length}`,
+  );
+  answers.length = 0;
+}
+{
+  let failGiven = true;
+  const h = harness({
+    topics: [weekend, noticeTopic],
+    deployment: kr,
+    notices: true,
+    store: (inner) => ({
+      ...inner,
+      async addNoticeGiven(notice) {
+        if (failGiven) {
+          failGiven = false;
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.addNoticeGiven(notice);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2026-10-26T00:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1);
+  assert.deepEqual(h.store.inspect().noticesGiven, [], 'the record write failed');
+  h.time.advance(3600);
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1, 'not pushed again');
+  assert.deepEqual(
+    h.store.inspect().noticesGiven.map((given) => given.channel),
+    ['push'],
+  );
+}
+
+// A check that runs between the consent's mark and its write does not lose the new notice.
+{
+  let interleave: (() => Promise<unknown>) | undefined;
+  const h = harness({
+    topics: [weekend, noticeTopic],
+    deployment: kr,
+    notices: true,
+    store: (inner) => ({
+      ...inner,
+      async appendConsent(input) {
+        if (interleave !== undefined) {
+          const run = interleave;
+          interleave = undefined;
+          await run();
+        }
+        return inner.appendConsent(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  interleave = () => h.service.runScheduler();
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.equal(
+    h.store.inspect().schedule.find((entry) => entry.id === 'notices')?.dueAt,
+    '2026-10-19T03:00:00Z',
+    'the check is due again after the write',
+  );
+}
+
 console.info('Notifications scheduler tests passed.');

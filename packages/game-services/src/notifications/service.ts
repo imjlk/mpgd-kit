@@ -937,8 +937,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       case 'job':
         // A queued delivery runs once: a row no holder claims, either never
         // sent or taken from the due rows for the queue. An attempted row
-        // keeps its claim, so it is replayed only after its lease.
-        return row.state.status === 'in-flight' && row.state.claim === undefined;
+        // keeps its claim, so it is replayed only after its lease, and never
+        // once its replays ended a day after the first attempt.
+        return row.state.status === 'in-flight'
+          && row.state.claim === undefined
+          && !(row.state.attempted
+            && row.firstAttemptedAt !== undefined
+            && at - Date.parse(row.firstAttemptedAt) >= notificationAmbiguousReplayHours * 3_600_000);
       case 'retry':
         // A direct caller replays its own platform rows once their lease ended.
         return row.state.status === 'in-flight'
@@ -1580,23 +1585,33 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 
   // Scheduler items.
 
-  /** A send a scheduler item creates: its key held by a first-evaluation claim, before any row. */
+  /**
+   * The send a scheduler item makes, keyed by the item: a new key held by a
+   * first-evaluation claim before any row (`created`), the stored send when
+   * one with rows exists (`existing`), or `busy` while another run holds the
+   * key without rows yet. A key whose holder stopped before storing a row
+   * starts over once its lease ends.
+   */
   const createItemSend = async (
     request: NotificationStoredSendRequest,
     origin: NotificationSendOrigin,
     at: number,
-  ): Promise<{ readonly send: NotificationStoredSend; readonly version: string } | 'exists'> => {
+  ): Promise<
+    | { readonly created: { readonly send: NotificationStoredSend; readonly version: string } }
+    | { readonly existing: NotificationStoredSend }
+    | 'busy'
+  > => {
     for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
-      const existing = await store.getSend(request.idempotencyKey);
-      if (existing !== undefined) {
-        const { send } = existing;
-        const stranded = send.rows.length === 0
-          && (send.claim === undefined || Date.parse(send.claim.leaseUntil) <= at);
-        if (!stranded) {
-          return 'exists';
+      const held = await store.getSend(request.idempotencyKey);
+      if (held !== undefined) {
+        const { send } = held;
+        if (send.rows.length > 0) {
+          return { existing: send };
         }
-        // A run that stopped before it stored any row: its key starts over.
-        await store.updateSend({ key: send.key, version: existing.version, send: undefined });
+        if (send.claim !== undefined && Date.parse(send.claim.leaseUntil) > at) {
+          return 'busy';
+        }
+        await store.updateSend({ key: send.key, version: held.version, send: undefined });
         continue;
       }
       const send: NotificationStoredSend = {
@@ -1611,7 +1626,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       };
       const version = await store.createSend(send);
       if (version !== undefined) {
-        return { send, version };
+        return { created: { send, version } };
       }
     }
     throw busy(request.idempotencyKey);
@@ -1626,18 +1641,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
-   * Plans the rows of a send `createItemSend` made, and stores them due at
-   * `dueAt` once `claim` answers that the item still wants the send. Answers
-   * the send's result and whether rows were stored; `undefined` when the
-   * item changed meanwhile, so nothing was stored. A caller error releases
-   * the key and throws `NOTIFICATIONS_INVALID_INPUT`; any other failure
-   * releases it and rethrows.
+   * Plans the rows of a send `createItemSend` made and stores them, due at
+   * `dueAt`. Answers the send's result and whether rows were stored (a gate
+   * refusal stores none and releases the key); `undefined` when a cancel
+   * removed the key meanwhile, so nothing was stored. A caller error
+   * releases the key and throws `NOTIFICATIONS_INVALID_INPUT`; any other
+   * failure releases it and rethrows.
    */
   const storeItemRows = async (
     created: { readonly send: NotificationStoredSend; readonly version: string },
     at: number,
     dueAt: number,
-    claim: () => Promise<boolean>,
   ): Promise<{ readonly outcome: NotificationDeliveryOutcome; readonly stored: boolean } | undefined> => {
     const { send, version } = created;
     let planned: Awaited<ReturnType<typeof plan>>;
@@ -1654,17 +1668,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await releaseQuietly(send.key, version);
       return { outcome: bestNotificationOutcome(planned.refusals) ?? noEndpoint(), stored: false };
     }
-    if (!await claim()) {
-      await releaseQuietly(send.key, version);
-      return undefined;
-    }
     const { claim: _claim, ...unclaimed } = send;
     const stored: NotificationStoredSend = {
       ...unclaimed,
       rows: planned.rows,
       changedAt: formatNotificationInstant(at),
     };
-    // A cancel since the claim removed the key: nothing is stored or sent.
+    // A cancel since the key was made removed it: nothing is stored or sent.
     if (!await store.updateSend({ key: send.key, version, send: stored })) {
       return undefined;
     }
@@ -1672,11 +1682,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
-   * Stops a fired reminder's send that still waits: the rows not delivered
-   * yet (deferred, queued, or in flight) are dropped, and a send the
-   * scheduler is still making loses its key, so no row of it is ever
-   * stored. A send the provider may already have accepted cannot be
-   * recalled. Answers whether anything waited.
+   * Stops a reminder's send that still waits: the rows not delivered yet
+   * (deferred, queued, or in flight) are dropped, and a send the scheduler
+   * is still making loses its key, so no row of it is ever stored. A set or
+   * a cancel runs it after its own write, for the pending reminder as for a
+   * fired one, so a scheduler run that fires the old reminder meanwhile
+   * loses either way. A send the provider may already have accepted cannot
+   * be recalled. Answers whether anything waited.
    */
   const stopReminderSend = async (player: string, reminder: NotificationStoredReminder): Promise<boolean> => {
     let key: string;
@@ -1730,10 +1742,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   /**
    * A due reminder becomes its `reminder:<player>:<key>:<fireAt>` send to
    * every provider the player has a recipient on, through the gate. The
-   * reminder is marked fired (and kept until its key's retention ends, so a
-   * set or cancel can still stop the send) in the same step that keeps the
-   * send; a refused send consumes it. A cancel or replace since it was read
-   * wins.
+   * rows are stored first and the reminder is marked fired after (kept until
+   * its key's retention ends, so a later set or cancel can still stop the
+   * send), so a run that stops between them leaves the reminder pending and
+   * the next run finds its rows. A refused send spends the reminder. A set or
+   * cancel since the read wins: it stops the send, and so does this run.
    */
   const fireReminder = async (
     held: NotificationVersionedScheduleEntry,
@@ -1756,30 +1769,39 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
       ...(reminder.link === undefined ? {} : { link: reminder.link }),
     };
+    // A fired reminder keeps only what names its send.
     const fired: NotificationScheduleEntry = {
       player,
       id: held.entry.id,
       dueAt: formatNotificationInstant(at + keyRetentionMs),
-      item: { ...reminder, firedAt: formatNotificationInstant(at) },
+      item: {
+        kind: 'reminder',
+        key: reminder.key,
+        topic: reminder.topic,
+        fireAt: reminder.fireAt,
+        firedAt: formatNotificationInstant(at),
+      },
     };
     const markFired = () =>
       store.updateScheduleEntry({ player, id: held.entry.id, version: held.version, entry: fired });
-    const created = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
-    if (created === 'exists') {
-      // Its send was made (an identical reminder, or a run that stopped after
-      // storing rows): the stored rows carry it from here.
+    const made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
+    if (made === 'busy') {
+      // Another run is making the send; its lease frees the key if it stops.
+      return undefined;
+    }
+    if ('existing' in made) {
+      // Its rows were stored (by a run that stopped before marking it, or for
+      // an identical reminder): they carry it from here.
       await markFired();
       return undefined;
     }
     let result: Awaited<ReturnType<typeof storeItemRows>>;
     try {
-      result = await storeItemRows(created, at, Date.parse(reminder.fireAt), markFired);
+      result = await storeItemRows(made.created, at, Date.parse(reminder.fireAt));
     } catch (error) {
       if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT') {
         // A send that cannot be made as asked fails once.
         await removeEntry(held);
-      } else {
-        await deferEntry(held, at);
       }
       throw error;
     }
@@ -1789,13 +1811,46 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     if (!result.stored) {
       // Refused by the gate: the reminder is spent, as a send would be.
       await removeEntry(held);
+      return { sendKey: key, outcome: result.outcome };
+    }
+    if (!await markFired()) {
+      // A set or cancel since the read: its own stop runs after its write; this one covers the rest.
+      await stopReminderSend(player, reminder);
+      return undefined;
     }
     return { sendKey: key, outcome: result.outcome };
   };
 
-  /** A fired reminder whose send key's retention ended: nothing can stop that send any more. */
-  const forgetFiredReminder = async (held: NotificationVersionedScheduleEntry): Promise<void> => {
-    await removeEntry(held);
+  /**
+   * A fired reminder whose send key's retention ended is forgotten, unless
+   * its send still waits (a long rate-limit or ambiguous replay keeps the
+   * key alive): then it looks again a day later.
+   */
+  const forgetFiredReminder = async (
+    held: NotificationVersionedScheduleEntry,
+    reminder: NotificationStoredReminder,
+  ): Promise<void> => {
+    let waiting = false;
+    try {
+      const key = createNotificationReminderIdempotencyKey({
+        player: held.entry.player,
+        key: reminder.key,
+        fireAt: reminder.fireAt,
+      });
+      waiting = (await store.getSend(key))?.send.rows.some((row) => row.state.status !== 'delivered') ?? false;
+    } catch {
+      waiting = false;
+    }
+    if (!waiting) {
+      await removeEntry(held);
+      return;
+    }
+    await store.updateScheduleEntry({
+      player: held.entry.player,
+      id: held.entry.id,
+      version: held.version,
+      entry: { ...held.entry, dueAt: formatNotificationInstant(nowMs() + dayMs) },
+    });
   };
 
   /** The instant an Asia/Seoul calendar date starts. */
@@ -1836,6 +1891,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const given = await store.listNoticesGiven(player);
     const owed = listNotificationNotices(records, given, now);
     const failed = new Set(check.failed ?? []);
+    const previouslyPushed = new Set(check.pushed ?? []);
+    const pushed: string[] = [];
     const results: NotificationDueResult[] = [];
     let waiting = false;
     let refused = false;
@@ -1846,31 +1903,51 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (sendFrom > today || failed.has(key)) {
         continue;
       }
+      const existing = await store.getSend(key);
+      if (existing === undefined && previouslyPushed.has(key)) {
+        // The last check pushed it, and the push is gone while the notice is
+        // still owed: the provider refused it when it was sent. It waits out
+        // the backoff like a push the gate refused.
+        refused = true;
+        continue;
+      }
       const request: NotificationStoredSendRequest = {
         idempotencyKey: key,
         player,
         topic: noticeTopic,
         templateData: { consentDate: toSeoulCalendarDate(identity.record.at) },
       };
-      const created = await createItemSend(
+      const made = await createItemSend(
         request,
         { kind: 'notice', notice: identity, variant: notice.variant },
         at,
       );
-      if (created === 'exists') {
+      if (made === 'busy') {
         waiting = true;
         continue;
       }
+      if ('existing' in made) {
+        if (notificationSendOutcome(made.existing)?.status === 'delivered') {
+          // Delivered, but its record was not written: it is recorded now, not pushed again.
+          await store.addNoticeGiven({ ...identity, player, channel: 'push', at: now });
+        } else {
+          waiting = true;
+        }
+        continue;
+      }
       try {
-        const result = await storeItemRows(created, at, seoulMidnight(sendFrom), async () => true);
+        const result = await storeItemRows(made.created, at, seoulMidnight(sendFrom));
         if (result !== undefined) {
           results.push({ sendKey: key, outcome: result.outcome });
-          waiting ||= result.stored;
-          refused ||= !result.stored;
+          if (result.stored) {
+            waiting = true;
+            pushed.push(key);
+          } else {
+            refused = true;
+          }
         }
       } catch (error) {
         if (!(error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')) {
-          await deferEntry(held, at);
           throw error;
         }
         // A push that cannot render fails once; the game still owes the notice.
@@ -1899,22 +1976,32 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     if (waiting) {
       consider(at + noticeRecheckMs);
     }
-    const attempts = refused ? check.attempts + 1 : 0;
+    // Refusals in a row: a push that is only waiting proves nothing yet, and
+    // nothing left to push ends the series.
+    let attempts = 0;
+    if (refused) {
+      attempts = check.attempts + 1;
+    } else if (waiting) {
+      attempts = check.attempts;
+    }
     if (refused) {
       consider(at + Math.min(noticeBackoffMs * 2 ** Math.min(attempts - 1, 16), dayMs));
     }
-    const settled: NotificationScheduleEntry | undefined = next === undefined
-      ? undefined
-      : {
-          player,
-          id: noticesEntryId,
-          dueAt: formatNotificationInstant(next),
-          item: {
-            kind: 'notices',
-            attempts,
-            ...(stillFailed.length === 0 ? {} : { failed: stillFailed }),
-          },
-        };
+    const item: NotificationNoticeCheck = {
+      kind: 'notices',
+      attempts,
+      ...(stillFailed.length === 0 ? {} : { failed: stillFailed }),
+      ...(pushed.length === 0 ? {} : { pushed }),
+    };
+    // With nothing to look at again, a check that remembers failed pushes
+    // stays without a due time, so they still fail once; a new record makes
+    // it due again.
+    let settled: NotificationScheduleEntry | undefined;
+    if (next !== undefined) {
+      settled = { player, id: noticesEntryId, dueAt: formatNotificationInstant(next), item };
+    } else if (stillFailed.length > 0) {
+      settled = { player, id: noticesEntryId, item };
+    }
     // A record written since the check began made it due again: that stands.
     await store.updateScheduleEntry({
       player,
@@ -1948,11 +2035,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (held !== undefined && check.attempts === 0 && held.entry.dueAt !== undefined && Date.parse(held.entry.dueAt) <= at) {
         return;
       }
+      // A new act or registration starts over: the backoff ends, and the
+      // pushes of the last check are not read as refused.
+      const { pushed: _pushed, ...kept } = check;
       const entry: NotificationScheduleEntry = {
         player,
         id: noticesEntryId,
         dueAt: formatNotificationInstant(dueAt),
-        item: { ...check, attempts: 0 },
+        item: { ...kept, attempts: 0 },
       };
       if (
         held === undefined
@@ -2016,10 +2106,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
   };
 
-  /** A registration may let a refused notice push through: its backoff ends now. Best effort. */
-  const retryNoticePushes = async (player: string): Promise<void> => {
+  /**
+   * Makes the player's notice check due now, best effort: after a
+   * registration only a check backing off after a refused push (the new
+   * device may let it through), after a consent write any.
+   */
+  const retryNoticePushes = async (player: string, onlyBackedOff = true): Promise<void> => {
     try {
-      await markNoticesDue(player, nowMs(), true);
+      await markNoticesDue(player, nowMs(), onlyBackedOff);
     } catch (error) {
       report(error, 'notices.retry');
     }
@@ -2101,6 +2195,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         await markNoticesDue(player, Date.parse(at));
       }
       const stored = await store.appendConsent({ player, record: withoutAt as NotificationConsentRecordInput, at });
+      if (stored.kind === 'advertising' || stored.kind === 'night') {
+        // Again after the write: a check that ran between the two found nothing new and settled.
+        await retryNoticePushes(player, false);
+      }
       await compactConsent(player, [...history, stored], Date.parse(at));
       return stored;
     },
@@ -2389,25 +2487,21 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (!passed) {
         return { status: refusal ?? 'permission-required' };
       }
-      // One reminder per key: setting it replaces the pending one and stops its send that waits.
+      // One reminder per key: setting it replaces the pending one and, after
+      // the write, stops a send of the previous one that waits (one a
+      // scheduler run is making for it, too).
       const id = reminderEntryId(reminder.key);
       const entry: NotificationScheduleEntry = { player, id, dueAt: reminder.fireAt, item: reminder };
-      let stopped = false;
       for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
         const held = await store.getScheduleEntry({ player, id });
-        let replaced = false;
-        if (held !== undefined && held.entry.item.kind === 'reminder') {
-          if (held.entry.item.firedAt === undefined) {
-            replaced = true;
-          } else {
-            stopped = (await stopReminderSend(player, held.entry.item)) || stopped;
-          }
-        }
+        const previous = held?.entry.item.kind === 'reminder' ? held.entry.item : undefined;
         const written = held === undefined
           ? (await store.createScheduleEntry(entry)) !== undefined
           : await store.updateScheduleEntry({ player, id, version: held.version, entry });
         if (written) {
-          return { status: replaced || stopped ? 'replaced' : 'scheduled' };
+          const pending = previous !== undefined && previous.firedAt === undefined;
+          const stopped = previous !== undefined && await stopReminderSend(player, previous);
+          return { status: pending || stopped ? 'replaced' : 'scheduled' };
         }
       }
       throw busy(id);
@@ -2423,18 +2517,16 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         throw invalidInput(`key: ${issue}.`);
       }
       const id = reminderEntryId(raw.key);
-      let stopped = false;
       for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
         const held = await store.getScheduleEntry({ player, id });
         if (held === undefined || held.entry.item.kind !== 'reminder') {
-          return { cancelled: stopped };
+          return { cancelled: false };
         }
-        const pending = held.entry.item.firedAt === undefined;
-        if (!pending) {
-          stopped = (await stopReminderSend(player, held.entry.item)) || stopped;
-        }
+        const reminder = held.entry.item;
         if (await removeEntry(held)) {
-          return { cancelled: pending || stopped };
+          // After the removal, so a scheduler run that fires it meanwhile loses its send too.
+          const stopped = await stopReminderSend(player, reminder);
+          return { cancelled: reminder.firedAt === undefined || stopped };
         }
       }
       throw busy(id);
@@ -2444,12 +2536,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const limit = batchLimit(options.limit);
       const touched = new Map<string, NotificationDeliveryOutcome>();
       let failed = 0;
-      for (const { player, id } of await store.listDueScheduleEntries({
-        at: formatNotificationInstant(nowMs()),
-        limit,
-      })) {
+      let due: readonly { readonly player: string; readonly id: string }[] = [];
+      try {
+        due = await store.listDueScheduleEntries({ at: formatNotificationInstant(nowMs()), limit });
+      } catch (error) {
+        // The due rows still go out: a schedule that cannot be read must not hold them.
+        failed += 1;
+        report(error, 'scheduler.list');
+      }
+      for (const { player, id } of due) {
+        let held: NotificationVersionedScheduleEntry | undefined;
         try {
-          const held = await store.getScheduleEntry({ player, id });
+          held = await store.getScheduleEntry({ player, id });
           if (held?.entry.dueAt === undefined || Date.parse(held.entry.dueAt) > nowMs()) {
             continue;
           }
@@ -2459,7 +2557,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
               touched.set(result.sendKey, result.outcome);
             }
           } else if (item.firedAt !== undefined) {
-            await forgetFiredReminder(held);
+            await forgetFiredReminder(held, item);
           } else {
             const result = await fireReminder(held, item);
             if (result !== undefined) {
@@ -2468,7 +2566,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           }
         } catch (error) {
           failed += 1;
-          report(error, 'scheduler', id.startsWith(reminderEntryPrefix) ? 'reminder' : id);
+          report(error, 'scheduler', `${encodeURIComponent(player)}:${id}`);
+          // A failure that may pass waits a minute; one that already moved or
+          // removed the entry (its version changed) is left as it is.
+          if (held !== undefined && !(error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')) {
+            await deferEntry(held, nowMs());
+          }
         }
       }
       const dispatched = await dispatchDueRows({ limit });

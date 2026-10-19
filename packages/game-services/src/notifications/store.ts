@@ -216,6 +216,11 @@ export interface NotificationNoticeCheck {
   readonly attempts: number;
   /** Notice send keys whose push could not render; each fails once and is not tried again. */
   readonly failed?: readonly string[];
+  /**
+   * Notice send keys the last check pushed: one that is gone at the next
+   * check while its notice is still owed was refused when it was sent.
+   */
+  readonly pushed?: readonly string[];
 }
 
 export type NotificationScheduleItem = NotificationStoredReminder | NotificationNoticeCheck;
