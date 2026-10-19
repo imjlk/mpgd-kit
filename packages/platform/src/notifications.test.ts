@@ -417,13 +417,19 @@ describe('notifications contract', () => {
     expect(() => assertNotificationDeployment({ ...starter, timeZone: 'Mars/Base' }, { allowPlaceholders: true }))
       .toThrow(/Unknown time zone/u);
     // Without the Korean rules no push carries the sender line, so it is not read.
-    for (const advertisingRules of ['none', undefined] as const) {
-      const deployment = { ...starter, ...(advertisingRules === undefined ? {} : { advertisingRules }) };
-      const { advertisingRules: _rules, ...withoutRules } = deployment;
-      const declared = advertisingRules === undefined ? withoutRules : deployment;
+    const withoutRules = {
+      advertisingSender: starter.advertisingSender,
+      advertisingOptOutLine: starter.advertisingOptOutLine,
+    };
+    for (const declared of [{ ...withoutRules, advertisingRules: 'none' } as const, withoutRules]) {
       expect(assertNotificationDeployment(declared)).toEqual(declared);
       expect(notificationDeploymentPlaceholders(declared)).toEqual([]);
     }
+    // A placeholder name alone is reported alone.
+    expect(notificationDeploymentPlaceholders({
+      advertisingRules: 'kr',
+      advertisingSender: { name: '__GAME_TITLE__', contact: '080-1234-5678' },
+    })).toEqual(['advertisingSender.name']);
     // Real values pass, including ones that merely contain the words.
     for (const contact of [
       '080-1234-5678',
@@ -432,6 +438,8 @@ describe('notifications contract', () => {
       'Seoul, Teheran-ro 1',
       'help@studio.example.kr',
       'help@my-example.com',
+      'help@example.com.au',
+      'help@example.co.kr',
       'todo-games.kr',
       '[주] 02-123-4567',
     ]) {

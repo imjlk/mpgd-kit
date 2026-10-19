@@ -428,7 +428,7 @@ export function isNotificationPlaceholderText(value: string): boolean {
   const text = value.trim();
   return /^replace[-_]with[-_]/iu.test(text)
     || /^(?:__[A-Za-z][\w]*__|\{\{[^{}]*\}\}|\$\{[^{}]*\}|<[^<>]*>|\[[^[\]]*\])$/u.test(text)
-    || /(?:^|[^\w-])example\.(?:com|org|net)(?![\w-])/iu.test(text)
+    || /(?:^|[^\w-])example\.(?:com|org|net)(?![\w-]|\.[a-z0-9])/iu.test(text)
     || /^(?:todo|tbd|change[-_ ]?me|placeholder|x{3,})$/iu.test(text);
 }
 
