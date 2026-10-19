@@ -430,8 +430,8 @@ export interface DevvitNotificationService {
  * no Devvit recipient (`unavailable: no-endpoint`).
  *
  * Players' own calls take a `devvitNotificationSession(userId)`. Server
- * reminders and their Devvit scheduler path come with the reminder
- * scheduler (S2).
+ * reminders (`setReminder`) and consent notice pushes fire through the
+ * `dispatch` scheduler task (`runDevvitNotificationTask`).
  */
 export function createDevvitNotificationService(
   input: CreateDevvitNotificationServiceInput,
@@ -520,14 +520,15 @@ export function devvitNotificationSession(userId: string): NotificationSession {
 
 /**
  * The Devvit scheduler tasks that keep the service's own work moving:
- * `dispatch` replays due rows (deferred sends, rate-limited ones, and
- * ambiguous answers once their lease ends) every minute, and `purge`
- * forgets old keys, history, and dead endpoints every five minutes. They
- * run, and use two of the installation's recurring tasks, even while the
- * game has no notifications service; such a run does no work. A game declares both in `devvit.json`
- * (`scheduler.tasks`, each with its `endpoint` and `cron`) and routes each
- * endpoint to `runDevvitNotificationTask`. S2's reminder scheduler takes
- * over the dispatch once it lands.
+ * `dispatch` runs the service's scheduler (`runScheduler`) every minute,
+ * which turns due server reminders into sends, pushes the consent notices
+ * owed by now, and replays due rows (deferred sends, rate-limited ones, and
+ * ambiguous answers once their lease ends), and `purge` forgets old keys,
+ * history, and dead endpoints every five minutes. They run, and use two of
+ * the installation's recurring tasks, even while the game has no
+ * notifications service; such a run does no work. A game declares both in
+ * `devvit.json` (`scheduler.tasks`, each with its `endpoint` and `cron`)
+ * and routes each endpoint to `runDevvitNotificationTask`.
  *
  * Devvit scheduler: <https://developers.reddit.com/docs/versioned_docs/version-0.14/capabilities/server/scheduler>
  * (a recurring task is a `devvit.json` `scheduler.tasks` entry whose
@@ -548,8 +549,11 @@ export const devvitNotificationSchedulerTasks = Object.freeze({
 
 export type DevvitNotificationTask = keyof typeof devvitNotificationSchedulerTasks;
 
-/** Due sends one dispatch task replays at most. */
-export const devvitNotificationDispatchBatch = 100;
+/**
+ * Due schedule entries, and due sends, one scheduler round of a dispatch
+ * task takes at most (`runScheduler`'s `limit`).
+ */
+export const devvitNotificationDispatchBatch = 10;
 
 /**
  * Rows of each kind one purge task deletes at most (the Redis store's
@@ -559,14 +563,10 @@ export const devvitNotificationDispatchBatch = 100;
 export const devvitNotificationPurgeBatch = 200;
 
 /**
- * Due sends one `dispatchDue` call of a dispatch task replays. The budget is
- * checked between chunks, so a run lasts the budget plus at most one chunk.
- */
-const dispatchChunk = 10;
-
-/**
- * A dispatch task starts no chunk after this long. Devvit documents no time
- * limit for a scheduler task; this keeps a run well inside the next minute's.
+ * A dispatch task starts no scheduler round after this long
+ * (`runScheduler`'s `budgetMs`), so a run lasts the budget plus at most one
+ * round. Devvit documents no time limit for a scheduler task; this keeps a
+ * run well inside the next minute's.
  */
 export const devvitNotificationDispatchBudgetMs = 20_000;
 
@@ -583,7 +583,8 @@ export function devvitNotificationTaskForEndpoint(pathname: string): DevvitNotif
 export type DevvitNotificationTaskResult =
   | {
       readonly task: 'dispatch';
-      readonly replayed: number;
+      /** The sends the run touched: fired reminders, notice pushes, and replayed rows. */
+      readonly dispatched: number;
       readonly failed: number;
     }
   | {
@@ -596,31 +597,22 @@ export type DevvitNotificationTaskResult =
 /**
  * Runs one scheduler task with a bounded batch.
  *
- * `dispatch` replays at most `dispatchLimit` (100, a positive integer) due
- * sends in chunks of 10 and starts no chunk after `budgetMs` (20 seconds).
- * The run ends early at a chunk in which no send produced a result, at a
- * chunk that repeats a send or lists fewer sends than it asked for, and
- * once it has counted 10 failures. A send that fails after its claim backs
- * off for a minute; one that fails before its claim stays due, and each
- * chunk lists it again, so it is retried at most 10 times a run and again
- * in every later run. The cap bounds a run's `failed` count to under 20
- * (under 30 if a send's settle also fails), and many distinct failures end
- * a run before its limit. `replayed` counts the sends that produced a
- * result, each once; `failed` counts failures, a send listed again
- * counting again.
+ * `dispatch` is one `runScheduler` run: rounds of at most `dispatchLimit`
+ * (10, a positive integer) due schedule entries and due sends, which go on
+ * while a round filled its batch and got somewhere, and start no round
+ * after `budgetMs` (20 seconds). Sends go out at no more than the Devvit
+ * entry's `rate`, 25,000 a day. One failing send never stops the others.
  *
  * `purge` deletes at most the store's `purgeLimit` rows of each kind (200
  * for the store `createDevvitNotificationService` builds). A backlog
  * drains over the following runs.
  */
 export async function runDevvitNotificationTask(
-  service: Pick<NotificationService, 'dispatchDue' | 'purge'>,
+  service: Pick<NotificationService, 'runScheduler' | 'purge'>,
   task: DevvitNotificationTask,
   options: {
     readonly dispatchLimit?: number;
     readonly budgetMs?: number;
-    /** Milliseconds now; `Date.now` by default. Tests inject it. */
-    readonly clock?: () => number;
   } = {},
 ): Promise<DevvitNotificationTaskResult> {
   if (task === 'dispatch') {
@@ -632,36 +624,8 @@ export async function runDevvitNotificationTask(
     if (!Number.isFinite(budgetMs) || budgetMs <= 0) {
       throw new RangeError('budgetMs must be a positive number of milliseconds');
     }
-    const clock = options.clock ?? Date.now;
-    const deadline = clock() + budgetMs;
-    const seen = new Set<string>();
-    let failed = 0;
-    let asked = 0;
-    while (asked < limit && clock() < deadline) {
-      const chunk = Math.min(dispatchChunk, limit - asked);
-      asked += chunk;
-      const answer = await service.dispatchDue({ limit: chunk });
-      failed += answer.failed;
-      const fresh = answer.results.filter((result) => !seen.has(result.sendKey));
-      for (const result of fresh) {
-        seen.add(result.sendKey);
-      }
-      // No result (nothing due, or every send failed), a repeated send, a
-      // short listing, or a chunk's worth of failures (a send that failed
-      // before its claim is listed again by every chunk): leave the rest to
-      // the next run. `failed` may count a send that also has a result, so a
-      // full chunk never reads as short; a skipped key can make one read
-      // short early.
-      if (
-        fresh.length === 0
-        || fresh.length < answer.results.length
-        || answer.results.length + answer.failed < chunk
-        || failed >= dispatchChunk
-      ) {
-        break;
-      }
-    }
-    return { task, replayed: seen.size, failed };
+    const run = await service.runScheduler({ limit, budgetMs });
+    return { task, dispatched: run.results.length, failed: run.failed };
   }
   const counts = await service.purge();
   return { task, ...counts };

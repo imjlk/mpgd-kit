@@ -7,9 +7,11 @@ import {
 
 /**
  * The notifications scheduler tasks of `devvit.json` (`scheduler.tasks`):
- * `mpgd-notifications-dispatch` replays due sends every minute and
- * `mpgd-notifications-purge` purges old rows every five minutes, each in a bounded
- * batch (`runDevvitNotificationTask` from `@mpgd/adapter-devvit/server`).
+ * `mpgd-notifications-dispatch` runs the notifications scheduler every
+ * minute (due server reminders, consent notice pushes, and due sends) and
+ * `mpgd-notifications-purge` purges old rows every five minutes, each in a
+ * bounded batch (`runDevvitNotificationTask` from
+ * `@mpgd/adapter-devvit/server`).
  * A server without a notifications service (no topic catalog yet) answers
  * the tasks without work.
  */
@@ -32,7 +34,7 @@ export function notificationTaskForPath(pathname: string): DevvitNotificationTas
  */
 export async function handleNotificationTask(input: {
   readonly task: DevvitNotificationTask;
-  /** The service's `dispatchDue` and `purge` (`createDevvitNotificationService(...).service`). */
+  /** The service's `runScheduler` and `purge` (`createDevvitNotificationService(...).service`). */
   readonly notifications: Parameters<typeof runDevvitNotificationTask>[0] | undefined;
   readonly log?: (message: string, error?: unknown) => void;
 }): Promise<NotificationTaskAnswer> {
@@ -49,7 +51,7 @@ export async function handleNotificationTask(input: {
   try {
     const result = await runDevvitNotificationTask(input.notifications, input.task);
     if (
-      (result.task === 'dispatch' && (result.replayed > 0 || result.failed > 0))
+      (result.task === 'dispatch' && (result.dispatched > 0 || result.failed > 0))
       || (result.task === 'purge' && result.sends + result.history + result.endpoints > 0)
     ) {
       log(`devvit notifications ${result.task}: ${JSON.stringify(result)}`);

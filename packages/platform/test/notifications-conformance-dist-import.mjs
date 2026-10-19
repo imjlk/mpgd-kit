@@ -54,7 +54,7 @@ assert.deepEqual(
   unsupported.filter((result) => result.status === 'passed').map((result) => result.vector),
   ['unsupported-target'],
 );
-assert.equal(unsupported.filter((result) => result.status === 'skipped').length, 47);
+assert.equal(unsupported.filter((result) => result.status === 'skipped').length, 49);
 assert.equal(
   notificationConformanceSkipReason(advertisingVector, createUnsupportedNotificationCapabilities()),
   'appliesTo remote.purposes includes "advertising"; the provider declares []',

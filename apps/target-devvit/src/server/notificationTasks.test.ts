@@ -49,11 +49,11 @@ test('a server without a notifications service answers the task without work', a
 });
 
 test('a task runs one bounded batch and logs only when it did work', async () => {
-  const limits: unknown[] = [];
+  const runs: unknown[] = [];
   const logs: string[] = [];
   const notifications = {
-    async dispatchDue(input?: { readonly limit?: number }) {
-      limits.push(input?.limit);
+    async runScheduler(input?: { readonly limit?: number; readonly budgetMs?: number }) {
+      runs.push(input);
       return {
         results: [
           { sendKey: 'k', outcome: { status: 'delivered' as const, alreadyProcessed: false } },
@@ -69,9 +69,9 @@ test('a task runs one bounded batch and logs only when it did work', async () =>
     logs.push(message);
   };
   const dispatched = await handleNotificationTask({ task: 'dispatch', notifications, log });
-  assert.deepEqual(dispatched.result, { task: 'dispatch', replayed: 1, failed: 0 });
-  // One short chunk: nothing more was due.
-  assert.deepEqual(limits, [10]);
+  assert.deepEqual(dispatched.result, { task: 'dispatch', dispatched: 1, failed: 0 });
+  // One scheduler run, in rounds of ten within twenty seconds.
+  assert.deepEqual(runs, [{ limit: 10, budgetMs: 20_000 }]);
   const purged = await handleNotificationTask({ task: 'purge', notifications, log });
   assert.equal(purged.status, 200);
   assert.equal(logs.length, 1);
@@ -82,7 +82,7 @@ test('a failing task answers 500 and logs the error', async () => {
   const answer = await handleNotificationTask({
     task: 'purge',
     notifications: {
-      dispatchDue: async () => ({ results: [], failed: 0 }),
+      runScheduler: async () => ({ results: [], failed: 0 }),
       purge: async () => {
         throw new Error('redis down');
       },

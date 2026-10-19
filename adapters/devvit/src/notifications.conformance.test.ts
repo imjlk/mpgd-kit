@@ -344,11 +344,11 @@ function createDevvitServiceBackend(
         await service.unregisterEndpoint(sessionOf(current, player), { provider });
       }
     },
-    setReminder() {
-      throw new NotificationConformanceScriptError('Server reminders are S2.');
+    async setReminder(reminder) {
+      return (await service.setReminder(sessionOf(requireSession('setReminder')), reminder)).status;
     },
-    async cancelReminder() {
-      return false;
+    async cancelReminder(request) {
+      return (await service.cancelReminder(sessionOf(requireSession('cancelReminder')), request)).cancelled;
     },
     async listNotices() {
       return service.listNotices(sessionOf(requireSession('listNotices')));
@@ -385,7 +385,8 @@ function createDevvitServiceBackend(
       }
     },
     async runScheduler() {
-      const { results, failed } = await service.dispatchDue({ limit: 1000 });
+      // The Devvit dispatch task's own run, unbounded by time for the vector.
+      const { results, failed } = await service.runScheduler({ limit: 1000 });
       expect(failed).toBe(0);
       for (const { sendKey, outcome } of results) {
         const previous = [...deliveries].reverse().find((delivered) => delivered.idempotencyKey === sendKey);

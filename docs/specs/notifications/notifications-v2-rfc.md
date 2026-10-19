@@ -1660,31 +1660,22 @@ rate limits), sends in flight after an ambiguous answer, and overdue consent
 notices are processed when due. Sends wait as ledger rows with a lease or an
 `until`; server reminders and each player's notice check wait as schedule
 entries, written by compare-and-set. The default is a D1 table plus a Cron
-trigger on the game-services Worker; the Devvit server will use the Devvit
-scheduler (after P3).
+trigger on the game-services Worker; the Devvit server uses the Devvit
+scheduler over its Redis store (P3).
 
 - **What P3 schedules on Devvit.** Two `devvit.json` scheduler tasks call
   the service's own work (`runDevvitNotificationTask` from
   `@mpgd/adapter-devvit/server`), each with a bounded batch:
-  `mpgd-notifications-dispatch` runs `dispatchDue` every minute for at most
-  100 due sends (deferred, rate-limited, and ambiguous rows past their
-  lease), in chunks of 10, starting no chunk after 20 seconds (Devvit
+  `mpgd-notifications-dispatch` is one `runScheduler` run every minute, in
+  rounds of at most 10 due schedule entries (server reminders and notice
+  checks) and 10 due sends, starting no round after 20 seconds (Devvit
   documents no time limit for a task, so a run is kept well inside the
-  next minute's). A run ends early at a chunk in which no send produced a
-  result, at a chunk that repeats a send or lists fewer than it asked for,
-  and once it has counted 10 failures. A send that fails after its claim
-  backs off for a minute; one that fails before its claim stays due, so it
-  is retried by each chunk (at most 10 times a run) and again in every
-  later run. The cap bounds a run's `failed` count to under 20 (under 30
-  if a send's settle also fails).
+  next minute's), paced at the Devvit entry's `rate` of 25,000 a day.
   `mpgd-notifications-purge` runs `purge` every five minutes, at most 200
   rows of each kind (57,600 a day, above the 25,000 sends a day Devvit
-  allows). A backlog drains over the next runs. Both tasks run, and
-  take two of the installation's recurring tasks, even while a game has no
+  allows). A backlog drains over the next runs. Both tasks run, and take
+  two of the installation's recurring tasks, even while a game has no
   notifications service; such a run does no work.
-- **Left to a follow-up.** S2's reminder scheduler on Devvit (its server
-  reminders and notice pushes) is wired once S2 and P3 have merged; it can
-  take over the dispatch task then.
 
 - **Each due item** becomes a normal send through the policy gate, and its
   key moves through the [key states](#key-states).
@@ -2342,7 +2333,7 @@ publishable package carries a Sampo changeset.
 | P2 | `@mpgd/adapter-capacitor/notifications`: `PushSdk` and `LocalNotificationSdk` over the plugins as optional peers, the provider, channels, the native opt-out action, cold-start buffering, settings link | |
 | P3 | `@mpgd/adapter-devvit`: game-rendered opt-in and opt-out through the server bridge, a client-side `identity.requestUpgrade` over `showLoginPrompt()`, and a delivery provider over `enqueue` with per-send links inside the Devvit server | |
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
-| S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path follows P3 | No reminders |
+| S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path landed with P3 | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
 
 **What S1 landed.**
@@ -2388,9 +2379,8 @@ publishable package carries a Sampo changeset.
 - The game-services Worker: migration `0008_notification_scheduler.sql`,
   the session routes `POST /reminders` and `POST /reminders/cancel`, and a
   cron that runs the scheduler after the purges.
-- Left for later: the Devvit scheduler path, after P3's Devvit delivery
-  provider and the Redis-backed store it runs on (open question 2); a
-  game-services client that implements the runtime's backend calls over
+- Left for later: the Devvit scheduler path, which landed with P3 over its
+  Redis-backed store (open question 2); a game-services client that implements the runtime's backend calls over
   the Worker routes; and seeding notice checks for players whose records
   predate the scheduler.
 
@@ -2398,9 +2388,10 @@ publishable package carries a Sampo changeset.
 provider, and Redis-backed store; see [Devvit](#profile-devvit),
 [Delivery providers](#remote-delivery), and open question 2.
 
-- Left to follow-ups: S2's reminder scheduler on Devvit (wired once S2 and
-  P3 have merged; P3 already schedules `dispatchDue` and `purge`), a shared
-  host-side `notifications.v2` bridge handler for the Apps in Toss and
+- The Devvit `dispatch` scheduler task runs S2's `runScheduler`, so server
+  reminders and notice pushes fire on Devvit, and the Redis store
+  implements S2's store steps.
+- Left to follow-ups: a shared host-side `notifications.v2` bridge handler for the Apps in Toss and
   Devvit adapters, the runtime's backend client for a service the
   Devvit server hosts (the game-services client), and the wiring in the
   generated Devvit app (C1).
