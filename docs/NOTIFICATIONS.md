@@ -31,7 +31,7 @@ is the practical summary. For Android and iOS also read the
   `createDevvitNotificationsV2BridgeHandler({ notifications, currentUserId,
   topics })` to its bridge and runs `createDevvitNotificationService({ redis,
   notifications, catalog, deployment })` in its scheduler tasks (see the
-  [Devvit adapter README](../adapters/devvit/README.md#notifications)).
+  [Devvit adapter README](https://github.com/imjlk/mpgd-kit/blob/main/adapters/devvit/README.md#notifications)).
 
 Before every release run `pnpm validate:notifications`. It checks the catalog
 against the providers each target enables and the deployment settings, and it
