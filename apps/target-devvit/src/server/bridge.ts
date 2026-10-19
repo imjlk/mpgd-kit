@@ -114,9 +114,20 @@ export function createDevvitBridgeHandler(
     // `notifications.*` answers below stay; a gateway that exposes v2 serves
     // v1 from it instead.
     if (isBridgeNotificationsV2Method(input.method)) {
-      return dependencies.notifications === undefined
-        ? createNotificationsV2UnavailableBridgeError(input, 'Devvit server bridge')
-        : dependencies.notifications.request(input);
+      if (dependencies.notifications === undefined) {
+        return createNotificationsV2UnavailableBridgeError(input, 'Devvit server bridge');
+      }
+      try {
+        return await dependencies.notifications.request(input);
+      } catch (error) {
+        warn(`devvit notifications ${input.method} failed: ${errorMessage(error)}`);
+        return createBridgeError(
+          input.id,
+          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          `${input.method} failed on the Devvit server.`,
+          true,
+        );
+      }
     }
     switch (input.method) {
       case 'runtime.getCapabilities':

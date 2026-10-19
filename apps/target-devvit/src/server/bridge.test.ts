@@ -351,6 +351,57 @@ test('notifications v2 methods are served by the configured notifications handle
   assert.equal(served.length, bridgeNotificationsV2Methods.length);
 });
 
+test('commerce and notifications handlers each serve only their own methods', async () => {
+  const commerceServed: string[] = [];
+  const notificationsServed: string[] = [];
+  const handler = createDevvitBridgeHandler({
+    redis: new FakeDevvitRedis(),
+    currentPlayerId: () => playerId,
+    currentDisplayName: async (id) => `u/${id}`,
+    commerce: {
+      async request(input: BridgeRequest): Promise<BridgeResponse> {
+        commerceServed.push(input.method);
+        return { id: input.id, ok: true, data: {} };
+      },
+    },
+    notifications: {
+      async request(input: BridgeRequest): Promise<BridgeResponse> {
+        notificationsServed.push(input.method);
+        return { id: input.id, ok: true, data: {} };
+      },
+    },
+  });
+  for (const method of [...bridgeCommerceV2Methods, ...bridgeNotificationsV2Methods]) {
+    await handler(request(method, {}));
+  }
+  assert.deepEqual(commerceServed, [...bridgeCommerceV2Methods]);
+  assert.deepEqual(notificationsServed, [...bridgeNotificationsV2Methods]);
+});
+
+test('a notifications handler that throws answers a retryable error', async () => {
+  const warnings: string[] = [];
+  const handler = createDevvitBridgeHandler({
+    redis: new FakeDevvitRedis(),
+    currentPlayerId: () => playerId,
+    currentDisplayName: async (id) => `u/${id}`,
+    notifications: {
+      async request(): Promise<BridgeResponse> {
+        throw new Error('plugin exploded');
+      },
+    },
+    warn: (message) => {
+      warnings.push(message);
+    },
+  });
+  const response = await handler(request('notifications.v2.getPermission', { topics: ['daily'] }));
+  assertError(response, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  if (response.ok === false) {
+    assert.equal(response.error.retryable, true);
+    assert.doesNotMatch(response.error.message, /exploded/u);
+  }
+  assert.equal(warnings.length, 1);
+});
+
 test('commerce v2 methods are served by the configured commerce handler only', async () => {
   const served: string[] = [];
   const handler = createDevvitBridgeHandler({
