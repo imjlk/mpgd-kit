@@ -789,21 +789,30 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
     'schedule: a notice check round-trips',
   );
 
-  // Ties compare by code point (SQLite's BINARY order), not by UTF-16 code unit.
+  // Ties compare by code point (SQLite's BINARY order), not by UTF-16 code unit,
+  // for the id and for the player.
   await store.createScheduleEntry(entry('p-cp', 'reminder:\u{1F600}', t(7_000)));
   await store.createScheduleEntry(entry('p-cp', 'reminder:\uFFEE', t(7_000)));
+  await store.createScheduleEntry(entry('p-cp-\u{1F600}', 'reminder:x', t(7_000)));
+  await store.createScheduleEntry(entry('p-cp-\uFFEE', 'reminder:x', t(7_000)));
   deepEqual(
     (await store.listDueScheduleEntries({ at: t(7_000), limit: 100 }))
-      .filter((due) => due.player === 'p-cp')
-      .map((due) => due.id),
-    ['reminder:\uFFEE', 'reminder:\u{1F600}'],
+      .filter((due) => due.player.startsWith('p-cp'))
+      .map((due) => [due.player, due.id]),
+    [
+      ['p-cp', 'reminder:\uFFEE'],
+      ['p-cp', 'reminder:\u{1F600}'],
+      ['p-cp-\uFFEE', 'reminder:x'],
+      ['p-cp-\u{1F600}', 'reminder:x'],
+    ],
     'schedule: ties by code point',
   );
 
-  // A time that does not parse is refused, before any version check.
+  // A time that does not parse is refused before anything is written or compared.
   const bad = { ...entry('p-bad', 'reminder:bad', t(0)), dueAt: 'not-a-time' };
   await rejects(() => store.createScheduleEntry(bad), 'invalid: a due time that does not parse');
   const valid = await store.createScheduleEntry(entry('p-bad', 'reminder:bad', t(0)));
+  ok(typeof valid === 'string', 'invalid: a refused create writes nothing');
   await rejects(
     () =>
       store.updateScheduleEntry({
@@ -812,34 +821,28 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
         version: `${valid ?? ''}-stale`,
         entry: bad,
       }),
-    'invalid: checked before the version',
+    'invalid: a due time that does not parse is refused before the version is compared',
   );
   await rejects(
     () => store.listDueScheduleEntries({ at: 'not-a-time', limit: 1 }),
-    'invalid: a due listing time',
+    'invalid: a due listing time that does not parse',
   );
   await rejects(
     () => store.countHistory({ provider: 'paced', since: 'not-a-time' }),
-    'invalid: a count start',
+    'invalid: a count start that does not parse',
   );
+  const consentBefore = await store.listConsent('p-prune');
+  const givenBefore = await store.listNoticesGiven('p-prune');
   await rejects(
-    () => store.pruneConsent({ player: 'p-prune', at: ['not-a-time'] }),
-    'invalid: a pruned instant',
+    () =>
+      store.pruneConsent({ player: 'p-prune', at: [consentBefore[0]?.at ?? t(0), 'not-a-time'] }),
+    'invalid: a pruned instant that does not parse',
   );
-  equal(
-    (await store.listConsent('p-prune')).length,
-    3,
-    'invalid: a refused pruning deletes nothing',
+  deepEqual(
+    [await store.listConsent('p-prune'), await store.listNoticesGiven('p-prune')],
+    [consentBefore, givenBefore],
+    'invalid: a refused pruning deletes nothing, not even the instants that parse',
   );
-}
-
-async function rejects(work: () => Promise<unknown>, message: string): Promise<void> {
-  try {
-    await work();
-  } catch {
-    return;
-  }
-  fail(message, 'resolved', 'a rejection');
 }
 
 /**
@@ -1166,6 +1169,20 @@ async function runConcurrencyAndEdgeClauses(
     (await store.getPlatformRegistration({ player: 'p-edge', provider: 'ait' })) !== undefined,
     'purge: registrations are not purged',
   );
+}
+
+/** Expects `work` to reject with an error (any store's own error type and wording). */
+async function rejects(work: () => Promise<unknown>, message: string): Promise<void> {
+  let outcome: unknown = 'resolved';
+  try {
+    await work();
+  } catch (error) {
+    if (error instanceof Error) {
+      return;
+    }
+    outcome = error;
+  }
+  fail(message, outcome, 'a rejection with an Error');
 }
 
 function fail(message: string, actual: unknown, expected: unknown): never {
