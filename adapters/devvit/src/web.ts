@@ -2,6 +2,7 @@ import * as devvitWebClient from '@devvit/web/client';
 
 import type { ShareResult } from '@mpgd/platform';
 
+import type { DevvitLoginPrompt } from './index.js';
 import type { DevvitCheckoutResult, DevvitPaymentsClient } from './payments.js';
 
 import {
@@ -53,6 +54,7 @@ const browserClient = devvitWebClient as unknown as {
   readonly requestExpandedMode: (event: MouseEvent, entry: string) => void | Promise<void>;
   readonly showShareSheet: (options: DevvitShareSheetOptions) => Promise<void>;
   readonly purchase: (skuOrSkus: string | readonly string[]) => Promise<DevvitOrderResultEventLike>;
+  readonly showLoginPrompt: () => void;
 };
 const browserSurfaceClient: DevvitSurfaceClient = {
   getWebViewMode: browserClient.getWebViewMode,
@@ -207,6 +209,22 @@ export function createDevvitWebPaymentsClient(): DevvitWebPaymentsClient {
         throw new TypeError('Devvit checkout requires a non-empty SKU.');
       }
       return toDevvitCheckoutResult(await browserClient.purchase(sku));
+    },
+  };
+}
+
+/**
+ * Reddit's login or sign-up flow (`showLoginPrompt()` from
+ * `@devvit/web/client`) as the `loginPrompt` of
+ * `createDevvitPlatformGateway`, which then answers
+ * `identity.requestUpgrade` for a logged-out viewer by opening it. Reddit
+ * reloads the post after the viewer logs in:
+ * <https://developers.reddit.com/docs/versioned_docs/version-0.14/guides/logged-out-users>.
+ */
+export function createDevvitWebLoginPrompt(): DevvitLoginPrompt {
+  return {
+    showLoginPrompt() {
+      browserClient.showLoginPrompt();
     },
   };
 }

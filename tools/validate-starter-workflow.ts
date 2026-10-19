@@ -197,6 +197,14 @@ const removedCommerceV1Names = [
 const removedCommerceV1Pattern = new RegExp(`\\b(?:${removedCommerceV1Names.join('|')})\\b`, 'u');
 
 const failures: string[] = [];
+
+/** The kit's Devvit app and the two starter copies of it. */
+const devvitWrapperRoots = [
+  'apps/target-devvit',
+  'packages/cli/templates/phaser-game/apps/target-devvit',
+  'examples/lite-starter/apps/target-devvit',
+] as const;
+
 validatePeerDependencyRuleParser();
 
 for (const file of requiredFiles) {
@@ -1717,6 +1725,53 @@ function validatePhaserTemplateDevvitBridge(): void {
     }
   }
 
+  // The notifications scheduler tasks: each app declares both tasks in
+  // devvit.json and routes them, and the module ships as a byte-identical copy.
+  for (const root of devvitWrapperRoots) {
+    const manifest = readJson(`${root}/devvit.json`) as {
+      readonly scheduler?: { readonly tasks?: Record<string, { readonly endpoint?: unknown; readonly cron?: unknown }> };
+    } | null;
+    // readJson has already reported a file that is missing or not JSON.
+    const tasks = manifest === null ? [] : [
+      [
+        'mpgd-notifications-dispatch',
+        '/internal/scheduler/mpgd-notifications-dispatch',
+        '* * * * *',
+      ],
+      ['mpgd-notifications-purge', '/internal/scheduler/mpgd-notifications-purge', '*/5 * * * *'],
+    ] as const;
+    for (const [name, endpoint, cron] of tasks) {
+      const task = manifest?.scheduler?.tasks?.[name];
+      if (task?.endpoint !== endpoint || task.cron !== cron) {
+        failures.push(
+          `${root}/devvit.json: scheduler.tasks.${name} must be ${endpoint} at "${cron}".`,
+        );
+      }
+    }
+    const serverSource = readText(`${root}/src/server/index.ts`);
+    for (const requiredText of [
+      "import { handleNotificationTask, notificationTaskForPath } from './notificationTasks.js';",
+      'notificationTaskForPath(requestPathname(request))',
+      'await handleNotificationTask({',
+      'notifications: notificationService',
+    ]) {
+      assertIncludesText(
+        serverSource,
+        requiredText,
+        `${root}/src/server/index.ts: notifications scheduler task routing.`,
+      );
+    }
+  }
+  const kitTasksPath = 'apps/target-devvit/src/server/notificationTasks.ts';
+  for (const copyPath of [
+    'packages/cli/templates/phaser-game/apps/target-devvit/src/server/notificationTasks.ts',
+    'examples/lite-starter/apps/target-devvit/src/server/notificationTasks.ts',
+  ]) {
+    if (!existsSync(copyPath) || !existsSync(kitTasksPath) || readText(copyPath) !== readText(kitTasksPath)) {
+      failures.push(`${copyPath}: must stay in parity with ${kitTasksPath}.`);
+    }
+  }
+
   if (!existsSync(templateIndexPath)) {
     failures.push(`${templateIndexPath}: required for the generated Devvit server entrypoint.`);
   } else {
@@ -2099,13 +2154,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
 }
 
 function validatePhaserTemplateDevvitVitePlugin(): void {
-  const wrapperRoots = [
-    'apps/target-devvit',
-    'packages/cli/templates/phaser-game/apps/target-devvit',
-    'examples/lite-starter/apps/target-devvit',
-  ] as const;
-
-  for (const root of wrapperRoots) {
+  for (const root of devvitWrapperRoots) {
     const vitePath = `${root}/vite.config.ts`;
     const serverPath = `${root}/src/server/index.ts`;
     const packagePath = `${root}/package.json`;

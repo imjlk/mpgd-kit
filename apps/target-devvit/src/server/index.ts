@@ -13,6 +13,7 @@ import productCatalogJson from '@mpgd/catalog/catalog.json';
 
 import devvitManifest from '../../devvit.json';
 import { createDevvitBridgeHandler } from './bridge.js';
+import { handleNotificationTask, notificationTaskForPath } from './notificationTasks.js';
 
 const maxRequestBodySize = 1_048_576;
 /**
@@ -42,6 +43,13 @@ const handleBridgeRequest = createDevvitBridgeHandler({
   currentDisplayName,
   ...(commerce === undefined ? {} : { commerce }),
 });
+/**
+ * The notifications v2 service (`createDevvitNotificationService` from
+ * `@mpgd/adapter-devvit/server`). The kit ships no topic catalog, so it has
+ * none and the scheduler tasks below do no work; a game that declares topics
+ * (C1) builds the service from its catalog here.
+ */
+const notificationService: Parameters<typeof handleNotificationTask>[0]['notifications'] = undefined;
 const bridgeRpcHandler = createBridgeRpcNodeHandler(createBridgeRpcRouter(handleBridgeRequest), {
   maxBodySize: maxRequestBodySize,
   prefix: defaultBridgeRpcEndpoint,
@@ -54,21 +62,26 @@ async function handleHttpRequest(
   setResponseSecurityHeaders(response);
 
   if (request.method === 'POST' && requestPathname(request) === '/internal/menu/create-post') {
-    try {
-      await drainRequestBody(request, maxRequestBodySize);
-    } catch (error) {
-      if (!(error instanceof RequestBodyTooLargeError)) {
-        throw error;
-      }
-
-      discardOversizedRequestBody(request, response);
-      sendJson(response, 413, {
-        error: 'REQUEST_BODY_TOO_LARGE',
-      });
+    if (!(await drainOrRejectBody(request, response))) {
       return;
     }
 
     await handleCreatePostMenu(response);
+    return;
+  }
+
+  const notificationTask = request.method === 'POST'
+    ? notificationTaskForPath(requestPathname(request))
+    : undefined;
+  if (notificationTask !== undefined) {
+    if (!(await drainOrRejectBody(request, response))) {
+      return;
+    }
+    const answer = await handleNotificationTask({
+      task: notificationTask,
+      notifications: notificationService,
+    });
+    sendJson(response, answer.status, answer.body);
     return;
   }
 
@@ -214,6 +227,21 @@ async function* readRequestBodyChunks(
     }
 
     yield buffer;
+  }
+}
+
+/** Drains a bounded internal request body; answers 413 and false when it is too large. */
+async function drainOrRejectBody(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+  try {
+    await drainRequestBody(request, maxRequestBodySize);
+    return true;
+  } catch (error) {
+    if (!(error instanceof RequestBodyTooLargeError)) {
+      throw error;
+    }
+    discardOversizedRequestBody(request, response);
+    sendJson(response, 413, { error: 'REQUEST_BODY_TOO_LARGE' });
+    return false;
   }
 }
 
