@@ -598,9 +598,12 @@ export function createStarterNotificationSettings(
         const writeAdvertising = advertisingAfter === advertisingGranted ? undefined : advertisingAfter;
         // Turning night on writes a fresh consent unless one already counts (a
         // stale one does not); turning it off withdraws any granted record.
-        const writeNight = nightAfter
-          ? (nightEffective ? undefined : true)
-          : (nightGranted ? false : undefined);
+        let writeNight: boolean | undefined;
+        if (nightAfter) {
+          writeNight = nightEffective ? undefined : true;
+        } else {
+          writeNight = nightGranted ? false : undefined;
+        }
         if (writeAdvertising !== undefined || writeNight !== undefined) {
           await input.runtime.setAdvertisingConsent({
             ...(writeAdvertising === undefined
