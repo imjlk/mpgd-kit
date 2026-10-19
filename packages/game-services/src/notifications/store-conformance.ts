@@ -513,17 +513,35 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
   ] as const) {
     await store.addHistory({ sendKey, provider, player, topic: 't', at: t(offset) });
   }
-  equal(await store.countHistory({ provider: 'paced', since: t(0) }), 3, 'count: every player');
   equal(
-    await store.countHistory({ provider: 'paced', since: t(200) }),
+    await store.countHistory({ provider: 'paced', since: t(0), until: t(300) }),
+    3,
+    'count: every player',
+  );
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(200), until: t(300) }),
     2,
     'count: since is inclusive',
   );
-  equal(await store.countHistory({ provider: 'paced', since: t(301) }), 0, 'count: none after');
   equal(
-    await store.countHistory({ provider: 'other-paced', since: t(0) }),
+    await store.countHistory({ provider: 'paced', since: t(301), until: t(400) }),
+    0,
+    'count: none after',
+  );
+  equal(
+    await store.countHistory({ provider: 'other-paced', since: t(0), until: t(300) }),
     1,
     'count: per provider',
+  );
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(0), until: t(299) }),
+    2,
+    'count: nothing after until (a clock that went back)',
+  );
+  equal(
+    await store.countHistory({ provider: 'paced', since: t(100), until: t(100) }),
+    1,
+    'count: until is inclusive',
   );
 
   // Schedule entries: create once, compare-and-set, the due index.
@@ -828,8 +846,12 @@ async function runSchedulerClauses(store: NotificationStore, at: (offsetMs: numb
     'invalid: a due listing time that does not parse',
   );
   await rejects(
-    () => store.countHistory({ provider: 'paced', since: 'not-a-time' }),
+    () => store.countHistory({ provider: 'paced', since: 'not-a-time', until: t(0) }),
     'invalid: a count start that does not parse',
+  );
+  await rejects(
+    () => store.countHistory({ provider: 'paced', since: t(0), until: 'not-a-time' }),
+    'invalid: a count end that does not parse',
   );
   const consentBefore = await store.listConsent('p-prune');
   const givenBefore = await store.listNoticesGiven('p-prune');

@@ -563,6 +563,30 @@ const pending = (h: Harness) =>
   );
 }
 
+// Pacing counts only deliveries up to the run's time: ones dated later (the clock went back) do not hold the rate.
+{
+  const h = harness({ fcmEntry: { ...fcmEntry, rate: { count: 1, windowSeconds: 60 } } });
+  await register(h, 'p-1');
+  await h.store.addHistory({
+    sendKey: 'before-the-clock-went-back',
+    provider: 'fcm',
+    player: 'p-9',
+    topic: 'friend-challenge',
+    at: '2026-10-19T03:00:30Z',
+  });
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:01Z',
+  });
+  h.time.advance(2);
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.player),
+    ['p-1'],
+  );
+}
+
 // With a queue, due rows are taken for one lease and enqueued; jobs deliver them.
 {
   let failNext = false;

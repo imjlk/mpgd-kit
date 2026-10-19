@@ -1549,11 +1549,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         let left = budgets.get(provider);
         if (left === undefined) {
           const rate = registry.provider(provider)?.entry.rate;
+          const at = nowMs();
           left = rate === undefined
             ? Number.POSITIVE_INFINITY
             : rate.count - await store.countHistory({
               provider,
-              since: formatNotificationInstant(nowMs() - rate.windowSeconds * secondMs + 1),
+              since: formatNotificationInstant(at - rate.windowSeconds * secondMs + 1),
+              // Deliveries dated after now (the clock went back) are outside the window.
+              until: formatNotificationInstant(at),
             });
         }
         budgets.set(provider, left - 1);

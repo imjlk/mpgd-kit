@@ -312,10 +312,10 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
         at: formatNotificationInstant(row.at_ms),
       }));
     },
-    async countHistory({ provider, since }) {
+    async countHistory({ provider, since, until }) {
       const row = await db.prepare(`SELECT COUNT(*) AS count FROM notification_delivery_history
-        WHERE provider = ? AND at_ms >= ?`)
-        .bind(provider, millisOf(since))
+        WHERE provider = ? AND at_ms >= ? AND at_ms <= ?`)
+        .bind(provider, millisOf(since), millisOf(until))
         .first<{ readonly count: number }>();
       return row?.count ?? 0;
     },

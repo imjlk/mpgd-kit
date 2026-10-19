@@ -344,10 +344,16 @@ export interface NotificationStore {
   }): Promise<readonly NotificationHistoryEntry[]>;
   /**
    * How many deliveries every player received through `provider` at or
-   * after `since`, for the scheduler's pacing. It counts delivered sends
-   * only, so pacing is approximate while other sends are in flight.
+   * after `since` and at or before `until`, for the scheduler's pacing. The
+   * upper bound leaves out deliveries dated after the run's time (the clock
+   * went back). It counts delivered sends only, so pacing is approximate
+   * while other sends are in flight.
    */
-  countHistory(input: { readonly provider: string; readonly since: string }): Promise<number>;
+  countHistory(input: {
+    readonly provider: string;
+    readonly since: string;
+    readonly until: string;
+  }): Promise<number>;
 
   getScheduleEntry(input: {
     readonly player: string;
@@ -803,9 +809,11 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
       const from = instantOf(since);
       return copy(history.filter((sent) => sent.player === player && Date.parse(sent.at) >= from));
     },
-    async countHistory({ provider, since }) {
+    async countHistory({ provider, since, until }) {
       const from = instantOf(since);
-      return history.filter((sent) => sent.provider === provider && Date.parse(sent.at) >= from).length;
+      const to = instantOf(until);
+      return history.filter((sent) =>
+        sent.provider === provider && Date.parse(sent.at) >= from && Date.parse(sent.at) <= to).length;
     },
     async getScheduleEntry({ player, id }) {
       const held = schedule.get(scheduleKey(player, id));
