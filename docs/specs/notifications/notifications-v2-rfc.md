@@ -9,7 +9,8 @@ protocol: `mpgd.notifications.v2`, version `2.0.0-draft.1`.
 
 Platform facts below were checked on 2026-10-12 against the sources listed in
 [References](#references); P1 re-checked the Apps in Toss facts on
-2026-10-19. Host policies change; re-check a fact before a provider pull
+2026-10-19, and P3 the Devvit facts the same day (through the Devvit MCP
+server's documentation search). Host policies change; re-check a fact before a provider pull
 request depends on it.
 
 ## Summary {#summary}
@@ -37,6 +38,8 @@ capabilities.
 The table records the baseline this RFC started from. P1 replaced the Apps in
 Toss row (see [Apps in Toss](#profile-ait)) and added an Apps in Toss
 functional-message delivery provider (see [Delivery providers](#remote-delivery)).
+P3 replaced the Devvit row (see [Devvit](#profile-devvit)) and added the
+Devvit delivery provider and a Redis-backed store inside the Devvit server.
 
 | Area | At the baseline |
 | --- | --- |
@@ -701,7 +704,9 @@ products and ad placements.
     `required`, or `none` for a `service` topic whose console template has no
     agreement statement.
   - **Devvit** needs `title` ≤ 60 and `body` ≤ 100 characters and may carry a
-    default `link`, a `t3_` or `t1_` id.
+    default `link`, a `t3_` or `t1_` id. A character is a Unicode code point,
+    and the provider checks the filled text again at send time (see
+    [Delivery providers](#remote-delivery)).
   - A field's `pattern` is read with the `u` flag. The validator reports a
     pattern that does not compile instead of throwing.
   - `agreement: 'none'` must not map to a `per-send` provider. Such a topic
@@ -1475,14 +1480,52 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   - **Limits.** 15,000 per minute per app (the registry's `rate`), and 10 per
     minute per user (a provider limit).
 - **Devvit.** It runs inside the Devvit server, not the game-services Worker,
-  because only that runtime can call the notifications API.
+  because only that runtime can call the notifications API:
+  `createDevvitNotificationDeliveryProvider` and
+  `createDevvitNotificationService` in `@mpgd/adapter-devvit/server`.
   - **Transport.** `enqueue` with a title, a body, and the send's `link`, one
-    recipient per call in the first wave. `failureCount` and `errors` map per
-    recipient.
+    recipient per call in the first wave. The recipient is the player's Reddit
+    user id (`t2_`), which the backend resolves from the authenticated
+    identity; the Devvit server's player id is `context.userId`.
+  - **What it sends.** The gate's filled title and body, with no template
+    data. Devvit reads both as Mustache templates, and every Mustache tag
+    starts with `{{`, so a filled text that still holds `{{` (from template
+    data, or from a catalog brace outside a `{{name}}` placeholder) is
+    `rejected` with reason `configuration` before anything is sent.
+  - **Length unit.** N2 left it open. Devvit's guidance says "titles ≤ 60
+    characters, body ≤ 100 characters" without a unit, the SDK
+    (`@devvit/notifications` 0.14.1) checks nothing before `Enqueue`, and
+    Devvit admins approve the copy before a game may send it. The kit counts
+    Unicode code points, as the catalog validator counts its mapping fields,
+    so an accented letter or most emoji count once, as a reader sees them; a
+    grapheme cluster of several code points counts more than once, which is
+    stricter than a reader. It checks the filled text at send time, because
+    placeholders change the length once template data fills them: a title
+    over 60 or a body over 100 is `rejected` with reason `configuration`.
+    Devvit has not confirmed the unit; if its server counts UTF-16 units, a
+    text with astral characters could still be refused, and that refusal
+    arrives as an `enqueue` error.
+  - **Answers.** `failureCount` and `errors` map per recipient.
+    - `successCount` above 0 is `accepted`.
+    - An error proves nothing was queued for the recipient. A message that
+      reads as a rate limit is `rate-limited`; one that names this recipient
+      and reads as the user's refusal (opted out, no such user) is `rejected`
+      with reason `recipient`; any other is `rejected` with reason
+      `configuration`, which the backend reports to the operator. Devvit
+      documents no error messages (checked 2026-10-19), so a deployment
+      names the messages it observes (`classifyEnqueueError`), and
+      `onEnqueueError` shows it every failure with Devvit's message.
+    - A call that throws, and an answer that counts neither a success nor a
+      failure, are `ambiguous`: Devvit may have queued it. `enqueue` takes no
+      idempotency key, so a replay after an ambiguous answer may show twice.
+  - **Opt-in at send time.** `readPermission` reads `isOptedIn`: opted in is
+    `granted`, otherwise `prompt`, which gate step 3 suppresses.
   - **Limits.** 2 per user per day (a provider limit), and 25,000 per app per
-    day (the registry's `rate`).
-  - The same delivery module and policy gate run there with a Redis-backed
-    ledger.
+    day (the registry's `rate`). Pre-release apps in testing may send only to
+    their developer and are not rate-limited.
+  - **Ledger.** The same delivery module and policy gate run there with a
+    Redis-backed store, `createDevvitRedisNotificationStore`, which passes
+    `runNotificationStoreConformance`; see open question 2 for its fencing.
 
 ### Reminder scheduler {#scheduler}
 
@@ -1490,7 +1533,9 @@ Server reminders, deferred sends (night window, quiet hours, provider limits,
 rate limits), sends in flight after an ambiguous answer, and overdue consent
 notices are stored with a lease and processed when due. The default is a D1
 table plus a Cron trigger on the game-services Worker; the Devvit server uses
-the Devvit scheduler.
+the Devvit scheduler. P3 runs the service and its due-row replays inside the
+Devvit server; wiring the Devvit scheduler to S2's scheduler is a follow-up
+after both land.
 
 - **Each due item** becomes a normal send through the policy gate, and its
   key moves through the [key states](#key-states).
@@ -1719,17 +1764,45 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `revokePermission` for the logged-in requester, and reads `isOptedIn`.
   - Devvit's guidance requires the game to offer both directions.
 - **Login.** A logged-out player needs login first: the provider reports
-  `action-required` availability and state with `requiredAction: 'login'`.
-  P3 adds a client-side Devvit `identity.requestUpgrade` that calls
-  `showLoginPrompt()` from `@devvit/web/client` and answers `reloadExpected:
-  true`, and it enables the reddit `identityUpgrade` integration. Today's
-  server bridge answers `unavailable` for that player.
+  `action-required` availability and state with `requiredAction: 'login'`,
+  and a request answers the `action-required` outcome without reaching the
+  plugin. The gateway's `loginPrompt` option
+  (`createDevvitWebLoginPrompt()` from `@mpgd/adapter-devvit/web`, over
+  `showLoginPrompt()` from `@devvit/web/client`) makes
+  `identity.requestUpgrade` open Reddit's login for such a player and answer
+  `{ status: 'completed', reloadExpected: true }`, because Reddit reloads the
+  post after login (a player who closes the prompt is still a guest on the
+  next read); a logged-in player gets the server's `completed` answer. The
+  reddit `identityUpgrade` integration stays `configuration-required` by
+  default, as on the other targets whose upgrade the game must wire: a game
+  that passes `loginPrompt` sets it `available` in its target config.
 - **Opt-out read at send time.** No opt-out event exists, and opt-out may move
   into Reddit settings, so the gate reads `isOptedIn` at send time instead of
   copying it.
 - **Links.** `enqueue` needs a post or comment for each recipient. The send's
   `link`, or the mapping's default `link`, supplies it, and the linked post's
   data supplies the route for the open.
+- **What P3 landed.**
+  - The server bridge's `notifications` dependency,
+    `createDevvitNotificationsV2BridgeHandler`, serves the nine methods for
+    the request's user (`context.userId`, never a payload field): the reads
+    and requests above, `revokePermission`, a `platform-user` registration,
+    `openSettings` answering `unavailable`, and `NOTIFICATIONS_UNSUPPORTED`
+    for the local methods. A refused opt-in (`success: false`) is
+    `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
+    `DEVVIT_OPT_IN_REFUSED`; a plugin call that throws is
+    `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic outside the catalog's
+    `reddit` mappings answers `unavailable` without an opt-in.
+  - `createDevvitPlatformGateway({ notifications: { topics } })` exposes
+    `notificationsV2` over that bridge, loads its client and validators on
+    first use, adds the capability block and
+    `providerAvailability.pushNotifications`, adds the webview's locale and
+    zone to the registration, and serves the v1 adapter from the same
+    provider. Without the option the gateway exposes no `notificationsV2`.
+    Devvit has no server-to-webview channel, so the provider emits no events.
+  - The kit's and the CLI template's server bridges take the handler; their
+    entrypoints do not wire it yet, because the kit ships no topic catalog
+    (C1).
 
 ## Advertising rules {#advertising-rules}
 
@@ -1852,10 +1925,12 @@ Other rules the profiles encode:
     protocol's events from 0 for each session and attaches to the provider only
     for the first listener, so events the provider buffered reach it.
   - The Cloudflare Pages host, the Apps in Toss sandbox bridge, and the
-    Devvit sandbox and server bridges (the kit's and the CLI template's)
-    answer every method with `NOTIFICATIONS_V2_UNAVAILABLE`
-    (`createNotificationsV2UnavailableBridgeError`). The Apps in Toss host
-    bridge serves v2 since P1.
+    Devvit sandbox bridge answer every method with
+    `NOTIFICATIONS_V2_UNAVAILABLE`
+    (`createNotificationsV2UnavailableBridgeError`), and so does the Devvit
+    server bridge (the kit's and the CLI template's) without its
+    `notifications` handler. The Apps in Toss host bridge serves v2 since
+    P1, and the Devvit server bridge with the handler since P3.
   - The Capacitor gateway answers the same code for a method no registered
     provider serves, before it pauses the game or reaches the base plugin, and
     its registry refuses the methods as methods a v1 provider declares. For the
@@ -1906,7 +1981,9 @@ How a real provider is judged:
   another one, such as the production service over an in-memory store. It
   receives the fake's inputs: the derived registry entry, the vector's
   catalog, deployment, and notices, the clock, and the host's send-time
-  permission read. The S1 service passes every vector except those that
+  permission read. The Devvit provider passes its vectors with the Devvit
+  server's service over the Redis store as the backend (P3). The S1 service
+  passes every vector except those that
   need S2's server reminders or notice pushes, and the per-send vector.
 
 ### Vector format {#vector-format}
@@ -1992,6 +2069,8 @@ listed fields of each item asserted:
 | `per-send-allowance` | One acceptance allows one delivery; retrying the delivered key answers the stored result, not `allowance-exhausted` |
 | `game-rendered-opt-in` | Game prompt, server opt-in, revocation read at send time |
 | `game-rendered-opt-out` | `revokePermission` opts out at the host; the next send is suppressed |
+| `game-rendered-opt-in-again` | After a revocation the read answers `denied`; the next request opts in again, is recorded, and sends resume |
+| `host-link-required` | A send without a link from the send or the mapping is `unavailable: link-missing` and reaches no provider; the send's link wins over the mapping's |
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
 | `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
 | `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it before then, recording a name that matches nothing, and recording it again after its `dueBy` change nothing; the next one is listed two years later |
@@ -2099,6 +2178,15 @@ publishable package carries a Sampo changeset.
   registry's `rate`; the replay of deferred rows is in S1 so that rate
   limits and windows settle.
 
+**What P3 landed.** The Devvit provider, server bridge handler, delivery
+provider, and Redis-backed store; see [Devvit](#profile-devvit),
+[Delivery providers](#remote-delivery), and open question 2.
+
+- Left to follow-ups: the Devvit scheduler path for S2's reminder scheduler
+  (after S2 and P3 land), the runtime's backend client for a service the
+  Devvit server hosts (the game-services client), and the wiring in the
+  generated Devvit app (C1).
+
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
 that also removes commerce v1.
@@ -2111,8 +2199,36 @@ that also removes commerce v1.
    release reads as `requested` once the player turns it on, and
    `streak-at-risk` resembles the deadline nudges the guide calls advertising.
    The project owner decides before C1.
-2. **Devvit ledger.** Confirm that a Redis-backed claim/lease ledger inside the
-   Devvit server meets the delivery ledger's fencing contract.
+2. **Devvit ledger.** Resolved in P3: the Redis-backed store meets the
+   delivery ledger's fencing contract.
+   - **The fencing token** is the send's version. The service claims a row
+     by writing the send with a new claim token, under the version it read,
+     and settles the answer the same way, after checking that its token
+     still holds the row. `createDevvitRedisNotificationStore` makes each of
+     those writes one WATCH/MULTI/EXEC transaction on the send's key: it
+     reads the stored version after WATCH and writes only when it matches,
+     so a write that another worker's claim preceded aborts at EXEC. A
+     holder whose lease expired and was taken over therefore cannot write
+     its answer back, and two claimers of one version cannot both win.
+   - **Indexes.** The due, in-flight, and retention indexes are written in
+     the same transaction as the send, so a replay never finds a row the
+     value disagrees with.
+   - **Abort detection.** `@devvit/redis` resolves an aborted EXEC as an
+     empty array and drops replies it cannot map (a protobuf zero may arrive
+     unset), so every transaction ends with a SET of a commit marker whose
+     reply always maps; only an empty result is an abort.
+   - **Clocks.** Leases compare against the service's clock, not Redis TTLs.
+     Clock skew between Devvit server instances can only start a replay
+     early, which the `ambiguous` rule already allows (Devvit's `enqueue`
+     has no idempotency key, so delivery is at least once after an
+     ambiguous answer); it can never let a stale holder overwrite a newer
+     state.
+   - **Tests.** The store passes `runNotificationStoreConformance` against
+     a fake Devvit Redis that models WATCH aborts and dropped replies; a
+     store test commits a competing claim between a holder's read and its
+     EXEC and shows the holder's write is refused; and a two-server service
+     test lets a lease expire mid-call, replays the row on the second
+     server, and shows the first server's late answer changes nothing.
 3. **Scheduler backend.** D1 plus Cron is the default; Durable Object alarms
    would give per-player precision at higher cost.
 4. **Remote copy on the server.** Whether the Worker reads localized copy from
