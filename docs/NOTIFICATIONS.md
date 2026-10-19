@@ -81,6 +81,15 @@ Rules the starter's settings screen follows, and your own screen must too:
   feature held back without them (App Review Guideline 5.1.2(i)), and the
   game keeps working when the player declines (Apps in Toss game
   checklist).
+- **Night consent only with advertising consent.** Night consent adds to
+  advertising consent, so the screen offers it only while advertising
+  consent is granted. Turning advertising consent off withdraws a granted
+  night consent in the same `setAdvertisingConsent` call.
+- **Show the records, not a guess.** Each switch shows the player's latest
+  backend record of its kind, read when the screen opens and after every
+  change, so a withdrawal made on another device or from a notice shows. No
+  device-side copy stands in for a record, and when the records cannot be
+  read the screen shows no switch.
 - **Turn off where it was turned on.** The game-rendered Devvit opt-in has a
   *Turn off* in the game; advertising and night consent are withdrawn in the
   same screen. A blocked OS permission offers only *Open system settings*
@@ -94,11 +103,12 @@ Rules the starter's settings screen follows, and your own screen must too:
 > **The runtime is not in the kit yet.** Composing the provider with the
 > backend needs a game-services client for the Worker's notification routes,
 > and those routes need the identity side's session binding. Until both ship,
-> `createStarterNotificationRuntime` in the starter returns `undefined`. The
+> `createStarterNotificationBackend` in the starter returns `undefined`. The
 > settings screen then asks for the OS or host permission (and withdraws a
-> Devvit opt-in the game rendered), keeps the reminder, advertising, and night
-> switches off, and says the choices cannot be saved. Return your own `NotificationRuntime` there if your backend
-> implements the routes.
+> Devvit opt-in the game rendered), shows no reminder, advertising, or night
+> switch, and says why. Return your own `NotificationRuntime` there, with
+> `listConsent` reading the player's consent records (`GET /consent` on the
+> game-services Worker), if your backend implements the routes.
 
 Notification opens are hints, never grants: an open carries a route and
 untrusted data, and anything worth claiming goes through the server. The
@@ -145,8 +155,9 @@ locale, with the act's date as `{{consentDate}}`:
   withdrawal) with its date, and that it was processed.
 - A re-confirmation states the sender's name, the consent and its date, and
   how to keep or withdraw it. The night re-confirmation must not say the
-  player still receives night advertising, because a night consent stands
-  after advertising consent is withdrawn.
+  player still receives night advertising: a night consent stands after
+  advertising consent is withdrawn unless the game withdraws it too (the
+  starter does).
 
 The starter's Korean copy follows that wording, with the game's title in
 brackets as the sender. The notice must name the same sender as

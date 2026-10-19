@@ -99,7 +99,6 @@ export class NotificationSettingsScene extends Phaser.Scene {
     this.busy = false;
     this.labels = starterNotificationLabelsFor(context.locale);
     this.settings = createStarterNotificationSettingsModel(context.platform, {
-      playerId: context.player.playerId,
       locale: context.locale,
     });
     const title = this.add
@@ -212,8 +211,11 @@ export class NotificationSettingsScene extends Phaser.Scene {
       }
     }
     if (!view.recording && (view.reminders.length > 0 || view.advertising !== undefined)) {
-      // Nothing could record these choices: no switches that cannot work.
-      line(text.notConnected, { ...textStyle, fontSize: '15px' });
+      // No switch without the player's records: it could not show or change the truth.
+      line(view.choices === 'unreadable' ? text.choicesUnreadable : text.notConnected, {
+        ...textStyle,
+        fontSize: '15px',
+      });
     } else if (view.reminders.length > 0) {
       line(text.reminders, { ...textStyle, color: '#ffffff' });
       for (const reminder of view.reminders) {
@@ -223,14 +225,22 @@ export class NotificationSettingsScene extends Phaser.Scene {
       }
     }
     if (view.recording && view.advertising !== undefined) {
-      const { granted, night } = view.advertising;
+      const { granted, night, nightSelectable } = view.advertising;
       action(`${text.advertising}: ${granted ? text.on : text.off}`, () =>
         this.settings.setAdvertising({ advertising: !granted }),
       );
       line(text.advertisingHelp, { ...textStyle, fontSize: '15px' });
-      action(`${text.night}: ${night ? text.on : text.off}`, () =>
-        this.settings.setAdvertising({ night: !night }),
-      );
+      if (nightSelectable) {
+        action(`${text.night}: ${night ? text.on : text.off}`, () =>
+          this.settings.setAdvertising({ night: !night }),
+        );
+      } else {
+        // Night consent adds to advertising consent: not selectable without it.
+        line(`${text.night}: ${text.off}\n${text.nightNeedsAdvertising}`, {
+          ...textStyle,
+          color: '#7b8794',
+        });
+      }
     }
     if (view.notices.length > 0) {
       line(text.notices, { ...textStyle, color: '#ffffff' });

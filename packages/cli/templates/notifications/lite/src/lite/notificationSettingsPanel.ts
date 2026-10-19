@@ -41,7 +41,6 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
 
   const model = (): StarterNotificationSettings => {
     settings ??= createStarterNotificationSettingsModel(context.platform, {
-      playerId: context.player.playerId,
       locale: context.locale,
     });
     return settings;
@@ -121,8 +120,10 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
       }
     }
     if (!view.recording && (view.reminders.length > 0 || view.advertising !== undefined)) {
-      // Nothing could record these choices: no switches that cannot work.
-      children.push(paragraph(text.notConnected));
+      // No switch without the player's records: it could not show or change the truth.
+      children.push(
+        paragraph(view.choices === 'unreadable' ? text.choicesUnreadable : text.notConnected),
+      );
     } else if (view.reminders.length > 0) {
       children.push(paragraph(text.reminders));
       for (const reminder of view.reminders) {
@@ -134,18 +135,22 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
       }
     }
     if (view.recording && view.advertising !== undefined) {
-      const { granted, night } = view.advertising;
+      const { granted, night, nightSelectable } = view.advertising;
       children.push(
         button(`${text.advertising}: ${granted ? text.on : text.off}`, () =>
           current.setAdvertising({ advertising: !granted }),
         ),
       );
       children.push(paragraph(text.advertisingHelp));
-      children.push(
-        button(`${text.night}: ${night ? text.on : text.off}`, () =>
-          current.setAdvertising({ night: !night }),
-        ),
+      const nightSwitch = button(`${text.night}: ${night ? text.on : text.off}`, () =>
+        current.setAdvertising({ night: !night }),
       );
+      // Night consent adds to advertising consent: not selectable without it.
+      nightSwitch.disabled = !nightSelectable;
+      children.push(nightSwitch);
+      if (!nightSelectable) {
+        children.push(paragraph(text.nightNeedsAdvertising));
+      }
     }
     if (view.notices.length > 0) {
       children.push(paragraph(text.notices));

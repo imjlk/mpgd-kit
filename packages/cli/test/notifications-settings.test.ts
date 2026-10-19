@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import type {
   NotificationCapabilities,
+  NotificationConsentRecord,
   NotificationEvent,
   NotificationNotice,
   NotificationPermissionResult,
@@ -76,8 +77,21 @@ function fakeProvider(
   return { provider, calls };
 }
 
+/**
+ * A runtime over an in-memory backend: player actions append consent records,
+ * and `listConsent` answers them newest first, as a backend may.
+ */
 function fakeRuntime(provider: NotificationProvider, notices: readonly NotificationNotice[] = []) {
   const calls: unknown[] = [];
+  const records: NotificationConsentRecord[] = [];
+  let clock = Date.parse('2026-10-19T00:00:00.000Z');
+  const append = (record: Omit<NotificationConsentRecord, 'at' | 'source'>): void => {
+    clock += 1000;
+    records.push(
+      { ...record, source: 'player', at: new Date(clock).toISOString() } as NotificationConsentRecord,
+    );
+  };
+  const listConsent = async (): Promise<readonly NotificationConsentRecord[]> => [...records].reverse();
   const runtime: NotificationRuntime = {
     getPermission: async (input) => ({ ...(await provider.getPermission(input)), sources: {} }),
     requestPermission: async (input) => {
@@ -92,9 +106,20 @@ function fakeRuntime(provider: NotificationProvider, notices: readonly Notificat
     unregister: async () => undefined,
     setTopicPreference: async (input) => {
       calls.push({ preference: input });
+      append({
+        kind: 'topic-preference',
+        topic: input.topic,
+        state: input.enabled ? 'granted' : 'withdrawn',
+      });
     },
     setAdvertisingConsent: async (input) => {
       calls.push({ advertising: input });
+      for (const kind of ['advertising', 'night'] as const) {
+        const state = input[kind];
+        if (state !== undefined) {
+          append({ kind, state, textVersion: input.textVersion });
+        }
+      }
     },
     reminders: {
       set: async () => ({ route: 'none', status: 'unavailable' }),
@@ -109,30 +134,14 @@ function fakeRuntime(provider: NotificationProvider, notices: readonly Notificat
     openSettings: async () => 'opened',
     subscribe: () => () => undefined,
   };
-  return { runtime, calls };
+  return { runtime, calls, records, append, listConsent };
 }
-
-const memoryStorage = () => {
-  const values = new Map<string, unknown>();
-  return {
-    values,
-    storage: {
-      load: async ({ key }: { readonly key: string }) => (values.has(key)
-        ? { value: values.get(key) }
-        : null),
-      save: async ({ key, value }: { readonly key: string; readonly value: unknown }) => {
-        values.set(key, value);
-      },
-    },
-  };
-};
 
 const common = {
   topics,
   defaultLocale: 'ko',
   consentTextVersion: '1',
   locale: 'ko',
-  playerId: 'player-1',
 } as const;
 
 // A target without notifications shows nothing to switch.
@@ -154,7 +163,8 @@ const common = {
     view.reminders.map((reminder) => [reminder.topic, reminder.enabled]),
     [['daily-ready', false]],
   );
-  assert.deepEqual(view.advertising, { granted: false, night: false });
+  assert.equal(view.choices, 'no-server');
+  assert.deepEqual(view.advertising, { granted: false, night: false, nightSelectable: false });
   // The permission asked up front leaves the advertising topic out.
   // Without a runtime the OS permission is on, but nothing is sent yet: the message says so.
   assert.equal(
@@ -171,26 +181,45 @@ const common = {
   );
 }
 
-// With a runtime: advertising and night consent are recorded separately, with
-// the text version, and the switches follow what was recorded on this device.
+// With a runtime: the switches show the player's latest backend records, and
+// advertising and night consent are recorded with the text version.
 {
   const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
-  const { runtime, calls } = fakeRuntime(provider);
-  const { storage, values } = memoryStorage();
-  const settings = createStarterNotificationSettings({ ...common, provider, runtime, storage });
-  assert.deepEqual((await settings.load()).advertising, { granted: false, night: false });
+  const { runtime, calls, listConsent } = fakeRuntime(provider);
+  const settings = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
+  const loaded = await settings.load();
+  assert.equal(loaded.choices, 'records');
+  assert.equal(loaded.recording, true);
+  // Night consent is not selectable before advertising consent.
+  assert.deepEqual(loaded.advertising, { granted: false, night: false, nightSelectable: false });
+  const early = await settings.setAdvertising({ night: true });
+  assert.equal(
+    early.message,
+    '야간 광고성 정보 수신은 광고성 정보 수신에 먼저 동의해야 켤 수 있어요.',
+  );
+  assert.deepEqual(calls, []);
   const advertising = await settings.setAdvertising({ advertising: true });
-  assert.deepEqual(advertising.advertising, { granted: true, night: false });
+  assert.deepEqual(advertising.advertising, { granted: true, night: false, nightSelectable: true });
   assert.equal(advertising.message, '광고성 정보 수신에 동의했어요.');
   const night = await settings.setAdvertising({ night: true });
-  assert.deepEqual(night.advertising, { granted: true, night: true });
+  assert.deepEqual(night.advertising, { granted: true, night: true, nightSelectable: true });
+  // Withdrawing advertising consent withdraws the night consent in the same call.
   const withdrawn = await settings.setAdvertising({ advertising: false });
-  // Withdrawing advertising consent leaves the night consent as it was (RFC: it stands).
-  assert.deepEqual(withdrawn.advertising, { granted: false, night: true });
+  assert.deepEqual(withdrawn.advertising, { granted: false, night: false, nightSelectable: false });
+  assert.equal(withdrawn.message, '광고성 정보 수신동의와 야간 광고성 정보 수신동의를 철회했어요.');
+  // A night consent never granted is not withdrawn again (that would be a refusal).
+  await settings.setAdvertising({ advertising: true });
+  await settings.setAdvertising({ advertising: false });
+  // Both at once is one consent call.
+  const both = await settings.setAdvertising({ advertising: true, night: true });
+  assert.deepEqual(both.advertising, { granted: true, night: true, nightSelectable: true });
   assert.deepEqual(calls, [
     { advertising: { advertising: 'granted', textVersion: '1' } },
     { advertising: { night: 'granted', textVersion: '1' } },
+    { advertising: { advertising: 'withdrawn', night: 'withdrawn', textVersion: '1' } },
+    { advertising: { advertising: 'granted', textVersion: '1' } },
     { advertising: { advertising: 'withdrawn', textVersion: '1' } },
+    { advertising: { advertising: 'granted', night: 'granted', textVersion: '1' } },
   ]);
   // Reminders: a granted app permission needs no prompt; the preference is recorded.
   const reminder = await settings.setReminder('daily-ready', true);
@@ -203,12 +232,90 @@ const common = {
     (await settings.setReminder('events', true)).message,
     '이 기기에서는 알림을 켤 수 없어요.',
   );
-  // The choices are remembered for the next screen.
-  assert.ok(values.size === 1);
-  const again = createStarterNotificationSettings({ ...common, provider, runtime, storage });
-  const reloaded = await again.load();
-  assert.deepEqual(reloaded.advertising, { granted: false, night: true });
-  assert.equal(reloaded.reminders[0]?.enabled, true);
+}
+
+// A withdrawal made elsewhere (another device, a notice, support) shows on the
+// next read: the switches never keep a stale on.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime, append, listConsent } = fakeRuntime(provider);
+  const settings = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
+  // A change needs the records it changes: the screen reads them first.
+  assert.match(
+    (await settings.setAdvertising({ advertising: true })).message ?? '',
+    /불러오지 못해/u,
+  );
+  await settings.load();
+  await settings.setAdvertising({ advertising: true, night: true });
+  await settings.setReminder('daily-ready', true);
+  const on = await settings.load();
+  assert.deepEqual(on.advertising, { granted: true, night: true, nightSelectable: true });
+  assert.equal(on.reminders[0]?.enabled, true);
+  append({ kind: 'advertising', state: 'withdrawn', textVersion: '1' });
+  append({ kind: 'night', state: 'withdrawn', textVersion: '1' });
+  append({ kind: 'topic-preference', topic: 'daily-ready', state: 'withdrawn' });
+  const off = await settings.load();
+  assert.deepEqual(off.advertising, { granted: false, night: false, nightSelectable: false });
+  assert.equal(off.reminders[0]?.enabled, false);
+  // A night consent left standing by another client stays withdrawable.
+  append({ kind: 'night', state: 'granted', textVersion: '1' });
+  const standing = await settings.load();
+  assert.deepEqual(standing.advertising, { granted: false, night: true, nightSelectable: true });
+}
+
+// Nothing on the device stands in for a record: a new device, or one whose
+// storage was cleared, shows the backend's records as they are.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime, listConsent } = fakeRuntime(provider);
+  const first = createStarterNotificationSettings({ ...common, provider, runtime, listConsent });
+  await first.load();
+  await first.setAdvertising({ advertising: true });
+  const fresh = await createStarterNotificationSettings({ ...common, provider, runtime, listConsent }).load();
+  assert.deepEqual(fresh.advertising, { granted: true, night: false, nightSelectable: true });
+  // Another player's backend records are their own: a fresh backend shows nothing on.
+  const other = fakeRuntime(provider);
+  const otherView = await createStarterNotificationSettings({
+    ...common,
+    provider,
+    runtime: other.runtime,
+    listConsent: other.listConsent,
+  }).load();
+  assert.deepEqual(otherView.advertising, { granted: false, night: false, nightSelectable: false });
+}
+
+// Records that cannot be read show no switch, and no change is made blind.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const { runtime, calls } = fakeRuntime(provider);
+  const original = console.warn;
+  console.warn = () => undefined;
+  try {
+    const failing = createStarterNotificationSettings({
+      ...common,
+      provider,
+      runtime,
+      listConsent: async () => {
+        throw new Error('offline');
+      },
+    });
+    const view = await failing.load();
+    assert.equal(view.available, true);
+    assert.equal(view.choices, 'unreadable');
+    assert.equal(view.recording, false);
+    assert.deepEqual(view.advertising, { granted: false, night: false, nightSelectable: false });
+    const blind = await failing.setAdvertising({ advertising: false });
+    assert.equal(
+      blind.message,
+      '수신 설정을 불러오지 못해 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.',
+    );
+    assert.deepEqual(calls, []);
+    // A runtime without a records reader cannot show the switches either.
+    const noReader = await createStarterNotificationSettings({ ...common, provider, runtime }).load();
+    assert.equal(noReader.choices, 'unreadable');
+  } finally {
+    console.warn = original;
+  }
 }
 
 // A per-topic host (Apps in Toss): turning a reminder on opens that topic's
@@ -311,24 +418,11 @@ const common = {
   assert.equal(os.permission.canRevoke, false);
 }
 
-// The remembered switches belong to one player on the device.
+// An empty change records nothing.
 {
   const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
-  const { runtime } = fakeRuntime(provider);
-  const { storage } = memoryStorage();
-  await createStarterNotificationSettings({ ...common, provider, runtime, storage })
-    .setAdvertising({ advertising: true });
-  const other = await createStarterNotificationSettings({
-    ...common,
-    provider,
-    runtime,
-    storage,
-    playerId: 'player-2',
-  }).load();
-  assert.deepEqual(other.advertising, { granted: false, night: false });
-  // An empty change records nothing.
-  const { runtime: quiet, calls } = fakeRuntime(provider);
-  const empty = await createStarterNotificationSettings({ ...common, provider, runtime: quiet })
+  const { runtime: quiet, calls, listConsent } = fakeRuntime(provider);
+  const empty = await createStarterNotificationSettings({ ...common, provider, runtime: quiet, listConsent })
     .setAdvertising({});
   assert.equal(empty.message, '이 기기에서는 알림을 켤 수 없어요.');
   assert.deepEqual(calls, []);
@@ -512,7 +606,7 @@ const common = {
 // A failing action reports a message instead of throwing into the scene.
 {
   const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
-  const { runtime } = fakeRuntime(provider);
+  const { runtime, listConsent } = fakeRuntime(provider);
   const failing: NotificationRuntime = {
     ...runtime,
     setAdvertisingConsent: async () => {
@@ -522,8 +616,14 @@ const common = {
   const original = console.warn;
   console.warn = () => undefined;
   try {
-    const view = await createStarterNotificationSettings({ ...common, provider, runtime: failing })
-      .setAdvertising({ advertising: true });
+    const settings = createStarterNotificationSettings({
+      ...common,
+      provider,
+      runtime: failing,
+      listConsent,
+    });
+    await settings.load();
+    const view = await settings.setAdvertising({ advertising: true });
     assert.equal(view.message, '설정을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.');
     assert.equal(view.advertising?.granted, false);
   } finally {

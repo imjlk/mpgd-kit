@@ -1,10 +1,11 @@
-import type { StorageAdapter } from '@mpgd/platform';
 import {
   fillNotificationTemplate,
   findNotificationCopy,
+  latestNotificationConsent,
   notificationNoticeVariantCopy,
   toSeoulCalendarDate,
   type NotificationCapabilities,
+  type NotificationConsentRecord,
   type NotificationNotice,
   type NotificationNoticeCopy,
   type NotificationPermissionSnapshot,
@@ -26,18 +27,36 @@ import {
  *   Apps in Toss and Devvit require. Nothing here prompts on its own, and no
  *   switch is on before the player turns it on.
  * - Consent is recorded through the notifications runtime, which sends it to
- *   the game backend: the server keeps the records the policy gate reads.
- *   Without a runtime (see `createStarterNotificationRuntime`), the screen
- *   asks for (and withdraws, where the game rendered it) only the OS or host
- *   permission and keeps the other switches off.
+ *   the game backend: the server keeps the records the policy gate reads,
+ *   and the switches show the player's latest records, read from the
+ *   backend each time the screen reads (`listConsent`), so a choice changed
+ *   on another device or in a notice shows here too. Nothing on the device
+ *   stands in for a record. Without a runtime (see
+ *   `createStarterNotificationBackend`), the screen asks for (and withdraws,
+ *   where the game rendered it) only the OS or host permission and shows no
+ *   reminder or advertising switch; when the records cannot be read, it shows
+ *   none either and says so.
+ * - Night consent (21:00 to 08:00 KST) is an addition to advertising consent:
+ *   it can be turned on only while advertising consent is granted, and
+ *   withdrawing advertising consent withdraws a granted night consent in the
+ *   same `setAdvertisingConsent` call.
  * - A reminder or consent is never paid for: the game gives no reward for
  *   turning notifications on, and keeps working when the player declines.
  */
 export interface StarterNotificationSettingsView {
   /** False when this target exposes no notifications (`gateway.notificationsV2` is absent). */
   readonly available: boolean;
-  /** Whether consent can be recorded: a runtime is present. */
+  /**
+   * Whether the reminder and advertising switches can be shown and changed:
+   * a runtime is present and the player's consent records were read.
+   */
   readonly recording: boolean;
+  /**
+   * Where the switches' states come from: the player's backend `records`,
+   * none because the game has no backend for them (`no-server`), or none
+   * because the records could not be read just now (`unreadable`).
+   */
+  readonly choices: 'records' | 'no-server' | 'unreadable';
   readonly permission: {
     /** The app permission, or for a host that asks per topic, the reminders' combined state. */
     readonly state: NotificationPermissionState;
@@ -56,13 +75,20 @@ export interface StarterNotificationSettingsView {
   readonly reminders: readonly {
     readonly topic: string;
     readonly label: string;
-    /** As last recorded from this device for this player; the server record decides. */
+    /** The player's latest `topic-preference` record for the topic is `granted`. */
     readonly enabled: boolean;
   }[];
   /** Present when this target delivers an advertising topic. */
   readonly advertising?: {
+    /** The latest `advertising` record is `granted`. */
     readonly granted: boolean;
+    /** The latest `night` record is `granted`. */
     readonly night: boolean;
+    /**
+     * Whether the night switch can be tapped: to turn it on, advertising
+     * consent must be granted; a granted night consent can always be withdrawn.
+     */
+    readonly nightSelectable: boolean;
   };
   /** Consent notices the server says are due, in the player's language. */
   readonly notices: readonly { readonly title: string; readonly body: string }[];
@@ -75,6 +101,12 @@ export interface StarterNotificationSettingsInput {
   readonly provider: NotificationProvider | undefined;
   /** The game's notifications runtime; absent until the game has a backend for it. */
   readonly runtime: NotificationRuntime | undefined;
+  /**
+   * The signed-in player's consent records from the game backend (the
+   * game-services Worker's `GET /consent`), in any order. The switches show
+   * the latest record of each kind; without it, they are not shown.
+   */
+  readonly listConsent?: () => Promise<readonly NotificationConsentRecord[]>;
   /** The topics this target maps (`starterNotificationTopics(configTarget)`). */
   readonly topics: readonly NotificationTopicDeclaration[];
   /** `notices.copy` of the catalog, for the notices the server lists. */
@@ -82,10 +114,6 @@ export interface StarterNotificationSettingsInput {
   readonly defaultLocale: string;
   /** The consent text version recorded with advertising and night consent. */
   readonly consentTextVersion: string;
-  /** Remembers this device's last recorded choices for display; `gateway.storage`. */
-  readonly storage?: StorageAdapter;
-  /** The player the remembered choices belong to, so another player on the device sees their own. */
-  readonly playerId: string;
   /** Asks the host to log the player in (`identity.requestUpgrade`), for a host that needs it first. */
   readonly requestLogin?: () => Promise<unknown>;
   readonly locale: string;
@@ -103,7 +131,12 @@ export interface StarterNotificationSettings {
   logIn(): Promise<StarterNotificationSettingsView>;
   /** From a tap: turns one reminder topic on (asking for its permission first) or off. */
   setReminder(topic: string, enabled: boolean): Promise<StarterNotificationSettingsView>;
-  /** From a tap: records advertising or night consent, or its withdrawal. */
+  /**
+   * From a tap: records advertising or night consent, or its withdrawal.
+   * Night consent is turned on only while advertising consent is granted (or
+   * granted in the same change), and withdrawing advertising consent also
+   * withdraws a granted night consent, in one call.
+   */
   setAdvertising(change: { readonly advertising?: boolean; readonly night?: boolean }): Promise<StarterNotificationSettingsView>;
   /**
    * Call once the screen shows `view.notices`: records each shown notice as
@@ -133,6 +166,8 @@ export const starterNotificationLabels = {
     off: '꺼짐',
     notices: '수신동의 안내',
     notConnected: '게임 서버가 연결되면 리마인더와 광고성 정보 수신 설정을 여기서 켜고 끌 수 있어요.',
+    choicesUnreadable: '수신 설정을 불러오지 못했어요. 잠시 후 다시 열어 주세요.',
+    nightNeedsAdvertising: '광고성 정보 수신에 동의하면 선택할 수 있어요.',
     back: '돌아가기',
     close: '닫기',
   },
@@ -154,6 +189,8 @@ export const starterNotificationLabels = {
     off: 'off',
     notices: 'Consent notices',
     notConnected: 'Once the game server is connected, reminders and promotional consent are set here.',
+    choicesUnreadable: 'Your notification choices could not be read. Open this screen again later.',
+    nightNeedsAdvertising: 'Available once you agree to promotional notifications.',
     back: 'Back',
     close: 'Close',
   },
@@ -166,14 +203,6 @@ export function starterNotificationLabelsFor(locale: string): StarterNotificatio
   return locale.toLowerCase().startsWith('ko')
     ? starterNotificationLabels.ko
     : starterNotificationLabels.en;
-}
-
-const storageKeyPrefix = 'mpgd.notification-settings.v1:';
-
-interface Remembered {
-  readonly reminders: Readonly<Record<string, boolean>>;
-  readonly advertising: boolean;
-  readonly night: boolean;
 }
 
 const messages = {
@@ -193,6 +222,9 @@ const messages = {
     readFailed: '알림 설정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.',
     advertisingOn: '광고성 정보 수신에 동의했어요.',
     advertisingOff: '광고성 정보 수신동의를 철회했어요.',
+    advertisingAndNightOff: '광고성 정보 수신동의와 야간 광고성 정보 수신동의를 철회했어요.',
+    nightNeedsAdvertising: '야간 광고성 정보 수신은 광고성 정보 수신에 먼저 동의해야 켤 수 있어요.',
+    choicesUnreadable: '수신 설정을 불러오지 못해 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.',
     nightOn: '야간 광고성 정보 수신에 동의했어요.',
     nightOff: '야간 광고성 정보 수신동의를 철회했어요.',
     reminderOn: '리마인더를 켰어요.',
@@ -214,6 +246,9 @@ const messages = {
     readFailed: 'The notification settings could not be read. Try again later.',
     advertisingOn: 'You agreed to promotional notifications.',
     advertisingOff: 'You withdrew your consent to promotional notifications.',
+    advertisingAndNightOff: 'You withdrew your consent to promotional notifications, by day and at night.',
+    nightNeedsAdvertising: 'Agree to promotional notifications first to get them at night.',
+    choicesUnreadable: 'Your choices could not be read, so nothing was changed. Try again later.',
     nightOn: 'You agreed to promotional notifications at night.',
     nightOff: 'You withdrew your consent to promotional notifications at night.',
     reminderOn: 'The reminder is on.',
@@ -226,6 +261,7 @@ type Messages = (typeof messages)['en' | 'ko'];
 const unavailableView = (message: string | undefined): StarterNotificationSettingsView => ({
   available: false,
   recording: false,
+  choices: 'no-server',
   permission: {
     state: 'unsupported',
     perTopic: false,
@@ -243,7 +279,6 @@ export function createStarterNotificationSettings(
   input: StarterNotificationSettingsInput,
 ): StarterNotificationSettings {
   const strings: Messages = input.locale.toLowerCase().startsWith('ko') ? messages.ko : messages.en;
-  const storageKey = `${storageKeyPrefix}${input.playerId}`;
   const reminderTopics = input.topics.filter((topic) => topic.purpose === 'requested');
   const advertisingTopics = input.topics.filter((topic) => topic.purpose === 'advertising');
   // Every topic but advertising asks for delivery permission up front; an
@@ -251,7 +286,8 @@ export function createStarterNotificationSettings(
   const permissionTopics = input.topics
     .filter((topic) => topic.purpose !== 'advertising')
     .map((topic) => topic.id);
-  let remembered: Remembered = { reminders: {}, advertising: false, night: false };
+  /** The player's records as the last view read them; `undefined` when they could not be read. */
+  let records: readonly NotificationConsentRecord[] | undefined;
   let capabilities: NotificationCapabilities | undefined;
   let message: string | undefined;
   let notices: StarterNotificationSettingsView['notices'] = [];
@@ -279,38 +315,40 @@ export function createStarterNotificationSettings(
           reminderTopics.map((topic) => topic.id),
         )
       : (snapshot.app ?? 'unsupported');
-    const recording = input.runtime !== undefined;
     const available = capabilities.availability !== 'unsupported';
     if (!available) {
-      // Nothing is shown, so no notice may be recorded as shown either.
+      // Nothing is shown, so no notice may be recorded as shown, and no switch changed.
       rendered = [];
+      records = undefined;
     }
+    const choices = available ? await readChoices() : 'no-server';
+    const recording = choices === 'records';
+    const granted = (kind: 'topic-preference' | 'advertising' | 'night', topic?: string): boolean =>
+      recording && records !== undefined && latestNotificationConsent(records, kind, topic)?.state === 'granted';
+    const advertising = granted('advertising');
+    const night = granted('night');
     return {
       available,
       recording,
+      choices,
       permission: {
         state,
         perTopic,
         canRequest: !perTopic && isRequestable(state),
         canOpenSettings: state === 'blocked' && capabilities.permission.settings,
         canRevoke: gameRendered && state === 'granted'
-          && (recording || provider.revokePermission !== undefined),
+          && (input.runtime !== undefined || provider.revokePermission !== undefined),
         canLogin: snapshot.requiredAction === 'login' && input.requestLogin !== undefined,
         ...(snapshot.requiredAction === undefined ? {} : { requiredAction: snapshot.requiredAction }),
       },
       reminders: reminderTopics.map((topic) => ({
         topic: topic.id,
         label: strings.reminderLabels[topic.id] ?? topic.id,
-        enabled: recording && remembered.reminders[topic.id] === true,
+        enabled: granted('topic-preference', topic.id),
       })),
       ...(advertisingTopics.length === 0
         ? {}
-        : {
-            advertising: {
-              granted: recording && remembered.advertising,
-              night: recording && remembered.night,
-            },
-          }),
+        : { advertising: { granted: advertising, night, nightSelectable: recording && (advertising || night) } }),
       notices: available ? notices : [],
       ...(message === undefined ? {} : { message }),
     };
@@ -334,15 +372,26 @@ export function createStarterNotificationSettings(
     }
   };
 
-  const remember = async (next: Remembered): Promise<void> => {
-    remembered = next;
+  /**
+   * Reads the player's consent records for the switches, every time the
+   * screen reads, so a change made elsewhere shows. Sorted by the backend's
+   * time, oldest first, so the latest record of each kind is the last.
+   */
+  const readChoices = async (): Promise<StarterNotificationSettingsView['choices']> => {
+    records = undefined;
+    if (input.runtime === undefined || input.listConsent === undefined) {
+      return input.runtime === undefined ? 'no-server' : 'unreadable';
+    }
     try {
-      await input.storage?.save({ key: storageKey, value: next });
+      records = [...(await input.listConsent())].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+      return 'records';
     } catch (error) {
-      // Only a display hint: the server keeps the record.
-      console.warn('[notifications] could not remember the settings on this device.', error);
+      console.warn('[notifications] the consent records could not be read.', error);
+      return 'unreadable';
     }
   };
+  const latestState = (kind: 'advertising' | 'night'): string | undefined =>
+    records === undefined ? undefined : latestNotificationConsent(records, kind)?.state;
 
   const run = async (action: () => Promise<string | undefined>): Promise<StarterNotificationSettingsView> => {
     try {
@@ -384,12 +433,6 @@ export function createStarterNotificationSettings(
 
   return {
     async load() {
-      try {
-        const stored = await input.storage?.load({ key: storageKey });
-        remembered = readRemembered(stored?.value);
-      } catch (error) {
-        console.warn('[notifications] could not read the remembered settings.', error);
-      }
       notices = [];
       rendered = [];
       // A new visit starts without the previous visit's outcome.
@@ -478,7 +521,6 @@ export function createStarterNotificationSettings(
           }
         }
         await input.runtime.setTopicPreference({ topic, enabled });
-        await remember({ ...remembered, reminders: { ...remembered.reminders, [topic]: enabled } });
         return enabled ? strings.reminderOn : strings.reminderOff;
       });
     },
@@ -490,18 +532,31 @@ export function createStarterNotificationSettings(
         if (advertisingTopics.length === 0 || (change.advertising === undefined && change.night === undefined)) {
           return strings.unavailable;
         }
+        if (records === undefined) {
+          // The current consent is unknown, so a change could withdraw the wrong one.
+          return strings.choicesUnreadable;
+        }
+        const advertisingGranted = latestState('advertising') === 'granted';
+        const nightGranted = latestState('night') === 'granted';
+        const advertisingAfter = change.advertising ?? advertisingGranted;
+        if (change.night === true && !advertisingAfter) {
+          // Night consent adds to advertising consent; alone it allows nothing.
+          return strings.nightNeedsAdvertising;
+        }
+        // Withdrawing advertising consent withdraws a granted night consent in
+        // the same call; a night consent never granted is not refused again.
+        const withdrawsNight = change.advertising === false && change.night === undefined && nightGranted;
+        const night = withdrawsNight ? false : change.night;
         await input.runtime.setAdvertisingConsent({
           ...(change.advertising === undefined
             ? {}
             : { advertising: change.advertising ? 'granted' : 'withdrawn' }),
-          ...(change.night === undefined ? {} : { night: change.night ? 'granted' : 'withdrawn' }),
+          ...(night === undefined ? {} : { night: night ? 'granted' : 'withdrawn' }),
           textVersion: input.consentTextVersion,
         });
-        await remember({
-          ...remembered,
-          advertising: change.advertising ?? remembered.advertising,
-          night: change.night ?? remembered.night,
-        });
+        if (withdrawsNight) {
+          return strings.advertisingAndNightOff;
+        }
         if (change.advertising !== undefined) {
           return change.advertising ? strings.advertisingOn : strings.advertisingOff;
         }
@@ -525,26 +580,6 @@ function combinedState(
     return 'unsupported';
   }
   return states.find((state) => state !== 'granted') ?? 'granted';
-}
-
-function readRemembered(value: unknown): Remembered {
-  if (typeof value !== 'object' || value === null) {
-    return { reminders: {}, advertising: false, night: false };
-  }
-  const record = value as Partial<Record<keyof Remembered, unknown>>;
-  const reminders: Record<string, boolean> = {};
-  if (typeof record.reminders === 'object' && record.reminders !== null) {
-    for (const [topic, enabled] of Object.entries(record.reminders)) {
-      if (enabled === true) {
-        reminders[topic] = true;
-      }
-    }
-  }
-  return {
-    reminders,
-    advertising: record.advertising === true,
-    night: record.night === true,
-  };
 }
 
 /**

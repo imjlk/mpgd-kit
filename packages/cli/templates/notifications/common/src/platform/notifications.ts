@@ -2,6 +2,7 @@ import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } fro
 import type { PlatformGateway } from '@mpgd/platform';
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
 import type {
+  NotificationConsentRecord,
   NotificationRuntime,
   NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
@@ -43,51 +44,61 @@ export function starterNotificationTopics(configTarget: string): readonly Notifi
 }
 
 /**
- * The game's notifications runtime (notifications RFC "Runtime"): the target's
- * provider composed with the game backend, which keeps consent records,
- * endpoint registrations, server reminders, and notices.
+ * The game backend's notifications surface the starter uses: the runtime
+ * (notifications RFC "Runtime"), which composes the target's provider with
+ * the backend that keeps consent records, endpoint registrations, server
+ * reminders, and notices; and the signed-in player's consent records (the
+ * game-services Worker's `GET /consent`), which the settings screen shows.
+ */
+export interface StarterNotificationBackend {
+  readonly runtime: NotificationRuntime;
+  listConsent(): Promise<readonly NotificationConsentRecord[]>;
+}
+
+/**
+ * The game's notifications backend.
  *
  * The kit does not ship that runtime's backend client yet: the game-services
  * Worker's notification routes need a session from the identity side, which
  * comes in a later kit release. Until then this returns `undefined`, and the
  * notification settings screen asks only for the OS or host permission and
- * keeps topic, advertising, and night consent switched off, because nothing
- * could record them. Return your own `NotificationRuntime` here when your
+ * shows no reminder, advertising, or night switch, because nothing could
+ * record them. Return your own runtime and consent reader here when your
  * backend implements those routes.
  */
-export function createStarterNotificationRuntime(
+export function createStarterNotificationBackend(
   _platform: PlatformGateway,
-): NotificationRuntime | undefined {
+): StarterNotificationBackend | undefined {
   return undefined;
 }
 
-const runtimes = new WeakMap<PlatformGateway, NotificationRuntime | undefined>();
+const backends = new WeakMap<PlatformGateway, StarterNotificationBackend | undefined>();
 
-/** One runtime per gateway: a runtime subscribes to its provider once, for the process. */
-function starterNotificationRuntime(platform: PlatformGateway): NotificationRuntime | undefined {
-  if (!runtimes.has(platform)) {
-    runtimes.set(platform, createStarterNotificationRuntime(platform));
+/** One backend per gateway: a runtime subscribes to its provider once, for the process. */
+function starterNotificationBackend(platform: PlatformGateway): StarterNotificationBackend | undefined {
+  if (!backends.has(platform)) {
+    backends.set(platform, createStarterNotificationBackend(platform));
   }
-  return runtimes.get(platform);
+  return backends.get(platform);
 }
 
-/** The settings screen's model for this gateway, player, and locale. */
+/** The settings screen's model for this gateway and locale. */
 export function createStarterNotificationSettingsModel(
   platform: TargetConfiguredGateway,
-  input: { readonly playerId: string; readonly locale: string },
+  input: { readonly locale: string },
 ): StarterNotificationSettings {
   const requestUpgrade = platform.identity.requestUpgrade?.bind(platform.identity);
+  const backend = starterNotificationBackend(platform);
   return createStarterNotificationSettings({
     provider: platform.notificationsV2,
-    runtime: starterNotificationRuntime(platform),
+    runtime: backend?.runtime,
+    ...(backend === undefined ? {} : { listConsent: () => backend.listConsent() }),
     topics: starterNotificationTopics(platform.configTarget),
     ...(starterNotificationCatalog.notices === undefined
       ? {}
       : { noticeCopy: starterNotificationCatalog.notices.copy }),
     defaultLocale: starterNotificationCatalog.defaultLocale,
     consentTextVersion: starterAdvertisingConsentTextVersion,
-    storage: platform.storage,
-    playerId: input.playerId,
     // Devvit: a logged-out player logs in before the opt-in (the gateway's loginPrompt).
     ...(requestUpgrade === undefined
       ? {}
@@ -105,7 +116,7 @@ export function subscribeStarterNotificationOpens(
   platform: PlatformGateway,
   routes: NotificationOpenRoutes,
 ): () => void {
-  const source = starterNotificationRuntime(platform) ?? platform.notificationsV2;
+  const source = starterNotificationBackend(platform)?.runtime ?? platform.notificationsV2;
   return source === undefined ? () => undefined : routeNotificationOpens(source, routes);
 }
 

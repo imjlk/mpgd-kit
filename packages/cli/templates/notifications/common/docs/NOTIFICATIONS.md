@@ -58,7 +58,17 @@ left for you.
 Consent records (reminders, 광고성 정보 수신동의, night consent), endpoint
 registration, server reminders, and consent notices go through the game
 backend. The kit does not ship that runtime's backend client yet, so
-`createStarterNotificationRuntime` returns `undefined` and the settings screen
-asks only for the OS or host permission (and withdraws a Devvit opt-in the
-game rendered). Return a `NotificationRuntime` there
-once your backend serves the notification routes.
+`createStarterNotificationBackend` in `src/platform/notifications.ts` returns
+`undefined` and the settings screen asks only for the OS or host permission
+(and withdraws a Devvit opt-in the game rendered). Once your backend serves
+the notification routes, return its `NotificationRuntime` there with
+`listConsent`, which reads the signed-in player's consent records (the
+game-services Worker's `GET /consent`). The settings screen shows each
+switch from the latest record, read every time it opens and after every
+change, so a choice made on another device shows; it keeps nothing on the
+device, and shows no switch when the records cannot be read.
+
+Night consent adds to 광고성 정보 수신동의: the screen offers it only while
+advertising consent is granted, and turning advertising consent off also
+withdraws a granted night consent in the same call (two records, two result
+notices).
