@@ -893,12 +893,13 @@ the pending reminder, and cancelling removes it.
   the reminder pending and the next run finds its send. A set stops the
   previous reminder's send before it writes the new one, and a cancel stops
   it both before and after it removes the reminder. A run that fires the
-  old reminder meanwhile fails to mark it, and stops its own send. A stop
+  old reminder meanwhile fails to mark it, and stops its own send unless the
+  new reminder has the same time and content (below). A stop
   only touches the send of its reminder's content, so a send the new
   reminder made at the same key stays.
 - **Same key and time.** The send key names the reminder's key and time,
-  not its content. Setting a fired reminder again with the same time and
-  content keeps the send it made. With other content, the rows of the
+  not its content. Setting a reminder again with the same time and content
+  keeps the send the previous one made, if it made one. With other content, the rows of the
   previous send that still wait are stopped and the new reminder makes its
   own send, unless a row of the previous send was already delivered: then
   the key keeps that send, the new reminder makes none, and the backend
