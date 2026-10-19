@@ -1641,4 +1641,47 @@ const pending = (h: Harness) =>
   assert.deepEqual(await set('t3_abc123'), { status: 'scheduled' });
 }
 
+// Compaction keeps every acceptance record while a per-send provider is registered (it counts them).
+{
+  for (const allowance of ['persistent', 'per-send'] as const) {
+    const time = clock('2026-10-19T03:00:00Z');
+    const store = createInMemoryNotificationStore();
+    const registered = createNotificationProviderRegistry([
+      { entry: platformEntry, delivery: fakeProvider('platform'), targets: ['vector'] },
+    ]);
+    // The registry refuses per-send entries, so the per-send case is built by hand.
+    const registry = allowance === 'persistent'
+      ? registered
+      : {
+          ...registered,
+          providers: registered.providers.map((provider) => ({
+            ...provider,
+            entry: { ...provider.entry, permission: { ...provider.entry.permission, allowance } },
+          })),
+        };
+    const service = createNotificationService({
+      store,
+      registry,
+      catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+      now: time.now,
+    });
+    const report = (state: 'granted' | 'denied') =>
+      service.recordConsent(session('p-1'), {
+        kind: 'delivery-permission',
+        state,
+        source: 'client-report',
+      });
+    await report('granted');
+    await report('denied');
+    await report('granted');
+    time.advance(86_401);
+    await report('denied');
+    assert.equal(
+      store.inspect().consent.length,
+      allowance === 'per-send' ? 4 : 1,
+      `${allowance}: acceptance records ${allowance === 'per-send' ? 'kept' : 'compacted'}`,
+    );
+  }
+}
+
 console.info('Notifications scheduler tests passed.');

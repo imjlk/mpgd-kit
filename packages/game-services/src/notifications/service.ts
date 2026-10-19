@@ -2209,10 +2209,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           });
         }
       }
-      // A per-send provider would count every accepted prompt; the registry
-      // refuses those, and compaction must keep their records before it serves one.
+      // A per-send provider counts every accepted prompt (gate step 3), so
+      // while one is registered the acceptance records are never pruned.
+      // The registry refuses per-send providers today; this keeps a
+      // registry that serves one from losing acceptances silently.
+      const perSend = registry.providers.some(
+        (provider) => provider.entry.permission.allowance === 'per-send',
+      );
       const prunable = records.filter((record) =>
-        Date.parse(record.at) <= at - consentCompactionMs && !keep.has(Date.parse(record.at)));
+        Date.parse(record.at) <= at - consentCompactionMs
+        && !keep.has(Date.parse(record.at))
+        && !(perSend && (record.kind === 'delivery-permission' || record.kind === 'host-agreement')));
       if (prunable.length > 0) {
         await store.pruneConsent({ player, at: prunable.map((record) => record.at) });
       }
