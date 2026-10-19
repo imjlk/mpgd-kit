@@ -533,9 +533,17 @@ try {
         peerDependencies: { firebase: '^13.0.0' },
       }),
     );
+    // With the game's firebase installed, the plugin's own peer check reports it.
     assert.throws(
       () => planCapacitorShellStarter(input(root, ['notifications'])),
-      /needs firebase \^13\.0\.0, but the game has 12\.7\.0/u,
+      /@capacitor-firebase\/messaging@8\.5\.2 needs firebase \^13\.0\.0, but the game has 12\.7\.0/u,
+    );
+    // Without it, the firebase the CLI would add is checked against the
+    // installed plugin's range.
+    rmSync(path.dirname(firebase), { recursive: true });
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /@capacitor-firebase\/messaging 8\.5\.2 needs firebase \^13\.0\.0, but this CLI would add 12\.19\.0/u,
     );
   }
 

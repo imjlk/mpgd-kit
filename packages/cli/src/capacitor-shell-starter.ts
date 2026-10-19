@@ -3240,8 +3240,10 @@ function planNotificationsProvider(input: {
     }
   }
   // The messaging plugin's web fallback imports `firebase`: the game's own
-  // copy must be in the plugin's peer range. An installed plugin names its
-  // range; for the plugin the starter adds, the kit pins it.
+  // copy must be in the plugin's peer range. For the plugin the starter
+  // adds, the kit pins the range. An installed plugin names its own, which
+  // `versionOf` already checked against an installed firebase; this covers
+  // the firebase the CLI would add.
   const messaging = shellPlugins.find(
     (plugin) => plugin.packageName === '@capacitor-firebase/messaging',
   );
@@ -3259,9 +3261,13 @@ function planNotificationsProvider(input: {
     if (typeof firebaseRange === 'string' && validRange(firebaseRange) !== null
       && !satisfies(firebase.version, firebaseRange, { includePrerelease: true })) {
       throw new Error(
-        `@capacitor-firebase/messaging ${messaging.version} needs firebase ${firebaseRange}, but `
-          + (firebase.installed ? `the game has ${firebase.version}` : `this CLI would add ${firebase.version}`)
-          + '; align the game\'s firebase (pnpm add firebase@"' + firebaseRange + '") before rerunning.',
+        firebase.installed
+          ? `@capacitor-firebase/messaging ${messaging.version} needs firebase ${firebaseRange}, but the game `
+            + `has ${firebase.version}; align the game's firebase (pnpm add firebase@"${firebaseRange}") `
+            + 'before rerunning.'
+          : `@capacitor-firebase/messaging ${messaging.version} needs firebase ${firebaseRange}, but this `
+            + `CLI would add ${firebase.version}; add a version in that range to the game `
+            + `(pnpm add firebase@"${firebaseRange}") or upgrade the CLI, then rerun.`,
       );
     }
   }
