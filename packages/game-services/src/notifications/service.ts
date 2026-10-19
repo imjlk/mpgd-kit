@@ -1854,7 +1854,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     let result: Awaited<ReturnType<typeof storeItemRows>>;
     try {
-      // The rows are due when the entry was: a past fireAt counts from its set time.
+      // The rows are due when the entry was: a past fireAt counts from its
+      // set time. A pending reminder always has a due time (runScheduler
+      // takes only entries with one); fireAt only satisfies the type.
       result = await storeItemRows(made.created, at, Date.parse(held.entry.dueAt ?? reminder.fireAt));
     } catch (error) {
       if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT') {

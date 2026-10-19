@@ -171,7 +171,7 @@ other migrations, and apply 0008 before deploying a Worker version that
 has the scheduler. Without its table the reminder routes fail, and so does
 the cron's reminder and notice step (the cron logs the missing table and
 still sends due rows). Under the Korean rules, with a notice topic and a
-provider that can carry notices (FCM), advertising and night consent writes
+provider that can carry notices (for example FCM), advertising and night consent writes
 are still recorded, but their notice pushes are not scheduled (the failure
 is logged), and records written before 0008 get a notice check only at the
 player's next advertising or night record. The memory store keeps consent records and endpoints in one
