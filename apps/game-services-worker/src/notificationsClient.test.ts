@@ -343,6 +343,55 @@ try {
       (error) => (error as GameServicesNotificationsRequestError).route === '/consent',
     ),
   );
+  // A Worker whose notifications configuration is broken answers a configuration error, not a retry.
+  const clientFor = (workerEnv: GameServicesWorkerEnv) => {
+    const handler = createWorkerFetchHandler(workerEnv);
+    return createGameServicesNotificationsClient({
+      baseUrl: 'https://game-services-worker.test',
+      fetch: async (url, init) => handler(new Request(url, init)),
+      identity: {
+        current: () => ({ playerId: 'p-e2e', sessionId: 's-e2e-3' }),
+        onAuthenticated: () => () => undefined,
+      },
+      getHeaders: () => ({ Authorization: 'Bearer token-3' }),
+    });
+  };
+  issued.set('Bearer token-3', {
+    playerId: 'p-e2e',
+    sessionId: 's-e2e-3',
+    installationId: 'install-e2e',
+  });
+  await assert.rejects(
+    clientFor({
+      ...env,
+      MPGD_NOTIFICATIONS_DEPLOYMENT: {
+        advertisingRules: 'kr',
+        advertisingSender: { contact: 'REPLACE-WITH-SENDER-PHONE-OR-ADDRESS' },
+      },
+    }).listConsent(),
+    (error: unknown) =>
+      error instanceof GameServicesNotificationsRequestError
+      && error.status === 500
+      && error.serverCode === 'NOTIFICATIONS_CONFIGURATION_REQUIRED'
+      && error.code === 'NOTIFICATIONS_CONFIGURATION_REQUIRED'
+      && !error.retryable,
+  );
+  // Another 500, such as a session binding that fails, stays retryable.
+  await assert.rejects(
+    clientFor({
+      ...env,
+      GAME_SERVICES_NOTIFICATIONS_AUTH: {
+        async authenticateNotificationSession() {
+          throw new Error('identity service down');
+        },
+      },
+    }).listConsent(),
+    (error: unknown) =>
+      error instanceof GameServicesNotificationsRequestError
+      && error.status === 500
+      && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'
+      && error.retryable,
+  );
   console.info('notifications client end to end against the Worker handler passed');
 } finally {
   runtime?.stop();

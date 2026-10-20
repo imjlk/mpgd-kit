@@ -178,7 +178,9 @@ player's next advertising or night record. The memory store keeps consent record
 isolate only, and the Worker refuses it next to a queue, whose consumer
 runs in another isolate. The catalog,
 the deployment, and the providers are checked on first use; a broken one
-fails the notifications routes with 500 and is logged once.
+fails the notifications routes with 500 and `{ "error":
+"NOTIFICATIONS_CONFIGURATION_REQUIRED" }`, which the notifications client
+does not retry, and is logged once.
 
 ```toml
 [vars]

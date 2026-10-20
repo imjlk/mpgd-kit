@@ -160,17 +160,18 @@ export interface GameServicesNotificationsClient extends NotificationRuntimeBack
  *   runtime retries at its next trigger (a read, a start, a sign-in), not
  *   on the Worker's `Retry-After`, which the client does not read.
  * - Another status names the code the Worker answered when it is a
- *   notifications code; otherwise a 5xx is
- *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (a misconfigured Worker's 500
- *   too, since a deploy can fix it) and a 4xx
- *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+ *   notifications code (a Worker whose notifications configuration is
+ *   broken answers 500 with `NOTIFICATIONS_CONFIGURATION_REQUIRED`, not
+ *   retryable); otherwise a 5xx is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`
+ *   and a 4xx `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
  * - A 2xx whose body is not JSON, or is empty (a captive portal or proxy
  *   answered): `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with that status. A
  *   2xx with JSON outside the route's contract:
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
  * - `status` 0, `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, nothing sent: no
- *   signed-in player with a session id, the header resolver failed, or the
- *   player signed out or changed while the headers were resolved.
+ *   signed-in player with a session id, the header resolver failed or did
+ *   not settle within `timeoutMs`, or the player signed out or changed
+ *   while the headers were resolved.
  * - `status` 0, `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, no answer read: the
  *   request failed in transit, timed out (`timeoutMs`), or its body could
  *   not be read, so the Worker may have handled it. Retrying may repeat it: reminders and endpoints
