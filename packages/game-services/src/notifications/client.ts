@@ -152,8 +152,14 @@ export interface GameServicesNotificationsClient extends NotificationRuntimeBack
  *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (a misconfigured Worker's 500
  *   too, since a deploy can fix it) and a 4xx
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
- * - No answer (the request failed, or the header resolver did):
- *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with `status` 0.
+ * - A 2xx whose body is not JSON, or is empty (a captive portal or proxy
+ *   answered): `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with that status. A
+ *   2xx with JSON outside the route's contract:
+ *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+ * - Nothing sent: `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with `status` 0,
+ *   when no player is signed in, the header resolver failed, the player
+ *   signed out or changed while the headers were resolved, or the request
+ *   did not reach the Worker.
  */
 export class GameServicesNotificationsRequestError extends NotificationError {
   /** The HTTP status, or 0 when no answer arrived. */
