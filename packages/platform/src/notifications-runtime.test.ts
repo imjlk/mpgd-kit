@@ -615,6 +615,9 @@ describe('createNotificationRuntime storage', () => {
   });
 });
 
+/** Lets a background load answer: it is neither awaited by start() nor by runUntilIdle(). */
+const settleLoad = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 describe('createNotificationRuntime registry entry', () => {
   it('compares the provider with an entry loaded in the background at start', async () => {
     const { host, backend } = setup();
@@ -635,14 +638,14 @@ describe('createNotificationRuntime registry entry', () => {
     // An entry that disagrees with the provider turns every call into a configuration error once loaded.
     const mismatched = create(async () => ({ ...entry, addressing: 'platform-user' }));
     await mismatched.start();
-    await mismatched.runUntilIdle();
+    await settleLoad();
     await expect(mismatched.getPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
       code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
     });
     // A matching entry passes.
     const matching = create(async () => entry);
     await matching.start();
-    await matching.runUntilIdle();
+    await settleLoad();
     await expect(matching.getPermission({ topics: ['energy-full'] })).resolves.toBeDefined();
     // A load that fails is reported once, the runtime works without it, and the next start loads again.
     const errors: unknown[] = [];
@@ -655,12 +658,13 @@ describe('createNotificationRuntime registry entry', () => {
       return { ...entry, addressing: 'platform-user' };
     }, (error) => errors.push(error));
     await unreachable.start();
+    await settleLoad();
     await expect(unreachable.runUntilIdle()).rejects.toThrow('Worker unreachable');
     expect(errors).toHaveLength(1);
     await expect(unreachable.getPermission({ topics: ['energy-full'] })).resolves.toBeDefined();
     unreachable.stop();
     await unreachable.start();
-    await unreachable.runUntilIdle();
+    await settleLoad();
     expect(loads).toBe(2);
     await expect(unreachable.getPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
       code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
@@ -668,7 +672,7 @@ describe('createNotificationRuntime registry entry', () => {
     // An entry once loaded is kept across starts.
     unreachable.stop();
     await unreachable.start();
-    await unreachable.runUntilIdle();
+    await settleLoad();
     expect(loads).toBe(2);
   });
 
@@ -685,12 +689,37 @@ describe('createNotificationRuntime registry entry', () => {
         return new Promise(() => undefined);
       },
     });
-    // start() resolves, and calls answer, while the load hangs.
+    // start(), calls, and runUntilIdle() answer while the load hangs.
     await runtime.start();
     await expect(runtime.getPermission({ topics: ['energy-full'] })).resolves.toBeDefined();
+    await runtime.runUntilIdle();
     runtime.stop();
     await runtime.start();
     expect(loads).toBe(1);
+  });
+
+  it('loads again after a loader that throws synchronously', async () => {
+    const { host, backend } = setup();
+    const errors: unknown[] = [];
+    let loads = 0;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: () => {
+        loads += 1;
+        throw new Error('bad Worker URL');
+      },
+      onError: (error) => errors.push(error),
+    });
+    await runtime.start();
+    await settleLoad();
+    runtime.stop();
+    await runtime.start();
+    await settleLoad();
+    expect(loads).toBe(2);
+    expect(errors).toHaveLength(2);
   });
 });
 
