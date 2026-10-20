@@ -78,12 +78,7 @@ export function inspectNodePins(root = repositoryRoot) {
     for (const entry of readdirSync(workflowRoot)) {
       if (!entry.endsWith('.yml') && !entry.endsWith('.yaml')) continue;
       const lines = readFileSync(join(workflowRoot, entry), 'utf8').split('\n');
-      for (let index = 0; index < lines.length; index++) {
-        const match = /^\s*node-version:\s*['"]?([^'"\s#]+)['"]?\s*(?:#.*)?$/.exec(lines[index] ?? '');
-        if (match !== null && match[1] !== version) {
-          failures.push(`.github/workflows/${entry}:${index + 1} node-version is ${match[1]}; expected ${version}`);
-        }
-      }
+      inspectSetupNodePins(entry, lines, version, failures);
     }
   }
   return { version, failures };
@@ -103,6 +98,142 @@ function nodePinSatisfies(pin, range) {
     if (left < right) return false;
   }
   return true;
+}
+
+/** Require every actions/setup-node step to set node-version to the exact mise pin.
+ * A missing key, or a value the line regex cannot see (an expression with whitespace),
+ * is a failure. Literal mismatches keep the previous message.
+ * @param {string} entry
+ * @param {string[]} lines
+ * @param {string} version
+ * @param {string[]} failures */
+function inspectSetupNodePins(entry, lines, version, failures) {
+  for (let index = 0; index < lines.length; index++) {
+    if (!isSetupNodeUses(lines[index] ?? '')) continue;
+    const step = setupNodeStepRange(lines, index);
+    const pin = setupNodeVersion(lines, step);
+    if (pin === undefined) {
+      failures.push(
+        `.github/workflows/${entry}:${index + 1} actions/setup-node omits node-version; expected ${version}`,
+      );
+      continue;
+    }
+    if (pin.value !== version) {
+      failures.push(
+        `.github/workflows/${entry}:${pin.line} node-version is ${pin.raw === '' ? 'empty' : pin.raw}; expected ${version}`,
+      );
+    }
+  }
+}
+
+/** @param {string} line */
+function isSetupNodeUses(line) {
+  return /^\s*(?:-\s+)?uses:\s*['"]?actions\/setup-node(?:@[^'"\s#]*)?['"]?\s*(?:#.*)?$/.test(line);
+}
+
+/** @param {string[]} lines @param {number} usesIndex */
+function setupNodeStepRange(lines, usesIndex) {
+  const stepIndent = listItemIndent(lines, usesIndex);
+  const usesLine = lines[usesIndex] ?? '';
+  const usesIsItem = indentOf(usesLine) === stepIndent && /^\s*-\s+/.test(usesLine);
+  let start = usesIndex;
+  // Do not walk into the previous step. Its body is indented past the list marker,
+  // so a plain indent check would treat that body as part of this step.
+  if (!usesIsItem) {
+    for (let index = usesIndex - 1; index >= 0; index--) {
+      const line = lines[index] ?? '';
+      if (isIgnorableWorkflowLine(line)) continue;
+      if (indentOf(line) <= stepIndent) {
+        start = index;
+        break;
+      }
+      start = index;
+    }
+  }
+  let end = lines.length;
+  for (let index = usesIndex + 1; index < lines.length; index++) {
+    const line = lines[index] ?? '';
+    if (isIgnorableWorkflowLine(line)) continue;
+    if (indentOf(line) <= stepIndent) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end, stepIndent };
+}
+
+/** @param {string[]} lines @param {number} usesIndex */
+function listItemIndent(lines, usesIndex) {
+  const line = lines[usesIndex] ?? '';
+  const ownDash = /^(\s*)-\s+/.exec(line);
+  if (ownDash !== null) return ownDash[1].length;
+  const usesIndent = indentOf(line);
+  for (let index = usesIndex - 1; index >= 0; index--) {
+    const previous = lines[index] ?? '';
+    if (isIgnorableWorkflowLine(previous)) continue;
+    const item = /^(\s*)-\s+/.exec(previous);
+    if (item !== null && item[1].length < usesIndent) return item[1].length;
+    if (indentOf(previous) < usesIndent) break;
+  }
+  return usesIndent;
+}
+
+/** @param {string[]} lines @param {{ start: number, end: number, stepIndent: number }} step */
+function setupNodeVersion(lines, step) {
+  let withIndent = -1;
+  for (let index = step.start; index < step.end; index++) {
+    const line = lines[index] ?? '';
+    if (isIgnorableWorkflowLine(line)) continue;
+    const indent = indentOf(line);
+    if (withIndent === -1) {
+      if (indent > step.stepIndent && /^\s*with:\s*(?:#.*)?$/.test(line)) withIndent = indent;
+      continue;
+    }
+    if (indent <= withIndent) break;
+    const match = /^\s*node-version:\s*(.*)$/.exec(line);
+    if (match === null) continue;
+    const raw = unquoteYamlScalar(stripYamlComment(match[1] ?? '').trim());
+    return { line: index + 1, raw, value: /^\d+\.\d+\.\d+$/.test(raw) ? raw : undefined };
+  }
+  return undefined;
+}
+
+/** @param {string} line */
+function isIgnorableWorkflowLine(line) {
+  const trimmed = line.trim();
+  return trimmed === '' || trimmed.startsWith('#');
+}
+
+/** @param {string} line */
+function indentOf(line) {
+  return /^\s*/.exec(line)?.[0].length ?? 0;
+}
+
+/** Keep a `#` inside a quoted scalar. A comment needs leading whitespace, as in YAML.
+ * @param {string} value */
+function stripYamlComment(value) {
+  let quote = '';
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index] ?? '';
+    if (quote !== '') {
+      if (char === quote) quote = '';
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === '#' && (index === 0 || value[index - 1] === ' ' || value[index - 1] === '\t')) {
+      return value.slice(0, index);
+    }
+  }
+  return value;
+}
+
+/** @param {string} value */
+function unquoteYamlScalar(value) {
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(value);
+  return quoted === null ? value : (quoted[2] ?? value);
 }
 
 function collectManifests(directory, files) {

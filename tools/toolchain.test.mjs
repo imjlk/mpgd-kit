@@ -67,3 +67,89 @@ test('requires CI setup-node to use the exact mise node pin', (t) => {
   write('package.json', { engines: { node: '>=24.23.0' }, devDependencies: { ttsc: '1.2.3' } });
   assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node >=24\.23\.0/);
 });
+
+test('rejects setup-node steps that omit node-version or use a non-literal value', (t) => {
+  const { root, write } = fixture(t);
+  write('.mise.toml', '[tools]\nnode = "24.22.0"\n');
+  write('package.json', { engines: { node: '>=24.0.0' }, devDependencies: { ttsc: '1.2.3' } });
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - uses: actions/setup-node@example',
+    '        with:',
+    '          cache: pnpm',
+    '      - run: |',
+    '          echo keep',
+    '          node-version: 24.22.0',
+    '',
+  ].join('\n'));
+  assert.match(
+    inspectNodePins(root).failures.join('\n'),
+    /ci\.yml:4 actions\/setup-node omits node-version; expected 24\.22\.0/,
+  );
+
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - uses: actions/checkout@example',
+    '        with:',
+    '          persist-credentials: false',
+    '      - uses: actions/setup-node@example',
+    '        with:',
+    '          cache: pnpm',
+    '',
+  ].join('\n'));
+  assert.match(
+    inspectNodePins(root).failures.join('\n'),
+    /ci\.yml:7 actions\/setup-node omits node-version; expected 24\.22\.0/,
+  );
+
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - name: Setup Node',
+    '        uses: actions/setup-node@example',
+    '        with:',
+    '          node-version: ${{ matrix.node }}',
+    '',
+  ].join('\n'));
+  assert.match(
+    inspectNodePins(root).failures.join('\n'),
+    /ci\.yml:7 node-version is \$\{?\{ matrix\.node \}\}; expected 24\.22\.0/,
+  );
+
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - uses: actions/setup-node@example',
+    '        with:',
+    "          node-version: '${{ env.NODE_VERSION }}'",
+    '',
+  ].join('\n'));
+  assert.match(
+    inspectNodePins(root).failures.join('\n'),
+    /ci\.yml:6 node-version is \$\{?\{ env\.NODE_VERSION \}\}; expected 24\.22\.0/,
+  );
+
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - uses: actions/checkout@example',
+    '        with:',
+    '          persist-credentials: false',
+    '      - name: Setup Node',
+    '        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0',
+    "        if: ${{ steps.meta.outputs.docs_only != 'true' }}",
+    '        with:',
+    "          node-version: '24.22.0'",
+    '          cache: pnpm',
+    '      - uses: jdx/mise-action@example',
+    '',
+  ].join('\n'));
+  assert.deepEqual(inspectNodePins(root).failures, []);
+});
