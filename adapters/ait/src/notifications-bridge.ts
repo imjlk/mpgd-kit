@@ -189,8 +189,14 @@ export function isCompatibleNotificationsProtocolVersion(host: string, game: str
   return hostVersion.major === gameVersion.major && hostVersion.prerelease === gameVersion.prerelease;
 }
 
-const protocolVersionPattern =
-  /^(0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+/** A SemVer 2.0.0 pre-release identifier: a number without leading zeros, or alphanumerics. */
+const prereleaseIdentifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
+const protocolVersionPattern = new RegExp(
+  `^(0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)`
+    + `(?:-(${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*))?`
+    + '(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$',
+  'u',
+);
 
 function parseProtocolVersion(
   version: string,

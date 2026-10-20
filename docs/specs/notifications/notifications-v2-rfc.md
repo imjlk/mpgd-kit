@@ -2635,8 +2635,9 @@ in Toss fixes.
     failure (a platform `code` and a boolean `retryable`) keeps its flag, so
     its `retryable: false` is no longer made retryable.
 - The Apps in Toss game-side client fails closed on a host whose
-  notifications protocol version is incompatible (above), and its lazy chunk reads events through the
-  bridge provider instead of a second copy of the envelope filter.
+  notifications protocol version is incompatible (above), and its lazy
+  chunk reads events through the bridge provider instead of a second copy
+  of the envelope filter.
 - The Apps in Toss functional-message provider refuses an
   `agreementFailReasons` entry that is empty or longer than 1,024 characters
   once trimmed, since it reads at most 1,024 characters of a

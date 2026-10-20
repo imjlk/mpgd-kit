@@ -300,8 +300,18 @@ describe('createAitBridgeNotificationProvider', () => {
       ['2.0.0', '2.9.4', true],
       ['3.0.0', '2.0.0', false],
       ['2.0.0+host.5', '2.0.0', true],
-      // Not semantic versions.
+      // Not semantic versions, on either side or both.
       ['2.0', '2.0.0', false],
+      ['2.0.0-', '2.0.0', false],
+      ['2.0.0-draft..1', '2.0.0-draft..1', false],
+      ['2.0.0+', '2.0.0', false],
+      ['2.0.0-draft.01', '2.0.0-draft.01', false],
+      ['2.0.0-01', '2.0.0-01', false],
+      ['2.0.0\n', '2.0.0', false],
+      ['2.0', '2.0', false],
+      // A numeric identifier of 0, or one with a letter, is fine.
+      ['2.0.0-0', '2.0.0-0', true],
+      ['2.0.0-0a.1', '2.0.0-0a.1', true],
       ['2.0.0', 'latest', false],
       ['', '2.0.0', false],
     ];
@@ -310,7 +320,7 @@ describe('createAitBridgeNotificationProvider', () => {
     }
   });
 
-  it('reports a host on another major protocol version as configuration-required', async () => {
+  it('reports a host on an incompatible protocol version as configuration-required', async () => {
     const { bridge } = hostBridge();
     const newer: GamePlatformBridge = {
       ...bridge,
