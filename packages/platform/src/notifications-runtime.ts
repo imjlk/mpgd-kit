@@ -147,7 +147,10 @@ export interface NotificationRuntimePersistedRegistration {
 export interface NotificationRuntimeState {
   /** The last registration the backend acknowledged. */
   readonly registration?: NotificationRuntimePersistedRegistration;
-  /** Set by `unregister()`; `register()` or the next authentication clears it. */
+  /**
+   * Set by `unregister()`; `register()` or the next authentication clears it,
+   * including one the runtime did not observe (see `unboundSession`).
+   */
   readonly unbound?: boolean;
   /**
    * With `unbound`: the session signed in when `unregister()` ran. Another
@@ -273,12 +276,12 @@ export function notificationRuntimeStateOf(value: unknown): NotificationRuntimeS
   }
   const record = value as Readonly<Record<string, unknown>>;
   const registration = persistedRegistrationOf(record['registration']);
-  const unboundSession = record['unbound'] === true
-    ? unboundSessionOf(record['unboundSession'])
-    : undefined;
+  // The session unregister() left means nothing without the unbound state.
+  const unbound = record['unbound'] === true;
+  const unboundSession = unbound ? unboundSessionOf(record['unboundSession']) : undefined;
   return {
     ...(registration === undefined ? {} : { registration }),
-    ...(record['unbound'] === true ? { unbound: true } : {}),
+    ...(unbound ? { unbound: true } : {}),
     ...(unboundSession === undefined ? {} : { unboundSession }),
   };
 }
@@ -426,7 +429,12 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   for 7 days, except on `register()`. `unregister()` unbinds the
  *   installation from the player signed in when it was called and cancels the
  *   pending local reminders, even when the unbind fails, and nothing binds it
- *   again, across restarts, until `register()` or the next authentication.
+ *   again, across restarts, until `register()` or the next authentication. A
+ *   session found at start or on a read other than the one `unregister()`
+ *   left (any session, when none was signed in then) is such an
+ *   authentication even when the runtime did not observe it; so are a
+ *   registration acknowledged for another session and, at start, a session
+ *   with nothing acknowledged yet.
  * - Reminders: one key across both routes, and `cancel` removes it from each
  *   route that has it. Local ones pass the client gate steps (permission,
  *   then the topic preference from the backend, then quiet hours, which move
