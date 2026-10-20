@@ -1558,8 +1558,13 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     - **Access tokens.** A key that cannot sign or a refused grant is
       `rejected` with reason `configuration`; a token endpoint that is down
       sent nothing and is `rate-limited`.
-  - **Expiry and actions.** The expiry is `android.ttl` and the
-    `apns-expiration` header. A message that would expire within a second
+  - **Expiry, collapse, and actions.** The expiry is `android.ttl` and the
+    `apns-expiration` header. A replay of the same send key sets
+    `android.collapse_key` and `apns-collapse-id` to the SHA-256 of that key
+    (64 hex characters, the APNs limit), so a crash after HTTP 200 and
+    before the ledger write replaces the first notification instead of
+    showing a second. Collapse is per token, so two devices of one send do
+    not hide each other. A message that would expire within a second
     is not sent (`rejected`, provider code `MESSAGE_EXPIRED`), because FCM
     reads a time to live of 0 as "deliver now if the device is reachable".
   - **Payload.** The gate's title and body are the FCM `notification`, and
@@ -1591,9 +1596,12 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       it), and 4010 (credentials not found) are `rejected` with reason
       `configuration`;
     - the partner API documents no recipient-level code, including none for
-      a missing agreement (checked 2026-10-19). A deployment names the codes
-      it observes (`agreementErrorCodes`, then `recipientErrorCodes`,
-      checked before every built-in code, 4095 included, on any status
+      a missing agreement (checked 2026-10-19). Documented codes are
+      classified first, and a deployment list cannot override them: 4095
+      stays `rate-limited` and 5004, 4034, and 4010 stay `configuration`,
+      so a rate limit is not stored as an agreement denial. A deployment
+      then names the codes it observes (`agreementErrorCodes`, then
+      `recipientErrorCodes`) on any status
       except HTTP 429, which is `rate-limited`, and 5xx, 408, and 425, which
       are `ambiguous`, whatever the body says); any other code is `rejected` with reason
       `recipient` on HTTP 200 (not `ambiguous`: an `ambiguous` row is

@@ -122,16 +122,28 @@ for the full configuration):
    and `MPGD_NOTIFICATIONS_DEPLOYMENT` to `notifications/deployment.json`
    (both JSON vars), and apply the D1 migrations `0007_notifications.sql`
    and `0008_notification_scheduler.sql`.
-4. Run the scheduler from a cron. **Every minute** (`crons = ["* * * * *"]`)
-   is the recommended period: it bounds how late a server reminder or a due
-   send can be, and each run works only on what is due. On a plan with a low
-   subrequest limit per run, lower `MPGD_NOTIFICATIONS_DUE_BATCH` as the
-   deploy guide describes. `MPGD_NOTIFICATIONS_CATALOG` and
+4. Run the scheduler from a cron on the **Workers Paid** plan. **Every
+   minute** (`crons = ["* * * * *"]`) is the recommended period there: it
+   bounds how late a server reminder or a due send can be, and each run
+   works only on what is due, stopping before another round would cross
+   `MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET` (1,000 by default). Do not enable
+   this cron on the Workers Free plan: a free-plan invocation has 10 ms of
+   CPU and 50 external subrequests, which the scheduler cannot stay inside.
+   A wall budget that is not shorter than the cron period is rejected. See the
+   [deploy guide](CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2).
+   A replay of one send sets FCM `android.collapse_key` and `apns-collapse-id`
+   from the send key, so a crash after HTTP 200 does not show a second
+   notification.
+   `MPGD_NOTIFICATIONS_CATALOG` and
    `MPGD_NOTIFICATIONS_DEPLOYMENT` are JSON vars: in `wrangler.toml` write the
    files' contents as TOML (one inline table on one line, or a
    `[vars.MPGD_NOTIFICATIONS_CATALOG]` table), put them in `vars` of a
    `wrangler.jsonc` as JSON, or paste them in the dashboard; update them
    with every catalog change.
+
+<!-- @link ../packages/game-services/src/notifications/fcm.ts#buildFcmMessage Sets android.collapse_key and apns-collapse-id from the send key. -->
+<!-- @link ../apps/game-services-worker/src/notificationsHandler.ts#runScheduledNotifications Paid-plan cron budget and subrequest stop. -->
+<!-- @evidence docs/specs/notifications/notifications-v2-rfc.md#remote-delivery Collapse id and FCM payload. -->
 5. The client routes (consent records, endpoint registration, reminders,
    notices) need the `GAME_SERVICES_NOTIFICATIONS_AUTH` session binding from
    the identity side, which the kit does not ship yet; a send-only Worker
