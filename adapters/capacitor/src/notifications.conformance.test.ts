@@ -170,7 +170,7 @@ describe('Capacitor notifications provider conformance', () => {
     const { failed, passed } = summary(results);
     expect(failed).toEqual([]);
     const expected = [
-      ...(profile.platform === 'ios' ? [
+      ...(profile.platform === 'ios' || profile.platform === 'android' ? [
         'advertising-needs-consent',
         'advertising-night-window',
         'advertising-notice-variants',
@@ -198,7 +198,7 @@ describe('Capacitor notifications provider conformance', () => {
       'reminder-local-quiet-hours',
       'reminder-local-route',
       'reminder-server-deferred-cancel',
-      ...(profile.platform === 'ios' ? ['reminder-server-set-checks'] : []),
+      'reminder-server-set-checks',
       'requested-topic-needs-opt-in',
     ];
     expect(passed).toEqual([...expected].sort());

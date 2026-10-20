@@ -81,8 +81,17 @@ initializer refuses a game or shell that lists it; remove it first.
    Android advertising push would arrive without the opt-out action the
    Korean rules require (a settings path in the body is not enough).
    Rendering them natively in the shell is a planned follow-up; until then
-   map no advertising topic to `android`. The starter's sample `events`
-   topic is mapped to iOS only.
+   map no advertising topic to `android`. The catalog validator refuses
+   that mapping, and the notifications service will not start on a catalog
+   that has it. The client still declares `advertising` so it pairs with
+   the standard FCM registry. The starter's sample `events` topic is
+   mapped to iOS only.
+
+<!--
+@link ../packages/catalog/src/notification-topics.ts#validateNotificationTopicCatalog An advertising topic must not map to android until the shell renders the opt-out action.
+@link ../adapters/capacitor/src/notifications-provider.ts#createCapacitorNotificationProvider Android still declares advertising so it pairs with the standard FCM registry.
+@evidence docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor Map no advertising topic to Android until the shell renders the opt-out action.
+-->
 
 ## 4. iOS
 

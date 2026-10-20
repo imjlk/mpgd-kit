@@ -553,9 +553,17 @@ export function createCapacitorNotificationProvider(
           }
           dispatch({ type: 'endpoint-changed', registration });
         }, (error: unknown) => {
-          if (generation === tokenGeneration) {
-            reportError(error);
+          if (generation !== tokenGeneration) {
+            return;
           }
+          // Channel creation can fail transiently. Keep this token: the
+          // foreground retry of `ensureChannels` publishes it once the
+          // channels exist. Dropping it leaves the backend on the previous
+          // address until the next registration or the seven-day refresh.
+          if (!androidChannelsReady) {
+            retainedToken = { token, generation };
+          }
+          reportError(error);
         });
     }));
     listen(() => push.addListener('notificationReceived', (event) => {
@@ -608,6 +616,37 @@ export function createCapacitorNotificationProvider(
   let channelsReady: Promise<void> | undefined;
   /** Android pushes name a channel; do not announce an address before it exists. */
   let androidChannelsReady = platform !== 'android';
+  /**
+   * A `tokenReceived` whose publish failed because Android channels were not
+   * ready. Published once a later `ensureChannels` succeeds, so a transient
+   * channel failure does not leave the backend on the previous token.
+   */
+  let retainedToken: { readonly token: string; readonly generation: number } | undefined;
+  const publishRetainedToken = (): void => {
+    const held = retainedToken;
+    if (held === undefined || !androidChannelsReady) {
+      return;
+    }
+    if (held.generation !== tokenGeneration) {
+      retainedToken = undefined;
+      return;
+    }
+    retainedToken = undefined;
+    void (async () => {
+      try {
+        const registration = await registrationOf(held.token);
+        if (held.generation !== tokenGeneration) {
+          return;
+        }
+        dispatch({ type: 'endpoint-changed', registration });
+      } catch (error) {
+        if (held.generation === tokenGeneration) {
+          retainedToken = held;
+          reportError(error);
+        }
+      }
+    })();
+  };
   const ensureChannels = (): Promise<void> => {
     channelsReady ??= (async () => {
       if (platform !== 'android') {
@@ -624,6 +663,7 @@ export function createCapacitorNotificationProvider(
       }
       androidChannelsReady = true;
       setupFailureReported = false;
+      publishRetainedToken();
     })().catch((error: unknown) => {
       channelsReady = undefined;
       androidChannelsReady = platform === 'android' ? false : androidChannelsReady;
@@ -698,12 +738,15 @@ export function createCapacitorNotificationProvider(
       ? { supported: false, purposes: [], addressing: 'none', content: 'free-form' }
       : {
           supported: true,
-          // An Android FCM notification message cannot carry the opt-out
-          // action, so advertising is not a remote purpose until the shell
-          // renders it (RFC "Provider profiles", Capacitor).
-          purposes: platform === 'android'
-            ? ['service', 'requested']
-            : ['service', 'requested', 'advertising'],
+          // Same purposes as `referenceNotificationProviders.fcm`, which
+          // `createFcmProviderRegistration` publishes for android and ios.
+          // `notificationRegistryMismatch` requires that list exactly; omitting
+          // `advertising` on Android makes every standard pairing
+          // `configuration-required`. An Android FCM notification message still
+          // cannot carry the opt-out action: the catalog validator refuses an
+          // advertising topic mapped to `android` until the shell renders it
+          // (RFC "Provider profiles", Capacitor).
+          purposes: ['service', 'requested', 'advertising'],
           addressing: 'device',
           content: 'free-form',
         },

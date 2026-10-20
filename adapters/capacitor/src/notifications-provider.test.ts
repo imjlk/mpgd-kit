@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createUnsupportedNotificationCapabilities,
+  notificationRegistryMismatch,
+  referenceNotificationProviders,
   type NotificationEvent,
   type NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
@@ -127,7 +129,7 @@ describe('Capacitor notifications provider: capabilities', () => {
       },
       remote: {
         supported: true,
-        purposes: ['service', 'requested'],
+        purposes: ['service', 'requested', 'advertising'],
         addressing: 'device',
         content: 'free-form',
       },
@@ -148,11 +150,20 @@ describe('Capacitor notifications provider: capabilities', () => {
     expect(legacy.permission.promptLimit).toBe(1);
   });
 
+  it('pairs with the standard FCM registry on Android and iOS', async () => {
+    // createFcmProviderRegistration publishes this entry for both targets.
+    // notificationRegistryMismatch requires the purpose lists to be equal.
+    const android = await setup().provider.getCapabilities();
+    const ios = await setup({ platform: 'ios' }).provider.getCapabilities();
+    expect(notificationRegistryMismatch(android, referenceNotificationProviders.fcm)).toBeUndefined();
+    expect(notificationRegistryMismatch(ios, referenceNotificationProviders.fcm)).toBeUndefined();
+  });
+
   it('returns a fresh block on every read', async () => {
     const { provider } = setup();
     const first = await provider.getCapabilities();
     (first.remote.purposes as string[]).length = 0;
-    expect((await provider.getCapabilities()).remote.purposes).toHaveLength(2);
+    expect((await provider.getCapabilities()).remote.purposes).toHaveLength(3);
   });
 
   it('fails closed without the plugins: unsupported reads, unavailable requests, no prompt', async () => {
@@ -533,6 +544,68 @@ describe('Capacitor notifications provider: endpoints', () => {
         address: { kind: 'fcm-token', value: 'tok-rotated', permission: 'blocked' },
       },
     });
+  });
+
+  it('replays a retained tokenReceived without a temporal-dead-zone error', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    const errors: unknown[] = [];
+    sdks.emitPush('tokenReceived', { token: 'tok-cold' });
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android',
+      topics,
+      push: sdks.push!,
+      local: sdks.local!,
+      app: null,
+      onError: (error) => errors.push(error),
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await settle();
+    expect(errors.some((error) => error instanceof ReferenceError)).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'endpoint-changed',
+      registration: expect.objectContaining({
+        address: expect.objectContaining({ kind: 'fcm-token', value: 'tok-cold' }),
+      }),
+    }));
+  });
+
+  it('publishes a token retained while Android channels were failing, once setup recovers', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    let failures = 2;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      createChannel: async () => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('channel');
+        }
+      },
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android',
+      topics,
+      push: sdks.push!,
+      local,
+      app: sdks.app,
+      onError: () => undefined,
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await settle();
+    sdks.emitPush('tokenReceived', { token: 'tok-held' });
+    await settle();
+    expect(events.filter((event) => event.type === 'endpoint-changed')).toEqual([]);
+    sdks.app.setActive(true);
+    await settle();
+    expect(events.filter((event) => event.type === 'endpoint-changed')).toEqual([
+      expect.objectContaining({
+        type: 'endpoint-changed',
+        registration: expect.objectContaining({
+          address: expect.objectContaining({ kind: 'fcm-token', value: 'tok-held' }),
+        }),
+      }),
+    ]);
   });
 
   it('does not return a token when Android channel creation failed', async () => {

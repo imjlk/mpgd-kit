@@ -1788,7 +1788,7 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 
 | Profile | `permission` | `remote` | `local` | `open` |
 | --- | --- | --- | --- | --- |
-| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form; iOS all three purposes, Android `service` and `requested` until the shell renders the opt-out action | supported, iOS `maxPending` 64 | payload |
+| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form; all three purposes on both, matching the standard FCM registry. Map no advertising topic to Android until the shell renders the opt-out action | supported, iOS `maxPending` 64 | payload |
 | Apps in Toss | topic, host, not readable, persistent, gesture required, no settings link; per-topic `agreement` | platform-user, host-template, `service` and `requested` | unsupported | landing-url |
 | Devvit | app, game, readable through the server bridge and server-readable, persistent, gesture required, revocable in the game | platform-user, free-form (approved copy), `service` and `requested` | unsupported | host-link |
 | Web, Microsoft Store PWA, CrazyGames, OnePlay, Verse8 | `availability: 'unsupported'` | unsupported | unsupported | none |
@@ -1861,9 +1861,16 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     which is a follow-up after C1. Until then, under the Korean rules, map
     no advertising topic to Android: the push would arrive without the
     opt-out action the rules require, and a settings path described in the
-    body does not replace it ([Advertising rules](#advertising-rules)). The
-    provider therefore omits `advertising` from Android `remote.purposes`
-    (`createCapacitorNotificationProvider`). The starter maps its sample
+    body does not replace it ([Advertising rules](#advertising-rules)).
+    `validateNotificationTopicCatalog` refuses that mapping, and the
+    notifications service will not start on a catalog that has it, so the
+    send is not left to the client. The Android and iOS providers still
+    declare `service`, `requested`, and `advertising`, the same list as
+    `referenceNotificationProviders.fcm` (the entry
+    `createFcmProviderRegistration` publishes for both targets).
+    `notificationRegistryMismatch` requires that list exactly; omitting
+    `advertising` on Android would make every standard pairing
+    `configuration-required`. The starter maps its sample
     advertising topic to iOS only. The game's
     settings screen stays the in-game opt-out on every target.
   - Tapping the action opens the declared `optOutRoute` of the advertising
