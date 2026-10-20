@@ -2244,6 +2244,8 @@ export interface NotificationConformanceRuntimeStorage {
   registration?: NotificationConformancePersistedRegistration;
   /** Set by `unregister()`; `register()` or the next authentication clears it. */
   unbound?: boolean;
+  /** With `unbound`: the session signed in when `unregister()` ran. */
+  unboundSession?: { readonly player: string; readonly session: string };
 }
 
 export type NotificationConformancePersistedRegistration = NotificationRuntimePersistedRegistration;
@@ -2292,6 +2294,7 @@ export function createNotificationConformanceRuntime(
       save(state) {
         delete kept.registration;
         delete kept.unbound;
+        delete kept.unboundSession;
         Object.assign(kept, state);
       },
     },

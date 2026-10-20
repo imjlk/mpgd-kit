@@ -151,8 +151,8 @@ export interface NotificationRuntimeState {
   readonly unbound?: boolean;
   /**
    * With `unbound`: the session signed in when `unregister()` ran. Another
-   * session found at start or on a read is a sign-in the runtime did not
-   * observe, so it binds again.
+   * session found at start or on a read, or any session when none was signed
+   * in then, is a sign-in the runtime did not observe, so it binds again.
    */
   readonly unboundSession?: { readonly player: string; readonly session: string };
 }
@@ -914,21 +914,38 @@ export function createNotificationRuntime(
    */
   const registerCurrent = (
     always: boolean,
-    rebind = false,
+    rebind: boolean | 'if-unobserved-sign-in' = false,
     permission?: NotificationPermissionState,
   ): Promise<void> =>
     enqueue('register', async () => {
-      if (rebind) {
+      if (rebind !== false) {
         const persisted = kept ?? await loadState();
         if (persisted.unbound === true) {
+          if (rebind === 'if-unobserved-sign-in' && !unobservedSignIn(persisted)) {
+            // An unregister() queued since the check left this very session.
+            return;
+          }
+          const { unboundSession, registration } = persisted;
           delete persisted.unbound;
           delete persisted.unboundSession;
           // The backend dropped the endpoint at the unbind: the registration
           // kept from before it is no longer acknowledged, so it is sent again.
           delete persisted.registration;
-          const saved = saveState(persisted);
-          if (saved !== undefined) {
-            await saved;
+          try {
+            const saved = saveState(persisted);
+            if (saved !== undefined) {
+              await saved;
+            }
+          } catch (error) {
+            // Memory goes back to what storage still holds.
+            persisted.unbound = true;
+            if (unboundSession !== undefined) {
+              persisted.unboundSession = unboundSession;
+            }
+            if (registration !== undefined) {
+              persisted.registration = registration;
+            }
+            throw error;
           }
         }
       }
@@ -949,6 +966,17 @@ export function createNotificationRuntime(
       }
     });
   /**
+   * Whether the session signed in now, while unbound, is a sign-in after
+   * `unregister()`: any session when none was signed in at the unbind, else
+   * one other than the session it left.
+   */
+  const unobservedSignIn = (persisted: MutableRuntimeState): boolean => {
+    const session = backend.session();
+    const left = persisted.unboundSession;
+    return session !== undefined
+      && (left === undefined || left.player !== session.player || left.session !== session.id);
+  };
+  /**
    * Catches the registration up with the session signed in now. At start and
    * on reads:
    * - while unbound, a session other than the one `unregister()` left is a
@@ -968,11 +996,9 @@ export function createNotificationRuntime(
     }
     const persisted = kept ?? await loadState();
     if (persisted.unbound === true) {
-      const left = persisted.unboundSession;
-      if (left === undefined || (left.player === session.player && left.session === session.id)) {
-        return;
+      if (unobservedSignIn(persisted)) {
+        await registerCurrent(false, 'if-unobserved-sign-in');
       }
-      await registerCurrent(false, true);
       return;
     }
     const last = persisted.registration;
@@ -1573,9 +1599,7 @@ export function createNotificationRuntime(
           persisted = kept;
         }
         persisted.unbound = true;
-        if (session === undefined) {
-          delete persisted.unboundSession;
-        } else {
+        if (session !== undefined) {
           persisted.unboundSession = { player: session.player, session: session.id };
         }
         const saveFailures: unknown[] = [];

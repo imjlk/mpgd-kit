@@ -129,6 +129,9 @@ function asyncStorage(initial?: unknown) {
   return {
     port,
     saves,
+    reset() {
+      stored = undefined;
+    },
     get stored() {
       return stored;
     },
@@ -420,6 +423,80 @@ describe('createNotificationRuntime storage', () => {
     await restarted.runUntilIdle();
     expect(backend.endpoints.map((endpoint) => [endpoint.player, endpoint.session])).toEqual([['p-2', 'session-2']]);
     expect(storage.stored).not.toHaveProperty('unbound');
+  });
+
+  it('binds again for any sign-in after an unregister() made while signed out, and keeps an earlier session', async () => {
+    const storage = asyncStorage();
+    const { host, backend, create } = setup(storage.port);
+    const runtime = create();
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle();
+    await runtime.unregister();
+    // The session ends; a second unregister() while signed out keeps the session the first one left.
+    backend.revokeSession();
+    await runtime.unregister();
+    expect(storage.stored).toEqual({ unbound: true, unboundSession: { player: 'p-1', session: 'session-1' } });
+    runtime.stop();
+    // Signed out at the unbind, with nothing kept: any later session is a sign-in.
+    storage.reset();
+    const signedOut = create();
+    await signedOut.start();
+    await signedOut.unregister();
+    expect(storage.stored).toEqual({ unbound: true });
+    signedOut.stop();
+    backend.authenticate('p-2');
+    const restarted = create();
+    await restarted.start();
+    await restarted.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => [endpoint.player, endpoint.session])).toEqual([['p-2', 'session-2']]);
+  });
+
+  it('binds again on a read, not only at start, and stays unbound on a read in the session it left', async () => {
+    const storage = asyncStorage();
+    const { host, backend, create } = setup(storage.port);
+    let announce: ((session: NotificationRuntimeSession) => void) | undefined;
+    // A backend whose sign-ins the runtime never hears about.
+    const runtime = create(clientOf(backend, {
+      onAuthenticated(listener) {
+        announce = listener;
+        return () => undefined;
+      },
+    }));
+    await runtime.start();
+    backend.authenticate('p-1');
+    expect(announce).toBeDefined();
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle();
+    await runtime.unregister();
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(backend.endpoints).toEqual([]);
+    backend.authenticate('p-2');
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => [endpoint.player, endpoint.session])).toEqual([['p-2', 'session-2']]);
+  });
+
+  it('keeps the unbound state in memory when clearing it cannot be saved', async () => {
+    const storage = asyncStorage();
+    const { host, backend, create } = setup(storage.port);
+    const runtime = create();
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle();
+    await runtime.unregister();
+    storage.failNextSaves(1);
+    await expect(runtime.register()).rejects.toBeInstanceOf(NotificationError);
+    expect(backend.endpoints).toEqual([]);
+    // Memory still says unbound, as storage does, and the next register() binds.
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(backend.endpoints).toEqual([]);
+    await runtime.register();
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
   });
 
   it('registers at start for a session signed in before the runtime started', async () => {

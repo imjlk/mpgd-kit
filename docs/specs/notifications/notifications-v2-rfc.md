@@ -613,9 +613,9 @@ Runtime rules:
       error.
     - The installation stays unbound, across restarts, until `register()` or
       the next authentication. A session other than the one signed in when
-      `unregister()` ran counts as that authentication even when the runtime
-      did not observe it, so the runtime keeps that session with the unbound
-      state.
+      `unregister()` ran (any session, when none was) counts as that
+      authentication even when the runtime did not observe it, so the runtime
+      keeps that session with the unbound state.
 - **Local reminders.** On start, on authentication, and after each backend
   read, the runtime compares `listLocal()` with the latest backend preference
   and permission and cancels the reminders that no longer pass, because a
