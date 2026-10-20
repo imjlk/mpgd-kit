@@ -332,7 +332,11 @@ export interface NotificationStore {
   }): Promise<boolean>;
   /** The player's sends with at least one `in-flight` row. */
   listInFlightSends(player: string): Promise<readonly NotificationStoredSend[]>;
-  /** Up to `limit` send keys with a row due at `at` (`notificationSendDueAt`), earliest first. */
+  /**
+   * Up to `limit` send keys with a row due at `at` (`notificationSendDueAt`),
+   * earliest first, then by key. Equal due times use the same order as the
+   * D1 store (`due_at_ms, send_key`) and a Redis sorted set's score ties.
+   */
   listDueSends(input: { readonly at: string; readonly limit: number }): Promise<readonly string[]>;
 
   /** Records a delivered send for one provider; a second record of the same pair is ignored. */
@@ -794,7 +798,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
           const due = notificationSendDueAt(send);
           return due !== undefined && Date.parse(due) <= now ? [{ key: send.key, due: Date.parse(due) }] : [];
         })
-        .sort((left, right) => left.due - right.due)
+        .sort((left, right) => left.due - right.due || compareCodePoints(left.key, right.key))
         .slice(0, Math.max(0, limit))
         .map((entry) => entry.key);
     },

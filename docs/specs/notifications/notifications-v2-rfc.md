@@ -832,8 +832,19 @@ Inputs follow the v1 bounds:
 `set` rejects `templateData` while any provider that would deliver the
 topic is host-template, whether or not the player is reached through it
 now, because template context stays on the server as in v1 and the
-reminder may reach the player there when it fires. Invalid input throws
+reminder may reach the player there when it fires. `set` also fills every
+locale copy a free-form provider would send, and a target mapping's own
+title and body, with that `templateData` before it writes. A host-template
+provider skips catalog copy, which the host renders, but not a mapping
+that supplies its own title and body: that text is rendered ahead of the
+host template. A placeholder without a value throws
+`NOTIFICATIONS_INVALID_INPUT`, so the reminder is not stored only to be
+dropped when it fires. Mapped placeholders on a host-template provider
+cannot be satisfied while `templateData` is rejected, and `set` throws
+rather than storing that reminder. Invalid input throws
 `NOTIFICATIONS_INVALID_INPUT`.
+
+<!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 
 Before scheduling locally, the runtime applies, in this order, the parts of
 the [policy gate](#policy-gate) it can evaluate on the client:
@@ -872,7 +883,10 @@ past is due at once, behind the reminders already due, and keeps its
   When the player can be reached on none, it checks each such provider
   without a recipient: a device provider answers `permission-required`, and
   a platform-user provider answers from its records or its host read, so
-  the reminder may be stored and find no recipient when it fires.
+  the reminder may be stored and find no recipient when it fires. A host
+  read that fails is skipped. The set throws
+  `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` only when no provider could be
+  checked and none passed.
 - **Which answer.** One provider that passes stores the reminder, which goes
   to every provider the player has a recipient on when it fires. Otherwise
   the refusal of the furthest gate step answers: `advertising-consent-missing`,
@@ -893,7 +907,11 @@ past is due at once, behind the reminders already due, and keeps its
   link the provider cannot take throw `NOTIFICATIONS_INVALID_INPUT`: the
   gate's link step runs at set time, so a provider whose sends need a link
   (Devvit) needs the reminder's or the topic mapping's, and a given link
-  must match the provider's mapping rule for `link`. A provider with a link
+  must match the provider's mapping rule for `link`. A link rule that does
+  not compile is the deployment's configuration: `set` checks every provider
+  that would deliver the topic, not only until the first candidate passes,
+  and throws even when another provider would pass or the player is not
+  reached on the broken provider yet. A provider with any other link
   problem is not checked further, so another provider's refusal answers
   first.
 
@@ -924,7 +942,12 @@ the pending reminder, and cancelling removes it.
 - Replacing or cancelling also stops a send of the reminder that waits
   (`deferred`) or whose provider answer was `ambiguous` (`in-flight`); the
   scheduler replays neither, and `cancel` answers `remote`.
-- A send the provider may already have accepted cannot be recalled.
+- A send the provider may already have accepted cannot be recalled. A row
+  whose claim lease is still live is not deleted: its holder records the
+  acceptance, and does not call the provider if the reminder was cancelled
+  or replaced before the call. Deleting that row would drop the idempotency
+  key and let the same key and time send again.
+  <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 - **Races with the scheduler.** The scheduler stores a reminder's send first
   and marks the reminder fired after, so a run that stops in between leaves
   the reminder pending and the next run finds its send. A set stops the
@@ -941,8 +964,12 @@ the pending reminder, and cancelling removes it.
   reminder makes its own send, unless one row of the previous send (for any
   provider or endpoint) was already delivered: then the key keeps that send
   for every provider, the new reminder makes none, and the backend reports
-  it. A scheduler run that read a reminder a set has replaced since leaves
-  the newer reminder's send alone.
+  it. A row that is only claimed, and not yet delivered, does not count.
+  The replacement stays pending until that claim is dropped or a row is
+  delivered. Marking it fired while the claim is merely live would spend
+  the reminder with no send: the holder then sees the replacement and does
+  not call the provider. A scheduler run that read a reminder a set has
+  replaced since leaves the newer reminder's send alone.
 - **A set that fails.** A set stops the previous reminder's waiting send
   before its write; if the write then fails, the previous reminder stays as
   it was without that send, and the set is retried.
