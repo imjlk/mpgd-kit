@@ -4,7 +4,8 @@ Status: **draft**. N2 through C1 implemented this contract: the types, the
 conformance runner and vectors, the providers, the Worker and Devvit
 backends, and the CLI starter. R1 added the production runtime and the
 game-services client. The identity-side session binding belongs to each
-game's identity service (see [What R1 landed](#pr-plan)). It is still outside the enforced
+game's identity service (see [What R1 landed](#pr-plan)). It is still
+outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope, and a
 conformance vector is not device or release verification. Baseline:
 `main@2f70328e`, 2026-10-12, revised the same day after review. Draft
@@ -2448,7 +2449,7 @@ publishable package carries a Sampo changeset.
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path landed with P3 | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
-| R1 | Follow-up: `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
+| R1 | `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
 
 **What S1 landed.**
 
@@ -2495,8 +2496,8 @@ publishable package carries a Sampo changeset.
   cron that runs the scheduler after the purges.
 - Left for later: a game-services client that implements the runtime's
   backend calls over the Worker routes (landed in R1, below), and seeding
-  notice checks for players whose records predate the scheduler. The Devvit scheduler path
-  landed with P3.
+  notice checks for players whose records predate the scheduler. The
+  Devvit scheduler path landed with P3.
 
 **What P3 landed.** The Devvit provider, server bridge handler, delivery
 provider, and Redis-backed store; see [Devvit](#profile-devvit),

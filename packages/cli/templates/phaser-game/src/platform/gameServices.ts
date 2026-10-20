@@ -64,8 +64,10 @@ export function resolveStarterServerSession(): StarterServerSession | undefined 
 }
 
 /**
- * Sets the game's server-backed session, before `createStarterGameServices`
- * and the notification settings or opens are first used.
+ * Sets the game's server-backed session. Call it at the top of `main.ts`,
+ * before `bootstrap()`: `createStarterGameServices` reads it once, and the
+ * notification settings and opens read it until a backend exists. Its
+ * `current()` may answer `undefined` until the player signs in.
  */
 export function setStarterServerSession(session: StarterServerSession | undefined): void {
   serverSession = session;
@@ -107,6 +109,6 @@ export function createStarterGameServices(input: {
       ? {}
       : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),
     transport: resolveGameServicesTransport(import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT),
-    ...(session === undefined ? {} : { getHeaders: session.getHeaders }),
+    ...(session === undefined ? {} : { getHeaders: () => session.getHeaders() }),
   });
 }

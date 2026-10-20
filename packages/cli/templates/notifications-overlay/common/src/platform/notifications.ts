@@ -1,4 +1,5 @@
 import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } from '@mpgd/catalog';
+import { resolveGameServicesAuthorityMode } from '@mpgd/game-services';
 import { createGameServicesNotificationsClient } from '@mpgd/game-services/notifications/client';
 import type {
   NotificationConsentRecord,
@@ -73,60 +74,117 @@ export interface StarterNotificationBackend {
  *
  * The Worker binds a device to the session its `Authorization` header names,
  * through its `GAME_SERVICES_NOTIFICATIONS_AUTH` binding to your identity
- * service (docs/CLOUDFLARE_WORKER_DEPLOY.md, "Sessions"). The runtime keeps
- * its registration state in the platform storage, and starts here, so
- * create it before the game signs in (the opens subscription does, at boot).
+ * service (docs/CLOUDFLARE_WORKER_DEPLOY.md, "Sessions"); it serves the
+ * Android, iOS, and Apps in Toss providers, while a Reddit game's backend is
+ * its Devvit server. The runtime keeps its registration state in the
+ * platform storage and starts here. Call this through the settings model or
+ * `subscribeStarterNotificationOpens`, which keep one runtime per gateway:
+ * a second call starts a second runtime on the same provider.
  */
 export function createStarterNotificationBackend(
   platform: TargetConfiguredGateway,
 ): StarterNotificationBackend | undefined {
   const baseUrl = import.meta.env.VITE_MPGD_GAME_SERVICES_URL?.trim();
-  const session = resolveStarterServerSession();
   const provider = platform.notificationsV2;
-  if (baseUrl === undefined || baseUrl === '' || session === undefined || provider === undefined) {
+  if (baseUrl === undefined || baseUrl === '' || provider === undefined) {
     return undefined;
   }
-  if (import.meta.env.MODE === 'production' && !baseUrl.startsWith('https://')) {
-    // The session's credentials never travel in clear text.
-    console.error(
-      '[notifications] VITE_MPGD_GAME_SERVICES_URL must be https in production; notifications stay off.',
+  const session = resolveStarterServerSession();
+  if (session === undefined) {
+    warnOnce(
+      platform,
+      '[notifications] VITE_MPGD_GAME_SERVICES_URL is set but no server session is: call setStarterServerSession '
+        + '(src/platform/gameServices.ts) before the game starts. The settings screen shows no switch until then.',
     );
     return undefined;
   }
-  const client = createGameServicesNotificationsClient({
-    baseUrl,
-    identity: session,
-    getHeaders: session.getHeaders,
-    // The catalog target whose mapping applies to this device (android or ios share FCM).
-    target: platform.configTarget,
-  });
-  const runtime = createNotificationRuntime({
-    provider,
-    backend: client,
-    catalog: starterNotificationTopics(platform.configTarget),
-    defaultLocale: starterNotificationCatalog.defaultLocale,
-    storage: createNotificationRuntimeStorage({ storage: platform.storage }),
-    onError(error) {
-      console.error('[notifications]', error);
-    },
-  });
-  // It subscribes to the provider at once; a backend that cannot answer yet does not fail the game.
-  runtime.start().catch((error: unknown) => {
-    console.error('[notifications] the runtime could not start.', error);
-  });
-  return { runtime, listConsent: () => client.listConsent() };
+  if (!isAllowedGameServicesUrl(baseUrl)) {
+    // The session's credentials never travel in clear text or to a private host in production.
+    console.error(
+      '[notifications] VITE_MPGD_GAME_SERVICES_URL must be a public https URL in production; notifications stay off.',
+    );
+    return undefined;
+  }
+  try {
+    const client = createGameServicesNotificationsClient({
+      baseUrl,
+      identity: session,
+      getHeaders: () => session.getHeaders(),
+      // The catalog target whose mapping applies to this device (android or ios share FCM).
+      target: platform.configTarget,
+    });
+    const runtime = createNotificationRuntime({
+      provider,
+      backend: client,
+      catalog: starterNotificationTopics(platform.configTarget),
+      defaultLocale: starterNotificationCatalog.defaultLocale,
+      storage: createNotificationRuntimeStorage({ storage: platform.storage }),
+      onError(error) {
+        console.error('[notifications]', error);
+      },
+    });
+    // It subscribes to the provider at once; a backend that cannot answer yet does not fail the game.
+    runtime.start().catch((error: unknown) => {
+      console.error('[notifications] the runtime could not start.', error);
+    });
+    return { runtime, listConsent: () => client.listConsent() };
+  } catch (error) {
+    // A configuration the client refuses turns notifications off, never the game.
+    console.error('[notifications] the notifications backend could not be created.', error);
+    return undefined;
+  }
 }
 
-const backends = new WeakMap<TargetConfiguredGateway, StarterNotificationBackend | undefined>();
+/**
+ * Whether the game-services URL may carry the session's credentials: any
+ * absolute http(s) URL outside production builds, and a public https URL
+ * without credentials in production, as the commerce client requires.
+ */
+function isAllowedGameServicesUrl(baseUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  if (resolveGameServicesAuthorityMode(import.meta.env.MODE) !== 'production') {
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  }
+  const host = url.hostname.toLowerCase();
+  return url.protocol === 'https:'
+    && url.username === ''
+    && url.password === ''
+    && host !== 'localhost'
+    && !host.endsWith('.localhost')
+    && !host.endsWith('.local');
+}
+
+const warned = new WeakSet<TargetConfiguredGateway>();
+function warnOnce(platform: TargetConfiguredGateway, message: string): void {
+  if (!warned.has(platform)) {
+    warned.add(platform);
+    console.warn(message);
+  }
+}
+
+const backends = new WeakMap<TargetConfiguredGateway, StarterNotificationBackend>();
 /** Per gateway, for the process: agreements given on a host that gives no read. */
 const agreements = new WeakMap<TargetConfiguredGateway, Set<string>>();
 
-/** One backend per gateway: a runtime subscribes to its provider once, for the process. */
+/**
+ * One backend per gateway: a runtime subscribes to its provider once, for the
+ * process. A gateway without one yet (no session set) is asked again on the
+ * next use.
+ */
 function starterNotificationBackend(platform: TargetConfiguredGateway): StarterNotificationBackend | undefined {
-  if (!backends.has(platform)) {
-    backends.set(platform, createStarterNotificationBackend(platform));
+  let backend = backends.get(platform);
+  if (backend === undefined) {
+    backend = createStarterNotificationBackend(platform);
+    if (backend !== undefined) {
+      backends.set(platform, backend);
+    }
   }
-  return backends.get(platform);
+  return backend;
 }
 
 /** The settings screen's model for this gateway and locale. */

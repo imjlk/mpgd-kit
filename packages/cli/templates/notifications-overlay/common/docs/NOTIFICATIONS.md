@@ -66,10 +66,11 @@ game has both:
 - a game-services URL, `VITE_MPGD_GAME_SERVICES_URL`, the one the commerce
   client uses (https in production); and
 - a server-backed session, which the game sets with
-  `setStarterServerSession` in `src/platform/gameServices.ts` before the
-  game boots its notifications: the signed-in `{ playerId, sessionId }`, a
-  sign-in subscription, and the session's `Authorization` header. The
-  commerce client then sends the same header. `sessionId` must stay the
+  `setStarterServerSession` in `src/platform/gameServices.ts` at the top of
+  `src/main.ts`, before `bootstrap()`: the signed-in `{ playerId, sessionId }`
+  (`undefined` until the player signs in), a sign-in subscription, and the
+  session's `Authorization` header. The commerce client then sends the same
+  header. `sessionId` must stay the
   same across token refreshes: it is the session id your identity service
   answers to the Worker's `authenticateNotificationSession` (see the kit's
   `docs/CLOUDFLARE_WORKER_DEPLOY.md`, "Sessions").
@@ -79,7 +80,8 @@ for the OS or host permission (and withdraws a Devvit opt-in the game
 rendered). With them, the runtime registers the device for the signed-in
 player, keeps its registration state in the platform storage, and
 `listConsent` reads the player's consent records (the Worker's
-`GET /consent`). The settings screen shows each
+`GET /consent`). The Worker serves the Android, iOS, and Apps in Toss
+providers; a Reddit game's notifications backend is its Devvit server. The settings screen shows each
 switch from the latest record, read every time it opens and after every
 change, so a choice made on another device shows. A tap reads the records
 again and writes only what changes. It keeps nothing on the device, and
