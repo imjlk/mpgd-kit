@@ -1024,6 +1024,80 @@ describe('createNotificationRuntime review fixes', () => {
     ]);
   });
 
+  it('keeps the order of records when the session changes mid-write while a grant is held back', async () => {
+    const { host, backend } = setup();
+    backend.authenticate('p-1');
+    let mode: 'fail' | 'switch' | 'write' = 'fail';
+    let answer: ((entry: ReturnType<typeof fcmEntry>) => void) | undefined;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        recordConsent: async (record) => {
+          if (mode === 'fail') {
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: 'offline' });
+          }
+          await backend.recordConsent(record);
+          if (mode === 'switch') {
+            // Another player signs in while the first record is written.
+            mode = 'write';
+            backend.authenticate('p-2');
+          }
+        },
+      }),
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: () => new Promise((resolve) => {
+        answer = resolve;
+      }),
+    });
+    await runtime.start();
+    // Two withdrawals wait after a failed write; a grant then waits behind them for the entry.
+    await expect(
+      runtime.setAdvertisingConsent({ advertising: 'withdrawn', night: 'withdrawn', textVersion: '1' }),
+    ).rejects.toBeDefined();
+    mode = 'switch';
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    // p-1 signs in again: the withdrawal left over goes first, then the grant once the entry matches.
+    backend.authenticate('p-1');
+    await runtime.runUntilIdle();
+    answer?.(fcmEntry());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.runUntilIdle();
+    expect(backend.consent.map((record) => [record.kind, record.state])).toEqual([
+      ['advertising', 'withdrawn'],
+      ['night', 'withdrawn'],
+      ['topic-preference', 'granted'],
+    ]);
+  });
+
+  it("keeps a withdrawal's own error when the local cancel on its error path fails too", async () => {
+    const { host, backend } = setup();
+    const errors: unknown[] = [];
+    const cancelFailure = new Error('cancel failed');
+    const provider = {
+      ...host.provider,
+      cancelLocal: async () => {
+        throw cancelFailure;
+      },
+    };
+    const runtime = createNotificationRuntime({
+      provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      registryEntry: { ...fcmEntry(), addressing: 'platform-user' },
+      onError: (error) => errors.push(error),
+    });
+    await runtime.start();
+    host.setPermission('granted');
+    await host.provider.scheduleLocal?.({ key: 'k', topic: 'energy-full', fireAt: '2026-10-12T05:00:00Z', title: 't', body: 'b' });
+    backend.authenticate('p-1');
+    await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: false })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    });
+    expect(errors).toContain(cancelFailure);
+  });
+
   it('sends what waited when the entry cannot be loaded', async () => {
     const { host, backend } = setup();
     backend.authenticate('p-1');
