@@ -1636,10 +1636,11 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `accepted` when `msgCount` is above 0 or any channel sent it. Otherwise
     it is `rejected`: reason `agreement` when a `fail` entry's
     `reachedFailReason` is one the deployment names
-    (`agreementFailReasons`, each 1 to 1,024 characters once trimmed: the
-    provider reads at most the first 1,024 characters of a reason, so it
-    refuses an empty or longer entry at creation), otherwise `recipient`, also when the `fail`
-    lists are empty.
+    (`agreementFailReasons`, each 1 to 1,024 UTF-16 code units once
+    trimmed: the provider takes the first 1,024 UTF-16 code units of a
+    `reachedFailReason` and trims that slice before matching, so it refuses
+    an empty or longer entry at creation), otherwise `recipient`, also when
+    the `fail` lists are empty.
   - **Limits.** 15,000 per minute per app (the registry's `rate`), and 10 per
     minute per user (a provider limit).
 - **Devvit.** It runs inside the Devvit server, not the game-services Worker,
@@ -2697,9 +2698,9 @@ in Toss fixes.
   chunk reads events through the bridge provider instead of a second copy
   of the envelope filter.
 - The Apps in Toss functional-message provider refuses an
-  `agreementFailReasons` entry that is empty or longer than 1,024 characters
-  once trimmed, since it reads at most 1,024 characters of a
-  `reachedFailReason`.
+  `agreementFailReasons` entry that is empty or longer than 1,024 UTF-16
+  code units once trimmed, since it takes the first 1,024 UTF-16 code units
+  of a `reachedFailReason` and trims that slice before matching.
 - Left to follow-ups: bulk sends (open question 5) and native rendering of
   Android advertising pushes (above).
 
