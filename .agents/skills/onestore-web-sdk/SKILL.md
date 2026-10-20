@@ -247,7 +247,7 @@ because each one causes incidents:
 - **Do not grant rewards from the client-side `rewarded` result.** The grant is confirmed through
   SSV → verification → the game company's server postback, and the game asks its own server whether
   the reward was granted. Say separately that receiving the postback is the user's job
-- **`requestId` is required for rewarded ads.** The SDK does not generate it. Do not generate requestId on the client. Pass the selected `placementId` and idempotency key to the authenticated game server, which binds the issued id to that placement and the session
+- **`requestId` is required for rewarded ads.** The SDK does not generate it. Do not generate requestId on the client. Pass the logical `placementId`, the ONEconsole placement id, and the idempotency key to the authenticated game server. `showRewardedAsync` and preload use the ONEconsole id, which may differ from the logical id
 
 If the user has no placement ID yet, tell them what to do in ONEconsole, in this order (source:
 [ONEconsole: 인앱 광고 (In-App Ads)](https://onestore-dev.gitbook.io/dev/docs/apps/product/monetization/iaa), English
@@ -298,7 +298,7 @@ ask for the value with the form. After placing it, always tell the user:
   grant items based on the server
 - **Consumption is the server's job.** Without it, buying the same product again fails with
   `already_owned`
-- **Put a server-issued opaque developerPayload on `purchase`.** It is optional for the SDK, but a Kit integration requires it. Transaction identifiers correlate the purchase result and PNS; they are not an account mapping. Pass the selected `productId` and checkout idempotency key to the authenticated game backend before calling `purchase`. The backend derives the player from the server session and returns an opaque value of at most 200 UTF-8 bytes bound to that checkout intent. Never put a user identifier, `playerId`, or other account key in it, and do not invent one on the client
+- **Put a server-issued opaque developerPayload on `purchase`.** It is optional for the SDK, but a Kit integration requires it. Transaction identifiers correlate the purchase result and PNS; they are not an account mapping. Pass the logical `productId`, the ONEconsole SKU, and the checkout idempotency key to the authenticated game backend before calling `purchase`. `purchase` uses the SKU, which may differ from the logical id. The backend derives the player from the server session and returns an opaque value of at most 200 UTF-8 bytes bound to that checkout intent. Never put a user identifier, `playerId`, or other account key in it, and do not invent one on the client
 - Do not show an error popup for `user_cancelled`
 - Purchase requests trigger `pause` (`reason: "payment"`) and `resume` events. Do not pause the game
   separately at the purchase call site; handle it in the one `pause` listener

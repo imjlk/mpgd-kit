@@ -115,7 +115,7 @@ Refresh explicitly before a ONEplay SDK upgrade, review the installed diff, reap
 `pnpm oneplay:skill:check` and `pnpm oneplay:skill:test` in Kit. The offline check
 detects SDK-version drift and an unexpected skill source. It also hashes every
 regular file in the installed skill directory (CRLF normalized to LF at the byte
-level, without decoding file bytes, paths sorted with `en` localeCompare, each
+level, without decoding file bytes, for text files only; other files are hashed unchanged, paths sorted with `en` localeCompare, each
 relative path then its bytes) and fails when that digest differs from
 `skills-lock.json` `computedHash`. It fails when the reviewed patch is missing:
 `developerPayload` and rewarded `requestId` must be obtained from an authenticated

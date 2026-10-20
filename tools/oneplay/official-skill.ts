@@ -22,23 +22,32 @@ export const requiredInstalledSkillText: ReadonlyArray<readonly [string, string]
   ['SKILL.md', 'checkout intent issuing: (server-issued only)'],
   [
     'references/game-template.html.txt',
-    'async function issueCheckoutIntent({ productId, idempotencyKey })',
+    'async function issueCheckoutIntent({ productId, platformProductId, idempotencyKey })',
   ],
-  ['references/game-template.html.txt', 'await issueCheckoutIntent({ productId, idempotencyKey })'],
+  [
+    'references/game-template.html.txt',
+    'await issueCheckoutIntent({ productId, platformProductId, idempotencyKey })',
+  ],
   [
     'references/game-template.html.txt',
     'throw new Error("Checkout intent backend is not connected");',
   ],
   [
     'references/game-template.html.txt',
-    'async function issueRewardRequest({ placementId, idempotencyKey })',
+    'async function issueRewardRequest({ placementId, platformPlacementId, idempotencyKey })',
   ],
-  ['references/game-template.html.txt', 'await issueRewardRequest({ placementId, idempotencyKey })'],
+  [
+    'references/game-template.html.txt',
+    'await issueRewardRequest({ placementId, platformPlacementId, idempotencyKey })',
+  ],
   [
     'references/game-template.html.txt',
     'throw new Error("Reward request backend is not connected");',
   ],
   ['references/game-template.html.txt', 'developerPayload: intent.developerPayload'],
+  ['references/game-template.html.txt', 'productId: platformProductId'],
+  ['references/game-template.html.txt', 'placementId: platformPlacementId'],
+  ['references/game-template.html.txt', 'if (releaseAdButton) $("btnAd").disabled = false;'],
   ['references/game-template.html.txt', 'async function verifyPurchaseOnServer(result)'],
   [
     'references/game-template.html.txt',
@@ -65,6 +74,9 @@ export const forbiddenInstalledSkillText: ReadonlyArray<RegExp> = [
  */
 export const payloadExampleForbiddenText: ReadonlyArray<RegExp> = [
   /Date\.now\s*\(/u,
+  /crypto\.randomUUID\s*\(/u,
+  /Math\.random\s*\(/u,
+  /getRandomValues\s*\(/u,
   /your user ID/u,
   /such as a\s+user identifier/iu,
   /recommended\s*\(\s*not required\s*\)/u,
@@ -78,8 +90,9 @@ export const payloadExampleForbiddenText: ReadonlyArray<RegExp> = [
  * `node_modules`, sorted by host `localeCompare`, path UTF-8 then raw bytes.
  * This digest keeps that concatenation, sorts with `localeCompare(..., 'en')`
  * so it does not depend on the host locale, and normalizes CRLF to LF at the
- * byte level. It does not decode file bytes, so distinct non-UTF-8 files cannot
- * collapse to one digest.
+ * byte level for text files only. Other files are hashed unchanged, so a binary
+ * `0D 0A` sequence cannot be rewritten to `0A`. It does not decode file bytes, so
+ * distinct non-UTF-8 files cannot collapse to one digest.
  * `LOCAL_PATCHES.md` is included. The lock records this reviewed digest after
  * local patches, not the raw upstream folder hash.
  */
@@ -216,11 +229,32 @@ function walkSkill(
     }
     const fullPath = join(currentDir, entry.name);
     const relativePath = relative(baseDir, fullPath).split('\\').join('/');
-    results.push({ relativePath, content: normalizedSkillBytes(readFileSync(fullPath)) });
+    results.push({
+      relativePath,
+      content: normalizedSkillBytes(relativePath, readFileSync(fullPath)),
+    });
   }
 }
 
-function normalizedSkillBytes(content: Buffer): Buffer {
+const textSkillSuffixes = [
+  '.md',
+  '.txt',
+  '.html',
+  '.json',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.css',
+  '.yml',
+  '.yaml',
+  '.svg',
+];
+
+function normalizedSkillBytes(relativePath: string, content: Buffer): Buffer {
+  if (!textSkillSuffixes.some((suffix) => relativePath.toLowerCase().endsWith(suffix))) {
+    return content;
+  }
   const parts: Buffer[] = [];
   let start = 0;
   for (let index = 0; index < content.length - 1; index += 1) {

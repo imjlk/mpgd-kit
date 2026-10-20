@@ -70,7 +70,7 @@ try {
   writeFileSync(binary, Buffer.from([0xff, 0x0d, 0x0a, 0x01]));
   const crlfBinary = hashInstalledOnePlaySkill(skillDir);
   writeFileSync(binary, Buffer.from([0xff, 0x0a, 0x01]));
-  assert.equal(hashInstalledOnePlaySkill(skillDir), crlfBinary);
+  assert.notEqual(hashInstalledOnePlaySkill(skillDir), crlfBinary);
   writeFileSync(binary, Buffer.from([0xfe, 0x0a, 0x01]));
   assert.notEqual(hashInstalledOnePlaySkill(skillDir), crlfBinary);
   rmSync(binary);
@@ -109,6 +109,12 @@ try {
   writeFileSync(timer, 'requestId issuance is recommended (not required)\n');
   lockToInstalled();
   await assert.rejects(() => checkOfficialOnePlaySkill(root), /client-issued/u);
+  writeFileSync(timer, 'const requestId = crypto.randomUUID();\n');
+  lockToInstalled();
+  await assert.rejects(() => checkOfficialOnePlaySkill(root), /client-issued/u);
+  writeFileSync(timer, 'const jitter = Math.random();\n');
+  lockToInstalled();
+  assert.equal((await checkOfficialOnePlaySkill(root)).sdkVersion, '1.1.0');
   rmSync(timer);
   lockToInstalled();
 
@@ -122,11 +128,11 @@ try {
     ['SKILL.md', 'checkout intent issuing: (server-issued only)'],
     [
       'references/game-template.html.txt',
-      'await issueCheckoutIntent({ productId, idempotencyKey })',
+      'await issueCheckoutIntent({ productId, platformProductId, idempotencyKey })',
     ],
     [
       'references/game-template.html.txt',
-      'await issueRewardRequest({ placementId, idempotencyKey })',
+      'await issueRewardRequest({ placementId, platformPlacementId, idempotencyKey })',
     ],
   ] as const) {
     const path = join(skillDir, file);
