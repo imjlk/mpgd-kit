@@ -173,3 +173,73 @@ test('rejects setup-node steps that omit node-version or use a non-literal value
   ].join('\n'));
   assert.deepEqual(inspectNodePins(root).failures, []);
 });
+
+test('rejects a continued node-version scalar that is not the exact pin', (t) => {
+  const { root, write } = fixture(t);
+  write('.mise.toml', '[tools]\nnode = "24.22.0"\n');
+  write('package.json', { engines: { node: '>=24.0.0' }, devDependencies: { ttsc: '1.2.3' } });
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - uses: actions/setup-node@example',
+    '        with:',
+    '          node-version: 24.22.0',
+    '            extra',
+    '          cache: pnpm',
+    '',
+  ].join('\n'));
+  assert.match(
+    inspectNodePins(root).failures.join('\n'),
+    /ci\.yml:6 node-version is 24\.22\.0 extra; expected 24\.22\.0/,
+  );
+
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - uses: actions/setup-node@example',
+    '        with:',
+    '          node-version: >-',
+    '            24.22.0',
+    '',
+  ].join('\n'));
+  assert.deepEqual(inspectNodePins(root).failures, []);
+});
+
+test('reads the mise node pin only from the tools table', (t) => {
+  const { root, write } = fixture(t);
+  write('package.json', { engines: { node: '>=24.0.0' }, devDependencies: { ttsc: '1.2.3' } });
+  write('.mise.toml', '[env]\nnode = "24.22.0"\n\n[tools]\npnpm = "11.7.0"\n');
+  assert.match(inspectNodePins(root).failures.join('\n'), /\.mise\.toml must pin an exact node version/);
+
+  write('.mise.toml', '[env]\nnote = """\n[tools]\nnode = "24.22.0"\n"""\n');
+  assert.match(inspectNodePins(root).failures.join('\n'), /\.mise\.toml must pin an exact node version/);
+
+  write('.mise.toml', '[tools]\nnode = "24.22.0"\n\n[env]\nnode = "99.0.0"\n');
+  assert.deepEqual(inspectNodePins(root).failures, []);
+
+  write('.mise.toml', "[tools]\nnode = '24.22.0'\n");
+  assert.deepEqual(inspectNodePins(root).failures, []);
+
+  write('.mise.toml', 'tools.node = "24.22.0"\n');
+  assert.deepEqual(inspectNodePins(root).failures, []);
+
+  write('.mise.toml', 'tools = { node = "24.22.0" }\n');
+  assert.deepEqual(inspectNodePins(root).failures, []);
+});
+
+test('accepts engines.node ranges that include the mise pin', (t) => {
+  const { root, write } = fixture(t);
+  write('.mise.toml', '[tools]\nnode = "24.22.0"\n');
+  for (const range of ['^24.0.0', '>=22 <25', '~24.22.0', '24.22.x']) {
+    write('package.json', { engines: { node: range }, devDependencies: { ttsc: '1.2.3' } });
+    assert.deepEqual(inspectNodePins(root).failures, [], range);
+  }
+  write('package.json', { engines: { node: '^20.0.0' }, devDependencies: { ttsc: '1.2.3' } });
+  assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node \^20\.0\.0/);
+  write('package.json', { engines: { node: '>=22 <24' }, devDependencies: { ttsc: '1.2.3' } });
+  assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node >=22 <24/);
+  write('package.json', { engines: { node: 'not-a-range' }, devDependencies: { ttsc: '1.2.3' } });
+  assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node not-a-range/);
+});
