@@ -185,6 +185,9 @@ export class GameServicesNotificationsRequestError extends NotificationError {
   }
 }
 
+/** The player changed while a request's headers were resolved; nothing was sent. */
+class NotificationsPlayerChangedError extends GameServicesNotificationsRequestError {}
+
 const reminderSetStatuses: readonly NotificationRuntimeReminderSetStatus[] = [
   'scheduled',
   'replaced',
@@ -282,7 +285,7 @@ export function createGameServicesNotificationsClient(
     if (session !== undefined) {
       const now = sessionOf(identity.current());
       if (now === undefined || now.player !== session.player) {
-        throw new GameServicesNotificationsRequestError({
+        throw new NotificationsPlayerChangedError({
           code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
           route,
           status: 0,
@@ -380,9 +383,10 @@ export function createGameServicesNotificationsClient(
       try {
         await request('/endpoints/unregister', 'POST', { provider }, session);
       } catch (error) {
-        // The player left while the headers were resolved: as above, the
-        // session's end unbinds what it registered.
-        if (sessionOf(identity.current())?.player !== player) {
+        // The player left while the headers were resolved, so nothing was
+        // sent: as above, the session's end unbinds what it registered. A
+        // request that went out and failed is the caller's to see.
+        if (error instanceof NotificationsPlayerChangedError) {
           return;
         }
         throw error;

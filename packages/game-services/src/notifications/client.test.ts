@@ -490,6 +490,56 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
   assert.equal(sent.length, 1);
 }
 
+// An unbind that went out and failed is rethrown, even when the player changed after it was sent.
+{
+  const { identity, signIn } = identityOf(session);
+  let switchAfterSend = false;
+  const { fetch, sent } = fakeFetch(() => {
+    if (switchAfterSend) {
+      signIn({ playerId: 'p-2', sessionId: 's-2' });
+    }
+    return { status: 503, body: { error: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' } };
+  });
+  const client = createGameServicesNotificationsClient({
+    baseUrl: 'https://services.example',
+    identity,
+    fetch,
+  });
+  assert.equal(
+    (await rejection(client.unregisterEndpoint({ provider: 'fcm', player: 'p-1' }))).status,
+    503,
+  );
+  switchAfterSend = true;
+  assert.equal(
+    (await rejection(client.unregisterEndpoint({ provider: 'fcm', player: 'p-1' }))).status,
+    503,
+  );
+  assert.equal(sent.length, 2);
+}
+
+// Signed out while the headers resolve: nothing is sent.
+{
+  let current: GameServicesNotificationSession | undefined = session;
+  const { fetch, sent } = fakeFetch(() => ({ status: 200, body: {} }));
+  const client = createGameServicesNotificationsClient({
+    baseUrl: 'https://services.example',
+    identity: { current: () => current, onAuthenticated: () => () => undefined },
+    fetch,
+    getHeaders: async () => {
+      current = undefined;
+      return { authorization: 'Bearer stale' };
+    },
+  });
+  const signedOut = await rejection(
+    client.registerEndpoint({
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    }),
+  );
+  assert.equal(signedOut.status, 0);
+  assert.equal(sent.length, 0);
+}
+
 // Inputs.
 {
   const { identity } = identityOf(session);
