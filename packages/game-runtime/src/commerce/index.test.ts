@@ -1,3 +1,5 @@
+import { createCommerceReconciler } from '@mpgd/game-services/commerce-reconciler';
+import { createInMemoryMonetizationOperationStore } from '@mpgd/game-services/monetization-operation-store';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createUnsupportedCommerceCapabilities,
@@ -18,7 +20,9 @@ function fixture(withFacts = true, purchase: Commerce['requestPurchase'] = async
   const nativeFacts = {
     subscribe(listener: (event: PlatformPurchasePresentationEvent) => void) {
       listeners.add(listener);
-      return () => { listeners.delete(listener); };
+      return () => {
+        listeners.delete(listener);
+      };
     },
   };
   const provider: Commerce = {
@@ -26,8 +30,14 @@ function fixture(withFacts = true, purchase: Commerce['requestPurchase'] = async
     getCapabilities: async () => createUnsupportedCommerceCapabilities(),
     fetchProducts: async () => [],
     requestPurchase: vi.fn(purchase),
-    getAvailablePurchases: vi.fn(async function (this: Commerce) { expect(this).toBe(provider); return []; }),
-    finishTransaction: vi.fn(async function (this: Commerce) { expect(this).toBe(provider); return { finished: true }; }),
+    getAvailablePurchases: vi.fn(async function (this: Commerce) {
+      expect(this).toBe(provider);
+      return [];
+    }),
+    finishTransaction: vi.fn(async function (this: Commerce) {
+      expect(this).toBe(provider);
+      return { finished: true };
+    }),
     subscribe: () => () => {},
     ...(withFacts ? { presentation: nativeFacts } : {}),
   };
@@ -151,6 +161,114 @@ describe('standalone commerce presentation', () => {
         'capacity',
       );
       expect(f.listeners.size).toBe(0);
+    }
+  });
+});
+
+describe('reconciler non-launch retries', () => {
+  for (const mode of ['native', 'external', 'classifier'] as const) {
+    it(`delivers ${mode} non-launch facts to the durable reconciler and retries one bound intent`, async () => {
+      const f = fixture(false);
+      let attempts = 0;
+      const events = new Set<(event: PlatformPurchasePresentationEvent) => void>();
+      const facts = {
+        subscribe(listener: (event: PlatformPurchasePresentationEvent) => void) {
+          events.add(listener);
+          return () => {
+            events.delete(listener);
+          };
+        },
+      };
+      const provider: Commerce = {
+        ...f.provider,
+        ...(mode === 'native' ? { presentation: facts } : {}),
+        getCapabilities: async () => ({
+          purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+          catalog: { products: true, offers: false, localizedPrice: true },
+          lifecycle: {
+            availablePurchases: true,
+            pending: true,
+            restore: false,
+            events: true,
+            finish: 'client',
+          },
+          authority: { evidence: 'client-token', accountBinding: 'optional' },
+          availability: 'available',
+        }),
+        getAvailablePurchases: async () => [],
+        fetchProducts: async () => [
+          {
+            logicalId: 'COINS',
+            store: 'fixture',
+            storeSku: 'coins',
+            kind: 'consumable',
+            title: 'Coins',
+            description: 'Coins',
+            price: { formatted: '$1', currencyCode: 'USD' },
+          },
+        ],
+        requestPurchase: async (input) => {
+          attempts += 1;
+          const state = attempts === 1 ? 'not-started' : 'closed';
+          for (const listener of events) {
+            listener({ idempotencyKey: input.idempotencyKey, sequence: 1, state });
+          }
+          return attempts === 1
+            ? { outcome: 'failed', error: { code: 'NETWORK', retryable: true } }
+            : { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } };
+        },
+      };
+      const controlled = createCoordinatedCommerceProvider({
+        provider,
+        presentation: f.presentation,
+        maxRememberedInvocations: 1,
+        ...(mode === 'external' ? { purchasePresentation: facts } : {}),
+        ...(mode === 'classifier' ? { classifyPurchasePresentation: (result: Result) => result.outcome === 'failed' ? 'not-started' as const : 'closed' as const } : {}),
+      });
+      const observations: PlatformPurchasePresentationEvent[] = [];
+      controlled.presentation?.subscribe((event) => observations.push(event));
+      const verify = vi.fn(async () => {
+        throw new Error('No purchase evidence; verification must not run');
+      });
+      const reconciler = createCommerceReconciler({
+        provider: controlled,
+        backend: { verifyPurchase: verify },
+        store: createInMemoryMonetizationOperationStore(),
+        playerId: 'player',
+        target: 'android',
+      });
+      await reconciler.start();
+      await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({ outcome: 'failed' });
+      expect(await reconciler.read(request.idempotencyKey)).toMatchObject({
+        state: 'requested',
+        error: { retryable: true },
+      });
+      await expect(controlled.requestPurchase({ ...request, logicalId: 'OTHER' })).rejects.toMatchObject({ code: 'key-conflict' });
+      await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({ outcome: 'cancelled' });
+      expect(await reconciler.read(request.idempotencyKey)).toMatchObject({ state: 'cancelled' });
+      expect(attempts).toBe(2);
+      expect(observations.map((event) => [event.sequence, event.state])).toEqual([
+        [1, 'not-started'],
+        [2, 'closed'],
+      ]);
+      expect(verify).not.toHaveBeenCalled();
+      await reconciler.stop();
+      controlled.dispose();
+    });
+  }
+  it('does not retry a failure after an opened sheet or an uncertain result', async () => {
+    for (const state of ['open', 'unknown'] as const) {
+      const f = fixture(true, async () => {
+        f.emit(state, 1);
+        return { outcome: 'failed', error: { code: 'NETWORK', retryable: true } };
+      });
+      const first = f.controlled.requestPurchase(request);
+      await first;
+      expect(f.controlled.requestPurchase(request)).toBe(first);
+      expect(f.provider.requestPurchase).toHaveBeenCalledOnce();
+      expect(f.presentation.getSnapshot().owner).toBeDefined();
+      f.emit('closed', 2);
+      f.controlled.dispose();
     }
   });
 });

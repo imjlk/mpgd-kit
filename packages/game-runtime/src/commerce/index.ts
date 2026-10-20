@@ -21,6 +21,8 @@ interface PurchaseFlight {
   closed: boolean;
   started: boolean;
   sequence: number;
+  notStarted: boolean;
+  retryable: boolean;
 }
 
 export type CoordinatedCommerceProvider = CommerceProviderSource & { dispose(): void };
@@ -46,7 +48,18 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
   if (!Number.isSafeInteger(capacity) || capacity < 1) {
     throw new TypeError('Invalid purchase history capacity.');
   }
-  const history = new Map<string, string>();
+  const history = new Map<string, { fingerprint: string; sequence: number; retryable: boolean }>();
+  const listeners = new Set<(event: PlatformPurchasePresentationEvent) => void>();
+  function publish(flight: PurchaseFlight, state: PlatformPurchasePresentationEvent['state']): void {
+    const entry = history.get(flight.key);
+    if (entry === undefined) {
+      return;
+    }
+    const event = Object.freeze({ idempotencyKey: flight.key, sequence: ++entry.sequence, state });
+    for (const listener of [...listeners]) {
+      observe(() => listener(event), input.onObserverError);
+    }
+  }
   const purchases = new Map<string, PurchaseFlight>();
   let last: PurchaseFlight | undefined;
   let disposed = false;
@@ -56,6 +69,7 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       return;
     }
     detached = true;
+    listeners.clear();
     if (unsubscribe !== undefined) {
       observe(unsubscribe, input.onObserverError);
     }
@@ -83,19 +97,31 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       flight.sequence = event.sequence;
       if (event.state === 'not-started' && flight.started) {
         flight.lease?.markUnknown();
+        publish(flight, 'unknown');
         return;
       }
       if (event.state === 'closed' || event.state === 'not-started') {
+        flight.notStarted = event.state === 'not-started';
+        publish(flight, event.state);
         close(flight);
       } else if (event.state === 'open') {
         flight.started = true;
         flight.lease?.markStarted();
+        publish(flight, 'open');
       } else {
         flight.lease?.markUnknown();
+        publish(flight, 'unknown');
       }
     }, input.onObserverError);
   });
   const commerce = forward(source, {
+    presentation: {
+      subscribe(listener: (event: PlatformPurchasePresentationEvent) => void): () => void {
+        if (disposed) { throw new PresentationExecutionError('disposed'); }
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    },
     requestPurchase(supplied: PurchaseRequestInput): Promise<PurchaseOutcome> {
       if (disposed) { return Promise.reject(new PresentationExecutionError('disposed')); }
       if (purchasePresentation === undefined && input.classifyPurchasePresentation === undefined) {
@@ -117,15 +143,17 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       const fingerprint = JSON.stringify([request.logicalId, request.source, request.offerId ?? null, request.quantity ?? null]);
       const prior = history.get(key);
       if (prior !== undefined) {
-        if (prior !== fingerprint) { return Promise.reject(new PresentationExecutionError('key-conflict')); }
+        if (prior.fingerprint !== fingerprint) { return Promise.reject(new PresentationExecutionError('key-conflict')); }
         const flight = purchases.get(key) ?? (last?.key === key ? last : undefined);
-        return flight?.promise ?? Promise.reject(new PresentationExecutionError('already-completed'));
+        if (!prior.retryable) { return flight?.promise ?? Promise.reject(new PresentationExecutionError('already-completed')); }
       }
-      if (history.size >= capacity) {
+      if (prior === undefined && history.size >= capacity) {
         return Promise.reject(new PresentationExecutionError('history-full'));
       }
+      const entry = prior ?? { fingerprint, sequence: 0, retryable: false };
+      entry.retryable = false;
       const flight: PurchaseFlight = {
-        key, called: false, settled: false, closed: false, started: false, sequence: 0,
+        key, called: false, settled: false, closed: false, started: false, sequence: 0, notStarted: false, retryable: false,
         promise: Promise.resolve().then(async () => {
           try {
             if (disposed) { throw new PresentationExecutionError('disposed'); }
@@ -137,17 +165,26 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
             if (state !== 'closed' && state !== 'not-started' && state !== 'unknown') {
               throw new TypeError('Invalid purchase presentation observation.');
             }
-            if (state === 'not-started' && flight.started && !flight.closed) {
+            if (state === 'not-started' && (flight.started || flight.closed && !flight.notStarted)) {
               throw new TypeError('Purchase observation contradicts native presentation.');
             }
-            if (state === 'unknown') { if (!flight.closed) { flight.lease.markUnknown(); } } else { close(flight); }
+            if (!flight.closed) {
+              flight.notStarted = state === 'not-started';
+              publish(flight, state);
+              if (state === 'unknown') { flight.lease.markUnknown(); } else { close(flight); }
+            }
+            flight.retryable = result.outcome === 'failed' && result.error.retryable && flight.notStarted && !flight.started;
             return result;
           } catch (error) {
             if (flight.called && !flight.closed) { flight.lease?.markUnknown(); }
             throw error;
           } finally {
             flight.settled = true;
-            if (!flight.called) { history.delete(key); purchases.delete(key); } else {
+            if (!flight.called) {
+              if (prior === undefined) { history.delete(key); } else { entry.retryable = true; }
+              purchases.delete(key);
+            } else {
+              entry.retryable = flight.retryable;
               last = flight;
               if (flight.closed) { purchases.delete(key); }
             }
@@ -155,7 +192,7 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
           }
         }),
       };
-      history.set(key, fingerprint);
+      history.set(key, entry);
       purchases.set(key, flight);
       void flight.promise.catch(() => {});
       return flight.promise;
