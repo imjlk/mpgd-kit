@@ -1623,9 +1623,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `accepted` when `msgCount` is above 0 or any channel sent it. Otherwise
     it is `rejected`: reason `agreement` when a `fail` entry's
     `reachedFailReason` is one the deployment names
-    (`agreementFailReasons`, each 1 to 1,024 characters once trimmed; the
-    provider reads at most the first 1,024 characters of a reason and refuses
-    any other entry at creation), otherwise `recipient`, also when the `fail`
+    (`agreementFailReasons`, each 1 to 1,024 characters once trimmed: the
+    provider reads at most the first 1,024 characters of a reason, so it
+    refuses an empty or longer entry at creation), otherwise `recipient`, also when the `fail`
     lists are empty.
   - **Limits.** 15,000 per minute per app (the registry's `rate`), and 10 per
     minute per user (a provider limit).
@@ -2238,9 +2238,9 @@ Other rules the profiles encode:
     address.
   - A host code of `[A-Za-z0-9_.:-]{1,128}` is named at the end of the
     message as `(host code <code>)`, which `readBridgeNotificationsHostCode`
-    reads back on the game side.
+    reads back (the Apps in Toss and Devvit clients do).
   - Events are numbered per handler from 0, one handler per session; the
-    Devvit server carries none.
+    Devvit server bridge exposes none.
 - **Protocol version.** `getCapabilities` answers `protocolVersion`, the
   host's `notificationsProtocolVersion`. The Apps in Toss client, whose host
   wrapper is built separately from the game, refuses a host on another major
@@ -2248,7 +2248,7 @@ Other rules the profiles encode:
   `NOTIFICATIONS_CONFIGURATION_REQUIRED`, as it refuses a host that serves
   another provider id; the gateway then reports `configuration-required`.
   The in-process Capacitor bridge and the Devvit client, built with their
-  hosts, do not check. Like the provider-id check, it guards
+  hosts, do not check the major (the Devvit client checks the provider id). Like the provider-id check, it guards
   `getCapabilities`, the read behind `PlatformCapabilities.notifications`;
   it does not refuse the other methods.
 - **What N3 landed.** When N3 landed no transport served v2; P1–P3 add the
@@ -2626,8 +2626,9 @@ in Toss fixes.
     pattern above.
   - Failures are read by shape as well as by class, so a provider built
     against another copy of `@mpgd/platform` keeps its notifications code
-    and retryable flag, and an unexpected failure that carries
-    `retryable: false` is no longer made retryable.
+    and retryable flag, and an unexpected failure shaped like a platform
+    failure (a platform `code` and a boolean `retryable`) keeps its flag, so
+    its `retryable: false` is no longer made retryable.
 - The Apps in Toss game-side client fails closed on a host on another
   notifications protocol major, and its lazy chunk reads events through the
   bridge provider instead of a second copy of the envelope filter.
