@@ -8,6 +8,7 @@ import {
   createFcmDeliveryProvider,
   createFcmProviderRegistration,
   FcmAccessTokenError,
+  fcmCollapseId,
   fcmMessagingScope,
   fcmTokenEndpoint,
   parseFcmServiceAccount,
@@ -135,6 +136,12 @@ const request: NotificationRemoteDeliveryRequest = {
 
 // The message: content, data, channel, expiry as android.ttl and apns-expiration, and the opt-out category.
 {
+  const collapseId = fcmCollapseId(request.sendKey);
+  assert.equal(collapseId.length, 64);
+  assert.equal(new TextEncoder().encode(collapseId).byteLength, 64);
+  assert.equal(await sha256Hex(request.sendKey), collapseId);
+  assert.equal(fcmCollapseId('x'.repeat(200)).length, 64);
+  assert.notEqual(fcmCollapseId('send-1'), fcmCollapseId('send-2'));
   const built = buildFcmMessage(request);
   assert.deepEqual(built, {
     status: 'ready',
@@ -149,9 +156,16 @@ const request: NotificationRemoteDeliveryRequest = {
         topic: 'sale',
         route: '/shop',
       },
-      android: { ttl: '32400s', notification: { channel_id: 'promotions' } },
+      android: {
+        collapse_key: collapseId,
+        ttl: '32400s',
+        notification: { channel_id: 'promotions' },
+      },
       apns: {
-        headers: { 'apns-expiration': String(Date.parse('2026-10-19T12:00:00Z') / 1000) },
+        headers: {
+          'apns-collapse-id': collapseId,
+          'apns-expiration': String(Date.parse('2026-10-19T12:00:00Z') / 1000),
+        },
         payload: { aps: { category: 'mpgd-advertising' } },
       },
     },
@@ -170,13 +184,15 @@ const request: NotificationRemoteDeliveryRequest = {
     data: {},
   });
   // Without a channelId a push posts to the purpose's default channel, and only advertising names a category.
+  // The collapse id is still set, so a replay does not show a second notification.
   assert.deepEqual(plain, {
     status: 'ready',
     message: {
       token: 'device-token',
       notification: { title: 'T', body: 'B' },
       data: { topic: 'friend-challenge', route: '/' },
-      android: { notification: { channel_id: 'mpgd-service' } },
+      android: { collapse_key: collapseId, notification: { channel_id: 'mpgd-service' } },
+      apns: { headers: { 'apns-collapse-id': collapseId } },
     },
   });
   for (const [change, reason] of [
@@ -698,4 +714,11 @@ console.info('FCM delivery provider tests passed.');
 function pemOf(base64: string): string {
   const label = ['PRIVATE', 'KEY'].join(' ');
   return `-----BEGIN ${label}-----\n${base64}\n-----END ${label}-----\n`;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)),
+  );
+  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }

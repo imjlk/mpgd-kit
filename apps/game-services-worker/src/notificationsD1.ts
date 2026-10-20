@@ -22,6 +22,14 @@ import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
  * records and the notices about them in one batch, and a send or a
  * schedule entry is written only while it keeps its version.
  */
+/** Rows one purge statement deletes. A larger backlog continues on the next cron. */
+export const d1NotificationPurgeBatch = 100;
+/**
+ * Statements one purge call runs per table. Past this, the next cron
+ * continues, so one invocation cannot delete without bound.
+ */
+export const d1NotificationPurgeMaxBatches = 20;
+
 export function createD1NotificationStore(db: D1Database): NotificationStore {
   return {
     async appendConsent({ player, record, at }) {
@@ -373,28 +381,48 @@ export function createD1NotificationStore(db: D1Database): NotificationStore {
     },
 
     async purge(cutoffs) {
-      const [sends, history, endpoints] = await db.batch([
-        db.prepare('DELETE FROM notification_sends WHERE changed_at_ms < ?')
-          .bind(millisOf(cutoffs.sendsChangedBefore)),
-        db.prepare('DELETE FROM notification_delivery_history WHERE at_ms < ?')
-          .bind(millisOf(cutoffs.historyBefore)),
-        db.prepare(`DELETE FROM notification_endpoints
+      const sends = await deleteInBatches(
+        `DELETE FROM notification_sends WHERE rowid IN (
+          SELECT rowid FROM notification_sends WHERE changed_at_ms < ? LIMIT ?
+        )`,
+        [millisOf(cutoffs.sendsChangedBefore)],
+      );
+      const history = await deleteInBatches(
+        `DELETE FROM notification_delivery_history WHERE rowid IN (
+          SELECT rowid FROM notification_delivery_history WHERE at_ms < ? LIMIT ?
+        )`,
+        [millisOf(cutoffs.historyBefore)],
+      );
+      const endpoints = await deleteInBatches(
+        `DELETE FROM notification_endpoints WHERE rowid IN (
+          SELECT rowid FROM notification_endpoints
           WHERE (status = 'invalid' AND invalidated_at_ms < ?)
             OR last_registered_at_ms < ?
-            OR (session_expires_at_ms IS NOT NULL AND session_expires_at_ms < ?)`)
-          .bind(
-            millisOf(cutoffs.invalidEndpointsBefore),
-            millisOf(cutoffs.staleEndpointsBefore),
-            millisOf(cutoffs.sessionEndpointsBefore),
-          ),
-      ]);
-      return {
-        sends: sends?.meta.changes ?? 0,
-        history: history?.meta.changes ?? 0,
-        endpoints: endpoints?.meta.changes ?? 0,
-      };
+            OR (session_expires_at_ms IS NOT NULL AND session_expires_at_ms < ?)
+          LIMIT ?
+        )`,
+        [
+          millisOf(cutoffs.invalidEndpointsBefore),
+          millisOf(cutoffs.staleEndpointsBefore),
+          millisOf(cutoffs.sessionEndpointsBefore),
+        ],
+      );
+      return { sends, history, endpoints };
     },
   };
+
+  async function deleteInBatches(sql: string, binds: readonly number[]): Promise<number> {
+    let total = 0;
+    for (let batch = 0; batch < d1NotificationPurgeMaxBatches; batch += 1) {
+      const result = await db.prepare(sql).bind(...binds, d1NotificationPurgeBatch).run();
+      const deleted = result.meta.changes ?? 0;
+      total += deleted;
+      if (deleted < d1NotificationPurgeBatch) {
+        return total;
+      }
+    }
+    return total;
+  }
 }
 
 interface EndpointRow {

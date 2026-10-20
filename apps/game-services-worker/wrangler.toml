@@ -202,4 +202,5 @@ head_sampling_rate = 1
 # dead_letter_queue = "mpgd-notifications-dead"
 #
 # [triggers]
+# Workers Paid only. A free-plan cron has 10 ms of CPU and 50 external subrequests.
 # crons = ["* * * * *"]

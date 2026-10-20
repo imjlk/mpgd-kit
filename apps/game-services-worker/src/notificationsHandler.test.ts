@@ -9,6 +9,8 @@ import {
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
   endWorkerNotificationSession,
+  notificationCronOperationsUsed,
+  notificationCronPeriodSeconds,
   notificationFailureCause,
   resolveWorkerNotifications,
   runScheduledNotifications,
@@ -70,6 +72,11 @@ const sessions: Readonly<Record<string, { playerId: string; sessionId: string; i
   'Bearer player-1': { playerId: 'p-1', sessionId: 's-1', installationId: 'install-1' },
   'Bearer player-1-ios': { playerId: 'p-1', sessionId: 's-2', installationId: 'install-2' },
   'Bearer chatty': { playerId: 'p-chatty', sessionId: 's-chatty', installationId: 'install-chatty' },
+  'Bearer endpoint-chatty': {
+    playerId: 'p-endpoint',
+    sessionId: 's-endpoint',
+    installationId: 'install-endpoint',
+  },
   'Bearer broken': { playerId: '', sessionId: 's', installationId: 'i' } as never,
   'Bearer bad-expiry': { playerId: 'p-9', sessionId: 's-9', installationId: 'i-9', expiresAt: 'tomorrow' } as never,
 };
@@ -178,6 +185,24 @@ try {
     authorization: 'Bearer player-1-ios',
     body: { registration: registration('tok-b'), target: 'ios' },
   })).status, 200);
+  // A guest session writing endpoints in a loop is capped per day, like consent.
+  const registerAgain = () =>
+    call('/endpoints', {
+      authorization: 'Bearer endpoint-chatty',
+      body: { registration: registration('tok-loop'), target: 'android' },
+    });
+  for (let index = 0; index < 200; index += 1) {
+    assert.equal((await registerAgain()).status, 200);
+  }
+  const endpointCapped = await registerAgain();
+  assert.deepEqual(
+    [endpointCapped.status, endpointCapped.body.error],
+    [429, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'],
+  );
+  assert.ok(
+    Number(endpointCapped.headers.get('retry-after')) > 86_000,
+    endpointCapped.headers.get('retry-after') ?? 'no Retry-After',
+  );
   // A field of the wrong type is a 400, never another request.
   for (const [path, body] of [
     ['/endpoints/unregister', { provider: 5 }],
@@ -383,6 +408,84 @@ try {
     const before = sends.length;
     await runScheduledNotifications(batched);
     assert.equal(sends.length - before, 3, 'three batches in one cron run');
+  }
+
+  // A wall budget longer than the cron period is rejected; a longer period accepts it.
+  {
+    assert.equal(notificationCronPeriodSeconds('* * * * *'), 60);
+    assert.equal(notificationCronPeriodSeconds('*/5 * * * *'), 300);
+    assert.equal(notificationCronPeriodSeconds('0 * * * *'), 3600);
+    const over = {
+      ...env,
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '120',
+    };
+    const post = (path: string, body: unknown) =>
+      createWorkerFetchHandler(over)(
+        new Request(`${base}${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    await post('/endpoints', { registration: registration('tok-over'), target: 'android' });
+    await post('/reminders', { reminder: { ...reminder(past), key: 'over-budget' } });
+    const before = sends.length;
+    const errors: unknown[][] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      await runScheduledNotifications(over, { cron: '* * * * *' });
+    } finally {
+      console.error = realError;
+    }
+    assert.equal(
+      sends.length,
+      before,
+      'a budget longer than the minute cron does not run the scheduler',
+    );
+    assert.ok(
+      errors.some((args) => String(args[0]).includes('longer than the cron period')),
+      errors.map((args) => String(args[0])).join('\n'),
+    );
+    await runScheduledNotifications(over, { cron: '*/5 * * * *' });
+    assert.equal(sends.length - before, 1, 'the same budget fits a five-minute cron');
+  }
+
+  // The subrequest budget stops a full-batch loop before the next round, then a later run finishes.
+  {
+    const settings = { budget: '1' };
+    const tight = {
+      ...env,
+      MPGD_NOTIFICATIONS_DUE_BATCH: '1',
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+      get MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET() {
+        return settings.budget;
+      },
+    };
+    const post = (path: string, body: unknown) =>
+      createWorkerFetchHandler(tight)(
+        new Request(`${base}${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    await post('/endpoints', { registration: registration('tok-tight'), target: 'android' });
+    for (const key of ['t-1', 't-2', 't-3']) {
+      await post('/reminders', { reminder: { ...reminder(past), key } });
+    }
+    const before = sends.length;
+    await runScheduledNotifications(tight, { cron: '* * * * *' });
+    assert.ok(sends.length - before < 3, `tight run sent ${sends.length - before}`);
+    assert.ok(
+      notificationCronOperationsUsed(tight) <= 1,
+      String(notificationCronOperationsUsed(tight)),
+    );
+    settings.budget = '1000';
+    await runScheduledNotifications(tight, { cron: '* * * * *' });
+    assert.equal(sends.length - before, 3, 'the backlog drains once the budget allows');
   }
 
   // Ending a session unbinds what it registered; an explicit unbind removes the other.
@@ -820,6 +923,13 @@ try {
     [
       { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', baseUrl: 'not a url' } },
       /^MPGD_AIT_NOTIFICATIONS: /u,
+    ],
+    [
+      {
+        ...aitEnv,
+        MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', baseUrl: 'https://evil.example' },
+      },
+      /host must be apps-in-toss-api\.toss\.im/u,
     ],
     // The starter's sender placeholder fails closed: the Worker does not start.
     [

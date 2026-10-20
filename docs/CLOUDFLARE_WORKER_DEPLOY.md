@@ -202,10 +202,19 @@ queue = "mpgd-notifications"
 max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
-# Purges and the scheduler, every minute (the recommended period; the purges run each time too).
-# Each run goes on in rounds (a batch of due reminders and notice checks, then a batch of due
-# sends) until nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS (20 by default) is used.
-# MPGD_NOTIFICATIONS_DUE_BATCH sets each batch (25 by default, at most 100). A reminder fires no
+# Purges and the scheduler. On the Workers Paid plan, every minute is the
+# recommended period (the purges run each time too). Do not enable this cron
+# on the Workers Free plan: a cron invocation there has 10 ms of CPU and 50
+# external subrequests, which this run cannot stay inside.
+# Each run goes on in rounds until nothing is due, the wall budget is used, or
+# another round would cross MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET (1,000 by
+# default, under the paid cap of 10,000 as of 2026-02-11). The wall budget
+# (MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS, 20 by default) must be shorter than
+# the cron period; a longer value skips the scheduler. Each purge deletes
+# at most 100 rows per statement, and at most 20 statements per table, so a
+# backlog continues on the next run.
+# MPGD_NOTIFICATIONS_DUE_BATCH sets each batch (25 by default, at most 100, and
+# no larger than one round of the subrequest budget). A reminder fires no
 # earlier than its time: the first run at or after it takes it unless the run's budget runs out
 # first (a failed item waits a minute), and its send then waits for the provider's rate, the
 # queue's consumer when one is bound, and the gate (quiet hours, the night window, limits).
@@ -278,25 +287,32 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   due at once but queues behind those already due. A reminder the gate
   refuses when it comes due, such as after the player's registering session
   ended, is spent.
-- **Throughput.** A run is bounded by its time budget, but its real ceiling
-  is the platform's per-invocation limits (check Cloudflare's current
-  figures; at the time of writing, subrequests are capped around 50 per
-  invocation on the free plan and around 1,000 on the paid one). Each
-  reminder costs roughly ten D1 queries, and a send without the queue costs
-  its provider calls too, so a run gets through a handful of items on the
-  free plan and on the order of a hundred on the paid one, fewer with
-  inline sends. These are rough, unmeasured estimates: measure yours. The
-  batch size, the provider pace, and the time budget are how a run stays
-  under those limits; the budget only bounds the number of rounds, so the
-  batch decides one round's cost. The default batch of 25 is already at
-  least about 250 queries in one round: on the free plan set
-  `MPGD_NOTIFICATIONS_DUE_BATCH` to about 2 to 3, and wherever runs fail on
-  the limits, lower the batch (lowering the budget only means fewer rounds
-  run). With the queue bound, the cron only writes the sends and takes
-  their rows, and each consumer invocation makes its own provider calls
-  under its own limits, so large waves need the queue. Keep the budget under the cron period (60 seconds for a
-  one-minute cron), or runs overlap; the scheduler's compare-and-set writes
-  keep overlapping runs correct, but they compete for the same items.
+- **Throughput.** A run is bounded by its wall-time budget and by a
+  subrequest budget, and it stops before another round would cross that
+  budget. Check Cloudflare's current figures; as of 2026-02-11 the free plan
+  allows 10 ms of CPU and 50 external subrequests per invocation (1,000
+  subrequests to Cloudflare services such as D1), and the paid plan allows
+  30 seconds of CPU for a cron whose interval is under an hour and 10,000
+  subrequests per invocation (previously 1,000). Do not enable the one-minute
+  cron on the free plan: 10 ms of CPU cannot run this scheduler. On the paid
+  plan the default subrequest budget is 1,000
+  (`MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET`), which fits either the current or
+  the previous paid cap, and the default batch of 25 is one round inside
+  that budget. Each reminder still costs roughly ten D1 queries, and a send
+  without the queue costs its provider calls too; these are rough,
+  unmeasured estimates. The batch size is clamped so one round's estimate
+  fits the budget, and the run does not start another round that would not.
+  A wall budget longer than the cron period is rejected (the scheduler is
+  skipped and the rejection is logged), so a one-minute cron cannot be given
+  a 300-second budget. Keep the budget under the cron period, or runs
+  overlap; the scheduler's compare-and-set writes keep overlapping runs
+  correct, but they compete for the same items. With the queue bound, the
+  cron only writes the sends and takes their rows, and each consumer
+  invocation makes its own provider calls under its own limits, so large
+  waves need the queue.
+
+<!-- @link ../apps/game-services-worker/src/notificationsHandler.ts#runScheduledNotifications Stops the cron before the subrequest budget and rejects a wall budget longer than the cron period. -->
+<!-- @evidence docs/specs/notifications/notifications-v2-rfc.md#scheduler The service run is still bounded by its own wall-time budget; the Worker adds the platform limits. -->
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
   other failure is retried with a growing delay (10 s, doubling, at most
   5 min). While the notifications configuration is broken (a catalog or
@@ -313,7 +329,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   partner API's client certificate is bound as `AIT_PARTNER_MTLS` (a
   `[[mtls_certificates]]` binding) and `MPGD_AIT_NOTIFICATIONS` names the
   recipient key: `{ recipientKey = "toss-user" }` (a Toss login user key)
-  or `"anonymous"`, with optional `baseUrl`, `timeoutMs`,
+  or `"anonymous"`, with optional `baseUrl` (only
+  `https://apps-in-toss-api.toss.im`; the repo documents no sandbox API
+  host), `timeoutMs`,
   `agreementErrorCodes`, `agreementFailReasons`, and
   `recipientErrorCodes`. It needs the identity binding above, which answers
   the player's key for provider `apps-in-toss`: a key from an authenticated
@@ -325,9 +343,16 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   topic maps `targets.ait` to `{ templateSetCode, agreement }`.
   - Name the partner API's codes for a recipient who has not agreed
     (`agreementErrorCodes`, `agreementFailReasons`) once you observe them.
+    Documented codes win over that list: 4095 stays a rate limit, and
+    5004, 4034, and 4010 stay configuration failures, so a rate limit is
+    not stored as an agreement denial.
     Without them such an answer is a `recipient` refusal, no denial is
     recorded, and every later send to that player calls the partner API
     again, against its limit of 10 calls per minute per user.
+
+<!-- @link ../packages/game-services/src/notifications/ait-functional-delivery.ts#createAitFunctionalMessageDeliveryProvider Allowlisted baseUrl, and documented error codes before deployment lists. -->
+<!-- @evidence docs/specs/notifications/notifications-v2-rfc.md#remote-delivery Partner error-code order and the production API host. -->
+<!-- @link ../apps/game-services-worker/src/notificationsD1.ts#createD1NotificationStore Purge deletes in bounded LIMIT batches. -->
 
 ## Production Notes
 

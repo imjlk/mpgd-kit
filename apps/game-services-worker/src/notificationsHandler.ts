@@ -4,6 +4,7 @@ import {
   createNotificationProviderRegistry,
   createNotificationService,
   createNotificationServiceCatalog,
+  maxClientNotificationConsentRecordsPerDay,
   NotificationConsentRateLimitError,
   parseFcmServiceAccount,
   type CreateNotificationServiceInput,
@@ -91,12 +92,22 @@ export interface GameServicesNotificationsEnv {
   /**
    * Items one scheduler round takes, for each of its two steps (due
    * reminders and notice checks, then due sends); 25 by default, at most
-   * 100. A cron run goes on in rounds until nothing is due or its time
-   * budget is used.
+   * 100, and never more than one round of `MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET`.
+   * A cron run goes on in rounds until nothing is due, its time budget is
+   * used, or another round would cross the subrequest budget.
    */
   readonly MPGD_NOTIFICATIONS_DUE_BATCH?: string;
-  /** Wall time one cron run's scheduler may use, in seconds; 20 by default, 1 to 300. */
+  /**
+   * Wall time one cron run's scheduler may use, in seconds; 20 by default.
+   * A value longer than the cron period is rejected so runs do not overlap.
+   */
   readonly MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS?: string;
+  /**
+   * D1 calls, queue sends, identity lookups, and provider calls one cron
+   * run may make before it stops. 1,000 by default, under the Workers Paid
+   * subrequest cap (10,000 as of 2026-02-11, previously 1,000).
+   */
+  readonly MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET?: string;
 }
 
 export type WorkerNotifications =
@@ -266,7 +277,19 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
   if (env.MPGD_NOTIFICATIONS_CATALOG === undefined) {
     return { status: 'disabled' };
   }
-  const registry = createNotificationProviderRegistry(workerNotificationProviders(env));
+  const registry = createNotificationProviderRegistry(
+    workerNotificationProviders(env).map((registration) => ({
+      ...registration,
+      delivery: {
+        ...registration.delivery,
+        async send(request) {
+          // FCM may refresh its access token and then send; other providers make one call.
+          takeCronOperation(env, registration.entry.provider === 'fcm' ? 2 : 1);
+          return registration.delivery.send(request);
+        },
+      },
+    })),
+  );
   const declared = parseJsonVar(env.MPGD_NOTIFICATIONS_DEPLOYMENT, 'MPGD_NOTIFICATIONS_DEPLOYMENT');
   const deployment = declared === undefined ? undefined : assertNotificationDeployment(declared);
   const catalog = createNotificationServiceCatalog(
@@ -283,21 +306,25 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
     ...(identity === undefined
       ? {}
       : {
-          resolvePlatformRecipient: async ({ provider, player }) =>
-            (await identity.resolveNotificationRecipient({ provider, playerId: player })) ?? undefined,
+          resolvePlatformRecipient: async ({ provider, player }) => {
+            takeCronOperation(env);
+            return (await identity.resolveNotificationRecipient({ provider, playerId: player })) ?? undefined;
+          },
         }),
     ...(queue === undefined
       ? {}
       : {
           queue: {
             async enqueue(jobs) {
-              // A queue batch carries at most 100 messages.
+              // A queue batch carries at most 100 messages, and each batch is one subrequest.
               for (let start = 0; start < jobs.length; start += 100) {
+                takeCronOperation(env);
                 await queue.sendBatch(jobs.slice(start, start + 100).map((body) => ({ body })));
               }
             },
           },
         }),
+    elapsedMs: () => notificationCronElapsed(env),
     onError(error, context) {
       console.error(
         'Notifications:',
@@ -323,14 +350,14 @@ function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationSto
     if (env.DB === undefined) {
       throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
     }
-    return createD1NotificationStore(env.DB);
+    return createD1NotificationStore(accountingDatabase(env.DB, env));
   }
   let store = memoryStoresByEnv.get(env);
   if (store === undefined) {
     console.warn(
       'Notifications use the memory store: consent records and endpoints live only in this isolate. Use D1 outside local development.',
     );
-    store = createInMemoryNotificationStore();
+    store = accountingStore(createInMemoryNotificationStore(), env);
     memoryStoresByEnv.set(env, store);
   }
   return store;
@@ -464,12 +491,24 @@ export function createNotificationsFetchHandler(
             200,
             privateHeaders,
           );
-        case 'POST /endpoints':
+        case 'POST /endpoints': {
+          const retryAfterSeconds = endpointWriteRetryAfter(session.sessionId);
+          if (retryAfterSeconds !== undefined) {
+            return json(
+              {
+                error: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+                message: `Too many endpoint registrations today; retry in ${retryAfterSeconds} s.`,
+              },
+              429,
+              { ...privateHeaders, 'Retry-After': String(retryAfterSeconds) },
+            );
+          }
           await service.registerEndpoint(session, {
             registration: body.registration,
             ...(body.target === undefined ? {} : { target: body.target as string }),
           });
           return json({}, 200, privateHeaders);
+        }
         case 'POST /endpoints/unregister':
           await service.unregisterEndpoint(
             session,
@@ -598,33 +637,312 @@ export async function consumeNotificationDispatchBatch(
  * and consent notice checks, then due rows: deferred sends and expired
  * leases, paced by each provider's rate and sent through the queue when one
  * is bound), each step on its own so a failed purge never skips the
- * scheduler. The run goes on in batches of MPGD_NOTIFICATIONS_DUE_BATCH
- * until nothing is due or MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS is used.
+ * scheduler. Rounds of MPGD_NOTIFICATIONS_DUE_BATCH continue until nothing
+ * is due, the wall budget is used, or another round would cross
+ * MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET. A wall budget longer than the cron
+ * period is rejected so the next trigger does not overlap this run.
  */
-export async function runScheduledNotifications(env: GameServicesNotificationsEnv): Promise<void> {
+export async function runScheduledNotifications(
+  env: GameServicesNotificationsEnv,
+  trigger?: { readonly cron?: string },
+): Promise<void> {
   const notifications = resolveWorkerNotifications(env);
   if (notifications.status !== 'ready') {
     return;
   }
+  const periodSeconds = notificationCronPeriodSeconds(trigger?.cron ?? '* * * * *');
+  const operationBudget = subrequestBudgetOf(env);
+  const limit = dueBatchOf(env, operationBudget);
+  const budgetSeconds = cronWallBudgetSeconds(env, periodSeconds);
+  const budget = cronBudgetOf(env);
+  budget.enforcing = true;
+  budget.remaining = operationBudget;
+  budget.used = 0;
+  budget.roundReserve = limit * estimatedOperationsPerDueItem;
+  budget.awaitingStart = true;
+  try {
+    try {
+      await notifications.service.purge();
+    } catch (error) {
+      console.error('Notifications purge failed:', describeFailure(error));
+    }
+    if (budgetSeconds === undefined) {
+      return;
+    }
+    try {
+      const { failed } = await notifications.service.runScheduler({
+        limit,
+        budgetMs: budgetSeconds * 1000,
+      });
+      if (failed > 0) {
+        console.error('Notifications scheduler:', failed, 'item(s) failed; see the reports above.');
+      }
+    } catch (error) {
+      console.error('Notifications scheduler failed:', describeFailure(error));
+    }
+  } finally {
+    budget.enforcing = false;
+  }
+}
+
+/** Operations the last cron run on this env counted, for tests and logs. */
+export function notificationCronOperationsUsed(env: object): number {
+  return cronBudgetOf(env).used;
+}
+
+/**
+ * Subrequests one paid-plan cron run may spend before it stops. Workers Paid
+ * allows 10,000 per invocation as of 2026-02-11 (1,000 before that). 1,000
+ * fits either cap and leaves headroom for the purge. The free plan allows 50
+ * external subrequests and 10 ms of CPU: this cron is not for that plan.
+ */
+export const defaultNotificationCronSubrequestBudget = 1_000;
+/** Assumed store or D1 calls per due item, so a round is not started when it would not fit. */
+const estimatedOperationsPerDueItem = 12;
+const defaultCronWallBudgetSeconds = 20;
+const endpointWriteWindowMs = 86_400_000;
+
+interface NotificationCronBudget {
+  enforcing: boolean;
+  remaining: number;
+  used: number;
+  roundReserve: number;
+  awaitingStart: boolean;
+}
+
+const cronBudgets = new WeakMap<object, NotificationCronBudget>();
+const endpointWritesBySession = new Map<string, number[]>();
+
+function cronBudgetOf(env: object): NotificationCronBudget {
+  let budget = cronBudgets.get(env);
+  if (budget === undefined) {
+    budget = {
+      enforcing: false,
+      remaining: Number.POSITIVE_INFINITY,
+      used: 0,
+      roundReserve: 0,
+      awaitingStart: false,
+    };
+    cronBudgets.set(env, budget);
+  }
+  return budget;
+}
+
+class NotificationCronBudgetExhausted extends Error {
+  override readonly name = 'NotificationCronBudgetExhausted';
+
+  constructor() {
+    super('Notifications cron subrequest budget is exhausted; this run stops.');
+  }
+}
+
+function takeCronOperation(env: object, count = 1): void {
+  const budget = cronBudgetOf(env);
+  if (!budget.enforcing) {
+    return;
+  }
+  if (budget.remaining < count) {
+    throw new NotificationCronBudgetExhausted();
+  }
+  budget.remaining -= count;
+  budget.used += count;
+}
+
+function notificationCronElapsed(env: object): number {
+  const budget = cronBudgetOf(env);
+  if (!budget.enforcing) {
+    return performance.now();
+  }
+  if (budget.awaitingStart) {
+    budget.awaitingStart = false;
+    return performance.now();
+  }
+  // The service checks this only between rounds, so a round that would not fit is not started.
+  if (budget.remaining < budget.roundReserve) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return performance.now();
+}
+
+function subrequestBudgetOf(env: GameServicesNotificationsEnv): number {
+  const declared = env.MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET?.trim();
+  const asked = declared === undefined || declared === ''
+    ? defaultNotificationCronSubrequestBudget
+    : Number(declared);
+  return Number.isFinite(asked) && asked >= 1
+    ? Math.floor(asked)
+    : defaultNotificationCronSubrequestBudget;
+}
+
+function dueBatchOf(env: GameServicesNotificationsEnv, operationBudget: number): number {
   const declared = env.MPGD_NOTIFICATIONS_DUE_BATCH?.trim();
   const asked = declared === undefined || declared === '' ? 25 : Number(declared);
-  const limit = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
-  const budget = env.MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS?.trim();
-  const seconds = budget === undefined || budget === '' ? 20 : Number(budget);
-  const budgetMs = (Number.isFinite(seconds) ? Math.min(Math.max(seconds, 1), 300) : 20) * 1000;
-  try {
-    await notifications.service.purge();
-  } catch (error) {
-    console.error('Notifications purge failed:', describeFailure(error));
+  const clamped = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
+  const affordable = Math.max(1, Math.floor(operationBudget / estimatedOperationsPerDueItem));
+  return Math.min(clamped, affordable);
+}
+
+function cronWallBudgetSeconds(
+  env: GameServicesNotificationsEnv,
+  periodSeconds: number,
+): number | undefined {
+  const declared = env.MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS?.trim();
+  const asked = declared === undefined || declared === ''
+    ? defaultCronWallBudgetSeconds
+    : Number(declared);
+  const seconds = Number.isFinite(asked) && asked >= 1
+    ? Math.floor(asked)
+    : defaultCronWallBudgetSeconds;
+  if (seconds > periodSeconds) {
+    console.error(
+      'Notifications cron budget of '
+        + `${seconds}s is longer than the cron period of ${periodSeconds}s; `
+        + 'the scheduler is skipped so runs do not overlap.',
+    );
+    return undefined;
   }
-  try {
-    const { failed } = await notifications.service.runScheduler({ limit, budgetMs });
-    if (failed > 0) {
-      console.error('Notifications scheduler:', failed, 'item(s) failed; see the reports above.');
+  return seconds;
+}
+
+/**
+ * Minimum seconds between firings of a 5-field cron, from its minute and
+ * hour fields. An expression this cannot parse is treated as every minute,
+ * the strictest period the documented trigger uses.
+ */
+export function notificationCronPeriodSeconds(cron: string): number {
+  const fields = cron.trim().split(/\s+/u);
+  if (fields.length !== 5) {
+    return 60;
+  }
+  const minutes = expandCronField(fields[0] ?? '', 0, 59);
+  const hours = expandCronField(fields[1] ?? '', 0, 23);
+  if (minutes === undefined || hours === undefined) {
+    return 60;
+  }
+  const slots: number[] = [];
+  for (const hour of hours) {
+    for (const minute of minutes) {
+      slots.push(hour * 60 + minute);
     }
-  } catch (error) {
-    console.error('Notifications scheduler failed:', describeFailure(error));
   }
+  slots.sort((left, right) => left - right);
+  const first = slots[0];
+  const last = slots[slots.length - 1];
+  if (first === undefined || last === undefined) {
+    return 60;
+  }
+  let gap = first + 24 * 60 - last;
+  for (let index = 1; index < slots.length; index += 1) {
+    gap = Math.min(gap, (slots[index] ?? 0) - (slots[index - 1] ?? 0));
+  }
+  return Math.max(gap, 1) * 60;
+}
+
+function expandCronField(field: string, min: number, max: number): readonly number[] | undefined {
+  const values = new Set<number>();
+  for (const part of field.split(',')) {
+    const match = /^(?:(\*)|(\d+)(?:-(\d+))?)(?:\/(\d+))?$/u.exec(part);
+    if (match === null) {
+      return undefined;
+    }
+    const [, star, startText, endText, stepText] = match;
+    const step = stepText === undefined ? 1 : Number(stepText);
+    if (!Number.isInteger(step) || step < 1) {
+      return undefined;
+    }
+    const start = star === '*' ? min : Number(startText);
+    const end = endText !== undefined ? Number(endText) : star === '*' ? max : start;
+    if (start < min || end > max || start > end) {
+      return undefined;
+    }
+    for (let value = start; value <= end; value += step) {
+      values.add(value);
+    }
+  }
+  return values.size === 0 ? undefined : [...values].sort((left, right) => left - right);
+}
+
+function accountingStore(store: NotificationStore, env: object): NotificationStore {
+  const wrapped: Partial<Record<keyof NotificationStore, unknown>> = {};
+  for (const key of Object.keys(store) as (keyof NotificationStore)[]) {
+    const method = store[key];
+    if (typeof method !== 'function') {
+      continue;
+    }
+    wrapped[key] = (...args: unknown[]) => {
+      takeCronOperation(env);
+      return (method as (...inner: unknown[]) => unknown).apply(store, args);
+    };
+  }
+  return wrapped as NotificationStore;
+}
+
+function accountingDatabase(db: D1Database, env: object): D1Database {
+  const originals = new WeakMap<object, D1PreparedStatement>();
+  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
+    const call = <Result>(method: (...args: never[]) => Result, values: unknown[]): Result =>
+      method.apply(statement, values as never[]);
+    const wrapped = {
+      bind(...values: unknown[]) {
+        return wrap(call(statement.bind, values));
+      },
+      run(...values: unknown[]) {
+        takeCronOperation(env);
+        return call(statement.run, values);
+      },
+      all(...values: unknown[]) {
+        takeCronOperation(env);
+        return call(statement.all, values);
+      },
+      first(...values: unknown[]) {
+        takeCronOperation(env);
+        return call(statement.first, values);
+      },
+      raw(...values: unknown[]) {
+        takeCronOperation(env);
+        return call(statement.raw, values);
+      },
+    };
+    originals.set(wrapped, statement);
+    return wrapped as D1PreparedStatement;
+  };
+  return {
+    prepare: (query: string) => wrap(db.prepare(query)),
+    batch(statements: D1PreparedStatement[]) {
+      takeCronOperation(env);
+      return db.batch(statements.map((statement) => originals.get(statement) ?? statement));
+    },
+    dump: () => db.dump(),
+    exec(query: string) {
+      takeCronOperation(env);
+      return db.exec(query);
+    },
+  } as D1Database;
+}
+
+/**
+ * Writes of POST /endpoints one session may make per rolling day, the same
+ * cap as client consent records. Counted in this isolate: it stops a guest
+ * session looping on one isolate, and a repeat still costs a D1 upsert.
+ * Answers when to retry, in seconds, once the cap is full.
+ */
+function endpointWriteRetryAfter(sessionId: string, now = Date.now()): number | undefined {
+  const windowStart = now - endpointWriteWindowMs;
+  const recent = (endpointWritesBySession.get(sessionId) ?? []).filter((at) => at > windowStart);
+  if (recent.length >= maxClientNotificationConsentRecordsPerDay) {
+    endpointWritesBySession.set(sessionId, recent);
+    const oldest = recent[0] ?? now;
+    return Math.max(1, Math.ceil((oldest + endpointWriteWindowMs - now) / 1000));
+  }
+  recent.push(now);
+  endpointWritesBySession.set(sessionId, recent);
+  if (endpointWritesBySession.size > 10_000) {
+    const oldestSession = endpointWritesBySession.keys().next().value;
+    if (oldestSession !== undefined) {
+      endpointWritesBySession.delete(oldestSession);
+    }
+  }
+  return undefined;
 }
 
 function readyService(env: GameServicesNotificationsEnv): NotificationService {
