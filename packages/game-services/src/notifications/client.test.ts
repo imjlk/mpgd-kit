@@ -274,6 +274,16 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
 
   const announced: unknown[] = [];
   const unsubscribe = client.onAuthenticated((started) => announced.push(started));
+  // A runtime that subscribes while a session is current does not take it, or its refresh, as a sign-in.
+  {
+    const { identity: restored, signIn: refresh } = identityOf(session);
+    const seen: unknown[] = [];
+    createGameServicesNotificationsClient({ baseUrl: 'https://services.example', identity: restored, fetch })
+      .onAuthenticated((started) => seen.push(started));
+    refresh({ ...session });
+    refresh({ playerId: 'p-1', sessionId: 's-9' });
+    assert.deepEqual(seen, [{ id: 's-9', player: 'p-1' }]);
+  }
   signIn(session);
   signIn({ ...session }); // A token refresh of the same session.
   signIn({ playerId: 'p-2', sessionId: 's-2' }); // An account switch.
@@ -331,6 +341,21 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
     { status: 500, body: { error: 'INTERNAL_ERROR' }, code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
     { status: 502, text: '<html>Bad gateway</html>', code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
     { status: 403, text: 'Forbidden', code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
+    { status: 408, text: 'Request Timeout', code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
+    {
+      status: 503,
+      text: 'Unavailable',
+      headers: { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' },
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    },
+    {
+      status: 503,
+      text: 'Unavailable',
+      headers: { 'Retry-After': '1e3' },
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    },
     // A success that breaks the route's contract is the Worker's fault, never retried.
     { status: 200, text: 'not json', code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
     { status: 200, body: { records: 'none' }, code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },

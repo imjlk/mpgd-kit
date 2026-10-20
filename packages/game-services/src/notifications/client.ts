@@ -64,7 +64,11 @@ export interface GameServicesNotificationIdentity {
   /**
    * Calls `listener` when a session becomes current: a sign-in, a session
    * restored at launch, or an account switch. Returns the unsubscribe. A
-   * repeat for the session already announced (a token refresh) is ignored.
+   * repeat for the session already announced (a token refresh) is ignored,
+   * and so is one for the session current when the runtime subscribed (at
+   * its `start()`). Start the runtime before the game signs in or restores a
+   * session; for a session that became current earlier, call the runtime's
+   * `register()` once it is current.
    */
   onAuthenticated(listener: (session: GameServicesNotificationSession) => void): () => void;
 }
@@ -132,11 +136,12 @@ export interface GameServicesNotificationsClient extends NotificationRuntimeBack
  *   the Worker does not serve this client's routes;
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`, not retryable.
  * - 400 and 413: `NOTIFICATIONS_INVALID_INPUT` (or the code the Worker names).
- * - 429 and 503: `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with the
+ * - 408, 425, 429, and 503: `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with the
  *   `Retry-After` the Worker sent.
  * - Another status names the code the Worker answered when it is a
  *   notifications code; otherwise a 5xx is
- *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` and a 4xx
+ *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (a misconfigured Worker's 500
+ *   too, since a deploy can fix it) and a 4xx
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
  * - No answer (the request failed, or the header resolver did):
  *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with `status` 0.
@@ -288,7 +293,9 @@ export function createGameServicesNotificationsClient(
   return {
     session: () => sessionOf(identity.current()),
     onAuthenticated(listener) {
-      let announced: NotificationRuntimeSession | undefined;
+      // The session already current when the runtime subscribes is not a new
+      // authentication; a later refresh of it is not either.
+      let announced = sessionOf(identity.current());
       return identity.onAuthenticated((session) => {
         const next = sessionOf(session);
         if (next === undefined || (announced?.id === next.id && announced.player === next.player)) {
@@ -433,11 +440,11 @@ function errorOf(
   const { status } = response;
   const serverCode = typeof body?.['error'] === 'string' ? body['error'] : undefined;
   const serverMessage = typeof body?.['message'] === 'string' ? body['message'] : undefined;
-  const retryAfterHeader = response.headers?.get('retry-after') ?? null;
-  const retryAfter = retryAfterHeader === null || retryAfterHeader.trim() === ''
-    ? Number.NaN
-    : Number(retryAfterHeader);
-  const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : undefined;
+  // Delay-seconds only, as the Worker sends it; an HTTP date or anything else is ignored.
+  const retryAfterHeader = response.headers?.get('retry-after')?.trim() ?? '';
+  const retryAfterSeconds = /^\d{1,9}$/u.test(retryAfterHeader)
+    ? Number(retryAfterHeader)
+    : undefined;
   let code: NotificationErrorCode;
   let message: string;
   if (status === 401) {
@@ -452,7 +459,7 @@ function errorOf(
   } else if (status === 400 || status === 413) {
     code = serverCode !== undefined && isNotificationErrorCode(serverCode) ? serverCode : 'NOTIFICATIONS_INVALID_INPUT';
     message = `${route}: ${serverMessage ?? 'the game-services Worker refused the request as invalid.'}`;
-  } else if (status === 429 || status === 503) {
+  } else if (status === 408 || status === 425 || status === 429 || status === 503) {
     code = 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE';
     message = `${route}: ${serverMessage ?? 'the game-services Worker is busy; retry later.'}`;
   } else if (serverCode !== undefined && isNotificationErrorCode(serverCode)) {

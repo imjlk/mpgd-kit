@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   listNotificationNotices,
   NotificationError,
+  notificationsProtocolVersion,
   type NotificationDeliveryOutcome,
 } from '@mpgd/platform/notifications';
 import {
@@ -45,8 +46,8 @@ import { createInMemoryNotificationStore } from './store.js';
  * by an in-process copy of the Worker's session routes (authentication from
  * the `Authorization` header, the route table, and the status mapping of
  * `apps/game-services-worker/src/notificationsHandler.ts`) over the service
- * and the in-memory store. The game-services Worker's own tests run the
- * runtime through this client against the real handler.
+ * and the in-memory store. apps/game-services-worker/src/notificationsClient.test.ts
+ * runs the runtime through this client against the real handler.
  */
 
 function resolveVectorsDir(): string {
@@ -94,7 +95,7 @@ function createWorkerRoutes(
   return async (url, init) => {
     const route = new URL(url).pathname.slice(gameServicesNotificationsRoutePrefix.length);
     if (route === '/providers') {
-      return json({ protocolVersion: '2.0.0-draft.1', ...service.providers() }, 200);
+      return json({ protocolVersion: notificationsProtocolVersion, ...service.providers() }, 200);
     }
     const authorization = init.headers['authorization'];
     const session = authorization === undefined ? undefined : sessions.get(authorization);
