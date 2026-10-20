@@ -250,9 +250,11 @@ export function createGameServicesNotificationsClient(
 
   /**
    * Sends one request. For a session route, `session` is the session the call
-   * began for: if another is current once the headers are resolved (an
-   * account switch during a token refresh), nothing is sent, so one player's
-   * call never goes out with the next player's credentials.
+   * began for: if another player is signed in once the headers are resolved
+   * (an account switch during a token refresh), nothing is sent, so one
+   * player's call never goes out with the next player's credentials. The
+   * same player under a new session id (an identity whose id rotates on
+   * refresh) still sends: the Worker reads the session from the header.
    */
   const request = async (
     route: Route,
@@ -279,12 +281,13 @@ export function createGameServicesNotificationsClient(
     }
     if (session !== undefined) {
       const now = sessionOf(identity.current());
-      if (now === undefined || now.id !== session.id || now.player !== session.player) {
+      if (now === undefined || now.player !== session.player) {
         throw new GameServicesNotificationsRequestError({
           code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
           route,
           status: 0,
-          message: `${route}: the session changed while its request headers were resolved; no request was sent.`,
+          message: `${route}: the player signed out or changed while the request headers were resolved; `
+            + 'no request was sent.',
         });
       }
     }
@@ -309,8 +312,9 @@ export function createGameServicesNotificationsClient(
     const parsed = parseJson(text);
     if (response.status >= 200 && response.status < 300) {
       if (parsed === 'not-json') {
-        // A success page that is not JSON came from something in between (a
-        // captive portal, a proxy), not from the Worker: try again later.
+        // A success page that is not JSON, or an empty one (a 204), came from
+        // something in between (a captive portal, a proxy), not from the
+        // Worker, which always answers a JSON object: try again later.
         throw new GameServicesNotificationsRequestError({
           code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
           route,
@@ -373,7 +377,16 @@ export function createGameServicesNotificationsClient(
         // player's session already ended, and its end unbound what it registered.
         return;
       }
-      await request('/endpoints/unregister', 'POST', { provider }, session);
+      try {
+        await request('/endpoints/unregister', 'POST', { provider }, session);
+      } catch (error) {
+        // The player left while the headers were resolved: as above, the
+        // session's end unbinds what it registered.
+        if (sessionOf(identity.current())?.player !== player) {
+          return;
+        }
+        throw error;
+      }
     },
     async setReminder(reminder) {
       const session = requireSession('/reminders');

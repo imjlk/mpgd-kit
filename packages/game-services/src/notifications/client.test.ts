@@ -464,6 +464,32 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
   assert.equal(sent.length, 0);
 }
 
+// A refresh that rotates the session id for the same player still sends; an unbind whose player left is skipped.
+{
+  const { identity, signIn } = identityOf(session);
+  const { fetch, sent } = fakeFetch(() => ({ status: 200, body: { record } }));
+  let refresh: GameServicesNotificationSession | undefined = {
+    playerId: 'p-1',
+    sessionId: 's-1-rotated',
+  };
+  const client = createGameServicesNotificationsClient({
+    baseUrl: 'https://services.example',
+    identity,
+    fetch,
+    getHeaders: async () => {
+      if (refresh !== undefined) {
+        signIn(refresh);
+      }
+      return { authorization: 'Bearer token' };
+    },
+  });
+  await client.recordConsent(record);
+  assert.equal(sent.length, 1);
+  refresh = { playerId: 'p-2', sessionId: 's-2' };
+  await client.unregisterEndpoint({ provider: 'fcm', player: 'p-1' });
+  assert.equal(sent.length, 1);
+}
+
 // Inputs.
 {
   const { identity } = identityOf(session);
