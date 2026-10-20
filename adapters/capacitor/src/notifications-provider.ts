@@ -1129,13 +1129,19 @@ export function createCapacitorNotificationProvider(
           listLocal(): Promise<readonly LocalNotificationEntry[]> {
             return serialized(async () => {
               const pending = await readPending(local);
-              const delivered = await deliveredIds(local);
+              // Android `getPending` keeps fired one-shots in storage. A row
+              // in the shade has fired. A past `fireAt` that is not there can
+              // still be an alarm Doze has not delivered; cancellation reads
+              // this list, so that row stays. Without the delivered read a
+              // timestamp cannot tell those apart, so every stored row stays.
+              // iOS removes a request from pending once it fires, and a
+              // replacement reuses the stable id while the delivered copy can
+              // still sit in Notification Center, so the shade filter is an
+              // Android-only storage workaround.
+              const delivered: ReadonlySet<number> = platform === 'android'
+                ? await deliveredIds(local)
+                : new Set<number>();
               return pending.ours
-                // Android `getPending` keeps fired one-shots in storage. A row
-                // in the shade has fired. A past `fireAt` that is not there can
-                // still be an alarm Doze has not delivered; cancellation reads
-                // this list, so that row stays. Without the delivered read a
-                // timestamp cannot tell those apart, so every stored row stays.
                 .filter((entry) => !delivered.has(entry.id))
                 .map(({ key, topic, fireAt }) => ({ key, topic, fireAt }));
             });

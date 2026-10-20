@@ -1148,6 +1148,26 @@ describe('Capacitor notifications provider: local reminders', () => {
     expect((await sdks.local!.getPending()).notifications.map((entry) => entry.id)).toEqual([9]);
   });
 
+  it('keeps an iOS pending replacement whose id is still in Notification Center', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    sdks.addStoredLocal({
+      id: 11,
+      extra: {
+        mpgdKey: 'energy',
+        mpgdTopic: 'energy-full',
+        mpgdFireAt: '2026-10-12T06:00:00Z',
+      },
+      delivered: true,
+    });
+    const pending = await provider.listLocal?.();
+    expect(pending).toEqual([
+      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' },
+    ]);
+    await provider.cancelLocal?.({ keys: ['energy'] });
+    expect((await sdks.local!.getPending()).notifications).toEqual([]);
+  });
+
   it('lists stored rows when the shade read fails', async () => {
     const { provider, sdks } = setup();
     grant(sdks);

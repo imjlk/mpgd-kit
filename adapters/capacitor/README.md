@@ -323,9 +323,10 @@ is created, which is how a cold-start open reaches it.
     in its `topic` data key; without that key it opens nothing.
   - An Android FCM notification message cannot carry actions, so an Android
     advertising push needs the shell to render it natively with the action,
-    which is not built yet (a follow-up after C1). Until then the provider
-    omits `advertising` from Android `remote.purposes`, and a catalog should
-    map no advertising topic to `android`: the push would arrive without the
+    which is not built yet (a follow-up after C1). Android `remote.purposes`
+    still lists `advertising` so the provider pairs with the standard FCM
+    registry, but `validateNotificationTopicCatalog` refuses a catalog that
+    maps an advertising topic to `android`: the push would arrive without the
     opt-out action the Korean rules require (see the RFC's advertising
     rules). The kit's starter maps its sample advertising topic to iOS only.
 - **Settings.** Neither plugin opens the notification settings, so the
