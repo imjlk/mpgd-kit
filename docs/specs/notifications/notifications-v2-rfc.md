@@ -251,7 +251,9 @@ follows v2 even where an adapter's v1 disagrees.
 The client declaration describes what the provider can do on the device. The
 backend never trusts it for a send decision: the gate reads the server's own
 [provider registry](#provider-registry) entry, and the runtime compares the
-two at start.
+two at start. While they disagree the runtime fails closed: every call
+throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing reaches the
+backend in the background either (no registration, no record).
 
 ## Client contract {#client-contract}
 
@@ -593,7 +595,9 @@ Runtime rules:
     acknowledged for another player or session, so a sign-in the runtime did
     not observe (one before its start, or while it was stopped) still moves
     the installation; at start, for a player already signed in, when no
-    registration was acknowledged yet; and on `register()`.
+    registration was acknowledged yet, and on reads while the provider's
+    address was never acknowledged (a first registration that failed); and
+    on `register()`.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the

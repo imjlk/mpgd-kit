@@ -208,7 +208,9 @@ export interface CreateNotificationRuntimeInput {
   /**
    * The backend's registry entry for this provider. When the provider's
    * capabilities disagree with it at start, every call throws
-   * `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+   * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing is registered or
+   * recorded in the background either. A registration waits for a
+   * `loadRegistryEntry` in flight, so it never goes out before the check.
    */
   readonly registryEntry?: NotificationDeliveryProviderEntry;
   /**
@@ -687,7 +689,8 @@ export function createNotificationRuntime(
       addWaiting(next);
     }
     const session = backend.session();
-    if (session === undefined) {
+    // Records wait while the provider disagrees with its registry entry.
+    if (session === undefined || configurationIssue !== undefined) {
       return;
     }
     const mine = waitingRecords.filter((waiting) =>
@@ -906,6 +909,15 @@ export function createNotificationRuntime(
     if (session === undefined) {
       return;
     }
+    // A registry entry still loading decides first, so a provider the
+    // backend's entry disagrees with never sends its address.
+    const load = registryEntryLoad;
+    if (load !== undefined) {
+      await load.catch(() => undefined);
+    }
+    if (configurationIssue !== undefined) {
+      return;
+    }
     const persisted = kept ?? await loadState();
     if (persisted.unbound === true) {
       return;
@@ -1032,7 +1044,10 @@ export function createNotificationRuntime(
     }
     const last = persisted.registration;
     if (last === undefined) {
-      if (atStart) {
+      // Nothing acknowledged yet: at start for a session already signed in,
+      // and on reads once the provider has an address whose registration
+      // failed (a Worker that answered 429 or could not be reached).
+      if (atStart || latestRegistration !== undefined) {
         await registerCurrent(false);
       }
       return;
@@ -1391,6 +1406,11 @@ export function createNotificationRuntime(
           },
         );
       }
+      if (configurationIssue !== undefined) {
+        // Fail closed: nothing reaches the backend for a provider its registry
+        // entry disagrees with; every call throws NOTIFICATIONS_CONFIGURATION_REQUIRED.
+        return;
+      }
       // A backend that cannot answer does not fail the start; the next read reconciles.
       await settle(reconcileLocal());
       await settle(refreshRegistration(true));
@@ -1737,6 +1757,8 @@ export function createNotificationRuntime(
       }
       const player = requirePlayer('setTopicPreference');
       await capabilitiesOf();
+      // Never recorded for a player who is no longer signed in.
+      assertSamePlayer('setTopicPreference', player);
       // The withdrawal is recorded first, so the server stops sending and no
       // new local reminder passes the gate even if cancelling fails.
       await queueRecords([{
@@ -1768,6 +1790,8 @@ export function createNotificationRuntime(
       }
       const player = requirePlayer('setAdvertisingConsent');
       await capabilitiesOf();
+      // Never recorded for a player who is no longer signed in.
+      assertSamePlayer('setAdvertisingConsent', player);
       // Each call is a consent decision the law asks to notify, so each one is appended.
       await queueRecords((['advertising', 'night'] as const).flatMap((kind) => {
         const state = request[kind];
@@ -1852,6 +1876,11 @@ export function createNotificationRuntime(
           && (await enqueue('local', () => removeLocalKey(request.key)));
         let remote = false;
         if (capabilities.remote.supported) {
+          // Signed out, the local reminder is removed above, and the call still
+          // throws: a server reminder under the key may be pending for the
+          // player who signed out, so success would claim a cancel that did
+          // not happen (RFC "Backend calls": before sign-in a call that
+          // reaches the backend throws). Retried after sign-in, it removes it.
           if (capabilities.availability === 'action-required') {
             return { route: 'remote', status: 'action-required' };
           }

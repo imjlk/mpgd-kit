@@ -757,6 +757,110 @@ describe('createNotificationRuntime registry entry', () => {
   });
 });
 
+describe('createNotificationRuntime review fixes', () => {
+  const fcmEntry = () => {
+    const entry = notificationConformanceRegistryEntry({ provider: osProfile.provider, capabilities: osProfile.capabilities });
+    if (entry === undefined) {
+      throw new Error('the profile has remote delivery');
+    }
+    return entry;
+  };
+
+  it('sends no registration and no record for a provider its registry entry disagrees with', async () => {
+    for (const given of ['at creation', 'loaded'] as const) {
+      const { host, backend } = setup();
+      const mismatched = { ...fcmEntry(), addressing: 'platform-user' as const };
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const runtime = createNotificationRuntime({
+        provider: host.provider,
+        backend,
+        catalog: [energy],
+        defaultLocale: 'ko',
+        ...(given === 'at creation'
+          ? { registryEntry: mismatched }
+          : { loadRegistryEntry: () => new Promise((resolve) => setTimeout(() => resolve(mismatched), 0)) }),
+      });
+      await runtime.start();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // A rotated address and a new session reach nothing either.
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-2' });
+      backend.authenticate('p-1');
+      await runtime.runUntilIdle().catch(() => undefined);
+      expect(backend.endpoints, given).toEqual([]);
+      expect(backend.consent, given).toEqual([]);
+      await expect(runtime.getPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      });
+    }
+  });
+
+  it('retries a first registration that failed, on the next read', async () => {
+    const { host, backend } = setup();
+    let failures = 1;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          if (failures > 0) {
+            failures -= 1;
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: '429' });
+          }
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      defaultLocale: 'ko',
+    });
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.start();
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(backend.endpoints).toEqual([]);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+  });
+
+  it('records no player action for a player who signed out while the call was under way', async () => {
+    const { host, backend } = setup();
+    let release: (() => void) | undefined;
+    let hold = false;
+    const provider = {
+      ...host.provider,
+      getCapabilities: async () => {
+        if (hold) {
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return host.provider.getCapabilities();
+      },
+    };
+    const runtime = createNotificationRuntime({ provider, backend, catalog: [energy], defaultLocale: 'ko' });
+    await runtime.start();
+    backend.authenticate('p-1');
+    await runtime.runUntilIdle();
+    for (const call of [
+      () => runtime.setTopicPreference({ topic: 'energy-full', enabled: true }),
+      () => runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: '1' }),
+    ]) {
+      hold = true;
+      const pending = call();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      hold = false;
+      // Another player signs in while the call waits for the provider.
+      backend.authenticate('p-2');
+      release?.();
+      await expect(pending).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+      // p-1 signing in again does not receive the abandoned record.
+      backend.authenticate('p-1');
+      await runtime.runUntilIdle();
+      expect(backend.consent).toEqual([]);
+    }
+  });
+});
+
 describe('createNotificationRuntime defaults', () => {
   it('dates the stored registration by the system clock', async () => {
     const storage = asyncStorage();
