@@ -1,4 +1,3 @@
-import type { BridgeNotificationsEvent } from '@mpgd/bridge';
 import { PlatformOperationError } from '@mpgd/platform';
 import type { NotificationProvider } from '@mpgd/platform/notifications';
 
@@ -7,7 +6,7 @@ import type { CreateAitBridgeNotificationProviderInput } from './notifications-b
 /** What the provider uses from the bridge client chunk. */
 export type AitBridgeNotificationClientModule = Pick<
   typeof import('./notifications-bridge.js'),
-  'createAitBridgeNotificationProvider' | 'readAitBridgeNotificationEvent'
+  'createAitBridgeNotificationProvider'
 >;
 
 type Loaded = AitBridgeNotificationClientModule;
@@ -31,8 +30,9 @@ const retryDelaysMs = [1_000, 4_000, 15_000];
  * - Every method waits for the chunk, then calls the bridge provider. A chunk
  *   that fails to load rejects with a retryable
  *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the next call loads again.
- * - `subscribe` attaches to the bridge channel only once the chunk has
- *   loaded. The host emits the launch's cold open to its first listener when
+ * - `subscribe` attaches to the bridge channel, through the bridge
+ *   provider's own `subscribe` (which skips other protocols and drops an
+ *   invalid envelope), only once the chunk has loaded. The host emits the launch's cold open to its first listener when
  *   that listener attaches, so nothing is missed, and the host claims the
  *   launch for the event only when the event can be delivered: a game that
  *   unsubscribes first, or whose chunk never loads, leaves the launch to the
@@ -102,6 +102,10 @@ export function createLazyAitBridgeNotificationProvider(
     return current;
   };
   let bridged: NotificationProvider | undefined;
+  const bridgedBy = (module: Loaded): NotificationProvider => {
+    bridged ??= module.createAitBridgeNotificationProvider(input);
+    return bridged;
+  };
   const provider = async (): Promise<NotificationProvider> => {
     let module: Loaded;
     try {
@@ -115,8 +119,7 @@ export function createLazyAitBridgeNotificationProvider(
         retryable: true,
       });
     }
-    bridged ??= module.createAitBridgeNotificationProvider(input);
-    return bridged;
+    return bridgedBy(module);
   };
   // The channel exists, so the chunk is needed: load it now rather than on
   // the first capability read, which is bounded in time.
@@ -136,12 +139,10 @@ export function createLazyAitBridgeNotificationProvider(
         if (closed) {
           return;
         }
-        const unsubscribe = input.subscribe((envelope: BridgeNotificationsEvent) => {
-          if (closed) {
-            return;
-          }
-          const event = module.readAitBridgeNotificationEvent(envelope);
-          if (event !== undefined) {
+        // The bridge provider reads and filters each envelope; this layer
+        // only stops delivery once the listener has left.
+        const unsubscribe = bridgedBy(module).subscribe((event) => {
+          if (!closed) {
             listener(event);
           }
         });

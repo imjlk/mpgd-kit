@@ -153,7 +153,7 @@ export function createAitBridgeNotificationProvider(
  * warning). An envelope without a protocol is malformed and reaches the
  * validator.
  */
-export function readAitBridgeNotificationEvent(envelope: unknown): NotificationEvent | undefined {
+function readAitBridgeNotificationEvent(envelope: unknown): NotificationEvent | undefined {
   const protocol: unknown = typeof envelope === 'object' && envelope !== null
     ? (envelope as { readonly protocol?: unknown }).protocol
     : undefined;

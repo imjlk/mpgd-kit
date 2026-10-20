@@ -123,6 +123,29 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     expect(loader.calls).toBe(1);
   });
 
+  it('reads envelopes through the bridge provider: other protocols skipped, invalid ones dropped', async () => {
+    const loader = controlledLoader();
+    const events = channel();
+    const provider = createLazyAitBridgeNotificationProvider(
+      {
+        provider: 'apps-in-toss',
+        request: async () => undefined,
+        subscribe: (listener) => events.subscribe(listener),
+      },
+      { load: loader.load },
+    );
+    const seen: NotificationEvent[] = [];
+    provider.subscribe((event) => seen.push(event));
+    await loader.call(0).resolve();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    events.emit({ protocol: 'mpgd.commerce.v2', sequence: 0, event: {} } as never);
+    events.emit({ protocol: 'mpgd.notifications.v2', sequence: 0, event: { type: 'opened' } } as never);
+    events.emit(opened('/c', 1));
+    expect(routes(seen)).toEqual(['/c']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('AIT bridge delivered an invalid notifications event.', expect.anything());
+  });
+
   it('detaches a listener that leaves during the host replay and isolates a throwing attach', async () => {
     const loader = controlledLoader();
     const listeners = new Set<(event: BridgeNotificationsEvent) => void>();
