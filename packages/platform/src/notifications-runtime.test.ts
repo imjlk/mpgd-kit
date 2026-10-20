@@ -823,6 +823,171 @@ describe('createNotificationRuntime review fixes', () => {
     expect(backend.consent.map((record) => [record.kind, record.state])).toEqual([['topic-preference', 'granted']]);
   });
 
+  it('handles register(), rotations, withdrawals, and stop() while the entry loads', async () => {
+    // A load whose answer the test releases.
+    const pendingLoad = () => {
+      let answer: ((entry: ReturnType<typeof fcmEntry>) => void) | undefined;
+      return {
+        load: () => new Promise<ReturnType<typeof fcmEntry>>((resolve) => {
+          answer = resolve;
+        }),
+        answer: () => answer?.(fcmEntry()),
+      };
+    };
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    // register() during the load is sent unconditionally once it matches, even if identical and fresh.
+    {
+      const storage = asyncStorage();
+      const { clock, host, backend } = setup(storage.port);
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const first = createNotificationRuntime({ provider: host.provider, backend, catalog: [energy], clock, defaultLocale: 'ko', storage: storage.port });
+      await first.start();
+      await first.runUntilIdle();
+      const sent = backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt);
+      expect(sent).toHaveLength(1);
+      first.stop();
+      clock.advance(60);
+      const loading = pendingLoad();
+      const runtime = createNotificationRuntime({
+        provider: host.provider, backend, catalog: [energy], clock, defaultLocale: 'ko', storage: storage.port, loadRegistryEntry: loading.load,
+      });
+      await runtime.start();
+      await runtime.register();
+      expect(backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt)).toEqual(sent);
+      loading.answer();
+      await tick();
+      await runtime.runUntilIdle();
+      expect(backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt)).not.toEqual(sent);
+    }
+
+    // A provider without register(): a rotation during the load is sent after it.
+    {
+      const { host, backend } = setup();
+      backend.authenticate('p-1');
+      const { register: _register, ...eventOnly } = host.provider;
+      const loading = pendingLoad();
+      const runtime = createNotificationRuntime({
+        provider: eventOnly, backend, catalog: [energy], defaultLocale: 'ko', loadRegistryEntry: loading.load,
+      });
+      await runtime.start();
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-rotated' });
+      await runtime.runUntilIdle();
+      expect(backend.endpoints).toEqual([]);
+      loading.answer();
+      await tick();
+      await runtime.runUntilIdle();
+      expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-rotated']);
+    }
+
+    // A withdrawal goes out at once; a grant after it waits for the check.
+    {
+      const { host, backend } = setup();
+      backend.authenticate('p-1');
+      const loading = pendingLoad();
+      const runtime = createNotificationRuntime({
+        provider: host.provider, backend, catalog: [energy], defaultLocale: 'ko', loadRegistryEntry: loading.load,
+      });
+      await runtime.start();
+      await runtime.setAdvertisingConsent({ advertising: 'withdrawn', textVersion: '1' });
+      await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: '1' });
+      await runtime.runUntilIdle();
+      expect(backend.consent.map((record) => record.state)).toEqual(['withdrawn']);
+      loading.answer();
+      await tick();
+      await runtime.runUntilIdle();
+      expect(backend.consent.map((record) => record.state)).toEqual(['withdrawn', 'granted']);
+    }
+
+    // A load that settles after stop() sends nothing.
+    {
+      const { host, backend } = setup();
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const loading = pendingLoad();
+      const runtime = createNotificationRuntime({
+        provider: host.provider, backend, catalog: [energy], defaultLocale: 'ko', loadRegistryEntry: loading.load,
+      });
+      await runtime.start();
+      runtime.stop();
+      loading.answer();
+      await tick();
+      await runtime.runUntilIdle();
+      expect(backend.endpoints).toEqual([]);
+    }
+  });
+
+  it('keeps the decided device permission of a registration held by the load', async () => {
+    const { host, backend } = setup();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    // A provider whose registration always reports granted, whatever it reads.
+    const provider = {
+      ...host.provider,
+      register: async () => {
+        const registration = await host.provider.register?.();
+        return registration === null || registration === undefined || registration.address.kind === 'platform-user'
+          ? (registration ?? null)
+          : { ...registration, address: { ...registration.address, permission: 'granted' as const } };
+      },
+    };
+    let answer: ((entry: ReturnType<typeof fcmEntry>) => void) | undefined;
+    const runtime = createNotificationRuntime({
+      provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: () => new Promise((resolve) => {
+        answer = resolve;
+      }),
+    });
+    await runtime.start();
+    host.setPermission('blocked');
+    await runtime.getPermission({ topics: ['energy-full'] });
+    answer?.(fcmEntry());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.permission)).toEqual(['blocked']);
+  });
+
+  it('reads nothing from the backend and still cancels a withdrawn topic locally on a mismatch', async () => {
+    const { host, backend } = setup();
+    let reads = 0;
+    const mismatched = { ...fcmEntry(), addressing: 'platform-user' as const };
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        listConsent: async () => {
+          reads += 1;
+          return backend.listConsent();
+        },
+      }),
+      catalog: [energy],
+      defaultLocale: 'ko',
+      registryEntry: mismatched,
+    });
+    await runtime.start();
+    // A pending local reminder of the topic, scheduled straight on the device.
+    host.setPermission('granted');
+    expect(await host.provider.scheduleLocal?.({
+      key: 'k',
+      topic: 'energy-full',
+      fireAt: '2026-10-12T05:00:00Z',
+      title: 't',
+      body: 'b',
+    })).toMatchObject({ status: 'scheduled' });
+    // A sign-in reconciles nothing against the backend.
+    backend.authenticate('p-1');
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(reads).toBe(0);
+    await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: false })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    });
+    expect(host.localPending).toEqual([]);
+    expect(reads).toBe(0);
+  });
+
   it('sends what waited when the entry cannot be loaded', async () => {
     const { host, backend } = setup();
     backend.authenticate('p-1');

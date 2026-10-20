@@ -208,17 +208,22 @@ export interface CreateNotificationRuntimeInput {
   /**
    * The backend's registry entry for this provider. When the provider's
    * capabilities disagree with it at start, every call throws
-   * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing is registered or
-   * recorded in the background either. While a `loadRegistryEntry` is in
-   * flight, registrations and records wait without holding any queue, and
-   * go out when the entry it answers matches.
+   * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing is registered, read,
+   * or recorded in the background either. `unregister()` is the exception:
+   * it still unbinds, since removing a device from a player is always safe. While a `loadRegistryEntry` is in
+   * flight, registrations (including `register()`, which then resolves
+   * before it is sent) and records that grant something wait without
+   * holding any queue, and go out when the load settles without a mismatch;
+   * withdrawals and refusals go out at once.
    */
   readonly registryEntry?: NotificationDeliveryProviderEntry;
   /**
    * Loads the registry entry when `start()` runs without `registryEntry`,
    * for example from the game-services Worker's `GET /providers`. The load
-   * runs on its own: neither `start()` nor `runUntilIdle()` waits for it, and
-   * calls run without the comparison until it answers. A load that fails is
+   * runs on its own: neither `start()` nor `runUntilIdle()` waits for it.
+   * Until it answers, reads, prompts, and local reminders run without the
+   * comparison, while registrations and granting records wait for it (see
+   * `registryEntry`). A load that fails is
    * reported through `onError` and the next `runUntilIdle()`, and the runtime
    * goes on without the entry, so a backend it cannot reach does not turn notifications off;
    * the next `start()` loads it again. An entry once loaded is kept for the
@@ -443,7 +448,8 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   address, or a platform user's changed locale or zone), and when a read
  *   or request, or a revocation, changes the device's decided permission; and
  *   at start and on reads once the last one the backend acknowledged is older
- *   than 7 days. An identical one for the same player and session is skipped
+ *   than 7 days, belongs to another session, or was never acknowledged (a
+ *   first registration that failed). An identical one for the same player and session is skipped
  *   for 7 days, except on `register()`. `unregister()` unbinds the
  *   installation from the player signed in when it was called and cancels the
  *   pending local reminders, even when the unbind fails, and nothing binds it
@@ -566,6 +572,10 @@ export function createNotificationRuntime(
   let loadedRegistryEntry: NotificationDeliveryProviderEntry | undefined;
   /** The load in flight, so overlapping starts share one. */
   let registryEntryLoad: Promise<void> | undefined;
+  /** A `register()` held by a load in flight; the load's flush sends it unconditionally. */
+  let forceRegistration = false;
+  /** The device permission of the latest registration a load in flight held. */
+  let heldPermission: NotificationPermissionState | undefined;
   /** The provider's capabilities as the latest `start()` read them. */
   let startCapabilities: NotificationCapabilities | undefined;
   /** The provider's latest registration, from `register()` or `endpoint-changed`. */
@@ -652,7 +662,8 @@ export function createNotificationRuntime(
   /** The session player's records, with that player's records still waiting; `undefined` without a session. */
   const readRecords = async (): Promise<NotificationConsentRecord[] | undefined> => {
     const session = backend.session();
-    if (session === undefined) {
+    // Nothing is read from a backend whose registry entry the provider disagrees with.
+    if (session === undefined || configurationIssue !== undefined) {
       return undefined;
     }
     const records = await backend.listConsent();
@@ -690,13 +701,20 @@ export function createNotificationRuntime(
       addWaiting(next);
     }
     const session = backend.session();
-    // Records wait while the registry entry loads (the load writes them once
-    // it matches) and while the provider disagrees with it.
-    if (session === undefined || registryEntryLoad !== undefined || configurationIssue !== undefined) {
+    // Records wait while the provider disagrees with its registry entry.
+    if (session === undefined || configurationIssue !== undefined) {
       return;
     }
-    const mine = waitingRecords.filter((waiting) =>
+    let mine = waitingRecords.filter((waiting) =>
       waiting.player === undefined || waiting.player === session.player);
+    if (registryEntryLoad !== undefined) {
+      // While the entry loads, only withdrawals and refusals go out, so the
+      // server stops sending at once; a record that grants waits for the
+      // check (the load writes it once the entry matches), and so does every
+      // record after it, keeping their order.
+      const firstGrant = mine.findIndex((waiting) => waiting.record.state === 'granted');
+      mine = firstGrant === -1 ? mine : mine.slice(0, firstGrant);
+    }
     if (mine.length === 0) {
       return;
     }
@@ -912,9 +930,16 @@ export function createNotificationRuntime(
       return;
     }
     // Nothing goes out before the registry check: while an entry loads the
-    // registration waits (the load sends it once the entry matches), and a
-    // provider the entry disagrees with never sends its address.
-    if (registryEntryLoad !== undefined || configurationIssue !== undefined) {
+    // registration waits (the load sends it once the entry matches, as
+    // forcefully as it was asked for), and a provider the entry disagrees
+    // with never sends its address.
+    if (registryEntryLoad !== undefined) {
+      forceRegistration ||= always;
+      // The permission the runtime decided for the device, which the flush keeps.
+      heldPermission = registration.address.kind === 'platform-user' ? undefined : registration.address.permission;
+      return;
+    }
+    if (configurationIssue !== undefined) {
       return;
     }
     const persisted = kept ?? await loadState();
@@ -991,10 +1016,13 @@ export function createNotificationRuntime(
       }
       const capabilities = await provider.getCapabilities();
       const register = provider.register;
-      if (!capabilities.remote.supported || capabilities.remote.addressing === 'none' || register === undefined) {
+      if (!capabilities.remote.supported || capabilities.remote.addressing === 'none') {
         return;
       }
-      const registration = (await register.call(provider)) ?? latestRegistration;
+      // A provider without `register()` reports its address only through
+      // `endpoint-changed`: the latest one it reported is its registration.
+      const registration = (register === undefined ? undefined : await register.call(provider))
+        ?? latestRegistration;
       if (registration !== undefined) {
         const { address } = registration;
         await sendRegistration(
@@ -1026,8 +1054,9 @@ export function createNotificationRuntime(
    *   this one, for the same reason;
    * - a device registration acknowledged more than 7 days ago is sent again,
    *   so the endpoint of a device in use never goes stale.
-   * At start only, with nothing acknowledged yet, the registration is sent
-   * for a session that was already signed in.
+   * With nothing acknowledged yet, the registration is sent at start for a
+   * session that was already signed in, and on reads once the provider has
+   * an address whose registration failed.
    */
   const refreshRegistration = async (atStart: boolean): Promise<void> => {
     const session = backend.session();
@@ -1047,7 +1076,13 @@ export function createNotificationRuntime(
       // and on reads once the provider has an address whose registration
       // failed (a Worker that answered 429 or could not be reached).
       if (atStart || latestRegistration !== undefined) {
-        await registerCurrent(false);
+        // The retry keeps the device permission the runtime decided last.
+        const address = latestRegistration?.address;
+        await registerCurrent(
+          false,
+          false,
+          address === undefined || address.kind === 'platform-user' ? undefined : address.permission,
+        );
       }
       return;
     }
@@ -1317,6 +1352,19 @@ export function createNotificationRuntime(
     return pending;
   };
 
+  /** Sends what waited for a registry check that passed (or could not run), while started. */
+  const flushAfterCheck = (): void => {
+    const force = forceRegistration;
+    const permission = heldPermission;
+    forceRegistration = false;
+    heldPermission = undefined;
+    if (configurationIssue !== undefined || unsubscribeProvider === undefined) {
+      return;
+    }
+    track(queueRecords([]));
+    track(registerCurrent(force, false, permission));
+  };
+
   // Events and authentication.
 
   const onProviderEvent = (event: NotificationEvent): void => {
@@ -1398,20 +1446,15 @@ export function createNotificationRuntime(
         loading.then(
           () => {
             registryEntryLoad = undefined;
-            if (configurationIssue === undefined) {
-              // What waited for the check goes out now.
-              track(queueRecords([]));
-              track(registerCurrent(false));
-            }
+            // What waited for the check goes out now, unless the check failed
+            // or the runtime stopped meanwhile.
+            flushAfterCheck();
           },
           (error: unknown) => {
             registryEntryLoad = undefined;
             fail(error);
-            if (configurationIssue === undefined) {
-              // Without the entry the runtime goes on unchecked, so what waited goes out.
-              track(queueRecords([]));
-              track(registerCurrent(false));
-            }
+            // Without the entry the runtime goes on unchecked, so what waited goes out.
+            flushAfterCheck();
           },
         );
       }
@@ -1767,13 +1810,18 @@ export function createNotificationRuntime(
         await cancelLocalWhere((entry) => entry.topic === request.topic);
       }
       const player = requirePlayer('setTopicPreference');
-      await capabilitiesOf();
-      // Never recorded for a player who is no longer signed in; a withdrawal
-      // still stops this device's reminders of the topic before it throws.
-      if (sessionPlayer() !== player && !request.enabled) {
-        await cancelLocalWhere((entry) => entry.topic === request.topic);
+      try {
+        await capabilitiesOf();
+        // Never recorded for a player who is no longer signed in.
+        assertSamePlayer('setTopicPreference', player);
+      } catch (error) {
+        // A withdrawal still stops this device's reminders of the topic,
+        // which touches no backend, before the call throws.
+        if (!request.enabled) {
+          await cancelLocalWhere((entry) => entry.topic === request.topic);
+        }
+        throw error;
       }
-      assertSamePlayer('setTopicPreference', player);
       // The withdrawal is recorded first, so the server stops sending and no
       // new local reminder passes the gate even if cancelling fails.
       await queueRecords([{
@@ -1891,11 +1939,12 @@ export function createNotificationRuntime(
           && (await enqueue('local', () => removeLocalKey(request.key)));
         let remote = false;
         if (capabilities.remote.supported) {
-          // Signed out, the local reminder is removed above, and the call still
-          // throws: a server reminder under the key may be pending for the
-          // player who signed out, so success would claim a cancel that did
-          // not happen (RFC "Backend calls": before sign-in a call that
-          // reaches the backend throws). Retried after sign-in, it removes it.
+          // Signed out, the local reminder is removed above and the call never
+          // claims a cancel: a server reminder under the key may be pending
+          // for the player who signed out. A provider waiting for a player
+          // action answers `action-required`; any other throws
+          // NOTIFICATIONS_TEMPORARILY_UNAVAILABLE below (RFC "Backend calls").
+          // Retried after sign-in, it removes the server reminder too.
           if (capabilities.availability === 'action-required') {
             return { route: 'remote', status: 'action-required' };
           }
