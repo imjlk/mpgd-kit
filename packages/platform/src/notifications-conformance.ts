@@ -1,18 +1,13 @@
 import {
   assertNotificationConsentRecord,
   assertNotificationDeployment,
-  assertRecordNotificationNoticeInput,
   createNotificationNoticeIdempotencyKey,
   createNotificationReminderIdempotencyKey,
-  evaluateLocalNotificationReminder,
   evaluateNotificationDelivery,
   evaluateNotificationReminderConsent,
-  findNotificationCopy,
   isNotificationTimestamp,
-  isRecordableNotificationPermissionState,
   isSameNotificationNotice,
   isValidNotificationTimeZone,
-  latestNotificationConsent,
   listNotificationNotices,
   normalizeNotificationTimestamp,
   notificationDefaultDeploymentTimeZone,
@@ -21,23 +16,16 @@ import {
   notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
   notificationNoticeTopic,
-  notificationPermissionConsentKind,
-  notificationPermissionStateOf,
   notificationProviderCarriesNotices,
-  notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationTemplateDataIssue,
   notificationTopicNeedsNoAgreement,
-  resolveNotificationContent,
-  routeNotificationReminder,
   toSeoulCalendarDate,
-  type CancelNotificationReminderInput,
   type EvaluateNotificationDeliveryInput,
   type LocalNotificationEntry,
   type LocalNotificationRequest,
   type NotificationCapabilities,
-  type NotificationConsentKind,
   type NotificationConsentRecord,
   type NotificationDeferralReason,
   type NotificationDeliveryContent,
@@ -54,22 +42,32 @@ import {
   type NotificationNoticeSettings,
   type NotificationNoticeVariant,
   type NotificationPermissionOutcome,
-  type NotificationPermissionResult,
   type NotificationPermissionSnapshot,
   type NotificationPermissionState,
   type NotificationProvider,
   type NotificationProviderLimit,
-  type NotificationRecordablePermissionState,
   type NotificationRequiredAction,
-  type NotificationRuntime,
-  type NotificationRuntimePermissionSnapshot,
   type NotificationTemplateData,
   type NotificationTopicDeclaration,
   type NotificationTopicMapping,
-  type RecordNotificationNoticeInput,
-  type ReminderResult,
-  type SetNotificationReminderInput,
 } from './notifications.js';
+import {
+  createNotificationRuntime,
+  type NotificationRuntimeBackend,
+  type NotificationRuntimeController,
+  type NotificationRuntimePersistedRegistration,
+  type NotificationRuntimeReminderSetStatus,
+  type NotificationRuntimeSession,
+} from './notifications-runtime.js';
+import {
+  bufferEvent,
+  deliverEach,
+  describeError,
+  isBoundedText,
+  noticeIdentityOf,
+  recordNoticeInputOf,
+  reminderInputIssue,
+} from './notifications-runtime-support.js';
 import {
   notificationConformanceAppliesToReason,
   notificationConformanceDefaultLocale,
@@ -93,7 +91,8 @@ import {
  * with its fixture `NotificationProvider`; a fake backend that keeps sessions,
  * consent records, endpoints, server reminders, notices, and an idempotency
  * ledger, and applies the pure policy gate before every provider call; and the
- * reference notifications runtime the runner drives as the `game` actor. Pure
+ * notifications runtime the runner drives as the `game` actor, which is the
+ * production one from `@mpgd/platform/notifications-runtime`. Pure
  * in-process code: no Phaser, DOM, network, or SDK imports. Nothing here sends
  * a real notification or grants anything.
  *
@@ -118,8 +117,6 @@ export const notificationConformanceLeaseSeconds = 300;
 
 const secondMs = 1000;
 const dayMs = 24 * 60 * 60 * secondMs;
-/** A registration identical to the last acknowledged one is skipped for this long. */
-const registrationRefreshMs = 7 * dayMs;
 /** An endpoint not refreshed for this long counts as missing at gate step 2. */
 const endpointStaleMs = 60 * dayMs;
 /** A send still rate-limited this long after its first deferral ends `unavailable`. */
@@ -225,7 +222,6 @@ export interface CreateNotificationConformanceHostInput {
   readonly timeZone?: string;
 }
 
-const eventBufferLimit = 64;
 const appKey = '\u0000app';
 
 /**
@@ -608,39 +604,8 @@ export function createNotificationConformanceHost(
   };
 }
 
-/**
- * Buffers an event for the first listener, keeping at most
- * `eventBufferLimit`: past it the oldest event that is not an open goes first,
- * so a cold-start open is not lost to later events.
- */
-function bufferEvent(buffer: NotificationEvent[], event: NotificationEvent): void {
-  buffer.push(event);
-  if (buffer.length > eventBufferLimit) {
-    const evicted = buffer.findIndex((buffered) => buffered.type !== 'opened');
-    buffer.splice(evicted === -1 ? 0 : evicted, 1);
-  }
-}
-
 function isDecidedAnswer(outcome: NotificationPermissionOutcome | undefined): boolean {
   return outcome === 'granted' || outcome === 'already-granted' || outcome === 'denied';
-}
-
-/** Calls every listener with every event, in order; returns the errors they threw. */
-function deliverEach(
-  listeners: readonly ((event: NotificationEvent) => void)[],
-  events: readonly NotificationEvent[],
-): unknown[] {
-  const errors: unknown[] = [];
-  for (const event of events) {
-    for (const listener of listeners) {
-      try {
-        listener(event);
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-  }
-  return errors;
 }
 
 function throwFirst(errors: readonly unknown[]): void {
@@ -706,57 +671,28 @@ export function notificationConformanceRegistryEntry(input: {
 // Backend.
 
 /** An authenticated game-services session; its installation id is the session's, never a request's. */
-export interface NotificationConformanceSession {
-  readonly id: string;
-  readonly player: string;
+export interface NotificationConformanceSession extends NotificationRuntimeSession {
   readonly installationId: string;
 }
 
 /**
- * What setting a server reminder answers: stored, the gate step 3 to 5
- * refusal, `capacity-exceeded` past a backend's cap on a player's pending
- * reminders, or `unavailable` when no provider the player can be reached on
- * maps the topic. The fake backend answers only the first six.
+ * What setting a server reminder answers (`NotificationRuntimeReminderSetStatus`).
+ * The fake backend answers only the first six.
  */
-export type NotificationConformanceReminderSetStatus =
-  | 'scheduled'
-  | 'replaced'
-  | 'permission-required'
-  | 'request-missing'
-  | 'preference-off'
-  | 'advertising-consent-missing'
-  | 'capacity-exceeded'
-  | 'unavailable';
+export type NotificationConformanceReminderSetStatus = NotificationRuntimeReminderSetStatus;
 
 export type NotificationConformanceNoticeChannel = 'in-game' | 'push' | 'other';
 
-/** The backend surface the runtime calls for the authenticated session. */
-export interface NotificationConformanceBackendClient {
+/**
+ * The backend surface the runtime calls for the authenticated session
+ * (`NotificationRuntimeBackend`), with the fixture session's installation and
+ * every notice channel a backend under test records.
+ */
+export interface NotificationConformanceBackendClient extends NotificationRuntimeBackend {
   /** The authenticated session; `undefined` before authentication and after the session ends. */
   session(): NotificationConformanceSession | undefined;
   /** Calls `listener` whenever a session starts; returns the unsubscribe. */
   onAuthenticated(listener: (session: NotificationConformanceSession) => void): () => void;
-  /** Appends a record for the session's player; the backend stamps `at` with its own clock. */
-  recordConsent(record: NotificationConsentRecord): Promise<void>;
-  /** The session player's consent records, oldest first. */
-  listConsent(): Promise<readonly NotificationConsentRecord[]>;
-  /**
-   * Binds a device registration to the session's installation and player, or
-   * keeps a platform-user registration's locale and zone for the player.
-   */
-  registerEndpoint(registration: NotificationEndpointRegistration): Promise<void>;
-  /**
-   * Unbinds the session's installation from `player`, the player whose
-   * session sent the unbind; an installation another player took over since
-   * stays bound.
-   */
-  unregisterEndpoint(input: { readonly provider: string; readonly player: string }): Promise<void>;
-  /** Checks gate steps 3 to 5, then stores or replaces the session player's reminder with this key. */
-  setReminder(input: SetNotificationReminderInput): Promise<NotificationConformanceReminderSetStatus>;
-  /** Whether a pending reminder with this key, or a waiting send of one, existed. */
-  cancelReminder(input: CancelNotificationReminderInput): Promise<boolean>;
-  /** The session player's listed notices; none unless the deployment applies the Korean rules. */
-  listNotices(): Promise<readonly NotificationNotice[]>;
   /**
    * Records a notice given to the session's player, named by its identity
    * fields, while that notice is listed; recording one that is not listed
@@ -2144,52 +2080,6 @@ export function createNotificationConformanceBackend(
   };
 }
 
-/** A well-formed `notices.recordShown` input, or `NOTIFICATIONS_INVALID_INPUT`. */
-function recordNoticeInputOf(input: unknown): RecordNotificationNoticeInput {
-  try {
-    return assertRecordNotificationNoticeInput(input);
-  } catch (error) {
-    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-      message: 'A notice is a listed notice, or its kind, the kind and time of the record it reports '
-        + `on, and its dueBy: ${describeError(error)}`,
-      cause: error,
-    });
-  }
-}
-
-/**
- * Only the fields that name a notice, with the record time in the canonical
- * form; a listed notice's `record.state` and `textVersion` are left out.
- */
-function noticeIdentityOf(notice: NotificationNoticeIdentity): NotificationNoticeIdentity {
-  return {
-    kind: notice.kind,
-    record: { kind: notice.record.kind, at: normalizeNotificationTimestamp(notice.record.at) },
-    dueBy: notice.dueBy,
-  };
-}
-
-/** Why a reminder's input breaks the RFC bounds, or `undefined`. */
-function reminderInputIssue(input: SetNotificationReminderInput): string | undefined {
-  const keyIssue = notificationKeyIssue(input.key);
-  if (keyIssue !== undefined) {
-    return `key: ${keyIssue}`;
-  }
-  if (timestampOrUndefined(input.fireAt) === undefined) {
-    return 'fireAt: expected RFC 3339 with an explicit offset';
-  }
-  if (input.templateData !== undefined) {
-    const issue = notificationTemplateDataIssue(input.templateData);
-    if (issue !== undefined) {
-      return `templateData: ${issue}`;
-    }
-  }
-  if (input.link !== undefined && !isBoundedText(input.link)) {
-    return 'link: expected a non-empty string';
-  }
-  return undefined;
-}
-
 function sendRequestOf(request: NotificationConformanceDeliverInput, defaultPlayer: string): SendRequest {
   const issue = sendInputIssue(request);
   if (issue !== undefined) {
@@ -2242,21 +2132,6 @@ function sendInputIssue(request: NotificationConformanceDeliverInput): string | 
     }
   }
   return undefined;
-}
-
-function isBoundedText(value: unknown): boolean {
-  return typeof value === 'string' && value.length > 0 && value.length <= 16_384;
-}
-
-function timestampOrUndefined(value: unknown): string | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-  try {
-    return normalizeNotificationTimestamp(value);
-  } catch {
-    return undefined;
-  }
 }
 
 function conflictError(key: string): NotificationError {
@@ -2356,20 +2231,14 @@ function compareText(left: string, right: string): number {
 
 // Runtime.
 
-export interface NotificationConformanceRuntime extends NotificationRuntime {
-  /**
-   * Subscribes to the provider and to authentication, compares the provider
-   * with its registry entry, and reconciles pending local reminders. Provider
-   * events are buffered for the game's first listener.
-   */
-  start(): Promise<void>;
-  /** Drops listeners, buffered events, and both subscriptions. */
-  stop(): void;
-  /** Waits for event-driven work (records, registrations, local reminders) and rethrows its first failure. */
-  runUntilIdle(): Promise<void>;
-}
+/**
+ * The reference runtime the runner drives as the `game` actor: the
+ * production runtime (`createNotificationRuntime` in
+ * `@mpgd/platform/notifications-runtime`), so every vector exercises it.
+ */
+export type NotificationConformanceRuntime = NotificationRuntimeController;
 
-/** What the runtime keeps across restarts. */
+/** What the runtime keeps across restarts; the runner passes the same object to each restart. */
 export interface NotificationConformanceRuntimeStorage {
   /** The last registration the backend acknowledged. */
   registration?: NotificationConformancePersistedRegistration;
@@ -2377,12 +2246,7 @@ export interface NotificationConformanceRuntimeStorage {
   unbound?: boolean;
 }
 
-export interface NotificationConformancePersistedRegistration {
-  readonly registration: NotificationEndpointRegistration;
-  readonly player: string;
-  readonly session: string;
-  readonly at: string;
-}
+export type NotificationConformancePersistedRegistration = NotificationRuntimePersistedRegistration;
 
 export interface CreateNotificationConformanceRuntimeInput {
   readonly provider: NotificationProvider;
@@ -2395,7 +2259,7 @@ export interface CreateNotificationConformanceRuntimeInput {
   readonly defaultLocale: string;
   /** The device locale for local reminder copy; defaults to `defaultLocale`. */
   readonly locale?: string;
-  /** Survives restarts; a fresh object when absent. */
+  /** Survives restarts; a fresh object when absent. The runtime writes it after each change. */
   readonly storage?: NotificationConformanceRuntimeStorage;
   /**
    * The backend's registry entry for this provider. When the provider's
@@ -2406,1432 +2270,32 @@ export interface CreateNotificationConformanceRuntimeInput {
 }
 
 /**
- * When a pending record is appended: `changed` when its state differs from
- * the latest record of its kind and scope; `always` every time (player
- * consent, which carries its text version); `each` every time and never
- * collapsed before authentication (a per-send acceptance allows one delivery).
- */
-type RecordMode = 'changed' | 'always' | 'each';
-
-interface PendingRecord {
-  readonly record: NotificationConsentRecord;
-  readonly mode: RecordMode;
-  /** The player authenticated when it was observed; `undefined` before authentication. */
-  readonly player: string | undefined;
-}
-
-/** A decided state the host reported for the app (no topic) or one topic. */
-interface Observation {
-  readonly topic?: string;
-  readonly state: NotificationPermissionState;
-  readonly accepted?: boolean;
-}
-
-interface ResolvedStates {
-  readonly app?: NotificationPermissionState;
-  readonly appSource?: 'host' | 'record';
-  readonly topics: Readonly<Record<string, NotificationPermissionState>>;
-  readonly sources: Readonly<Record<string, 'host' | 'record'>>;
-}
-
-interface LocalEntry {
-  readonly key: string;
-  readonly topic: string;
-  readonly fireAt?: string;
-}
-
-type RuntimeQueue = 'record' | 'register' | 'local';
-
-/**
- * The reference notifications runtime (RFC "Runtime"): the provider composed
- * with the backend for the authenticated session.
- *
- * - Reads return the provider snapshot. A topic the host reads `unknown`
- *   takes the latest record, `sources` says which answered, and a
- *   game-rendered consent that is not opted in reads `prompt` until a
- *   decision is recorded and `denied` after it. A topic whose mapping needs no
- *   agreement reads `granted`. A read that observes a changed decided state
- *   records it, and every read still answers when the backend cannot.
- * - Reads, requests, and revocations take each topic once, however often it
- *   is listed.
- * - Requests throw `NOTIFICATIONS_USER_GESTURE_REQUIRED` without a gesture on
- *   a gesture-only provider. An unsupported provider answers `unavailable`, a
- *   provider in `action-required` answers that with its `requiredAction`, an
- *   undeclared or unmapped topic answers `unavailable`, a topic that needs no
- *   agreement answers `already-granted`, and a topic the host reads `blocked`
- *   answers `blocked`, all without reaching the host; every other topic
- *   reaches the prompt.
- * - Records: decided states that differ from the latest record of their kind
- *   and scope, never `dismissed` or `action-required` answers. Device
- *   providers write none (the endpoint holds the permission), other app-scope
- *   providers write `delivery-permission`, and topic-scope providers write
- *   `host-agreement` with the host evidence, plus a `topic-preference` of
- *   `granted` when the player accepts a `requested` topic's agreement.
- *   Per-send acceptances are appended every time. A record belongs to the
- *   player signed in when the call or event began: one observed before
- *   authentication waits for it (only the latest per kind and scope), and one
- *   observed for a player waits for that player's session. A player action
- *   (`setTopicPreference`, `setAdvertisingConsent`) needs an authenticated
- *   player and throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` without one, as
- *   does every other backend call (a server reminder, `reminders.cancel`'s
- *   server part, and `notices`). A backend call belongs to the player signed
- *   in when it began and is refused when another player signed in since. A
- *   record the backend would refuse is dropped and its error surfaces.
- * - Registrations: the provider's registration goes to the backend at
- *   authentication, on `register()`, on `endpoint-changed` (a rotated device
- *   address, or a platform user's changed locale or zone), and when a read
- *   or request, or a revocation, changes the device's decided permission; and
- *   at start and on reads once the last one the backend acknowledged is older
- *   than 7 days. An identical one for the same player and session is skipped
- *   for 7 days, except on `register()`. `unregister()` unbinds the
- *   installation from the player signed in when it was called and cancels the
- *   pending local reminders, even when the unbind fails, and nothing binds it
- *   again, across restarts, until `register()` or the next authentication.
- * - Reminders: one key across both routes, and `cancel` removes it from each
- *   route that has it. Local ones pass the client gate steps (permission,
- *   then the topic preference from the backend, then quiet hours, which move
- *   them or refuse a topic that is not deferrable, then the topic's daily
- *   cap); server ones are checked and stored by the backend. Turning a topic off cancels its local
- *   reminders, a known permission other than granted cancels them, and start,
- *   authentication, and every backend read reconcile them with the catalog
- *   (a topic that no longer takes the local route loses its reminders), the
- *   latest preference, and permission.
- * - Game listeners run after the runtime's own handling of an event; a
- *   listener that throws stops neither the others nor the runtime, and its
- *   error surfaces from `runUntilIdle`, as do failures of background work:
- *   the first one, or an `AggregateError` that counts them all. `stop()` and
- *   a later `start()` buffer events for the next first subscriber again.
+ * The production runtime over the conformance inputs: `storage` is a plain
+ * object the runtime reads when it is created and rewrites after each
+ * change, so a restart that passes the same object resumes from it.
  */
 export function createNotificationConformanceRuntime(
   input: CreateNotificationConformanceRuntimeInput,
 ): NotificationConformanceRuntime {
-  const { provider, backend, clock } = input;
-  const storage = input.storage ?? {};
-  const listeners = new Set<(event: NotificationEvent) => void>();
-  let buffer: NotificationEvent[] = [];
-  let gameSubscribed = false;
-  let unsubscribeProvider: (() => void) | undefined;
-  let unsubscribeAuthentication: (() => void) | undefined;
-  let configurationIssue: string | undefined;
-  /** The provider's latest registration, from `register()` or `endpoint-changed`. */
-  let latestRegistration: NotificationEndpointRegistration | undefined;
-  const background = new Set<Promise<void>>();
-  /** The first background failure since the last `runUntilIdle`, and how many there were. */
-  let failure: { readonly error: unknown; count: number } | undefined;
-  const fail = (error: unknown): void => {
-    if (failure === undefined) {
-      failure = { error, count: 1 };
-    } else {
-      failure.count += 1;
-    }
-  };
-  const waitingRecords: PendingRecord[] = [];
-  /** One promise chain per queue: records, registrations, and local reminder changes. */
-  const queues: Record<RuntimeQueue, Promise<unknown>> = {
-    record: Promise.resolve(),
-    register: Promise.resolve(),
-    local: Promise.resolve(),
-  };
-  /** Local reminders this runtime scheduled: the fallback for a provider without `listLocal`. */
-  const scheduledLocal = new Map<string, LocalEntry>();
-
-  const emit = (event: NotificationEvent): void => {
-    if (!gameSubscribed) {
-      bufferEvent(buffer, event);
-      return;
-    }
-    for (const error of deliverEach([...listeners], [event])) {
-      fail(error);
-    }
-  };
-  const track = (work: Promise<void>): void => {
-    const tracked: Promise<void> = work
-      .catch((error: unknown) => {
-        fail(error);
-      })
-      .finally(() => {
-        background.delete(tracked);
-      });
-    background.add(tracked);
-  };
-  /** Awaits follow-up work of a call that has already answered; a failure surfaces from `runUntilIdle`. */
-  const settle = async (work: Promise<void>): Promise<void> => {
-    try {
-      await work;
-    } catch (error) {
-      fail(error);
-    }
-  };
-  /**
-   * Runs `work` after every earlier job of the same queue, in call order. A job
-   * never enqueues onto its own queue and waits for it, which would deadlock.
-   */
-  const enqueue = <Result>(queue: RuntimeQueue, work: () => Promise<Result>): Promise<Result> => {
-    const run = queues[queue].then(work);
-    queues[queue] = run.catch(() => undefined);
-    return run;
-  };
-  const topicOf = (topic: string): NotificationTopicDeclaration | undefined =>
-    input.catalog.find((entry) => entry.id === topic);
-  const capabilitiesOf = async (): Promise<NotificationCapabilities> => {
-    const capabilities = await provider.getCapabilities();
-    if (configurationIssue !== undefined) {
-      throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-        message: `The provider disagrees with its registry entry: ${configurationIssue}.`,
-      });
-    }
-    return capabilities;
-  };
-  const sessionPlayer = (): string | undefined => backend.session()?.player;
-
-  // Consent records.
-
-  /** The session player's records, with that player's records still waiting; `undefined` without a session. */
-  const readRecords = async (): Promise<NotificationConsentRecord[] | undefined> => {
-    const session = backend.session();
-    if (session === undefined) {
-      return undefined;
-    }
-    const records = await backend.listConsent();
-    return [
-      ...records,
-      ...waitingRecords
-        .filter((pending) => pending.player === undefined || pending.player === session.player)
-        .map((pending) => pending.record),
-    ];
-  };
-  const addWaiting = (next: PendingRecord): void => {
-    if (next.player === undefined && next.mode !== 'each') {
-      // Before authentication only the latest per kind and scope is kept.
-      for (let index = waitingRecords.length - 1; index >= 0; index -= 1) {
-        const waiting = waitingRecords[index];
-        if (
-          waiting !== undefined
-          && waiting.player === undefined
-          && waiting.mode !== 'each'
-          && waiting.record.kind === next.record.kind
-          && waiting.record.topic === next.record.topic
-        ) {
-          waitingRecords.splice(index, 1);
-        }
-      }
-    }
-    waitingRecords.push(next);
-  };
-  /**
-   * Inside the record queue: writes the session player's waiting records and
-   * then `pending`, in order. What cannot be written waits for the next write.
-   */
-  const writeRecords = async (pending: readonly PendingRecord[]): Promise<void> => {
-    for (const next of pending) {
-      addWaiting(next);
-    }
-    const session = backend.session();
-    if (session === undefined) {
-      return;
-    }
-    const mine = waitingRecords.filter((waiting) =>
-      waiting.player === undefined || waiting.player === session.player);
-    if (mine.length === 0) {
-      return;
-    }
-    for (const waiting of mine) {
-      waitingRecords.splice(waitingRecords.indexOf(waiting), 1);
-    }
-    try {
-      const records = [...(await backend.listConsent())];
-      while (mine.length > 0) {
-        if (backend.session()?.id !== session.id) {
-          // The session changed during the write: the rest waits for its player.
-          waitingRecords.push(...mine);
-          return;
-        }
-        const next = mine[0];
-        if (next !== undefined) {
-          const latest = latestNotificationConsent(records, next.record.kind, next.record.topic);
-          if (next.mode !== 'changed' || latest?.state !== next.record.state) {
-            await backend.recordConsent(next.record);
-            records.push(next.record);
-          }
-        }
-        mine.shift();
-      }
-    } catch (error) {
-      waitingRecords.push(...mine);
-      throw error;
-    }
-  };
-  const queueRecords = (pending: readonly PendingRecord[]): Promise<void> => {
-    // A record the backend would refuse (a provider's malformed evidence) is
-    // dropped, so it never blocks the records after it; its error surfaces.
-    const valid = pending.filter((next) => {
-      try {
-        assertNotificationConsentRecord(next.record);
-        return true;
-      } catch (error) {
-        fail(error);
-        return false;
-      }
-    });
-    return valid.length === 0 && waitingRecords.length === 0
-      ? Promise.resolve()
-      : enqueue('record', () => writeRecords(valid));
-  };
-  /**
-   * A player action is recorded for the authenticated player, never for
-   * whoever authenticates next.
-   */
-  const requirePlayer = (operation: string): string => {
-    const player = sessionPlayer();
-    if (player === undefined) {
-      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
-        message: `${operation} records a player action, which needs an authenticated player.`,
-      });
-    }
-    return player;
-  };
-  /** Refuses a server call when another player signed in after the call began. */
-  const assertSamePlayer = (operation: string, player: string | undefined): void => {
-    if (sessionPlayer() !== player) {
-      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
-        message: `${operation} began for another player; ask again for the player signed in now.`,
-      });
-    }
-  };
-  /**
-   * A server call needs the player who was signed in when it began, and that
-   * player still signed in; before sign-in it is temporarily unavailable.
-   */
-  const requireSignedIn = (operation: string, player: string | undefined): void => {
-    if (player === undefined) {
-      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
-        message: `${operation} calls the backend, which needs an authenticated player.`,
-      });
-    }
-    assertSamePlayer(operation, player);
-  };
-  /**
-   * The records the decided states in `observations` call for, for `player`:
-   * the one authenticated when the call began, or `undefined` before
-   * authentication.
-   */
-  const permissionRecords = (
-    capabilities: NotificationCapabilities,
-    observations: readonly Observation[],
-    evidence: NotificationPermissionResult['evidence'],
-    player: string | undefined,
-  ): PendingRecord[] => {
-    const pending: PendingRecord[] = [];
-    const proof = evidence === undefined ? {} : { evidence };
-    for (const observation of observations) {
-      const state = observation.state;
-      if (!isRecordableNotificationPermissionState(state)) {
-        continue;
-      }
-      const mode: RecordMode = capabilities.permission.allowance === 'per-send' && observation.accepted === true
-        ? 'each'
-        : 'changed';
-      if (observation.topic === undefined) {
-        // Device providers keep the permission on the endpoint, not in records.
-        if (capabilities.permission.scope === 'app' && !isDeviceAddressing(capabilities)) {
-          pending.push({
-            mode,
-            player,
-            record: {
-              kind: 'delivery-permission',
-              state,
-              source: 'client-report',
-              at: clock.now(),
-              ...proof,
-            },
-          });
-        }
-        continue;
-      }
-      const topic = topicOf(observation.topic);
-      // Host policy, not the player, granted a topic that needs no agreement.
-      if (capabilities.permission.scope === 'topic' && topic !== undefined && !notificationTopicNeedsNoAgreement(topic)) {
-        pending.push({
-          mode,
-          player,
-          record: {
-            kind: 'host-agreement',
-            topic: observation.topic,
-            state,
-            source: 'client-report',
-            at: clock.now(),
-            ...proof,
-          },
-        });
-      }
-    }
-    return pending;
-  };
-  /**
-   * The states a snapshot reports after the runtime's rules: a game-rendered
-   * consent not opted in reads `denied` once a decision is recorded (or made
-   * now), a topic that needs no agreement reads `granted`, and an `unknown`
-   * host read takes the latest record.
-   */
-  const resolveStates = (
-    capabilities: NotificationCapabilities,
-    snapshot: NotificationPermissionSnapshot,
-    topics: readonly string[],
-    records: readonly NotificationConsentRecord[] | undefined,
-    decidedNow = false,
-  ): ResolvedStates => {
-    const scope = capabilities.permission.scope;
-    const kind = notificationPermissionConsentKind(scope);
-    const decided = decidedNow
-      || (records !== undefined && latestNotificationConsent(records, 'delivery-permission') !== undefined);
-    const resolve = (
-      host: NotificationPermissionState,
-      topic: string | undefined,
-    ): { readonly state: NotificationPermissionState; readonly source: 'host' | 'record' } => {
-      const declared = topic === undefined ? undefined : topicOf(topic);
-      if (scope === 'topic' && declared !== undefined && notificationTopicNeedsNoAgreement(declared)) {
-        return { state: 'granted', source: 'host' };
-      }
-      const state = capabilities.permission.prompt === 'game' && host === 'prompt' && decided
-        ? 'denied'
-        : host;
-      const recorded = state === 'unknown' && records !== undefined
-        ? latestRecordState(records, kind, scope === 'app' ? undefined : topic)
-        : undefined;
-      return recorded === undefined
-        ? { state, source: 'host' }
-        : { state: recorded, source: 'record' };
-    };
-    const app = scope === 'app' && snapshot.app !== undefined
-      ? resolve(snapshot.app, undefined)
-      : undefined;
-    const resolved = topics.map(
-      (topic) => [topic, resolve(notificationPermissionStateOf(snapshot, topic), topic)] as const,
-    );
-    return {
-      ...(app === undefined ? {} : { app: app.state, appSource: app.source }),
-      topics: Object.fromEntries(resolved.map(([topic, entry]) => [topic, entry.state])),
-      sources: Object.fromEntries(resolved.map(([topic, entry]) => [topic, entry.source])),
-    };
-  };
-  /** The decided states the host itself reported, one per scope. */
-  const hostObservations = (
-    capabilities: NotificationCapabilities,
-    states: ResolvedStates,
-    topics: readonly string[],
-  ): Observation[] => {
-    if (capabilities.permission.scope === 'app') {
-      return states.app === undefined || states.appSource !== 'host' ? [] : [{ state: states.app }];
-    }
-    return topics
-      .filter((topic) => states.sources[topic] === 'host')
-      .map((topic) => ({ topic, state: stateIn(states, topic) }));
-  };
-
-  // Registrations.
-
-  /**
-   * Inside the register queue: sends `registration` for the session unless
-   * the backend acknowledged the same one for this player and session within
-   * 7 days. One made before authentication is sent at authentication, and
-   * nothing binds after `unregister()` until `register()` or the next
-   * authentication, across restarts.
-   */
-  const sendRegistration = async (
-    registration: NotificationEndpointRegistration,
-    always: boolean,
-  ): Promise<void> => {
-    latestRegistration = registration;
-    const session = backend.session();
-    if (session === undefined || storage.unbound === true) {
-      return;
-    }
-    const last = storage.registration;
-    if (
-      !always
-      && last !== undefined
-      && last.player === session.player
-      && last.session === session.id
-      && sameJson(last.registration, registration)
-      && Date.parse(clock.now()) - Date.parse(last.at) < registrationRefreshMs
-    ) {
-      return;
-    }
-    await backend.registerEndpoint(registration);
-    storage.registration = {
-      registration,
-      player: session.player,
-      session: session.id,
-      at: clock.now(),
-    };
-  };
-  /**
-   * Registers the provider's current address or platform identity; `rebind`
-   * ends an `unregister()`. A `permission` the runtime decided (a
-   * game-rendered consent reads `denied` once withdrawn) replaces the one a
-   * device address carries.
-   */
-  const registerCurrent = (
-    always: boolean,
-    rebind = false,
-    permission?: NotificationPermissionState,
-  ): Promise<void> =>
-    enqueue('register', async () => {
-      if (rebind) {
-        delete storage.unbound;
-      }
-      const capabilities = await provider.getCapabilities();
-      const register = provider.register;
-      if (!capabilities.remote.supported || capabilities.remote.addressing === 'none' || register === undefined) {
-        return;
-      }
-      const registration = (await register.call(provider)) ?? latestRegistration;
-      if (registration !== undefined) {
-        const { address } = registration;
-        await sendRegistration(
-          permission === undefined || address.kind === 'platform-user' || address.permission === permission
-            ? registration
-            : { ...registration, address: { ...address, permission } },
-          always,
-        );
-      }
-    });
-  /**
-   * Re-sends the registration once the one the backend last acknowledged for
-   * this player and session is older than 7 days, so the endpoint of a device
-   * in use never goes stale. Runs at start and on reads.
-   */
-  const refreshRegistration = async (): Promise<void> => {
-    const session = backend.session();
-    const last = storage.registration;
-    if (
-      session === undefined
-      || storage.unbound === true
-      || last === undefined
-      || last.player !== session.player
-      || last.session !== session.id
-      || Date.parse(clock.now()) - Date.parse(last.at) < registrationRefreshMs
-      || !isDeviceAddressing(await provider.getCapabilities())
-    ) {
-      return;
-    }
-    await registerCurrent(false);
-  };
-  /** Re-registers when the device's decided permission differs from the latest registration's. */
-  const syncRegistration = async (
-    capabilities: NotificationCapabilities,
-    state: NotificationPermissionState | undefined,
-  ): Promise<void> => {
-    if (
-      !isDeviceAddressing(capabilities)
-      || state === undefined
-      || !isRecordableNotificationPermissionState(state)
-    ) {
-      return;
-    }
-    const address = (latestRegistration ?? storage.registration?.registration)?.address;
-    if (address !== undefined && address.kind !== 'platform-user' && address.permission === state) {
-      return;
-    }
-    await registerCurrent(false, false, state);
-  };
-
-  // Local reminders.
-
-  const listLocalEntries = async (): Promise<readonly LocalEntry[]> =>
-    provider.listLocal === undefined ? [...scheduledLocal.values()] : provider.listLocal();
-  /** Inside the local queue: cancels the pending local reminders `refused` picks. */
-  const cancelLocalNow = async (refused: (entry: LocalEntry) => boolean): Promise<void> => {
-    const cancelLocal = provider.cancelLocal;
-    if (cancelLocal === undefined) {
-      return;
-    }
-    const keys = (await listLocalEntries()).filter(refused).map((entry) => entry.key);
-    if (keys.length > 0) {
-      await cancelLocal.call(provider, { keys });
-      for (const key of keys) {
-        scheduledLocal.delete(key);
-      }
-    }
-  };
-  /**
-   * Cancels pending local reminders. In the local queue, so a reminder being
-   * set when a withdrawal lands is scheduled before this sweep runs.
-   */
-  const cancelLocalWhere = (refused: (entry: LocalEntry) => boolean): Promise<void> =>
-    enqueue('local', async () => {
-      if ((await provider.getCapabilities()).local.supported) {
-        await cancelLocalNow(refused);
-      }
-    });
-  /** The device would still show local reminders after permission stops being granted. */
-  const cancelRevokedLocal = async (
-    capabilities: NotificationCapabilities,
-    states: ResolvedStates,
-    topics: readonly string[],
-  ): Promise<void> => {
-    if (!capabilities.local.supported) {
-      return;
-    }
-    if (capabilities.permission.scope === 'app') {
-      if (states.app !== undefined && revokesLocalReminders(states.app)) {
-        await cancelLocalWhere(() => true);
-      }
-      return;
-    }
-    const revoked = topics.filter((topic) => revokesLocalReminders(stateIn(states, topic)));
-    if (revoked.length > 0) {
-      await cancelLocalWhere((entry) => revoked.includes(entry.topic));
-    }
-  };
-  /**
-   * Cancels the pending local reminders that no longer pass, in two sweeps.
-   * The first, without the backend, takes every one whose topic no longer
-   * takes the local route: an app update removed the topic from the catalog or
-   * took away its `local` channel. The second takes the others whose
-   * permission is known and not granted and, with the backend's records,
-   * those whose topic preference refuses them, because a preference changed
-   * on another device never reaches this one as an event. The second sweep
-   * runs even when the first fails, and the first one's error is thrown at
-   * the end (with the second one's, if both fail).
-   */
-  const reconcileLocal = (): Promise<void> =>
-    enqueue('local', async () => {
-      const capabilities = await provider.getCapabilities();
-      if (!capabilities.local.supported || provider.cancelLocal === undefined) {
-        return;
-      }
-      const localTopicOf = (entry: LocalEntry): NotificationTopicDeclaration | undefined => {
-        const topic = topicOf(entry.topic);
-        return topic !== undefined && routeNotificationReminder(topic, capabilities) === 'local'
-          ? topic
-          : undefined;
-      };
-      let offRoute: { readonly error: unknown } | undefined;
-      try {
-        await cancelLocalNow((entry) => localTopicOf(entry) === undefined);
-      } catch (error) {
-        offRoute = { error };
-      }
-      try {
-        await cancelRefusedLocal(capabilities, localTopicOf);
-      } catch (error) {
-        if (offRoute === undefined) {
-          throw error;
-        }
-        throw new AggregateError(
-          [offRoute.error, error],
-          'Neither sweep of the local reminders completed. First: ' + describeError(offRoute.error),
-        );
-      }
-      if (offRoute !== undefined) {
-        throw offRoute.error;
-      }
-    });
-  /**
-   * Inside the local queue: the second sweep. Reminders whose topic left the
-   * local route belong to the first sweep and are skipped, so a reminder the
-   * host cannot cancel is not tried twice.
-   */
-  const cancelRefusedLocal = async (
-    capabilities: NotificationCapabilities,
-    localTopicOf: (entry: LocalEntry) => NotificationTopicDeclaration | undefined,
-  ): Promise<void> => {
-    const pending = (await listLocalEntries()).filter((entry) => localTopicOf(entry) !== undefined);
-    if (pending.length === 0) {
-      return;
-    }
-    const records = await readRecords();
-    const topics = [...new Set(pending.map((entry) => entry.topic))];
-    const states = resolveStates(
-      capabilities,
-      await provider.getPermission({ topics }),
-      topics,
-      records,
-    );
-    await cancelLocalNow((entry) => {
-      const topic = localTopicOf(entry);
-      if (topic === undefined) {
-        return false;
-      }
-      if (revokesLocalReminders(stateIn(states, entry.topic))) {
-        return true;
-      }
-      return records !== undefined && preferenceRefuses(topic, records, clock.now());
-    });
-  };
-  const localZone = (): string => {
-    const zone = (latestRegistration ?? storage.registration?.registration)?.timeZone;
-    return zone !== undefined && isValidNotificationTimeZone(zone) ? zone : input.timeZone;
-  };
-  /** Inside the local queue: the client gate steps, then the provider's schedule. */
-  const scheduleLocalReminder = async (
-    capabilities: NotificationCapabilities,
-    topic: NotificationTopicDeclaration,
-    request: SetNotificationReminderInput,
-    player: string | undefined,
-  ): Promise<ReminderResult> => {
-    const scheduleLocal = provider.scheduleLocal;
-    if (scheduleLocal === undefined) {
-      return { route: 'local', status: 'unavailable' };
-    }
-    const records = await readRecords();
-    const states = resolveStates(
-      capabilities,
-      await provider.getPermission({ topics: [topic.id] }),
-      [topic.id],
-      records,
-    );
-    const decision = evaluateLocalNotificationReminder({
-      topic,
-      permission: stateIn(states, topic.id),
-      consent: records ?? [],
-      fireAt: request.fireAt,
-      timeZone: localZone(),
-      // The topic's other pending reminders, which only its daily cap reads;
-      // replacing one does not count it against itself.
-      ...(topic.frequency === undefined
-        ? {}
-        : {
-            pending: (await listLocalEntries()).flatMap((entry) =>
-              entry.topic === topic.id && entry.key !== request.key && entry.fireAt !== undefined
-                ? [{ fireAt: providerFireAt(entry.fireAt) }]
-                : []),
-          }),
-    });
-    if (decision.status !== 'schedule') {
-      return { route: 'local', status: decision.status };
-    }
-    const locale = input.locale ?? input.defaultLocale;
-    if (!hasLocalCopy(topic, locale, input.defaultLocale)) {
-      return { route: 'local', status: 'unavailable' };
-    }
-    // Local copy is free-form content: the mapping's title and body, else the catalog copy.
-    let content: NotificationDeliveryContent;
-    try {
-      content = resolveNotificationContent({
-        topic,
-        content: 'free-form',
-        locale,
-        defaultLocale: input.defaultLocale,
-        ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
-      });
-    } catch (error) {
-      throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-        message: error instanceof Error ? error.message : String(error),
-        cause: error,
-      });
-    }
-    // One key across both routes: the server reminder with the key goes
-    // first, for the player who began the call. After an account switch the
-    // server reminder under the key is another player's, and it stays.
-    if (capabilities.remote.supported && player !== undefined && sessionPlayer() === player) {
-      await backend.cancelReminder({ key: request.key });
-    }
-    const scheduled = await scheduleLocal.call(provider, {
-      key: request.key,
-      topic: topic.id,
-      fireAt: decision.fireAt,
-      title: content.title ?? '',
-      body: content.body ?? '',
-      route: content.route,
-    });
-    if (scheduled.status === 'scheduled' || scheduled.status === 'replaced') {
-      scheduledLocal.set(request.key, {
-        key: request.key,
-        topic: topic.id,
-        fireAt: decision.fireAt,
-      });
-    }
-    return {
-      route: 'local',
-      status: scheduled.status === 'unsupported' ? 'unavailable' : scheduled.status,
-    };
-  };
-  /** Inside the local queue: removes a pending local reminder; whether one was pending. */
-  const removeLocalKey = async (key: string): Promise<boolean> => {
-    const cancelLocal = provider.cancelLocal;
-    if (cancelLocal === undefined) {
-      return false;
-    }
-    const pending = (await listLocalEntries()).some((entry) => entry.key === key);
-    if (pending || provider.listLocal === undefined) {
-      // Without `listLocal` the runtime cannot tell, so it cancels anyway.
-      await cancelLocal.call(provider, { keys: [key] });
-      scheduledLocal.delete(key);
-    }
-    return pending;
-  };
-
-  // Events and authentication.
-
-  const onProviderEvent = (event: NotificationEvent): void => {
-    // The runtime's own handling first, so a game listener cannot skip it.
-    if (event.type === 'endpoint-changed') {
-      const { registration } = event;
-      track(enqueue('register', async () => {
-        const { remote } = await provider.getCapabilities();
-        const platformUser = registration.address.kind === 'platform-user';
-        if (
-          remote.supported
-          && (remote.addressing === 'platform-user') === platformUser
-          && remote.addressing !== 'none'
-        ) {
-          // A rotated address replaces the old one for this installation; a
-          // platform user's changed locale or zone reaches the backend too.
-          await sendRegistration(registration, false);
-        }
-      }));
-    }
-    if (event.type === 'permission-changed') {
-      // The change belongs to the player authenticated now.
-      const player = sessionPlayer();
-      track((async () => {
-        const capabilities = await provider.getCapabilities();
-        const topics = Object.keys(event.snapshot.topics);
-        const states = resolveStates(capabilities, event.snapshot, topics, await readRecords());
-        await enqueue('record', () => writeRecords(permissionRecords(
-          capabilities,
-          hostObservations(capabilities, states, topics),
-          undefined,
-          player,
-        )));
-        await syncRegistration(capabilities, states.app);
-        await cancelRevokedLocal(capabilities, states, topics);
-      })());
-    }
-    emit(event);
-  };
-  const onAuthenticated = (): void => {
-    // Records observed before authentication go to this session's player, the
-    // registration goes again (a new session always sends it), and pending
-    // local reminders meet the player's records.
-    track(queueRecords([]));
-    track(registerCurrent(false, true));
-    track(reconcileLocal());
-  };
-
-  return {
-    async start() {
-      unsubscribeProvider ??= provider.subscribe(onProviderEvent);
-      unsubscribeAuthentication ??= backend.onAuthenticated(onAuthenticated);
-      const capabilities = await provider.getCapabilities();
-      configurationIssue = input.registryEntry === undefined || !capabilities.remote.supported
-        ? undefined
-        : notificationRegistryMismatch(capabilities, input.registryEntry);
-      // A backend that cannot answer does not fail the start; the next read reconciles.
-      await settle(reconcileLocal());
-      await settle(refreshRegistration());
-    },
-    stop() {
-      unsubscribeProvider?.();
-      unsubscribeProvider = undefined;
-      unsubscribeAuthentication?.();
-      unsubscribeAuthentication = undefined;
-      listeners.clear();
-      buffer = [];
-      // A later start buffers events for its first subscriber again.
-      gameSubscribed = false;
-    },
-    async runUntilIdle() {
-      while (background.size > 0) {
-        await Promise.all([...background]);
-      }
-      const first = failure;
-      failure = undefined;
-      if (first !== undefined) {
-        throw first.count === 1
-          ? first.error
-          : new AggregateError(
-            [first.error],
-            `${first.count} background failures since the last runUntilIdle; the first: `
-              + describeError(first.error),
-          );
-      }
-    },
-    async getPermission(input): Promise<NotificationRuntimePermissionSnapshot> {
-      assertTopics(input.topics, false);
-      // A topic listed twice is read once.
-      const request = { topics: [...new Set(input.topics)] };
-      const player = sessionPlayer();
-      const capabilities = await capabilitiesOf();
-      const snapshot = await provider.getPermission({ topics: request.topics });
-      if (capabilities.availability === 'unsupported') {
-        return {
-          ...snapshot,
-          sources: Object.fromEntries(request.topics.map((topic) => [topic, 'host' as const])),
-        };
-      }
-      let records: NotificationConsentRecord[] | undefined;
-      try {
-        records = await readRecords();
-      } catch (error) {
-        // A read still answers when the backend cannot.
-        fail(error);
-      }
-      const states = resolveStates(capabilities, snapshot, request.topics, records);
-      await settle(queueRecords(permissionRecords(
-        capabilities,
-        hostObservations(capabilities, states, request.topics),
-        undefined,
-        player,
-      )));
-      await settle(syncRegistration(capabilities, states.app));
-      await settle(cancelRevokedLocal(capabilities, states, request.topics));
-      if (records !== undefined) {
-        await settle(reconcileLocal());
-      }
-      await settle(refreshRegistration());
-      return {
-        ...(states.app === undefined ? {} : { app: states.app }),
-        topics: states.topics,
-        sources: states.sources,
-        ...(snapshot.requiredAction === undefined ? {} : { requiredAction: snapshot.requiredAction }),
-      };
-    },
-    async requestPermission(input): Promise<NotificationPermissionResult> {
-      assertTopics(input.topics, true);
-      // A topic listed twice is asked, and recorded, once.
-      const request = { ...input, topics: [...new Set(input.topics)] };
-      // The records belong to the player signed in when the prompt opened.
-      const player = sessionPlayer();
-      if (typeof request.gesture !== 'boolean') {
-        throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-          message: 'requestPermission needs a boolean gesture.',
-        });
-      }
-      const capabilities = await capabilitiesOf();
-      const every = (outcome: NotificationPermissionOutcome): Record<string, NotificationPermissionOutcome> =>
-        Object.fromEntries(request.topics.map((topic) => [topic, outcome]));
-      if (capabilities.availability === 'unsupported') {
-        // Unsupported is an answer: no prompt is reached.
-        return {
-          snapshot: await provider.getPermission({ topics: request.topics }),
-          outcomes: every('unavailable'),
-        };
-      }
-      if (capabilities.permission.userGesture && !request.gesture) {
-        throw new NotificationError('NOTIFICATIONS_USER_GESTURE_REQUIRED', {
-          message: 'This provider asks for notification permission only inside a player gesture.',
-        });
-      }
-      const before = await provider.getPermission({ topics: request.topics });
-      if (capabilities.availability === 'action-required') {
-        // The game resolves the action (identity.requestUpgrade on Devvit) and asks again.
-        return {
-          snapshot: before,
-          outcomes: every('action-required'),
-          requiredAction: before.requiredAction ?? 'login',
-        };
-      }
-      const scope = capabilities.permission.scope;
-      const outcomes = new Map<string, NotificationPermissionOutcome>();
-      const asked: string[] = [];
-      for (const topic of request.topics) {
-        const declared = topicOf(topic);
-        if (declared?.mapping === undefined) {
-          outcomes.set(topic, 'unavailable');
-        } else if (scope === 'topic' && notificationTopicNeedsNoAgreement(declared)) {
-          outcomes.set(topic, 'already-granted');
-        } else if (notificationPermissionStateOf(before, topic) === 'blocked') {
-          // Only a state the provider read from the host stops a request; a record never does.
-          outcomes.set(topic, 'blocked');
-        } else {
-          asked.push(topic);
-        }
-      }
-      const result = asked.length === 0
-        ? undefined
-        : await provider.requestPermission({ topics: asked });
-      for (const topic of asked) {
-        outcomes.set(
-          topic,
-          result !== undefined && Object.prototype.hasOwnProperty.call(result.outcomes, topic)
-            ? (result.outcomes[topic] ?? 'unavailable')
-            : 'unavailable',
-        );
-      }
-      // The host has answered: its answer is returned whatever the backend does.
-      let records: NotificationConsentRecord[] | undefined;
-      try {
-        records = await readRecords();
-      } catch (error) {
-        fail(error);
-      }
-      const after = mergeSnapshots(before, result?.snapshot, asked, outcomes, scope);
-      const states = resolveStates(
-        capabilities,
-        after,
-        request.topics,
-        records,
-        asked.some((topic) => outcomes.get(topic) === 'denied'),
-      );
-      const decidedTopics = asked.filter((topic) => isDecision(outcomes.get(topic)));
-      const observations: Observation[] = scope === 'app'
-        ? (states.app === undefined || states.appSource !== 'host' || decidedTopics.length === 0
-          ? []
-          : [{ state: states.app, accepted: asked.some((topic) => isAcceptance(outcomes.get(topic))) }])
-        : decidedTopics
-          .filter((topic) => states.sources[topic] === 'host')
-          .map((topic) => ({
-            topic,
-            state: stateIn(states, topic),
-            accepted: isAcceptance(outcomes.get(topic)),
-          }));
-      const pending = permissionRecords(capabilities, observations, result?.evidence, player);
-      if (scope === 'topic') {
-        for (const topic of asked) {
-          // Accepting a requested topic's agreement is the player's request for it.
-          if (isAcceptance(outcomes.get(topic)) && topicOf(topic)?.purpose === 'requested') {
-            pending.push({
-              mode: 'changed',
-              player,
-              record: { kind: 'topic-preference', topic, state: 'granted', source: 'player', at: clock.now() },
-            });
-          }
-        }
-      }
-      await settle(queueRecords(pending));
-      await settle(syncRegistration(capabilities, states.app));
-      await settle(cancelRevokedLocal(capabilities, states, request.topics));
-      return {
-        snapshot: {
-          ...(states.app === undefined ? {} : { app: states.app }),
-          topics: states.topics,
-          ...(result?.snapshot.requiredAction === undefined
-            ? {}
-            : { requiredAction: result.snapshot.requiredAction }),
-        },
-        outcomes: Object.fromEntries(request.topics.map((topic) => [topic, outcomes.get(topic) ?? 'unavailable'])),
-        ...(result?.requiredAction === undefined ? {} : { requiredAction: result.requiredAction }),
-        ...(result?.evidence === undefined ? {} : { evidence: result.evidence }),
-      };
-    },
-    async revokePermission(input): Promise<NotificationPermissionResult> {
-      assertTopics(input.topics, true);
-      const request = { topics: [...new Set(input.topics)] };
-      const player = sessionPlayer();
-      const capabilities = await capabilitiesOf();
-      const revoke = provider.revokePermission;
-      if (capabilities.permission.prompt !== 'game' || revoke === undefined) {
-        throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
-          message: 'Only a game-rendered consent is withdrawn in the game; others change in OS or host settings.',
-        });
-      }
-      if (capabilities.availability === 'action-required') {
-        // A logged-out player has no consent at the host to withdraw yet.
-        const snapshot = await provider.getPermission({ topics: request.topics });
-        return {
-          snapshot,
-          outcomes: Object.fromEntries(request.topics.map((topic) => [topic, 'action-required' as const])),
-          requiredAction: snapshot.requiredAction ?? 'login',
-        };
-      }
-      const result = await revoke.call(provider, { topics: request.topics });
-      // Read again: a revocation is a decision, so not opted in reads `denied` from here on.
-      const states = resolveStates(
-        capabilities,
-        await provider.getPermission({ topics: request.topics }),
-        request.topics,
-        undefined,
-        true,
-      );
-      if (
-        capabilities.permission.scope === 'app'
-        && !isDeviceAddressing(capabilities)
-        && states.app !== undefined
-        && isRecordableNotificationPermissionState(states.app)
-      ) {
-        await settle(queueRecords([{
-          mode: 'changed',
-          player,
-          record: { kind: 'delivery-permission', state: states.app, source: 'player', at: clock.now() },
-        }]));
-      }
-      // A device endpoint stops at the host's answer too.
-      await settle(syncRegistration(capabilities, states.app));
-      await settle(cancelRevokedLocal(capabilities, states, request.topics));
-      return {
-        snapshot: { ...(states.app === undefined ? {} : { app: states.app }), topics: states.topics },
-        outcomes: Object.fromEntries(request.topics.map((topic) => [
-          topic,
-          Object.prototype.hasOwnProperty.call(result.outcomes, topic)
-            ? (result.outcomes[topic] ?? 'denied')
-            : 'denied',
-        ])),
-      };
-    },
-    async register() {
-      await capabilitiesOf();
-      await registerCurrent(true, true);
-    },
-    async unregister() {
-      // The player signing out, captured before any wait, and the unbind
-      // queued at once, so an authentication that follows is never the one
-      // unbound.
-      const session = backend.session();
-      const unbinding = enqueue('register', async () => {
-        // Persisted: a restart before the next authentication binds nothing.
-        storage.unbound = true;
-        if (session === undefined || !isDeviceAddressing(await provider.getCapabilities())) {
-          return;
-        }
-        await backend.unregisterEndpoint({ provider: provider.provider, player: session.player });
-        if (storage.registration?.session === session.id) {
-          delete storage.registration;
-        }
-      });
-      // The device's pending local reminders belong to the player leaving.
-      // They are cancelled whether or not the unbind reaches the backend (an
-      // offline logout), and either failure is thrown once both have run.
-      const outcomes = await Promise.allSettled([unbinding, cancelLocalWhere(() => true)]);
-      const failures = outcomes.flatMap((outcome) =>
-        outcome.status === 'rejected' ? [outcome.reason as unknown] : []);
-      if (failures.length > 1) {
-        throw new AggregateError(failures, 'unregister() could neither unbind nor cancel the local reminders.');
-      }
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-    },
-    async setTopicPreference(request) {
-      if (
-        typeof request.topic !== 'string'
-        || topicOf(request.topic) === undefined
-        || typeof request.enabled !== 'boolean'
-      ) {
-        throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-          message: 'setTopicPreference needs a declared topic and a boolean.',
-        });
-      }
-      if (!request.enabled && sessionPlayer() === undefined) {
-        // The device stops showing the topic's reminders even before the
-        // player signs in; the withdrawal itself needs the player.
-        await cancelLocalWhere((entry) => entry.topic === request.topic);
-      }
-      const player = requirePlayer('setTopicPreference');
-      await capabilitiesOf();
-      // The withdrawal is recorded first, so the server stops sending and no
-      // new local reminder passes the gate even if cancelling fails.
-      await queueRecords([{
-        mode: 'changed',
-        player,
-        record: {
-          kind: 'topic-preference',
-          topic: request.topic,
-          state: request.enabled ? 'granted' : 'withdrawn',
-          source: 'player',
-          at: clock.now(),
-        },
-      }]);
-      if (!request.enabled) {
-        await cancelLocalWhere((entry) => entry.topic === request.topic);
-      }
-    },
-    async setAdvertisingConsent(request) {
-      const states = [request.advertising, request.night];
-      if (
-        states.every((state) => state === undefined)
-        || states.some((state) => state !== undefined && state !== 'granted' && state !== 'withdrawn')
-        || typeof request.textVersion !== 'string'
-        || request.textVersion.trim() === ''
-      ) {
-        throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-          message: 'setAdvertisingConsent needs an advertising or night decision and the consent text version.',
-        });
-      }
-      const player = requirePlayer('setAdvertisingConsent');
-      await capabilitiesOf();
-      // Each call is a consent decision the law asks to notify, so each one is appended.
-      await queueRecords((['advertising', 'night'] as const).flatMap((kind) => {
-        const state = request[kind];
-        return state === undefined
-          ? []
-          : [{
-              mode: 'always' as const,
-              player,
-              record: {
-                kind,
-                state,
-                source: 'player' as const,
-                at: clock.now(),
-                textVersion: request.textVersion,
-              },
-            }];
-      }));
-      // Advertising never takes the local route, so there is nothing to cancel.
-    },
-    reminders: {
-      async set(request) {
-        const issue = reminderInputIssue(request);
-        if (issue !== undefined) {
-          throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-            message: `Invalid reminder: ${issue}.`,
-          });
-        }
-        // A server reminder belongs to the player signed in when the call began.
-        const player = sessionPlayer();
-        const capabilities = await capabilitiesOf();
-        const topic = topicOf(request.topic);
-        if (topic === undefined) {
-          return { route: 'none', status: 'unavailable' };
-        }
-        const route = routeNotificationReminder(topic, capabilities);
-        if (route === 'none') {
-          return { route, status: 'unavailable' };
-        }
-        if (route === 'remote' && capabilities.remote.content === 'host-template' && request.templateData !== undefined) {
-          // Template context stays on the server, as in v1.
-          throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-            message: 'A host-template provider takes no templateData in a reminder.',
-          });
-        }
-        if (capabilities.availability === 'action-required') {
-          return { route, status: 'action-required' };
-        }
-        if (route === 'local') {
-          // In the local queue, so a withdrawal or revocation sweep that starts
-          // while this reads consent runs after the schedule and cancels it.
-          return enqueue('local', () => scheduleLocalReminder(capabilities, topic, request, player));
-        }
-        // A server reminder needs the signed-in player, checked before anything changes.
-        requireSignedIn('reminders.set', player);
-        // One key across both routes: the local reminder with the key goes first.
-        if (capabilities.local.supported) {
-          await enqueue('local', () => removeLocalKey(request.key));
-        }
-        assertSamePlayer('reminders.set', player);
-        return {
-          route,
-          status: await backend.setReminder({
-            key: request.key,
-            topic: topic.id,
-            fireAt: normalizeNotificationTimestamp(request.fireAt),
-            ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
-            ...(request.link === undefined ? {} : { link: request.link }),
-          }),
-        };
-      },
-      async cancel(request) {
-        const issue = notificationKeyIssue(request.key);
-        if (issue !== undefined) {
-          throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-            message: `Invalid reminder key: ${issue}.`,
-          });
-        }
-        const player = sessionPlayer();
-        const capabilities = await capabilitiesOf();
-        // One key across both routes: each route that has the key loses it.
-        const local = capabilities.local.supported
-          && (await enqueue('local', () => removeLocalKey(request.key)));
-        let remote = false;
-        if (capabilities.remote.supported) {
-          if (capabilities.availability === 'action-required') {
-            return { route: 'remote', status: 'action-required' };
-          }
-          requireSignedIn('reminders.cancel', player);
-          remote = await backend.cancelReminder({ key: request.key });
-        }
-        // Both routes have the key only after a local reminder was set while
-        // signed out; the local one is the latest set, so it answers.
-        if (local) {
-          return { route: 'local', status: 'cancelled' };
-        }
-        // Nothing is pending under the key any more.
-        return { route: remote ? 'remote' : 'none', status: 'cancelled' };
+  const kept = input.storage ?? {};
+  return createNotificationRuntime({
+    provider: input.provider,
+    backend: input.backend,
+    catalog: input.catalog,
+    clock: input.clock,
+    timeZone: input.timeZone,
+    defaultLocale: input.defaultLocale,
+    ...(input.locale === undefined ? {} : { locale: input.locale }),
+    ...(input.registryEntry === undefined ? {} : { registryEntry: input.registryEntry }),
+    storage: {
+      load: () => ({ ...kept }),
+      save(state) {
+        delete kept.registration;
+        delete kept.unbound;
+        Object.assign(kept, state);
       },
     },
-    notices: {
-      async list() {
-        // The notices of the player signed in when the call began.
-        const player = sessionPlayer();
-        await capabilitiesOf();
-        requireSignedIn('notices.list', player);
-        const notices = await backend.listNotices();
-        assertSamePlayer('notices.list', player);
-        return notices;
-      },
-      async recordShown(request) {
-        const player = sessionPlayer();
-        // The backend gets only the name, with the record time in the canonical
-        // form; a name that matches no listed notice records nothing.
-        const notice = noticeIdentityOf(recordNoticeInputOf(request));
-        await capabilitiesOf();
-        requireSignedIn('notices.recordShown', player);
-        await backend.recordNotice({ ...notice, channel: 'in-game' });
-      },
-    },
-    async openSettings() {
-      const capabilities = await capabilitiesOf();
-      const openSettings = provider.openSettings;
-      return capabilities.permission.settings && openSettings !== undefined
-        ? openSettings.call(provider)
-        : 'unavailable';
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      if (!gameSubscribed) {
-        gameSubscribed = true;
-        const drained = buffer;
-        buffer = [];
-        // The first subscriber receives every buffered event once, even if it throws on one.
-        for (const error of deliverEach([listener], drained)) {
-          fail(error);
-        }
-      }
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-  };
-}
-
-function assertTopics(topics: unknown, nonEmpty: boolean): void {
-  if (
-    !Array.isArray(topics)
-    || (nonEmpty && topics.length === 0)
-    || topics.some((topic) => typeof topic !== 'string' || topic.length === 0)
-  ) {
-    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-      message: nonEmpty ? 'Expected at least one topic id.' : 'Expected a list of topic ids.',
-    });
-  }
-}
-
-/**
- * The snapshot after a request: the host's answer for the asked topics over
- * the read before it, and the answer a prompt just gave for a topic the host
- * cannot read back.
- */
-function mergeSnapshots(
-  before: NotificationPermissionSnapshot,
-  after: NotificationPermissionSnapshot | undefined,
-  asked: readonly string[],
-  outcomes: ReadonlyMap<string, NotificationPermissionOutcome>,
-  scope: NotificationCapabilities['permission']['scope'],
-): NotificationPermissionSnapshot {
-  const topics = new Map<string, NotificationPermissionState>(Object.entries(before.topics));
-  for (const [topic, state] of Object.entries(after?.topics ?? {})) {
-    topics.set(topic, state);
-  }
-  let app = after?.app ?? before.app;
-  for (const topic of asked) {
-    const decided = outcomeState(outcomes.get(topic));
-    if (decided === undefined) {
-      continue;
-    }
-    if (scope === 'app') {
-      app = app === undefined || app === 'unknown' ? decided : app;
-    } else if ((topics.get(topic) ?? 'unknown') === 'unknown') {
-      topics.set(topic, decided);
-    }
-  }
-  if (scope === 'app' && app !== undefined) {
-    // An app-scope topic reads the app state; an `unknown` entry for it does not outlive the answer.
-    for (const topic of asked) {
-      if (topics.get(topic) === 'unknown') {
-        topics.set(topic, app);
-      }
-    }
-  }
-  return { ...(app === undefined ? {} : { app }), topics: Object.fromEntries(topics) };
-}
-
-/** The state a decided outcome leaves when the host cannot be read. */
-function outcomeState(
-  outcome: NotificationPermissionOutcome | undefined,
-): NotificationRecordablePermissionState | undefined {
-  switch (outcome) {
-    case 'granted':
-    case 'already-granted':
-      return 'granted';
-    case 'denied':
-      return 'denied';
-    case 'blocked':
-      return 'blocked';
-    default:
-      return undefined;
-  }
-}
-
-function stateIn(states: ResolvedStates, topic: string): NotificationPermissionState {
-  return Object.prototype.hasOwnProperty.call(states.topics, topic)
-    ? (states.topics[topic] ?? 'unknown')
-    : (states.app ?? 'unknown');
-}
-
-function isDeviceAddressing(capabilities: NotificationCapabilities): boolean {
-  return capabilities.remote.supported && capabilities.remote.addressing === 'device';
-}
-
-/** A known permission other than `granted`: the device no longer shows local reminders. */
-function revokesLocalReminders(state: NotificationPermissionState): boolean {
-  return state === 'prompt'
-    || state === 'prompt-with-rationale'
-    || state === 'denied'
-    || state === 'blocked';
-}
-
-function isAcceptance(outcome: NotificationPermissionOutcome | undefined): boolean {
-  return outcome === 'granted' || outcome === 'already-granted';
-}
-
-/** An answer the player gave: never `dismissed`, `action-required`, or `unavailable`. */
-function isDecision(outcome: NotificationPermissionOutcome | undefined): boolean {
-  return outcomeState(outcome) !== undefined;
-}
-
-/** The latest permission state recorded for a kind and scope; `withdrawn` is not a permission state. */
-function latestRecordState(
-  records: readonly NotificationConsentRecord[],
-  kind: NotificationConsentKind,
-  topic: string | undefined,
-): NotificationRecordablePermissionState | undefined {
-  const state = latestNotificationConsent(records, kind, topic)?.state;
-  return state === undefined || state === 'withdrawn' ? undefined : state;
-}
-
-/**
- * A pending reminder's `fireAt` as the provider listed it, which the daily cap
- * reads: one that does not parse strictly is the provider breaking the
- * contract, not the game's input.
- */
-function providerFireAt(fireAt: string): string {
-  if (!isNotificationTimestamp(fireAt)) {
-    throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `The provider listed a local reminder whose fireAt is not RFC 3339 with a date that exists: ${JSON.stringify(fireAt)}.`,
-    });
-  }
-  return fireAt;
-}
-
-/** Whether the topic preference alone refuses a reminder of `topic` now. */
-function preferenceRefuses(
-  topic: NotificationTopicDeclaration,
-  records: readonly NotificationConsentRecord[],
-  at: string,
-): boolean {
-  const decision = evaluateLocalNotificationReminder({
-    topic,
-    permission: 'granted',
-    consent: records,
-    fireAt: at,
-    timeZone: 'UTC',
   });
-  return decision.status === 'request-missing' || decision.status === 'preference-off';
-}
-
-function hasLocalCopy(
-  topic: NotificationTopicDeclaration,
-  locale: string,
-  defaultLocale: string,
-): boolean {
-  return (typeof topic.mapping?.['title'] === 'string' && typeof topic.mapping['body'] === 'string')
-    || findNotificationCopy(topic, locale, defaultLocale) !== undefined;
-}
-
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 // Runner.
@@ -4527,8 +2991,4 @@ function matchPartial(
   if (expected !== actual) {
     failures.push({ path, expected, actual });
   }
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }

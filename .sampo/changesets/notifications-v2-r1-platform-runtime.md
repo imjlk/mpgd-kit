@@ -1,0 +1,7 @@
+---
+npm/@mpgd/platform: minor (Added)
+---
+
+`@mpgd/platform/notifications-runtime` is the production notifications runtime (RFC "Runtime"): `createNotificationRuntime({ provider, backend, catalog, defaultLocale })` composes a target's provider with the game backend for the authenticated player and returns the `NotificationRuntime` with `start`, `stop`, and `runUntilIdle`. The backend is the `NotificationRuntimeBackend` port, which `@mpgd/game-services/notifications/client` implements over the game-services Worker. What survives a restart (the last acknowledged registration and the unbound state after `unregister()`) goes through the `NotificationRuntimeStorage` port: `createNotificationRuntimeStorage({ storage: gateway.storage })` keeps it under one platform storage key, and without a port it lives in memory. A storage read or write that fails surfaces as a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and `onError` observes background failures as they happen.
+
+`createNotificationConformanceRuntime` now returns this runtime, so every conformance vector exercises production code; its inputs and the vector results are unchanged. `NotificationConformanceBackendClient`, `NotificationConformanceSession`, and `NotificationConformanceReminderSetStatus` extend or alias the new runtime types.

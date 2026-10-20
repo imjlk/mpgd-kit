@@ -73,6 +73,10 @@
       "types": "./dist/notifications-conformance.d.ts",
       "default": "./dist/notifications-conformance.js"
     },
+    "./notifications-runtime": {
+      "types": "./dist/notifications-runtime.d.ts",
+      "default": "./dist/notifications-runtime.js"
+    },
     "./routes": {
       "types": "./dist/routes.d.ts",
       "default": "./dist/routes.js"
