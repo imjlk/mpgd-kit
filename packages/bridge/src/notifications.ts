@@ -160,9 +160,11 @@ export interface CreateNotificationsV2BridgeHandlerInput {
   readonly registerOptional?: boolean | undefined;
   /**
    * The message a failure the provider did not normalize (neither a
-   * `NotificationError` nor a `PlatformOperationError`) crosses with. By
-   * default `<method> failed: <its message>`; a host whose provider failures
-   * can carry internal text passes a fixed one.
+   * `NotificationError` nor a `PlatformOperationError`, by class or by shape)
+   * crosses with. By default `<method> failed: <its message>`; a host whose
+   * provider failures can carry internal text passes a fixed one. A failure
+   * with a notifications code is the provider's own answer and keeps its
+   * message.
    */
   readonly unexpectedFailureMessage?: ((method: BridgeNotificationsV2Method) => string) | undefined;
   /**
@@ -315,7 +317,18 @@ export function createNotificationsV2BridgeHandler(
         return { id: request.id, ok: true, data: validResult(name, method, data) };
       } catch (error) {
         report(error, method);
-        return toBridgeError(request.id, method, error, input.unexpectedFailureMessage);
+        try {
+          return toBridgeError(request.id, method, error, input.unexpectedFailureMessage);
+        } catch {
+          // Reading the failure threw (a getter on a thrown object): answer
+          // without its text rather than reject the request.
+          return createBridgeError(
+            request.id,
+            'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+            `${method} failed.`,
+            true,
+          );
+        }
       }
     },
     // The source carries this protocol only, so every envelope is a notifications one.
@@ -333,7 +346,9 @@ const hostCodeSuffix = new RegExp(`\\(host code (${hostCodeCharacters})\\)$`, 'u
  * The host code a notifications v2 bridge error names at the end of its
  * message, as `createNotificationsV2BridgeHandler` writes it
  * (`... (host code <code>)`), or `undefined`. The bridge error has no field
- * for it, so a game-side client reads it back from the message.
+ * for it, so a game-side client reads it back from the message. Read it only
+ * from an error with a `NOTIFICATIONS_*` code: the handler names a host code
+ * only there, and other messages may end in provider text.
  */
 export function readBridgeNotificationsHostCode(message: string): string | undefined {
   return hostCodeSuffix.exec(message)?.[1];
@@ -431,5 +446,5 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message : (stringField(error, 'message') ?? String(error));
 }

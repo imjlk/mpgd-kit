@@ -382,7 +382,7 @@ describe('createDevvitNotificationsV2BridgeHandler', () => {
       });
   });
 
-  it('logs failures by default, but not the expected unsupported local methods', async () => {
+  it('logs failures by default, but not an unsupported local method or an invalid payload', async () => {
     const plugin = createFakeDevvitNotifications({ currentUserId: user });
     const bridge = createDevvitNotificationsV2BridgeHandler({
       notifications: plugin,

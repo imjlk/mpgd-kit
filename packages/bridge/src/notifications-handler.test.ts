@@ -400,6 +400,63 @@ const minimal: NotificationProvider = {
   );
 }
 
+// Shapes that are not Error instances, with and without unexpectedFailureMessage.
+{
+  let failure: unknown;
+  const answer = async (unexpectedFailureMessage?: (method: string) => string) => {
+    const handler = createNotificationsV2BridgeHandler({
+      provider: {
+        ...minimal,
+        requestPermission: async () => {
+          throw failure;
+        },
+      },
+      ...(unexpectedFailureMessage === undefined ? {} : { unexpectedFailureMessage }),
+    });
+    return errorOf(
+      await handler.request(request('notifications.v2.requestPermission', { topics: ['a'] })),
+    );
+  };
+  const redact = (method: string) => `${method} failed on the host.`;
+  // A plain object keeps its message text, unless the host redacts it.
+  failure = { code: 'HOST_SOMETHING', message: 'internal detail', retryable: false };
+  assert.deepEqual(await answer(), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.v2.requestPermission failed: internal detail',
+    retryable: false,
+  });
+  assert.deepEqual(await answer(redact), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.v2.requestPermission failed on the host.',
+    retryable: false,
+  });
+  // A notifications code is the provider's own answer: its message crosses, redaction or not.
+  failure = { code: 'NOTIFICATIONS_UNSUPPORTED', message: 'no reminders here', retryable: false };
+  assert.deepEqual(await answer(redact), {
+    code: 'NOTIFICATIONS_UNSUPPORTED',
+    message: 'no reminders here',
+    retryable: false,
+  });
+  // Without a string message, a fixed one.
+  failure = { code: 'NOTIFICATIONS_UNSUPPORTED', message: 42, retryable: false, hostCode: 7 };
+  assert.deepEqual(await answer(), {
+    code: 'NOTIFICATIONS_UNSUPPORTED',
+    message: 'notifications.v2.requestPermission failed.',
+    retryable: false,
+  });
+  // A thrown object whose fields throw still gets an answer.
+  failure = {
+    get code(): string {
+      throw new Error('hostile getter');
+    },
+  };
+  assert.deepEqual(await answer(), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.v2.requestPermission failed.',
+    retryable: true,
+  });
+}
+
 // readBridgeNotificationsHostCode reads back what the handler writes, and nothing else.
 {
   let hostCode = '';
