@@ -105,12 +105,14 @@ its own checked project. The Windows compiler concurrency limit is unchanged.
 
 `mise exec -- <command>` uses the checked-in Node and Go versions. Kit workflows
 <!--
-@link ../tools/validate-toolchain.mjs#inspectNodePins Rejects a setup-node step whose node-version is missing, non-literal, or different from the mise Node pin.
+@link ../tools/validate-toolchain.mjs#inspectNodePins Rejects a setup-node step whose node-version is missing, nested in another scalar, non-literal, or different from the mise Node pin, and a missing or non-string engines.node.
 -->
 that call `actions/setup-node` pin that same exact Node release as a literal
-`node-version`. An omitted pin or a non-literal expression is rejected. Jobs using
+`node-version` key directly under that step's `with` block. An omitted pin, a
+pin buried in another scalar, or a non-literal expression is rejected. Jobs using
 mise-action read `.mise.toml` directly. `pnpm validate:toolchain` rejects drift
-between the mise pin, root `engines.node`, and those workflow pins. The project's
+between the mise pin, root `engines.node`, and those workflow pins. A missing or
+non-string `engines.node` is rejected too. The project's
 `TTSC_GO_BINARY` override keeps Go and GOROOT aligned. `tools/run-ttsx.mjs` keeps
 TypeScript-Go resolution and application arguments consistent; emitted runtime
 files are owned by ttsx. It does not delete authored `.js` or `.d.ts` source siblings.

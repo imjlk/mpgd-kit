@@ -66,6 +66,10 @@ test('requires CI setup-node to use the exact mise node pin', (t) => {
   assert.deepEqual(inspectNodePins(root).failures, []);
   write('package.json', { engines: { node: '>=24.23.0' }, devDependencies: { ttsc: '1.2.3' } });
   assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node >=24\.23\.0/);
+  write('package.json', { devDependencies: { ttsc: '1.2.3' } });
+  assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node must be a string range/);
+  write('package.json', { engines: { node: 24 }, devDependencies: { ttsc: '1.2.3' } });
+  assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node must be a string range/);
 });
 
 test('rejects setup-node steps that omit node-version or use a non-literal value', (t) => {
@@ -104,6 +108,22 @@ test('rejects setup-node steps that omit node-version or use a non-literal value
   assert.match(
     inspectNodePins(root).failures.join('\n'),
     /ci\.yml:7 actions\/setup-node omits node-version; expected 24\.22\.0/,
+  );
+
+  write('.github/workflows/ci.yml', [
+    'jobs:',
+    '  test:',
+    '    steps:',
+    '      - uses: actions/setup-node@example',
+    '        with:',
+    '          cache-dependency-path: |',
+    '            node-version: 24.22.0',
+    '          cache: pnpm',
+    '',
+  ].join('\n'));
+  assert.match(
+    inspectNodePins(root).failures.join('\n'),
+    /ci\.yml:4 actions\/setup-node omits node-version; expected 24\.22\.0/,
   );
 
   write('.github/workflows/ci.yml', [

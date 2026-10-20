@@ -69,7 +69,9 @@ export function inspectNodePins(root = repositoryRoot) {
   const manifestPath = join(root, 'package.json');
   if (existsSync(manifestPath)) {
     const engines = JSON.parse(readFileSync(manifestPath, 'utf8')).engines?.node;
-    if (typeof engines === 'string' && !nodePinSatisfies(version, engines)) {
+    if (typeof engines !== 'string') {
+      failures.push(`package.json engines.node must be a string range that accepts the .mise.toml pin ${version}`);
+    } else if (!nodePinSatisfies(version, engines)) {
       failures.push(`package.json engines.node ${engines} does not accept the .mise.toml pin ${version}`);
     }
   }
@@ -191,7 +193,7 @@ function setupNodeVersion(lines, step) {
     }
     if (indent <= withIndent) break;
     const match = /^\s*node-version:\s*(.*)$/.exec(line);
-    if (match === null) continue;
+    if (match === null || indent !== withIndent + 2) continue;
     const raw = unquoteYamlScalar(stripYamlComment(match[1] ?? '').trim());
     return { line: index + 1, raw, value: /^\d+\.\d+\.\d+$/.test(raw) ? raw : undefined };
   }
