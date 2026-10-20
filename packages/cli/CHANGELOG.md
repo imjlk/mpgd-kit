@@ -1,5 +1,20 @@
 # @mpgd/cli
 
+## 0.54.0 — 2026-10-21
+
+### Patch changes
+
+- [38a4983d](https://github.com/imjlk/mpgd-kit/commit/38a4983d1abc03b5e7f151b12a2e57b9c1d834ad) `mpgd game create` and `pnpm create @mpgd/game` keep `$&`, `$'`, `` $` ``, and `$$` in a display title literal. Those sequences are no longer read as replacement patterns, so a title such as `Hit $&` no longer leaves `__GAME_TITLE__` in `notifications/topics.json` or injects the rest of a JSON file. Titles may also contain quotes and backslashes. Generated JSON, including `public/manifest.webmanifest`, escapes them, and single-quoted TypeScript titles escape quotes and backslashes, so the generated source still parses. Control characters and angle brackets are still refused.
+  
+  The generated notification settings scene wraps the outcome strip to the same 840px column as the list and moves the list down when that strip wraps, so the English stale-night consent message stays on the 960x540 canvas. — Thanks @imjlk!
+- Updated dependencies: @mpgd/adapter-ait@0.20.1, @mpgd/adapter-browser@0.11.5, @mpgd/adapter-capacitor@0.12.1, @mpgd/adapter-devvit@0.13.3, @mpgd/adapter-verse8@0.7.5, @mpgd/analytics@0.4.14, @mpgd/bridge@0.14.2, @mpgd/capacitor-play-billing@0.3.5, @mpgd/capacitor-storekit@0.3.5, @mpgd/catalog@0.10.5, @mpgd/game-runtime@0.7.5, @mpgd/game-services@0.27.0, @mpgd/i18n@0.6.19, @mpgd/platform@0.27.0, @mpgd/target-config@0.23.5
+
+### Added
+
+- [f772a896](https://github.com/imjlk/mpgd-kit/commit/f772a8964437d512349736e609668792b480fbc1) A game created with `--providers notifications` gets a notifications backend once it has one to talk to: `createStarterNotificationBackend` now builds the notifications runtime (`@mpgd/platform/notifications-runtime`) over the game-services Worker's notification routes (`@mpgd/game-services/notifications/client`) when the game has `VITE_MPGD_GAME_SERVICES_URL` (a public https URL in production, the commerce client's rule) and has set its server-backed session with the new `setStarterServerSession`, and the target exposes a notifications provider. The runtime keeps its registration state in the platform storage, and the settings screen then shows the reminder, advertising, and night switches from the player's consent records. The runtime also loads the Worker's registry entry for its target (`GET /providers`) in the background and compares the provider with it; a Worker it cannot reach is logged and the runtime runs without the check. A Reddit game gets no Worker backend, since its notifications backend is the Devvit server. Without a URL or a session it returns `undefined`, as before, and warns once when the URL is set without a session. The Worker wiring lives in the new `src/platform/notificationBackend.ts`.
+  
+  Every generated game gains `src/platform/serverSession.ts` (`StarterServerSession`, `setStarterServerSession`, `resolveStarterServerSession`); when a session is set, the commerce client in `gameServices.ts` sends its header too. Nothing changes for a game that sets none. `mpgd target init capacitor --providers notifications` writes `serverSession.ts` into a game created by an earlier release that lacks it, next to the other notifications modules. `sessionId` must be the stable session-family id the identity service answers to `authenticateNotificationSession`, not a rotating one such as a `GuestSessionCoordinator` view's. — Thanks @imjlk!
+
 ## 0.53.0 — 2026-10-20
 
 ### Added
