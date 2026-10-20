@@ -9,37 +9,65 @@ const installedSkillDir = '.agents/skills/onestore-web-sdk';
 
 /**
  * Text that must remain after an upstream skill refresh.
- * A12-1 / section 4 require a server-issued opaque payload. A10 / B6 require a
- * server-issued request id. There is no separate doctor runner in tools/oneplay;
- * this list is what keeps that checklist wording from being reverted.
+ * A12-1 / section 4 require a server-issued opaque payload. A10 / B6 and
+ * sdk-context require a server-issued request id. The HTML sample must pass the
+ * selected offer into those hooks and keep the fail-closed purchase verification
+ * hook. There is no separate doctor runner in tools/oneplay; this list is what
+ * keeps that checklist wording from being reverted.
  */
 export const requiredInstalledSkillText: ReadonlyArray<readonly [string, string]> = [
   ['SKILL.md', 'server-issued opaque developerPayload'],
   ['SKILL.md', 'Do not generate requestId on the client'],
-  ['references/game-template.html.txt', 'async function issueCheckoutIntent()'],
+  ['SKILL.md', 'How checkout intent is issued'],
+  ['SKILL.md', 'checkout intent issuing: (server-issued only)'],
+  [
+    'references/game-template.html.txt',
+    'async function issueCheckoutIntent({ productId, idempotencyKey })',
+  ],
+  ['references/game-template.html.txt', 'await issueCheckoutIntent({ productId, idempotencyKey })'],
   [
     'references/game-template.html.txt',
     'throw new Error("Checkout intent backend is not connected");',
   ],
-  ['references/game-template.html.txt', 'async function issueRewardRequest()'],
+  [
+    'references/game-template.html.txt',
+    'async function issueRewardRequest({ placementId, idempotencyKey })',
+  ],
+  ['references/game-template.html.txt', 'await issueRewardRequest({ placementId, idempotencyKey })'],
   [
     'references/game-template.html.txt',
     'throw new Error("Reward request backend is not connected");',
   ],
   ['references/game-template.html.txt', 'developerPayload: intent.developerPayload'],
+  ['references/game-template.html.txt', 'async function verifyPurchaseOnServer(result)'],
+  [
+    'references/game-template.html.txt',
+    'throw new Error("Purchase verification backend is not connected");',
+  ],
   ['references/checks.md', 'opaque developerPayload bound to an authenticated intent'],
   ['references/checks.md', 'issued by the game server and bound to the authenticated session'],
   ['references/checks.md', 'client-generated for rewarded ads'],
   ['references/sdk-context.md', 'opaque server-issued checkout intent'],
+  ['references/sdk-context.md', 'server-issued requestId bound to the authenticated session'],
+  ['references/sdk-context.md', 'Independently verify or reconcile'],
   ['LOCAL_PATCHES.md', 'reviewed SHA-256 of this installed skill directory'],
 ];
 
-/** Upstream examples that must not return. The user-identifier phrase may wrap. */
+/** Upstream payload wording that must not return anywhere in the skill tree. */
 export const forbiddenInstalledSkillText: ReadonlyArray<RegExp> = [
+  /server-issued \/ generated on the client/u,
+];
+
+/**
+ * Client-issued payload and request-id examples. Applied only near
+ * `developerPayload` or `requestId`, so a timer, retry, or account note can use
+ * the same phrases. The user-identifier phrase may wrap inside that window.
+ */
+export const payloadExampleForbiddenText: ReadonlyArray<RegExp> = [
   /Date\.now\s*\(/u,
   /your user ID/u,
   /such as a\s+user identifier/iu,
-  /server-issued \/ generated on the client/u,
+  /recommended\s*\(\s*not required\s*\)/u,
 ];
 
 /**
@@ -49,7 +77,9 @@ export const forbiddenInstalledSkillText: ReadonlyArray<RegExp> = [
  * with `computeSkillFolderHash`: every regular file, skipping `.git` and
  * `node_modules`, sorted by host `localeCompare`, path UTF-8 then raw bytes.
  * This digest keeps that concatenation, sorts with `localeCompare(..., 'en')`
- * so it does not depend on the host locale, and normalizes CRLF to LF.
+ * so it does not depend on the host locale, and normalizes CRLF to LF at the
+ * byte level. It does not decode file bytes, so distinct non-UTF-8 files cannot
+ * collapse to one digest.
  * `LOCAL_PATCHES.md` is included. The lock records this reviewed digest after
  * local patches, not the raw upstream folder hash.
  */
@@ -124,6 +154,15 @@ function assertInstalledSkillPatch(skillDir: string): void {
         );
       }
     }
+    for (const example of payloadIdentifierExamples(text)) {
+      for (const pattern of payloadExampleForbiddenText) {
+        if (pattern.test(example)) {
+          throw new Error(
+            `ONEstore skill still documents a client-issued payload or request id (${pattern.source} in ${file.relativePath}).`,
+          );
+        }
+      }
+    }
   }
   for (const [file, marker] of requiredInstalledSkillText) {
     const match = files.find((entry) => entry.relativePath === file);
@@ -131,6 +170,20 @@ function assertInstalledSkillPatch(skillDir: string): void {
       throw new Error(`ONEstore skill local patch is missing from ${file}.`);
     }
   }
+}
+
+const payloadExampleRadius = 240;
+
+function payloadIdentifierExamples(text: string): readonly string[] {
+  const examples: string[] = [];
+  for (const match of text.matchAll(/\b(?:developerPayload|requestId)\b/gu)) {
+    const at = match.index ?? 0;
+    const token = match[0] ?? '';
+    examples.push(
+      text.slice(Math.max(0, at - payloadExampleRadius), at + token.length + payloadExampleRadius),
+    );
+  }
+  return examples;
 }
 
 function collectSkillFiles(skillDir: string): Array<{ relativePath: string; content: Buffer }> {
@@ -168,7 +221,20 @@ function walkSkill(
 }
 
 function normalizedSkillBytes(content: Buffer): Buffer {
-  return Buffer.from(content.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+  const parts: Buffer[] = [];
+  let start = 0;
+  for (let index = 0; index < content.length - 1; index += 1) {
+    if (content[index] === 0x0d && content[index + 1] === 0x0a) {
+      parts.push(content.subarray(start, index), Buffer.from([0x0a]));
+      start = index + 2;
+      index += 1;
+    }
+  }
+  if (start === 0) {
+    return content;
+  }
+  parts.push(content.subarray(start));
+  return Buffer.concat(parts);
 }
 
 function object(value: unknown): value is Record<string, unknown> {

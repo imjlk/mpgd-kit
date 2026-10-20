@@ -114,12 +114,16 @@ Refresh explicitly before a ONEplay SDK upgrade, review the installed diff, reap
 `LOCAL_PATCHES.md`, update `computedHash`, then run
 `pnpm oneplay:skill:check` and `pnpm oneplay:skill:test` in Kit. The offline check
 detects SDK-version drift and an unexpected skill source. It also hashes every
-regular file in the installed skill directory (CRLF normalized to LF, paths sorted
-with `en` localeCompare, each relative path then its bytes) and fails when that
-digest differs from `skills-lock.json` `computedHash`. It fails when the reviewed
-patch is missing: `developerPayload` and rewarded `requestId` must be obtained from
-an authenticated server endpoint (`createOnePlayCheckoutIntentIssuer` /
-`createOnePlayRewardRequestIssuer`), not invented on the client. It does not fetch
+regular file in the installed skill directory (CRLF normalized to LF at the byte
+level, without decoding file bytes, paths sorted with `en` localeCompare, each
+relative path then its bytes) and fails when that digest differs from
+`skills-lock.json` `computedHash`. It fails when the reviewed patch is missing:
+`developerPayload` and rewarded `requestId` must be obtained from an authenticated
+server endpoint (`createOnePlayCheckoutIntentIssuer` /
+`createOnePlayRewardRequestIssuer`) for the selected product or placement and
+idempotency key, not invented on the client. The sample purchase verification hook
+must stay fail-closed, and sdk-context must keep independent server verification.
+It does not fetch
 upstream or replace the skill's doctor and device acceptance checklist. A10 and B6
 live in the skill checklist; there is no separate doctor runner in `tools/oneplay`,
 and the drift check keeps their server-issued wording.

@@ -53,7 +53,7 @@ URL) are the user's job, and this skill does not cover the ONE store hosting pag
 
 ### Values you need from the user
 
-**There are only four: three come from the ONE store side, and one is the game company's server design.** Many users start without knowing
+**There are only five: three come from the ONE store side, and two are the game company's server design.** Many users start without knowing
 what is needed, so **tell them up front and say where to get each one.**
 
 | Value | Where it comes from | If missing |
@@ -61,7 +61,8 @@ what is needed, so **tell them up front and say where to get each one.**
 | **SDK version** | The user's ONE store contact, or the [release notes](https://onestore-dev.gitbook.io/dev/tools/web-sdk/releasenote). Starts with `v`. **If they were not told otherwise, recommend the latest, `v1.1.0`** | You can proceed with `v1.1.0` |
 | **Ad placement ID (`placementId`)** | Requested in ONEconsole: Apps > (the game) > 수익화 > 인앱 광고 (Monetization > In-App Ads), one per ad type (rewarded, interstitial). See [ONEconsole: 인앱 광고 (In-App Ads)](https://onestore-dev.gitbook.io/dev/docs/apps/product/monetization/iaa) | Every ad request fails, with no fallback |
 | **In-app product ID (`productId`)** | ONEconsole: Apps > (the game) > 수익화 > 인앱 상품 (Monetization > In-App Products). Managed products only | Purchases fail with `invalid_request` |
-| **How `requestId` is issued** | The authenticated game server. It must issue the id and bind it to the session. Do not generate requestId on the client | A client-generated id cannot tell whose reward a postback belongs to |
+| **How checkout intent is issued** | The authenticated game server, not ONEconsole. It must issue an opaque `developerPayload` for the selected `productId` and checkout idempotency key, and bind that intent to the session. Do not generate developerPayload on the client | `issueCheckoutIntent()` fails closed, so the purchase cannot be bound to the selected offer |
+| **How `requestId` is issued** | The authenticated game server. It must issue the id for the selected placement and idempotency key, and bind it to the session. Do not generate requestId on the client | A client-generated id cannot tell whose reward a postback belongs to |
 
 #### When you ask for values, give a form to fill in
 
@@ -81,6 +82,12 @@ Ad placement ID: (write it here, e.g. rewarded rew_xxxx, interstitial int_xxxx)
 In-app product ID: (write it here, e.g. gem_100, gem_1000)
         The product ID registered in ONEconsole under 수익화 > 인앱 상품 (Monetization > In-App Products).
         If there are several, list them all separated by commas. (Managed products only.)
+
+checkout intent issuing: (server-issued only)
+        The opaque developerPayload for the product the player selected. Your authenticated
+        game server issues it for that productId and a checkout idempotency key, and binds
+        it to the session. Do not generate developerPayload on the client, and do not send
+        a user id or playerId.
 
 requestId issuing: (server-issued only)
         The tracking key for rewarded ad rewards. Your authenticated server issues it
@@ -240,7 +247,7 @@ because each one causes incidents:
 - **Do not grant rewards from the client-side `rewarded` result.** The grant is confirmed through
   SSV → verification → the game company's server postback, and the game asks its own server whether
   the reward was granted. Say separately that receiving the postback is the user's job
-- **`requestId` is required for rewarded ads.** The SDK does not generate it. Do not generate requestId on the client. Obtain it from the authenticated game server, which binds it to the session
+- **`requestId` is required for rewarded ads.** The SDK does not generate it. Do not generate requestId on the client. Pass the selected `placementId` and idempotency key to the authenticated game server, which binds the issued id to that placement and the session
 
 If the user has no placement ID yet, tell them what to do in ONEconsole, in this order (source:
 [ONEconsole: 인앱 광고 (In-App Ads)](https://onestore-dev.gitbook.io/dev/docs/apps/product/monetization/iaa), English
@@ -291,7 +298,7 @@ ask for the value with the form. After placing it, always tell the user:
   grant items based on the server
 - **Consumption is the server's job.** Without it, buying the same product again fails with
   `already_owned`
-- **Put a server-issued opaque developerPayload on `purchase`.** It is optional for the SDK, but a Kit integration requires it. Transaction identifiers correlate the purchase result and PNS; they are not an account mapping. Obtain the payload from the authenticated game backend, which derives the player from the server session and returns an opaque value of at most 200 UTF-8 bytes bound to that checkout intent. Never put a user identifier, `playerId`, or other account key in it, and do not invent one on the client
+- **Put a server-issued opaque developerPayload on `purchase`.** It is optional for the SDK, but a Kit integration requires it. Transaction identifiers correlate the purchase result and PNS; they are not an account mapping. Pass the selected `productId` and checkout idempotency key to the authenticated game backend before calling `purchase`. The backend derives the player from the server session and returns an opaque value of at most 200 UTF-8 bytes bound to that checkout intent. Never put a user identifier, `playerId`, or other account key in it, and do not invent one on the client
 - Do not show an error popup for `user_cancelled`
 - Purchase requests trigger `pause` (`reason: "payment"`) and `resume` events. Do not pause the game
   separately at the purchase call site; handle it in the one `pause` listener

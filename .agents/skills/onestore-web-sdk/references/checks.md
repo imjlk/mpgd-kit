@@ -28,11 +28,11 @@ Show the full table; the point is to show what is already done too. Cite evidenc
 | A7 | Save before quit | If the game calls `quit()` itself, it saves before the call (`exit` does not fire on that path) |
 | A8 | Back key | `onBackPressed` is registered and is a **synchronous function** (no async) |
 | A9 | pause / resume | Listeners exist, handling is idempotent, `ringerSilent` from `resume` is applied |
-| A10 | Rewarded ads | `requestId` passed to `showRewardedAsync` is issued by the game server and bound to the authenticated session, not minted on the client, and the reward branch is `status === "rewarded"` only |
+| A10 | Rewarded ads | `requestId` passed to `showRewardedAsync` is issued by the game server and bound to the authenticated session, the selected placement, and that attempt's idempotency key, not minted on the client, and the reward branch is `status === "rewarded"` only |
 | A10-1 | Ad preload | `loadRewarded` / `loadInterstitial` is called early, when the game starts (recommended; without it the first ad takes longer) |
 | A11 | Reward granting | Whether the client grants currency directly (if so, needs confirmation: granting through the server postback is the policy) |
 | A12 | Purchase | `reason` branches for `purchase` (`user_cancelled`, etc.) and the hook for server-side `purchaseToken` verification |
-| A12-1 | developerPayload | `purchase` requests include a server-issued opaque `developerPayload` bound to an authenticated checkout intent. It is optional for the SDK: transaction identifiers correlate the purchase result and PNS. Require a reliable server-owned account/order mapping, for example an opaque developerPayload bound to an authenticated intent. It must not be a user identifier or other account key, and it is at most 200 bytes in UTF-8 |
+| A12-1 | developerPayload | `purchase` requests include a server-issued opaque `developerPayload` bound to an authenticated checkout intent for the selected product and checkout idempotency key. It is optional for the SDK: transaction identifiers correlate the purchase result and PNS. Require a reliable server-owned account/order mapping, for example an opaque developerPayload bound to an authenticated intent. It must not be a user identifier or other account key, and it is at most 200 bytes in UTF-8 |
 | A13 | External navigation | `openDeeplink` is used instead of `window.top.location` or `window.open` |
 | A14 | Frame-busting code | Frame-busting code such as `window.parent !== window` checks (should be **missing**) |
 | A15 | Forbidden APIs | Use of `alert` / `confirm` / `prompt` / `print` (should be **missing**) |
@@ -43,7 +43,7 @@ Show the full table; the point is to show what is already done too. Cite evidenc
 | A20 | Listener timing | `pause` / `resume` / `exit` listeners are registered before `initializeAsync()` (recommended; events can arrive right after init) |
 | A21 | Calls into the game | When SDK code and game code are separate scripts, SDK code calls the game object only after it exists (waits with `whenGame` from SKILL.md or an equivalent). The `initializeAsync()` result can arrive before the game script runs |
 
-If items that need values (placementId, productId, SDK URL, how requestId is issued) are empty, give
+If items that need values (placementId, productId, SDK URL, how requestId is issued, how checkout intent is issued) are empty, give
 the fill-in form from SKILL.md under the table.
 
 ## List B: pre-release check

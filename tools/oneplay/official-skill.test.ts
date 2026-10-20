@@ -66,6 +66,14 @@ try {
   writeFileSync(crlf, 'same\ntext\n');
   assert.equal(hashInstalledOnePlaySkill(skillDir), crlfHash);
   rmSync(crlf);
+  const binary = join(skillDir, 'references/icon.bin');
+  writeFileSync(binary, Buffer.from([0xff, 0x0d, 0x0a, 0x01]));
+  const crlfBinary = hashInstalledOnePlaySkill(skillDir);
+  writeFileSync(binary, Buffer.from([0xff, 0x0a, 0x01]));
+  assert.equal(hashInstalledOnePlaySkill(skillDir), crlfBinary);
+  writeFileSync(binary, Buffer.from([0xfe, 0x0a, 0x01]));
+  assert.notEqual(hashInstalledOnePlaySkill(skillDir), crlfBinary);
+  rmSync(binary);
   lockToInstalled();
   assert.equal((await checkOfficialOnePlaySkill(root)).sdkVersion, '1.1.0');
 
@@ -81,6 +89,55 @@ try {
   await assert.rejects(() => checkOfficialOnePlaySkill(root), /client-issued/u);
   writeFileSync(skillMd, reviewed);
   lockToInstalled();
+
+  const timer = join(skillDir, 'references/lifecycle.md');
+  writeFileSync(
+    timer,
+    `Measure a retry with Date.now().\nShow your user ID on the account screen.\n`,
+  );
+  lockToInstalled();
+  assert.equal((await checkOfficialOnePlaySkill(root)).sdkVersion, '1.1.0');
+  writeFileSync(
+    timer,
+    `requestId is server-issued.\n${'pad '.repeat(200)}\nconst started = Date.now();\nyour user ID stays on the account screen.\n`,
+  );
+  lockToInstalled();
+  assert.equal((await checkOfficialOnePlaySkill(root)).sdkVersion, '1.1.0');
+  writeFileSync(timer, 'developerPayload such as a user identifier\n');
+  lockToInstalled();
+  await assert.rejects(() => checkOfficialOnePlaySkill(root), /client-issued/u);
+  writeFileSync(timer, 'requestId issuance is recommended (not required)\n');
+  lockToInstalled();
+  await assert.rejects(() => checkOfficialOnePlaySkill(root), /client-issued/u);
+  rmSync(timer);
+  lockToInstalled();
+
+  for (const [file, marker] of [
+    ['references/sdk-context.md', 'server-issued requestId bound to the authenticated session'],
+    [
+      'references/game-template.html.txt',
+      'throw new Error("Purchase verification backend is not connected");',
+    ],
+    ['references/sdk-context.md', 'Independently verify or reconcile'],
+    ['SKILL.md', 'checkout intent issuing: (server-issued only)'],
+    [
+      'references/game-template.html.txt',
+      'await issueCheckoutIntent({ productId, idempotencyKey })',
+    ],
+    [
+      'references/game-template.html.txt',
+      'await issueRewardRequest({ placementId, idempotencyKey })',
+    ],
+  ] as const) {
+    const path = join(skillDir, file);
+    const text = readFileSync(path, 'utf8');
+    assert.equal(text.includes(marker), true, marker);
+    writeFileSync(path, text.replace(marker, 'removed marker'));
+    lockToInstalled();
+    await assert.rejects(() => checkOfficialOnePlaySkill(root), /local patch is missing/u);
+    writeFileSync(path, text);
+    lockToInstalled();
+  }
 
   const checks = join(skillDir, 'references/checks.md');
   const checksText = readFileSync(checks, 'utf8');

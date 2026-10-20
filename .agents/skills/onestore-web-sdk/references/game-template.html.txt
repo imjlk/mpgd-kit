@@ -1,7 +1,8 @@
 <!doctype html>
 <!-- ONE store H5 Game SDK integration template, based on the official sample.
      Replace: __SDK_VERSION__ (SDK version, starts with v, default v1.1.0)
-     TODO: placementId, productId (developerPayload and requestId come from the server hooks)
+     TODO: placementId, productId, and the idempotency keys passed into the server hooks
+     (developerPayload and requestId come back from those hooks; do not invent them)
      UI text is a placeholder; match the game's own language. -->
 <html lang="en">
   <head>
@@ -72,6 +73,7 @@
           // REQUIRED: call the game's bootstrap here, after its real assets finish loading.
           // Shared by native-host startup and the playable browser fallback.
         }
+        const rewardedPlacementId = "" /* TODO: rewarded placementId the player selected */;
         async function verifyPurchaseOnServer(result) {
           // REQUIRED: persist result.purchaseToken plus the server-issued intent, then
           // send them through your authenticated game backend. Retry reconciliation on
@@ -80,17 +82,21 @@
           // Replace this hook; fail closed until configured. PNS is a second recovery path.
           throw new Error("Purchase verification backend is not connected");
         }
-        async function issueCheckoutIntent() {
-          // REQUIRED: authenticated game backend. The server derives the player from
-          // the session and returns { developerPayload }, an opaque value of at most
-          // 200 UTF-8 bytes bound to this checkout intent. Never send a user id,
-          // playerId, or other account key. Fail closed until this hook is implemented.
+        async function issueCheckoutIntent({ productId, idempotencyKey }) {
+          // REQUIRED: authenticated game backend. productId is the catalog product
+          // the player selected. idempotencyKey is stable for this checkout attempt.
+          // The server derives the player from the session and returns
+          // { developerPayload }, an opaque value of at most 200 UTF-8 bytes bound
+          // to that product and key. Never send a user id, playerId, or other
+          // account key. Fail closed until this hook is implemented.
           throw new Error("Checkout intent backend is not connected");
         }
-        async function issueRewardRequest() {
-          // REQUIRED: authenticated game backend. The server returns { requestId }
-          // bound to the session. The SDK does not generate requestId. Never build
-          // one on the client. Fail closed until this hook is implemented.
+        async function issueRewardRequest({ placementId, idempotencyKey }) {
+          // REQUIRED: authenticated game backend. placementId is the rewarded
+          // placement the player selected. idempotencyKey is stable for this attempt.
+          // The server derives the player from the session and returns { requestId }
+          // bound to that placement and key. The SDK does not generate requestId.
+          // Never build one on the client. Fail closed until this hook is implemented.
           throw new Error("Reward request backend is not connected");
         }
         function say(m) { $("msg").textContent = m; }
@@ -162,7 +168,7 @@
                   // Preloading early makes the ad show immediately when the button is
                   // pressed (call loadInterstitial too if you use interstitial ads)
                   if (!$("btnAd").disabled)
-                    sdk.ads.loadRewarded({ placementId: "" /* TODO: placement ID */ });
+                    sdk.ads.loadRewarded({ placementId: rewardedPlacementId });
                 })
                 .catch((e) => {
                   console.error("startGameAsync failed", e.reason, e.message);
@@ -179,9 +185,11 @@
           $("btnBuy").disabled = true;
           say("Processing purchase…");
           try {
-            const intent = await issueCheckoutIntent();
+            const productId = "" /* TODO: catalog productId for the offer the player selected */;
+            const idempotencyKey = "" /* TODO: stable key for this checkout attempt */;
+            const intent = await issueCheckoutIntent({ productId, idempotencyKey });
             const r = await sdk.iap.purchase({
-              productId: "" /* TODO: in-app product ID */,
+              productId,
               // productName: "", // optional; if omitted, the registered product name is shown
               // developerPayload is the opaque server-issued checkout intent. At most 200 bytes in UTF-8.
               developerPayload: intent.developerPayload,
@@ -211,11 +219,14 @@
         $("btnAd").addEventListener("click", async () => {
           $("btnAd").disabled = true;
           try {
-            // requestId is required. The authenticated server issues it and binds it
-            // to the session. The SDK does not generate it.
-            const requestId = (await issueRewardRequest()).requestId;
+            // requestId is required. Pass the selected placement and attempt key;
+            // the authenticated server issues the id and binds it to that placement.
+            // The SDK does not generate it.
+            const placementId = rewardedPlacementId;
+            const idempotencyKey = "" /* TODO: stable key for this rewarded attempt */;
+            const requestId = (await issueRewardRequest({ placementId, idempotencyKey })).requestId;
             const r = await sdk.ads.showRewardedAsync({
-              placementId: "" /* TODO: placement ID */,
+              placementId,
               requestId,
             });
             // Failures do not throw; they come back in status

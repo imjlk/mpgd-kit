@@ -151,8 +151,8 @@ Key rules (the most misunderstood area):
   SSV (server-side verification) → verification → the game company's server postback. `rewarded` is
   only a signal for the reward effect
 - **`requestId` is required for rewarded ads.** Without it the request fails with `invalid_request`
-  without calling the app. The SDK does not generate it. The postback has to identify the user, so
-  **issuing it on the game company's server and mapping it to the user is recommended** (not required)
+  without calling the app. The SDK does not generate it. Obtain a server-issued requestId bound to the authenticated session, the selected placement, and that attempt's idempotency key. Do not
+  generate requestId on the client. Server issuance is required
 - Failures **do not throw**. They come back as `status: "failed"` with a `reason`
 - A missing `placementId`, an unregistered placement, or a placement type mismatch (a rewarded ID
   used for an interstitial, or the reverse) fails with `invalid_request`
