@@ -1,4 +1,4 @@
-import { PlatformOperationError } from '@mpgd/platform';
+import { PlatformOperationError, readPlatformOperationFailure } from '@mpgd/platform';
 import {
   assertNotificationBridgeCancelLocalPayload,
   assertNotificationBridgeCancelLocalResult,
@@ -166,10 +166,12 @@ export interface CreateNotificationsV2BridgeHandlerInput {
    */
   readonly unexpectedFailureMessage?: ((method: BridgeNotificationsV2Method) => string) | undefined;
   /**
-   * Called with every failure the handler answers with an error, except an
-   * invalid payload (the caller's), before the answer is built: the provider's
-   * own text stays on the host. Synchronous; a hook that throws or returns a
-   * promise that rejects changes nothing.
+   * Called with every failure of a notifications v2 method the handler
+   * answers with an error, before the answer is built, so the provider's own
+   * text can stay on the host. The caller's mistakes are not reported: an
+   * invalid payload, and a method that is not a notifications v2 method
+   * (answered `UNSUPPORTED_METHOD`). Synchronous; a hook that throws or
+   * returns a promise or thenable that rejects changes nothing.
    */
   readonly onError?:
     | ((error: unknown, context: { readonly method: BridgeNotificationsV2Method }) => void)
@@ -198,11 +200,14 @@ export interface CreateNotificationsV2BridgeHandlerInput {
  * - **Failures.** A thrown `NotificationError` crosses as
  *   `{ code, message, retryable }`, its message naming a host code of
  *   `[A-Za-z0-9_.:-]{1,128}` as `(host code <code>)`, the only place a bridge
- *   error can carry it; a host code outside that pattern is left out. A
- *   `PlatformOperationError` keeps a notifications code and its retryable
- *   flag; with any other code it is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`
- *   with its retryable flag. Anything else is a retryable
- *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+ *   error can carry it (`readBridgeNotificationsHostCode` reads it back); a
+ *   host code outside that pattern is left out. Any `PlatformOperationError`
+ *   with a notifications code crosses the same way. Errors are read by shape
+ *   as well as by class, so a provider built against another copy of
+ *   `@mpgd/platform` keeps its codes. A `PlatformOperationError` with any
+ *   other code is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with its retryable
+ *   flag. Anything else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, retryable
+ *   unless it carries a `retryable: false` of its own.
  * - **Events.** `subscribe` delivers the provider's events as
  *   `{ protocol: 'mpgd.notifications.v2', sequence, event }`, numbered per
  *   handler from 0, through `createBridgeEventSource`: the provider is
@@ -214,7 +219,7 @@ export function createNotificationsV2BridgeHandler(
   input: CreateNotificationsV2BridgeHandlerInput,
 ): NotificationsV2BridgeHandler {
   const { provider } = input;
-  const name = input.label === undefined
+  const name = input.label === undefined || input.label.length === 0
     ? 'The notifications provider'
     : `The ${input.label} notifications provider`;
   const events = createBridgeEventSource(bridgeNotificationsEventProtocol, provider);
@@ -287,8 +292,8 @@ export function createNotificationsV2BridgeHandler(
     }
     try {
       const reported: unknown = input.onError(error, { method });
-      if (reported instanceof Promise) {
-        reported.catch(() => {});
+      if (isThenable(reported)) {
+        reported.then(undefined, () => {});
       }
     } catch {
       // A failing hook never changes the answer.
@@ -320,7 +325,19 @@ export function createNotificationsV2BridgeHandler(
 }
 
 /** The host codes a bridge error names in its message, as `(host code <code>)`. */
-const hostCodeValue = /^[A-Za-z0-9_.:-]{1,128}$/u;
+const hostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
+const hostCodeValue = new RegExp(`^${hostCodeCharacters}$`, 'u');
+const hostCodeSuffix = new RegExp(`\\(host code (${hostCodeCharacters})\\)$`, 'u');
+
+/**
+ * The host code a notifications v2 bridge error names at the end of its
+ * message, as `createNotificationsV2BridgeHandler` writes it
+ * (`... (host code <code>)`), or `undefined`. The bridge error has no field
+ * for it, so a game-side client reads it back from the message.
+ */
+export function readBridgeNotificationsHostCode(message: string): string | undefined {
+  return hostCodeSuffix.exec(message)?.[1];
+}
 
 class InvalidPayloadError extends Error {
   override readonly name = 'InvalidPayloadError';
@@ -363,35 +380,54 @@ function toBridgeError(
   if (error instanceof InvalidPayloadError) {
     return createBridgeError(id, 'NOTIFICATIONS_INVALID_INPUT', error.message);
   }
-  if (error instanceof NotificationError) {
+  // Read by shape as well as by class: a provider built against another copy
+  // of `@mpgd/platform` throws errors that fail `instanceof` here, and a
+  // permanent code must not turn into a retryable one.
+  const failure = readPlatformOperationFailure(error);
+  if (failure !== null && isNotificationErrorCode(failure.code)) {
+    const message = stringField(error, 'message') ?? `${method} failed.`;
+    const hostCode = stringField(error, 'hostCode');
     return createBridgeError(
       id,
-      error.code,
-      error.hostCode === undefined || !hostCodeValue.test(error.hostCode)
-        ? error.message
-        : `${error.message} (host code ${error.hostCode})`,
-      error.retryable,
+      failure.code,
+      hostCode === undefined || !hostCodeValue.test(hostCode)
+        ? message
+        : `${message} (host code ${hostCode})`,
+      failure.retryable,
     );
   }
   if (error instanceof PlatformOperationError) {
-    return isNotificationErrorCode(error.code)
-      ? createBridgeError(id, error.code, error.message, error.retryable)
-      : createBridgeError(
-          id,
-          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-          `${method} failed: ${error.message}`,
-          error.retryable,
-        );
+    return createBridgeError(
+      id,
+      'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      `${method} failed: ${error.message}`,
+      error.retryable,
+    );
   }
-  // A failure the provider did not normalize is a host failure the game may retry.
+  // A failure the provider did not normalize is a host failure the game may
+  // retry, unless it carries a retryable flag of its own.
   return createBridgeError(
     id,
     'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
     unexpectedFailureMessage === undefined
       ? `${method} failed: ${messageOf(error)}`
       : unexpectedFailureMessage(method),
-    true,
+    failure?.retryable ?? true,
   );
+}
+
+function stringField(value: unknown, key: string): string | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+  const field: unknown = (value as Readonly<Record<string, unknown>>)[key];
+  return typeof field === 'string' ? field : undefined;
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === 'object' || typeof value === 'function')
+    && value !== null
+    && typeof (value as { readonly then?: unknown }).then === 'function';
 }
 
 function messageOf(error: unknown): string {

@@ -10,7 +10,10 @@ import {
 
 import { validNotificationsV2Exchanges } from './fixtures';
 import type { BridgeNotificationsEvent, BridgeRequest, BridgeResponse } from './index';
-import { createNotificationsV2BridgeHandler } from './notifications';
+import {
+  createNotificationsV2BridgeHandler,
+  readBridgeNotificationsHostCode,
+} from './notifications';
 
 function request(method: string, payload: unknown, id = `${method}:test`): BridgeRequest {
   return {
@@ -174,6 +177,12 @@ const minimal: NotificationProvider = {
   const unlabelled = createNotificationsV2BridgeHandler({ provider: minimal });
   assert.equal(
     errorOf(await unlabelled.request(request('notifications.v2.listLocal', protocol))).message,
+    'The notifications provider does not implement notifications.v2.listLocal.',
+  );
+  // An empty label counts as none.
+  const empty = createNotificationsV2BridgeHandler({ provider: minimal, label: '' });
+  assert.equal(
+    errorOf(await empty.request(request('notifications.v2.listLocal', protocol))).message,
     'The notifications provider does not implement notifications.v2.listLocal.',
   );
 }
@@ -343,6 +352,84 @@ const minimal: NotificationProvider = {
     message: 'notifications.v2.requestPermission failed: text',
     retryable: true,
   });
+  // An error from another copy of @mpgd/platform fails instanceof, and is read by its shape.
+  class ForeignPlatformError extends Error {
+    constructor(
+      readonly code: string,
+      message: string,
+      readonly retryable: boolean,
+      readonly hostCode?: string,
+    ) {
+      super(message);
+    }
+  }
+  assert.deepEqual(
+    await answer(new ForeignPlatformError('NOTIFICATIONS_CONFIGURATION_REQUIRED', 'refused', false, 'HOST_2')),
+    {
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      message: 'refused (host code HOST_2)',
+      retryable: false,
+    },
+  );
+  assert.deepEqual(
+    await answer(new ForeignPlatformError('NOTIFICATIONS_UNSUPPORTED', 'no', false, 'bad code')),
+    { code: 'NOTIFICATIONS_UNSUPPORTED', message: 'no', retryable: false },
+  );
+  // Another code keeps its retryable flag, with the text of an unnormalized failure.
+  assert.deepEqual(await answer(new ForeignPlatformError('HOST_SOMETHING', 'gone', false)), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.v2.requestPermission failed: gone',
+    retryable: false,
+  });
+  // A shape without a boolean flag or with a code that is not a platform code is not one.
+  assert.deepEqual(
+    await answer(Object.assign(new Error('raw'), { code: 'NOTIFICATIONS_UNSUPPORTED' })),
+    {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: raw',
+      retryable: true,
+    },
+  );
+  assert.deepEqual(
+    await answer(Object.assign(new Error('reset'), { code: 'ECONNRESET', retryable: false })),
+    {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: reset',
+      retryable: false,
+    },
+  );
+}
+
+// readBridgeNotificationsHostCode reads back what the handler writes, and nothing else.
+{
+  let hostCode = '';
+  const handler = createNotificationsV2BridgeHandler({
+    provider: {
+      ...minimal,
+      requestPermission: async () => {
+        throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+          message: 'refused',
+          hostCode,
+        });
+      },
+    },
+  });
+  for (const [code, expected] of [
+    ['UNIMPLEMENTED', 'UNIMPLEMENTED'],
+    ['a.b:c-d_9', 'a.b:c-d_9'],
+    ['x'.repeat(128), 'x'.repeat(128)],
+    ['x'.repeat(129), undefined],
+    ['bad code', undefined],
+    ['CODE)\n(host code FORGED', undefined],
+  ] as const) {
+    hostCode = code;
+    const { message } = errorOf(
+      await handler.request(request('notifications.v2.requestPermission', { topics: ['a'] })),
+    );
+    assert.equal(readBridgeNotificationsHostCode(message), expected, code);
+  }
+  assert.equal(readBridgeNotificationsHostCode('refused'), undefined);
+  assert.equal(readBridgeNotificationsHostCode('refused (host code A) and more'), undefined);
 }
 
 // unexpectedFailureMessage keeps an unnormalized failure's text on the host; onError sees it.
@@ -421,6 +508,27 @@ const minimal: NotificationProvider = {
       'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
     );
   }
+}
+
+// A hook that returns a thenable gets a rejection handler, so a rejecting one is never unhandled.
+{
+  const handlers: unknown[] = [];
+  const handler = createNotificationsV2BridgeHandler({
+    provider: {
+      ...minimal,
+      getPermission: async () => {
+        throw new Error('boom');
+      },
+    },
+    onError: (() => ({
+      then(_onFulfilled: unknown, onRejected: unknown) {
+        handlers.push(onRejected);
+      },
+    })) as unknown as () => void,
+  });
+  await handler.request(request('notifications.v2.getPermission', { topics: ['a'] }));
+  assert.equal(handlers.length, 1);
+  assert.equal(typeof handlers[0], 'function');
 }
 
 // A provider whose methods read `this` is called on itself.

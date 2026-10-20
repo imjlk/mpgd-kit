@@ -21,6 +21,7 @@ import {
   assertBridgeNotificationsV2Payload,
   assertBridgeNotificationsV2Result,
   createNotificationsV2BridgeHandler,
+  readBridgeNotificationsHostCode,
 } from '../dist/notifications.js';
 
 // The main entry loads no notifications code; only `./notifications` does.
@@ -139,5 +140,7 @@ const unsupported = await handler.request({
 });
 assert.equal(unsupported.ok, false);
 assert.equal(unsupported.error.code, 'NOTIFICATIONS_UNSUPPORTED');
+assert.equal(readBridgeNotificationsHostCode('refused (host code HOST_1)'), 'HOST_1');
+assert.equal(readBridgeNotificationsHostCode('refused'), undefined);
 
 console.log('@mpgd/bridge Node ESM import passed.');
