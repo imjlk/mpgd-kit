@@ -1,5 +1,5 @@
 import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } from '@mpgd/catalog';
-import { resolveGameServicesAuthorityMode } from '@mpgd/game-services';
+import { isPublicGameServicesUrl, resolveGameServicesAuthorityMode } from '@mpgd/game-services';
 import { createGameServicesNotificationsClient } from '@mpgd/game-services/notifications/client';
 import type {
   NotificationConsentRecord,
@@ -98,14 +98,15 @@ export function createStarterNotificationBackend(
     );
     return undefined;
   }
-  if (!isAllowedGameServicesUrl(baseUrl)) {
-    // The session's credentials never travel in clear text or to a private host in production.
-    console.error(
-      '[notifications] VITE_MPGD_GAME_SERVICES_URL must be a public https URL in production; notifications stay off.',
-    );
-    return undefined;
-  }
   try {
+    if (!isAllowedGameServicesUrl(baseUrl)) {
+      // The session's credentials never travel in clear text or to a private host in production.
+      warnOnce(
+        platform,
+        '[notifications] VITE_MPGD_GAME_SERVICES_URL must be a public https URL in production; notifications stay off.',
+      );
+      return undefined;
+    }
     const client = createGameServicesNotificationsClient({
       baseUrl,
       identity: session,
@@ -130,40 +131,43 @@ export function createStarterNotificationBackend(
     return { runtime, listConsent: () => client.listConsent() };
   } catch (error) {
     // A configuration the client refuses turns notifications off, never the game.
-    console.error('[notifications] the notifications backend could not be created.', error);
+    warnOnce(platform, '[notifications] the notifications backend could not be created.', error);
     return undefined;
   }
 }
 
 /**
  * Whether the game-services URL may carry the session's credentials: any
- * absolute http(s) URL outside production builds, and a public https URL
- * without credentials in production, as the commerce client requires.
+ * absolute http(s) URL outside production builds, and in production the
+ * public https URL the commerce client requires (`isPublicGameServicesUrl`).
  */
 function isAllowedGameServicesUrl(baseUrl: string): boolean {
-  let url: URL;
+  if (resolveGameServicesAuthorityMode(import.meta.env.MODE) === 'production') {
+    return isPublicGameServicesUrl(baseUrl);
+  }
   try {
-    url = new URL(baseUrl);
+    const { protocol } = new URL(baseUrl);
+    return protocol === 'https:' || protocol === 'http:';
   } catch {
     return false;
   }
-  if (resolveGameServicesAuthorityMode(import.meta.env.MODE) !== 'production') {
-    return url.protocol === 'https:' || url.protocol === 'http:';
-  }
-  const host = url.hostname.toLowerCase();
-  return url.protocol === 'https:'
-    && url.username === ''
-    && url.password === ''
-    && host !== 'localhost'
-    && !host.endsWith('.localhost')
-    && !host.endsWith('.local');
 }
 
-const warned = new WeakSet<TargetConfiguredGateway>();
-function warnOnce(platform: TargetConfiguredGateway, message: string): void {
-  if (!warned.has(platform)) {
-    warned.add(platform);
-    console.warn(message);
+/** Messages already logged per gateway: a screen opened again does not log them again. */
+const warned = new WeakMap<TargetConfiguredGateway, Set<string>>();
+function warnOnce(platform: TargetConfiguredGateway, message: string, error?: unknown): void {
+  let messages = warned.get(platform);
+  if (messages === undefined) {
+    messages = new Set();
+    warned.set(platform, messages);
+  }
+  if (!messages.has(message)) {
+    messages.add(message);
+    if (error === undefined) {
+      console.warn(message);
+    } else {
+      console.error(message, error);
+    }
   }
 }
 
