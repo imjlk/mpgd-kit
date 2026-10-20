@@ -94,6 +94,14 @@ describe('adapter-ait', () => {
       message: 'Unsupported method.',
       retryable: false,
     });
+    await expect(gateway.promotions?.grantReward({
+      campaignId: 'DAILY',
+      idempotencyKey: 'old-host-grant',
+    })).rejects.toMatchObject({ code: 'UNSUPPORTED_METHOD' });
+    await expect(gateway.promotions?.recoverReward?.({
+      campaignId: 'DAILY',
+      idempotencyKey: 'old-host-recover',
+    })).resolves.toEqual({ status: 'pending' });
   });
 
   it('classifies a missing bridge as a non-retryable configuration failure', async () => {

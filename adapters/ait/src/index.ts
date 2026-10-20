@@ -272,7 +272,18 @@ export function createAitPlatformGateway(input: {
       getAvailability: (payload) =>
         request<PromotionRewardAvailability>('promotions.getAvailability', payload),
       grantReward: (payload) => request<PromotionRewardResult>('promotions.grantReward', payload),
-      recoverReward: (payload) => request<PromotionRewardResult>('promotions.recoverReward', payload),
+      // Hosts published before this method answer UNSUPPORTED_METHOD. Recovery
+      // must stay non-dispatching, so that absence is pending rather than an exception.
+      recoverReward: async (payload) => {
+        try {
+          return await request<PromotionRewardResult>('promotions.recoverReward', payload);
+        } catch (error) {
+          if (error instanceof PlatformOperationError && error.code === 'UNSUPPORTED_METHOD') {
+            return { status: 'pending' };
+          }
+          throw error;
+        }
+      },
     },
     ...(commerce === undefined ? {} : { commerce }),
     ...(notificationsV2 === undefined ? {} : { notificationsV2 }),
