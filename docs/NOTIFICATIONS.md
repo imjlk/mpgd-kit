@@ -131,13 +131,14 @@ Rules the starter's settings screen follows, and your own screen must too:
 > the `sessionId` the identity service answers to
 > `authenticateNotificationSession` for that header, the same across token
 > refreshes. A `GuestSessionCoordinator` view's `sessionId` may rotate on
-> refresh, so do not pass it as that id. The runtime compares its provider
-> with the Worker's registry entry for the target (`GET /providers`), and
-> runs without the check when the Worker cannot be reached. A Reddit game
-> gets no Worker backend: its notifications backend is the Devvit server. Without them it returns `undefined`, and the
-> settings screen asks for the OS or host permission (and withdraws a Devvit
-> opt-in the game rendered), shows no reminder, advertising, or night
-> switch, and says why. The runtime keeps its last registration, push
+> refresh, so do not pass it as that id. Without a URL or a session it
+> returns `undefined`, and the settings screen asks for the OS or host
+> permission (and withdraws a Devvit opt-in the game rendered), shows no
+> reminder, advertising, or night switch, and says why. A Reddit game gets
+> no Worker backend either: its notifications backend is the Devvit server.
+> The runtime compares its provider with the Worker's registry entry for the
+> target (`GET /providers`), and runs without the check when the Worker
+> cannot be reached. The runtime keeps its last registration, push
 > address included, in the platform storage, like other game data. A game
 > created before this release has no `serverSession.ts`; `mpgd target init
 > capacitor --providers notifications` writes one, and its commerce client

@@ -698,6 +698,40 @@ describe('createNotificationRuntime registry entry', () => {
     expect(loads).toBe(1);
   });
 
+  it('loads no entry for a provider without remote delivery', async () => {
+    const backend = createNotificationConformanceBackend({
+      entry: undefined,
+      catalog: [energy],
+      clock: createNotificationConformanceClock(now),
+      defaultLocale: 'ko',
+      defaultPlayer: 'p-1',
+    });
+    const host = createNotificationConformanceHost({
+      profile: {
+        ...osProfile,
+        capabilities: {
+          ...osProfile.capabilities,
+          remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
+        },
+      },
+      catalog: [energy],
+    });
+    let loads = 0;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: async () => {
+        loads += 1;
+        return undefined;
+      },
+    });
+    await runtime.start();
+    await settleLoad();
+    expect(loads).toBe(0);
+  });
+
   it('loads again after a loader that throws synchronously', async () => {
     const { host, backend } = setup();
     const errors: unknown[] = [];

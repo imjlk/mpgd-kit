@@ -7,7 +7,8 @@ import type { GameServicesHeaderResolver } from '@mpgd/game-services';
  * `setStarterServerSession`, over your own session holder and identity
  * service. The commerce client then sends its header. In a game created with
  * `--providers notifications`, the notifications runtime uses the same
- * session and header for the game-services Worker's notification routes. *
+ * session and header for the game-services Worker's notification routes.
+ *
  * `sessionId` must be the stable session-family id: the `sessionId` your
  * identity service answers to the Worker's `authenticateNotificationSession`
  * for this session's header, the same across token refreshes. Do not pass a

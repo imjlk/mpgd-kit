@@ -1366,7 +1366,13 @@ export function createNotificationRuntime(
       const known = input.registryEntry ?? loadedRegistryEntry;
       compare(known);
       const load = input.loadRegistryEntry;
-      if (known === undefined && load !== undefined && registryEntryLoad === undefined) {
+      // Only a provider with remote delivery is compared, so only it loads an entry.
+      if (
+        known === undefined
+        && load !== undefined
+        && registryEntryLoad === undefined
+        && startCapabilities.remote.supported
+      ) {
         // Neither awaited nor tracked, so a backend that is slow or never
         // answers holds up neither the start nor `runUntilIdle`; a failure is
         // still reported through `onError` and the next `runUntilIdle`.

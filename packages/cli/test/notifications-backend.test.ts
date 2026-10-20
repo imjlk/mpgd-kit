@@ -48,7 +48,7 @@ const fcmEntry = {
   mappingFields: ['channelId'],
 };
 
-function gateway(configTarget: string): TargetConfiguredGateway {
+function gateway(configTarget: string, target: string = configTarget): TargetConfiguredGateway {
   const values = new Map<string, unknown>();
   const storage: StorageAdapter = {
     async load({ key }) {
@@ -63,6 +63,7 @@ function gateway(configTarget: string): TargetConfiguredGateway {
     catalog: [],
   });
   return {
+    target,
     configTarget,
     notificationsV2: host.provider,
     storage,
@@ -116,6 +117,11 @@ try {
     }));
     assert.equal(
       createStarterWorkerNotificationBackend(gateway('reddit'), input({ fetch })),
+      undefined,
+    );
+    // Another Devvit config target of the same game.
+    assert.equal(
+      createStarterWorkerNotificationBackend(gateway('reddit-staging', 'reddit'), input({ fetch })),
       undefined,
     );
     assert.deepEqual(requests, []);
@@ -175,6 +181,40 @@ try {
       targets: { android: 'fcm', ios: 'fcm' },
     }));
     const backend = createStarterWorkerNotificationBackend(gateway('android'), input({ fetch }));
+    assert.ok(backend !== undefined);
+    await settle();
+    await backend.runtime.getPermission({ topics: ['daily-ready'] });
+  }
+
+  // The entry is the one the target names, not the first one listed.
+  {
+    const { fetch } = worker(() => ({
+      protocolVersion: '2.0.0-draft.1',
+      providers: [
+        fcmEntry,
+        { ...fcmEntry, provider: 'ait-functional', addressing: 'platform-user' },
+      ],
+      targets: { android: 'fcm', ait: 'ait-functional' },
+    }));
+    const android = createStarterWorkerNotificationBackend(gateway('android'), input({ fetch }));
+    const ait = createStarterWorkerNotificationBackend(gateway('ait'), input({ fetch }));
+    assert.ok(android !== undefined && ait !== undefined);
+    await settle();
+    await android.runtime.getPermission({ topics: ['daily-ready'] });
+    await assert.rejects(
+      ait.runtime.getPermission({ topics: ['daily-ready'] }),
+      (error: unknown) => error instanceof NotificationError && error.code === 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    );
+  }
+
+  // A target the Worker does not serve: no entry, and the runtime runs without the check.
+  {
+    const { fetch } = worker(() => ({
+      protocolVersion: '2.0.0-draft.1',
+      providers: [fcmEntry],
+      targets: {},
+    }));
+    const backend = createStarterWorkerNotificationBackend(gateway('ios'), input({ fetch }));
     assert.ok(backend !== undefined);
     await settle();
     await backend.runtime.getPermission({ topics: ['daily-ready'] });

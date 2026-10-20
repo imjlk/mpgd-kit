@@ -77,7 +77,8 @@ export function createStarterWorkerNotificationBackend(
   platform: TargetConfiguredGateway,
   input: StarterWorkerNotificationInput,
 ): StarterNotificationBackend | undefined {
-  if (targetsWithoutWorkerBackend.has(platform.configTarget)) {
+  // By platform, and by config target name for a gateway that reports another platform.
+  if (platform.target === 'reddit' || targetsWithoutWorkerBackend.has(platform.configTarget)) {
     return undefined;
   }
   const baseUrl = input.baseUrl?.trim();
