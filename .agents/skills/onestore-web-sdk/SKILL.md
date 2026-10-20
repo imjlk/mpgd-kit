@@ -61,7 +61,7 @@ what is needed, so **tell them up front and say where to get each one.**
 | **SDK version** | The user's ONE store contact, or the [release notes](https://onestore-dev.gitbook.io/dev/tools/web-sdk/releasenote). Starts with `v`. **If they were not told otherwise, recommend the latest, `v1.1.0`** | You can proceed with `v1.1.0` |
 | **Ad placement ID (`placementId`)** | Requested in ONEconsole: Apps > (the game) > 수익화 > 인앱 광고 (Monetization > In-App Ads), one per ad type (rewarded, interstitial). See [ONEconsole: 인앱 광고 (In-App Ads)](https://onestore-dev.gitbook.io/dev/docs/apps/product/monetization/iaa) | Every ad request fails, with no fallback |
 | **In-app product ID (`productId`)** | ONEconsole: Apps > (the game) > 수익화 > 인앱 상품 (Monetization > In-App Products). Managed products only | Purchases fail with `invalid_request` |
-| **How `requestId` is issued** | The game company's server design. Issuing it on the server and mapping it to the user is recommended | You cannot tell whose reward a postback belongs to |
+| **How `requestId` is issued** | The authenticated game server. It must issue the id and bind it to the session. Do not generate requestId on the client | A client-generated id cannot tell whose reward a postback belongs to |
 
 #### When you ask for values, give a form to fill in
 
@@ -82,10 +82,9 @@ In-app product ID: (write it here, e.g. gem_100, gem_1000)
         The product ID registered in ONEconsole under 수익화 > 인앱 상품 (Monetization > In-App Products).
         If there are several, list them all separated by commas. (Managed products only.)
 
-requestId issuing: (server-issued / generated on the client)
-        The tracking key for rewarded ad rewards. The postback must tell you which user
-        the reward belongs to, so issuing it on your server and mapping it to the user
-        is recommended.
+requestId issuing: (server-issued only)
+        The tracking key for rewarded ad rewards. Your authenticated server issues it
+        and binds it to the session. Do not generate requestId on the client.
 ```
 
 - **Leave the value slots empty.** If you pre-fill example values, some users leave them as is
@@ -241,8 +240,7 @@ because each one causes incidents:
 - **Do not grant rewards from the client-side `rewarded` result.** The grant is confirmed through
   SSV → verification → the game company's server postback, and the game asks its own server whether
   the reward was granted. Say separately that receiving the postback is the user's job
-- **`requestId` is required for rewarded ads.** The SDK does not generate it. Issuing it on the
-  server and mapping it to the user is recommended
+- **`requestId` is required for rewarded ads.** The SDK does not generate it. Do not generate requestId on the client. Obtain it from the authenticated game server, which binds it to the session
 
 If the user has no placement ID yet, tell them what to do in ONEconsole, in this order (source:
 [ONEconsole: 인앱 광고 (In-App Ads)](https://onestore-dev.gitbook.io/dev/docs/apps/product/monetization/iaa), English
@@ -293,10 +291,7 @@ ask for the value with the form. After placing it, always tell the user:
   grant items based on the server
 - **Consumption is the server's job.** Without it, buying the same product again fails with
   `already_owned`
-- **Put the information needed to grant the item in `developerPayload`.** It is optional but very
-  important: the purchase result and the PNS notification are matched to the user and purchase by
-  this value, so leaving it empty removes the way to match them. Suggest what to put in it (such as a
-  user identifier) based on the game's structure, but do not decide it by guessing
+- **Put a server-issued opaque developerPayload on `purchase`.** It is optional for the SDK, but a Kit integration requires it. Transaction identifiers correlate the purchase result and PNS; they are not an account mapping. Obtain the payload from the authenticated game backend, which derives the player from the server session and returns an opaque value of at most 200 UTF-8 bytes bound to that checkout intent. Never put a user identifier, `playerId`, or other account key in it, and do not invent one on the client
 - Do not show an error popup for `user_cancelled`
 - Purchase requests trigger `pause` (`reason: "payment"`) and `resume` events. Do not pause the game
   separately at the purchase call site; handle it in the one `pause` listener

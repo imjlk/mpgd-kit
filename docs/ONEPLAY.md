@@ -92,6 +92,11 @@ Register the test URL and test account, then open ONE store → My → Usage inf
 
 The official `ONE-store/onestore_web_sdk_skills` skill is installed at
 `.agents/skills/onestore-web-sdk` with provenance in `skills-lock.json`.
+`computedHash` is the reviewed digest of that installed directory after the
+local corrections in `LOCAL_PATCHES.md`. A fresh `npx skills` install records
+the upstream folder hash instead; do not commit that value until the corrections
+are reapplied and the digest is updated.
+
 For a game consuming Kit, run the following **from that game's repository root**;
 for Kit maintenance, run from this repository root:
 
@@ -99,10 +104,25 @@ for Kit maintenance, run from this repository root:
 npx skills add ONE-store/onestore_web_sdk_skills --agent codex --yes
 ```
 
-Refresh explicitly before a ONEplay SDK upgrade, review the installed diff, then run
-`pnpm oneplay:skill:check` and `pnpm oneplay:skill:test` in Kit. The offline check detects
-SDK-version drift and an unexpected skill source; it does not fetch upstream, prove that
-upstream has not changed, or replace the skill's doctor and device acceptance checklist.
+<!--
+@link ../tools/oneplay/official-skill.ts#checkOfficialOnePlaySkill Recomputes the installed skill digest and requires the server-issued payload patch.
+@link ../packages/game-services/src/oneplay-purchase.ts#createOnePlayCheckoutIntentIssuer Issues the opaque checkout payload from the authenticated server session.
+@link ../packages/game-services/src/oneplay-reward.ts#createOnePlayRewardRequestIssuer Issues the rewarded request id from the authenticated server session.
+-->
+
+Refresh explicitly before a ONEplay SDK upgrade, review the installed diff, reapply
+`LOCAL_PATCHES.md`, update `computedHash`, then run
+`pnpm oneplay:skill:check` and `pnpm oneplay:skill:test` in Kit. The offline check
+detects SDK-version drift and an unexpected skill source. It also hashes every
+regular file in the installed skill directory (CRLF normalized to LF, paths sorted
+with `en` localeCompare, each relative path then its bytes) and fails when that
+digest differs from `skills-lock.json` `computedHash`. It fails when the reviewed
+patch is missing: `developerPayload` and rewarded `requestId` must be obtained from
+an authenticated server endpoint (`createOnePlayCheckoutIntentIssuer` /
+`createOnePlayRewardRequestIssuer`), not invented on the client. It does not fetch
+upstream or replace the skill's doctor and device acceptance checklist. A10 and B6
+live in the skill checklist; there is no separate doctor runner in `tools/oneplay`,
+and the drift check keeps their server-issued wording.
 Never run skill updates during production builds or silently adopt changed instructions.
 The Kit adapters and authoritative purchase/SSV boundaries take precedence over a standalone
 HTML sample's inline SDK calls: scenes continue using PlatformGateway and game-services.

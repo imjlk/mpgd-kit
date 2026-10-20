@@ -185,11 +185,7 @@ Products)**. Web products support **managed products only** (no subscriptions).
 
 - `productId` is required: the custom product ID registered in the Developer Center. `productName`
   is optional (if omitted, the registered product name is shown)
-- `developerPayload` **holds the information needed to grant the item.** It is optional but **very
-  important**: when the game receives the purchase result or the server receives the PNS (payment
-  notification), this value identifies which user and which purchase it is. Put in what is needed
-  to grant the item, such as a user identifier, and map it on the server. **Up to 200 bytes in
-  UTF-8.** Longer values reject with `invalid_request` without calling the app
+- `developerPayload` **is an opaque server-issued checkout intent.** It is optional for the SDK but required for a Kit integration: the purchase result and PNS carry it back, and the game server maps it to the authenticated session that issued it. Never put a user identifier, `playerId`, or other account key in it, and do not invent it on the client. **Up to 200 bytes in UTF-8.** Longer values reject with `invalid_request` without calling the app
 - It waits until the purchase UI ends (success, failure, or cancel). **There is no SDK timeout**
 - **Purchase requests trigger `pause` / `resume`, and the `pause` reason is `"payment"`.** The
   purchase call site does not need to pause the game; handle it consistently in the `pause` listener

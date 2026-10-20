@@ -1,7 +1,7 @@
 <!doctype html>
 <!-- ONE store H5 Game SDK integration template, based on the official sample.
      Replace: __SDK_VERSION__ (SDK version, starts with v, default v1.1.0)
-     TODO: placementId, productId, requestId issuing
+     TODO: placementId, productId (developerPayload and requestId come from the server hooks)
      UI text is a placeholder; match the game's own language. -->
 <html lang="en">
   <head>
@@ -79,6 +79,19 @@
           // grants idempotently, consumes, and returns the authoritative account.
           // Replace this hook; fail closed until configured. PNS is a second recovery path.
           throw new Error("Purchase verification backend is not connected");
+        }
+        async function issueCheckoutIntent() {
+          // REQUIRED: authenticated game backend. The server derives the player from
+          // the session and returns { developerPayload }, an opaque value of at most
+          // 200 UTF-8 bytes bound to this checkout intent. Never send a user id,
+          // playerId, or other account key. Fail closed until this hook is implemented.
+          throw new Error("Checkout intent backend is not connected");
+        }
+        async function issueRewardRequest() {
+          // REQUIRED: authenticated game backend. The server returns { requestId }
+          // bound to the session. The SDK does not generate requestId. Never build
+          // one on the client. Fail closed until this hook is implemented.
+          throw new Error("Reward request backend is not connected");
         }
         function say(m) { $("msg").textContent = m; }
         // Keep the game playable without the SDK: turn off only what needs the app
@@ -162,59 +175,65 @@
         }
 
         /* ── In-app purchase ─────────────────────────────────────── */
-        $("btnBuy").addEventListener("click", () => {
+        $("btnBuy").addEventListener("click", async () => {
           $("btnBuy").disabled = true;
           say("Processing purchase…");
-          sdk.iap.purchase({
-            productId: "" /* TODO: in-app product ID */,
-            // productName: "", // optional; if omitted, the registered product name is shown
-            // developerPayload holds what is needed to grant the item. Optional but very
-            //   important: the purchase result and the PNS notification are matched to the
-            //   user and purchase by this value. At most 200 bytes in UTF-8.
-            developerPayload: "" /* TODO: e.g. your user ID and an order key (ctx.playerId can be absent) */,
-          })
-            .then(async (r) => {
-              // A success response only signals that payment completed. The game
-              //   company's server grants the item after verifying r.purchaseToken. The
-              //   payment notification (PNS) also goes to the server, and consumption is the
-              //   server's job too (buying an unconsumed product again gives already_owned).
-              say("Payment received; verifying purchase…");
-              try {
-                await verifyPurchaseOnServer(r);
-                say("Purchase verified: " + r.productId);
-              } catch {
-                say("Payment received; verification pending. Do not purchase again to retry.");
-              }
-            })
-            .catch((e) => {
-              // Branch on reason only. Do not show an error for user_cancelled
-              if (e.reason !== "user_cancelled") say("Purchase failed: " + e.reason);
-            })
-            .finally(() => { $("btnBuy").disabled = false; });
+          try {
+            const intent = await issueCheckoutIntent();
+            const r = await sdk.iap.purchase({
+              productId: "" /* TODO: in-app product ID */,
+              // productName: "", // optional; if omitted, the registered product name is shown
+              // developerPayload is the opaque server-issued checkout intent. At most 200 bytes in UTF-8.
+              developerPayload: intent.developerPayload,
+            });
+            // A success response only signals that payment completed. The game
+            //   company's server grants the item after verifying r.purchaseToken. The
+            //   payment notification (PNS) also goes to the server, and consumption is the
+            //   server's job too (buying an unconsumed product again gives already_owned).
+            say("Payment received; verifying purchase…");
+            try {
+              await verifyPurchaseOnServer(r);
+              say("Purchase verified: " + r.productId);
+            } catch {
+              say("Payment received; verification pending. Do not purchase again to retry.");
+            }
+          } catch (e) {
+            // Branch on reason only. Do not show an error for user_cancelled.
+            // A missing server hook has no reason; surface that message instead.
+            if (!e.reason) say(e.message || "Purchase failed");
+            else if (e.reason !== "user_cancelled") say("Purchase failed: " + e.reason);
+          } finally {
+            $("btnBuy").disabled = false;
+          }
         });
 
         /* ── Rewarded ad ───────────────────────────────────────── */
         $("btnAd").addEventListener("click", async () => {
-          // requestId is required. Issuing it on the server and mapping it to the
-          //   user is recommended. The SDK does not generate it.
-          const requestId = "req-" + Date.now(); /* TODO: replace with a server-issued ID */
           $("btnAd").disabled = true;
-          const r = await sdk.ads.showRewardedAsync({
-            placementId: "" /* TODO: placement ID */,
-            requestId,
-          });
-          // Failures do not throw; they come back in status
-          if (r.status === "rewarded") {
-            // Only a signal for the reward effect. The grant is confirmed through SSV →
-            //   verification → the game company's server postback. Do not grant here.
-            say("Reward requested (waiting for the server postback)");
-          } else if (r.status === "dismissed") {
-            say("No reward: the ad was not watched to the end.");
-          } else {
-            // failed, including no_fill (no inventory), is not rewarded. Do not block progress
-            say("The ad could not be shown. (" + (r.reason || "failed") + ")");
+          try {
+            // requestId is required. The authenticated server issues it and binds it
+            // to the session. The SDK does not generate it.
+            const requestId = (await issueRewardRequest()).requestId;
+            const r = await sdk.ads.showRewardedAsync({
+              placementId: "" /* TODO: placement ID */,
+              requestId,
+            });
+            // Failures do not throw; they come back in status
+            if (r.status === "rewarded") {
+              // Only a signal for the reward effect. The grant is confirmed through SSV →
+              //   verification → the game company's server postback. Do not grant here.
+              say("Reward requested (waiting for the server postback)");
+            } else if (r.status === "dismissed") {
+              say("No reward: the ad was not watched to the end.");
+            } else {
+              // failed, including no_fill (no inventory), is not rewarded. Do not block progress
+              say("The ad could not be shown. (" + (r.reason || "failed") + ")");
+            }
+          } catch (e) {
+            say(e.message || "The ad could not be shown.");
+          } finally {
+            $("btnAd").disabled = false;
           }
-          $("btnAd").disabled = false;
         });
 
         /* ── Interstitial ad (optional) ────────────────────────────── */
