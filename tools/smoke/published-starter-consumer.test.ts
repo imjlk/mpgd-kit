@@ -125,6 +125,30 @@ await test('publication retries until the registry tarball is fetchable', async 
   assert.equal(metadata.tarball, tarball);
 });
 
+await test('publication retries when disposing a tarball response fails', async () => {
+  const name = '@mpgd/cli';
+  const version = '0.50.1';
+  const tarball = 'https://registry.npmjs.org/cli.tgz';
+  const dist = { integrity: 'sha512-fixture', tarball };
+  let tarballProbes = 0;
+  const metadata = await publishedMetadata(name, version, async (input) => {
+    if (String(input) === tarball) {
+      tarballProbes += 1;
+      if (tarballProbes === 1) {
+        return new Response(new ReadableStream({
+          cancel() {
+            return Promise.reject(new TypeError('socket closed while cancelling tarball'));
+          },
+        }), { status: 200 });
+      }
+      return new Response('', { status: 200 });
+    }
+    return Response.json({ name, versions: { [version]: { name, version, dist } } });
+  }, () => Promise.resolve());
+  assert.ok(tarballProbes >= 2, 'a cancel failure must not skip the next tarball probe');
+  assert.equal(metadata.tarball, tarball);
+});
+
 await test('publication retries network timeouts and transient registry responses', async () => {
   const name = '@mpgd/cli';
   const version = '0.50.1';

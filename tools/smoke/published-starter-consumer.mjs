@@ -289,6 +289,15 @@ export async function retryTransientTarball404(invoke, pause, limit = fetch404Re
 }
 
 /**
+ * fetch reports DNS/socket failures as TypeError and aborts as named errors.
+ * @param {unknown} error
+ */
+function isTransientRegistryError(error) {
+  return error instanceof TypeError
+    || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name));
+}
+
+/**
  * @param {string} url
  * @param {typeof fetch} request
  * @param {string} [accept]
@@ -308,8 +317,7 @@ async function fetchRegistry(url, request, accept, method = 'GET') {
     return response;
   } catch (error) {
     // fetch reports DNS/socket failures as TypeError and aborts as named errors.
-    if (error instanceof TypeError
-      || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))) {
+    if (isTransientRegistryError(error)) {
       return undefined;
     }
     throw error;
@@ -340,7 +348,15 @@ async function probeTarball(url, request, method) {
     return false;
   }
   if (response.body !== null) {
-    await response.body.cancel();
+    try {
+      await response.body.cancel();
+    } catch (error) {
+      // Disposal can fail with the same socket errors as a metadata body read.
+      if (isTransientRegistryError(error)) {
+        return false;
+      }
+      throw error;
+    }
   }
   if (response.ok) {
     return true;
@@ -388,8 +404,7 @@ export async function publishedMetadata(
           document = await response.json();
         } catch (error) {
           // A socket can close after headers. Metadata assertions below stay fatal.
-          if (error instanceof TypeError
-            || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))) {
+          if (isTransientRegistryError(error)) {
             return undefined;
           }
           throw error;
