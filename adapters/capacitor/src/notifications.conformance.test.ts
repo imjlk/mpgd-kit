@@ -78,6 +78,7 @@ function harnessFor(profile: Profile) {
         },
         timeZone: () => context.timeZone,
         locale: () => undefined,
+        now: () => Date.parse(context.clock.now()),
         onError: (error) => {
           throw error;
         },
@@ -169,12 +170,14 @@ describe('Capacitor notifications provider conformance', () => {
     const { failed, passed } = summary(results);
     expect(failed).toEqual([]);
     const expected = [
-      'advertising-needs-consent',
-      'advertising-night-window',
-      'advertising-notice-variants',
-      'advertising-notices',
-      'advertising-rules-none',
-      'advertising-sender-required',
+      ...(profile.platform === 'ios' ? [
+        'advertising-needs-consent',
+        'advertising-night-window',
+        'advertising-notice-variants',
+        'advertising-notices',
+        'advertising-rules-none',
+        'advertising-sender-required',
+      ] : []),
       'endpoint-fan-out',
       'endpoint-lifecycle',
       'endpoint-rotation',
@@ -195,7 +198,7 @@ describe('Capacitor notifications provider conformance', () => {
       'reminder-local-quiet-hours',
       'reminder-local-route',
       'reminder-server-deferred-cancel',
-      'reminder-server-set-checks',
+      ...(profile.platform === 'ios' ? ['reminder-server-set-checks'] : []),
       'requested-topic-needs-opt-in',
     ];
     expect(passed).toEqual([...expected].sort());

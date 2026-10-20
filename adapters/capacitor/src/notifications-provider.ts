@@ -1,5 +1,5 @@
 import { App, type AppPlugin } from '@capacitor/app';
-import type { PermissionState, PluginListenerHandle } from '@capacitor/core';
+import type { PluginListenerHandle } from '@capacitor/core';
 import {
   assertLocalNotificationRequest,
   isRootRelativeNotificationRoute,
@@ -29,6 +29,7 @@ import type {
   LocalNotificationSdkEntry,
   LocalNotificationSdkSchema,
   NotificationSdkChannel,
+  NotificationSdkPermissionState,
   PushSdk,
   PushSdkNotification,
 } from './notifications-sdk.js';
@@ -116,6 +117,11 @@ export interface CreateCapacitorNotificationProviderInput {
   readonly timeZone?: () => string | undefined;
   /** The device locale for registrations; defaults to `navigator.language`. */
   readonly locale?: () => string | undefined;
+  /**
+   * Clock for deciding whether a stored Android reminder has already fired.
+   * Defaults to `Date.now`. Tests and conformance pass the scenario clock.
+   */
+  readonly now?: () => number;
   readonly settingsLeaveTimeoutMs?: number;
   readonly settingsReturnTimeoutMs?: number;
   /** Reports a native listener or setup failure; defaults to `console.warn`. */
@@ -288,15 +294,28 @@ export function createCapacitorNotificationProvider(
   // Permission. It is read from the local plugin, which reflects the system
   // setting on every Android version, and asked through the push plugin,
   // which also registers with APNs on iOS.
-  let checkPermission: (() => Promise<PermissionState>) | undefined;
+  let checkPermission: (() => Promise<NotificationSdkPermissionState>) | undefined;
   if (local !== undefined) {
-    checkPermission = async () => (await local.checkPermissions()).display;
+    checkPermission = async () => {
+      const display = (await local.checkPermissions()).display;
+      // Android 13+ `checkPermissions` reads POST_NOTIFICATIONS and can
+      // answer granted after the player turns notifications off in settings.
+      // `areNotificationsEnabled` is that switch. On older Android the
+      // permission read already uses it, so a false answer agrees.
+      if (platform === 'android' && display === 'granted' && local.areEnabled !== undefined) {
+        const enabled = await local.areEnabled();
+        if (enabled.value === false) {
+          return 'denied';
+        }
+      }
+      return display;
+    };
   } else if (push !== undefined) {
     // Without the local plugin, Android 12 and lower read granted whatever
     // the system setting is: the push plugin cannot tell.
     checkPermission = async () => (await push.checkPermissions()).receive;
   }
-  let askPermission: (() => Promise<PermissionState>) | undefined;
+  let askPermission: (() => Promise<NotificationSdkPermissionState>) | undefined;
   if (push !== undefined) {
     askPermission = async () => (await push.requestPermissions()).receive;
   } else if (local !== undefined) {
@@ -404,6 +423,12 @@ export function createCapacitorNotificationProvider(
     return mappedTopic(stringOf(data[capacitorNotificationDataKeys.topic]));
   };
   const openedFromPush = (actionId: string, notification: PushSdkNotification | undefined): void => {
+    if (actionId === 'dismiss') {
+      // Firebase Messaging emits notificationActionPerformed for a swipe
+      // dismiss (`UNNotificationDismissActionIdentifier`) and retains it
+      // until a listener consumes it. That is not an open.
+      return;
+    }
     const data = isRecord(notification?.data) ? notification.data : {};
     const declared = declaredTopicOf(data);
     const topicId = declared?.id;
@@ -469,21 +494,37 @@ export function createCapacitorNotificationProvider(
       }
       const { token } = event;
       tokenFailureReported = false;
-      // A rotated token goes out at once, with the permission this provider
-      // last read: a permission changes only in system settings, and the
-      // return from there reads it again. During a request (iOS issues the
-      // first token right after the grant) it waits for that answer, and
-      // before any read it reads first.
-      if (lastObserved !== undefined && requesting === undefined) {
-        dispatch({ type: 'endpoint-changed', registration: registrationWith(token, lastObserved) });
-        return;
+      // A rotation must reach the runtime before this listener returns: the
+      // conformance harness registers the address from that synchronous
+      // event. The permission on it is the last read. A change made in
+      // system settings has no event, so a fresh read follows and replaces
+      // the announcement when the permission differs. Channels are awaited
+      // on that read; `register()` does not return a token until they exist.
+      const announced = lastObserved !== undefined && requesting === undefined
+        ? lastObserved
+        : undefined;
+      const announcedNow = announced !== undefined && androidChannelsReady;
+      if (announcedNow && announced !== undefined) {
+        dispatch({
+          type: 'endpoint-changed',
+          registration: registrationWith(token, announced),
+        });
       }
       void (requesting ?? Promise.resolve())
         .catch(() => undefined)
-        .then(() => (lastObserved === undefined
-          ? registrationOf(token)
-          : registrationWith(token, lastObserved)))
-        .then((registration) => dispatch({ type: 'endpoint-changed', registration }), reportError);
+        .then(async () => {
+          await ensureChannels();
+          return registrationOf(token);
+        })
+        .then((registration) => {
+          const permission = registration.address.kind === 'fcm-token'
+            ? registration.address.permission
+            : undefined;
+          if (announcedNow && permission === announced) {
+            return;
+          }
+          dispatch({ type: 'endpoint-changed', registration });
+        }, reportError);
     }));
     listen(() => push.addListener('notificationReceived', (event) => {
       const data = isRecord(event?.notification?.data) ? event.notification.data : {};
@@ -533,6 +574,8 @@ export function createCapacitorNotificationProvider(
     }
   };
   let channelsReady: Promise<void> | undefined;
+  /** Android pushes name a channel; do not announce an address before it exists. */
+  let androidChannelsReady = platform !== 'android';
   const ensureChannels = (): Promise<void> => {
     channelsReady ??= (async () => {
       if (platform !== 'android') {
@@ -547,9 +590,11 @@ export function createCapacitorNotificationProvider(
       for (const channel of channels) {
         await createChannel(channel);
       }
+      androidChannelsReady = true;
       setupFailureReported = false;
     })().catch((error: unknown) => {
       channelsReady = undefined;
+      androidChannelsReady = platform === 'android' ? false : androidChannelsReady;
       throw error;
     });
     return channelsReady;
@@ -621,7 +666,12 @@ export function createCapacitorNotificationProvider(
       ? { supported: false, purposes: [], addressing: 'none', content: 'free-form' }
       : {
           supported: true,
-          purposes: ['service', 'requested', 'advertising'],
+          // An Android FCM notification message cannot carry the opt-out
+          // action, so advertising is not a remote purpose until the shell
+          // renders it (RFC "Provider profiles", Capacitor).
+          purposes: platform === 'android'
+            ? ['service', 'requested']
+            : ['service', 'requested', 'advertising'],
           addressing: 'device',
           content: 'free-form',
         },
@@ -653,6 +703,28 @@ export function createCapacitorNotificationProvider(
       }
     }
     return { all, ours: sortEntries(ours) };
+  };
+
+  /** How many times to re-read pending after a schedule the plugin resolved early. */
+  const scheduleConfirmAttempts = 4;
+  /** Pause after the immediate re-reads, so a `center.add` still in flight can land. */
+  const scheduleConfirmDelayMs = 25;
+  /**
+   * iOS `LocalNotifications.schedule` resolves before `center.add` completes.
+   * The first getPending can miss the row; the next one sees a delayed add.
+   */
+  const confirmScheduled = async (sdk: LocalNotificationSdk, id: number): Promise<boolean> => {
+    for (let attempt = 0; attempt < scheduleConfirmAttempts; attempt += 1) {
+      if (attempt > 1) {
+        await new Promise((resolve) => setTimeout(resolve, scheduleConfirmDelayMs));
+      }
+      const pending = await callSdk(() => sdk.getPending());
+      const notifications = Array.isArray(pending?.notifications) ? pending.notifications : [];
+      if (notifications.some((entry) => entry.id === id)) {
+        return true;
+      }
+    }
+    return false;
   };
 
   /**
@@ -694,6 +766,16 @@ export function createCapacitorNotificationProvider(
           notifications: [schemaOf({ ...checked, id, fireAt, route })],
         }),
       );
+      // iOS `schedule` resolves before `center.add` finishes, and a full
+      // center silently drops one. A future reminder must be pending before
+      // this answers `scheduled`; an already-due one posts at once and does
+      // not have to stay pending.
+      const nowMs = (input.now ?? Date.now)();
+      if (Date.parse(fireAt) > nowMs && !(await confirmScheduled(sdk, id))) {
+        throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+          message: `Capacitor notifications: the reminder ${checked.key} was not pending after schedule.`,
+        });
+      }
     } catch (error) {
       // The new reminder failed after the farthest gave way: put that one back.
       if (evicted !== undefined) {
@@ -851,6 +933,9 @@ export function createCapacitorNotificationProvider(
       : {
           async register(): Promise<NotificationEndpointRegistration | null> {
             assertConfigured();
+            // Do not hand the backend a token until the Android channels
+            // exist. A failed create is retryable and returns no token.
+            await callSdk(ensureChannels);
             let value: string;
             try {
               value = (await push.getToken()).token;
@@ -915,8 +1000,16 @@ export function createCapacitorNotificationProvider(
             });
           },
           listLocal(): Promise<readonly LocalNotificationEntry[]> {
-            return serialized(async () => (await readPending(local)).ours
-              .map(({ key, topic, fireAt }) => ({ key, topic, fireAt })));
+            return serialized(async () => {
+              const now = (input.now ?? Date.now)();
+              return (await readPending(local)).ours
+                // Android `getPending` lists stored rows, including one-shots
+                // that already fired. Those are not pending. iOS drops them
+                // from the center, and a past `fireAt` there can still be
+                // waiting for the device to wake, so it stays.
+                .filter((entry) => platform !== 'android' || Date.parse(entry.fireAt) > now)
+                .map(({ key, topic, fireAt }) => ({ key, topic, fireAt }));
+            });
           },
         }),
     async openSettings(): Promise<NotificationSettingsResult> {
@@ -1071,11 +1164,18 @@ function topicsOf(request: NotificationTopicsInput): readonly string[] {
   return [...new Set(request.topics)];
 }
 
-function toPermissionState(state: PermissionState | undefined): NotificationPermissionState {
+function toPermissionState(
+  state: NotificationSdkPermissionState | undefined,
+): NotificationPermissionState {
   switch (state) {
     case 'granted':
       return 'granted';
     case 'prompt':
+    case 'provisional':
+    case 'ephemeral':
+      // Provisional and ephemeral can still be upgraded by a prompt. The
+      // installed plugins collapse both to `granted`; a shell that reports
+      // the raw status is not treated as already granted.
       return 'prompt';
     case 'prompt-with-rationale':
       return 'prompt-with-rationale';

@@ -25,6 +25,9 @@ import type {
 
 type Listener = (event: never) => void;
 
+/** OS states the plugins may report, including iOS provisional authorization. */
+export type FakeOsPermissionState = PermissionState | 'provisional' | 'ephemeral';
+
 /**
  * A plugin's listener table with Capacitor's `retainUntilConsumed`: an event
  * emitted while no listener is registered waits for the first one.
@@ -85,13 +88,39 @@ export interface FakeNotificationSdks extends NotificationConformanceHostActor {
     listenerCount(): number;
   };
   /** The OS permission as the plugins report it. */
-  osState: PermissionState;
+  osState: FakeOsPermissionState;
+  /**
+   * `NotificationManager.areNotificationsEnabled()`. Android 13+ can report
+   * `POST_NOTIFICATIONS` granted while this is false.
+   */
+  notificationsEnabled: boolean;
   readonly channels: readonly NotificationSdkChannel[];
   readonly actionTypes: readonly LocalNotificationSdkActionType[];
   readonly scheduled: readonly LocalNotificationSdkSchema[];
   readonly localPending: readonly LocalNotificationEntry[];
   /** A pending notification another part of the app scheduled. */
   addForeignPending(id: number): void;
+  /**
+   * A stored local row, as Android `getPending` returns an already-fired
+   * one-shot. It is not a schedule call.
+   */
+  addStoredLocal(entry: {
+    readonly id: number;
+    readonly title?: string;
+    readonly body?: string;
+    readonly extra: Readonly<Record<string, string>>;
+  }): void;
+  /**
+   * The next iOS `schedule` resolves without inserting, and the row appears
+   * on the getPending call after the one that misses it (`center.add` has
+   * not finished when the plugin resolves).
+   */
+  delayNextIosAdd(): void;
+  /** The next iOS `schedule` resolves and the row never becomes pending. */
+  dropNextIosAdd(): void;
+  /** Holds `createChannel` until `releaseChannels`. */
+  holdChannels(): void;
+  releaseChannels(): void;
   emitPush(eventName: 'tokenReceived' | 'notificationReceived' | 'notificationActionPerformed', event: unknown): void;
   emitLocal(eventName: 'localNotificationReceived' | 'localNotificationActionPerformed', event: unknown): void;
   /** Rejects the next call of `method` with `error`. */
@@ -126,6 +155,11 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
   let prompts = 0;
   let token: string | undefined;
   let tapCount = 0;
+  let iosAddsToDelay = 0;
+  let iosAddsToDrop = 0;
+  const deferredAdds: LocalNotificationSdkSchema[] = [];
+  let channelHold: Promise<void> = Promise.resolve();
+  let releaseChannelHold = (): void => undefined;
 
   const failure = async (method: string): Promise<void> => {
     if (failures.has(method)) {
@@ -135,7 +169,7 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
     }
   };
 
-  const prompt = async (): Promise<PermissionState> => {
+  const prompt = async (): Promise<FakeOsPermissionState> => {
     prompts += 1;
     const result = promptQueue.shift();
     if (result === undefined) {
@@ -177,6 +211,8 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
       return { token };
     },
     async createChannel(channel) {
+      await channelHold;
+      await failure('push.createChannel');
       channels.push(channel);
     },
     addListener: ((eventName: string, listener: Listener) =>
@@ -192,6 +228,10 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
       await failure('local.requestPermissions');
       return { display: await prompt() };
     },
+    async areEnabled() {
+      await failure('local.areEnabled');
+      return { value: sdks.notificationsEnabled };
+    },
     async schedule({ notifications }) {
       await failure('local.schedule');
       if (sdks.osState !== 'granted') {
@@ -205,8 +245,17 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
           fireAt: notification.extra['mpgdFireAt'] ?? '',
           exact: notification.isExactNotification,
         });
-        pending.set(notification.id, notification);
         scheduled.push(notification);
+        if (input.platform === 'ios' && iosAddsToDrop > 0) {
+          iosAddsToDrop -= 1;
+          continue;
+        }
+        if (input.platform === 'ios' && iosAddsToDelay > 0) {
+          iosAddsToDelay -= 1;
+          deferredAdds.push(notification);
+          continue;
+        }
+        pending.set(notification.id, notification);
       }
       return { notifications: notifications.map(({ id }) => ({ id })) };
     },
@@ -226,9 +275,16 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
     },
     async getPending() {
       await failure('local.getPending');
+      // A delayed iOS add is invisible to the getPending that races center.add,
+      // and visible to the next one.
+      const visible = [...pending.values()];
+      for (const notification of deferredAdds) {
+        pending.set(notification.id, notification);
+      }
+      deferredAdds.length = 0;
       return {
         // As the plugin reports them: id, title, body, and extra.
-        notifications: [...pending.values()].map((entry) => ({
+        notifications: visible.map((entry) => ({
           id: entry.id,
           ...('title' in entry ? { title: entry.title, body: entry.body } : {}),
           extra: { ...entry.extra },
@@ -236,6 +292,8 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
       };
     },
     async createChannel(channel) {
+      await channelHold;
+      await failure('local.createChannel');
       channels.push(channel);
     },
     async registerActionTypes({ types }) {
@@ -290,6 +348,7 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
     ...(input.local === false ? {} : { local }),
     app,
     osState: 'prompt',
+    notificationsEnabled: true,
     get channels() {
       return channels;
     },
@@ -317,6 +376,27 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
     },
     addForeignPending(id) {
       pending.set(id, { id, extra: {} });
+    },
+    addStoredLocal(entry) {
+      pending.set(entry.id, { id: entry.id, extra: { ...entry.extra } });
+    },
+    delayNextIosAdd() {
+      iosAddsToDelay += 1;
+    },
+    dropNextIosAdd() {
+      iosAddsToDrop += 1;
+    },
+    holdChannels() {
+      channelHold = new Promise((resolve) => {
+        releaseChannelHold = () => {
+          resolve();
+          channelHold = Promise.resolve();
+          releaseChannelHold = () => undefined;
+        };
+      });
+    },
+    releaseChannels() {
+      releaseChannelHold();
     },
     emitPush(eventName, event) {
       pushListeners.emit(eventName, event);

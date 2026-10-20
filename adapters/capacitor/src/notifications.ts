@@ -22,6 +22,7 @@ export {
   type LocalNotificationSdkEntry,
   type LocalNotificationSdkSchema,
   type NotificationSdkChannel,
+  type NotificationSdkPermissionState,
   type PushSdk,
   type PushSdkActionEvent,
   type PushSdkNotification,

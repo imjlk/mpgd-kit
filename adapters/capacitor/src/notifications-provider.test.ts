@@ -87,6 +87,7 @@ function setup(
     app: sdks.app,
     timeZone: () => 'Asia/Seoul',
     locale: () => 'ko-KR',
+    now: () => Date.parse('2026-10-12T03:00:00Z'),
     onError: (error) => errors.push(error),
     ...overrides,
   });
@@ -126,7 +127,7 @@ describe('Capacitor notifications provider: capabilities', () => {
       },
       remote: {
         supported: true,
-        purposes: ['service', 'requested', 'advertising'],
+        purposes: ['service', 'requested'],
         addressing: 'device',
         content: 'free-form',
       },
@@ -142,6 +143,7 @@ describe('Capacitor notifications provider: capabilities', () => {
     expect(ios.permission.promptLimit).toBe(1);
     expect(ios.local).toEqual({ supported: true, maxPending: 64 });
     expect(ios.permission.settings).toBe(false);
+    expect(ios.remote.purposes).toEqual(['service', 'requested', 'advertising']);
     const legacy = await setup({ androidPromptLimit: 1 }).provider.getCapabilities();
     expect(legacy.permission.promptLimit).toBe(1);
   });
@@ -150,7 +152,7 @@ describe('Capacitor notifications provider: capabilities', () => {
     const { provider } = setup();
     const first = await provider.getCapabilities();
     (first.remote.purposes as string[]).length = 0;
-    expect((await provider.getCapabilities()).remote.purposes).toHaveLength(3);
+    expect((await provider.getCapabilities()).remote.purposes).toHaveLength(2);
   });
 
   it('fails closed without the plugins: unsupported reads, unavailable requests, no prompt', async () => {
@@ -200,6 +202,21 @@ describe('Capacitor notifications provider: permission', () => {
     sdks.osState = 'denied';
     expect(await read()).toBe('blocked');
     expect(checks).not.toHaveBeenCalled();
+  });
+
+  it('reads a provisional or ephemeral authorization as still promptable', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    sdks.osState = 'provisional';
+    expect((await provider.getPermission({ topics: [] })).app).toBe('prompt');
+    sdks.osState = 'ephemeral';
+    expect((await provider.getPermission({ topics: [] })).app).toBe('prompt');
+  });
+
+  it('reads Android notifications turned off in settings as blocked even when the permission is granted', async () => {
+    const { provider, sdks } = setup();
+    grant(sdks);
+    sdks.notificationsEnabled = false;
+    expect((await provider.getPermission({ topics: [] })).app).toBe('blocked');
   });
 
   it('reads the push plugin when the local plugin is absent', async () => {
@@ -428,6 +445,74 @@ describe('Capacitor notifications provider: endpoints', () => {
     });
   });
 
+  it('announces a rotated token with a fresh permission read, not the last one', async () => {
+    const { provider, sdks } = setup();
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    grant(sdks);
+    await provider.getPermission({ topics: [] });
+    sdks.osState = 'denied';
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-rotated' });
+    await settle();
+    const rotated = events.filter((event) => event.type === 'endpoint-changed').at(-1);
+    expect(rotated).toMatchObject({
+      type: 'endpoint-changed',
+      registration: {
+        address: { kind: 'fcm-token', value: 'tok-rotated', permission: 'blocked' },
+      },
+    });
+  });
+
+  it('does not return a token when Android channel creation failed', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      createChannel: async () => Promise.reject(new Error('channel')),
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android',
+      topics,
+      push: sdks.push!,
+      local,
+      app: null,
+      onError: () => undefined,
+    });
+    await settle();
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await expect(provider.register?.()).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+  });
+
+  it('does not return a token before Android channels exist', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    sdks.holdChannels();
+    sdks.osState = 'granted';
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android',
+      topics,
+      push: sdks.push!,
+      local: sdks.local!,
+      app: null,
+    });
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    let settled = false;
+    const pending = provider.register?.().then((value) => {
+      settled = true;
+      return value;
+    });
+    await settle();
+    expect(settled).toBe(false);
+    expect(sdks.channels).toEqual([]);
+    sdks.releaseChannels();
+    await expect(pending).resolves.toMatchObject({
+      address: { kind: 'fcm-token', value: 'tok-1', permission: 'granted' },
+    });
+    expect(sdks.channels.map((channel) => channel.id)).toEqual([
+      'reminders', 'mpgd-service', 'mpgd-advertising',
+    ]);
+  });
+
   it('announces a rotated token as endpoint-changed, buffered for the first subscriber', async () => {
     const { provider, sdks } = setup();
     // Before any read the permission is read first.
@@ -435,8 +520,9 @@ describe('Capacitor notifications provider: endpoints', () => {
     await settle();
     grant(sdks);
     await provider.getPermission({ topics: [] });
-    // Once read, the rotation goes out at once with that permission.
+    // Once read, the rotation goes out with a fresh read of that permission.
     sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-2' });
+    await settle();
     const events: NotificationEvent[] = [];
     provider.subscribe((event) => events.push(event));
     expect(events).toEqual([
@@ -557,6 +643,7 @@ describe('Capacitor notifications provider: events around a request', () => {
     hold?.({ display: 'prompt' });
     await stale;
     sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await settle();
     expect(events).toEqual([{
       type: 'endpoint-changed',
       registration: {
@@ -632,6 +719,7 @@ describe('Capacitor notifications provider: events around a request', () => {
     hold?.({ display: 'prompt' });
     await stale;
     sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await settle();
     expect(events).toEqual([{
       type: 'endpoint-changed',
       registration: {
@@ -713,7 +801,10 @@ describe('Capacitor notifications provider: events around a request', () => {
       code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
     });
     // Neither a token nor a return from settings waits for it any more.
+    // The token read is asynchronous, so it is allowed to finish before the
+    // settings read; both must still arrive.
     sdks.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await settle();
     sdks.osState = 'denied';
     sdks.app.setActive(true);
     await settle();
@@ -878,6 +969,54 @@ describe('Capacitor notifications provider: local reminders', () => {
     expect(await provider.scheduleLocal?.({ ...reminder, key: 'r-0', fireAt: at(2) }))
       .toEqual({ status: 'replaced' });
     expect((await provider.listLocal?.())?.length).toBe(63);
+  });
+
+  it('omits Android rows whose fireAt is already past', async () => {
+    const { provider, sdks } = setup();
+    grant(sdks);
+    await provider.scheduleLocal?.(reminder);
+    sdks.addStoredLocal({
+      id: 9,
+      extra: {
+        mpgdKey: 'fired',
+        mpgdTopic: 'energy-full',
+        mpgdFireAt: '2020-01-01T00:00:00Z',
+      },
+    });
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' },
+    ]);
+  });
+
+  it('reports scheduled only after iOS has the reminder pending', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    sdks.delayNextIosAdd();
+    expect(await provider.scheduleLocal?.(reminder)).toEqual({ status: 'scheduled' });
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' },
+    ]);
+  });
+
+  it('restores an evicted reminder when iOS does not keep the new one pending', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    for (let id = 1; id <= 63; id += 1) {
+      sdks.addForeignPending(id);
+    }
+    await provider.scheduleLocal?.({
+      ...reminder,
+      key: 'far',
+      fireAt: '2026-10-20T00:00:00Z',
+      route: '/far',
+    });
+    sdks.dropNextIosAdd();
+    await expect(provider.scheduleLocal?.({ ...reminder, key: 'near' })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'far', topic: 'energy-full', fireAt: '2026-10-20T00:00:00Z' },
+    ]);
   });
 });
 
@@ -1234,6 +1373,17 @@ describe('Capacitor notifications provider: opens and events', () => {
       { type: 'opened', channel: 'remote', source: 'warm' },
       { type: 'received', channel: 'remote' },
     ]);
+  });
+
+  it('ignores a push dismiss, which is not an open', () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdks.emitPush('notificationActionPerformed', {
+      actionId: 'dismiss',
+      notification: { data: { topic: 'friend-challenge', route: '/?entry=friend-challenge' } },
+    });
+    expect(events).toEqual([]);
   });
 
   it('opens the declared opt-out screen from the advertising opt-out action', () => {

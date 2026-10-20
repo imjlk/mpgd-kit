@@ -1752,7 +1752,7 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 
 | Profile | `permission` | `remote` | `local` | `open` |
 | --- | --- | --- | --- | --- |
-| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form, all three purposes | supported, iOS `maxPending` 64 | payload |
+| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form; iOS all three purposes, Android `service` and `requested` until the shell renders the opt-out action | supported, iOS `maxPending` 64 | payload |
 | Apps in Toss | topic, host, not readable, persistent, gesture required, no settings link; per-topic `agreement` | platform-user, host-template, `service` and `requested` | unsupported | landing-url |
 | Devvit | app, game, readable through the server bridge and server-readable, persistent, gesture required, revocable in the game | platform-user, free-form (approved copy), `service` and `requested` | unsupported | host-link |
 | Web, Microsoft Store PWA, CrazyGames, OnePlay, Verse8 | `availability: 'unsupported'` | unsupported | unsupported | none |
@@ -1819,7 +1819,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     no advertising topic to Android: the push would arrive without the
     opt-out action the rules require, and a settings path described in the
     body does not replace it ([Advertising rules](#advertising-rules)). The
-    starter maps its sample advertising topic to iOS only. The game's
+    provider therefore omits `advertising` from Android `remote.purposes`
+    (`createCapacitorNotificationProvider`). The starter maps its sample
+    advertising topic to iOS only. The game's
     settings screen stays the in-game opt-out on every target.
   - Tapping the action opens the declared `optOutRoute` of the advertising
     topic the push names in its `topic` data key, never a route from the
@@ -1853,13 +1855,18 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     each payload and answer, and the gateway's client validates again. The
     gateway serves its v1 `notifications` adapter from the same provider and
     refuses a v1 push provider next to it.
-- **Cold starts.** Verify cold-start opens on a device: Capacitor 8.5 moved the
-  iOS template to the UIScene lifecycle, which sets the notification delegate
-  later than Apple recommends. The provider registers its native listeners
-  when it is created and marks an open `cold` when it arrives before the first
+- **Cold starts.** A killed-app notification tap is delivered only in
+  `connectionOptions.notificationResponse` of
+  `scene(_:willConnectTo:options:)`. Capacitor 8.5's scene proxy replays URL
+  contexts on `capacitorViewDidAppear` and does not read that response, and
+  `@capacitor/ios` 8.5.2 does not either. The reference shell's
+  `SceneDelegate` forwards it to the notification-center delegate (or the
+  bridge's notification router) on the first `capacitorViewDidAppear`, once
+  plugins have registered. The provider registers its native listeners when
+  it is created and marks an open `cold` when it arrives before the first
   subscriber. It also keeps events that arrive while no listener is attached
   later for the next subscriber (all but receipts), because the gateway's
-  bridge detaches when its last listener leaves.
+  bridge detaches when its last listener leaves. Verify the tap on a device.
 - **Unmapped topics.** A topic the catalog does not declare, or declares
   without a mapping for the target, reads `unsupported` and schedules
   nothing; an open naming it carries no topic.

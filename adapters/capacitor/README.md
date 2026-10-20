@@ -208,6 +208,10 @@ const notifications = createCapacitorNotificationServiceProvider({
 const gateway = createCapacitorPlatformGateway({ ..., providers: [notifications] });
 ```
 
+<!--
+@link src/notifications-provider.ts#createCapacitorNotificationProvider Android omits advertising from remote purposes, waits for channels before register, ignores a dismiss, and confirms an iOS schedule.
+@evidence ../../docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor An Android FCM notification message cannot carry the opt-out action, and a killed-app tap is only in connectionOptions.notificationResponse.
+-->
 Create it once, early in startup: it registers its native listeners when it
 is created, which is how a cold-start open reaches it.
 
@@ -240,7 +244,12 @@ is created, which is how a cold-start open reaches it.
   `NOTIFICATIONS_V2_UNAVAILABLE` before it pauses the game.
 - **Permission.** One OS permission for the app. The provider reads it through
   the local plugin, which reflects the system setting on Android 12 and lower
-  where the push plugin answers `granted` regardless. The OS `denied` reads
+  where the push plugin answers `granted` regardless. On Android 13+ a granted
+  `POST_NOTIFICATIONS` with notifications turned off in settings
+  (`areNotificationsEnabled() == false`) reads `blocked`. iOS provisional and
+  ephemeral authorization, when a shell reports them instead of collapsing
+  them to `granted`, read `prompt` so a full prompt can still upgrade them.
+  The OS `denied` reads
   `blocked`: after one denial on iOS (`promptLimit` 1) and after the second on
   Android 13+ (`promptLimit` 2; pass `androidPromptLimit: 1` for an app that
   targets SDK 32 or lower). Only `requestPermission` shows the dialog, and a
@@ -252,6 +261,11 @@ is created, which is how a cold-start open reaches it.
   schedules locally. Otherwise it reads the permission first and answers
   `permission-required` without calling the plugin, whose own `schedule` would
   prompt on Android 13+.
+  iOS `schedule` resolves before `center.add` finishes, so the provider
+  checks `getPending` for the id before it answers `scheduled` and restores
+  any reminder it evicted when the id is missing. Android `listLocal` omits
+  stored one-shots whose `fireAt` is already past: `getPending` keeps those
+  rows after they fire.
   - Reminders are inexact (`isExactNotification: false`; the plugin's default
     would open the exact-alarm settings screen) but may fire in Android's Doze
     mode (`allowWhileIdle: true`; Android lets such alarms fire about once per
@@ -284,8 +298,12 @@ is created, which is how a cold-start open reaches it.
   the like), reach the game as untrusted `data`. A route is kept only when
   `isRootRelativeNotificationRoute` accepts it, and a topic only when the
   catalog declares it. Nothing is granted from an open. An open that arrives
-  before the first subscriber is marked `cold`; Capacitor replays a cold-start
-  tap asynchronously, so one replayed after the game subscribed reads `warm`.
+  before the first subscriber is marked `cold`. A killed-app tap on iOS is
+  only in `UIScene.ConnectionOptions.notificationResponse`. The reference
+  shell's `SceneDelegate` forwards it to the notification-center delegate
+  once the bridge has loaded plugins (`capacitorViewDidAppear`); Capacitor
+  8.5's scene proxy does not. Capacitor then replays that tap to the first
+  native listener, so one replayed after the game subscribed reads `warm`.
 - **Advertising opt-out.** For a catalog with an advertising topic, the
   provider registers the action type `mpgd-advertising`
   (`capacitorAdvertisingActionTypeId`) with the `advertising-opt-out` action
@@ -298,8 +316,9 @@ is created, which is how a cold-start open reaches it.
     in its `topic` data key; without that key it opens nothing.
   - An Android FCM notification message cannot carry actions, so an Android
     advertising push needs the shell to render it natively with the action,
-    which is not built yet (a follow-up after C1). Until then map no
-    advertising topic to `android`: the push would arrive without the
+    which is not built yet (a follow-up after C1). Until then the provider
+    omits `advertising` from Android `remote.purposes`, and a catalog should
+    map no advertising topic to `android`: the push would arrive without the
     opt-out action the Korean rules require (see the RFC's advertising
     rules). The kit's starter maps its sample advertising topic to iOS only.
 - **Settings.** Neither plugin opens the notification settings, so the
@@ -317,7 +336,12 @@ is created, which is how a cold-start open reaches it.
   five seconds when the app never left.
 - **Endpoints.** `register()` answers the FCM token with the device
   permission, locale, and time zone, or `null` while Firebase cannot issue one
-  yet; a token Firebase issues later arrives as `endpoint-changed`. It
+  yet; a token Firebase issues later arrives as `endpoint-changed`. On
+  Android it waits until the topic channels exist, and does not return a
+  token if creating them failed: FCM sets `android.notification.channel_id`,
+  so a push that arrives before the channel exists is dropped. A rotated
+  token is announced at once with the last permission read, then replaced if
+  a fresh read differs (a settings change has no event). It
   registers FCM tokens only: `fcm-installation` addresses are reserved,
   because FCM HTTP v1 cannot send to a Firebase installation id and the
   game-services FCM sender refuses them.
