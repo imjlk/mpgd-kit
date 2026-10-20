@@ -178,7 +178,9 @@ player's next advertising or night record. The memory store keeps consent record
 isolate only, and the Worker refuses it next to a queue, whose consumer
 runs in another isolate. The catalog,
 the deployment, and the providers are checked on first use; a broken one
-fails the notifications routes with 500 and is logged once.
+fails the notifications routes with 500 and `{ "error":
+"NOTIFICATIONS_CONFIGURATION_REQUIRED" }`, which the notifications client
+does not retry, and is logged once.
 
 ```toml
 [vars]
@@ -264,8 +266,21 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   the missing binding the first time a session route is asked for (a
   send-only Worker, which serves only `deliverNotification`, can ignore
   it). The
-  identity Worker's side (the `NotificationSessions` entrypoint) is a
-  follow-up and is not in this repository yet.
+  identity Worker's side (the `NotificationSessions` entrypoint) belongs to
+  the game's identity service and is not in this repository: implement
+  `authenticateNotificationSession` and call `endNotificationSession` as
+  **Sessions** above describes.
+- **The client.** `createGameServicesNotificationsClient` in
+  `@mpgd/game-services/notifications/client` calls these routes for the
+  notifications runtime (`@mpgd/platform/notifications-runtime`). It takes
+  the commerce client's `baseUrl`, `fetch`, and header resolver, the
+  catalog `target` for device registrations, and the game's identity: the
+  signed-in `{ playerId, sessionId }`, where `sessionId` is the one
+  `authenticateNotificationSession` returns for that session's header, and
+  a sign-in subscription. No request names a player or an installation.
+  A 401 reaches the runtime as a retryable
+  `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and a 404 on a session route as
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
 - **Sends** are never a client route: a game server calls
   `deliverNotification(input)` on the service binding. It answers
   `{ ok: true, value }` with the send's outcome, or `{ ok: false, error: {

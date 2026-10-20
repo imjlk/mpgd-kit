@@ -406,7 +406,8 @@ export function createNotificationsFetchHandler(
       return json({ error: 'UNKNOWN_ENDPOINT' }, 404, corsHeaders);
     }
     if (notifications.status === 'misconfigured') {
-      return json({ error: 'INTERNAL_ERROR' }, 500, corsHeaders);
+      // Named, so a client stops retrying what only a fixed deploy can change.
+      return json({ error: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' }, 500, corsHeaders);
     }
     const { service } = notifications;
     const route = pathname.slice(notificationsRoutePrefix.length);

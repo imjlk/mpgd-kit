@@ -1162,10 +1162,10 @@ try {
       /placeholder in advertisingSender\.contact/u,
     ],
   ] as const) {
-    assert.equal(
-      (await createWorkerFetchHandler(broken)(new Request(`${base}/providers`))).status,
-      500,
-    );
+    const refused = await createWorkerFetchHandler(broken)(new Request(`${base}/providers`));
+    assert.equal(refused.status, 500);
+    // The body names the configuration, so clients stop retrying it.
+    assert.deepEqual(await refused.json(), { error: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
     const resolved = resolveWorkerNotifications(broken);
     assert.ok(
       resolved.status === 'misconfigured' && reason.test(resolved.error.message),

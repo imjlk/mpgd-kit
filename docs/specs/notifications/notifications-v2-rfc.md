@@ -2,9 +2,10 @@
 
 Status: **draft**. N2 through C1 implemented this contract: the types, the
 conformance runner and vectors, the providers, the Worker and Devvit
-backends, and the CLI starter. The game-services client runtime and the
-identity-side session binding are follow-ups (see
-[What C1 landed](#pr-plan)). It is still outside the enforced
+backends, and the CLI starter. R1 added the production runtime and the
+game-services client. The identity-side session binding belongs to each
+game's identity service (see [What R1 landed](#pr-plan)). It is still
+outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope, and a
 conformance vector is not device or release verification. Baseline:
 `main@2f70328e`, 2026-10-12, revised the same day after review. Draft
@@ -250,7 +251,9 @@ follows v2 even where an adapter's v1 disagrees.
 The client declaration describes what the provider can do on the device. The
 backend never trusts it for a send decision: the gate reads the server's own
 [provider registry](#provider-registry) entry, and the runtime compares the
-two at start.
+two at start. While they disagree the runtime fails closed: every call
+throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing reaches the
+backend in the background either (no registration, no record).
 
 ## Client contract {#client-contract}
 
@@ -420,9 +423,11 @@ The gateway gains `notificationsV2?: NotificationProvider` next to the v1
 
 ### Runtime {#runtime}
 
-Games do not call the provider directly. The game-services client composes
-the provider with the backend in one notifications runtime, which the
-conformance runner drives as the `game` actor:
+Games do not call the provider directly. The notifications runtime
+(`createNotificationRuntime` in `@mpgd/platform/notifications-runtime`)
+composes the provider with the backend, such as the game-services client
+over the Worker's routes; the conformance runner drives it as the `game`
+actor:
 
 ```ts
 export interface NotificationConsentRecord {
@@ -586,8 +591,13 @@ Runtime rules:
     device's decided permission; when a player authenticates (an account
     switch moves the installation to the new player); at start and on each
     read, once the registration the backend last acknowledged is older than
-    7 days, so the endpoint of a device in use never goes stale; and on
-    `register()`.
+    7 days, so the endpoint of a device in use never goes stale, or was
+    acknowledged for another player or session, so a sign-in the runtime did
+    not observe (one before its start, or while it was stopped) still moves
+    the installation; at start, for a player already signed in, when no
+    registration was acknowledged yet, and on reads while the provider's
+    address was never acknowledged (a first registration that failed); and
+    on `register()`.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the
@@ -609,7 +619,10 @@ Runtime rules:
       fails, such as on an offline logout, and then throws the unbind's
       error.
     - The installation stays unbound, across restarts, until `register()` or
-      the next authentication.
+      the next authentication. A session other than the one signed in when
+      `unregister()` ran (any session, when none was) counts as that
+      authentication even when the runtime did not observe it, so the runtime
+      keeps that session with the unbound state.
 - **Local reminders.** On start, on authentication, and after each backend
   read, the runtime compares `listLocal()` with the latest backend preference
   and permission and cancels the reminders that no longer pass, because a
@@ -2311,7 +2324,8 @@ written for one fixture profile and declares in `appliesTo` the capability
 fields its scenario depends on. A provider in P1–P3 runs, through a
 `createProvider` hook as commerce providers do, every vector whose
 `appliesTo` its own capabilities satisfy; the reference runtime runs all of
-them with fixture providers.
+them with fixture providers. Since R1 the reference runtime is the
+production runtime from `@mpgd/platform/notifications-runtime`.
 
 How a real provider is judged:
 
@@ -2510,6 +2524,7 @@ publishable package carries a Sampo changeset.
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path landed with P3 | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
+| R1 | `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
 
 **What S1 landed.**
 
@@ -2555,9 +2570,9 @@ publishable package carries a Sampo changeset.
   the session routes `POST /reminders` and `POST /reminders/cancel`, and a
   cron that runs the scheduler after the purges.
 - Left for later: a game-services client that implements the runtime's
-  backend calls over the Worker routes, and seeding notice checks for
-  players whose records predate the scheduler. The Devvit scheduler path
-  landed with P3.
+  backend calls over the Worker routes (landed in R1, below), and seeding
+  notice checks for players whose records predate the scheduler. The
+  Devvit scheduler path landed with P3.
 
 **What P3 landed.** The Devvit provider, server bridge handler, delivery
 provider, and Redis-backed store; see [Devvit](#profile-devvit),
@@ -2569,8 +2584,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
 - Left to follow-ups: a shared host-side `notifications.v2` bridge
   handler for the Apps in Toss and Devvit adapters (landed in B1, below),
   and the runtime's backend client for a service the Devvit server hosts
-  (the game-services client). The wiring in the generated Devvit app landed
-  in C1.
+  (the game-services client landed in R1 for the Worker). The wiring in
+  the generated Devvit app landed in C1.
 
 **What C1 landed.**
 
@@ -2601,19 +2616,55 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   [Firebase setup guide](../../FIREBASE_NOTIFICATIONS.md).
 - Left to follow-ups:
   - The runtime's backend client (a game-services client over the Worker's
-    notification routes). The routes need the identity side's session
-    binding, which is its own follow-up, and the only runtime is the
-    conformance reference. Until both land, the starter's
-    `createStarterNotificationBackend` returns `undefined`: the settings
-    screen asks for the permission but shows no reminder, advertising, or
-    night switch, and says so. With a backend, the switches show the
-    player's latest consent records (the Worker's `GET /consent`), read on
-    every view, never a device-side copy.
+    notification routes) and a production runtime: landed in R1, below.
   - Native rendering of Android advertising pushes with the opt-out action
     in the Capacitor shell; until then the starter maps no advertising topic
     to Android.
   - The shared host-side `notifications.v2` bridge handler (landed in B1,
     below), and bulk sends (open question 5).
+
+**What R1 landed.**
+
+- `@mpgd/platform/notifications-runtime`: the production runtime,
+  `createNotificationRuntime`, over a backend port
+  (`NotificationRuntimeBackend`) and a storage port for what survives a
+  restart (`NotificationRuntimeStorage`; `createNotificationRuntimeStorage`
+  keeps it in the platform storage). The conformance runner's reference
+  runtime is now this one, so every vector exercises production code. A
+  sign-in the runtime did not observe still moves the installation (see
+  [Runtime](#runtime), Registration and Unbinding).
+- `@mpgd/game-services/notifications/client`:
+  `createGameServicesNotificationsClient`, the backend port over the
+  Worker's session routes, with the commerce client's `baseUrl`, `fetch`,
+  and header resolver. The game's identity supplies the session
+  (`{ playerId, sessionId }` and a sign-in subscription); requests name no
+  player or installation. Worker answers map to the runtime's codes: 401 is
+  a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, a 404 on a session
+  route `NOTIFICATIONS_CONFIGURATION_REQUIRED`, a 400 or 413
+  `NOTIFICATIONS_INVALID_INPUT`, and an answer outside the route's contract
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED`. The vectors the service passes
+  also pass with the runtime calling it through this client, and a Worker
+  test runs the runtime through it against the real handler.
+- The starter: `createStarterNotificationBackend` returns the runtime over
+  this client when the game has `VITE_MPGD_GAME_SERVICES_URL` and sets a
+  server-backed session with `setStarterServerSession`, whose header the
+  commerce client then sends too; otherwise `undefined`, as before. The
+  runtime loads the Worker's registry entry for its target
+  (`GET /providers`, `loadRegistryEntry`) in the background and compares
+  the provider with it; a Worker it cannot reach is logged and the runtime
+  runs without the comparison. A Reddit game gets no Worker backend: its
+  notifications backend is the Devvit server.
+- Left to follow-ups:
+  - The identity side's `NotificationSessions` binding stays with each
+    game's identity service; the contract is in the
+    [Worker guide](../../CLOUDFLARE_WORKER_DEPLOY.md) ("Sessions").
+  - Expose a stable session-family id from `GuestSessionCoordinator`. Its
+    view's `sessionId` may rotate on refresh, while the runtime and the
+    Worker need the id `authenticateNotificationSession` answers, which
+    stays the same across refreshes; until then a game passes that id
+    itself.
+  - Android advertising rendering and bulk sends, as listed under C1; the
+    shared host-side `notifications.v2` bridge handler landed in B1, below.
 
 **What B1 landed.** B1 is a follow-up to the first release wave: the shared
 host-side handler that the P3 and C1 notes left open, and three small Apps
@@ -2649,9 +2700,8 @@ in Toss fixes.
   `agreementFailReasons` entry that is empty or longer than 1,024 characters
   once trimmed, since it reads at most 1,024 characters of a
   `reachedFailReason`.
-- Left to follow-ups: bulk sends (open question 5); native rendering of
-  Android advertising pushes and the runtime's backend client (both
-  above).
+- Left to follow-ups: bulk sends (open question 5) and native rendering of
+  Android advertising pushes (above).
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release

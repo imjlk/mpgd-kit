@@ -114,15 +114,37 @@ Rules the starter's settings screen follows, and your own screen must too:
   `setTopicPreference`, and `setAdvertisingConsent` with the consent text
   version. The backend's policy gate decides every send from those records.
 
-> **The runtime is not in the kit yet.** Composing the provider with the
-> backend needs a game-services client for the Worker's notification routes,
-> and those routes need the identity side's session binding. Until both ship,
-> `createStarterNotificationBackend` in the starter returns `undefined`. The
-> settings screen then asks for the OS or host permission (and withdraws a
-> Devvit opt-in the game rendered), shows no reminder, advertising, or night
-> switch, and says why. Return your own `NotificationRuntime` there, with
-> `listConsent` reading the player's consent records (`GET /consent` on the
-> game-services Worker), if your backend implements the routes.
+> **The runtime needs a session.** `createNotificationRuntime` in
+> `@mpgd/platform/notifications-runtime` composes the provider with a
+> backend; `createGameServicesNotificationsClient` in
+> `@mpgd/game-services/notifications/client` is that backend over the
+> game-services Worker's notification routes. The Worker binds each request
+> to the session its `Authorization` header names, through the identity
+> service's `NotificationSessions` binding, which lives in the game's own
+> identity Worker ([Sessions](./CLOUDFLARE_WORKER_DEPLOY.md)). The starter's
+> `createStarterNotificationBackend` builds both when the game has a
+> game-services URL (`VITE_MPGD_GAME_SERVICES_URL`) and sets its
+> server-backed session with `setStarterServerSession`
+> (`src/platform/serverSession.ts`): the signed-in `{ playerId, sessionId }`,
+> a sign-in subscription, and the session's header, which the commerce
+> client then sends too. `sessionId` must be the stable session-family id:
+> the `sessionId` the identity service answers to
+> `authenticateNotificationSession` for that header, the same across token
+> refreshes. A `GuestSessionCoordinator` view's `sessionId` may rotate on
+> refresh, so do not pass it as that id. Without a URL or a session (or
+> with a production URL the commerce rule refuses, or no notifications
+> provider) it returns `undefined`, and the settings screen asks for the OS or host
+> permission (and withdraws a Devvit opt-in the game rendered), shows no
+> reminder, advertising, or night switch, and says why. A Reddit game gets
+> no Worker backend either: its notifications backend is the Devvit server.
+> The runtime compares its provider with the Worker's registry entry for the
+> target (`GET /providers`), and runs without the check when the Worker
+> cannot be reached or lists no entry for the target. The runtime keeps its last registration, push
+> address included, in the platform storage, like other game data. A game
+> created before this release has no `serverSession.ts`; `mpgd target init
+> capacitor --providers notifications` writes one, and its commerce client
+> sends the header only once `gameServices.ts` passes it, as the starter's
+> now does.
 
 Notification opens are hints, never grants: an open carries a route and
 untrusted data, and anything worth claiming goes through the server. The
