@@ -112,7 +112,7 @@ nor a timeout should reset the server's monetary dispatch fence. A legacy failur
 already removed cannot recover its old error code.
 
 <!--
-@link src/host.ts#createAitHostBridge Grant and recover share one idempotency-key lock, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, fail closed when a scoped marker's campaignId does not match its key, and do not return a legacy receipt when cleanup cannot durably bind it.
+@link src/host.ts#createAitHostBridge Grant and recover share one idempotency-key lock, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, and leave a stored record pending when its campaignId differs.
 @link src/index.ts#createAitPlatformGateway An older host's unsupported recoverReward method, including a protocol validator rejection, is pending, not an exception.
 -->
 
@@ -122,8 +122,8 @@ a new installation without local state. It never calls the authorizer or native 
 a resolver's `retry` result leaves pending storage untouched. An explicit `grantReward` request
 is still required for a newly authorized payment. An unknown provider outcome remains pending;
 this API cannot reconstruct a lost provider key or prove non-payment. Grant and recover for the
-same idempotency key run one at a time, including when the campaigns differ, so two campaigns
-cannot both bind one unscoped legacy marker. After authorization, and again immediately
+same idempotency key run one at a time, including when the campaigns differ, because the
+marker is keyed by that claim id. After authorization, and again immediately
 before the native payout, grant re-reads storage and the bridge-local receipt cache and returns
 a granted receipt instead of paying again.
 
@@ -131,23 +131,11 @@ Recovery does not require current native payout support. A missing local marker 
 `pendingSince`, so the resolver receives no invented timestamp. A failed local read can fall back
 to the authority; that fallback does not run while a grant for the same claim is in flight, and it
 writes only a terminal authority receipt. Confirmed receipts are cached for later restarts. The
-receipt contract is the same for markerless and existing-marker resolution. New markers are stored under
-`mpgd:ait:promotion-grant:v2:<campaignId>:<idempotencyKey>` and include `campaignId`. A legacy
-`v1` marker, which was keyed only by the idempotency key, is still readable. The first campaign
-that reconciles an unbound legacy marker binds it; another campaign does not receive that receipt.
-Server-issued idempotency keys should stay unique across campaigns. An unbound legacy marker is
-bound to the reconciling campaign before any scoped copy is written. If that binding or the copy
-cannot be written, a legacy granted receipt is not returned from local storage: the resolver is asked
-for that campaign and only its `granted` answer is returned (it is not given `pendingSince`, and
-`retry` cannot dispatch); without a resolver the claim stays pending. A legacy pending marker that
-cannot be copied still goes to the resolver. The campaign id is written onto
-the legacy marker before it is removed, so a failed delete still fences a restarted bridge.
-A cleanup read that fails is not a successful copy: the campaign binding is stored before the
-receipt is returned. If that binding cannot be stored, the claim stays pending and the scoped
-copy is removed, so a restarted bridge cannot credit the unbound marker to a second campaign.
-An authority `retry` also removes
-that migrated copy, so it cannot block the authorized payout. A v2 marker whose embedded
-`campaignId` does not match its key stays pending and is not overwritten or paid again.
+receipt contract is the same for markerless and existing-marker resolution. Markers stay keyed by
+the claim id, `mpgd:ait:promotion-grant:v1:<idempotencyKey>`, as on main. New records also include
+`campaignId`. A stored record whose `campaignId` differs from the requested campaign stays pending
+and is not overwritten, removed, or paid again. A record with no `campaignId` is read as before.
+Campaign-scoped storage keys are a follow-up.
 
 An older host that does not implement `promotions.recoverReward` answers `{ status: 'pending' }`
 instead of throwing. That includes a host whose protocol validator rejects the method and whose
