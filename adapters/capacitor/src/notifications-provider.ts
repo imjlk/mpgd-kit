@@ -743,15 +743,22 @@ export function createCapacitorNotificationProvider(
     if (read === undefined) {
       return new Set();
     }
-    const result = await callSdk(() => read());
-    const notifications = Array.isArray(result?.notifications) ? result.notifications : [];
-    const ids = new Set<number>();
-    for (const notification of notifications) {
-      if (typeof notification?.id === 'number') {
-        ids.add(notification.id);
+    try {
+      const result = await read();
+      const notifications = Array.isArray(result?.notifications) ? result.notifications : [];
+      const ids = new Set<number>();
+      for (const notification of notifications) {
+        if (typeof notification?.id === 'number') {
+          ids.add(notification.id);
+        }
       }
+      return ids;
+    } catch {
+      // A failed shade read cannot tell a fired row from a deferred alarm.
+      // Hide nothing, as when the method is absent, so cancellation still
+      // reaches every stored row.
+      return new Set();
     }
-    return ids;
   };
 
   /** How long to wait for an iOS `center.add` that the plugin already accepted. */
@@ -762,7 +769,7 @@ export function createCapacitorNotificationProvider(
   /**
    * iOS `LocalNotifications.schedule` resolves before `center.add` completes.
    * The pending row for this id can still be the reminder being replaced, so
-   * a match is the requested key, `fireAt`, and route — not the id alone.
+   * a match is the requested key, topic, `fireAt`, and route — not the id alone.
    * Returns whether that row appeared before the wall-clock budget elapsed.
    */
   const confirmScheduled = async (
@@ -830,6 +837,7 @@ export function createCapacitorNotificationProvider(
     const expected: ScheduledExpectation = {
       id,
       key: checked.key,
+      topic: checked.topic,
       fireAt,
       title: checked.title,
       body: checked.body,
@@ -850,7 +858,7 @@ export function createCapacitorNotificationProvider(
     }
     // iOS `schedule` resolves before `center.add` finishes, and a full
     // center silently drops one. A future reminder is confirmed when the
-    // pending row carries this key, time, and route. An add still missing
+    // pending row carries this key, topic, time, and route. An add still missing
     // when the wait ends is unconfirmed, not a failure: `center.add` has no
     // deadline, and throwing would restore the evicted reminder into a slot
     // the add may still take. An already-due one posts at once and does not
@@ -1290,6 +1298,7 @@ interface LocalEntryExtra extends LocalNotificationEntry {
 interface ScheduledExpectation {
   readonly id: number;
   readonly key: string;
+  readonly topic: string;
   readonly fireAt: string;
   readonly title: string;
   readonly body: string;
@@ -1309,6 +1318,7 @@ function matchesScheduled(
   }
   const { extra } = notification;
   if (stringOf(extra[extraKeys.key]) !== expected.key
+    || stringOf(extra[extraKeys.topic]) !== expected.topic
     || stringOf(extra[extraKeys.fireAt]) !== expected.fireAt
     || safeRoute(extra[extraKeys.route]) !== expected.route) {
     return false;

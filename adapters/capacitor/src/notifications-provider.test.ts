@@ -1075,6 +1075,26 @@ describe('Capacitor notifications provider: local reminders', () => {
     expect((await sdks.local!.getPending()).notifications.map((entry) => entry.id)).toEqual([9]);
   });
 
+  it('lists stored rows when the shade read fails', async () => {
+    const { provider, sdks } = setup();
+    grant(sdks);
+    await provider.scheduleLocal?.(reminder);
+    sdks.addStoredLocal({
+      id: 9,
+      extra: {
+        mpgdKey: 'doze',
+        mpgdTopic: 'energy-full',
+        mpgdFireAt: '2020-01-02T00:00:00Z',
+      },
+      delivered: true,
+    });
+    sdks.failNext('local.getDeliveredNotifications', new Error('shade'));
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'doze', topic: 'energy-full', fireAt: '2020-01-02T00:00:00Z' },
+      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' },
+    ]);
+  });
+
   it('keeps a past Android row when delivered notifications cannot be read', async () => {
     const sdks = createFakeNotificationSdks({ platform: 'android' });
     const { getDeliveredNotifications: _delivered, ...local } = sdks.local!;
@@ -1138,6 +1158,29 @@ describe('Capacitor notifications provider: local reminders', () => {
     await expect(replacing).resolves.toEqual({ status: 'replaced' });
     expect(await provider.listLocal?.()).toEqual([
       { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T07:00:00Z' },
+    ]);
+  });
+
+  it('does not treat the old topic as a completed replacement', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    await provider.scheduleLocal?.({ ...reminder, route: '/keep' });
+    sdks.holdNextIosAdd();
+    let settled = false;
+    const replacing = provider.scheduleLocal?.({
+      ...reminder,
+      topic: 'friend-challenge',
+      route: '/keep',
+    }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await settle();
+    expect(settled).toBe(false);
+    sdks.releaseIosAdds();
+    await expect(replacing).resolves.toEqual({ status: 'replaced' });
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'energy', topic: 'friend-challenge', fireAt: '2026-10-12T06:00:00Z' },
     ]);
   });
 

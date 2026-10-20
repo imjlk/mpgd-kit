@@ -262,7 +262,7 @@ is created, which is how a cold-start open reaches it.
   `permission-required` without calling the plugin, whose own `schedule` would
   prompt on Android 13+.
   iOS `schedule` resolves before `center.add` finishes, so the provider
-  checks `getPending` for the reminder's key, `fireAt`, and route — not only
+  checks `getPending` for the reminder's key, topic, `fireAt`, and route — not only
   its id — and waits with a bounded backoff before it answers. An add still
   missing when that wait ends is not a failure: `center.add` has no deadline,
   and failing it would restore a reminder evicted to make room while the new
