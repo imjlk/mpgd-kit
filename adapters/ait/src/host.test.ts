@@ -3005,6 +3005,100 @@ describe('AIT production host bridge', () => {
     expect(grantPromotionReward).toHaveBeenCalledTimes(0);
   });
 
+  describe('legacy marker whose scoped copy cannot be written', () => {
+    const promotionRewards = {
+      CAMPAIGN_A: { promotionCode: 'PROMO_A', amount: 1 },
+      CAMPAIGN_B: { promotionCode: 'PROMO_B', amount: 1 },
+    };
+    const setupUnwritable = (legacy: Record<string, unknown>) => {
+      const legacyKey = 'mpgd:ait:promotion-grant:v1:unwritable-claim';
+      const legacyRecord = JSON.stringify(legacy);
+      const values = new Map<string, string>([[legacyKey, legacyRecord]]);
+      const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+      const storage = {
+        getItem: async (key: string) => values.get(key) ?? null,
+        setItem: async (key: string, value: string) => {
+          if (key.includes(':v2:')) {
+            throw new Error('scoped write failed');
+          }
+          values.set(key, value);
+        },
+        removeItem: async (key: string) => { values.delete(key); },
+      };
+      return { legacyKey, legacyRecord, values, grantPromotionReward, storage };
+    };
+
+    it('keeps a stored v1 receipt pending without a resolver', async () => {
+      const fixture = setupUnwritable({ status: 'granted', receiptKey: 'legacy-receipt' });
+      const bridge = createAitHostBridge({
+        promotionRewards,
+        dependencies: createDependencies({
+          grantPromotionReward: fixture.grantPromotionReward,
+          storage: fixture.storage,
+        }),
+      });
+      await expect(request(bridge, 'promotions.recoverReward', {
+        campaignId: 'CAMPAIGN_A',
+        idempotencyKey: 'unwritable-claim',
+      })).resolves.toEqual({ status: 'pending' });
+      expect(fixture.values.get(fixture.legacyKey)).toBe(fixture.legacyRecord);
+      expect(fixture.grantPromotionReward).toHaveBeenCalledTimes(0);
+    });
+
+    it('returns only the authority answer for a stored v1 receipt and never dispatches', async () => {
+      const fixture = setupUnwritable({ status: 'granted', receiptKey: 'legacy-receipt' });
+      const resolvePendingPromotionGrant = vi.fn(async (input: { readonly campaignId: string }) => (
+        input.campaignId === 'CAMPAIGN_A'
+          ? { status: 'granted' as const, receiptKey: 'server-receipt-a' }
+          : { status: 'retry' as const }
+      ));
+      const create = () => createAitHostBridge({
+        promotionRewards,
+        authorizePromotionGrant: async () => ({ status: 'authorized' }),
+        resolvePendingPromotionGrant,
+        dependencies: createDependencies({
+          grantPromotionReward: fixture.grantPromotionReward,
+          storage: fixture.storage,
+        }),
+      });
+      await expect(request(create(), 'promotions.grantReward', {
+        campaignId: 'CAMPAIGN_A',
+        idempotencyKey: 'unwritable-claim',
+      })).resolves.toEqual({ status: 'granted', receiptKey: 'server-receipt-a' });
+      // A restarted bridge for another campaign gets no local receipt, and
+      // `retry` cannot reopen a claim whose v1 marker says it was paid.
+      await expect(request(create(), 'promotions.grantReward', {
+        campaignId: 'CAMPAIGN_B',
+        idempotencyKey: 'unwritable-claim',
+      })).resolves.toEqual({ status: 'pending' });
+      expect(fixture.values.get(fixture.legacyKey)).toBe(fixture.legacyRecord);
+      expect(fixture.grantPromotionReward).toHaveBeenCalledTimes(0);
+      expect(resolvePendingPromotionGrant).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not dispatch a pending v1 claim the authority retries while storage is unwritable', async () => {
+      const fixture = setupUnwritable({
+        status: 'pending',
+        pendingSince: '2026-07-22T00:00:00.000Z',
+      });
+      const bridge = createAitHostBridge({
+        promotionRewards,
+        authorizePromotionGrant: async () => ({ status: 'authorized' }),
+        resolvePendingPromotionGrant: async () => ({ status: 'retry' }),
+        dependencies: createDependencies({
+          grantPromotionReward: fixture.grantPromotionReward,
+          storage: fixture.storage,
+        }),
+      });
+      const result = await request(bridge, 'promotions.grantReward', {
+        campaignId: 'CAMPAIGN_A',
+        idempotencyKey: 'unwritable-claim',
+      });
+      expect(result).not.toMatchObject({ status: 'granted' });
+      expect(fixture.grantPromotionReward).toHaveBeenCalledTimes(0);
+    });
+  });
+
   it('returns a protocol error for a malformed runtime bridge call', async () => {
     const bridge = createAitHostBridge({ dependencies: createDependencies() });
     const response: unknown = await Reflect.apply(bridge.request, bridge, [null]);

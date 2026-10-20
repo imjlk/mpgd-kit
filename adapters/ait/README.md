@@ -135,8 +135,11 @@ receipt contract is the same for markerless and existing-marker resolution. New 
 `mpgd:ait:promotion-grant:v2:<campaignId>:<idempotencyKey>` and include `campaignId`. A legacy
 `v1` marker, which was keyed only by the idempotency key, is still readable. The first campaign
 that reconciles an unbound legacy marker binds it; another campaign does not receive that receipt.
-Server-issued idempotency keys should stay unique across campaigns. A legacy marker that could not
-be copied remains fenced in the current process by that binding. The campaign id is written onto
+Server-issued idempotency keys should stay unique across campaigns. If a legacy marker cannot be
+copied at all, a legacy granted receipt is not returned from local storage: the resolver is asked
+for that campaign and only its `granted` answer is returned (it is not given `pendingSince`, and
+`retry` cannot dispatch); without a resolver the claim stays pending. A legacy pending marker that
+cannot be copied still goes to the resolver. The campaign id is written onto
 the legacy marker before it is removed, so a failed delete still fences a restarted bridge.
 A cleanup read that fails is not a successful copy: the campaign binding is stored before the
 receipt is returned. If that binding cannot be stored, the claim stays pending and the scoped
