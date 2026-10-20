@@ -116,9 +116,10 @@ export interface CreateGameServicesNotificationsClientInput {
    */
   readonly target?: string;
   /**
-   * How long one request may take, answer body included, before it is
-   * aborted and answers `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`; 15 seconds
-   * by default.
+   * How long one request may take, from resolving its headers to reading
+   * its answer, before it is aborted and answers
+   * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`; 15 seconds by default, at most
+   * 2147483647.
    */
   readonly timeoutMs?: number;
 }
@@ -242,9 +243,10 @@ export function createGameServicesNotificationsClient(
   }
   const { identity } = input;
   const timeoutMs = input.timeoutMs ?? defaultGameServicesNotificationsTimeoutMs;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  // setTimeout takes at most 2^31 - 1 ms; a longer delay would fire at once.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
     throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-      message: 'The notifications client timeoutMs must be a positive number of milliseconds.',
+      message: 'The notifications client timeoutMs must be a positive number of milliseconds, at most 2147483647.',
     });
   }
   if (input.target !== undefined && (typeof input.target !== 'string' || input.target.length === 0)) {
@@ -287,75 +289,99 @@ export function createGameServicesNotificationsClient(
     method: 'GET' | 'POST',
     body: unknown,
     session: NotificationRuntimeSession | undefined,
-  ): Promise<Readonly<Record<string, unknown>>> => {
+  ): Promise<{ readonly response: GameServicesNotificationsFetchResponse; readonly text: string }> => {
     const fetcher = input.fetch ?? globalFetch();
-    let headers: Readonly<Record<string, string>>;
-    try {
-      headers = await resolveGameServicesRequestHeaders({
-        headers: input.headers,
-        // The public registry read needs no credentials, so it works signed out.
-        getHeaders: session === undefined ? undefined : input.getHeaders,
-      });
-    } catch (error) {
-      throw new GameServicesNotificationsRequestError({
-        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-        route,
-        status: 0,
-        message: `${route}: the session's request headers could not be resolved; no request was sent.`,
-        cause: error instanceof GameServicesHeaderResolutionError ? error : undefined,
-      });
-    }
-    if (session !== undefined) {
-      const now = sessionOf(identity.current());
-      if (now === undefined || now.player !== session.player) {
-        throw new NotificationsPlayerChangedError({
-          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-          route,
-          status: 0,
-          message: `${route}: the player signed out or changed while the request headers were resolved; `
-            + 'no request was sent.',
-        });
-      }
-    }
-    let response: GameServicesNotificationsFetchResponse;
-    let text: string;
-    // The fetch is aborted at the deadline, and the call answers then even
-    // when a fetch ignores the signal, so no runtime queue waits on it.
+    // One deadline for the whole request, from resolving its headers to
+    // reading its answer: at the deadline the fetch is aborted and the call
+    // answers, even when a header resolver or a fetch never settles, so no
+    // runtime queue waits on it.
     const controller = typeof AbortController === 'function' ? new AbortController() : undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
-        controller?.abort();
         reject(new Error(`no answer within ${timeoutMs} ms`));
+        try {
+          controller?.abort();
+        } catch {
+          // The call has answered already.
+        }
       }, timeoutMs);
     });
     deadline.catch(() => undefined);
     try {
-      response = await Promise.race([
-        fetcher(`${baseUrl}${gameServicesNotificationsRoutePrefix}${route}`, {
-          method,
-          headers: method === 'POST' ? { ...headers, 'content-type': 'application/json' } : { ...headers },
-          ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
-          ...(controller === undefined ? {} : { signal: controller.signal }),
-        }),
-        deadline,
-      ]);
-      text = await Promise.race([response.text(), deadline]);
-    } catch (error) {
-      throw new GameServicesNotificationsRequestError({
-        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-        route,
-        status: 0,
-        message: timedOut
-          ? `${route}: the game-services Worker did not answer within ${timeoutMs} ms; the request was aborted.`
-          : `${route}: the game-services Worker could not be reached.`,
-        cause: error,
-      });
+      let headers: Readonly<Record<string, string>>;
+      try {
+        headers = await Promise.race([
+          resolveGameServicesRequestHeaders({
+            headers: input.headers,
+            // The public registry read needs no credentials, so it works signed out.
+            getHeaders: session === undefined ? undefined : input.getHeaders,
+          }),
+          deadline,
+        ]);
+      } catch (error) {
+        throw new GameServicesNotificationsRequestError({
+          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          route,
+          status: 0,
+          message: timedOut
+            ? `${route}: the session's request headers were not resolved within ${timeoutMs} ms; no request was sent.`
+            : `${route}: the session's request headers could not be resolved; no request was sent.`,
+          cause: error instanceof GameServicesHeaderResolutionError ? error : undefined,
+        });
+      }
+      if (session !== undefined) {
+        const now = sessionOf(identity.current());
+        if (now === undefined || now.player !== session.player) {
+          throw new NotificationsPlayerChangedError({
+            code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+            route,
+            status: 0,
+            message: `${route}: the player signed out or changed while the request headers were resolved; `
+              + 'no request was sent.',
+          });
+        }
+      }
+      try {
+        const response = await Promise.race([
+          fetcher(`${baseUrl}${gameServicesNotificationsRoutePrefix}${route}`, {
+            method,
+            headers: method === 'POST'
+              ? { ...headers, 'content-type': 'application/json' }
+              : { ...headers },
+            ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
+            ...(controller === undefined ? {} : { signal: controller.signal }),
+          }),
+          deadline,
+        ]);
+        return { response, text: await Promise.race([response.text(), deadline]) };
+      } catch (error) {
+        throw new GameServicesNotificationsRequestError({
+          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          route,
+          status: 0,
+          message: timedOut
+            ? `${route}: the game-services Worker did not answer within ${timeoutMs} ms; the client stopped waiting `
+              + '(and aborted the fetch, where it takes a signal).'
+            : `${route}: the game-services Worker could not be reached.`,
+          cause: error,
+        });
+      }
     } finally {
       clearTimeout(timer);
     }
+  };
+
+  /** Sends one request and reads its answer as the route's JSON object. */
+  const call = async (
+    route: Route,
+    method: 'GET' | 'POST',
+    body: unknown,
+    session: NotificationRuntimeSession | undefined,
+  ): Promise<Readonly<Record<string, unknown>>> => {
+    const { response, text } = await request(route, method, body, session);
     const parsed = parseJson(text);
     if (response.status >= 200 && response.status < 300) {
       if (parsed === 'not-json') {
@@ -394,12 +420,12 @@ export function createGameServicesNotificationsClient(
     },
     async recordConsent(record) {
       const session = requireSession('/consent');
-      const answer = await request('/consent', 'POST', { record }, session);
+      const answer = await call('/consent', 'POST', { record }, session);
       checked('/consent', () => assertNotificationConsentRecord(answer['record']));
     },
     async listConsent() {
       const session = requireSession('/consent');
-      const answer = await request('/consent', 'GET', undefined, session);
+      const answer = await call('/consent', 'GET', undefined, session);
       const records = answer['records'];
       if (!Array.isArray(records)) {
         throw contractBroken('/consent', 200, 'records is not a list');
@@ -409,7 +435,7 @@ export function createGameServicesNotificationsClient(
     },
     async registerEndpoint(registration) {
       const session = requireSession('/endpoints');
-      await request(
+      await call(
         '/endpoints',
         'POST',
         { registration, ...(input.target === undefined ? {} : { target: input.target }) },
@@ -425,7 +451,7 @@ export function createGameServicesNotificationsClient(
         return;
       }
       try {
-        await request('/endpoints/unregister', 'POST', { provider }, session);
+        await call('/endpoints/unregister', 'POST', { provider }, session);
       } catch (error) {
         // The player left while the headers were resolved, so nothing was
         // sent: as above, the session's end unbinds what it registered. A
@@ -438,7 +464,7 @@ export function createGameServicesNotificationsClient(
     },
     async setReminder(reminder) {
       const session = requireSession('/reminders');
-      const answer = await request('/reminders', 'POST', { reminder }, session);
+      const answer = await call('/reminders', 'POST', { reminder }, session);
       const status = answer['status'];
       if (!reminderSetStatuses.includes(status as NotificationRuntimeReminderSetStatus)) {
         throw contractBroken('/reminders', 200, `status ${JSON.stringify(status)} is not a reminder status`);
@@ -447,7 +473,7 @@ export function createGameServicesNotificationsClient(
     },
     async cancelReminder({ key }) {
       const session = requireSession('/reminders/cancel');
-      const answer = await request('/reminders/cancel', 'POST', { key }, session);
+      const answer = await call('/reminders/cancel', 'POST', { key }, session);
       if (typeof answer['cancelled'] !== 'boolean') {
         throw contractBroken('/reminders/cancel', 200, 'cancelled is not a boolean');
       }
@@ -455,7 +481,7 @@ export function createGameServicesNotificationsClient(
     },
     async listNotices() {
       const session = requireSession('/notices');
-      const answer = await request('/notices', 'GET', undefined, session);
+      const answer = await call('/notices', 'GET', undefined, session);
       const notices = answer['notices'];
       if (!Array.isArray(notices)) {
         throw contractBroken('/notices', 200, 'notices is not a list');
@@ -465,10 +491,10 @@ export function createGameServicesNotificationsClient(
     },
     async recordNotice({ channel, kind, record, dueBy }) {
       const session = requireSession('/notices/shown');
-      await request('/notices/shown', 'POST', { notice: { kind, record, dueBy }, channel }, session);
+      await call('/notices/shown', 'POST', { notice: { kind, record, dueBy }, channel }, session);
     },
     async getProviders() {
-      const answer = await request('/providers', 'GET', undefined, undefined);
+      const answer = await call('/providers', 'GET', undefined, undefined);
       const { protocolVersion, providers, targets } = answer;
       if (
         typeof protocolVersion !== 'string'

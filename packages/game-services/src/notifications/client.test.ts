@@ -613,6 +613,36 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
     await new Promise((resolve) => setImmediate(resolve));
     mock.timers.tick(500);
     assert.match((await rejection(listing)).message, /within 500 ms/u);
+    // An answer whose body never arrives.
+    const slowBody = createGameServicesNotificationsClient({
+      baseUrl: 'https://services.example',
+      identity,
+      fetch: async () => ({ status: 200, text: async () => new Promise<string>(() => undefined) }),
+      timeoutMs: 500,
+    });
+    const reading = slowBody.listNotices();
+    await new Promise((resolve) => setImmediate(resolve));
+    mock.timers.tick(500);
+    assert.match((await rejection(reading)).message, /did not answer within 500 ms/u);
+    // A header resolver that never settles: nothing is sent, and the call still answers.
+    const { fetch: neverCalled, sent } = fakeFetch(() => ({ status: 200, body: {} }));
+    const stuckHeaders = createGameServicesNotificationsClient({
+      baseUrl: 'https://services.example',
+      identity,
+      fetch: neverCalled,
+      getHeaders: () => new Promise(() => undefined),
+      timeoutMs: 500,
+    });
+    const resolving = stuckHeaders.listConsent();
+    await new Promise((resolve) => setImmediate(resolve));
+    mock.timers.tick(500);
+    const unresolved = await rejection(resolving);
+    assert.equal(unresolved.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+    assert.match(
+      unresolved.message,
+      /headers were not resolved within 500 ms; no request was sent/u,
+    );
+    assert.equal(sent.length, 0);
   } finally {
     mock.timers.reset();
   }
@@ -630,7 +660,7 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
       createGameServicesNotificationsClient({ baseUrl: 'https://x.example', identity, target: '' }),
     NotificationError,
   );
-  for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
     assert.throws(
       () =>
         createGameServicesNotificationsClient({ baseUrl: 'https://x.example', identity, timeoutMs }),
