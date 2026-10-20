@@ -586,8 +586,10 @@ Runtime rules:
     device's decided permission; when a player authenticates (an account
     switch moves the installation to the new player); at start and on each
     read, once the registration the backend last acknowledged is older than
-    7 days, so the endpoint of a device in use never goes stale; and on
-    `register()`.
+    7 days, so the endpoint of a device in use never goes stale, or was
+    acknowledged for another player or session, so a sign-in the runtime did
+    not observe (one before its start, or while it was stopped) still moves
+    the installation; and on `register()`.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the

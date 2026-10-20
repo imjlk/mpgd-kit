@@ -926,7 +926,10 @@ export function createNotificationRuntime(
   /**
    * Re-sends the registration once the one the backend last acknowledged for
    * this player and session is older than 7 days, so the endpoint of a device
-   * in use never goes stale. Runs at start and on reads.
+   * in use never goes stale, and at once when it was acknowledged for another
+   * session: one that started while the runtime was not listening (before
+   * `start()`, or between `stop()` and `start()`) is an authentication the
+   * runtime would otherwise miss. Runs at start and on reads.
    */
   const refreshRegistration = async (): Promise<void> => {
     const session = backend.session();
@@ -935,13 +938,14 @@ export function createNotificationRuntime(
     }
     const persisted = kept ?? await loadState();
     const last = persisted.registration;
+    if (persisted.unbound === true || last === undefined) {
+      return;
+    }
+    const otherSession = last.player !== session.player || last.session !== session.id;
     if (
-      persisted.unbound === true
-      || last === undefined
-      || last.player !== session.player
-      || last.session !== session.id
-      || Date.parse(clock.now()) - Date.parse(last.at) < registrationRefreshMs
-      || !isDeviceAddressing(await provider.getCapabilities())
+      !otherSession
+      && (Date.parse(clock.now()) - Date.parse(last.at) < registrationRefreshMs
+        || !isDeviceAddressing(await provider.getCapabilities()))
     ) {
       return;
     }

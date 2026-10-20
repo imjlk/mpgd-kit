@@ -169,6 +169,32 @@ describe('createNotificationRuntime storage', () => {
     expect(backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt)).toEqual(registered);
   });
 
+  it('registers at start for a session that began while the runtime was not listening', async () => {
+    const storage = asyncStorage();
+    const { host, backend, create } = setup(storage.port);
+    const runtime = create();
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.session)).toEqual(['session-1']);
+    runtime.stop();
+
+    // The player signs in again while no runtime listens; the next runtime's start binds the new session.
+    backend.authenticate('p-2');
+    const restarted = create();
+    await restarted.start();
+    await restarted.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => [endpoint.player, endpoint.session])).toEqual([['p-2', 'session-2']]);
+    // Its own session is acknowledged now: the next start sends nothing new.
+    const registered = backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt);
+    restarted.stop();
+    const again = create();
+    await again.start();
+    await again.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt)).toEqual(registered);
+  });
+
   it('keeps unregister() across a restart until the next authentication', async () => {
     const storage = asyncStorage();
     const { host, backend, create } = setup(storage.port);

@@ -47,7 +47,11 @@ export interface GameServicesNotificationSession {
   /**
    * Stable for the session's life, across token refreshes (its refresh
    * family): the `sessionId` the identity service answers to the Worker's
-   * `authenticateNotificationSession`. A new sign-in starts a new one.
+   * `authenticateNotificationSession`. A new sign-in starts a new one. An
+   * identity whose own session id rotates on refresh (a
+   * `GuestSessionCoordinator` view may) maps it to the family's stable id;
+   * otherwise each rotation counts as a new session and sends the
+   * registration again.
    */
   readonly sessionId: string;
 }
@@ -62,13 +66,13 @@ export interface GameServicesNotificationIdentity {
   /** The current session, or `undefined` while signed out. */
   current(): GameServicesNotificationSession | undefined;
   /**
-   * Calls `listener` when a session becomes current: a sign-in, a session
-   * restored at launch, or an account switch. Returns the unsubscribe. A
-   * repeat for the session already announced (a token refresh) is ignored,
-   * and so is one for the session current when the runtime subscribed (at
-   * its `start()`). Start the runtime before the game signs in or restores a
-   * session; for a session that became current earlier, call the runtime's
-   * `register()` once it is current.
+   * Calls `listener` when a session becomes current after the subscription:
+   * a sign-in, a session restored after the runtime started, or an account
+   * switch. Returns the unsubscribe. A repeat for the session already
+   * announced (a token refresh) is ignored, and so is one for the session
+   * current when the runtime subscribed (at its `start()`); the runtime's
+   * start registers again on its own when that session is not the one its
+   * last registration was acknowledged for.
    */
   onAuthenticated(listener: (session: GameServicesNotificationSession) => void): () => void;
 }

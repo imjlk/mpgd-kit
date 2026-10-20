@@ -342,6 +342,15 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
     { status: 502, text: '<html>Bad gateway</html>', code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
     { status: 403, text: 'Forbidden', code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
     { status: 408, text: 'Request Timeout', code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
+    { status: 425, text: 'Too Early', code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
+    {
+      status: 503,
+      text: 'Unavailable',
+      headers: { 'Retry-After': ' 7 ' },
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+      retryAfterSeconds: 7,
+    },
     {
       status: 503,
       text: 'Unavailable',
