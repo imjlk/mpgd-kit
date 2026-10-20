@@ -356,8 +356,8 @@ function discoverGameManifests(
         continue;
       }
       const resolvedLocation = location
-        .replaceAll('${MPGD_GAME_ROOT}', targetsDirectory)
-        .replaceAll('${MPGD_GAME_APP_ROOT}', targetsDirectory);
+        .replaceAll('${MPGD_GAME_ROOT}', () => targetsDirectory)
+        .replaceAll('${MPGD_GAME_APP_ROOT}', () => targetsDirectory);
       if (resolvedLocation.includes('$' + '{')) {
         notes.push('Skipped target with unresolved path token: ' + location);
         continue;

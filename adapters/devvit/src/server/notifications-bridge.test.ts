@@ -266,6 +266,57 @@ describe('createDevvitServerNotificationProvider', () => {
       hostCode: devvitNotificationHostCodes.optOutRefused,
     });
   });
+
+  it('returns the observed opt-in when a concurrent request already opted the user in', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    let entered = 0;
+    let releaseBoth: () => void = () => {};
+    const bothEntered = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    plugin.optInCurrentUser = async () => {
+      entered += 1;
+      if (entered === 2) {
+        releaseBoth();
+      }
+      await bothEntered;
+      if (plugin.optedIn.has(user)) {
+        return { success: false, message: 'duplicate opt-in' };
+      }
+      plugin.optedIn.add(user);
+      return { success: true };
+    };
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    const [first, second] = await Promise.all([
+      provider.requestPermission({ topics: ['friend-challenge'] }),
+      provider.requestPermission({ topics: ['friend-challenge'] }),
+    ]);
+    expect(first.snapshot.app).toBe('granted');
+    expect(second.snapshot.app).toBe('granted');
+    expect(plugin.optedIn.has(user)).toBe(true);
+  });
+
+  it('returns the observed opt-out when a concurrent request already opted the user out', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    plugin.optedIn.add(user);
+    plugin.optOutCurrentUser = async () => {
+      plugin.optedIn.delete(user);
+      return { success: false, message: 'duplicate opt-out' };
+    };
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    await expect(provider.revokePermission?.({ topics: ['friend-challenge'] })).resolves.toMatchObject({
+      snapshot: { app: 'prompt' },
+      outcomes: { 'friend-challenge': 'denied' },
+    });
+  });
 });
 
 describe('createDevvitNotificationsV2BridgeHandler', () => {
