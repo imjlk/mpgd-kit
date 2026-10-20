@@ -8,7 +8,8 @@ import { runMpgdCli } from '../src/index.js';
 /**
  * `String.prototype.replaceAll` treats `$&`, `$'`, `` $` ``, and `$$` in a
  * string replacement as patterns. A display title must survive that, including
- * quotes and backslashes inside generated JSON and JS string literals.
+ * quotes and backslashes inside generated JSON, the web app manifest, and
+ * JS string literals.
  */
 const titles = [
   'Hit $&',
@@ -76,7 +77,8 @@ try {
           false,
           `${template} ${JSON.stringify(title)} left a placeholder in ${relative}`,
         );
-        if (!file.endsWith('.json')) {
+        // `.webmanifest` is JSON. Hosted PWA and Microsoft Store both parse it.
+        if (!file.endsWith('.json') && !file.endsWith('.webmanifest')) {
           continue;
         }
         let parsed: unknown;
@@ -114,6 +116,13 @@ try {
       }
       const html = readFileSync(path.join(directory, 'index.html'), 'utf8');
       assert.equal(html.includes(`<title>${title}</title>`), true, `${template} html title`);
+      if (template === 'phaser') {
+        const manifest = JSON.parse(
+          readFileSync(path.join(directory, 'public/manifest.webmanifest'), 'utf8'),
+        ) as { readonly name: string; readonly description: string };
+        assert.equal(manifest.name, title, 'phaser webmanifest name');
+        assert.equal(manifest.description.includes(title), true, 'phaser webmanifest description');
+      }
       const devvitVite = readFileSync(
         path.join(directory, 'apps/target-devvit/vite.config.ts'),
         'utf8',

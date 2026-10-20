@@ -4041,7 +4041,8 @@ function renderTemplate(
   context: ReturnType<typeof createTemplateContext>,
   relativePath: string,
 ): string {
-  const jsonFile = relativePath.endsWith('.json');
+  // `.webmanifest` is JSON. Hosted PWA deploy and Microsoft Store submission parse it.
+  const jsonFile = relativePath.endsWith('.json') || relativePath.endsWith('.webmanifest');
   const typescriptFile = relativePath.endsWith('.ts');
   const insert = (placeholder: string, value: string): string => {
     if (jsonFile && jsonEscapedPlaceholder(placeholder)) {
