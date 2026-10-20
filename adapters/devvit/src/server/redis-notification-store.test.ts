@@ -696,6 +696,186 @@ describe('createDevvitRedisNotificationStore', () => {
     expect(await store.listConsent('p')).toHaveLength(1);
   });
 
+  it('lists history when hMGet is disabled', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    await store.addHistory({
+      sendKey: 'h-1',
+      provider: 'devvit',
+      player: 't2_player',
+      topic: 't',
+      at: '2026-10-19T03:00:00Z',
+    });
+    redis.disableHMGet();
+    await expect(redis.hMGet('unused', ['field'])).rejects.toThrow(/HMGET/u);
+    await expect(store.listHistory({ player: 't2_player', since: '2026-10-01T00:00:00Z' })).resolves.toEqual([
+      expect.objectContaining({ sendKey: 'h-1', player: 't2_player' }),
+    ]);
+  });
+
+  it('does not replay an EXEC whose reply was lost after commit', async () => {
+    const redis = createFakeNotificationRedis();
+    let lost = 0;
+    const flaky = {
+      ...redis,
+      async watch(...watched: string[]) {
+        const transaction = await redis.watch(...watched);
+        return {
+          ...transaction,
+          async exec() {
+            const results = await transaction.exec();
+            if (lost > 0) {
+              lost -= 1;
+              throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+            }
+            return results;
+          },
+        };
+      },
+    };
+    const backoffs: number[] = [];
+    const store = createDevvitRedisNotificationStore(flaky, {
+      transactionAttempts: 4,
+      backoff: async (attempt) => {
+        backoffs.push(attempt);
+      },
+    });
+    lost = 1;
+    await expect(store.createSend(send('lost', []))).rejects.toThrow(/socket hang up/u);
+    expect(backoffs).toEqual([]);
+    expect((await store.getSend('lost'))?.send.key).toBe('lost');
+
+    const held = await store.getSend('lost');
+    lost = 1;
+    await expect(store.updateSend({
+      key: 'lost',
+      version: held?.version ?? '',
+      send: { ...send('lost', []), changedAt: '2026-10-19T04:00:00Z' },
+    })).rejects.toThrow(/socket hang up/u);
+    expect(backoffs).toEqual([]);
+    expect((await store.getSend('lost'))?.send.changedAt).toBe('2026-10-19T04:00:00Z');
+  });
+
+  it('retries an EXEC that aborted before commit, and a connection loss thrown before EXEC', async () => {
+    const redis = createFakeNotificationRedis();
+    let timeouts = 1;
+    const timingOut = {
+      ...redis,
+      async watch(...watched: string[]) {
+        const transaction = await redis.watch(...watched);
+        return {
+          ...transaction,
+          async exec() {
+            if (timeouts > 0) {
+              timeouts -= 1;
+              throw new Error('transaction timed out after 5 seconds');
+            }
+            return transaction.exec();
+          },
+        };
+      },
+    };
+    const backoffs: number[] = [];
+    const store = createDevvitRedisNotificationStore(timingOut, {
+      transactionAttempts: 4,
+      backoff: async (attempt) => {
+        backoffs.push(attempt);
+      },
+    });
+    await expect(store.createSend(send('timed-out', []))).resolves.toEqual(expect.any(String));
+    expect(timeouts).toBe(0);
+    expect(backoffs).toEqual([1]);
+
+    let resets = 1;
+    const resetting = {
+      ...redis,
+      async get(key: string) {
+        if (resets > 0) {
+          resets -= 1;
+          throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+        }
+        return redis.get(key);
+      },
+      watch: redis.watch.bind(redis),
+    };
+    const planning = createDevvitRedisNotificationStore(resetting, {
+      transactionAttempts: 4,
+      backoff: async () => {
+        // A planning read never reached EXEC, so a lost reply is impossible.
+      },
+    });
+    await expect(planning.createSend(send('reset', []))).resolves.toEqual(expect.any(String));
+    expect(resets).toBe(0);
+  });
+
+  it('retries a transient watch or planning read and still throws a non-transient error', async () => {
+    const redis = createFakeNotificationRedis();
+    const backoffs: number[] = [];
+    let watchThrows = 1;
+    let getThrows = 1;
+    const flaky = {
+      ...redis,
+      async get(key: string) {
+        if (getThrows > 0) {
+          getThrows -= 1;
+          throw new Error('Redis transaction limit exceeded: 20 concurrent transactions');
+        }
+        return redis.get(key);
+      },
+      async watch(...watched: string[]) {
+        if (watchThrows > 0) {
+          watchThrows -= 1;
+          throw new Error('transaction timed out after 5 seconds');
+        }
+        return redis.watch(...watched);
+      },
+    };
+    const store = createDevvitRedisNotificationStore(flaky, {
+      transactionAttempts: 4,
+      backoff: async (attempt) => {
+        backoffs.push(attempt);
+      },
+    });
+    await expect(store.createSend(send('k', []))).resolves.toEqual(expect.any(String));
+    expect(backoffs.length).toBeGreaterThan(0);
+    expect(watchThrows).toBe(0);
+    expect(getThrows).toBe(0);
+
+    const fatal = {
+      ...redis,
+      async get(): Promise<string | undefined> {
+        throw new Error('WRONGTYPE key is a hash');
+      },
+      watch: redis.watch.bind(redis),
+    };
+    const failing = createDevvitRedisNotificationStore(fatal, {
+      transactionAttempts: 4,
+      backoff: async () => {
+        throw new Error('a non-transient error must not retry');
+      },
+    });
+    await expect(failing.createSend(send('bad', []))).rejects.toThrow(/WRONGTYPE/u);
+  });
+
+  it('drops the in-flight index member when purge deletes an unreadable send', async () => {
+    const redis = createFakeNotificationRedis();
+    const store = createDevvitRedisNotificationStore(redis);
+    await store.createSend(send('k', [claimed('holder', '2026-10-19T03:05:00Z')]));
+    expect((await store.listInFlightSends('t2_player')).map((row) => row.key)).toEqual(['k']);
+    const valueKey = redis.keys().find((key) => key.includes(':send:') && key.endsWith(':k'));
+    expect(valueKey).toBeTypeOf('string');
+    redis.poke(valueKey ?? '', '{not-a-send');
+    await store.purge({
+      sendsChangedBefore: '2026-11-01T00:00:00Z',
+      historyBefore: '2026-11-01T00:00:00Z',
+      invalidEndpointsBefore: '2026-11-01T00:00:00Z',
+      staleEndpointsBefore: '2026-11-01T00:00:00Z',
+      sessionEndpointsBefore: '2026-11-01T00:00:00Z',
+    });
+    expect(await store.listInFlightSends('t2_player')).toEqual([]);
+    expect(redis.keys().filter((key) => key.includes('in-flight'))).toEqual([]);
+  });
+
   it('rejects an empty namespace and out-of-range attempts', () => {
     const redis = createFakeNotificationRedis();
     expect(() => createDevvitRedisNotificationStore(redis, { namespace: '' })).toThrow(TypeError);
