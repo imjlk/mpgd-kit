@@ -57,140 +57,182 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     fcmTokens.push(body.message.token);
     return Response.json({ name: `projects/mpgd-client-e2e/messages/${fcmTokens.length}` });
   }
-  return realFetch(input, init);
+  // Nothing else may leave the process.
+  throw new Error(`Unexpected fetch: ${url}`);
 }) as typeof fetch;
 
-const catalog: NotificationTopicCatalog = {
-  version: '2026-10-20',
-  defaultLocale: 'ko',
-  topics: [
-    {
-      id: 'daily-ready',
-      purpose: 'requested',
-      channels: ['remote'],
-      route: '/?entry=daily',
-      copy: { ko: { title: '오늘의 퍼즐', body: '새 퍼즐이 준비됐어요.' } },
-      targets: { android: { channelId: 'reminders' } },
-    },
-    {
-      id: 'friend-challenge',
-      purpose: 'service',
-      channels: ['remote'],
-      route: '/?entry=challenge',
-      copy: { ko: { title: '도전', body: '도전장이 왔어요.' } },
-      targets: { android: { channelId: 'social' } },
-    },
-  ],
-};
-
-/** The identity Worker's sessions, by bearer token; revoking one makes the Worker answer 401. */
-const issued = new Map<string, { playerId: string; sessionId: string; installationId: string }>();
-const env = {
-  MPGD_STORE: 'memory',
-  MPGD_NOTIFICATIONS_CATALOG: catalog,
-  MPGD_NOTIFICATIONS_DEPLOYMENT: {
-    advertisingRules: 'kr',
-    advertisingSender: { contact: '080-000-0000' },
-  },
-  FCM_SERVICE_ACCOUNT: serviceAccount,
-  GAME_SERVICES_NOTIFICATIONS_AUTH: {
-    async authenticateNotificationSession({ authorization }: { readonly authorization: string }) {
-      return issued.get(authorization) ?? null;
-    },
-  },
-} satisfies GameServicesWorkerEnv;
-const fetchWorker = createWorkerFetchHandler(env);
-
-// The game's identity: the current session, its bearer token, and the sign-in subscription.
-let current: (GameServicesNotificationSession & { readonly token: string }) | undefined;
-const signedIn = new Set<(session: GameServicesNotificationSession) => void>();
-const signIn = (session: GameServicesNotificationSession, token: string): void => {
-  issued.set(`Bearer ${token}`, { ...session, installationId: 'install-e2e' });
-  current = { ...session, token };
-  for (const listener of [...signedIn]) {
-    listener(session);
-  }
-};
-
-const client = createGameServicesNotificationsClient({
-  baseUrl: 'https://game-services-worker.test',
-  fetch: async (url, init) => fetchWorker(new Request(url, init)),
-  identity: {
-    current: () => current,
-    onAuthenticated(listener) {
-      signedIn.add(listener);
-      return () => {
-        signedIn.delete(listener);
-      };
-    },
-  },
-  getHeaders: () => (current === undefined ? {} : { Authorization: `Bearer ${current.token}` }),
-  target: 'android',
-});
-
-// The device: a fixture FCM provider whose declaration matches the Worker's registry entry.
-const providers = await client.getProviders();
-assert.deepEqual(providers.targets, { android: 'fcm', ios: 'fcm' });
-const registryEntry = providers.providers.find((entry) => entry.provider === 'fcm');
-assert.ok(registryEntry !== undefined);
-const capabilities: NotificationCapabilities = {
-  availability: 'available',
-  permission: {
-    scope: 'app',
-    prompt: 'os',
-    readable: true,
-    serverReadable: false,
-    allowance: 'persistent',
-    userGesture: false,
-    promptLimit: 2,
-    settings: true,
-  },
-  remote: {
-    supported: true,
-    purposes: ['service', 'requested', 'advertising'],
-    addressing: 'device',
-    content: 'free-form',
-  },
-  local: { supported: false },
-  open: 'payload',
-};
-const topics = resolveNotificationTopicsForTarget(catalog, 'android');
-const host = createNotificationConformanceHost({
-  profile: { provider: 'fcm', capabilities },
-  catalog: topics,
-  timeZone: 'Asia/Seoul',
-});
-const runtime = createNotificationRuntime({
-  provider: host.provider,
-  backend: client,
-  catalog: topics,
-  defaultLocale: 'ko',
-  registryEntry,
-  storage: createMemoryNotificationRuntimeStorage(),
-});
-const deliver = (key: string) => deliverWorkerNotification(env, {
-  idempotencyKey: key,
-  player: 'p-e2e',
-  topic: 'friend-challenge',
-});
-
+let runtime: ReturnType<typeof createNotificationRuntime> | undefined;
 try {
+  const catalog: NotificationTopicCatalog = {
+    version: '2026-10-20',
+    defaultLocale: 'ko',
+    topics: [
+      {
+        id: 'daily-ready',
+        purpose: 'requested',
+        channels: ['remote'],
+        route: '/?entry=daily',
+        copy: { ko: { title: '오늘의 퍼즐', body: '새 퍼즐이 준비됐어요.' } },
+        targets: { android: { channelId: 'reminders' } },
+      },
+      {
+        id: 'friend-challenge',
+        purpose: 'service',
+        channels: ['remote'],
+        route: '/?entry=challenge',
+        copy: { ko: { title: '도전', body: '도전장이 왔어요.' } },
+        targets: { android: { channelId: 'social' } },
+      },
+    ],
+  };
+
+  /** The identity Worker's sessions, by bearer token; revoking one makes the Worker answer 401. */
+  const issued = new Map<string, { playerId: string; sessionId: string; installationId: string }>();
+  const env = {
+    MPGD_STORE: 'memory',
+    MPGD_NOTIFICATIONS_CATALOG: catalog,
+    MPGD_NOTIFICATIONS_DEPLOYMENT: {
+      advertisingRules: 'kr',
+      advertisingSender: { contact: '080-000-0000' },
+    },
+    FCM_SERVICE_ACCOUNT: serviceAccount,
+    GAME_SERVICES_NOTIFICATIONS_AUTH: {
+      async authenticateNotificationSession({ authorization }: { readonly authorization: string }) {
+        return issued.get(authorization) ?? null;
+      },
+    },
+  } satisfies GameServicesWorkerEnv;
+  const fetchWorker = createWorkerFetchHandler(env);
+
+  /** Requests the client sent to the Worker. */
+  let workerRequests = 0;
+  // The game's identity: the current session, its bearer token, and the sign-in subscription.
+  let current: (GameServicesNotificationSession & { readonly token: string }) | undefined;
+  const signedIn = new Set<(session: GameServicesNotificationSession) => void>();
+  const signIn = (session: GameServicesNotificationSession, token: string): void => {
+    issued.set(`Bearer ${token}`, { ...session, installationId: 'install-e2e' });
+    current = { ...session, token };
+    for (const listener of [...signedIn]) {
+      listener(session);
+    }
+  };
+
+  const client = createGameServicesNotificationsClient({
+    baseUrl: 'https://game-services-worker.test',
+    fetch: async (url, init) => {
+      workerRequests += 1;
+      return fetchWorker(new Request(url, init));
+    },
+    identity: {
+      current: () => current,
+      onAuthenticated(listener) {
+        signedIn.add(listener);
+        return () => {
+          signedIn.delete(listener);
+        };
+      },
+    },
+    getHeaders: () => (current === undefined ? {} : { Authorization: `Bearer ${current.token}` }),
+    target: 'android',
+  });
+
+  // The device: a fixture FCM provider whose declaration matches the Worker's registry entry.
+  const providers = await client.getProviders();
+  assert.deepEqual(providers.targets, { android: 'fcm', ios: 'fcm' });
+  const registryEntry = providers.providers.find((entry) => entry.provider === 'fcm');
+  assert.ok(registryEntry !== undefined);
+  const capabilities: NotificationCapabilities = {
+    availability: 'available',
+    permission: {
+      scope: 'app',
+      prompt: 'os',
+      readable: true,
+      serverReadable: false,
+      allowance: 'persistent',
+      userGesture: false,
+      promptLimit: 2,
+      settings: true,
+    },
+    remote: {
+      supported: true,
+      purposes: ['service', 'requested', 'advertising'],
+      addressing: 'device',
+      content: 'free-form',
+    },
+    local: { supported: false },
+    open: 'payload',
+  };
+  const topics = resolveNotificationTopicsForTarget(catalog, 'android');
+  const host = createNotificationConformanceHost({
+    profile: { provider: 'fcm', capabilities },
+    catalog: topics,
+    timeZone: 'Asia/Seoul',
+  });
+  runtime = createNotificationRuntime({
+    provider: host.provider,
+    backend: client,
+    catalog: topics,
+    defaultLocale: 'ko',
+    registryEntry,
+    storage: createMemoryNotificationRuntimeStorage(),
+  });
+  const deliver = (key: string) => deliverWorkerNotification(env, {
+    idempotencyKey: key,
+    player: 'p-e2e',
+    topic: 'friend-challenge',
+  });
+  /** A 401 from the Worker, as the client maps it. */
+  const isUnauthorized = (error: unknown): boolean =>
+    error instanceof GameServicesNotificationsRequestError
+    && error.status === 401
+    && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'
+    && error.retryable;
+  // Another device of the same player, registered through its own session and installation.
+  issued.set('Bearer token-other', {
+    playerId: 'p-e2e',
+    sessionId: 's-other',
+    installationId: 'install-other',
+  });
+  const otherDevice = await fetchWorker(
+    new Request('https://game-services-worker.test/game-services/notifications/endpoints', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token-other', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        registration: {
+          provider: 'fcm',
+          address: { kind: 'fcm-token', value: 'tok-other', permission: 'granted' },
+        },
+        target: 'android',
+      }),
+    }),
+  );
+  assert.equal(otherDevice.status, 200);
+  const requestsBefore = workerRequests;
+
   host.issueEndpoint({ kind: 'fcm-token', value: 'tok-e2e' });
   await runtime.start();
-  // Signed out: a backend call sends nothing and is temporarily unavailable.
+  // Signed out: a backend call is temporarily unavailable and sends nothing.
   await assert.rejects(
     runtime.setTopicPreference({ topic: 'daily-ready', enabled: true }),
     (error: unknown) => error instanceof NotificationError && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
   );
+  assert.equal(workerRequests, requestsBefore);
 
-  // Sign-in and a grant: the registration reaches the Worker, bound to the session's installation.
+  // Sign-in registers this installation with the device's permission, not yet granted: no send reaches it.
   signIn({ playerId: 'p-e2e', sessionId: 's-e2e-1' }, 'token-1');
+  await runtime.runUntilIdle();
+  assert.equal((await deliver('e2e-send-0') as { readonly status?: unknown }).status, 'delivered');
+  assert.deepEqual(fcmTokens, ['tok-other']);
+  fcmTokens.length = 0;
+
+  // The grant re-registers it as granted, bound to this session's installation.
   host.queuePrompt('granted');
   const granted = await runtime.requestPermission({ topics: ['daily-ready'], gesture: true });
   assert.equal(granted.outcomes['daily-ready'], 'granted');
   await runtime.runUntilIdle();
   assert.deepEqual(await deliver('e2e-send-1'), { status: 'delivered', alreadyProcessed: false });
-  assert.deepEqual(fcmTokens, ['tok-e2e']);
+  assert.deepEqual([...fcmTokens].sort(), ['tok-e2e', 'tok-other']);
+  fcmTokens.length = 0;
 
   // Consent records: the player's request for a requested topic, read back from GET /consent.
   await runtime.setTopicPreference({ topic: 'daily-ready', enabled: true });
@@ -199,8 +241,6 @@ try {
     records.map((record) => [record.kind, record.topic, record.state, record.source]),
     [['topic-preference', 'daily-ready', 'granted', 'player']],
   );
-  // A device-addressed provider writes no delivery-permission record: the endpoint holds it.
-  assert.ok(records.every((record) => record.kind !== 'delivery-permission'));
 
   // Server reminders: set and cancel by key.
   const fireAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
@@ -245,35 +285,43 @@ try {
   await runtime.notices.recordShown(notice);
   assert.deepEqual(await runtime.notices.list(), []);
 
-  // Logout: unregister() unbinds the installation before the session closes; later sends find no endpoint.
+  // Logout: unregister() unbinds this session's installation only; the other device still receives.
   await runtime.unregister();
-  assert.deepEqual(await deliver('e2e-send-2'), { status: 'unavailable', reason: 'no-endpoint' });
+  issued.delete('Bearer token-1');
+  assert.equal((await deliver('e2e-send-2') as { readonly status?: unknown }).status, 'delivered');
+  assert.deepEqual(fcmTokens, ['tok-other']);
+  fcmTokens.length = 0;
 
   // The next sign-in binds the installation again.
   signIn({ playerId: 'p-e2e', sessionId: 's-e2e-2' }, 'token-2');
   await runtime.runUntilIdle();
   assert.deepEqual(await deliver('e2e-send-3'), { status: 'delivered', alreadyProcessed: false });
-  assert.deepEqual(fcmTokens, ['tok-e2e', 'tok-e2e']);
+  assert.deepEqual([...fcmTokens].sort(), ['tok-e2e', 'tok-other']);
 
   // A 401 mid-session: the identity service revoked the token while the game still holds it.
   issued.delete('Bearer token-2');
+  const active = runtime;
   for (const work of [
-    runtime.setTopicPreference({ topic: 'daily-ready', enabled: false }),
-    runtime.notices.list(),
-    runtime.reminders.set({ key: 'daily', topic: 'daily-ready', fireAt }),
+    () => active.setTopicPreference({ topic: 'daily-ready', enabled: false }),
+    () => active.notices.list(),
+    () => active.reminders.set({ key: 'daily', topic: 'daily-ready', fireAt }),
   ]) {
-    await assert.rejects(work, (error: unknown) =>
-      error instanceof GameServicesNotificationsRequestError
-      && error.status === 401
-      && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'
-      && error.retryable);
+    await assert.rejects(work(), isUnauthorized);
   }
-  // The read still answers from the host; the backend failure surfaces in the background.
+  // The read still answers from the host; the backend's 401 surfaces in the background.
   const read = await runtime.getPermission({ topics: ['daily-ready'] });
   assert.equal(read.topics['daily-ready'], 'granted');
-  await runtime.runUntilIdle().catch(() => undefined);
+  const background = await runtime.runUntilIdle().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  assert.ok(
+    isUnauthorized(background)
+      || (background instanceof AggregateError && background.errors.every(isUnauthorized)),
+    `expected the 401 in the background, got ${String(background)}`,
+  );
   console.info('notifications client end to end against the Worker handler passed');
 } finally {
-  runtime.stop();
+  runtime?.stop();
   globalThis.fetch = realFetch;
 }
