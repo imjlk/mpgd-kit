@@ -123,7 +123,7 @@ const requiredDevvitQueries = [
   'playtest',
   'payments',
 ] as const;
-const expectedDevvitVersion = '0.14.1';
+const expectedDevvitVersion = '0.15.0';
 // @devvit/mcp 0.0.27 depends on better-sqlite3 11.9.1, which ships prebuilt
 // binaries for Node 22 but not 24 and does not build on 26. `--no-config` keeps
 // mise from loading project or global config, so the server gets no
@@ -1083,15 +1083,23 @@ function validateAppIconPipeline(): void {
     `${devvitPackagePath}: scripts.prepare:icon:production`,
   );
 
+  assertEqual(
+    devvitPackageJson?.scripts?.['check:sdk'],
+    'pnpm exec mpgd kit devvit-check --project .',
+    `${devvitPackagePath}: scripts.check:sdk`,
+  );
+
   for (const script of ['init', 'init:copy-paste', 'upload', 'publish']) {
     const command = devvitPackageJson?.scripts?.[script];
     assertString(command, `${devvitPackagePath}: scripts.${script}`);
 
     if (
       typeof command === 'string'
-      && !command.startsWith('pnpm run prepare:icon:production && ')
+      && !command.startsWith('pnpm run check:sdk && pnpm run prepare:icon:production && ')
     ) {
-      failures.push(`${devvitPackagePath}: scripts.${script} must prepare a production icon.`);
+      failures.push(
+        `${devvitPackagePath}: scripts.${script} must check the latest SDK before preparing a production icon.`,
+      );
     }
   }
 

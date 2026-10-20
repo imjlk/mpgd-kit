@@ -6,29 +6,30 @@
   "scripts": {
     "prepare:icon": "pnpm --dir ../.. icons:generate:devvit",
     "prepare:icon:production": "pnpm --dir ../.. icons:generate:devvit:production",
-    "init": "pnpm run prepare:icon:production && devvit upload --config devvit.json",
-    "init:copy-paste": "pnpm run prepare:icon:production && devvit upload --copy-paste --config devvit.json",
+    "init": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit upload --config devvit.json",
+    "init:copy-paste": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit upload --copy-paste --config devvit.json",
     "dev": "pnpm run prepare:icon && devvit playtest --config devvit.json",
     "build": "pnpm --dir ../.. build:devvit",
     "whoami": "devvit whoami",
-    "upload": "pnpm run prepare:icon:production && devvit upload --config devvit.json",
-    "publish": "pnpm run prepare:icon:production && devvit publish --config devvit.json",
+    "upload": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit upload --config devvit.json",
+    "publish": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit publish --config devvit.json",
     "check": "ttsc --noEmit -p tsconfig.json",
     "lint": "ttsc --noEmit -p tsconfig.json",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "check:sdk": "pnpm exec mpgd kit devvit-check --project ."
   },
   "dependencies": {
-    "@devvit/web": "0.14.1",
+    "@devvit/web": "0.15.0",
     "@mpgd/adapter-devvit": "__MPGD_DEPENDENCY_VERSION_ADAPTER_DEVVIT__",
     "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION_BRIDGE__",
     "@mpgd/catalog": "__MPGD_DEPENDENCY_VERSION_CATALOG__"
   },
   "devDependencies": {
-    "@devvit/start": "0.14.1",
+    "@devvit/start": "0.15.0",
     "@ttsc/unplugin": "0.32.1",
     "@types/node": "^24.0.0",
-    "devvit": "0.14.1",
+    "devvit": "0.15.0",
     "ttsc": "0.32.1",
     "typescript": "7.0.2",
     "vite": "7.3.6"

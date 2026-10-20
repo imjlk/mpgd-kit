@@ -83,6 +83,7 @@ import {
   readGameCreateProviders,
 } from './notifications-starter.js';
 import { applyKitUpgrade, planKitUpgrade } from './kit-upgrade.js';
+import { checkDevvitSdk } from './devvit-sdk-check.js';
 import { applyToolingMigration, planToolingMigration } from './tooling-migration.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 import {
@@ -3123,6 +3124,16 @@ const kitCommand = defineI18n({
     ko: '현재 mpgd-kit 체크아웃을 점검합니다.',
   }),
   subCommands: {
+    'devvit-check': defineI18n({
+      name: 'devvit-check',
+      description: 'Require exact installed latest stable Devvit SDK and CLI before upload.',
+      resource: commandResource({ en: 'Check latest stable Devvit SDK before upload.', ko: '업로드 전 Devvit 최신 안정 SDK를 확인합니다.' }),
+      args: { project: { type: 'string', default: '.', description: 'Devvit target directory.' } },
+      run: async (ctx) => {
+        const entries = await checkDevvitSdk(readOptionalString(ctx.values.project) ?? '.');
+        for (const entry of entries) { console.info(entry.name + '@' + entry.installed + ' (latest stable)'); }
+      },
+    }),
     upgrade: defineI18n({
       name: 'upgrade',
       description: 'Plan or apply the latest published Kit package versions for a game.',
