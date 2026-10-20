@@ -57,13 +57,29 @@ left for you.
 
 Consent records (reminders, 광고성 정보 수신동의, night consent), endpoint
 registration, server reminders, and consent notices go through the game
-backend. The kit does not ship that runtime's backend client yet, so
-`createStarterNotificationBackend` in `src/platform/notifications.ts` returns
-`undefined` and the settings screen asks only for the OS or host permission
-(and withdraws a Devvit opt-in the game rendered). Once your backend serves
-the notification routes, return its `NotificationRuntime` there with
-`listConsent`, which reads the signed-in player's consent records (the
-game-services Worker's `GET /consent`). The settings screen shows each
+backend. `createStarterNotificationBackend` in
+`src/platform/notifications.ts` builds the notifications runtime
+(`@mpgd/platform/notifications-runtime`) over the game-services Worker's
+notification routes (`@mpgd/game-services/notifications/client`) when the
+game has both:
+
+- a game-services URL, `VITE_MPGD_GAME_SERVICES_URL`, the one the commerce
+  client uses (https in production); and
+- a server-backed session, which the game sets with
+  `setStarterServerSession` in `src/platform/gameServices.ts` before the
+  game boots its notifications: the signed-in `{ playerId, sessionId }`, a
+  sign-in subscription, and the session's `Authorization` header. The
+  commerce client then sends the same header. `sessionId` must stay the
+  same across token refreshes: it is the session id your identity service
+  answers to the Worker's `authenticateNotificationSession` (see the kit's
+  `docs/CLOUDFLARE_WORKER_DEPLOY.md`, "Sessions").
+
+Without either, it returns `undefined` and the settings screen asks only
+for the OS or host permission (and withdraws a Devvit opt-in the game
+rendered). With them, the runtime registers the device for the signed-in
+player, keeps its registration state in the platform storage, and
+`listConsent` reads the player's consent records (the Worker's
+`GET /consent`). The settings screen shows each
 switch from the latest record, read every time it opens and after every
 change, so a choice made on another device shows. A tap reads the records
 again and writes only what changes. It keeps nothing on the device, and

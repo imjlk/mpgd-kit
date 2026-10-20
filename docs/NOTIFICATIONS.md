@@ -108,15 +108,23 @@ Rules the starter's settings screen follows, and your own screen must too:
   `setTopicPreference`, and `setAdvertisingConsent` with the consent text
   version. The backend's policy gate decides every send from those records.
 
-> **The runtime is not in the kit yet.** Composing the provider with the
-> backend needs a game-services client for the Worker's notification routes,
-> and those routes need the identity side's session binding. Until both ship,
-> `createStarterNotificationBackend` in the starter returns `undefined`. The
-> settings screen then asks for the OS or host permission (and withdraws a
-> Devvit opt-in the game rendered), shows no reminder, advertising, or night
-> switch, and says why. Return your own `NotificationRuntime` there, with
-> `listConsent` reading the player's consent records (`GET /consent` on the
-> game-services Worker), if your backend implements the routes.
+> **The runtime needs a session.** `createNotificationRuntime` in
+> `@mpgd/platform/notifications-runtime` composes the provider with a
+> backend; `createGameServicesNotificationsClient` in
+> `@mpgd/game-services/notifications/client` is that backend over the
+> game-services Worker's notification routes. The Worker binds each request
+> to the session its `Authorization` header names, through the identity
+> service's `NotificationSessions` binding, which lives in the game's own
+> identity Worker ([Sessions](./CLOUDFLARE_WORKER_DEPLOY.md)). The starter's
+> `createStarterNotificationBackend` builds both when the game has a
+> game-services URL (`VITE_MPGD_GAME_SERVICES_URL`) and sets its
+> server-backed session with `setStarterServerSession`
+> (`src/platform/gameServices.ts`): the signed-in `{ playerId, sessionId }`,
+> a sign-in subscription, and the session's header, which the commerce
+> client then sends too. Without them it returns `undefined`, and the
+> settings screen asks for the OS or host permission (and withdraws a Devvit
+> opt-in the game rendered), shows no reminder, advertising, or night
+> switch, and says why.
 
 Notification opens are hints, never grants: an open carries a route and
 untrusted data, and anything worth claiming goes through the server. The

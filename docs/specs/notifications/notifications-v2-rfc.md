@@ -2,9 +2,9 @@
 
 Status: **draft**. N2 through C1 implemented this contract: the types, the
 conformance runner and vectors, the providers, the Worker and Devvit
-backends, and the CLI starter. The game-services client runtime and the
-identity-side session binding are follow-ups (see
-[What C1 landed](#pr-plan)). It is still outside the enforced
+backends, and the CLI starter. R1 added the production runtime and the
+game-services client. The identity-side session binding belongs to each
+game's identity service (see [What R1 landed](#pr-plan)). It is still outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope, and a
 conformance vector is not device or release verification. Baseline:
 `main@2f70328e`, 2026-10-12, revised the same day after review. Draft
@@ -2448,6 +2448,7 @@ publishable package carries a Sampo changeset.
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path landed with P3 | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
+| R1 | Follow-up: `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
 
 **What S1 landed.**
 
@@ -2493,8 +2494,8 @@ publishable package carries a Sampo changeset.
   the session routes `POST /reminders` and `POST /reminders/cancel`, and a
   cron that runs the scheduler after the purges.
 - Left for later: a game-services client that implements the runtime's
-  backend calls over the Worker routes, and seeding notice checks for
-  players whose records predate the scheduler. The Devvit scheduler path
+  backend calls over the Worker routes (landed in R1, below), and seeding
+  notice checks for players whose records predate the scheduler. The Devvit scheduler path
   landed with P3.
 
 **What P3 landed.** The Devvit provider, server bridge handler, delivery
@@ -2507,7 +2508,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
 - Left to follow-ups: a shared host-side `notifications.v2` bridge
   handler for the Apps in Toss and Devvit adapters, and the runtime's
   backend client for a service the Devvit server hosts (the game-services
-  client). The wiring in the generated Devvit app landed in C1.
+  client landed in R1 for the Worker). The wiring in the generated Devvit
+  app landed in C1.
 
 **What C1 landed.**
 
@@ -2538,19 +2540,48 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   [Firebase setup guide](../../FIREBASE_NOTIFICATIONS.md).
 - Left to follow-ups:
   - The runtime's backend client (a game-services client over the Worker's
-    notification routes). The routes need the identity side's session
-    binding, which is its own follow-up, and the only runtime is the
-    conformance reference. Until both land, the starter's
-    `createStarterNotificationBackend` returns `undefined`: the settings
-    screen asks for the permission but shows no reminder, advertising, or
-    night switch, and says so. With a backend, the switches show the
-    player's latest consent records (the Worker's `GET /consent`), read on
-    every view, never a device-side copy.
+    notification routes) and a production runtime: landed in R1, below.
   - Native rendering of Android advertising pushes with the opt-out action
     in the Capacitor shell; until then the starter maps no advertising topic
     to Android.
   - The shared host-side `notifications.v2` bridge handler, and bulk sends
     (open question 5).
+
+**What R1 landed.**
+
+- `@mpgd/platform/notifications-runtime`: the production runtime,
+  `createNotificationRuntime`, over a backend port
+  (`NotificationRuntimeBackend`) and a storage port for what survives a
+  restart (`NotificationRuntimeStorage`; `createNotificationRuntimeStorage`
+  keeps it in the platform storage). The conformance runner's reference
+  runtime is now this one, so every vector exercises production code. A
+  sign-in the runtime did not observe still moves the installation (see
+  [Runtime](#runtime), Registration and Unbinding).
+- `@mpgd/game-services/notifications/client`:
+  `createGameServicesNotificationsClient`, the backend port over the
+  Worker's session routes, with the commerce client's `baseUrl`, `fetch`,
+  and header resolver. The game's identity supplies the session
+  (`{ playerId, sessionId }` and a sign-in subscription); requests name no
+  player or installation. Worker answers map to the runtime's codes: 401 is
+  a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, a 404 on a session
+  route `NOTIFICATIONS_CONFIGURATION_REQUIRED`, a 400 or 413
+  `NOTIFICATIONS_INVALID_INPUT`, and an answer outside the route's contract
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED`. The vectors the service passes
+  also pass with the runtime calling it through this client, and a Worker
+  test runs the runtime through it against the real handler.
+- The starter: `createStarterNotificationBackend` returns the runtime over
+  this client when the game has `VITE_MPGD_GAME_SERVICES_URL` and sets a
+  server-backed session with `setStarterServerSession`, whose header the
+  commerce client then sends too; otherwise `undefined`, as before.
+- Left to follow-ups:
+  - The identity side's `NotificationSessions` binding stays with each
+    game's identity service; the contract is in the
+    [Worker guide](../../CLOUDFLARE_WORKER_DEPLOY.md) ("Sessions").
+  - The starter does not yet pass the Worker's registry entry
+    (`GET /providers`, `getProviders()`) to the runtime, so the start-time
+    comparison of the provider with its registry entry is off there.
+  - The shared host-side `notifications.v2` bridge handler, Android
+    advertising rendering, and bulk sends, as listed under C1.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
