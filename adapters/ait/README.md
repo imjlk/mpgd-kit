@@ -101,28 +101,52 @@ includes a bounded `errorCode`. Raw provider messages are deliberately excluded.
 best effort and stops blocking the native response after three seconds. Its failure cannot turn a
 successful payment into a failure.
 
-Explicit failures now retain the pending marker with their code. A restarted host reports that code
+Explicit failures retain the pending marker with their code. A restarted host reports that code
 again and returns `failed` without another SDK call. The resolver may still return a verified receipt;
 only an explicit authority `retry` decision can remove the marker and reach authorization again.
+A stored failure is not short-circuited in memory, so that retry can clear it in the same process.
+If storing the code fails, the same host process still treats the claim as an explicit failure and
+does not take the retry path. A process restart cannot recover a code that was never stored.
 A client-reported failure is **not** independent proof that no payment happened. Neither the observer
 nor a timeout should reset the server's monetary dispatch fence. A legacy failure whose marker was
 already removed cannot recover its old error code.
+
+<!--
+@link src/host.ts#createAitHostBridge Grant and recover share one idempotency-key lock, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, and leave a stored record pending when its campaignId differs.
+@link src/index.ts#createAitPlatformGateway An older host's unsupported recoverReward method, including a protocol validator rejection, is pending, not an exception.
+-->
 
 `gateway.promotions.recoverReward({ campaignId, idempotencyKey })` is an optional recovery-only
 capability. It reads a persisted receipt or consults the configured authority resolver, including
 a new installation without local state. It never calls the authorizer or native payout API, and
 a resolver's `retry` result leaves pending storage untouched. An explicit `grantReward` request
 is still required for a newly authorized payment. An unknown provider outcome remains pending;
-this API cannot reconstruct a lost provider key or prove non-payment.
+this API cannot reconstruct a lost provider key or prove non-payment. Grant and recover for the
+same idempotency key run one at a time, including when the campaigns differ, because the
+marker is keyed by that claim id. After authorization, and again immediately
+before the native payout, grant re-reads storage and the bridge-local receipt cache and returns
+a granted receipt instead of paying again.
 
 Recovery does not require current native payout support. A missing local marker has no known
 `pendingSince`, so the resolver receives no invented timestamp. A failed local read can fall back
-to the authority; confirmed receipts are cached for later restarts. The receipt contract is the
-same for markerless and existing-marker resolution.
+to the authority; that fallback does not run while a grant for the same claim is in flight, and it
+writes only a terminal authority receipt. Confirmed receipts are cached for later restarts. The
+receipt contract is the same for markerless and existing-marker resolution. Markers stay keyed by
+the claim id, `mpgd:ait:promotion-grant:v1:<idempotencyKey>`, as on main. New records also include
+`campaignId`. A stored record whose `campaignId` differs from the requested campaign stays pending
+and is not overwritten, removed, or paid again. A record with no `campaignId` is read as before.
+Campaign-scoped storage keys are a follow-up.
+
+An older host that does not implement `promotions.recoverReward` answers `{ status: 'pending' }`
+instead of throwing. That includes a host whose protocol validator rejects the method and whose
+request wrapper reports `AIT_BRIDGE_REQUEST_FAILED`, not only an `UNSUPPORTED_METHOD` fallback.
+`grantReward` is unchanged and still throws. Other host failures still throw.
 
 Undefined/malformed SDK responses and exceptions retain a bounded diagnostic code in the pending
 marker. They remain ambiguous, not confirmed non-payment. Thrown provider codes are preserved when
 safe; raw messages are not persisted. Recovery replays these observations for an unavailable game
-server to catch up. Terminal receipts also have a bridge-local fallback (up to 256 entries) when
-native storage fails. This fallback does not survive host termination, never grants eligibility,
-and does not replace durable storage or the server ledger.
+server to catch up. Terminal receipts also have a bridge-local fallback when
+native storage fails. Entries whose durable write failed are not evicted; other entries stay
+bounded at 256. This fallback does not survive host termination, never grants eligibility,
+and does not replace durable storage or the server ledger. The observer stops blocking after three
+seconds, and a late observer rejection is ignored.
