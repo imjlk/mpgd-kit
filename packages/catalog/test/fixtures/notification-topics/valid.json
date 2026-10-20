@@ -132,7 +132,6 @@
         "en": { "title": "Weekend event", "body": "The weekend event has started." }
       },
       "targets": {
-        "android": { "channelId": "advertising" },
         "ios": {}
       }
     }

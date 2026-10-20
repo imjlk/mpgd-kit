@@ -1796,7 +1796,7 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 
 | Profile | `permission` | `remote` | `local` | `open` |
 | --- | --- | --- | --- | --- |
-| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form, all three purposes | supported, iOS `maxPending` 64 | payload |
+| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form; all three purposes on both, matching the standard FCM registry. Map no advertising topic to Android until the shell renders the opt-out action | supported, iOS `maxPending` 64 | payload |
 | Apps in Toss | topic, host, not readable, persistent, gesture required, no settings link; per-topic `agreement` | platform-user, host-template, `service` and `requested` | unsupported | landing-url |
 | Devvit | app, game, readable through the server bridge and server-readable, persistent, gesture required, revocable in the game | platform-user, free-form (approved copy), `service` and `requested` | unsupported | host-link |
 | Web, Microsoft Store PWA, CrazyGames, OnePlay, Verse8 | `availability: 'unsupported'` | unsupported | unsupported | none |
@@ -1850,7 +1850,14 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   posts to `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose,
   and creating the provider throws when a channel would mix advertising with
   other topics. It creates the channels at start, because a push needs its
-  channel before it arrives, and tries again after a failure.
+  channel before it arrives, and tries again after a failure. A push-only
+  Android shell whose messaging plugin has no `createChannel` is
+  `configuration-required` when the catalog names a channel, so `register()`
+  does not hand the backend a token for a channel that cannot be created.
+  `listLocal` omits an Android row only when it is visible in the shade. A
+  past `fireAt` that is not delivered stays listed: Doze can defer an inexact
+  alarm past its time while the plugin still has it pending, and cancellation
+  reads `listLocal`.
 - **Opt-out action.** The provider registers the advertising opt-out action
   natively as the action type `mpgd-advertising` with the action
   `advertising-opt-out`, through `@capacitor/local-notifications`.
@@ -1862,8 +1869,17 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     which is a follow-up after C1. Until then, under the Korean rules, map
     no advertising topic to Android: the push would arrive without the
     opt-out action the rules require, and a settings path described in the
-    body does not replace it ([Advertising rules](#advertising-rules)). The
-    starter maps its sample advertising topic to iOS only. The game's
+    body does not replace it ([Advertising rules](#advertising-rules)).
+    `validateNotificationTopicCatalog` refuses that mapping, and the
+    notifications service will not start on a catalog that has it, so the
+    send is not left to the client. The Android and iOS providers still
+    declare `service`, `requested`, and `advertising`, the same list as
+    `referenceNotificationProviders.fcm` (the entry
+    `createFcmProviderRegistration` publishes for both targets).
+    `notificationRegistryMismatch` requires that list exactly; omitting
+    `advertising` on Android would make every standard pairing
+    `configuration-required`. The starter maps its sample
+    advertising topic to iOS only. The game's
     settings screen stays the in-game opt-out on every target.
   - Tapping the action opens the declared `optOutRoute` of the advertising
     topic the push names in its `topic` data key, never a route from the
@@ -1897,13 +1913,18 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     each payload and answer, and the gateway's client validates again. The
     gateway serves its v1 `notifications` adapter from the same provider and
     refuses a v1 push provider next to it.
-- **Cold starts.** Verify cold-start opens on a device: Capacitor 8.5 moved the
-  iOS template to the UIScene lifecycle, which sets the notification delegate
-  later than Apple recommends. The provider registers its native listeners
-  when it is created and marks an open `cold` when it arrives before the first
+- **Cold starts.** A killed-app notification tap is delivered only in
+  `connectionOptions.notificationResponse` of
+  `scene(_:willConnectTo:options:)`. Capacitor 8.5's scene proxy replays URL
+  contexts on `capacitorViewDidAppear` and does not read that response, and
+  `@capacitor/ios` 8.5.2 does not either. The reference shell's
+  `SceneDelegate` forwards it to the notification-center delegate (or the
+  bridge's notification router) on the first `capacitorViewDidAppear`, once
+  plugins have registered. The provider registers its native listeners when
+  it is created and marks an open `cold` when it arrives before the first
   subscriber. It also keeps events that arrive while no listener is attached
   later for the next subscriber (all but receipts), because the gateway's
-  bridge detaches when its last listener leaves.
+  bridge detaches when its last listener leaves. Verify the tap on a device.
 - **Unmapped topics.** A topic the catalog does not declare, or declares
   without a mapping for the target, reads `unsupported` and schedules
   nothing; an open naming it carries no topic.

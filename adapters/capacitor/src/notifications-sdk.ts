@@ -8,6 +8,14 @@ import { Capacitor, type PermissionState, type PluginListenerHandle } from '@cap
 // `@capacitor-firebase/messaging` 8.x and `@capacitor/local-notifications`
 // 8.x, narrowed to what the provider calls.
 
+/**
+ * Permission strings the plugins report. The installed 8.x plugins collapse
+ * iOS `.provisional` and `.ephemeral` to `granted`; a shell that reports the
+ * raw status uses the extra values, which the provider treats as still
+ * promptable.
+ */
+export type NotificationSdkPermissionState = PermissionState | 'provisional' | 'ephemeral';
+
 /** A notification as `@capacitor-firebase/messaging` reports it. */
 export interface PushSdkNotification {
   readonly id?: string;
@@ -40,9 +48,9 @@ export interface NotificationSdkChannel {
  */
 export interface PushSdk {
   /** On Android 12 and lower the plugin answers `granted` whatever the system setting is. */
-  checkPermissions(): Promise<{ readonly receive: PermissionState }>;
+  checkPermissions(): Promise<{ readonly receive: NotificationSdkPermissionState }>;
   /** Shows the OS dialog when the OS still allows it; on iOS it also registers with APNs. */
-  requestPermissions(): Promise<{ readonly receive: PermissionState }>;
+  requestPermissions(): Promise<{ readonly receive: NotificationSdkPermissionState }>;
   /** Rejects while Firebase cannot issue a token yet (iOS before APNs registration, offline). */
   getToken(): Promise<{ readonly token: string }>;
   createChannel?(channel: NotificationSdkChannel): Promise<void>;
@@ -106,12 +114,27 @@ export interface LocalNotificationSdkActionType {
  */
 export interface LocalNotificationSdk {
   /** Reflects the system setting on every Android version, unlike the push plugin. */
-  checkPermissions(): Promise<{ readonly display: PermissionState }>;
-  requestPermissions(): Promise<{ readonly display: PermissionState }>;
+  checkPermissions(): Promise<{ readonly display: NotificationSdkPermissionState }>;
+  requestPermissions(): Promise<{ readonly display: NotificationSdkPermissionState }>;
+  /**
+   * `NotificationManager.areNotificationsEnabled()`. Absent on a partial
+   * fake. On Android 13+ `checkPermissions` reads `POST_NOTIFICATIONS` and
+   * can answer `granted` while this is false.
+   */
+  areEnabled?(): Promise<{ readonly value: boolean }>;
   // Parameter lists are mutable, as the plugin declares them.
   schedule(options: { readonly notifications: LocalNotificationSdkSchema[] }): Promise<unknown>;
   cancel(options: { readonly notifications: { readonly id: number }[] }): Promise<void>;
   getPending(): Promise<{ readonly notifications: readonly LocalNotificationSdkEntry[] }>;
+  /**
+   * Notifications currently visible in the shade. Android `getPending` also
+   * keeps a fired one-shot in storage; a row here has fired. Absent on a
+   * partial fake, which then cannot tell that row from an alarm Doze has
+   * not delivered yet.
+   */
+  getDeliveredNotifications?(): Promise<{
+    readonly notifications: readonly { readonly id: number }[];
+  }>;
   createChannel(channel: NotificationSdkChannel): Promise<void>;
   /**
    * On iOS this sets the app's notification categories, which remote

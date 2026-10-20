@@ -39,9 +39,15 @@ fails until the advertising sender's contact placeholder is replaced.
 
 ## What each target supports {#targets}
 
+<!--
+@link ../adapters/capacitor/src/notifications-provider.ts#createCapacitorNotificationProvider Android and iOS remote purposes match the standard FCM registry, including advertising.
+@link ../packages/catalog/src/notification-topics.ts#validateNotificationTopicCatalog An advertising topic must not map to android until the shell renders the opt-out action.
+@evidence specs/notifications/notifications-v2-rfc.md#profile-capacitor Map no advertising topic to Android until the shell renders the opt-out action.
+-->
+
 | Target | Consent UI | Remote | Local reminders | Opens | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Android (Capacitor) | OS dialog for the app; on Android 13+ two denials leave only settings (a dismissed dialog counts none) | FCM, `service` and `requested`; no advertising until the shell renders it with the opt-out action | yes, inexact | push data `route` | Channels per purpose; an advertising topic, once mapped, gets its own. |
+| Android (Capacitor) | OS dialog for the app; on Android 13+ two denials leave only settings (a dismissed dialog counts none) | FCM, all three purposes, matching the standard registry. Map no advertising topic to Android until the shell renders the opt-out action; the catalog validator refuses that mapping | yes, inexact | push data `route` | Channels per purpose; an advertising topic, once the shell can render it, gets its own. |
 | iOS (Capacitor) | OS dialog, once; a denial leaves only settings | FCM (relayed to APNs), all three purposes | yes, at most 64 pending | push data `route` | Advertising pushes carry the opt-out action through the `mpgd-advertising` category. |
 | Apps in Toss | A Toss sheet per topic, from a tap | Functional messages (`service`, `requested`) through the partner API | no | landing URL per console template | No advertising, and functional messages may not carry benefits or retention content: check that a reminder qualifies before mapping it (the starter maps none). Each topic maps `targets.ait` to the console template code and `agreement`. Toss gives no read, so the backend record decides. |
 | Reddit (Devvit) | The game's own toggle, from a tap; the player must be logged in | Devvit notifications (`service`, `requested`), copy pre-approved by Devvit admins | no | the linked post | Gated beta: keep `integrations.notifications` at `approval-required` until Reddit approves the app. Each send needs a post or comment link. |
