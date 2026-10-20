@@ -3073,7 +3073,57 @@ describe('AIT production host bridge', () => {
       })).resolves.toEqual({ status: 'pending' });
       expect(fixture.values.get(fixture.legacyKey)).toBe(fixture.legacyRecord);
       expect(fixture.grantPromotionReward).toHaveBeenCalledTimes(0);
-      expect(resolvePendingPromotionGrant).toHaveBeenCalledTimes(2);
+      // The v1 marker was bound to CAMPAIGN_A before the copy was attempted,
+      // so CAMPAIGN_B never reads it and the resolver is asked only once.
+      expect(resolvePendingPromotionGrant).toHaveBeenCalledTimes(1);
+      expect(resolvePendingPromotionGrant).toHaveBeenCalledWith({
+        campaignId: 'CAMPAIGN_A',
+        idempotencyKey: 'unwritable-claim',
+      });
+    });
+
+    it('binds the v1 marker before any scoped copy exists', async () => {
+      const legacyKey = 'mpgd:ait:promotion-grant:v1:bind-first';
+      const legacyRecord = JSON.stringify({ status: 'granted', receiptKey: 'legacy-receipt' });
+      const values = new Map<string, string>([[legacyKey, legacyRecord]]);
+      let legacyReads = 0;
+      const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+      const storage = {
+        getItem: async (key: string) => {
+          if (key === legacyKey) {
+            legacyReads += 1;
+            if (legacyReads === 2) {
+              throw new Error('legacy cleanup read failed');
+            }
+          }
+          return values.get(key) ?? null;
+        },
+        setItem: async (key: string, value: string) => {
+          if (key.includes('v1-binding:')) {
+            throw new Error('legacy binding write failed');
+          }
+          values.set(key, value);
+        },
+        removeItem: async () => {
+          throw new Error('remove failed');
+        },
+      };
+      const create = () => createAitHostBridge({
+        promotionRewards,
+        dependencies: createDependencies({ grantPromotionReward, storage }),
+      });
+      await expect(request(create(), 'promotions.recoverReward', {
+        campaignId: 'CAMPAIGN_A',
+        idempotencyKey: 'bind-first',
+      })).resolves.toEqual({ status: 'pending' });
+      expect([...values.keys()].some((key) => key.includes(':v2:'))).toBe(false);
+      expect(values.get(legacyKey)).toBe(legacyRecord);
+      await expect(request(create(), 'promotions.recoverReward', {
+        campaignId: 'CAMPAIGN_B',
+        idempotencyKey: 'bind-first',
+      })).resolves.toEqual({ status: 'pending' });
+      expect([...values.keys()].some((key) => key.includes(':v2:'))).toBe(false);
+      expect(grantPromotionReward).toHaveBeenCalledTimes(0);
     });
 
     it('does not dispatch a pending v1 claim the authority retries while storage is unwritable', async () => {

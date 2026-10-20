@@ -2102,6 +2102,16 @@ async function migrateLegacyPromotionGrant(
   if (!isRecord(state) || (typeof state.campaignId === 'string' && state.campaignId !== campaignId)) {
     return 'fenced';
   }
+  // Bind the v1 marker before any scoped copy exists. Otherwise a failed
+  // cleanup, binding write, and copy removal could leave a campaign-scoped
+  // receipt durable beside an unbound v1 marker another campaign can claim
+  // after restart. Without the binding nothing is copied.
+  if (
+    typeof state.campaignId !== 'string'
+    && !(await persistLegacyCampaignBinding(storage, idempotencyKey, campaignId))
+  ) {
+    return 'unwritable';
+  }
   try {
     await writePromotionGrantRecord(storage, memory, campaignId, idempotencyKey, state);
     return 'fenced';
@@ -2124,8 +2134,9 @@ async function migrateLegacyPromotionGrant(
 
 /**
  * `fenced`: copied and bound, or nothing to bind. `unbound`: the cleanup could
- * not bind or remove the v1 marker. `unwritable`: the scoped copy itself could
- * not be written, so the v1 marker is untouched and unbound.
+ * not bind or remove the v1 marker. `unwritable`: the v1 marker could not be
+ * bound before copying, or the scoped copy itself could not be written, so no
+ * scoped copy was created from it.
  */
 type LegacyPromotionMigration = 'fenced' | 'unbound' | 'unwritable';
 
