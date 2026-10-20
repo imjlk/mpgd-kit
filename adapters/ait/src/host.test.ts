@@ -2916,6 +2916,95 @@ describe('AIT production host bridge', () => {
     expect(grantPromotionReward).toHaveBeenCalledTimes(0);
   });
 
+  it('does not credit a legacy receipt twice when the cleanup read fails', async () => {
+    const legacyKey = 'mpgd:ait:promotion-grant:v1:cleanup-read';
+    const bindingKey = 'mpgd:ait:promotion-grant:v1-binding:cleanup-read';
+    const values = new Map<string, string>([
+      [legacyKey, JSON.stringify({ status: 'granted', receiptKey: 'legacy-receipt' })],
+    ]);
+    let legacyReads = 0;
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const storage = {
+      getItem: async (key: string) => {
+        if (key === legacyKey) {
+          legacyReads += 1;
+          if (legacyReads === 2) {
+            throw new Error('legacy cleanup read failed');
+          }
+        }
+        return values.get(key) ?? null;
+      },
+      setItem: async (key: string, value: string) => { values.set(key, value); },
+      removeItem: async (key: string) => { values.delete(key); },
+    };
+    const create = () => createAitHostBridge({
+      promotionRewards: {
+        CAMPAIGN_A: { promotionCode: 'PROMO_A', amount: 1 },
+        CAMPAIGN_B: { promotionCode: 'PROMO_B', amount: 1 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    const claim = { idempotencyKey: 'cleanup-read' };
+    await expect(request(create(), 'promotions.recoverReward', {
+      ...claim,
+      campaignId: 'CAMPAIGN_A',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'legacy-receipt' });
+    expect(values.get(bindingKey)).toContain('CAMPAIGN_A');
+    expect(JSON.parse(values.get(legacyKey) ?? '{}')).not.toHaveProperty('campaignId');
+    const restarted = create();
+    const [again, other] = await Promise.all([
+      request(restarted, 'promotions.recoverReward', { ...claim, campaignId: 'CAMPAIGN_A' }),
+      request(restarted, 'promotions.recoverReward', { ...claim, campaignId: 'CAMPAIGN_B' }),
+    ]);
+    expect(again).toEqual({ status: 'granted', receiptKey: 'legacy-receipt' });
+    expect(other).toEqual({ status: 'pending' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(0);
+  });
+
+  it('does not publish a legacy receipt when the cleanup read and binding write both fail', async () => {
+    const legacyKey = 'mpgd:ait:promotion-grant:v1:cleanup-read-unbound';
+    const values = new Map<string, string>([
+      [legacyKey, JSON.stringify({ status: 'granted', receiptKey: 'legacy-receipt' })],
+    ]);
+    let legacyReads = 0;
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const storage = {
+      getItem: async (key: string) => {
+        if (key === legacyKey) {
+          legacyReads += 1;
+          if (legacyReads === 2) {
+            throw new Error('legacy cleanup read failed');
+          }
+        }
+        return values.get(key) ?? null;
+      },
+      setItem: async (key: string, value: string) => {
+        if (key.includes('v1-binding:')) {
+          throw new Error('legacy binding write failed');
+        }
+        values.set(key, value);
+      },
+      removeItem: async (key: string) => { values.delete(key); },
+    };
+    const create = () => createAitHostBridge({
+      promotionRewards: {
+        CAMPAIGN_A: { promotionCode: 'PROMO_A', amount: 1 },
+        CAMPAIGN_B: { promotionCode: 'PROMO_B', amount: 1 },
+      },
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    await expect(request(create(), 'promotions.recoverReward', {
+      campaignId: 'CAMPAIGN_A',
+      idempotencyKey: 'cleanup-read-unbound',
+    })).resolves.toEqual({ status: 'pending' });
+    expect([...values.entries()].some(([key, value]) => (
+      key.includes(':v2:') && value.includes('legacy-receipt')
+    ))).toBe(false);
+    expect(values.get(legacyKey)).toContain('legacy-receipt');
+    expect(grantPromotionReward).toHaveBeenCalledTimes(0);
+  });
+
   it('returns a protocol error for a malformed runtime bridge call', async () => {
     const bridge = createAitHostBridge({ dependencies: createDependencies() });
     const response: unknown = await Reflect.apply(bridge.request, bridge, [null]);

@@ -112,7 +112,7 @@ nor a timeout should reset the server's monetary dispatch fence. A legacy failur
 already removed cannot recover its old error code.
 
 <!--
-@link src/host.ts#createAitHostBridge Grant and recover share one idempotency-key lock, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, and fail closed when a scoped marker's campaignId does not match its key.
+@link src/host.ts#createAitHostBridge Grant and recover share one idempotency-key lock, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, fail closed when a scoped marker's campaignId does not match its key, and do not return a legacy receipt when cleanup cannot durably bind it.
 @link src/index.ts#createAitPlatformGateway An older host's unsupported recoverReward method, including a protocol validator rejection, is pending, not an exception.
 -->
 
@@ -138,6 +138,9 @@ that reconciles an unbound legacy marker binds it; another campaign does not rec
 Server-issued idempotency keys should stay unique across campaigns. A legacy marker that could not
 be copied remains fenced in the current process by that binding. The campaign id is written onto
 the legacy marker before it is removed, so a failed delete still fences a restarted bridge.
+A cleanup read that fails is not a successful copy: the campaign binding is stored before the
+receipt is returned. If that binding cannot be stored, the claim stays pending and the scoped
+copy is removed, so a restarted bridge cannot credit the unbound marker to a second campaign.
 An authority `retry` also removes
 that migrated copy, so it cannot block the authorized payout. A v2 marker whose embedded
 `campaignId` does not match its key stays pending and is not overwritten or paid again.

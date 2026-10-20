@@ -107,6 +107,7 @@ const minimumPromotionTossAppVersion = '5.232.0';
 const reservedStorageKeyPrefix = 'mpgd:ait:';
 /** Legacy unscoped markers. New writes use the campaign-scoped v2 prefix. */
 const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
+const promotionGrantLegacyBindingPrefix = 'mpgd:ait:promotion-grant:v1-binding:';
 const promotionGrantScopedStoragePrefix = 'mpgd:ait:promotion-grant:v2:';
 const promotionReceiptCacheLimit = 256;
 const notificationTopics = new Set<NotificationTopic>([
@@ -1614,13 +1615,20 @@ async function resolvePersistedPromotionGrant(
     return {};
   }
   if (loaded.legacy) {
-    await migrateLegacyPromotionGrant(
+    const fenced = await migrateLegacyPromotionGrant(
       input.storage,
       input.memory,
       input.campaignId,
       input.idempotencyKey,
       loaded.serialized,
     );
+    if (!fenced) {
+      console.warn(
+        'AIT legacy promotion marker could not be bound; keeping the claim pending.',
+        input.campaignId,
+      );
+      return { result: { status: 'pending' } };
+    }
   }
   const storageKey = loaded.storageKey;
   const serialized = loaded.serialized;
@@ -1825,6 +1833,18 @@ function promotionGrantLegacyStorageKey(idempotencyKey: string): string {
   return `${promotionGrantStoragePrefix}${encodeURIComponent(idempotencyKey)}`;
 }
 
+function promotionGrantLegacyBindingKey(idempotencyKey: string): string {
+  return `${promotionGrantLegacyBindingPrefix}${encodeURIComponent(idempotencyKey)}`;
+}
+
+/** The unscoped marker is still claimable and no durable campaign binding was stored. */
+class LegacyPromotionFenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LegacyPromotionFenceError';
+  }
+}
+
 function readStoredCampaignId(serialized: string): string | undefined {
   try {
     const state: unknown = JSON.parse(serialized);
@@ -1861,10 +1881,19 @@ async function loadPromotionGrantRecord(
     return { storageKey: scopedKey, legacy: false, serialized: null, campaignMismatch: false };
   }
   const bound = readStoredCampaignId(legacy);
+  let durable = bound;
+  if (durable === undefined) {
+    try {
+      durable = await readLegacyCampaignBinding(storage, idempotencyKey);
+    } catch {
+      // An unreadable binding cannot prove the marker is unbound.
+      return { storageKey: scopedKey, legacy: false, serialized: legacy, campaignMismatch: true };
+    }
+  }
   const inProcess = memory?.legacyBindings.get(idempotencyKey);
   if (
-    (bound !== undefined && bound !== campaignId)
-    || (bound === undefined && inProcess !== undefined && inProcess !== campaignId)
+    (durable !== undefined && durable !== campaignId)
+    || (durable === undefined && inProcess !== undefined && inProcess !== campaignId)
   ) {
     return { storageKey: scopedKey, legacy: false, serialized: null, campaignMismatch: false };
   }
@@ -1887,15 +1916,32 @@ async function writePromotionGrantRecord(
   try {
     legacy = await storage.getItem(legacyKey);
   } catch {
-    // A failed read cannot prove the unscoped marker is gone.
+    // A failed read cannot prove the unscoped marker is gone. A process-local
+    // map does not survive restart, so persist the campaign binding or fail.
+    if (!(await persistLegacyCampaignBinding(storage, idempotencyKey, campaignId))) {
+      throw new LegacyPromotionFenceError(
+        'AIT legacy promotion marker could not be bound after a failed cleanup read.',
+      );
+    }
     memory?.legacyBindings.set(idempotencyKey, campaignId);
     return;
   }
   if (legacy === null) {
     memory?.legacyBindings.delete(idempotencyKey);
+    await clearLegacyCampaignBinding(storage, idempotencyKey);
     return;
   }
-  const bound = readStoredCampaignId(legacy);
+  const embedded = readStoredCampaignId(legacy);
+  let bound = embedded;
+  if (bound === undefined) {
+    try {
+      bound = await readLegacyCampaignBinding(storage, idempotencyKey);
+    } catch {
+      throw new LegacyPromotionFenceError(
+        'AIT legacy promotion marker could not be bound after a failed cleanup read.',
+      );
+    }
+  }
   if (bound !== undefined && bound !== campaignId) {
     return;
   }
@@ -1912,11 +1958,62 @@ async function writePromotionGrantRecord(
   try {
     await storage.removeItem(legacyKey);
     memory?.legacyBindings.delete(idempotencyKey);
+    await clearLegacyCampaignBinding(storage, idempotencyKey);
   } catch {
     if (!stamped) {
-      throw new Error('AIT legacy promotion marker could not be bound or removed.');
+      throw new LegacyPromotionFenceError(
+        'AIT legacy promotion marker could not be bound or removed.',
+      );
     }
   }
+}
+
+async function readLegacyCampaignBinding(
+  storage: Pick<typeof Storage, 'getItem'>,
+  idempotencyKey: string,
+): Promise<string | undefined> {
+  const serialized = await storage.getItem(promotionGrantLegacyBindingKey(idempotencyKey));
+  if (serialized === null) {
+    return undefined;
+  }
+  const owner = readStoredCampaignId(serialized);
+  if (owner === undefined) {
+    throw new Error('AIT legacy promotion binding is unreadable.');
+  }
+  return owner;
+}
+
+async function persistLegacyCampaignBinding(
+  storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
+  idempotencyKey: string,
+  campaignId: string,
+): Promise<boolean> {
+  const key = promotionGrantLegacyBindingKey(idempotencyKey);
+  try {
+    const existing = await storage.getItem(key);
+    if (existing !== null) {
+      const owner = readStoredCampaignId(existing);
+      if (owner === campaignId) {
+        return true;
+      }
+      if (owner !== undefined) {
+        return false;
+      }
+    }
+    await storage.setItem(key, JSON.stringify({ campaignId }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function clearLegacyCampaignBinding(
+  storage: Pick<typeof Storage, 'removeItem'>,
+  idempotencyKey: string,
+): Promise<void> {
+  try {
+    await storage.removeItem(promotionGrantLegacyBindingKey(idempotencyKey));
+  } catch { /* The marker is already gone, or the next cleanup read can retry. */ }
 }
 
 async function migrateLegacyPromotionGrant(
@@ -1925,20 +2022,33 @@ async function migrateLegacyPromotionGrant(
   campaignId: string,
   idempotencyKey: string,
   serialized: string,
-): Promise<void> {
+): Promise<boolean> {
   memory?.legacyBindings.set(idempotencyKey, campaignId);
   let state: unknown;
   try {
     state = JSON.parse(serialized);
   } catch {
-    return;
+    return true;
   }
   if (!isRecord(state) || (typeof state.campaignId === 'string' && state.campaignId !== campaignId)) {
-    return;
+    return true;
   }
   try {
     await writePromotionGrantRecord(storage, memory, campaignId, idempotencyKey, state);
-  } catch { /* The in-process binding still hides this marker from another campaign. */ }
+    return true;
+  } catch (error) {
+    if (!(error instanceof LegacyPromotionFenceError)) {
+      // A lost scoped write is not proof that an unbound marker remains. The
+      // caller still returns a reconciled receipt and keeps the in-process fence.
+      return true;
+    }
+    // Do not leave a scoped receipt beside an unbound v1 marker. A later read
+    // would return it after restart while another campaign can still claim v1.
+    try {
+      await storage.removeItem(promotionGrantScopedStorageKey(campaignId, idempotencyKey));
+    } catch { /* This call still stays pending. */ }
+    return false;
+  }
 }
 
 export async function shareIntent(
