@@ -252,6 +252,39 @@ describe('createAitBridgeNotificationProvider', () => {
     })).getCapabilities())).resolves.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
   });
 
+  it('fails closed on a host that speaks another major notifications protocol version', async () => {
+    const capabilitiesAt = (protocolVersion: string) => answering(() => ({
+      protocolVersion,
+      provider: 'apps-in-toss',
+      capabilities: createAitNotificationCapabilities(),
+    })).getCapabilities();
+    for (const compatible of ['2.0.0-draft.1', '2.0.0', '2.3.1']) {
+      await expect(capabilitiesAt(compatible)).resolves.toEqual(createAitNotificationCapabilities());
+    }
+    for (const incompatible of ['3.0.0', '1.9.0', '20.0.0', '02.0.0', 'v2.0.0', '2', 'draft']) {
+      await expect(failureOf(capabilitiesAt(incompatible))).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+        retryable: false,
+        message: expect.stringContaining(`notifications protocol ${incompatible};`),
+      });
+    }
+  });
+
+  it('reports a host on another major protocol version as configuration-required', async () => {
+    const { bridge } = hostBridge();
+    const newer: GamePlatformBridge = {
+      ...bridge,
+      request: async (input) => {
+        const response = await bridge.request(input);
+        return input.method === 'notifications.v2.getCapabilities' && response.ok
+          ? { ...response, data: { ...(response.data as object), protocolVersion: '3.0.0' } }
+          : response;
+      },
+    };
+    const capabilities = await gatewayOver(newer).getCapabilities();
+    expect(capabilities.notifications).toMatchObject({ availability: 'configuration-required' });
+  });
+
   it('ignores another protocol and drops an invalid notifications envelope', () => {
     let deliver: ((event: BridgeNotificationsEvent) => void) | undefined;
     const provider = createAitBridgeNotificationProvider({

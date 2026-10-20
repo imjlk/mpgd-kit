@@ -16,6 +16,7 @@ import {
   isNotificationErrorCode,
   NotificationError,
   notificationsProtocol,
+  notificationsProtocolVersion,
   type NotificationEvent,
   type NotificationProvider,
   type NotificationProviderId,
@@ -75,6 +76,14 @@ export interface CreateAitBridgeNotificationProviderInput {
  * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, retryable unless the failure says
  * otherwise. An event envelope of another
  * protocol is ignored, and an invalid one is dropped with a warning.
+ *
+ * `getCapabilities` fails closed with `NOTIFICATIONS_CONFIGURATION_REQUIRED`
+ * when the host serves another provider id or speaks another major version
+ * of the notifications protocol than this game (`notificationsProtocolVersion`),
+ * as the commerce evidence registry compares commerce protocol majors: the
+ * host wrapper and the game are built separately, and a host on another
+ * major may read the same payloads differently. The gateway then reports
+ * notifications as `configuration-required`.
  */
 export function createAitBridgeNotificationProvider(
   input: CreateAitBridgeNotificationProviderInput,
@@ -105,6 +114,14 @@ export function createAitBridgeNotificationProvider(
       if (answer.provider !== input.provider) {
         throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
           message: `The bridge serves notifications provider ${answer.provider}, not ${input.provider}.`,
+        });
+      }
+      const hostMajor = protocolMajorOf(answer.protocolVersion);
+      if (hostMajor === undefined || hostMajor !== protocolMajorOf(notificationsProtocolVersion)) {
+        throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+          message: `The bridge speaks notifications protocol ${
+            answer.protocolVersion.slice(0, 64)
+          }; this game speaks ${notificationsProtocolVersion}.`,
         });
       }
       return answer.capabilities;
@@ -149,6 +166,11 @@ export function readAitBridgeNotificationEvent(envelope: unknown): NotificationE
     console.warn('AIT bridge delivered an invalid notifications event.', error);
     return undefined;
   }
+}
+
+/** The major version of a protocol version such as `2.0.0-draft.1`, or `undefined` for one without it. */
+function protocolMajorOf(version: string): string | undefined {
+  return /^(0|[1-9][0-9]*)\./u.exec(version)?.[1];
 }
 
 function toNotificationError(error: unknown): NotificationError {
