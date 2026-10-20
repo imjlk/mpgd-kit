@@ -14,6 +14,13 @@ import {
   runNotificationConformanceVectors,
 } from '@mpgd/platform/notifications-conformance';
 import { assertNotificationConformanceVector } from '@mpgd/platform/notifications-vectors';
+import {
+  createMemoryNotificationRuntimeStorage,
+  createNotificationRuntime,
+  createNotificationRuntimeStorage,
+  defaultNotificationRuntimeStorageKey,
+  notificationRuntimeStateOf,
+} from '@mpgd/platform/notifications-runtime';
 
 const vectorsDir = new URL('../../../docs/specs/notifications/vectors/', import.meta.url);
 const vectors = readdirSync(vectorsDir)
@@ -67,8 +74,15 @@ for (const factory of [
   createNotificationConformanceHost,
   createNotificationConformanceRuntime,
   notificationConformanceRegistryEntry,
+  createNotificationRuntime,
+  createNotificationRuntimeStorage,
+  createMemoryNotificationRuntimeStorage,
+  notificationRuntimeStateOf,
 ]) {
   assert.equal(typeof factory, 'function');
 }
+
+assert.equal(defaultNotificationRuntimeStorageKey, 'mpgd:notifications-runtime');
+assert.deepEqual(notificationRuntimeStateOf({ unbound: true, extra: 1 }), { unbound: true });
 
 console.info('Notifications conformance dist entrypoint passed.');

@@ -15,6 +15,7 @@ import type { PurchasePresentationEvent } from '@mpgd/game-runtime/ads';
 
 import { resolveStarterCommerceProducts } from './commerceProducts';
 import { createStorageMonetizationOperationStore } from './monetizationJournal';
+import { resolveStarterServerSession } from './serverSession';
 
 const productCatalog = productCatalogJson as ProductCatalog;
 
@@ -47,6 +48,7 @@ export function createStarterGameServices(input: {
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
 }): StarterGameServices {
+  const session = resolveStarterServerSession({ once: true });
   return createGameServicesRuntime({
     gateway: input.gateway,
     playerId: input.playerId,
@@ -64,5 +66,6 @@ export function createStarterGameServices(input: {
       ? {}
       : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),
     transport: resolveGameServicesTransport(import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT),
+    ...(session === undefined ? {} : { getHeaders: () => session.getHeaders() }),
   });
 }

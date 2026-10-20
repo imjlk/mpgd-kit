@@ -57,13 +57,42 @@ left for you.
 
 Consent records (reminders, 광고성 정보 수신동의, night consent), endpoint
 registration, server reminders, and consent notices go through the game
-backend. The kit does not ship that runtime's backend client yet, so
-`createStarterNotificationBackend` in `src/platform/notifications.ts` returns
-`undefined` and the settings screen asks only for the OS or host permission
-(and withdraws a Devvit opt-in the game rendered). Once your backend serves
-the notification routes, return its `NotificationRuntime` there with
-`listConsent`, which reads the signed-in player's consent records (the
-game-services Worker's `GET /consent`). The settings screen shows each
+backend. `createStarterNotificationBackend` in
+`src/platform/notifications.ts` builds the notifications runtime
+(`@mpgd/platform/notifications-runtime`) over the game-services Worker's
+notification routes (`@mpgd/game-services/notifications/client`) when the
+game has both:
+
+- a game-services URL, `VITE_MPGD_GAME_SERVICES_URL`, the one the commerce
+  client uses (a public https URL in production); and
+- a server-backed session, which the game sets with
+  `setStarterServerSession` in `src/platform/serverSession.ts` at the top of
+  `src/main.ts`, before `bootstrap()`: the signed-in `{ playerId, sessionId }`
+  (`undefined` until the player signs in), a sign-in subscription, and the
+  session's `Authorization` header. The commerce client then sends the same
+  header. `sessionId` must be the stable session-family id: the `sessionId` your
+  identity service answers to the Worker's `authenticateNotificationSession`
+  for this session's header, the same across token refreshes (see the kit's
+  `docs/CLOUDFLARE_WORKER_DEPLOY.md`, "Sessions"). Do not pass a per-token
+  or rotating id: a `GuestSessionCoordinator` view's `sessionId` may rotate
+  on refresh, so it is not that id.
+
+Without either, it returns `undefined` and the settings screen asks only
+for the OS or host permission (and withdraws a Devvit opt-in the game
+rendered). With them, the runtime registers the device for the signed-in
+player, keeps its registration state in the platform storage, and
+`listConsent` reads the player's consent records (the Worker's
+`GET /consent`). The runtime also loads the Worker's registry entry for
+its target (`GET /providers`) and turns notifications into a configuration
+error when the provider disagrees with it; a Worker it cannot reach is
+logged and the runtime runs without that check.
+
+Reddit never gets this backend, even with a URL and a session: a Reddit
+game's notifications backend is its Devvit server, which keeps the opt-in,
+the records, and the sends, and the Worker serves no `reddit` target. The
+Worker serves the Android, iOS, and Apps in Toss providers.
+
+The settings screen shows each
 switch from the latest record, read every time it opens and after every
 change, so a choice made on another device shows. A tap reads the records
 again and writes only what changes. It keeps nothing on the device, and
