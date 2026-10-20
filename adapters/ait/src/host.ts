@@ -2092,7 +2092,9 @@ async function migrateLegacyPromotionGrant(
   idempotencyKey: string,
   serialized: string,
 ): Promise<LegacyPromotionMigration> {
-  memory?.legacyBindings.set(idempotencyKey, campaignId);
+  // The in-process binding hides the v1 marker from every other campaign, so
+  // it is recorded only once the marker is valid and durably bound to this
+  // campaign. A malformed or unbound marker stays visible and reads pending.
   let state: unknown;
   try {
     state = JSON.parse(serialized);
@@ -2112,6 +2114,7 @@ async function migrateLegacyPromotionGrant(
   ) {
     return 'unwritable';
   }
+  memory?.legacyBindings.set(idempotencyKey, campaignId);
   try {
     await writePromotionGrantRecord(storage, memory, campaignId, idempotencyKey, state);
     return 'fenced';

@@ -3082,6 +3082,32 @@ describe('AIT production host bridge', () => {
       });
     });
 
+    it('does not hide a malformed v1 marker from another campaign in the same process', async () => {
+      const legacyKey = 'mpgd:ait:promotion-grant:v1:malformed-claim';
+      const values = new Map<string, string>([[legacyKey, '{not json']]);
+      const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+      const storage = {
+        getItem: async (key: string) => values.get(key) ?? null,
+        setItem: async (key: string, value: string) => { values.set(key, value); },
+        removeItem: async (key: string) => { values.delete(key); },
+      };
+      const bridge = createAitHostBridge({
+        promotionRewards,
+        authorizePromotionGrant: async () => ({ status: 'authorized' }),
+        dependencies: createDependencies({ grantPromotionReward, storage }),
+      });
+      await expect(request(bridge, 'promotions.recoverReward', {
+        campaignId: 'CAMPAIGN_A',
+        idempotencyKey: 'malformed-claim',
+      })).resolves.toEqual({ status: 'pending' });
+      await expect(request(bridge, 'promotions.grantReward', {
+        campaignId: 'CAMPAIGN_B',
+        idempotencyKey: 'malformed-claim',
+      })).resolves.toEqual({ status: 'pending' });
+      expect(values.get(legacyKey)).toBe('{not json');
+      expect(grantPromotionReward).toHaveBeenCalledTimes(0);
+    });
+
     it('binds the v1 marker before any scoped copy exists', async () => {
       const legacyKey = 'mpgd:ait:promotion-grant:v1:bind-first';
       const legacyRecord = JSON.stringify({ status: 'granted', receiptKey: 'legacy-receipt' });
