@@ -1959,17 +1959,23 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await stopReminderSend(player, reminder, made.existing.fingerprint);
       made = await createItemSend(request, { kind: 'reminder', key: reminder.key }, at);
       if (made !== 'busy' && 'existing' in made && made.existing.fingerprint !== fingerprint) {
-        // A row of it was delivered, so the key keeps that send: this
-        // reminder cannot have its own under the same key and time.
-        report(
-          new Error(
-            "A delivered send of another reminder holds this reminder's key and time; it is not sent.",
-          ),
-          'scheduler.reminder',
-          key,
-        );
-        await markFired();
-        return undefined;
+        // A delivered row keeps the key: this reminder cannot have its own
+        // under the same key and time. A merely live claim does not. The
+        // holder drops that row if the reminder was replaced before the
+        // provider call, and marking this one fired would spend it with no
+        // delivery. It stays pending until the claim settles or is dropped.
+        if (made.existing.rows.some((row) => row.state.status === 'delivered')) {
+          report(
+            new Error(
+              "A delivered send of another reminder holds this reminder's key and time; it is not sent.",
+            ),
+            'scheduler.reminder',
+            key,
+          );
+          await markFired();
+          return undefined;
+        }
+        return 'busy';
       }
     }
     if (made === 'busy') {
@@ -2404,8 +2410,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         } else {
           const result = await fireReminder(held, item);
           if (result === 'busy') {
-            // Another run holds its send: it waits a minute, so the next
-            // round does not list it again, and it is not progress. The run
+            // Another run holds its send, or a live claim of other content
+            // still occupies the key: it waits a minute, so the next round
+            // does not list it again, and it is not progress. The run
             // holding the send then loses its mark to this version, re-reads
             // the same reminder, and keeps its rows; the next run marks it.
             await deferEntry(held, nowMs());
@@ -2780,6 +2787,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (reminder.templateData !== undefined && hostTemplate) {
         throw invalidInput('A host-template provider keeps template context on the server; a reminder takes no templateData.');
       }
+      // An uncompilable link rule is the deployment's. Every provider that
+      // would deliver the topic is checked, not only until the first
+      // candidate passes: registry order, or a player not reached on that
+      // provider yet, must not schedule a reminder the deployment cannot take.
+      if (reminder.link !== undefined) {
+        for (const provider of declaring) {
+          const configuration = reminderLinkRuleConfigurationIssue(provider);
+          if (configuration !== undefined) {
+            throw invalidInput(`Invalid reminder: ${configuration}`);
+          }
+        }
+      }
       // Gate steps 3 to 5 at set time: one candidate that passes is enough.
       const consent = await store.listConsent(player);
       const permissions = new Map<string, Promise<NotificationPermissionState | undefined>>();
@@ -2995,10 +3014,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 }
 
 /**
- * Fills every locale copy, and a target mapping's own title and body, with
- * the reminder's template data. A placeholder without a value is
- * `NOTIFICATIONS_INVALID_INPUT` now, not a reminder that is stored and then
- * dropped when it fires.
+ * Fills every locale copy a free-form provider would send, and a target
+ * mapping's own title and body, with the reminder's template data. A
+ * host-template provider skips catalog copy (the host renders that) but not
+ * a mapping that supplies its own title and body: that text is what the
+ * send renders, ahead of the host template. A placeholder without a value
+ * is `NOTIFICATIONS_INVALID_INPUT` now, not a reminder that is stored and
+ * then dropped when it fires.
  */
 function assertReminderCopyFills(
   providers: readonly RegisteredNotificationProvider[],
@@ -3008,9 +3030,7 @@ function assertReminderCopyFills(
 ): void {
   const data = templateData ?? {};
   for (const provider of providers) {
-    if (provider.entry.content === 'host-template') {
-      continue;
-    }
+    const hostTemplate = provider.entry.content === 'host-template';
     for (const target of provider.targets) {
       const topic = catalog.topicsFor(target).find((declared) =>
         declared.id === topicId && declared.channels.includes('remote'));
@@ -3019,7 +3039,11 @@ function assertReminderCopyFills(
       }
       const mappedTitle = topic.mapping?.['title'];
       const mappedBody = topic.mapping?.['body'];
-      const texts: string[] = typeof mappedTitle === 'string' && typeof mappedBody === 'string'
+      const mapped = typeof mappedTitle === 'string' && typeof mappedBody === 'string';
+      if (hostTemplate && !mapped) {
+        continue;
+      }
+      const texts: string[] = mapped
         ? [mappedTitle, mappedBody]
         : topic.copy === undefined
           ? []
@@ -3057,23 +3081,16 @@ function reminderLinkIssue(
   link: string | undefined,
 ): { readonly configuration: boolean; readonly message: string } | undefined {
   if (link !== undefined) {
+    const configuration = reminderLinkRuleConfigurationIssue(provider);
+    if (configuration !== undefined) {
+      return { configuration: true, message: configuration };
+    }
     const pattern = provider.validation.mapping['link']?.pattern;
-    if (pattern !== undefined) {
-      let rule: RegExp;
-      try {
-        rule = new RegExp(pattern, 'u');
-      } catch (error) {
-        return {
-          configuration: true,
-          message: `provider ${provider.entry.provider}'s link rule does not compile (${describe(error)}).`,
-        };
-      }
-      if (!rule.test(link)) {
-        return {
-          configuration: false,
-          message: `link does not match provider ${provider.entry.provider}'s link rule.`,
-        };
-      }
+    if (pattern !== undefined && !new RegExp(pattern, 'u').test(link)) {
+      return {
+        configuration: false,
+        message: `link does not match provider ${provider.entry.provider}'s link rule.`,
+      };
     }
     return undefined;
   }
@@ -3084,6 +3101,22 @@ function reminderLinkIssue(
     };
   }
   return undefined;
+}
+
+/** An uncompilable link rule, or `undefined`. The pattern is the deployment's. */
+function reminderLinkRuleConfigurationIssue(
+  provider: RegisteredNotificationProvider,
+): string | undefined {
+  const pattern = provider.validation.mapping['link']?.pattern;
+  if (pattern === undefined) {
+    return undefined;
+  }
+  try {
+    new RegExp(pattern, 'u');
+    return undefined;
+  } catch (error) {
+    return `provider ${provider.entry.provider}'s link rule does not compile (${describe(error)}).`;
+  }
 }
 
 /** A scheduler batch: clamped to 1 to 1000; anything that is not a number is the default, 100. */

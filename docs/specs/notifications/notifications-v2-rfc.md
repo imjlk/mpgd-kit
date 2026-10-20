@@ -834,9 +834,14 @@ topic is host-template, whether or not the player is reached through it
 now, because template context stays on the server as in v1 and the
 reminder may reach the player there when it fires. `set` also fills every
 locale copy a free-form provider would send, and a target mapping's own
-title and body, with that `templateData` before it writes. A placeholder
-without a value throws `NOTIFICATIONS_INVALID_INPUT`, so the reminder is
-not stored only to be dropped when it fires. Invalid input throws
+title and body, with that `templateData` before it writes. A host-template
+provider skips catalog copy, which the host renders, but not a mapping
+that supplies its own title and body: that text is rendered ahead of the
+host template. A placeholder without a value throws
+`NOTIFICATIONS_INVALID_INPUT`, so the reminder is not stored only to be
+dropped when it fires. Mapped placeholders on a host-template provider
+cannot be satisfied while `templateData` is rejected, and `set` throws
+rather than storing that reminder. Invalid input throws
 `NOTIFICATIONS_INVALID_INPUT`.
 
 <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
@@ -902,7 +907,11 @@ past is due at once, behind the reminders already due, and keeps its
   link the provider cannot take throw `NOTIFICATIONS_INVALID_INPUT`: the
   gate's link step runs at set time, so a provider whose sends need a link
   (Devvit) needs the reminder's or the topic mapping's, and a given link
-  must match the provider's mapping rule for `link`. A provider with a link
+  must match the provider's mapping rule for `link`. A link rule that does
+  not compile is the deployment's configuration: `set` checks every provider
+  that would deliver the topic, not only until the first candidate passes,
+  and throws even when another provider would pass or the player is not
+  reached on the broken provider yet. A provider with any other link
   problem is not checked further, so another provider's refusal answers
   first.
 
@@ -955,8 +964,12 @@ the pending reminder, and cancelling removes it.
   reminder makes its own send, unless one row of the previous send (for any
   provider or endpoint) was already delivered: then the key keeps that send
   for every provider, the new reminder makes none, and the backend reports
-  it. A scheduler run that read a reminder a set has replaced since leaves
-  the newer reminder's send alone.
+  it. A row that is only claimed, and not yet delivered, does not count.
+  The replacement stays pending until that claim is dropped or a row is
+  delivered. Marking it fired while the claim is merely live would spend
+  the reminder with no send: the holder then sees the replacement and does
+  not call the provider. A scheduler run that read a reminder a set has
+  replaced since leaves the newer reminder's send alone.
 - **A set that fails.** A set stops the previous reminder's waiting send
   before its write; if the write then fails, the previous reminder stays as
   it was without that send, and the set is retried.

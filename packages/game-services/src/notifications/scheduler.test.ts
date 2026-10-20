@@ -2320,4 +2320,176 @@ const pending = (h: Harness) =>
   assert.equal(linked.calls.length, 0);
 }
 
+// A host-template provider's mapping title and body are filled at set time.
+// Catalog copy is not: the host renders that. templateData is still rejected,
+// so a placeholder in the mapping cannot be satisfied and must not be stored.
+{
+  const mapped: NotificationTopicDeclaration = {
+    ...challenge,
+    mapping: { title: 'Hello {{name}}', body: 'ready', templateSetCode: 'x', agreement: 'none' },
+  };
+  const host = harness({
+    topics: [mapped],
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  await expectCode(
+    host.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'a host-template mapping title the fire would fail to fill',
+  );
+  assert.deepEqual(host.store.inspect().schedule, []);
+  const plain: NotificationTopicDeclaration = {
+    ...challenge,
+    mapping: { title: 'Hello', body: 'ready', templateSetCode: 'x', agreement: 'none' },
+  };
+  const plainHost = harness({
+    topics: [plain],
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  assert.deepEqual(
+    await plainHost.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    { status: 'scheduled' },
+    'mapping text with no placeholder stands in for the host template',
+  );
+  // Catalog copy is not what a host template sends, so its placeholders are not a set-time failure.
+  const copyOnly: NotificationTopicDeclaration = {
+    ...challenge,
+    copy: { ko: { title: 'Hi {{name}}', body: 'Body' } },
+    mapping: { templateSetCode: 'x', agreement: 'none' },
+  };
+  const copyHost = harness({
+    topics: [copyOnly],
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  assert.deepEqual(
+    await copyHost.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    { status: 'scheduled' },
+  );
+}
+
+// An uncompilable link rule fails the set for every declaring provider, not only until the first candidate passes.
+{
+  const brokenEntry = {
+    ...platformEntry,
+    provider: 'broken',
+    link: true,
+    mapping: { link: { required: false, pattern: '(' } },
+  };
+  const passingStore = createInMemoryNotificationStore();
+  const passingFirst = createNotificationService({
+    store: passingStore,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['vector'] },
+      { entry: brokenEntry, delivery: fakeProvider('broken'), targets: ['broken'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await passingFirst.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await expectCode(
+    passingFirst.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+      link: 't3_ok',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'a later candidate has an uncompilable link rule',
+  );
+  assert.deepEqual(passingStore.inspect().schedule, []);
+  // The broken provider is not reached now, so it is not a candidate, but it would deliver the topic later.
+  const unreachedStore = createInMemoryNotificationStore();
+  const unreached = createNotificationService({
+    store: unreachedStore,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['vector'] },
+      { entry: brokenEntry, delivery: fakeProvider('broken'), targets: ['broken'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: () => undefined,
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await unreached.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await expectCode(
+    unreached.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+      link: 't3_ok',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'an unreached declaring provider has an uncompilable link rule',
+  );
+  assert.deepEqual(unreachedStore.inspect().schedule, []);
+}
+
+// A live claim of other content at the same key and time does not spend the replacement.
+{
+  let replaceOnRead: (() => Promise<void>) | undefined;
+  const other: NotificationTopicDeclaration = { ...challenge, id: 'match-ready' };
+  const h = harness({
+    queue: true,
+    topics: [challenge, other],
+    store: (inner) => ({
+      ...inner,
+      async getEndpoint(input) {
+        const hook = replaceOnRead;
+        replaceOnRead = undefined;
+        await hook?.();
+        return inner.getEndpoint(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  await h.service.runScheduler();
+  const claimed = h.jobs[0] as NotificationDispatchJob;
+  replaceOnRead = async () => {
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt });
+    await h.service.runScheduler();
+  };
+  await h.service.dispatch(claimed);
+  assert.equal(h.fcm.calls.length, 0, 'the holder drops the row without calling the provider');
+  const waiting = pending(h);
+  assert.equal(waiting.length, 1, 'the replacement stays pending while the old claim was live');
+  const topic = waiting[0]?.item.kind === 'reminder' ? waiting[0].item.topic : undefined;
+  assert.equal(topic, 'match-ready');
+  h.time.advance(60);
+  const queued = h.jobs.length;
+  await h.service.runScheduler();
+  for (const job of h.jobs.slice(queued)) {
+    await h.service.dispatch(job);
+  }
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.topic.id),
+    ['match-ready'],
+    'the replacement is sent once the old claim is dropped',
+  );
+  assert.deepEqual(pending(h), []);
+}
+
 console.info('Notifications scheduler tests passed.');

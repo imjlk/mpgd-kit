@@ -248,7 +248,9 @@ invitation to buy.
    - **Copy** must include the catalog's `defaultLocale`; `{{name}}`
      placeholders are filled from the reminder's or send's template data.
      A server reminder whose data cannot fill every locale copy, or the
-     target mapping's own title and body, is refused when it is set.
+     target mapping's own title and body, is refused when it is set,
+     including a host-template provider whose mapping supplies its own title
+     and body (its catalog copy is not filled).
      <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
      <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#reminders -->
 2. Run `pnpm validate:notifications`.
