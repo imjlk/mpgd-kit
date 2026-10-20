@@ -51,6 +51,60 @@ export function inspectToolchain(root = repositoryRoot) {
   return { version, manifests: files.length, declarations, failures };
 }
 
+/** Keep local mise and CI setup-node on one exact Node release.
+ * @param {string} [root] */
+export function inspectNodePins(root = repositoryRoot) {
+  const failures = [];
+  const misePath = join(root, '.mise.toml');
+  if (!existsSync(misePath)) {
+    failures.push('.mise.toml must pin an exact node version.');
+    return { version: undefined, failures };
+  }
+  const pin = /^node\s*=\s*"(\d+\.\d+\.\d+)"\s*$/m.exec(readFileSync(misePath, 'utf8'));
+  if (pin === null) {
+    failures.push('.mise.toml must pin an exact node version.');
+    return { version: undefined, failures };
+  }
+  const version = pin[1];
+  const manifestPath = join(root, 'package.json');
+  if (existsSync(manifestPath)) {
+    const engines = JSON.parse(readFileSync(manifestPath, 'utf8')).engines?.node;
+    if (typeof engines === 'string' && !nodePinSatisfies(version, engines)) {
+      failures.push(`package.json engines.node ${engines} does not accept the .mise.toml pin ${version}`);
+    }
+  }
+  const workflowRoot = join(root, '.github/workflows');
+  if (existsSync(workflowRoot)) {
+    for (const entry of readdirSync(workflowRoot)) {
+      if (!entry.endsWith('.yml') && !entry.endsWith('.yaml')) continue;
+      const lines = readFileSync(join(workflowRoot, entry), 'utf8').split('\n');
+      for (let index = 0; index < lines.length; index++) {
+        const match = /^\s*node-version:\s*['"]?([^'"\s#]+)['"]?\s*(?:#.*)?$/.exec(lines[index] ?? '');
+        if (match !== null && match[1] !== version) {
+          failures.push(`.github/workflows/${entry}:${index + 1} node-version is ${match[1]}; expected ${version}`);
+        }
+      }
+    }
+  }
+  return { version, failures };
+}
+
+/** @param {string} pin @param {string} range */
+function nodePinSatisfies(pin, range) {
+  const minimum = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(range);
+  const actual = /^(\d+)\.(\d+)\.(\d+)$/.exec(pin);
+  if (minimum === null || actual === null) {
+    return false;
+  }
+  for (let index = 1; index <= 3; index++) {
+    const left = Number(actual[index]);
+    const right = Number(minimum[index]);
+    if (left > right) return true;
+    if (left < right) return false;
+  }
+  return true;
+}
+
 function collectManifests(directory, files) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
@@ -64,10 +118,13 @@ function collectManifests(directory, files) {
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const result = inspectToolchain(resolve(process.argv[2] ?? repositoryRoot));
-  if (result.failures.length > 0) {
-    process.stderr.write(`${result.failures.join('\n')}\n`);
+  const nodePins = inspectNodePins(resolve(process.argv[2] ?? repositoryRoot));
+  const failures = [...result.failures, ...nodePins.failures];
+  if (failures.length > 0) {
+    process.stderr.write(`${failures.join('\n')}\n`);
     process.exitCode = 1;
   } else {
     console.log(`ttsc ${result.version}: ${result.declarations} aligned declarations across ${result.manifests} manifests.`);
+    console.info(`node ${nodePins.version}: workflow setup-node pins match .mise.toml.`);
   }
 }

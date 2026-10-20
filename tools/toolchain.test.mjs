@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { inspectToolchain } from './validate-toolchain.mjs';
+import { inspectNodePins, inspectToolchain } from './validate-toolchain.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'mpgd-toolchain-check-'));
@@ -54,4 +54,16 @@ test('rejects a floating root version instead of treating it as the baseline', (
   const { root, write } = fixture(t);
   write('package.json', { devDependencies: { ttsc: '^1.2.3' } });
   assert.throws(() => inspectToolchain(root), /exact.*ttsc version/);
+});
+
+test('requires CI setup-node to use the exact mise node pin', (t) => {
+  const { root, write } = fixture(t);
+  write('.mise.toml', '[tools]\nnode = "24.22.0"\n');
+  write('package.json', { engines: { node: '>=24.0.0' }, devDependencies: { ttsc: '1.2.3' } });
+  write('.github/workflows/ci.yml', 'jobs:\n  test:\n    steps:\n      - uses: actions/setup-node@example\n        with:\n          node-version: 24\n');
+  assert.match(inspectNodePins(root).failures.join('\n'), /ci\.yml:6 node-version is 24; expected 24\.22\.0/);
+  write('.github/workflows/ci.yml', 'jobs:\n  test:\n    steps:\n      - uses: actions/setup-node@example\n        with:\n          node-version: 24.22.0\n');
+  assert.deepEqual(inspectNodePins(root).failures, []);
+  write('package.json', { engines: { node: '>=24.23.0' }, devDependencies: { ttsc: '1.2.3' } });
+  assert.match(inspectNodePins(root).failures.join('\n'), /engines\.node >=24\.23\.0/);
 });

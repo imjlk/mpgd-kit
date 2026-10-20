@@ -103,7 +103,13 @@ its own checked project. The Windows compiler concurrency limit is unchanged.
    Record the cold/warm build timings and unresolved environment limitations in
    the PR. Do not update historical changelogs or pinned submission worktrees.
 
-`mise exec -- <command>` uses the checked-in Node and Go versions. The project's
+`mise exec -- <command>` uses the checked-in Node and Go versions. Kit workflows
+<!--
+@link ../tools/validate-toolchain.mjs#inspectNodePins Rejects drift between the mise Node pin and actions/setup-node.
+-->
+that call `actions/setup-node` pin that same exact Node release; jobs using
+mise-action read `.mise.toml` directly. `pnpm validate:toolchain` rejects drift
+between the mise pin, root `engines.node`, and those workflow pins. The project's
 `TTSC_GO_BINARY` override keeps Go and GOROOT aligned. `tools/run-ttsx.mjs` keeps
 TypeScript-Go resolution and application arguments consistent; emitted runtime
 files are owned by ttsx. It does not delete authored `.js` or `.d.ts` source siblings.

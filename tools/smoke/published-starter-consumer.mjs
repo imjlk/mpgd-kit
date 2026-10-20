@@ -146,6 +146,215 @@ export function assertGeneratedManifests(directory, parseSpec) {
   }
 }
 
+const publicationAttempts = 36;
+const publicationPauseMs = 10_000;
+export const fetch404RetryLimit = 6;
+
+/** @param {string} name */
+function registryPackageUrl(name) {
+  const escapedName = name.startsWith('@')
+    ? `@${encodeURIComponent(name.slice(1))}`
+    : encodeURIComponent(name);
+  return `${registry}${escapedName}`;
+}
+
+/** @returns {Promise<void>} */
+function publicationPause() {
+  return new Promise((done) => setTimeout(done, publicationPauseMs));
+}
+
+/** @param {string} version */
+function parseSemver(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version);
+  if (match === null) {
+    return undefined;
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    text: version,
+  };
+}
+
+/** Exact pins and caret ranges are what generated games request from npm.
+ * @param {string} spec */
+export function isAwaitedPackageSpec(spec) {
+  return parseSemver(spec) !== undefined
+    || /^\^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(spec);
+}
+
+/**
+ * Highest registry version pnpm selects for an exact pin or caret range.
+ * @param {readonly string[]} versions
+ * @param {string} spec
+ */
+export function selectPublishedVersion(versions, spec) {
+  const exact = parseSemver(spec);
+  if (exact !== undefined) {
+    return versions.includes(spec) ? spec : undefined;
+  }
+  const caret = /^\^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(spec);
+  if (caret === null) {
+    return undefined;
+  }
+  const major = Number(caret[1]);
+  const minor = Number(caret[2]);
+  const patch = Number(caret[3]);
+  const matches = versions.flatMap((version) => {
+    const parsed = parseSemver(version);
+    if (parsed === undefined) {
+      return [];
+    }
+    const inRange = major === 0
+      ? parsed.major === 0 && parsed.minor === minor && parsed.patch >= patch
+        && (minor !== 0 || parsed.patch === patch)
+      : parsed.major === major && (
+        parsed.minor > minor || (parsed.minor === minor && parsed.patch >= patch)
+      );
+    return inRange ? [parsed] : [];
+  }).sort((left, right) => left.major - right.major || left.minor - right.minor || left.patch - right.patch);
+  return matches.at(-1)?.text;
+}
+
+/** @param {string} directory */
+export function collectPublishedPackageSpecs(directory) {
+  /** @type {Map<string, { name: string; spec: string }>} */
+  const specs = new Map();
+  walk(directory);
+  return [...specs.values()].sort((left, right) =>
+    left.name.localeCompare(right.name) || left.spec.localeCompare(right.spec));
+
+  /** @param {string} current */
+  function walk(current) {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules') {
+          walk(path);
+        }
+        continue;
+      }
+      if (!entry.isFile() || entry.name !== 'package.json') {
+        continue;
+      }
+      const manifest = JSON.parse(readFileSync(path, 'utf8'));
+      for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+        const dependencies = manifest[field];
+        if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) {
+          continue;
+        }
+        for (const [name, spec] of Object.entries(dependencies)) {
+          if (name.startsWith('@mpgd/') && typeof spec === 'string' && isAwaitedPackageSpec(spec)) {
+            specs.set(`${name}\0${spec}`, { name, spec });
+          }
+        }
+      }
+    }
+  }
+}
+
+/** @param {string} output */
+export function isTransientTarball404(output) {
+  return output.includes('ERR_PNPM_FETCH_404');
+}
+
+/** @typedef {{ status?: number | null; error?: Error; stdout?: string; stderr?: string; log?: string }} CommandResult */
+
+/**
+ * @param {() => CommandResult | Promise<CommandResult>} invoke
+ * @param {() => Promise<unknown>} pause
+ * @param {number} [limit]
+ * @returns {Promise<CommandResult>}
+ */
+export async function retryTransientTarball404(invoke, pause, limit = fetch404RetryLimit) {
+  /** @type {CommandResult | undefined} */
+  let last;
+  for (let attempt = 0; attempt < limit; attempt++) {
+    last = await invoke();
+    const output = `${last.stdout ?? ''}\n${last.stderr ?? ''}\n${last.error?.message ?? ''}`;
+    if (last.status === 0 && last.error === undefined) {
+      return last;
+    }
+    if (attempt === limit - 1 || !isTransientTarball404(output)) {
+      return last;
+    }
+    console.info(`npm tarball was not fetchable; retrying install (${attempt + 1}/${limit})`);
+    await pause();
+  }
+  throw new Error('Install retry limit must be at least 1.');
+}
+
+/**
+ * @param {string} url
+ * @param {typeof fetch} request
+ * @param {string} [accept]
+ * @param {string} [method]
+ * @returns {Promise<Response | undefined>}
+ */
+async function fetchRegistry(url, request, accept, method = 'GET') {
+  try {
+    const response = await request(url, {
+      method,
+      headers: {
+        ...(accept === undefined ? {} : { accept }),
+        ...(method === 'GET' && accept === undefined ? { range: 'bytes=0-0' } : {}),
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+    return response;
+  } catch (error) {
+    // fetch reports DNS/socket failures as TypeError and aborts as named errors.
+    if (error instanceof TypeError
+      || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Metadata can list dist.tarball before that object exists. Probe the same URL
+ * `npm view <pkg>@<ver> dist.tarball` prints: HEAD, then a ranged GET.
+ * @param {string} url
+ * @param {typeof fetch} request
+ */
+async function confirmTarball(url, request) {
+  if (await probeTarball(url, request, 'HEAD')) {
+    return true;
+  }
+  return probeTarball(url, request, 'GET');
+}
+
+/**
+ * @param {string} url
+ * @param {typeof fetch} request
+ * @param {'HEAD' | 'GET'} method
+ */
+async function probeTarball(url, request, method) {
+  const response = await fetchRegistry(url, request, undefined, method);
+  if (response === undefined) {
+    return false;
+  }
+  if (response.body !== null) {
+    await response.body.cancel();
+  }
+  if (response.ok) {
+    return true;
+  }
+  if (method === 'HEAD' && (response.status === 405 || response.status === 501)) {
+    return false;
+  }
+  assert.ok(
+    [404, 408, 429].includes(response.status) || response.status >= 500,
+    `npm tarball failed: ${response.status}`,
+  );
+  return false;
+}
+
 /** @param {string} name @param {string} version
  * @param {typeof fetch} [request]
  * @param {() => Promise<unknown>} [pause] */
@@ -153,35 +362,32 @@ export async function publishedMetadata(
   name,
   version,
   request = fetch,
-  pause = () => new Promise((done) => setTimeout(done, 10_000)),
+  pause = publicationPause,
 ) {
-  // Match pnpm's scoped-package URL, including its CDN cache key.
-  const escapedName = name.startsWith('@')
-    ? `@${encodeURIComponent(name.slice(1))}`
-    : encodeURIComponent(name);
-  // npm's public metadata cache can lag a successful publish by five minutes.
-  for (let attempt = 0; attempt < 36; attempt++) {
+  const packageUrl = registryPackageUrl(name);
+  // npm's public metadata cache can lag a successful publish by five minutes,
+  // and the tarball CDN can lag the metadata that names dist.tarball.
+  for (let attempt = 0; attempt < publicationAttempts; attempt++) {
     // Package managers consume package lists, whose caches can lag the single-
     // version endpoint. Require both full and abbreviated install metadata.
     const versions = await Promise.all(
       ['application/json', 'application/vnd.npm.install-v1+json'].map(async (accept) => {
+        const response = await fetchRegistry(packageUrl, request, accept);
+        if (response === undefined) {
+          return undefined;
+        }
+        if (!response.ok) {
+          assert.ok(
+            [404, 408, 429].includes(response.status) || response.status >= 500,
+            `npm metadata failed: ${response.status}`,
+          );
+          return undefined;
+        }
         let document;
         try {
-          const response = await request(`${registry}${escapedName}`, {
-            headers: { accept },
-            signal: AbortSignal.timeout(30_000),
-          });
-          if (!response.ok) {
-            assert.ok(
-              [404, 408, 429].includes(response.status) || response.status >= 500,
-              `npm metadata failed: ${response.status}`,
-            );
-            return undefined;
-          }
           document = await response.json();
         } catch (error) {
-          // fetch reports DNS/socket failures as TypeError and aborts as named
-          // errors. Metadata assertions below deliberately remain fatal.
+          // A socket can close after headers. Metadata assertions below stay fatal.
           if (error instanceof TypeError
             || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))) {
             return undefined;
@@ -204,13 +410,73 @@ export async function publishedMetadata(
     if (full !== undefined && abbreviated !== undefined) {
       assert.equal(full.integrity, abbreviated.integrity, 'npm metadata integrity differs');
       assert.equal(full.tarball, abbreviated.tarball, 'npm metadata tarball differs');
-      return full;
+      if (await confirmTarball(full.tarball, request)) {
+        return full;
+      }
     }
-    if (attempt < 35) {
+    if (attempt < publicationAttempts - 1) {
       await pause();
     }
   }
   throw new Error(`Published package did not become visible: ${name}@${version}`);
+}
+
+/**
+ * @param {readonly { name: string; spec: string }[]} specs
+ * @param {typeof fetch} [request]
+ * @param {() => Promise<unknown>} [pause]
+ */
+export async function awaitPublishedPackageSpecs(
+  specs,
+  request = fetch,
+  pause = publicationPause,
+) {
+  await Promise.all(specs.map((spec) => awaitPublishedSpec(spec.name, spec.spec, request, pause)));
+}
+
+/**
+ * @param {string} name
+ * @param {string} spec
+ * @param {typeof fetch} request
+ * @param {() => Promise<unknown>} pause
+ */
+async function awaitPublishedSpec(name, spec, request, pause) {
+  if (parseSemver(spec) !== undefined) {
+    await publishedMetadata(name, spec, request, pause);
+    return;
+  }
+  if (!isAwaitedPackageSpec(spec)) {
+    return;
+  }
+  for (let attempt = 0; attempt < publicationAttempts; attempt++) {
+    const response = await fetchRegistry(registryPackageUrl(name), request, 'application/json');
+    if (response !== undefined && !response.ok) {
+      assert.ok(
+        [404, 408, 429].includes(response.status) || response.status >= 500,
+        `npm metadata failed: ${response.status}`,
+      );
+    }
+    let versions;
+    if (response?.ok === true) {
+      try {
+        versions = Object.keys((await response.json()).versions ?? {});
+      } catch (error) {
+        if (!(error instanceof TypeError
+          || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)))) {
+          throw error;
+        }
+      }
+    }
+    const selected = versions === undefined ? undefined : selectPublishedVersion(versions, spec);
+    if (selected !== undefined) {
+      await publishedMetadata(name, selected, request, pause);
+      return;
+    }
+    if (attempt < publicationAttempts - 1) {
+      await pause();
+    }
+  }
+  throw new Error(`Published package did not become visible: ${name}@${spec}`);
 }
 
 async function main() {
@@ -250,7 +516,7 @@ async function main() {
     : 'pnpm';
   assert.ok(pnpm, 'Put the pinned standalone pnpm executable on PATH (mise exec)');
   /** @param {string} command @param {string[]} args @param {string} cwd */
-  function run(command, args, cwd) {
+  function spawnLogged(command, args, cwd) {
     console.info(`${command} ${args.join(' ')} (${cwd})`);
     const child = spawnSync(command, args, {
       cwd,
@@ -261,9 +527,34 @@ async function main() {
     });
     const log = `${command} ${args.join(' ')}\n${child.stdout ?? ''}\n${child.stderr ?? ''}\n`;
     appendFileSync(join(output, 'commands.log'), log);
-    assert.ifError(child.error);
-    assert.equal(child.status, 0, log);
-    return child.stdout;
+    /** @type {CommandResult} */
+    const result = {
+      status: child.status,
+      stdout: typeof child.stdout === 'string' ? child.stdout : '',
+      stderr: typeof child.stderr === 'string' ? child.stderr : '',
+      log,
+    };
+    if (child.error !== undefined) {
+      result.error = child.error;
+    }
+    return result;
+  }
+  /** @param {CommandResult} result */
+  function assertSucceeded(result) {
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.log);
+    return result.stdout ?? '';
+  }
+  /** @param {string} command @param {string[]} args @param {string} cwd */
+  function run(command, args, cwd) {
+    return assertSucceeded(spawnLogged(command, args, cwd));
+  }
+  /** @param {string} command @param {string[]} args @param {string} cwd */
+  async function runInstall(command, args, cwd) {
+    return assertSucceeded(await retryTransientTarball404(
+      () => spawnLogged(command, args, cwd),
+      publicationPause,
+    ));
   }
   const requested = [
     { name: '@mpgd/cli', version: cliVersion },
@@ -299,7 +590,7 @@ async function main() {
     join(bootstrap, 'pnpm-workspace.yaml'),
     "packages: ['.']\nallowBuilds:\n  esbuild: true\n  sharp: true\n",
   );
-  run(pnpm, ['install', '--no-frozen-lockfile'], bootstrap);
+  await runInstall(pnpm, ['install', '--no-frozen-lockfile'], bootstrap);
   const bootstrapRequire = createRequire(join(bootstrap, 'package.json'));
   /** @type {typeof import('npm-package-arg')} */
   const packageArg = bootstrapRequire('npm-package-arg');
@@ -328,8 +619,12 @@ async function main() {
     assert.ok(manifest.dependencies['@mpgd/lite-shell']);
     assert.equal(manifest.dependencies.phaser, undefined);
   }
-  run(pnpm, ['install', '--no-frozen-lockfile'], game);
-  run(pnpm, ['install', '--frozen-lockfile'], game);
+  // Direct @mpgd specs can resolve to versions published in the same release.
+  // Confirm those tarballs before install; the install retry covers transitive
+  // packages whose metadata is visible before the CDN object exists.
+  await awaitPublishedPackageSpecs(collectPublishedPackageSpecs(game));
+  await runInstall(pnpm, ['install', '--no-frozen-lockfile'], game);
+  await runInstall(pnpm, ['install', '--frozen-lockfile'], game);
   const requireFromGame = createRequire(join(game, 'package.json'));
   const cliRoot = dirname(dirname(requireFromGame.resolve('@mpgd/cli')));
   assert.ok(isWithin(realpathSync(game), realpathSync(cliRoot)), 'CLI resolved outside consumer');
