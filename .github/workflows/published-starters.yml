@@ -118,7 +118,7 @@ jobs:
           ref: ${{ needs.source.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
       # No repository pnpm install/build: the consumer must work using npm alone.
       - name: Generate and build from the public npm registry
         run: mise exec -- node tools/smoke/published-starter-consumer.mjs
@@ -128,11 +128,11 @@ jobs:
           MPGD_PUBLISHED_SOURCE_SHA: ${{ needs.source.outputs.sha }}
           MPGD_PUBLISHED_CLI_VERSION: ${{ needs.source.outputs.cli }}
           MPGD_PUBLISHED_CREATE_VERSION: ${{ needs.source.outputs.creator }}
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: ${{ runner.os == 'Windows' }}
         with:
           dotnet-version: 8.0.425
-      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
         if: ${{ runner.os == 'Windows' }}
       - name: Package the registry consumer in the CI WinUI host
         if: ${{ runner.os == 'Windows' }}
