@@ -84,12 +84,13 @@ export type GameServicesNotificationsFetch = (
     readonly method: 'GET' | 'POST';
     readonly headers: Record<string, string>;
     readonly body?: string;
+    /** Aborted when the request times out. */
+    readonly signal?: AbortSignal;
   },
 ) => Promise<GameServicesNotificationsFetchResponse>;
 
 export interface GameServicesNotificationsFetchResponse {
   readonly status: number;
-  readonly headers?: { get(name: string): string | null };
   text(): Promise<string>;
 }
 
@@ -114,7 +115,16 @@ export interface CreateGameServicesNotificationsClientInput {
    * registration without it when one provider serves two targets.
    */
   readonly target?: string;
+  /**
+   * How long one request may take, answer body included, before it is
+   * aborted and answers `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`; 15 seconds
+   * by default.
+   */
+  readonly timeoutMs?: number;
 }
+
+/** The default `timeoutMs`: a request still unanswered after this is aborted. */
+export const defaultGameServicesNotificationsTimeoutMs = 15_000;
 
 /** The registry the Worker publishes at `GET /providers`. */
 export interface GameServicesNotificationProviders {
@@ -145,8 +155,9 @@ export interface GameServicesNotificationsClient extends NotificationRuntimeBack
  *   the Worker does not serve this client's routes;
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`, not retryable.
  * - 400 and 413: `NOTIFICATIONS_INVALID_INPUT` (or the code the Worker names).
- * - 408, 425, 429, and 503: `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with the
- *   `Retry-After` the Worker sent.
+ * - 408, 425, 429, and 503: `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. The
+ *   runtime retries at its next trigger (a read, a start, a sign-in), not
+ *   on the Worker's `Retry-After`, which the client does not read.
  * - Another status names the code the Worker answered when it is a
  *   notifications code; otherwise a 5xx is
  *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (a misconfigured Worker's 500
@@ -160,8 +171,8 @@ export interface GameServicesNotificationsClient extends NotificationRuntimeBack
  *   signed-in player with a session id, the header resolver failed, or the
  *   player signed out or changed while the headers were resolved.
  * - `status` 0, `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, no answer read: the
- *   request failed in transit or its body could not be read, so the Worker
- *   may have handled it. Retrying may repeat it: reminders and endpoints
+ *   request failed in transit, timed out (`timeoutMs`), or its body could
+ *   not be read, so the Worker may have handled it. Retrying may repeat it: reminders and endpoints
  *   replace by key, but an advertising or night consent record is written
  *   again.
  */
@@ -172,8 +183,6 @@ export class GameServicesNotificationsRequestError extends NotificationError {
   readonly route: string;
   /** The `error` the Worker answered, such as `UNAUTHORIZED`. */
   readonly serverCode: string | undefined;
-  /** The `Retry-After` seconds the Worker sent with a retryable answer. */
-  readonly retryAfterSeconds: number | undefined;
 
   constructor(input: {
     readonly code: NotificationErrorCode;
@@ -181,7 +190,6 @@ export class GameServicesNotificationsRequestError extends NotificationError {
     readonly status: number;
     readonly message: string;
     readonly serverCode?: string;
-    readonly retryAfterSeconds?: number;
     readonly cause?: unknown;
   }) {
     super(input.code, {
@@ -191,7 +199,6 @@ export class GameServicesNotificationsRequestError extends NotificationError {
     this.status = input.status;
     this.route = input.route;
     this.serverCode = input.serverCode;
-    this.retryAfterSeconds = input.retryAfterSeconds;
   }
 }
 
@@ -234,6 +241,12 @@ export function createGameServicesNotificationsClient(
     });
   }
   const { identity } = input;
+  const timeoutMs = input.timeoutMs ?? defaultGameServicesNotificationsTimeoutMs;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+      message: 'The notifications client timeoutMs must be a positive number of milliseconds.',
+    });
+  }
   if (input.target !== undefined && (typeof input.target !== 'string' || input.target.length === 0)) {
     throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
       message: 'The notifications client target must be a non-empty string.',
@@ -306,21 +319,42 @@ export function createGameServicesNotificationsClient(
     }
     let response: GameServicesNotificationsFetchResponse;
     let text: string;
+    // The fetch is aborted at the deadline, and the call answers then even
+    // when a fetch ignores the signal, so no runtime queue waits on it.
+    const controller = typeof AbortController === 'function' ? new AbortController() : undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller?.abort();
+        reject(new Error(`no answer within ${timeoutMs} ms`));
+      }, timeoutMs);
+    });
+    deadline.catch(() => undefined);
     try {
-      response = await fetcher(`${baseUrl}${gameServicesNotificationsRoutePrefix}${route}`, {
-        method,
-        headers: method === 'POST' ? { ...headers, 'content-type': 'application/json' } : { ...headers },
-        ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
-      });
-      text = await response.text();
+      response = await Promise.race([
+        fetcher(`${baseUrl}${gameServicesNotificationsRoutePrefix}${route}`, {
+          method,
+          headers: method === 'POST' ? { ...headers, 'content-type': 'application/json' } : { ...headers },
+          ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
+          ...(controller === undefined ? {} : { signal: controller.signal }),
+        }),
+        deadline,
+      ]);
+      text = await Promise.race([response.text(), deadline]);
     } catch (error) {
       throw new GameServicesNotificationsRequestError({
         code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
         route,
         status: 0,
-        message: `${route}: the game-services Worker could not be reached.`,
+        message: timedOut
+          ? `${route}: the game-services Worker did not answer within ${timeoutMs} ms; the request was aborted.`
+          : `${route}: the game-services Worker could not be reached.`,
         cause: error,
       });
+    } finally {
+      clearTimeout(timer);
     }
     const parsed = parseJson(text);
     if (response.status >= 200 && response.status < 300) {
@@ -505,11 +539,6 @@ function errorOf(
   const { status } = response;
   const serverCode = typeof body?.['error'] === 'string' ? body['error'] : undefined;
   const serverMessage = typeof body?.['message'] === 'string' ? body['message'] : undefined;
-  // Delay-seconds only, as the Worker sends it; an HTTP date or anything else is ignored.
-  const retryAfterHeader = response.headers?.get('retry-after')?.trim() ?? '';
-  const retryAfterSeconds = /^\d{1,9}$/u.test(retryAfterHeader)
-    ? Number(retryAfterHeader)
-    : undefined;
   let code: NotificationErrorCode;
   let message: string;
   if (status === 401) {
@@ -540,6 +569,5 @@ function errorOf(
     status,
     message,
     ...(serverCode === undefined ? {} : { serverCode }),
-    ...(retryAfterSeconds === undefined || code !== 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' ? {} : { retryAfterSeconds }),
   });
 }

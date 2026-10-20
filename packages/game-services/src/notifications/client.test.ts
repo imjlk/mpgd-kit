@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
+import { mock } from 'node:test';
 
-import { NotificationError, type NotificationConsentRecord } from '@mpgd/platform/notifications';
+import {
+  NotificationError,
+  type NotificationCapabilities,
+  type NotificationConsentRecord,
+} from '@mpgd/platform/notifications';
+import { createNotificationConformanceHost } from '@mpgd/platform/notifications-conformance';
+import { createNotificationRuntime } from '@mpgd/platform/notifications-runtime';
 
 import {
   createGameServicesNotificationsClient,
@@ -61,12 +68,8 @@ function fakeFetch(answer: (sent: Sent) => { status: number; body?: unknown; tex
     };
     sent.push(request);
     const reply = answer(request);
-    const headers = new Map(
-      Object.entries(reply.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
-    );
     return {
       status: reply.status,
-      headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
       text: async () => reply.text ?? (reply.body === undefined ? '' : JSON.stringify(reply.body)),
     };
   };
@@ -312,7 +315,6 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
     readonly code: string;
     readonly retryable: boolean;
     readonly serverCode?: string;
-    readonly retryAfterSeconds?: number;
   }[] = [
     { status: 401, body: { error: 'UNAUTHORIZED' }, code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true, serverCode: 'UNAUTHORIZED' },
     { status: 404, body: { error: 'UNKNOWN_ENDPOINT' }, code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false, serverCode: 'UNKNOWN_ENDPOINT' },
@@ -327,7 +329,6 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
       headers: { 'Retry-After': '30' },
       code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
       retryable: true,
-      retryAfterSeconds: 30,
     },
     {
       status: 503,
@@ -335,7 +336,6 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
       headers: { 'Retry-After': '5' },
       code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
       retryable: true,
-      retryAfterSeconds: 5,
     },
     { status: 500, body: { error: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' }, code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
     { status: 500, body: { error: 'INTERNAL_ERROR' }, code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
@@ -349,7 +349,6 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
       headers: { 'Retry-After': ' 7 ' },
       code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
       retryable: true,
-      retryAfterSeconds: 7,
     },
     {
       status: 503,
@@ -393,7 +392,6 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
     if (expected.serverCode !== undefined) {
       assert.equal(error.serverCode, expected.serverCode, label);
     }
-    assert.equal(error.retryAfterSeconds, expected.retryAfterSeconds, label);
   }
 
   // A route-specific contract break: a reminder status the runtime does not know.
@@ -540,6 +538,86 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
   assert.equal(sent.length, 0);
 }
 
+// A request that never answers is aborted at the deadline, answers retryable, and the runtime's queue moves on.
+{
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const { identity } = identityOf(session);
+    let hang = true;
+    const aborted: boolean[] = [];
+    const registered: unknown[] = [];
+    const client = createGameServicesNotificationsClient({
+      baseUrl: 'https://services.example',
+      identity,
+      fetch: async (_url, init) => {
+        if (hang) {
+          // A fetch that never settles, whatever its signal says.
+          init.signal?.addEventListener('abort', () => aborted.push(true));
+          return new Promise(() => undefined);
+        }
+        registered.push(init.body === undefined ? undefined : JSON.parse(init.body) as unknown);
+        return { status: 200, text: async () => '{}' };
+      },
+    });
+    const capabilities: NotificationCapabilities = {
+      availability: 'available',
+      permission: {
+        scope: 'app',
+        prompt: 'os',
+        readable: true,
+        serverReadable: false,
+        allowance: 'persistent',
+        userGesture: false,
+        settings: false,
+      },
+      remote: { supported: true, purposes: ['service'], addressing: 'device', content: 'free-form' },
+      local: { supported: false },
+      open: 'payload',
+    };
+    const host = createNotificationConformanceHost({
+      profile: { provider: 'fcm', capabilities },
+      catalog: [],
+    });
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-timeout' });
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: client,
+      catalog: [],
+      defaultLocale: 'ko',
+    });
+    const stuck = runtime.register();
+    // Let the call reach the fetch (setImmediate is not faked), then pass the deadline.
+    await new Promise((resolve) => setImmediate(resolve));
+    mock.timers.tick(14_999);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(aborted, [], 'not before the deadline');
+    mock.timers.tick(1);
+    const timedOut = await rejection(stuck);
+    assert.equal(timedOut.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+    assert.equal(timedOut.retryable, true);
+    assert.equal(timedOut.status, 0);
+    assert.match(timedOut.message, /did not answer within 15000 ms/u);
+    assert.deepEqual(aborted, [true]);
+    // The register queue is not held by the request that never answered.
+    hang = false;
+    await runtime.register();
+    assert.equal(registered.length, 1);
+    // A custom deadline.
+    const quick = createGameServicesNotificationsClient({
+      baseUrl: 'https://services.example',
+      identity,
+      fetch: async () => new Promise(() => undefined),
+      timeoutMs: 500,
+    });
+    const listing = quick.listConsent();
+    await new Promise((resolve) => setImmediate(resolve));
+    mock.timers.tick(500);
+    assert.match((await rejection(listing)).message, /within 500 ms/u);
+  } finally {
+    mock.timers.reset();
+  }
+}
+
 // Inputs.
 {
   const { identity } = identityOf(session);
@@ -552,6 +630,13 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
       createGameServicesNotificationsClient({ baseUrl: 'https://x.example', identity, target: '' }),
     NotificationError,
   );
+  for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () =>
+        createGameServicesNotificationsClient({ baseUrl: 'https://x.example', identity, timeoutMs }),
+      NotificationError,
+    );
+  }
 }
 
 console.info('notifications client: requests, sessions, and answer mapping passed');
