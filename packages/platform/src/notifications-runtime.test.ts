@@ -795,6 +795,54 @@ describe('createNotificationRuntime review fixes', () => {
     }
   });
 
+  it('holds registrations and records while the entry loads, without holding the queues, and sends them when it matches', async () => {
+    const { host, backend } = setup();
+    let answer: ((entry: ReturnType<typeof fcmEntry>) => void) | undefined;
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: () => new Promise((resolve) => {
+        answer = resolve;
+      }),
+    });
+    await runtime.start();
+    // While it loads: calls answer, nothing is sent, and runUntilIdle and unregister do not hang.
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    await runtime.runUntilIdle();
+    expect(backend.endpoints).toEqual([]);
+    expect(backend.consent).toEqual([]);
+    // The matching entry arrives: the waiting record and the registration go out.
+    answer?.(fcmEntry());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+    expect(backend.consent.map((record) => [record.kind, record.state])).toEqual([['topic-preference', 'granted']]);
+  });
+
+  it('sends what waited when the entry cannot be loaded', async () => {
+    const { host, backend } = setup();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    const errors: unknown[] = [];
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: () => new Promise((_resolve, reject) => setTimeout(() => reject(new Error('unreachable')), 0)),
+      onError: (error) => errors.push(error),
+    });
+    await runtime.start();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(errors).toHaveLength(1);
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+  });
+
   it('retries a first registration that failed, on the next read', async () => {
     const { host, backend } = setup();
     let failures = 1;
@@ -858,6 +906,42 @@ describe('createNotificationRuntime review fixes', () => {
       await runtime.runUntilIdle();
       expect(backend.consent).toEqual([]);
     }
+  });
+});
+
+describe('createNotificationRuntime withdrawal on an account switch', () => {
+  it("still cancels the topic's local reminders when the withdrawal throws on a switch", async () => {
+    const { host, backend } = setup();
+    let release: (() => void) | undefined;
+    let hold = false;
+    const provider = {
+      ...host.provider,
+      getCapabilities: async () => {
+        if (hold) {
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return host.provider.getCapabilities();
+      },
+    };
+    const runtime = createNotificationRuntime({ provider, backend, catalog: [energy], defaultLocale: 'ko' });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    expect(await runtime.reminders.set({ key: 'k', topic: 'energy-full', fireAt: '2026-10-12T05:00:00Z' }))
+      .toMatchObject({ route: 'local' });
+    expect(host.localPending).toHaveLength(1);
+    hold = true;
+    const withdrawing = runtime.setTopicPreference({ topic: 'energy-full', enabled: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    hold = false;
+    backend.authenticate('p-2');
+    release?.();
+    await expect(withdrawing).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    expect(host.localPending).toEqual([]);
   });
 });
 

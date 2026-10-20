@@ -209,8 +209,9 @@ export interface CreateNotificationRuntimeInput {
    * The backend's registry entry for this provider. When the provider's
    * capabilities disagree with it at start, every call throws
    * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing is registered or
-   * recorded in the background either. A registration waits for a
-   * `loadRegistryEntry` in flight, so it never goes out before the check.
+   * recorded in the background either. While a `loadRegistryEntry` is in
+   * flight, registrations and records wait without holding any queue, and
+   * go out when the entry it answers matches.
    */
   readonly registryEntry?: NotificationDeliveryProviderEntry;
   /**
@@ -689,8 +690,9 @@ export function createNotificationRuntime(
       addWaiting(next);
     }
     const session = backend.session();
-    // Records wait while the provider disagrees with its registry entry.
-    if (session === undefined || configurationIssue !== undefined) {
+    // Records wait while the registry entry loads (the load writes them once
+    // it matches) and while the provider disagrees with it.
+    if (session === undefined || registryEntryLoad !== undefined || configurationIssue !== undefined) {
       return;
     }
     const mine = waitingRecords.filter((waiting) =>
@@ -909,13 +911,10 @@ export function createNotificationRuntime(
     if (session === undefined) {
       return;
     }
-    // A registry entry still loading decides first, so a provider the
-    // backend's entry disagrees with never sends its address.
-    const load = registryEntryLoad;
-    if (load !== undefined) {
-      await load.catch(() => undefined);
-    }
-    if (configurationIssue !== undefined) {
+    // Nothing goes out before the registry check: while an entry loads the
+    // registration waits (the load sends it once the entry matches), and a
+    // provider the entry disagrees with never sends its address.
+    if (registryEntryLoad !== undefined || configurationIssue !== undefined) {
       return;
     }
     const persisted = kept ?? await loadState();
@@ -1399,10 +1398,20 @@ export function createNotificationRuntime(
         loading.then(
           () => {
             registryEntryLoad = undefined;
+            if (configurationIssue === undefined) {
+              // What waited for the check goes out now.
+              track(queueRecords([]));
+              track(registerCurrent(false));
+            }
           },
           (error: unknown) => {
             registryEntryLoad = undefined;
             fail(error);
+            if (configurationIssue === undefined) {
+              // Without the entry the runtime goes on unchecked, so what waited goes out.
+              track(queueRecords([]));
+              track(registerCurrent(false));
+            }
           },
         );
       }
@@ -1411,6 +1420,8 @@ export function createNotificationRuntime(
         // entry disagrees with; every call throws NOTIFICATIONS_CONFIGURATION_REQUIRED.
         return;
       }
+      // Records that waited for a check that now passes.
+      await settle(queueRecords([]));
       // A backend that cannot answer does not fail the start; the next read reconciles.
       await settle(reconcileLocal());
       await settle(refreshRegistration(true));
@@ -1757,7 +1768,11 @@ export function createNotificationRuntime(
       }
       const player = requirePlayer('setTopicPreference');
       await capabilitiesOf();
-      // Never recorded for a player who is no longer signed in.
+      // Never recorded for a player who is no longer signed in; a withdrawal
+      // still stops this device's reminders of the topic before it throws.
+      if (sessionPlayer() !== player && !request.enabled) {
+        await cancelLocalWhere((entry) => entry.topic === request.topic);
+      }
       assertSamePlayer('setTopicPreference', player);
       // The withdrawal is recorded first, so the server stops sending and no
       // new local reminder passes the gate even if cancelling fails.
