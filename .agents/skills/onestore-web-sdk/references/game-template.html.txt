@@ -1,7 +1,8 @@
 <!doctype html>
 <!-- ONE store H5 Game SDK integration template, based on the official sample.
      Replace: __SDK_VERSION__ (SDK version, starts with v, default v1.1.0)
-     TODO: placementId, productId, requestId issuing
+     TODO: logical catalog placementId, ONEconsole placement ID, logical catalog productId, ONEconsole SKU, and the idempotency keys passed into the server hooks
+     (developerPayload and requestId come back from those hooks; do not invent them)
      UI text is a placeholder; match the game's own language. -->
 <html lang="en">
   <head>
@@ -72,6 +73,8 @@
           // REQUIRED: call the game's bootstrap here, after its real assets finish loading.
           // Shared by native-host startup and the playable browser fallback.
         }
+        const rewardedPlacementId = "" /* TODO: logical catalog placementId */;
+        const rewardedPlatformPlacementId = "" /* TODO: ONEconsole placement ID; may differ */;
         async function verifyPurchaseOnServer(result) {
           // REQUIRED: persist result.purchaseToken plus the server-issued intent, then
           // send them through your authenticated game backend. Retry reconciliation on
@@ -79,6 +82,24 @@
           // grants idempotently, consumes, and returns the authoritative account.
           // Replace this hook; fail closed until configured. PNS is a second recovery path.
           throw new Error("Purchase verification backend is not connected");
+        }
+        async function issueCheckoutIntent({ productId, platformProductId, idempotencyKey }) {
+          // REQUIRED: authenticated game backend.
+          // productId is the logical catalog id. platformProductId is the ONEconsole
+          // SKU passed to purchase. idempotencyKey is stable for this attempt.
+          // The server derives the player from the session and binds the intent to
+          // that logical product and key. Never send a user id, playerId, or other
+          // account key. Fail closed until this hook is implemented.
+          throw new Error("Checkout intent backend is not connected");
+        }
+        async function issueRewardRequest({ placementId, platformPlacementId, idempotencyKey }) {
+          // REQUIRED: authenticated game backend.
+          // placementId is the logical catalog placement. platformPlacementId is the
+          // ONEconsole id passed to showRewardedAsync. idempotencyKey is stable for
+          // this attempt. The server derives the player from the session and returns
+          // { requestId } bound to that placement and key. Never build one on the client.
+          // Fail closed until this hook is implemented.
+          throw new Error("Reward request backend is not connected");
         }
         function say(m) { $("msg").textContent = m; }
         // Keep the game playable without the SDK: turn off only what needs the app
@@ -149,7 +170,7 @@
                   // Preloading early makes the ad show immediately when the button is
                   // pressed (call loadInterstitial too if you use interstitial ads)
                   if (!$("btnAd").disabled)
-                    sdk.ads.loadRewarded({ placementId: "" /* TODO: placement ID */ });
+                    sdk.ads.loadRewarded({ placementId: rewardedPlatformPlacementId });
                 })
                 .catch((e) => {
                   console.error("startGameAsync failed", e.reason, e.message);
@@ -162,60 +183,96 @@
         }
 
         /* ── In-app purchase ─────────────────────────────────────── */
-        $("btnBuy").addEventListener("click", () => {
+        $("btnBuy").addEventListener("click", async () => {
           $("btnBuy").disabled = true;
           say("Processing purchase…");
-          sdk.iap.purchase({
-            productId: "" /* TODO: in-app product ID */,
-            // productName: "", // optional; if omitted, the registered product name is shown
-            // developerPayload holds what is needed to grant the item. Optional but very
-            //   important: the purchase result and the PNS notification are matched to the
-            //   user and purchase by this value. At most 200 bytes in UTF-8.
-            developerPayload: "" /* TODO: e.g. your user ID and an order key (ctx.playerId can be absent) */,
-          })
-            .then(async (r) => {
-              // A success response only signals that payment completed. The game
-              //   company's server grants the item after verifying r.purchaseToken. The
-              //   payment notification (PNS) also goes to the server, and consumption is the
-              //   server's job too (buying an unconsumed product again gives already_owned).
-              say("Payment received; verifying purchase…");
-              try {
-                await verifyPurchaseOnServer(r);
-                say("Purchase verified: " + r.productId);
-              } catch {
-                say("Payment received; verification pending. Do not purchase again to retry.");
-              }
-            })
-            .catch((e) => {
-              // Branch on reason only. Do not show an error for user_cancelled
-              if (e.reason !== "user_cancelled") say("Purchase failed: " + e.reason);
-            })
-            .finally(() => { $("btnBuy").disabled = false; });
+          try {
+            const productId = "" /* TODO: logical catalog productId */;
+            const platformProductId = "" /* TODO: ONEconsole SKU; may differ from productId */;
+            const idempotencyKey = "" /* TODO: stable key for this checkout attempt */;
+            const intent = await issueCheckoutIntent({ productId, platformProductId, idempotencyKey });
+            const r = await sdk.iap.purchase({
+              productId: platformProductId,
+              // productName: "", // optional; if omitted, the registered product name is shown
+              // developerPayload is the opaque server-issued checkout intent. At most 200 bytes in UTF-8.
+              developerPayload: intent.developerPayload,
+            });
+            // A success response only signals that payment completed. The game
+            //   company's server grants the item after verifying r.purchaseToken. The
+            //   payment notification (PNS) also goes to the server, and consumption is the
+            //   server's job too (buying an unconsumed product again gives already_owned).
+            say("Payment received; verifying purchase…");
+            try {
+              await verifyPurchaseOnServer(r);
+              say("Purchase verified: " + r.productId);
+            } catch {
+              say("Payment received; verification pending. Do not purchase again to retry.");
+            }
+          } catch (e) {
+            // Branch on reason only. Do not show an error for user_cancelled.
+            // A missing server hook has no reason; surface that message instead.
+            if (!e.reason) say(e.message || "Purchase failed");
+            else if (e.reason !== "user_cancelled") say("Purchase failed: " + e.reason);
+          } finally {
+            $("btnBuy").disabled = false;
+          }
         });
 
         /* ── Rewarded ad ───────────────────────────────────────── */
         $("btnAd").addEventListener("click", async () => {
-          // requestId is required. Issuing it on the server and mapping it to the
-          //   user is recommended. The SDK does not generate it.
-          const requestId = "req-" + Date.now(); /* TODO: replace with a server-issued ID */
           $("btnAd").disabled = true;
-          const r = await sdk.ads.showRewardedAsync({
-            placementId: "" /* TODO: placement ID */,
-            requestId,
-          });
-          // Failures do not throw; they come back in status
-          if (r.status === "rewarded") {
-            // Only a signal for the reward effect. The grant is confirmed through SSV →
-            //   verification → the game company's server postback. Do not grant here.
-            say("Reward requested (waiting for the server postback)");
-          } else if (r.status === "dismissed") {
-            say("No reward: the ad was not watched to the end.");
-          } else {
-            // failed, including no_fill (no inventory), is not rewarded. Do not block progress
-            say("The ad could not be shown. (" + (r.reason || "failed") + ")");
+          let sdkRequested = false;
+          let releaseAdButton = true;
+          try {
+            // requestId is required. Pass the logical placement and the ONEconsole
+            // placement; the authenticated server issues the id. The SDK call uses
+            // the ONEconsole id. The SDK does not generate requestId.
+            const placementId = rewardedPlacementId;
+            const platformPlacementId = rewardedPlatformPlacementId;
+            const idempotencyKey = "" /* TODO: stable key for this rewarded attempt */;
+            const requestId = (await issueRewardRequest({ placementId, platformPlacementId, idempotencyKey })).requestId;
+            sdkRequested = true;
+            const r = await sdk.ads.showRewardedAsync({
+              placementId: platformPlacementId,
+              requestId,
+            });
+            // Failures do not throw; they come back in status
+            if (r.status === "rewarded") {
+              // Only a signal for the reward effect. The grant is confirmed through SSV →
+              //   verification → the game company's server postback. Do not grant here.
+              say("Reward requested (waiting for the server postback)");
+            } else if (r.status === "dismissed") {
+              say("No reward: the ad was not watched to the end.");
+            } else if (rewardedAdNeverStarted(r.reason)) {
+              // failed, including no_fill (no inventory), is not rewarded. Do not block progress
+              say("The ad could not be shown. (" + (r.reason || "failed") + ")");
+            } else {
+              releaseAdButton = false;
+              say("Ad outcome unknown. Reload and reconcile before requesting again.");
+            }
+          } catch (e) {
+            if (sdkRequested) {
+              releaseAdButton = false;
+              say("Ad outcome unknown. Reload and reconcile before requesting again.");
+            } else {
+              say(e.message || "The ad could not be shown.");
+            }
+          } finally {
+            if (releaseAdButton) $("btnAd").disabled = false;
           }
-          $("btnAd").disabled = false;
         });
+
+        function rewardedAdNeverStarted(reason) {
+          return reason === "no_fill"
+            || reason === "invalid_request"
+            || reason === "platform_not_supported"
+            || reason === "unsupported_action"
+            || reason === "unsupported_screen"
+            || reason === "already_showing"
+            || reason === "rate_limited"
+            || reason === "not_initialized"
+            || reason === "show_failed";
+        }
 
         /* ── Interstitial ad (optional) ────────────────────────────── */
         // Call at a natural break, such as a stage clear. No reward and no requestId.
