@@ -725,8 +725,9 @@ export function createNotificationRuntime(
       const records = [...(await backend.listConsent())];
       while (mine.length > 0) {
         if (backend.session()?.id !== session.id) {
-          // The session changed during the write: the rest waits for its player.
-          waitingRecords.push(...mine);
+          // The session changed during the write: the rest waits for its
+          // player, ahead of any record held back behind it.
+          waitingRecords.unshift(...mine);
           return;
         }
         const next = mine[0];
@@ -740,7 +741,8 @@ export function createNotificationRuntime(
         mine.shift();
       }
     } catch (error) {
-      waitingRecords.push(...mine);
+      // Back at the front, so a record held back while the entry loads stays after it.
+      waitingRecords.unshift(...mine);
       throw error;
     }
   };
@@ -1818,7 +1820,12 @@ export function createNotificationRuntime(
         // A withdrawal still stops this device's reminders of the topic,
         // which touches no backend, before the call throws.
         if (!request.enabled) {
-          await cancelLocalWhere((entry) => entry.topic === request.topic);
+          try {
+            await cancelLocalWhere((entry) => entry.topic === request.topic);
+          } catch (cancelError) {
+            // Reported, so the call still throws its own error.
+            fail(cancelError);
+          }
         }
         throw error;
       }

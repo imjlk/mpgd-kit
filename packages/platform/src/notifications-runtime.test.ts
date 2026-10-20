@@ -988,6 +988,42 @@ describe('createNotificationRuntime review fixes', () => {
     expect(reads).toBe(0);
   });
 
+  it('keeps the order of records when a write fails while a grant is held back', async () => {
+    const { host, backend } = setup();
+    backend.authenticate('p-1');
+    let failNext = true;
+    let answer: ((entry: ReturnType<typeof fcmEntry>) => void) | undefined;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        recordConsent: async (record) => {
+          if (failNext) {
+            failNext = false;
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: 'offline' });
+          }
+          await backend.recordConsent(record);
+        },
+      }),
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: () => new Promise((resolve) => {
+        answer = resolve;
+      }),
+    });
+    await runtime.start();
+    // One decision, written in order: the withdrawal goes first and fails once, the grant waits for the entry.
+    await expect(
+      runtime.setAdvertisingConsent({ advertising: 'withdrawn', night: 'granted', textVersion: '1' }),
+    ).rejects.toBeDefined();
+    answer?.(fcmEntry());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.runUntilIdle();
+    expect(backend.consent.map((record) => [record.kind, record.state])).toEqual([
+      ['advertising', 'withdrawn'],
+      ['night', 'granted'],
+    ]);
+  });
+
   it('sends what waited when the entry cannot be loaded', async () => {
     const { host, backend } = setup();
     backend.authenticate('p-1');
