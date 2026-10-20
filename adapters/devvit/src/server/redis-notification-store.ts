@@ -44,7 +44,11 @@ import { createHash } from 'node:crypto';
  *   providers, so it stores none in practice.
  * - **History** is a hash per player (one field per send and provider, so a
  *   repeat is ignored) with sorted sets by time: per player, for all
- *   players (purge), and per provider. `countHistory` counts the provider's
+ *   players (purge), and per provider. `listHistory` reads the hash with
+ *   `hGetAll`, not `hMGet`: Devvit documents `hMGet` as an allowlisted
+ *   command that may be disabled per app, and the gate calls `listHistory`
+ *   before any write, so a disabled `hMGet` would fail every send.
+ *   `countHistory` counts the provider's
  *   set by rank (`@devvit/redis` has no ZCOUNT): a few reads, not a
  *   snapshot, which the scheduler's approximate pacing allows.
  * - **Schedule entries** (server reminders, and notice checks for a
@@ -74,7 +78,12 @@ import { createHash } from 'node:crypto';
  * `createDevvitRedisPostOperationStore`. Here every transaction ends with a
  * commit marker whose reply always maps, so only an empty or all-nil result
  * is an abort, and a committed write is never retried as if it were lost.
- * Devvit allows 20 concurrent transactions per installation by default.
+ * Devvit allows 20 concurrent transactions per installation by default, and
+ * a transaction still open after 5 seconds is aborted. A throw from WATCH,
+ * the planning read, or EXEC that is one of those limits, or another
+ * transient Redis failure, is retried inside the same attempt budget with
+ * the step's backoff. A non-transient failure throws on the attempt that
+ * saw it.
  *
  * Devvit Redis: <https://developers.reddit.com/docs/versioned_docs/version-0.14/capabilities/server/redis>
  * (transactions: WATCH, MULTI, EXEC, DISCARD, UNWATCH).
@@ -106,7 +115,6 @@ export interface DevvitNotificationRedis {
   mGet(keys: string[]): Promise<(string | null)[]>;
   hGet(key: string, field: string): Promise<string | undefined>;
   hGetAll(key: string): Promise<Record<string, string>>;
-  hMGet(key: string, fields: string[]): Promise<(string | null)[]>;
   hSet(key: string, fieldValues: Record<string, string>): Promise<unknown>;
   zRange(
     key: string,
@@ -213,6 +221,10 @@ export function createDevvitRedisNotificationStore(
     due: `${namespace}:sends:due`,
     changed: `${namespace}:sends:changed`,
     inFlight: (player: string) => `${namespace}:sends:in-flight:${enc(player)}`,
+    // The in-flight member is the send key, which does not name the player.
+    // This pointer is written in the same transaction, so purge can drop the
+    // member when the send value no longer parses.
+    inFlightOwner: (key: string) => `${namespace}:sends:in-flight-owner:${enc(key)}`,
     history: (player: string) => `${namespace}:history:${enc(player)}`,
     historyAt: (player: string) => `${namespace}:history-at:${enc(player)}`,
     historyAll: `${namespace}:history-all`,
@@ -258,11 +270,12 @@ export function createDevvitRedisNotificationStore(
       if (attempt > 0) {
         await backoff(attempt);
       }
-      const { watched, plan } = await prepare();
-      lastWatched = watched;
-      const transaction = await redis.watch(...watched);
+      let transaction: DevvitNotificationRedisTransaction | undefined;
       let multiStarted = false;
       try {
+        const { watched, plan } = await prepare();
+        lastWatched = watched;
+        transaction = await redis.watch(...watched);
         const planned = await plan();
         if ('retry' in planned) {
           await transaction.unwatch();
@@ -291,8 +304,16 @@ export function createDevvitRedisNotificationStore(
         }
         return result;
       } catch (error) {
-        await bestEffortReset(transaction, multiStarted);
-        throw error;
+        if (transaction !== undefined) {
+          await bestEffortReset(transaction, multiStarted);
+        }
+        // A nil EXEC retries above. A throw from WATCH, the planning read,
+        // or EXEC retries only when it is transient (the 20-transaction cap,
+        // the 5-second timeout, or another transient Redis failure), and
+        // only while attempts remain. A non-transient failure throws now.
+        if (!isTransientDevvitRedisError(error) || attempt + 1 >= attempts) {
+          throw error;
+        }
       }
     }
     throw new Error(
@@ -499,13 +520,35 @@ export function createDevvitRedisNotificationStore(
       send !== undefined && send.rows.some((row) => row.state.status === 'in-flight');
     if (before !== undefined && flying(before) && !flying(after)) {
       commands.push((transaction) => transaction.zRem(keys.inFlight(before.request.player), [key]));
+      commands.push((transaction) => transaction.del(keys.inFlightOwner(key)));
     }
     if (after !== undefined && flying(after)) {
       commands.push((transaction) =>
         transaction.zAdd(keys.inFlight(after.request.player), { member: key, score: 0 }),
       );
+      commands.push((transaction) =>
+        transaction.set(keys.inFlightOwner(key), after.request.player),
+      );
     }
     return commands;
+  }
+
+  /**
+   * Commands that drop an in-flight index member whose send value no longer
+   * names the player. The owner pointer is written with the member. A row
+   * written before that pointer existed cannot be removed from a player
+   * index the value no longer tells; `listInFlightSends` skips the missing
+   * value.
+   */
+  async function inFlightCleanup(key: string): Promise<Command[]> {
+    const owner = await redis.get(keys.inFlightOwner(key));
+    if (isMissing(owner) || owner.length === 0) {
+      return [];
+    }
+    return [
+      (transaction) => transaction.zRem(keys.inFlight(owner), [key]),
+      (transaction) => transaction.del(keys.inFlightOwner(key)),
+    ];
   }
 
   /** A stored send value, or `'unreadable'` for one that is not a send. */
@@ -978,10 +1021,12 @@ export function createDevvitRedisNotificationStore(
         return [];
       }
       const key = keys.history(player);
-      const values = await redis.hMGet(key, fields);
-      return values
-        .filter((value): value is string => typeof value === 'string')
-        .map((value) => parse<NotificationHistoryEntry>(value, key))
+      const stored = await redis.hGetAll(key);
+      return fields
+        .flatMap((field) => {
+          const value = stored[field];
+          return typeof value === 'string' ? [parse<NotificationHistoryEntry>(value, key)] : [];
+        })
         .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
     },
     async countHistory({ provider, since, until }) {
@@ -1069,13 +1114,14 @@ export function createDevvitRedisNotificationStore(
           const raw = await redis.get(valueKey);
           const stored = isMissing(raw) ? undefined : readSendValue(raw);
           if (stored === 'unreadable') {
-            // Its in-flight index entry, if any, names a player the value no
-            // longer tells; listInFlightSends skips the missing value.
+            // The value no longer names the player. The owner pointer, written
+            // with the in-flight member, is what makes that member cleanable.
             return {
               commands: [
                 (transaction) => transaction.del(valueKey),
                 (transaction) => transaction.zRem(keys.changed, [key]),
                 (transaction) => transaction.zRem(keys.due, [key]),
+                ...(await inFlightCleanup(key)),
               ],
               result: true,
             };
@@ -1086,6 +1132,7 @@ export function createDevvitRedisNotificationStore(
               commands: [
                 (transaction) => transaction.zRem(keys.changed, [key]),
                 (transaction) => transaction.zRem(keys.due, [key]),
+                ...(await inFlightCleanup(key)),
               ],
               result: false,
             };
@@ -1285,6 +1332,47 @@ function defaultBackoff(attempt: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });
+}
+
+/**
+ * Whether a Redis client throw is worth another attempt: the installation's
+ * 20-transaction cap, a transaction aborted after 5 seconds, or another
+ * transient failure. A wrong type, a disabled command, or a value this store
+ * cannot parse is not transient.
+ */
+function isTransientDevvitRedisError(error: unknown): boolean {
+  if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError) {
+    return false;
+  }
+  const text = redisErrorText(error);
+  if (text.length === 0) {
+    return false;
+  }
+  if (
+    /not allowed|allow-?list|unknown command|WRONGTYPE|unsupported response|is not JSON|NOAUTH/iu
+      .test(text)
+  ) {
+    return false;
+  }
+  if (/\btransactions?\b/iu.test(text)
+    && /\b(?:limit|cap|exceed\w*|too many|concurrent|timeout|timed out|deadline)\b/iu.test(text)) {
+    return true;
+  }
+  return /\b(?:timed?\s*out|timeout|deadline exceeded|temporarily unavailable|resource[_ ]exhausted|try again later|econnreset|econnrefused|socket hang up)\b/iu
+    .test(text);
+}
+
+function redisErrorText(error: unknown): string {
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (typeof error !== 'object' || error === null) {
+    return '';
+  }
+  const record = error as { readonly message?: unknown; readonly code?: unknown; readonly msg?: unknown };
+  return [record.message, record.code, record.msg]
+    .filter((part): part is string => typeof part === 'string')
+    .join(' ');
 }
 
 /** A missing key, field, or member: `@devvit/redis` answers `undefined`, a classic client `null`. */

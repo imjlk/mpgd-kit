@@ -140,11 +140,11 @@ function readsAsRateLimit(message: string): boolean {
     return true;
   }
   // A word about size or about the text marks a length or content refusal,
-  // whatever period it names. "Message" may count sends ("daily message
-  // limit"), so it marks one only when the message names no period.
-  if (/\b(?:characters?|length|long|size|bytes?|title|body|link|text|content|payload|template)\b/iu.test(
-    message,
-  )) {
+  // whatever period it names. Such a refusal is configuration: the same send
+  // fails again, so it must not be replayed as ambiguous. "Message" may count
+  // sends ("daily message limit"), so it marks a rate limit only when the
+  // message names no period and no size or text word.
+  if (readsAsSizeOrTextRefusal(message)) {
     return false;
   }
   if (!dailyLimitWords.test(message) && /\bmessages?\b/iu.test(message)) {
@@ -166,6 +166,13 @@ const adjacentCountedLimit = new RegExp(
   String.raw`\b(?:${dailyPeriodSource}|send(?:ing)?|notifications?) limits?\b`,
   'iu',
 );
+
+/** Title, character, length, link, and the other size or text words a refusal names. */
+const sizeOrTextWords = /\b(?:characters?|length|long|size|bytes?|title|body|link|text|content|payload|template)\b/iu;
+
+function readsAsSizeOrTextRefusal(message: string): boolean {
+  return sizeOrTextWords.test(message);
+}
 
 /**
  * A message that reads as this user's refusal: not opted in, opted out, no
@@ -208,22 +215,26 @@ function reasonOf(answer: NotificationRemoteDeliveryAnswer): Pick<DevvitEnqueueE
  *   points of the filled text (see `devvitNotificationTextLength`), a link
  *   that is not a `t3_` or `t1_` id, and a recipient that is not a `t2_` id
  *   are `rejected` with reason `configuration` (the recipient: `recipient`),
- *   because the same send would fail again.
+ *   because the same send would fail again. An `enqueue` error that reads
+ *   as a length or content refusal (those same size and text words) is
+ *   `rejected` with reason `configuration` once, not replayed.
  * - **Answers.** `successCount` above 0 is `accepted`. Otherwise an error for
  *   this recipient (or for no named user) is a failure Devvit counted:
  *   a message that reads as a rate limit is `rate-limited` (deferred, for
- *   at most a day), one that reads as the user's refusal (not opted in, no
- *   such user) in an error that names this recipient is `rejected` with
- *   reason `recipient`. Any other error is `ambiguous` (provider code
- *   `DEVVIT_ENQUEUE_UNCLASSIFIED`): Devvit documents no error messages, so
- *   an unknown one is neither proof of a setup error nor of a refusal. The
- *   service reports it to the operator and replays it after each lease,
- *   which doubles from the claim lease up to an hour, for at most 24 hours
- *   after the first attempt (`notificationAmbiguousReplayHours`): with the
- *   default 300-second lease, at most 27 calls. A call that throws,
- *   or an answer that counts neither a success nor a failure, is
- *   `ambiguous` too: Devvit may have queued it, and `enqueue` takes no
- *   idempotency key, so a replay may show twice.
+ *   at most a day), one that reads as a length or content refusal is
+ *   `rejected` with reason `configuration`, one that reads as the user's
+ *   refusal (not opted in, no such user) in an error that names this
+ *   recipient is `rejected` with reason `recipient`. Any other error is
+ *   `ambiguous` (provider code `DEVVIT_ENQUEUE_UNCLASSIFIED`): Devvit
+ *   documents no error messages, so an unknown one is neither proof of a
+ *   setup error nor of a refusal. The service reports it to the operator
+ *   and replays it after each lease, which doubles from the claim lease up
+ *   to an hour, for at most 24 hours after the first attempt
+ *   (`notificationAmbiguousReplayHours`): with the default 300-second
+ *   lease, at most 27 calls. A call that throws, or an answer that counts
+ *   neither a success nor a failure, is `ambiguous` too: Devvit may have
+ *   queued it, and `enqueue` takes no idempotency key, so a replay may
+ *   show twice.
  *   `classifyEnqueueError` overrides each default, and `onEnqueueError`
  *   sees every failure with Devvit's message.
  * - **Opt-in at send time.** `readPermission` reads `isOptedIn`, since no
@@ -356,9 +367,11 @@ export function createDevvitNotificationDeliveryProvider(
         });
       }
       const message = typeof ours?.message === 'string' ? ours.message : '';
-      let fallback: 'rate-limited' | 'recipient' | 'ambiguous' = 'ambiguous';
+      let fallback: 'rate-limited' | 'recipient' | 'configuration' | 'ambiguous' = 'ambiguous';
       if (readsAsRateLimit(message)) {
         fallback = 'rate-limited';
+      } else if (readsAsSizeOrTextRefusal(message)) {
+        fallback = 'configuration';
       } else if (ours?.userId === userId && readsAsUserRefusal(message)) {
         // Only an error that names this recipient proves a refusal of the user.
         fallback = 'recipient';
@@ -429,7 +442,9 @@ export interface DevvitNotificationService {
  * (`context.userId`), which is also the recipient; any other player id has
  * no Devvit recipient (`unavailable: no-endpoint`).
  *
- * Players' own calls take a `devvitNotificationSession(userId)`. Server
+ * Players' own calls take `devvitNotificationSessionFromContext(context)`
+ * (the request's `context.userId`). `devvitNotificationSession(userId)` remains
+ * for a caller that already holds that id. Server
  * reminders (`setReminder`) fire through the `dispatch` scheduler task
  * (`runDevvitNotificationTask`). The scheduler pushes no consent notices
  * through Devvit: its entry fixes the title and body per topic, so it does
@@ -512,12 +527,36 @@ export function createDevvitNotificationService(
  * player has no game-services session: the user id is the player, and one
  * session and installation per user, which no endpoint uses because Devvit
  * registers no device address.
+ *
+ * @deprecated Prefer `devvitNotificationSessionFromContext`. A caller-supplied
+ * id can name a different player than the request.
  */
 export function devvitNotificationSession(userId: string): NotificationSession {
   if (!devvitUserIdPattern.test(userId)) {
     throw new TypeError('A Devvit notifications session needs a t2_ Reddit user id.');
   }
   return { player: userId, sessionId: `devvit:${userId}`, installationId: `devvit:${userId}` };
+}
+
+/** The Devvit request context fields this session reads (`context` from `@devvit/web/server`). */
+export interface DevvitNotificationSessionContext {
+  /** The logged-in Reddit user of the current request (`context.userId`). */
+  readonly userId?: string | undefined;
+}
+
+/**
+ * The notifications session of the current Devvit request. The player is
+ * `context.userId`, not a string the caller supplies, so a handler cannot
+ * record consent or set a reminder for a different user by passing one.
+ * A missing or non-`t2_` id throws: a logged-out request has no session.
+ */
+export function devvitNotificationSessionFromContext(
+  context: DevvitNotificationSessionContext,
+): NotificationSession {
+  if (typeof context.userId !== 'string') {
+    throw new TypeError('A Devvit notifications session needs the request context user id.');
+  }
+  return devvitNotificationSession(context.userId);
 }
 
 /**

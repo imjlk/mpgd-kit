@@ -1624,9 +1624,16 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   - **Answers.** `failureCount` and `errors` map per recipient.
     - `successCount` above 0 is `accepted`.
     - An error for the recipient is a failure Devvit counted. A message that
-      reads as a rate limit is `rate-limited`; one that names this recipient
-      and reads as the user's refusal (opted out, no such user) is `rejected`
-      with reason `recipient`.
+      reads as a rate limit is `rate-limited`; one that reads as a length or
+      content refusal (a title, character, length, link, or other size or
+      text word) is `rejected` with reason `configuration` once, not
+      replayed; one that names this recipient and reads as the user's
+      refusal (opted out, no such user) is `rejected` with reason
+      `recipient`.
+
+<!--
+@link ../../../adapters/devvit/src/server/notifications-delivery.ts#createDevvitNotificationDeliveryProvider Classifies a length or content enqueue refusal as configuration, once.
+-->
     - Any other error is `ambiguous` (provider code
       `DEVVIT_ENQUEUE_UNCLASSIFIED`). The ambiguity is in the classification:
       an unknown message proves neither a setup error nor a refusal, nor
@@ -1994,8 +2001,12 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `openSettings` answering `unavailable`, and `NOTIFICATIONS_UNSUPPORTED`
     for the local methods. A refused opt-in (`success: false`) is
     `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
-    `DEVVIT_OPT_IN_REFUSED`; a plugin call that throws is
-    `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic outside the catalog's
+    `DEVVIT_OPT_IN_REFUSED` only when a re-read of `isOptedIn` still shows
+    the user out; if a concurrent request already opted the user in, the
+    handler returns that observed `granted` state instead of a permanent
+    configuration error. A refused opt-out is re-read the same way. A plugin
+    call that throws is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic
+    outside the catalog's
     `reddit` mappings reads `unsupported` and answers `unavailable` to a
     request or revocation, which opts nothing in or out for it. A revocation
     for a user who is already out calls no opt-out, and the provider's
@@ -2562,7 +2573,16 @@ that also removes commerce v1.
      empty array and drops replies it cannot map (a protobuf zero may arrive
      unset), so every transaction ends with a SET of a commit marker whose
      reply always maps; only a `null`, empty, or all-nil result is an
-     abort.
+     abort. A throw from WATCH, the planning read, or EXEC that is the
+     20-transaction cap, the 5-second transaction timeout, or another
+     transient Redis failure is retried inside that step's attempt budget.
+     History reads use `hGetAll`, not allowlisted `hMGet`, so a disabled
+     `hMGet` does not fail the gate's history read.
+
+<!--
+@link ../../../adapters/devvit/src/server/redis-notification-store.ts#createDevvitRedisNotificationStore Retries transient Redis errors and reads history with hGetAll.
+@link ../../../adapters/devvit/src/server/notifications-bridge.ts#createDevvitServerNotificationProvider Re-reads isOptedIn after a refused opt-in or opt-out.
+-->
    - **Clocks.** Leases compare against the service's clock, not Redis TTLs.
      Clock skew between Devvit server instances can only start a replay
      early, which the `ambiguous` rule already allows (Devvit's `enqueue`
