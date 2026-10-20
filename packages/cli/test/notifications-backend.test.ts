@@ -209,13 +209,16 @@ try {
 
   // A target the Worker does not serve: no entry, and the runtime runs without the check.
   {
-    const { fetch } = worker(() => ({
+    // The only entry listed would not match, so a fallback to it would fail the read below.
+    const { fetch, requests } = worker(() => ({
       protocolVersion: '2.0.0-draft.1',
-      providers: [fcmEntry],
+      providers: [{ ...fcmEntry, addressing: 'platform-user' }],
       targets: {},
     }));
     const backend = createStarterWorkerNotificationBackend(gateway('ios'), input({ fetch }));
     assert.ok(backend !== undefined);
+    await settle();
+    assert.equal(requests.length, 1);
     await settle();
     await backend.runtime.getPermission({ topics: ['daily-ready'] });
   }
