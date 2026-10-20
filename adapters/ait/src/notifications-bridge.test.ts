@@ -328,11 +328,6 @@ describe('createAitBridgeNotificationProvider', () => {
       };
       return { provider, methods, listeners, emit };
     }
-    const settle = async () => {
-      for (let turn = 0; turn < 10; turn += 1) {
-        await Promise.resolve();
-      }
-    };
 
     it('reads capabilities once before the first other method, shared by concurrent calls', async () => {
       const { provider, methods } = host(() => capabilitiesAnswer());
@@ -411,7 +406,10 @@ describe('createAitBridgeNotificationProvider', () => {
         // Attached at once, so the host's cold open reaches it, and a read started.
         expect(listeners.size).toBe(1);
         expect(methods).toEqual(['notifications.v2.getCapabilities']);
-        await settle();
+        // getCapabilities joins the read the subscription started.
+        await expect(failureOf(provider.getCapabilities())).resolves.toMatchObject({
+          code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+        });
         expect(listeners.size).toBe(0);
         emit('/late');
         expect(seen).toEqual([]);
@@ -425,6 +423,39 @@ describe('createAitBridgeNotificationProvider', () => {
       }
     });
 
+    it('detaches subscriptions when a later read finds a once-compatible host incompatible', async () => {
+      let answer = capabilitiesAnswer();
+      const { provider, listeners, emit } = host(() => answer);
+      const seen: NotificationEvent[] = [];
+      provider.subscribe((event) => seen.push(event));
+      await provider.getCapabilities();
+      emit('/a');
+      expect(listeners.size).toBe(1);
+      answer = capabilitiesAnswer('2.0.0');
+      await expect(failureOf(provider.getCapabilities())).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      });
+      expect(listeners.size).toBe(0);
+      emit('/b');
+      expect(seen.map((event) => (event.type === 'opened' ? event.route : undefined))).toEqual(['/a']);
+      await expect(failureOf(provider.getPermission({ topics: ['a'] }))).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      });
+    });
+
+    it('rejects every caller sharing a read that finds the host incompatible', async () => {
+      const { provider, methods } = host(() => capabilitiesAnswer('2.0.0-draft.2'));
+      const failures = await Promise.all([
+        failureOf(provider.getPermission({ topics: ['a'] })),
+        failureOf(provider.getCapabilities()),
+        failureOf(provider.register?.() ?? Promise.resolve()),
+      ]);
+      for (const failure of failures) {
+        expect(failure).toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false });
+      }
+      expect(methods).toEqual(['notifications.v2.getCapabilities']);
+    });
+
     it('keeps subscriptions on a compatible host or after a failed read', async () => {
       let answer: () => unknown = () => {
         throw new PlatformOperationError({ code: 'AIT_BRIDGE_TIMEOUT', retryable: true });
@@ -432,7 +463,10 @@ describe('createAitBridgeNotificationProvider', () => {
       const { provider, listeners, emit } = host(() => answer());
       const seen: NotificationEvent[] = [];
       const unsubscribe = provider.subscribe((event) => seen.push(event));
-      await settle();
+      // getCapabilities joins the failing read the subscription started.
+      await expect(failureOf(provider.getCapabilities())).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      });
       // The read failed: no verdict, the subscription stays.
       expect(listeners.size).toBe(1);
       emit('/a');

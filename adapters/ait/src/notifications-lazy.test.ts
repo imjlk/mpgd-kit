@@ -174,6 +174,40 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     expect(subscribes).toEqual([1]);
   });
 
+  it('leaves no listener attached once the host is judged incompatible', async () => {
+    const events = channel();
+    const provider = createLazyAitBridgeNotificationProvider(
+      {
+        provider: 'apps-in-toss',
+        request: async (method) => method === 'notifications.v2.getCapabilities'
+          ? {
+              protocolVersion: '3.0.0',
+              provider: 'apps-in-toss',
+              capabilities: createAitNotificationCapabilities(),
+            }
+          : { topics: {} },
+        subscribe: (listener) => events.subscribe(listener),
+      },
+      { load: async () => bridgeClient },
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const seen: NotificationEvent[] = [];
+    provider.subscribe((event) => seen.push(event));
+    await expect(provider.getCapabilities()).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    });
+    expect(events.attached).toBe(0);
+    events.emit(opened('/late'));
+    expect(seen).toEqual([]);
+    // A later subscriber does not attach either.
+    provider.subscribe((event) => seen.push(event));
+    expect(events.attached).toBe(0);
+    await expect(provider.getPermission({ topics: ['a'] })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    });
+    expect(warn).toHaveBeenCalled();
+  });
+
   it('reads envelopes through the bridge provider: other protocols skipped, invalid ones dropped', async () => {
     const loader = controlledLoader();
     const events = channel();
