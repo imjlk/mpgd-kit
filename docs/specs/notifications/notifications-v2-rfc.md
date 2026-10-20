@@ -1626,13 +1626,15 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     - An error for the recipient is a failure Devvit counted. A message that
       reads as a rate limit is `rate-limited`; one that reads as a length or
       content refusal (a title, character, length, link, or other size or
-      text word) is `rejected` with reason `configuration` once, not
-      replayed; one that names this recipient and reads as the user's
-      refusal (opted out, no such user) is `rejected` with reason
-      `recipient`.
+      text word, together with refusal evidence such as too long, exceeds,
+      invalid, not allowed, or not found) is `rejected` with reason
+      `configuration` once, not replayed. A field name alone, such as
+      "payload service temporarily unavailable", stays `ambiguous`. One that
+      names this recipient and reads as the user's refusal (opted out, no
+      such user) is `rejected` with reason `recipient`.
 
 <!--
-@link ../../../adapters/devvit/src/server/notifications-delivery.ts#createDevvitNotificationDeliveryProvider Classifies a length or content enqueue refusal as configuration, once.
+@link ../../../adapters/devvit/src/server/notifications-delivery.ts#createDevvitNotificationDeliveryProvider Classifies a length or content enqueue refusal as configuration only when the message also shows refusal evidence.
 -->
     - Any other error is `ambiguous` (provider code
       `DEVVIT_ENQUEUE_UNCLASSIFIED`). The ambiguity is in the classification:
@@ -2573,14 +2575,17 @@ that also removes commerce v1.
      empty array and drops replies it cannot map (a protobuf zero may arrive
      unset), so every transaction ends with a SET of a commit marker whose
      reply always maps; only a `null`, empty, or all-nil result is an
-     abort. A throw from WATCH, the planning read, or EXEC that is the
-     20-transaction cap, the 5-second transaction timeout, or another
-     transient Redis failure is retried inside that step's attempt budget.
-     History reads use `hGetAll`, not allowlisted `hMGet`, so a disabled
-     `hMGet` does not fail the gate's history read.
+     abort. A throw from WATCH or the planning read that is transient is
+     retried inside that step's attempt budget, as is an EXEC throw that
+     proves the transaction aborted before commit (the 20-transaction cap,
+     the 5-second timeout). A connection loss thrown by EXEC is not retried:
+     the reply may have been lost after commit, and re-planning would report
+     the landed write as contention. History reads use `hGetAll`, not
+     allowlisted `hMGet`, so a disabled `hMGet` does not fail the gate's
+     history read.
 
 <!--
-@link ../../../adapters/devvit/src/server/redis-notification-store.ts#createDevvitRedisNotificationStore Retries transient Redis errors and reads history with hGetAll.
+@link ../../../adapters/devvit/src/server/redis-notification-store.ts#createDevvitRedisNotificationStore Retries a transient error that proves EXEC did not commit, and reads history with hGetAll.
 @link ../../../adapters/devvit/src/server/notifications-bridge.ts#createDevvitServerNotificationProvider Re-reads isOptedIn after a refused opt-in or opt-out.
 -->
    - **Clocks.** Leases compare against the service's clock, not Redis TTLs.

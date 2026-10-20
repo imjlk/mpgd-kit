@@ -713,6 +713,101 @@ describe('createDevvitRedisNotificationStore', () => {
     ]);
   });
 
+  it('does not replay an EXEC whose reply was lost after commit', async () => {
+    const redis = createFakeNotificationRedis();
+    let lost = 0;
+    const flaky = {
+      ...redis,
+      async watch(...watched: string[]) {
+        const transaction = await redis.watch(...watched);
+        return {
+          ...transaction,
+          async exec() {
+            const results = await transaction.exec();
+            if (lost > 0) {
+              lost -= 1;
+              throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+            }
+            return results;
+          },
+        };
+      },
+    };
+    const backoffs: number[] = [];
+    const store = createDevvitRedisNotificationStore(flaky, {
+      transactionAttempts: 4,
+      backoff: async (attempt) => {
+        backoffs.push(attempt);
+      },
+    });
+    lost = 1;
+    await expect(store.createSend(send('lost', []))).rejects.toThrow(/socket hang up/u);
+    expect(backoffs).toEqual([]);
+    expect((await store.getSend('lost'))?.send.key).toBe('lost');
+
+    const held = await store.getSend('lost');
+    lost = 1;
+    await expect(store.updateSend({
+      key: 'lost',
+      version: held?.version ?? '',
+      send: { ...send('lost', []), changedAt: '2026-10-19T04:00:00Z' },
+    })).rejects.toThrow(/socket hang up/u);
+    expect(backoffs).toEqual([]);
+    expect((await store.getSend('lost'))?.send.changedAt).toBe('2026-10-19T04:00:00Z');
+  });
+
+  it('retries an EXEC that aborted before commit, and a connection loss thrown before EXEC', async () => {
+    const redis = createFakeNotificationRedis();
+    let timeouts = 1;
+    const timingOut = {
+      ...redis,
+      async watch(...watched: string[]) {
+        const transaction = await redis.watch(...watched);
+        return {
+          ...transaction,
+          async exec() {
+            if (timeouts > 0) {
+              timeouts -= 1;
+              throw new Error('transaction timed out after 5 seconds');
+            }
+            return transaction.exec();
+          },
+        };
+      },
+    };
+    const backoffs: number[] = [];
+    const store = createDevvitRedisNotificationStore(timingOut, {
+      transactionAttempts: 4,
+      backoff: async (attempt) => {
+        backoffs.push(attempt);
+      },
+    });
+    await expect(store.createSend(send('timed-out', []))).resolves.toEqual(expect.any(String));
+    expect(timeouts).toBe(0);
+    expect(backoffs).toEqual([1]);
+
+    let resets = 1;
+    const resetting = {
+      ...redis,
+      async get(key: string) {
+        if (resets > 0) {
+          resets -= 1;
+          throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+        }
+        return redis.get(key);
+      },
+      watch: redis.watch.bind(redis),
+    };
+    const planning = createDevvitRedisNotificationStore(resetting, {
+      transactionAttempts: 4,
+      backoff: async () => {
+        // A planning read never reached EXEC, so a lost reply is impossible.
+      },
+    });
+    await expect(planning.createSend(send('reset', []))).resolves.toEqual(expect.any(String));
+    expect(resets).toBe(0);
+  });
+
   it('retries a transient watch or planning read and still throws a non-transient error', async () => {
     const redis = createFakeNotificationRedis();
     const backoffs: number[] = [];

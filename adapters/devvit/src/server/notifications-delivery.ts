@@ -139,11 +139,12 @@ function readsAsRateLimit(message: string): boolean {
   if (/rate[ -]?limit|too many (?:requests|notifications)|quota|throttl/iu.test(message)) {
     return true;
   }
-  // A word about size or about the text marks a length or content refusal,
-  // whatever period it names. Such a refusal is configuration: the same send
-  // fails again, so it must not be replayed as ambiguous. "Message" may count
-  // sends ("daily message limit"), so it marks a rate limit only when the
-  // message names no period and no size or text word.
+  // A size or text word plus refusal evidence marks a length or content
+  // refusal, whatever period it names. Such a refusal is configuration: the
+  // same send fails again, so it must not be replayed as ambiguous. A field
+  // name alone ("payload service temporarily unavailable") is not evidence.
+  // "Message" may count sends ("daily message limit"), so it marks a rate
+  // limit only when the message names no period and no size or text refusal.
   if (readsAsSizeOrTextRefusal(message)) {
     return false;
   }
@@ -170,8 +171,14 @@ const adjacentCountedLimit = new RegExp(
 /** Title, character, length, link, and the other size or text words a refusal names. */
 const sizeOrTextWords = /\b(?:characters?|length|long|size|bytes?|title|body|link|text|content|payload|template)\b/iu;
 
+/**
+ * Words that prove a deterministic refusal. A field name alone is not one:
+ * "payload service temporarily unavailable" stays ambiguous and is replayed.
+ */
+const refusalEvidence = /\b(?:too long|exceed(?:s|ed|ing)?|invalid|not allowed|not found|does not exist)\b/iu;
+
 function readsAsSizeOrTextRefusal(message: string): boolean {
-  return sizeOrTextWords.test(message);
+  return sizeOrTextWords.test(message) && refusalEvidence.test(message);
 }
 
 /**
@@ -216,8 +223,10 @@ function reasonOf(answer: NotificationRemoteDeliveryAnswer): Pick<DevvitEnqueueE
  *   that is not a `t3_` or `t1_` id, and a recipient that is not a `t2_` id
  *   are `rejected` with reason `configuration` (the recipient: `recipient`),
  *   because the same send would fail again. An `enqueue` error that reads
- *   as a length or content refusal (those same size and text words) is
- *   `rejected` with reason `configuration` once, not replayed.
+ *   as a length or content refusal (a size or text word, and refusal
+ *   evidence such as too long, exceeds, invalid, not allowed, or not found)
+ *   is `rejected` with reason `configuration` once, not replayed. A field
+ *   name alone stays ambiguous.
  * - **Answers.** `successCount` above 0 is `accepted`. Otherwise an error for
  *   this recipient (or for no named user) is a failure Devvit counted:
  *   a message that reads as a rate limit is `rate-limited` (deferred, for

@@ -173,6 +173,11 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     ['a malformed answer', null as unknown as DevvitEnqueueResponse, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
     ['an answer that counts nothing', { successCount: 0, failureCount: 0, errors: [] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered }],
     ['a call that throws', () => Promise.reject(new Error('twirp unavailable')), { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueFailed }],
+    ['a payload outage that names no refusal', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'payload service temporarily unavailable' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a content field in a transport error', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'content delivery failed' }] }, { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified }],
+    ['a content refusal', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'content is not allowed' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['an invalid payload', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'invalid payload' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
+    ['a body that is too long', { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'body too long' }] }, { status: 'rejected', reason: 'configuration', providerCode: devvitNotificationProviderCodes.enqueueRejected }],
   ])('maps %s per recipient', async (_name, answer, expected) => {
     const plugin = createFakePlugin();
     plugin.answers.push(answer === null ? (() => Promise.resolve(answer)) : answer);

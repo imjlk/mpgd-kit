@@ -79,11 +79,13 @@ import { createHash } from 'node:crypto';
  * commit marker whose reply always maps, so only an empty or all-nil result
  * is an abort, and a committed write is never retried as if it were lost.
  * Devvit allows 20 concurrent transactions per installation by default, and
- * a transaction still open after 5 seconds is aborted. A throw from WATCH,
- * the planning read, or EXEC that is one of those limits, or another
- * transient Redis failure, is retried inside the same attempt budget with
- * the step's backoff. A non-transient failure throws on the attempt that
- * saw it.
+ * a transaction still open after 5 seconds is aborted. A throw from WATCH
+ * or the planning read that is transient, and an EXEC throw that proves the
+ * transaction aborted before commit (that cap, that timeout), are retried
+ * inside the same attempt budget with the step's backoff. A connection loss
+ * thrown by EXEC is not: the reply may have been lost after commit, and
+ * re-planning would report the landed write as contention. A non-transient
+ * failure throws on the attempt that saw it.
  *
  * Devvit Redis: <https://developers.reddit.com/docs/versioned_docs/version-0.14/capabilities/server/redis>
  * (transactions: WATCH, MULTI, EXEC, DISCARD, UNWATCH).
@@ -272,6 +274,7 @@ export function createDevvitRedisNotificationStore(
       }
       let transaction: DevvitNotificationRedisTransaction | undefined;
       let multiStarted = false;
+      let execStarted = false;
       try {
         const { watched, plan } = await prepare();
         lastWatched = watched;
@@ -292,6 +295,7 @@ export function createDevvitRedisNotificationStore(
           await command(transaction);
         }
         await transaction.set(keys.commitMarker, commitMarkerValue);
+        execStarted = true;
         const results = await transaction.exec();
         if (results !== null && !Array.isArray(results)) {
           throw new Error('Devvit Redis transaction returned an unsupported response.');
@@ -307,11 +311,17 @@ export function createDevvitRedisNotificationStore(
         if (transaction !== undefined) {
           await bestEffortReset(transaction, multiStarted);
         }
-        // A nil EXEC retries above. A throw from WATCH, the planning read,
-        // or EXEC retries only when it is transient (the 20-transaction cap,
-        // the 5-second timeout, or another transient Redis failure), and
-        // only while attempts remain. A non-transient failure throws now.
-        if (!isTransientDevvitRedisError(error) || attempt + 1 >= attempts) {
+        // A nil EXEC retries above. A throw before EXEC (WATCH, the planning
+        // read, MULTI, or a queued command) retries when it is transient:
+        // EXEC did not run. A throw from EXEC retries only when it proves
+        // the transaction aborted before commit (the 20-transaction cap, the
+        // 5-second timeout). A connection loss on EXEC is not retried: the
+        // reply may have been lost after commit, and re-planning would
+        // report the landed write as contention.
+        const retryable = execStarted
+          ? provesExecAbortedBeforeCommit(error)
+          : isTransientDevvitRedisError(error);
+        if (!retryable || attempt + 1 >= attempts) {
           throw error;
         }
       }
@@ -1335,31 +1345,52 @@ function defaultBackoff(attempt: number): Promise<void> {
 }
 
 /**
- * Whether a Redis client throw is worth another attempt: the installation's
- * 20-transaction cap, a transaction aborted after 5 seconds, or another
- * transient failure. A wrong type, a disabled command, or a value this store
- * cannot parse is not transient.
+ * Whether a Redis client throw is worth another attempt when EXEC has not
+ * run: the installation's 20-transaction cap, a transaction aborted after 5
+ * seconds, or another transient failure. A wrong type, a disabled command,
+ * or a value this store cannot parse is not transient.
  */
 function isTransientDevvitRedisError(error: unknown): boolean {
+  const kind = redisThrowKind(error);
+  return kind === 'aborted-before-commit' || kind === 'connection-loss';
+}
+
+/**
+ * Whether an EXEC throw proves the transaction aborted before commit. A
+ * connection loss does not: the server may have committed and dropped the
+ * reply, so the caller must see the error instead of a retried plan.
+ */
+function provesExecAbortedBeforeCommit(error: unknown): boolean {
+  return redisThrowKind(error) === 'aborted-before-commit';
+}
+
+const permanentRedisError = /not allowed|allow-?list|unknown command|WRONGTYPE|unsupported response|is not JSON|NOAUTH/iu;
+const connectionLoss = /\b(?:econnreset|econnrefused|socket hang up|temporarily unavailable|resource[_ ]exhausted|try again later)\b/iu;
+const transactionAbort = /\b(?:timed?\s*out|timeout|deadline exceeded)\b/iu;
+
+function redisThrowKind(
+  error: unknown,
+): 'permanent' | 'aborted-before-commit' | 'connection-loss' | 'other' {
   if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError) {
-    return false;
+    return 'permanent';
   }
   const text = redisErrorText(error);
-  if (text.length === 0) {
-    return false;
+  if (text.length === 0 || permanentRedisError.test(text)) {
+    return 'permanent';
+  }
+  // A dropped connection can follow a commit whose reply never arrived, even
+  // when the message also names a timeout. That is not proof of an abort.
+  if (connectionLoss.test(text)) {
+    return 'connection-loss';
   }
   if (
-    /not allowed|allow-?list|unknown command|WRONGTYPE|unsupported response|is not JSON|NOAUTH/iu
-      .test(text)
+    (/\btransactions?\b/iu.test(text)
+      && /\b(?:limit|cap|exceed\w*|too many|concurrent|timeout|timed out|deadline)\b/iu.test(text))
+    || transactionAbort.test(text)
   ) {
-    return false;
+    return 'aborted-before-commit';
   }
-  if (/\btransactions?\b/iu.test(text)
-    && /\b(?:limit|cap|exceed\w*|too many|concurrent|timeout|timed out|deadline)\b/iu.test(text)) {
-    return true;
-  }
-  return /\b(?:timed?\s*out|timeout|deadline exceeded|temporarily unavailable|resource[_ ]exhausted|try again later|econnreset|econnrefused|socket hang up)\b/iu
-    .test(text);
+  return 'other';
 }
 
 function redisErrorText(error: unknown): string {
