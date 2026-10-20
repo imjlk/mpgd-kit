@@ -153,9 +153,11 @@ export interface NotificationRuntimeState {
 
 /**
  * Where the runtime keeps its state across restarts. `load` runs once, when
- * the runtime is created, and again after a load that failed; `save` runs
- * after each change, with the whole state. Either may answer synchronously.
- * A value `load` answers that is not a runtime state reads as an empty one.
+ * the runtime is created, and again after a load that failed; a failed load
+ * is reported by the call that needed the state. `save` runs after each
+ * change, with the whole state. Either may answer synchronously. A value
+ * `load` answers that is not a runtime state reads as an empty one. One
+ * runtime owns a storage: a game with two runtimes gives each its own key.
  */
 export interface NotificationRuntimeStorage {
   load(): unknown;
@@ -199,7 +201,8 @@ export interface CreateNotificationRuntimeInput {
   /**
    * Called with each failure of background work (records, registrations,
    * local reminders, game listeners) as it happens; `runUntilIdle` still
-   * rethrows them. An error `onError` throws is ignored.
+   * rethrows them. It runs synchronously: an error it throws, or a promise
+   * it returns, is ignored.
    */
   readonly onError?: (error: unknown) => void;
 }
@@ -286,8 +289,15 @@ function persistedRegistrationOf(value: unknown): NotificationRuntimePersistedRe
     || registration === null
     || Array.isArray(registration)
     || !text((registration as Readonly<Record<string, unknown>>)['provider'])
-    || typeof (registration as Readonly<Record<string, unknown>>)['address'] !== 'object'
-    || (registration as Readonly<Record<string, unknown>>)['address'] === null
+  ) {
+    return undefined;
+  }
+  const address = (registration as Readonly<Record<string, unknown>>)['address'];
+  if (
+    typeof address !== 'object'
+    || address === null
+    || Array.isArray(address)
+    || !text((address as Readonly<Record<string, unknown>>)['kind'])
   ) {
     return undefined;
   }
@@ -509,7 +519,10 @@ export function createNotificationRuntime(
   let failure: { readonly error: unknown; count: number } | undefined;
   const fail = (error: unknown): void => {
     try {
-      input.onError?.(error);
+      const observed: unknown = input.onError?.(error);
+      if (isPromiseLike(observed)) {
+        observed.then(undefined, () => undefined);
+      }
     } catch {
       // The observer's own failure is not the runtime's.
     }
@@ -856,16 +869,18 @@ export function createNotificationRuntime(
       return;
     }
     await backend.registerEndpoint(registration);
-    persisted.registration = {
+    const acknowledged: NotificationRuntimePersistedRegistration = {
       registration,
       player: session.player,
       session: session.id,
       at: clock.now(),
     };
-    const saved = saveState(persisted);
+    // Kept only once saved: after a failed save the next identical one is sent again.
+    const saved = saveState({ ...persisted, registration: acknowledged });
     if (saved !== undefined) {
       await saved;
     }
+    persisted.registration = acknowledged;
   };
   /**
    * Registers the provider's current address or platform identity; `rebind`
@@ -1095,7 +1110,15 @@ export function createNotificationRuntime(
       [topic.id],
       records,
     );
-    const registered = latestRegistration ?? (kept ?? await loadState()).registration?.registration;
+    let registered = latestRegistration;
+    if (registered === undefined) {
+      try {
+        registered = (kept ?? await loadState()).registration?.registration;
+      } catch (error) {
+        // Without the stored registration the deployment's zone applies, as before any registration.
+        fail(error);
+      }
+    }
     const decision = evaluateLocalNotificationReminder({
       topic,
       permission: stateIn(states, topic.id),
@@ -1485,33 +1508,63 @@ export function createNotificationRuntime(
       // unbound.
       const session = backend.session();
       const unbinding = enqueue('register', async () => {
-        // Persisted: a restart before the next authentication binds nothing.
-        const persisted = kept ?? await loadState();
+        // The unbind is tried even when the stored state cannot be read; the
+        // unbound state is then kept in memory and saved over it.
+        let loadFailure: { readonly error: unknown } | undefined;
+        let persisted: MutableRuntimeState;
+        try {
+          persisted = kept ?? await loadState();
+        } catch (error) {
+          loadFailure = { error };
+          persisted = {};
+          kept ??= persisted;
+        }
         persisted.unbound = true;
+        const saveFailures: unknown[] = [];
+        /** Saves the state; a failure is collected, and a synchronous save answers synchronously. */
+        const save = (): void | Promise<void> => {
+          let saved: void | Promise<void>;
+          try {
+            saved = saveState(persisted);
+          } catch (error) {
+            saveFailures.push(error);
+            return undefined;
+          }
+          return saved?.then(undefined, (error: unknown) => {
+            saveFailures.push(error);
+          });
+        };
+        // Saved before the unbind, so a restart during it binds nothing.
+        const before = save();
+        if (before !== undefined) {
+          await before;
+        }
         let unbindFailure: { readonly error: unknown } | undefined;
         try {
           if (session !== undefined && isDeviceAddressing(await provider.getCapabilities())) {
             await backend.unregisterEndpoint({ provider: provider.provider, player: session.player });
             if (persisted.registration?.session === session.id) {
               delete persisted.registration;
+              const after = save();
+              if (after !== undefined) {
+                await after;
+              }
             }
           }
         } catch (error) {
           unbindFailure = { error };
         }
-        // The unbound state is saved even when the unbind failed; the unbind's error wins.
-        try {
-          const saved = saveState(persisted);
-          if (saved !== undefined) {
-            await saved;
-          }
-        } catch (error) {
-          if (unbindFailure === undefined) {
-            throw error;
-          }
+        // The unbind's error is thrown first; the others still reach onError and runUntilIdle.
+        const failures = [
+          ...(unbindFailure === undefined ? [] : [unbindFailure.error]),
+          ...(loadFailure === undefined ? [] : [loadFailure.error]),
+          ...saveFailures,
+        ];
+        for (const error of failures.slice(1)) {
+          fail(error);
         }
-        if (unbindFailure !== undefined) {
-          throw unbindFailure.error;
+        if (failures.length > 0) {
+          throw failures[0];
         }
       });
       // The device's pending local reminders belong to the player leaving.

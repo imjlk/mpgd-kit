@@ -254,6 +254,88 @@ describe('createNotificationRuntime storage', () => {
     expect((error as NotificationError).retryable).toBe(true);
   });
 
+  it('sends a registration again when saving its acknowledgement failed', async () => {
+    const storage = asyncStorage();
+    const { clock, host, backend, create } = setup(storage.port);
+    const runtime = create();
+    await runtime.start();
+    backend.authenticate('p-1');
+    await runtime.runUntilIdle();
+    storage.failNextSaves(1);
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await expect(runtime.runUntilIdle()).rejects.toBeInstanceOf(NotificationError);
+    const sent = backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt);
+    expect(sent).toHaveLength(1);
+    clock.advance(60);
+    // The same address again: nothing was kept as acknowledged, so it is sent, and kept this time.
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.lastRegisteredAt)).not.toEqual(sent);
+    expect(storage.stored).toMatchObject({ registration: { player: 'p-1' } });
+  });
+
+  it('still unbinds when the stored state cannot be read, and saves the unbound state', async () => {
+    const storage = asyncStorage();
+    const { host, backend, create } = setup(storage.port);
+    const runtime = create();
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.runUntilIdle();
+    // A second runtime whose loads fail logs the same player out.
+    storage.failNextLoads(2);
+    runtime.stop();
+    const restarted = create();
+    const error = await restarted.unregister().then(() => undefined, (failure: unknown) => failure);
+    expect(backend.endpoints).toEqual([]);
+    expect((error as NotificationError).code).toBe('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+    expect((error as NotificationError).message).toContain('could not read');
+    expect(storage.stored).toEqual({ unbound: true });
+  });
+
+  it('throws the unbind error when the save fails too, and reports the save failure', async () => {
+    const storage = asyncStorage();
+    const errors: unknown[] = [];
+    const { host, backend, create } = setup(storage.port, { onError: (error) => errors.push(error) });
+    const offline = new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: 'offline' });
+    const runtime = create(clientOf(backend, {
+      unregisterEndpoint: async () => {
+        throw offline;
+      },
+    }));
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle();
+    storage.failNextSaves(1);
+    await expect(runtime.unregister()).rejects.toBe(offline);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as NotificationError).message).toContain('could not save');
+    await expect(runtime.runUntilIdle()).rejects.toBe(errors[0]);
+  });
+
+  it('schedules a local reminder in the deployment zone when the stored state cannot be read', async () => {
+    const storage = asyncStorage();
+    storage.failNextLoads(1000);
+    const { host, backend, create } = setup(storage.port);
+    const runtime = create();
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    const result = await runtime.reminders.set({
+      key: 'energy',
+      topic: 'energy-full',
+      fireAt: '2026-10-12T05:00:00Z',
+    });
+    expect(result).toEqual({ route: 'local', status: 'scheduled' });
+    expect(host.localPending.map((entry) => entry.key)).toEqual(['energy']);
+    await expect(runtime.runUntilIdle()).rejects.toBeDefined();
+  });
+
   it('reads a value that is not a runtime state as an empty one', () => {
     expect(notificationRuntimeStateOf(undefined)).toEqual({});
     expect(notificationRuntimeStateOf('x')).toEqual({});
@@ -271,6 +353,9 @@ describe('createNotificationRuntime storage', () => {
     };
     expect(notificationRuntimeStateOf({ registration, unbound: true, extra: 1 })).toEqual({ registration, unbound: true });
     expect(notificationRuntimeStateOf({ registration: { ...registration, at: 'yesterday' } })).toEqual({});
+    expect(notificationRuntimeStateOf({
+      registration: { ...registration, registration: { provider: 'fcm', address: [] } },
+    })).toEqual({});
   });
 
   it('keeps the state in one storage key of the platform storage adapter', async () => {
@@ -358,5 +443,25 @@ describe('createNotificationRuntime defaults', () => {
     expect(errors).toEqual([broken]);
     await expect(runtime.runUntilIdle()).rejects.toBe(broken);
     expect(notificationDefaultDeploymentTimeZone).toBe('Asia/Seoul');
+  });
+
+  it('ignores a promise onError returns, even a rejected one', async () => {
+    const seen: unknown[] = [];
+    const { host, create } = setup(undefined, {
+      onError: async (error) => {
+        seen.push(error);
+        throw new Error('the async observer fails');
+      },
+    });
+    const runtime = create();
+    await runtime.start();
+    const broken = new Error('listener');
+    runtime.subscribe(() => {
+      throw broken;
+    });
+    host.tap({ channel: 'remote', topic: 'energy-full' });
+    await Promise.resolve();
+    expect(seen).toEqual([broken]);
+    await expect(runtime.runUntilIdle()).rejects.toBe(broken);
   });
 });
