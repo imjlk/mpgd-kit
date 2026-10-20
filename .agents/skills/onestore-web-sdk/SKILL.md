@@ -53,16 +53,18 @@ URL) are the user's job, and this skill does not cover the ONE store hosting pag
 
 ### Values you need from the user
 
-**There are only five: three come from the ONE store side, and two are the game company's server design.** Many users start without knowing
+**There are seven: three come from the ONE store side, two are logical catalog IDs from the game, and two are the game company's server design.** Many users start without knowing
 what is needed, so **tell them up front and say where to get each one.**
 
 | Value | Where it comes from | If missing |
 |---|---|---|
 | **SDK version** | The user's ONE store contact, or the [release notes](https://onestore-dev.gitbook.io/dev/tools/web-sdk/releasenote). Starts with `v`. **If they were not told otherwise, recommend the latest, `v1.1.0`** | You can proceed with `v1.1.0` |
-| **Ad placement ID (`placementId`)** | Requested in ONEconsole: Apps > (the game) > 수익화 > 인앱 광고 (Monetization > In-App Ads), one per ad type (rewarded, interstitial). See [ONEconsole: 인앱 광고 (In-App Ads)](https://onestore-dev.gitbook.io/dev/docs/apps/product/monetization/iaa) | Every ad request fails, with no fallback |
-| **In-app product ID (`productId`)** | ONEconsole: Apps > (the game) > 수익화 > 인앱 상품 (Monetization > In-App Products). Managed products only | Purchases fail with `invalid_request` |
-| **How checkout intent is issued** | The authenticated game server, not ONEconsole. It must issue an opaque `developerPayload` for the selected `productId` and checkout idempotency key, and bind that intent to the session. Do not generate developerPayload on the client | `issueCheckoutIntent()` fails closed, so the purchase cannot be bound to the selected offer |
-| **How `requestId` is issued** | The authenticated game server. It must issue the id for the selected placement and idempotency key, and bind it to the session. Do not generate requestId on the client | A client-generated id cannot tell whose reward a postback belongs to |
+| **Logical catalog placement ID** | The game ad catalog `placement.id` for that rewarded placement. Not the ONEconsole ID. The authenticated issuer looks this id up; copying the ONEconsole ID here fails that lookup when the two differ | `issueRewardRequest` cannot bind the reward to the selected placement |
+| **ONEconsole ad placement ID** | Requested in ONEconsole: Apps > (the game) > 수익화 > 인앱 광고 (Monetization > In-App Ads), one per ad type (rewarded, interstitial). See [ONEconsole: 인앱 광고 (In-App Ads)](https://onestore-dev.gitbook.io/dev/docs/apps/product/monetization/iaa). `showRewardedAsync` and preload use this id. It may differ from the logical catalog placement ID. If they are the same, still record both | Every ad request fails, with no fallback |
+| **Logical catalog product ID** | The game product catalog `product.id`. Not the ONEconsole SKU. The authenticated issuer looks this id up; copying the SKU here fails that lookup when the two differ | `issueCheckoutIntent` cannot bind the purchase to the selected offer |
+| **ONEconsole in-app product ID** | ONEconsole: Apps > (the game) > 수익화 > 인앱 상품 (Monetization > In-App Products). Managed products only. `purchase` uses this SKU. It may differ from the logical catalog product ID. If they are the same, still record both | Purchases fail with `invalid_request` |
+| **How checkout intent is issued** | The authenticated game server, not ONEconsole. It must issue an opaque `developerPayload` for the selected logical `productId` and checkout idempotency key, and bind that intent to the session. Do not generate developerPayload on the client | `issueCheckoutIntent()` fails closed, so the purchase cannot be bound to the selected offer |
+| **How `requestId` is issued** | The authenticated game server. It must issue the id for the selected logical placement and idempotency key, and bind it to the session. Do not generate requestId on the client | A client-generated id cannot tell whose reward a postback belongs to |
 
 #### When you ask for values, give a form to fill in
 
@@ -74,24 +76,38 @@ SDK version: (leave blank to use the latest, v1.1.0)
         Fill this in only if ONE store gave you a specific version. It starts with v.
         It goes into the {{version}} part of the CDN URL.
 
-Ad placement ID: (write it here, e.g. rewarded rew_xxxx, interstitial int_xxxx)
+Logical catalog placement ID: (game catalog placement.id, not the ONEconsole ID)
+        The rewardedPlacementId. Your game ad catalog uses this id.
+        The authenticated server looks it up. If it differs from the ONEconsole
+        ID, do not copy the ONEconsole ID into this slot.
+
+ONEconsole ad placement ID: (write it here, e.g. rewarded rew_xxxx, interstitial int_xxxx)
         Request it in ONEconsole: Apps > (the game) > 수익화 > 인앱 광고
         (Monetization > In-App Ads). Rewarded and interstitial
         IDs are issued separately, so say which one this is.
+        This is rewardedPlatformPlacementId. showRewardedAsync and preload use it.
+        It may differ from the logical catalog placement ID. If they are the same, write it in both slots.
 
-In-app product ID: (write it here, e.g. gem_100, gem_1000)
-        The product ID registered in ONEconsole under 수익화 > 인앱 상품 (Monetization > In-App Products).
+Logical catalog product ID: (game catalog product.id, not the ONEconsole SKU)
+        The productId passed to issueCheckoutIntent. Your game product catalog
+        uses this id. The authenticated server looks it up. If it differs from
+        the ONEconsole SKU, do not copy the SKU into this slot.
+
+ONEconsole in-app product ID: (write it here, e.g. gem_100, gem_1000)
+        The SKU registered in ONEconsole under 수익화 > 인앱 상품 (Monetization > In-App Products).
+        This is platformProductId. purchase uses it. It may differ from the
+        logical catalog product ID. If they are the same, write it in both slots.
         If there are several, list them all separated by commas. (Managed products only.)
 
 checkout intent issuing: (server-issued only)
         The opaque developerPayload for the product the player selected. Your authenticated
-        game server issues it for that productId and a checkout idempotency key, and binds
+        game server issues it for that logical productId and a checkout idempotency key, and binds
         it to the session. Do not generate developerPayload on the client, and do not send
         a user id or playerId.
 
 requestId issuing: (server-issued only)
         The tracking key for rewarded ad rewards. Your authenticated server issues it
-        and binds it to the session. Do not generate requestId on the client.
+        for the logical catalog placement ID and binds it to the session. Do not generate requestId on the client.
 ```
 
 - **Leave the value slots empty.** If you pre-fill example values, some users leave them as is
@@ -275,10 +291,12 @@ ads on a device before release.
 If the ad code was placed with an empty ID, receiving the ID means more than filling in one value.
 Do all of the following:
 
-1. **Put each ID in its own slot.** The rewarded ID goes where `loadRewarded` / `showRewardedAsync`
-   use it; the interstitial ID goes where `loadInterstitial` / `showInterstitialAsync` use it. If it
-   is unclear which one the user sent, ask. The two are issued separately, and a placement type
-   mismatch fails with `invalid_request`
+1. **Put each ID in its own slot.** The logical catalog placement id goes to `issueRewardRequest`.
+   The ONEconsole id goes where `loadRewarded` / `showRewardedAsync` use it. Do not copy the
+   ONEconsole id into the logical slot when they differ. The interstitial ONEconsole id goes where
+   `loadInterstitial` / `showInterstitialAsync` use it. If it is unclear which id the user sent, ask.
+   Rewarded and interstitial IDs are issued separately, and a placement type mismatch fails with
+   `invalid_request`
 2. **Turn back on what was turned off because the ID was empty**: a disabled ad button, a skipped
    preload, an early `return`, a "not set" label. Filling in the constant alone often leaves the
    button disabled

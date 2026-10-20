@@ -12,14 +12,20 @@ const installedSkillDir = '.agents/skills/onestore-web-sdk';
  * A12-1 / section 4 require a server-issued opaque payload. A10 / B6 and
  * sdk-context require a server-issued request id. The HTML sample must pass the
  * selected offer into those hooks and keep the fail-closed purchase verification
- * hook. There is no separate doctor runner in tools/oneplay; this list is what
- * keeps that checklist wording from being reverted.
+ * hook. The required-values table and copyable form collect logical catalog IDs
+ * separately from ONEconsole IDs. There is no separate doctor runner in
+ * tools/oneplay; this list is what keeps that checklist wording from being
+ * reverted.
  */
 export const requiredInstalledSkillText: ReadonlyArray<readonly [string, string]> = [
   ['SKILL.md', 'server-issued opaque developerPayload'],
   ['SKILL.md', 'Do not generate requestId on the client'],
   ['SKILL.md', 'How checkout intent is issued'],
   ['SKILL.md', 'checkout intent issuing: (server-issued only)'],
+  ['SKILL.md', '| **Logical catalog placement ID** |'],
+  ['SKILL.md', '| **Logical catalog product ID** |'],
+  ['SKILL.md', 'Logical catalog placement ID: (game catalog placement.id, not the ONEconsole ID)'],
+  ['SKILL.md', 'Logical catalog product ID: (game catalog product.id, not the ONEconsole SKU)'],
   [
     'references/game-template.html.txt',
     'async function issueCheckoutIntent({ productId, platformProductId, idempotencyKey })',
@@ -88,11 +94,14 @@ export const payloadExampleForbiddenText: ReadonlyArray<RegExp> = [
  * `npx skills` (vercel-labs/skills project lock, version 1) writes `computedHash`
  * with `computeSkillFolderHash`: every regular file, skipping `.git` and
  * `node_modules`, sorted by host `localeCompare`, path UTF-8 then raw bytes.
- * This digest keeps that concatenation, sorts with `localeCompare(..., 'en')`
- * so it does not depend on the host locale, and normalizes CRLF to LF at the
- * byte level for text files only. Other files are hashed unchanged, so a binary
- * `0D 0A` sequence cannot be rewritten to `0A`. It does not decode file bytes, so
- * distinct non-UTF-8 files cannot collapse to one digest.
+ * This digest sorts with `localeCompare(..., 'en')` so it does not depend on
+ * the host locale, and normalizes CRLF to LF at the byte level for text files
+ * only. Other files are hashed unchanged, so a binary `0D 0A` sequence cannot
+ * be rewritten to `0A`. It does not decode file bytes, so distinct non-UTF-8
+ * files cannot collapse to one digest. Each entry is an 8-byte big-endian
+ * length of the UTF-8 relative path, those path bytes, an 8-byte big-endian
+ * length of the file bytes, then those bytes, so a path/content boundary cannot
+ * collide with a renamed file.
  * `LOCAL_PATCHES.md` is included. The lock records this reviewed digest after
  * local patches, not the raw upstream folder hash.
  */
@@ -101,10 +110,19 @@ export function hashInstalledOnePlaySkill(skillDir: string): string {
   files.sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'en'));
   const hash = createHash('sha256');
   for (const file of files) {
-    hash.update(file.relativePath);
+    const pathBytes = Buffer.from(file.relativePath, 'utf8');
+    hash.update(skillDigestLength(pathBytes.length));
+    hash.update(pathBytes);
+    hash.update(skillDigestLength(file.content.length));
     hash.update(file.content);
   }
   return hash.digest('hex');
+}
+
+function skillDigestLength(byteLength: number): Buffer {
+  const prefix = Buffer.alloc(8);
+  prefix.writeBigUInt64BE(BigInt(byteLength));
+  return prefix;
 }
 
 /** Offline drift check after explicitly refreshing the official skill. It is not a live latest-version claim. */

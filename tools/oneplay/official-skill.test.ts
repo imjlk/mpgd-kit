@@ -13,6 +13,36 @@ const root = mkdtempSync(join(tmpdir(), 'oneplay-skill-'));
 const skillDir = join(root, '.agents/skills/onestore-web-sdk');
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 
+const logicalCatalogHandoffMarkers = [
+  '| **Logical catalog placement ID** |',
+  '| **Logical catalog product ID** |',
+  'Logical catalog placement ID: (game catalog placement.id, not the ONEconsole ID)',
+  'Logical catalog product ID: (game catalog product.id, not the ONEconsole SKU)',
+] as const;
+
+function digestOf(files: Readonly<Record<string, string>>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'oneplay-digest-'));
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      writeFileSync(join(dir, name), content);
+    }
+    return hashInstalledOnePlaySkill(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Path bytes immediately followed by content collide: "z" + "xHELLO" === "zx" + "HELLO".
+assert.notEqual(digestOf({ z: 'xHELLO' }), digestOf({ zx: 'HELLO' }));
+
+const installedSkill = readFileSync(
+  join(repoRoot, '.agents/skills/onestore-web-sdk/SKILL.md'),
+  'utf8',
+);
+for (const marker of logicalCatalogHandoffMarkers) {
+  assert.equal(installedSkill.includes(marker), true, marker);
+}
+
 function writeLock(hash: string, source = 'ONE-store/onestore_web_sdk_skills'): void {
   writeFileSync(
     join(root, 'skills-lock.json'),
@@ -126,6 +156,16 @@ try {
     ],
     ['references/sdk-context.md', 'Independently verify or reconcile'],
     ['SKILL.md', 'checkout intent issuing: (server-issued only)'],
+    ['SKILL.md', '| **Logical catalog placement ID** |'],
+    ['SKILL.md', '| **Logical catalog product ID** |'],
+    [
+      'SKILL.md',
+      'Logical catalog placement ID: (game catalog placement.id, not the ONEconsole ID)',
+    ],
+    [
+      'SKILL.md',
+      'Logical catalog product ID: (game catalog product.id, not the ONEconsole SKU)',
+    ],
     [
       'references/game-template.html.txt',
       'await issueCheckoutIntent({ productId, platformProductId, idempotencyKey })',

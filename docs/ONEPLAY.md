@@ -106,6 +106,7 @@ npx skills add ONE-store/onestore_web_sdk_skills --agent codex --yes
 
 <!--
 @link ../tools/oneplay/official-skill.ts#checkOfficialOnePlaySkill Recomputes the installed skill digest and requires the server-issued payload patch.
+@link ../tools/oneplay/official-skill.ts#hashInstalledOnePlaySkill Length-prefixes each reviewed path and file so a rename cannot share a digest with a content change.
 @link ../packages/game-services/src/oneplay-purchase.ts#createOnePlayCheckoutIntentIssuer Issues the opaque checkout payload from the authenticated server session.
 @link ../packages/game-services/src/oneplay-reward.ts#createOnePlayRewardRequestIssuer Issues the rewarded request id from the authenticated server session.
 -->
@@ -115,8 +116,7 @@ Refresh explicitly before a ONEplay SDK upgrade, review the installed diff, reap
 `pnpm oneplay:skill:check` and `pnpm oneplay:skill:test` in Kit. The offline check
 detects SDK-version drift and an unexpected skill source. It also hashes every
 regular file in the installed skill directory (CRLF normalized to LF at the byte
-level, without decoding file bytes, for text files only; other files are hashed unchanged, paths sorted with `en` localeCompare, each
-relative path then its bytes) and fails when that digest differs from
+level, without decoding file bytes, for text files only; other files are hashed unchanged; paths sorted with `en` localeCompare; each entry is an 8-byte big-endian length of the UTF-8 relative path, those path bytes, an 8-byte big-endian length of the file bytes, then those bytes) and fails when that digest differs from
 `skills-lock.json` `computedHash`. It fails when the reviewed patch is missing:
 `developerPayload` and rewarded `requestId` must be obtained from an authenticated
 server endpoint (`createOnePlayCheckoutIntentIssuer` /

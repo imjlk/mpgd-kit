@@ -1,7 +1,7 @@
 <!doctype html>
 <!-- ONE store H5 Game SDK integration template, based on the official sample.
      Replace: __SDK_VERSION__ (SDK version, starts with v, default v1.1.0)
-     TODO: placementId, productId, and the idempotency keys passed into the server hooks
+     TODO: logical catalog placementId, ONEconsole placement ID, logical catalog productId, ONEconsole SKU, and the idempotency keys passed into the server hooks
      (developerPayload and requestId come back from those hooks; do not invent them)
      UI text is a placeholder; match the game's own language. -->
 <html lang="en">

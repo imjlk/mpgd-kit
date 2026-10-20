@@ -43,8 +43,8 @@ Show the full table; the point is to show what is already done too. Cite evidenc
 | A20 | Listener timing | `pause` / `resume` / `exit` listeners are registered before `initializeAsync()` (recommended; events can arrive right after init) |
 | A21 | Calls into the game | When SDK code and game code are separate scripts, SDK code calls the game object only after it exists (waits with `whenGame` from SKILL.md or an equivalent). The `initializeAsync()` result can arrive before the game script runs |
 
-If items that need values (placementId, productId, SDK URL, how requestId is issued, how checkout intent is issued) are empty, give
-the fill-in form from SKILL.md under the table.
+If items that need values (logical catalog placement ID, ONEconsole placement ID, logical catalog product ID, ONEconsole product ID, SDK URL, how requestId is issued, how checkout intent is issued) are empty, give
+the fill-in form from SKILL.md under the table. Do not copy an ONEconsole ID into the logical catalog slot.
 
 ## List B: pre-release check
 
