@@ -129,7 +129,7 @@ for the full configuration):
    `MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET` (1,000 by default). Do not enable
    this cron on the Workers Free plan: a free-plan invocation has 10 ms of
    CPU and 50 external subrequests, which the scheduler cannot stay inside.
-   A wall budget longer than the cron period is rejected. See the
+   A wall budget that is not shorter than the cron period is rejected. See the
    [deploy guide](CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2).
    A replay of one send sets FCM `android.collapse_key` and `apns-collapse-id`
    from the send key, so a crash after HTTP 200 does not show a second

@@ -39,10 +39,29 @@ const serviceAccount = JSON.stringify({
 // Google stands in through fetch: token grants and FCM sends are recorded, nothing leaves the process.
 const sends: { readonly token: string; readonly channel: unknown; readonly body: string }[] = [];
 const realFetch = globalThis.fetch;
+let holdGoogleFetch: Promise<void> | undefined;
+let noteGoogleFetchEntered: (() => void) | undefined;
+let unauthorizedSendsLeft = 0;
+let countGoogleFetches = false;
+let googleFetchCount = 0;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input instanceof Request ? input.url : input);
+  const google = url === 'https://oauth2.googleapis.com/token'
+    || url === 'https://fcm.googleapis.com/v1/projects/mpgd-worker-test/messages:send';
+  if (countGoogleFetches && google) {
+    googleFetchCount += 1;
+  }
+  if (holdGoogleFetch !== undefined && url === 'https://oauth2.googleapis.com/token') {
+    noteGoogleFetchEntered?.();
+    noteGoogleFetchEntered = undefined;
+    await holdGoogleFetch;
+  }
   if (url === 'https://oauth2.googleapis.com/token') {
     return Response.json({ access_token: 'worker-access-token', expires_in: 3600 });
+  }
+  if (url === 'https://fcm.googleapis.com/v1/projects/mpgd-worker-test/messages:send' && unauthorizedSendsLeft > 0) {
+    unauthorizedSendsLeft -= 1;
+    return new Response('{}', { status: 401, headers: { 'content-type': 'application/json' } });
   }
   if (url === 'https://fcm.googleapis.com/v1/projects/mpgd-worker-test/messages:send') {
     const body = JSON.parse(String(init?.body)) as {
@@ -446,7 +465,7 @@ try {
       'a budget longer than the minute cron does not run the scheduler',
     );
     assert.ok(
-      errors.some((args) => String(args[0]).includes('longer than the cron period')),
+      errors.some((args) => String(args[0]).includes('not shorter than the cron period')),
       errors.map((args) => String(args[0])).join('\n'),
     );
     await runScheduledNotifications(over, { cron: '*/5 * * * *' });
@@ -486,6 +505,206 @@ try {
     settings.budget = '1000';
     await runScheduledNotifications(tight, { cron: '* * * * *' });
     assert.equal(sends.length - before, 3, 'the backlog drains once the budget allows');
+  }
+
+  // A wall budget equal to the cron period still overlaps the next trigger.
+  {
+    assert.equal(notificationCronPeriodSeconds('5/15 * * * *'), 15 * 60);
+    assert.equal(notificationCronPeriodSeconds('0/15 * * * *'), 15 * 60);
+    assert.equal(notificationCronPeriodSeconds('5-59/15 * * * *'), 15 * 60);
+    const equal = {
+      ...env,
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '60',
+    };
+    const post = (path: string, body: unknown) =>
+      createWorkerFetchHandler(equal)(
+        new Request(`${base}${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    await post('/endpoints', { registration: registration('tok-equal'), target: 'android' });
+    await post('/reminders', { reminder: { ...reminder(past), key: 'equal-budget' } });
+    const before = sends.length;
+    const errors: unknown[][] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      await runScheduledNotifications(equal, { cron: '* * * * *' });
+    } finally {
+      console.error = realError;
+    }
+    assert.equal(
+      sends.length,
+      before,
+      'a 60s budget on a one-minute cron does not run the scheduler',
+    );
+    assert.ok(
+      errors.some((args) => String(args[0]).includes('not shorter than the cron period')),
+      errors.map((args) => String(args[0])).join('\n'),
+    );
+    const stepped = {
+      ...env,
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '1200',
+    };
+    const postStepped = (path: string, body: unknown) =>
+      createWorkerFetchHandler(stepped)(
+        new Request(`${base}${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    await postStepped('/endpoints', { registration: registration('tok-step'), target: 'android' });
+    await postStepped('/reminders', { reminder: { ...reminder(past), key: 'stepped-cron' } });
+    const beforeStep = sends.length;
+    await runScheduledNotifications(stepped, { cron: '5/15 * * * *' });
+    assert.equal(
+      sends.length,
+      beforeStep,
+      'a 20-minute budget does not fit a cron that fires every 15 minutes',
+    );
+  }
+
+  // Purge is counted before the first round, so a budget that cannot cover that round leaves the item untouched.
+  {
+    const tightRound = {
+      ...env,
+      MPGD_NOTIFICATIONS_DUE_BATCH: '1',
+      MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET: '12',
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+    };
+    const post = (path: string, body: unknown) =>
+      createWorkerFetchHandler(tightRound)(
+        new Request(`${base}${path}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    await post('/endpoints', { registration: registration('tok-reserve'), target: 'android' });
+    await post('/reminders', { reminder: { ...reminder(past), key: 'reserve' } });
+    const before = sends.length;
+    await runScheduledNotifications(tightRound, { cron: '* * * * *' });
+    assert.equal(
+      sends.length,
+      before,
+      'the scheduler does not start a round purge already made unaffordable',
+    );
+  }
+
+  // A cold FCM 401 retry is four fetches, and each one is counted.
+  {
+    const postOn = async (
+      target: GameServicesWorkerEnv,
+      key: string,
+      token: string,
+    ) => {
+      const fetchTarget = createWorkerFetchHandler(target);
+      const post = (path: string, body: unknown) =>
+        fetchTarget(
+          new Request(`${base}${path}`, {
+            method: 'POST',
+            headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          }),
+        );
+      await post('/endpoints', { registration: registration(token), target: 'android' });
+      await post('/reminders', { reminder: { ...reminder(past), key } });
+    };
+    const warm = {
+      ...env,
+      MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET: '1000',
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+    };
+    const cold = {
+      ...env,
+      MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET: '1000',
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+    };
+    await postOn(warm, 'warm-fcm', 'tok-warm');
+    await postOn(cold, 'cold-fcm', 'tok-cold');
+    countGoogleFetches = true;
+    googleFetchCount = 0;
+    try {
+      await runScheduledNotifications(warm, { cron: '*/5 * * * *' });
+      const warmFetches = googleFetchCount;
+      const warmUsed = notificationCronOperationsUsed(warm);
+      googleFetchCount = 0;
+      unauthorizedSendsLeft = 1;
+      await runScheduledNotifications(cold, { cron: '*/5 * * * *' });
+      const coldFetches = googleFetchCount;
+      const coldUsed = notificationCronOperationsUsed(cold);
+      assert.equal(warmFetches, 2, 'a cached-miss send is a token grant and one messages:send');
+      assert.equal(coldFetches, 4, 'a bare 401 retries the token grant and the send');
+      assert.ok(
+        coldUsed - warmUsed >= coldFetches - warmFetches,
+        `warm used ${warmUsed} (${warmFetches} fetches), cold used ${coldUsed} (${coldFetches} fetches)`,
+      );
+    } finally {
+      countGoogleFetches = false;
+      unauthorizedSendsLeft = 0;
+      googleFetchCount = 0;
+    }
+  }
+
+  // A client route on the same env is not charged to a cron that is awaiting provider I/O.
+  {
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      noteGoogleFetchEntered = resolve;
+    });
+    holdGoogleFetch = new Promise((resolve) => {
+      release = resolve;
+    });
+    const shared = {
+      ...env,
+      MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET: '40',
+      MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+    };
+    const sharedFetch = createWorkerFetchHandler(shared);
+    await sharedFetch(
+      new Request(`${base}/endpoints`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+        body: JSON.stringify({ registration: registration('tok-shared'), target: 'android' }),
+      }),
+    );
+    await sharedFetch(
+      new Request(`${base}/reminders`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer player-1', 'content-type': 'application/json' },
+        body: JSON.stringify({ reminder: { ...reminder(past), key: 'shared-budget' } }),
+      }),
+    );
+    const running = runScheduledNotifications(shared, { cron: '* * * * *' });
+    try {
+      await Promise.race([
+        entered,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('cron did not reach the FCM token fetch')), 5_000);
+        }),
+      ]);
+      const statuses: number[] = [];
+      for (let index = 0; index < 80; index += 1) {
+        const response = await sharedFetch(
+          new Request(`${base}/consent`, { headers: { authorization: 'Bearer player-1' } }),
+        );
+        statuses.push(response.status);
+      }
+      assert.ok(
+        statuses.every((status) => status === 200),
+        statuses.join(','),
+      );
+    } finally {
+      release();
+      holdGoogleFetch = undefined;
+      noteGoogleFetchEntered = undefined;
+      await running;
+    }
   }
 
   // Ending a session unbinds what it registered; an explicit unbind removes the other.

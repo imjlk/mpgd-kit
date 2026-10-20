@@ -208,9 +208,10 @@ dead_letter_queue = "mpgd-notifications-dead"
 # external subrequests, which this run cannot stay inside.
 # Each run goes on in rounds until nothing is due, the wall budget is used, or
 # another round would cross MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET (1,000 by
-# default, under the paid cap of 10,000 as of 2026-02-11). The wall budget
+# default, under the paid cap of 10,000 as of 2026-02-11). The count is for
+# that scheduled invocation only. The wall budget
 # (MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS, 20 by default) must be shorter than
-# the cron period; a longer value skips the scheduler. Each purge deletes
+# the cron period; a value that is not shorter skips the scheduler. Each purge deletes
 # at most 100 rows per statement, and at most 20 statements per table, so a
 # backlog continues on the next run.
 # MPGD_NOTIFICATIONS_DUE_BATCH sets each batch (25 by default, at most 100, and
@@ -289,7 +290,11 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   ended, is spent.
 - **Throughput.** A run is bounded by its wall-time budget and by a
   subrequest budget, and it stops before another round would cross that
-  budget. Check Cloudflare's current figures; as of 2026-02-11 the free plan
+  budget. The count is the scheduled invocation's own D1 calls, queue
+  sends, identity lookups, and provider fetches (each FCM token grant and
+  `messages:send`, including a bare 401 retry), not a fixed charge per send,
+  and a fetch, queue, or RPC event on the same isolate is not part of it.
+  Check Cloudflare's current figures; as of 2026-02-11 the free plan
   allows 10 ms of CPU and 50 external subrequests per invocation (1,000
   subrequests to Cloudflare services such as D1), and the paid plan allows
   30 seconds of CPU for a cron whose interval is under an hour and 10,000
@@ -298,20 +303,19 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   plan the default subrequest budget is 1,000
   (`MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET`), which fits either the current or
   the previous paid cap, and the default batch of 25 is one round inside
-  that budget. Each reminder still costs roughly ten D1 queries, and a send
-  without the queue costs its provider calls too; these are rough,
-  unmeasured estimates. The batch size is clamped so one round's estimate
-  fits the budget, and the run does not start another round that would not.
-  A wall budget longer than the cron period is rejected (the scheduler is
-  skipped and the rejection is logged), so a one-minute cron cannot be given
-  a 300-second budget. Keep the budget under the cron period, or runs
-  overlap; the scheduler's compare-and-set writes keep overlapping runs
-  correct, but they compete for the same items. With the queue bound, the
-  cron only writes the sends and takes their rows, and each consumer
-  invocation makes its own provider calls under its own limits, so large
-  waves need the queue.
+  that budget. A round is not started unless the allowance left after the
+  purge can cover an estimate of sixteen operations per item (store calls
+  plus the most fetches one FCM send can make); the calls themselves are
+  counted as they happen. A wall budget that is not shorter than the cron
+  period is rejected (the scheduler is skipped and the rejection is logged),
+  so a one-minute cron cannot be given a 60-second budget. Keep the budget
+  shorter than the cron period, or runs overlap; the scheduler's
+  compare-and-set writes keep overlapping runs correct, but they compete
+  for the same items. With the queue bound, the cron only writes the sends
+  and takes their rows, and each consumer invocation makes its own provider
+  calls under its own limits, so large waves need the queue.
 
-<!-- @link ../apps/game-services-worker/src/notificationsHandler.ts#runScheduledNotifications Stops the cron before the subrequest budget and rejects a wall budget longer than the cron period. -->
+<!-- @link ../apps/game-services-worker/src/notificationsHandler.ts#runScheduledNotifications Stops the cron before the subrequest budget and rejects a wall budget that is not shorter than the cron period. -->
 <!-- @evidence docs/specs/notifications/notifications-v2-rfc.md#scheduler The service run is still bounded by its own wall-time budget; the Worker adds the platform limits. -->
 - **Queue.** A job that cannot run as asked is logged and acknowledged; any
   other failure is retried with a growing delay (10 s, doubling, at most
