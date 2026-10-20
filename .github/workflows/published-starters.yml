@@ -128,7 +128,7 @@ jobs:
           MPGD_PUBLISHED_SOURCE_SHA: ${{ needs.source.outputs.sha }}
           MPGD_PUBLISHED_CLI_VERSION: ${{ needs.source.outputs.cli }}
           MPGD_PUBLISHED_CREATE_VERSION: ${{ needs.source.outputs.creator }}
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: ${{ runner.os == 'Windows' }}
         with:
           dotnet-version: 8.0.425
