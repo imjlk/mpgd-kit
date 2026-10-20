@@ -11,6 +11,7 @@ import { createNotificationConformanceHost } from '@mpgd/platform/notifications-
 import {
   createMemoryNotificationRuntimeStorage,
   createNotificationRuntime,
+  type NotificationRuntimeController,
 } from '@mpgd/platform/notifications-runtime';
 
 import { createWorkerFetchHandler, type GameServicesWorkerEnv } from './handler.js';
@@ -61,7 +62,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   throw new Error(`Unexpected fetch: ${url}`);
 }) as typeof fetch;
 
-let runtime: ReturnType<typeof createNotificationRuntime> | undefined;
+let runtime: NotificationRuntimeController | undefined;
 try {
   const catalog: NotificationTopicCatalog = {
     version: '2026-10-20',
@@ -106,6 +107,8 @@ try {
 
   /** Requests the client sent to the Worker. */
   let workerRequests = 0;
+  /** The address and permission of each registration the client sent. */
+  const registrations: [string, string][] = [];
   // The game's identity: the current session, its bearer token, and the sign-in subscription.
   let current: (GameServicesNotificationSession & { readonly token: string }) | undefined;
   const signedIn = new Set<(session: GameServicesNotificationSession) => void>();
@@ -121,6 +124,12 @@ try {
     baseUrl: 'https://game-services-worker.test',
     fetch: async (url, init) => {
       workerRequests += 1;
+      if (url.endsWith('/endpoints') && init.body !== undefined) {
+        const { registration } = JSON.parse(init.body) as {
+          readonly registration: { readonly address: { readonly value: string; readonly permission: string } };
+        };
+        registrations.push([registration.address.value, registration.address.permission]);
+      }
       return fetchWorker(new Request(url, init));
     },
     identity: {
@@ -168,6 +177,8 @@ try {
     catalog: topics,
     timeZone: 'Asia/Seoul',
   });
+  /** Background failures as the runtime reports them. */
+  const backgroundErrors: unknown[] = [];
   runtime = createNotificationRuntime({
     provider: host.provider,
     backend: client,
@@ -175,12 +186,14 @@ try {
     defaultLocale: 'ko',
     registryEntry,
     storage: createMemoryNotificationRuntimeStorage(),
+    onError: (error) => backgroundErrors.push(error),
   });
-  const deliver = (key: string) => deliverWorkerNotification(env, {
+  const deliver = async (key: string) => await deliverWorkerNotification(env, {
     idempotencyKey: key,
     player: 'p-e2e',
     topic: 'friend-challenge',
-  });
+  }) as { readonly status: string; readonly alreadyProcessed?: boolean };
+  const delivered = { status: 'delivered', alreadyProcessed: false };
   /** A 401 from the Worker, as the client maps it. */
   const isUnauthorized = (error: unknown): boolean =>
     error instanceof GameServicesNotificationsRequestError
@@ -216,12 +229,15 @@ try {
     runtime.setTopicPreference({ topic: 'daily-ready', enabled: true }),
     (error: unknown) => error instanceof NotificationError && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
   );
+  await assert.rejects(client.listConsent(), (error: unknown) =>
+    error instanceof GameServicesNotificationsRequestError && error.status === 0);
   assert.equal(workerRequests, requestsBefore);
 
   // Sign-in registers this installation with the device's permission, not yet granted: no send reaches it.
   signIn({ playerId: 'p-e2e', sessionId: 's-e2e-1' }, 'token-1');
   await runtime.runUntilIdle();
-  assert.equal((await deliver('e2e-send-0') as { readonly status?: unknown }).status, 'delivered');
+  assert.deepEqual(registrations, [['tok-e2e', 'prompt']]);
+  assert.deepEqual(await deliver('e2e-send-0'), delivered);
   assert.deepEqual(fcmTokens, ['tok-other']);
   fcmTokens.length = 0;
 
@@ -230,7 +246,11 @@ try {
   const granted = await runtime.requestPermission({ topics: ['daily-ready'], gesture: true });
   assert.equal(granted.outcomes['daily-ready'], 'granted');
   await runtime.runUntilIdle();
-  assert.deepEqual(await deliver('e2e-send-1'), { status: 'delivered', alreadyProcessed: false });
+  assert.deepEqual(registrations, [
+    ['tok-e2e', 'prompt'],
+    ['tok-e2e', 'granted'],
+  ]);
+  assert.deepEqual(await deliver('e2e-send-1'), delivered);
   assert.deepEqual([...fcmTokens].sort(), ['tok-e2e', 'tok-other']);
   fcmTokens.length = 0;
 
@@ -288,14 +308,14 @@ try {
   // Logout: unregister() unbinds this session's installation only; the other device still receives.
   await runtime.unregister();
   issued.delete('Bearer token-1');
-  assert.equal((await deliver('e2e-send-2') as { readonly status?: unknown }).status, 'delivered');
+  assert.deepEqual(await deliver('e2e-send-2'), delivered);
   assert.deepEqual(fcmTokens, ['tok-other']);
   fcmTokens.length = 0;
 
   // The next sign-in binds the installation again.
   signIn({ playerId: 'p-e2e', sessionId: 's-e2e-2' }, 'token-2');
   await runtime.runUntilIdle();
-  assert.deepEqual(await deliver('e2e-send-3'), { status: 'delivered', alreadyProcessed: false });
+  assert.deepEqual(await deliver('e2e-send-3'), delivered);
   assert.deepEqual([...fcmTokens].sort(), ['tok-e2e', 'tok-other']);
 
   // A 401 mid-session: the identity service revoked the token while the game still holds it.
@@ -308,17 +328,20 @@ try {
   ]) {
     await assert.rejects(work(), isUnauthorized);
   }
+  // Drain what those calls left, so the next failure is the read's own.
+  await runtime.runUntilIdle().catch(() => undefined);
+  backgroundErrors.length = 0;
   // The read still answers from the host; the backend's 401 surfaces in the background.
   const read = await runtime.getPermission({ topics: ['daily-ready'] });
   assert.equal(read.topics['daily-ready'], 'granted');
-  const background = await runtime.runUntilIdle().then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  // Each backend call the read made in the background (its consent read among them) failed with the 401.
+  await assert.rejects(runtime.runUntilIdle());
+  assert.ok(backgroundErrors.length > 0);
+  assert.ok(backgroundErrors.every(isUnauthorized), backgroundErrors.map(String).join('; '));
   assert.ok(
-    isUnauthorized(background)
-      || (background instanceof AggregateError && background.errors.every(isUnauthorized)),
-    `expected the 401 in the background, got ${String(background)}`,
+    backgroundErrors.some(
+      (error) => (error as GameServicesNotificationsRequestError).route === '/consent',
+    ),
   );
   console.info('notifications client end to end against the Worker handler passed');
 } finally {
