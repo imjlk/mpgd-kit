@@ -212,6 +212,15 @@ export interface CreateNotificationRuntimeInput {
    */
   readonly registryEntry?: NotificationDeliveryProviderEntry;
   /**
+   * Loads the registry entry at `start()` when `registryEntry` is absent, for
+   * example from the game-services Worker's `GET /providers`. Until it
+   * answers, calls run without the comparison. A load that fails is
+   * reported through `onError` and the runtime starts without the entry, so
+   * a backend it cannot reach does not turn notifications off; the next
+   * `start()` loads it again. An entry once loaded is kept.
+   */
+  readonly loadRegistryEntry?: () => Promise<NotificationDeliveryProviderEntry | undefined>;
+  /**
    * Called with each failure of background work (records, registrations,
    * local reminders, game listeners) as it happens; `runUntilIdle` still
    * rethrows them. It runs synchronously: an error it throws, or a promise
@@ -548,6 +557,8 @@ export function createNotificationRuntime(
   let unsubscribeProvider: (() => void) | undefined;
   let unsubscribeAuthentication: (() => void) | undefined;
   let configurationIssue: string | undefined;
+  /** The entry `loadRegistryEntry` answered, kept across starts. */
+  let loadedRegistryEntry: NotificationDeliveryProviderEntry | undefined;
   /** The provider's latest registration, from `register()` or `endpoint-changed`. */
   let latestRegistration: NotificationEndpointRegistration | undefined;
   const background = new Set<Promise<void>>();
@@ -1339,9 +1350,18 @@ export function createNotificationRuntime(
       unsubscribeProvider ??= provider.subscribe(onProviderEvent);
       unsubscribeAuthentication ??= backend.onAuthenticated(onAuthenticated);
       const capabilities = await provider.getCapabilities();
-      configurationIssue = input.registryEntry === undefined || !capabilities.remote.supported
+      let entry = input.registryEntry ?? loadedRegistryEntry;
+      if (entry === undefined && input.loadRegistryEntry !== undefined) {
+        try {
+          entry = await input.loadRegistryEntry();
+          loadedRegistryEntry = entry;
+        } catch (error) {
+          fail(error);
+        }
+      }
+      configurationIssue = entry === undefined || !capabilities.remote.supported
         ? undefined
-        : notificationRegistryMismatch(capabilities, input.registryEntry);
+        : notificationRegistryMismatch(capabilities, entry);
       // A backend that cannot answer does not fail the start; the next read reconciles.
       await settle(reconcileLocal());
       await settle(refreshRegistration(true));
