@@ -4,18 +4,20 @@ import type { GameServicesHeaderResolver } from '@mpgd/game-services';
  * The game's server-backed session: who is signed in to the game backend,
  * and the `Authorization` header for that session. The starter has none, so
  * `resolveStarterServerSession` returns `undefined`. Set yours with
- * `setStarterServerSession` (for example over a `GuestSessionCoordinator`
- * from `@mpgd/game-services` and your identity service). The commerce client
- * then sends its header. In a game created with `--providers notifications`,
- * the notifications runtime uses the same session and header for the
- * game-services Worker's notification routes.
+ * `setStarterServerSession`, over your own session holder and identity
+ * service. The commerce client then sends its header. In a game created with
+ * `--providers notifications`, the notifications runtime uses the same
+ * session and header for the game-services Worker's notification routes. *
+ * `sessionId` must be the stable session-family id: the `sessionId` your
+ * identity service answers to the Worker's `authenticateNotificationSession`
+ * for this session's header, the same across token refreshes. Do not pass a
+ * per-token or rotating id: a `GuestSessionCoordinator` view's `sessionId`
+ * may rotate on refresh, so it is not that id.
  */
 export interface StarterServerSession {
   /**
    * The signed-in player and session, or `undefined` while signed out.
-   * `sessionId` stays the same across token refreshes: it is the
-   * `sessionId` your identity service answers to the Worker's
-   * `authenticateNotificationSession`.
+   * `sessionId` is the stable session-family id (see above).
    */
   current(): { readonly playerId: string; readonly sessionId: string } | undefined;
   /** Calls `listener` when a session becomes current (sign-in, restore, account switch); returns the unsubscribe. */

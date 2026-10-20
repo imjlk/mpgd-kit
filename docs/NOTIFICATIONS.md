@@ -127,7 +127,14 @@ Rules the starter's settings screen follows, and your own screen must too:
 > server-backed session with `setStarterServerSession`
 > (`src/platform/serverSession.ts`): the signed-in `{ playerId, sessionId }`,
 > a sign-in subscription, and the session's header, which the commerce
-> client then sends too. Without them it returns `undefined`, and the
+> client then sends too. `sessionId` must be the stable session-family id:
+> the `sessionId` the identity service answers to
+> `authenticateNotificationSession` for that header, the same across token
+> refreshes. A `GuestSessionCoordinator` view's `sessionId` may rotate on
+> refresh, so do not pass it as that id. The runtime compares its provider
+> with the Worker's registry entry for the target (`GET /providers`), and
+> runs without the check when the Worker cannot be reached. A Reddit game
+> gets no Worker backend: its notifications backend is the Devvit server. Without them it returns `undefined`, and the
 > settings screen asks for the OS or host permission (and withdraws a Devvit
 > opt-in the game rendered), shows no reminder, advertising, or night
 > switch, and says why. The runtime keeps its last registration, push

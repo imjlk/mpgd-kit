@@ -45,22 +45,21 @@ export const gameServicesNotificationsRoutePrefix = '/game-services/notification
 export interface GameServicesNotificationSession {
   readonly playerId: string;
   /**
-   * Stable for the session's life, across token refreshes (its refresh
-   * family): the `sessionId` the identity service answers to the Worker's
-   * `authenticateNotificationSession`. A new sign-in starts a new one. An
-   * identity whose own session id rotates on refresh (a
-   * `GuestSessionCoordinator` view may) maps it to the family's stable id;
-   * otherwise each rotation counts as a new session and sends the
-   * registration again.
+   * The stable session-family id: the `sessionId` the identity service
+   * answers to the Worker's `authenticateNotificationSession` for this
+   * session's header, the same across token refreshes. A new sign-in starts
+   * a new one. A per-token or rotating id is not it (a
+   * `GuestSessionCoordinator` view's `sessionId` may rotate on refresh); with
+   * one, each rotation counts as a new session and sends the registration
+   * again.
    */
   readonly sessionId: string;
 }
 
 /**
  * The game's identity as the notifications client needs it. The game wires
- * it to its own session holder (for example a `GuestSessionCoordinator`
- * from `@mpgd/game-services`, whose view names `serverUserId` and a session
- * id); the kit does not create sessions.
+ * it to its own session holder and identity service; the kit does not
+ * create sessions.
  */
 export interface GameServicesNotificationIdentity {
   /** The current session, or `undefined` while signed out. */

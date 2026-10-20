@@ -1,18 +1,12 @@
 import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } from '@mpgd/catalog';
-import { isPublicGameServicesUrl, resolveGameServicesAuthorityMode } from '@mpgd/game-services';
-import { createGameServicesNotificationsClient } from '@mpgd/game-services/notifications/client';
-import type {
-  NotificationConsentRecord,
-  NotificationRuntime,
-  NotificationTopicDeclaration,
-} from '@mpgd/platform/notifications';
-import {
-  createNotificationRuntime,
-  createNotificationRuntimeStorage,
-} from '@mpgd/platform/notifications-runtime';
+import type { NotificationTopicDeclaration } from '@mpgd/platform/notifications';
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
 
 import notificationTopicsJson from '../../notifications/topics.json';
+import {
+  createStarterWorkerNotificationBackend,
+  type StarterNotificationBackend,
+} from './notificationBackend';
 import { resolveStarterServerSession } from './serverSession';
 import { routeNotificationOpens, type NotificationOpenRoutes } from './notificationOpens';
 import {
@@ -49,109 +43,39 @@ export function starterNotificationTopics(configTarget: string): readonly Notifi
   }
 }
 
-/**
- * The game backend's notifications surface the starter uses: the runtime
- * (notifications RFC "Runtime"), which composes the target's provider with
- * the backend that keeps consent records, endpoint registrations, server
- * reminders, and notices; and the signed-in player's consent records (the
- * game-services Worker's `GET /consent`), which the settings screen shows.
- */
-export interface StarterNotificationBackend {
-  readonly runtime: NotificationRuntime;
-  listConsent(): Promise<readonly NotificationConsentRecord[]>;
-}
+export type { StarterNotificationBackend } from './notificationBackend';
 
 /**
  * The game's notifications backend: the notifications runtime over the
- * game-services Worker's notification routes
- * (`@mpgd/game-services/notifications/client`), when the game has both a
- * game-services URL (`VITE_MPGD_GAME_SERVICES_URL`, as the commerce client
- * uses) and a server-backed session (`setStarterServerSession` in
- * `serverSession.ts`), and the target exposes a notifications provider.
- * Otherwise `undefined`: the notification settings screen then asks only for
- * the OS or host permission and shows no reminder, advertising, or night
- * switch, because nothing could record them.
+ * game-services Worker's notification routes (see `notificationBackend.ts`),
+ * when the game has both a game-services URL (`VITE_MPGD_GAME_SERVICES_URL`,
+ * as the commerce client uses) and a server-backed session
+ * (`setStarterServerSession` in `serverSession.ts`), and the target exposes
+ * a notifications provider. Otherwise `undefined`: the notification settings
+ * screen then asks only for the OS or host permission and shows no
+ * reminder, advertising, or night switch, because nothing could record them.
  *
- * The Worker binds a device to the session its `Authorization` header names,
- * through its `GAME_SERVICES_NOTIFICATIONS_AUTH` binding to your identity
- * service (docs/CLOUDFLARE_WORKER_DEPLOY.md, "Sessions"); it serves the
- * Android, iOS, and Apps in Toss providers, while a Reddit game's backend is
- * its Devvit server. The runtime keeps its registration state in the
- * platform storage and starts here. Call this through the settings model or
- * `subscribeStarterNotificationOpens`, which keep one runtime per gateway:
- * a second call starts a second runtime on the same provider.
+ * Reddit gets no Worker backend: its notifications backend is the Devvit
+ * server, which keeps the opt-in, the records, and the sends. The Worker
+ * serves the Android, iOS, and Apps in Toss providers and binds a device to
+ * the session its `Authorization` header names, through its
+ * `GAME_SERVICES_NOTIFICATIONS_AUTH` binding to your identity service
+ * (docs/CLOUDFLARE_WORKER_DEPLOY.md, "Sessions"). Call this through the
+ * settings model or `subscribeStarterNotificationOpens`, which keep one
+ * runtime per gateway: a second call starts a second runtime on the same
+ * provider.
  */
 export function createStarterNotificationBackend(
   platform: TargetConfiguredGateway,
 ): StarterNotificationBackend | undefined {
-  const baseUrl = import.meta.env.VITE_MPGD_GAME_SERVICES_URL?.trim();
-  const provider = platform.notificationsV2;
-  if (baseUrl === undefined || baseUrl === '' || provider === undefined) {
-    return undefined;
-  }
-  const session = resolveStarterServerSession();
-  if (session === undefined) {
-    warnOnce(
-      platform,
-      '[notifications] VITE_MPGD_GAME_SERVICES_URL is set but no server session is: call setStarterServerSession '
-        + '(src/platform/serverSession.ts) before the game starts. The settings screen shows no switch until then.',
-    );
-    return undefined;
-  }
-  try {
-    if (!isAllowedGameServicesUrl(baseUrl)) {
-      // The session's credentials never travel in clear text or to a private host in production.
-      warnOnce(
-        platform,
-        '[notifications] VITE_MPGD_GAME_SERVICES_URL must be an absolute http(s) URL, and a public https URL '
-          + 'without credentials in production; notifications stay off.',
-      );
-      return undefined;
-    }
-    const client = createGameServicesNotificationsClient({
-      baseUrl,
-      identity: session,
-      getHeaders: () => session.getHeaders(),
-      // The catalog target whose mapping applies to this device (android or ios share FCM).
-      target: platform.configTarget,
-    });
-    const runtime = createNotificationRuntime({
-      provider,
-      backend: client,
-      catalog: starterNotificationTopics(platform.configTarget),
-      defaultLocale: starterNotificationCatalog.defaultLocale,
-      storage: createNotificationRuntimeStorage({ storage: platform.storage }),
-      onError(error) {
-        console.error('[notifications]', error);
-      },
-    });
-    // It subscribes to the provider at once; a backend that cannot answer yet does not fail the game.
-    runtime.start().catch((error: unknown) => {
-      console.error('[notifications] the runtime could not start.', error);
-    });
-    return { runtime, listConsent: () => client.listConsent() };
-  } catch (error) {
-    // A configuration the client refuses turns notifications off, never the game.
-    warnOnce(platform, '[notifications] the notifications backend could not be created.', error);
-    return undefined;
-  }
-}
-
-/**
- * Whether the game-services URL may carry the session's credentials: any
- * absolute http(s) URL outside production builds, and in production the
- * public https URL the commerce client requires (`isPublicGameServicesUrl`).
- */
-function isAllowedGameServicesUrl(baseUrl: string): boolean {
-  if (resolveGameServicesAuthorityMode(import.meta.env.MODE) === 'production') {
-    return isPublicGameServicesUrl(baseUrl);
-  }
-  try {
-    const { protocol } = new URL(baseUrl);
-    return protocol === 'https:' || protocol === 'http:';
-  } catch {
-    return false;
-  }
+  return createStarterWorkerNotificationBackend(platform, {
+    baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL,
+    mode: import.meta.env.MODE,
+    session: resolveStarterServerSession(),
+    topics: starterNotificationTopics(platform.configTarget),
+    defaultLocale: starterNotificationCatalog.defaultLocale,
+    log: (message, error) => warnOnce(platform, message, error),
+  });
 }
 
 /** Messages already logged per gateway: a screen opened again does not log them again. */

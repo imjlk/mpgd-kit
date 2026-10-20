@@ -512,6 +512,7 @@ export const notificationsCapacitorGateways: Readonly<Record<'android' | 'ios', 
 export const notificationsCapacitorGatewayModules: readonly string[] = Object.freeze([
   'src/platform/capacitorNotifications.ts',
   'src/platform/notifications.ts',
+  'src/platform/notificationBackend.ts',
   'src/platform/notificationSettings.ts',
   'src/platform/notificationOpens.ts',
 ]);

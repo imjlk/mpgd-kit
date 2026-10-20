@@ -2605,14 +2605,21 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
 - The starter: `createStarterNotificationBackend` returns the runtime over
   this client when the game has `VITE_MPGD_GAME_SERVICES_URL` and sets a
   server-backed session with `setStarterServerSession`, whose header the
-  commerce client then sends too; otherwise `undefined`, as before.
+  commerce client then sends too; otherwise `undefined`, as before. The
+  runtime loads the Worker's registry entry for its target
+  (`GET /providers`, `loadRegistryEntry`) in the background and compares
+  the provider with it; a Worker it cannot reach is logged and the runtime
+  runs without the comparison. A Reddit game gets no Worker backend: its
+  notifications backend is the Devvit server.
 - Left to follow-ups:
   - The identity side's `NotificationSessions` binding stays with each
     game's identity service; the contract is in the
     [Worker guide](../../CLOUDFLARE_WORKER_DEPLOY.md) ("Sessions").
-  - The starter does not yet pass the Worker's registry entry
-    (`GET /providers`, `getProviders()`) to the runtime, so the start-time
-    comparison of the provider with its registry entry is off there.
+  - Expose a stable session-family id from `GuestSessionCoordinator`. Its
+    view's `sessionId` may rotate on refresh, while the runtime and the
+    Worker need the id `authenticateNotificationSession` answers, which
+    stays the same across refreshes; until then a game passes that id
+    itself.
   - The shared host-side `notifications.v2` bridge handler, Android
     advertising rendering, and bulk sends, as listed under C1.
 
