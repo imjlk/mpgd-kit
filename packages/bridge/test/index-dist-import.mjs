@@ -20,6 +20,7 @@ import {
 import {
   assertBridgeNotificationsV2Payload,
   assertBridgeNotificationsV2Result,
+  createNotificationsV2BridgeHandler,
 } from '../dist/notifications.js';
 
 // The main entry loads no notifications code; only `./notifications` does.
@@ -103,5 +104,40 @@ assert.deepEqual(envelopes.map((envelope) => envelope.sequence), [0, 1]);
 for (const envelope of envelopes) {
   assert.doesNotThrow(() => assertBridgeEvent(envelope));
 }
+
+// The host handler from the published entry serves a provider end to end.
+const handler = createNotificationsV2BridgeHandler({
+  provider: {
+    provider: 'fixture',
+    getCapabilities: async () => ({}),
+    getPermission: async ({ topics }) => ({
+      topics: Object.fromEntries(topics.map((topic) => [topic, 'unsupported'])),
+    }),
+    requestPermission: async () => ({ snapshot: { topics: {} }, outcomes: {} }),
+    subscribe: () => () => {},
+  },
+});
+assert.deepEqual(
+  await handler.request({
+    id: 'dist-3',
+    method: 'notifications.v2.getPermission',
+    payload: { topics: ['daily'] },
+  }),
+  { id: 'dist-3', ok: true, data: { topics: { daily: 'unsupported' } } },
+);
+const brokenAnswer = await handler.request({
+  id: 'dist-4',
+  method: 'notifications.v2.getCapabilities',
+  payload: { protocol: 'mpgd.notifications.v2' },
+});
+assert.equal(brokenAnswer.ok, false);
+assert.equal(brokenAnswer.error.code, 'NOTIFICATIONS_CONFIGURATION_REQUIRED');
+const unsupported = await handler.request({
+  id: 'dist-5',
+  method: 'notifications.v2.listLocal',
+  payload: { protocol: 'mpgd.notifications.v2' },
+});
+assert.equal(unsupported.ok, false);
+assert.equal(unsupported.error.code, 'NOTIFICATIONS_UNSUPPORTED');
 
 console.log('@mpgd/bridge Node ESM import passed.');

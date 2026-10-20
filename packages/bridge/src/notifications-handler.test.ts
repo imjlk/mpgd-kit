@@ -1,0 +1,496 @@
+import assert from 'node:assert/strict';
+
+import { PlatformOperationError } from '@mpgd/platform';
+import {
+  NotificationError,
+  notificationsProtocolVersion,
+  type NotificationEvent,
+  type NotificationProvider,
+} from '@mpgd/platform/notifications';
+
+import { validNotificationsV2Exchanges } from './fixtures';
+import type { BridgeNotificationsEvent, BridgeRequest, BridgeResponse } from './index';
+import { createNotificationsV2BridgeHandler } from './notifications';
+
+function request(method: string, payload: unknown, id = `${method}:test`): BridgeRequest {
+  return {
+    id,
+    method: method as BridgeRequest['method'],
+    payload,
+    meta: { target: 'web', appVersion: '1', buildId: 'test', sentAt: '2026-10-21T00:00:00Z' },
+  };
+}
+
+function errorOf(response: BridgeResponse): { readonly code: string; readonly message: string; readonly retryable: boolean } {
+  assert.equal(response.ok, false, JSON.stringify(response));
+  if (response.ok) {
+    throw new Error('unreachable');
+  }
+  return response.error;
+}
+
+const exchanges = Object.fromEntries(
+  validNotificationsV2Exchanges.map((exchange) => [exchange.method, exchange]),
+) as unknown as Record<string, { readonly payload: unknown; readonly result: Record<string, unknown> }>;
+
+function exchangeOf(method: string): { readonly payload: unknown; readonly result: Record<string, unknown> } {
+  const exchange = exchanges[method];
+  if (exchange === undefined) {
+    throw new Error(`No fixture for ${method}.`);
+  }
+  return exchange;
+}
+
+const protocol = { protocol: 'mpgd.notifications.v2' } as const;
+const capabilities = exchangeOf(
+  'notifications.v2.getCapabilities',
+).result['capabilities'] as Awaited<
+  ReturnType<NotificationProvider['getCapabilities']>
+>;
+
+/** A provider that answers every method with its fixture answer and records the calls. */
+function fullProvider(calls: string[] = []): NotificationProvider {
+  const answer = (method: string) => exchangeOf(method).result;
+  return {
+    provider: 'fcm',
+    async getCapabilities() {
+      calls.push('getCapabilities');
+      return capabilities;
+    },
+    async getPermission() {
+      calls.push('getPermission');
+      return answer('notifications.v2.getPermission') as never;
+    },
+    async requestPermission() {
+      calls.push('requestPermission');
+      return answer('notifications.v2.requestPermission') as never;
+    },
+    async revokePermission() {
+      calls.push('revokePermission');
+      return answer('notifications.v2.revokePermission') as never;
+    },
+    async register() {
+      calls.push('register');
+      return answer('notifications.v2.register')['registration'] as never;
+    },
+    async scheduleLocal() {
+      calls.push('scheduleLocal');
+      return answer('notifications.v2.scheduleLocal') as never;
+    },
+    async cancelLocal() {
+      calls.push('cancelLocal');
+    },
+    async listLocal() {
+      calls.push('listLocal');
+      return answer('notifications.v2.listLocal')['pending'] as never;
+    },
+    async openSettings() {
+      calls.push('openSettings');
+      return 'opened';
+    },
+    subscribe: () => () => {},
+  };
+}
+
+const minimal: NotificationProvider = {
+  provider: 'fixture',
+  getCapabilities: async () => capabilities,
+  getPermission: async ({ topics }) => ({
+    topics: Object.fromEntries(topics.map((topic) => [topic, 'unsupported' as const])),
+  }),
+  requestPermission: async () => ({ snapshot: { topics: {} }, outcomes: {} }),
+  subscribe: () => () => {},
+};
+
+// Every method answers its fixture answer, checked on the way out.
+{
+  const calls: string[] = [];
+  const handler = createNotificationsV2BridgeHandler({ provider: fullProvider(calls) });
+  for (const exchange of validNotificationsV2Exchanges) {
+    const response = await handler.request(request(exchange.method, exchange.payload));
+    assert.deepEqual(
+      response,
+      {
+        id: `${exchange.method}:test`,
+        ok: true,
+        data: exchange.method === 'notifications.v2.getCapabilities'
+          ? { protocolVersion: notificationsProtocolVersion, provider: 'fcm', capabilities }
+          : exchange.result,
+      },
+      exchange.method,
+    );
+  }
+  assert.deepEqual(calls, [
+    'getCapabilities',
+    'getPermission',
+    'requestPermission',
+    'revokePermission',
+    'register',
+    'scheduleLocal',
+    'cancelLocal',
+    'listLocal',
+    'openSettings',
+  ]);
+}
+
+// A method outside notifications v2, an inherited key included, answers UNSUPPORTED_METHOD.
+{
+  const handler = createNotificationsV2BridgeHandler({ provider: minimal });
+  for (const method of [
+    'storage.load',
+    'commerce.v2.getCapabilities',
+    'constructor',
+    'notifications.v2.unknown',
+  ]) {
+    assert.equal(
+      errorOf(await handler.request(request(method, {}))).code,
+      'UNSUPPORTED_METHOD',
+      method,
+    );
+  }
+}
+
+// A method the provider lacks answers NOTIFICATIONS_UNSUPPORTED; openSettings answers unavailable.
+{
+  const handler = createNotificationsV2BridgeHandler({ provider: minimal, label: 'Fixture' });
+  for (const method of [
+    'notifications.v2.revokePermission',
+    'notifications.v2.register',
+    'notifications.v2.scheduleLocal',
+    'notifications.v2.cancelLocal',
+    'notifications.v2.listLocal',
+  ]) {
+    const error = errorOf(await handler.request(request(method, exchangeOf(method).payload)));
+    assert.equal(error.code, 'NOTIFICATIONS_UNSUPPORTED', method);
+    assert.equal(error.retryable, false);
+    assert.equal(error.message, `The Fixture notifications provider does not implement ${method}.`);
+  }
+  assert.deepEqual(await handler.request(request('notifications.v2.openSettings', protocol)), {
+    id: 'notifications.v2.openSettings:test',
+    ok: true,
+    data: { status: 'unavailable' },
+  });
+  // Without a label the message names no host.
+  const unlabelled = createNotificationsV2BridgeHandler({ provider: minimal });
+  assert.equal(
+    errorOf(await unlabelled.request(request('notifications.v2.listLocal', protocol))).message,
+    'The notifications provider does not implement notifications.v2.listLocal.',
+  );
+}
+
+// registerOptional answers no address for a provider without register, and only then.
+{
+  const optional = createNotificationsV2BridgeHandler({
+    provider: minimal,
+    registerOptional: true,
+  });
+  assert.deepEqual(await optional.request(request('notifications.v2.register', protocol)), {
+    id: 'notifications.v2.register:test',
+    ok: true,
+    data: { registration: null },
+  });
+  // The payload is still checked first.
+  assert.equal(
+    errorOf(await optional.request(request('notifications.v2.register', {}))).code,
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  // A provider that has register is called, and its answer is still checked.
+  const broken = createNotificationsV2BridgeHandler({
+    provider: { ...minimal, register: async () => undefined as never },
+    registerOptional: true,
+  });
+  assert.equal(
+    errorOf(await broken.request(request('notifications.v2.register', protocol))).code,
+    'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+  );
+}
+
+// A payload the contract rejects never reaches the provider and is not reported.
+{
+  const calls: string[] = [];
+  const reported: unknown[] = [];
+  const handler = createNotificationsV2BridgeHandler({
+    provider: fullProvider(calls),
+    onError: (error) => reported.push(error),
+  });
+  for (const [method, payload] of [
+    ['notifications.v2.getCapabilities', {}],
+    ['notifications.v2.getPermission', { topics: 'a' }],
+    ['notifications.v2.getPermission', { topics: ['a'], extra: true }],
+    ['notifications.v2.requestPermission', { topics: [] }],
+    ['notifications.v2.revokePermission', null],
+    ['notifications.v2.register', { protocol: 'mpgd.commerce.v2' }],
+    [
+      'notifications.v2.scheduleLocal',
+      {
+        ...(exchangeOf('notifications.v2.scheduleLocal').payload as object),
+        route: 'https://evil.example',
+      },
+    ],
+    ['notifications.v2.cancelLocal', {}],
+    ['notifications.v2.listLocal', undefined],
+    ['notifications.v2.openSettings', []],
+  ] as const) {
+    const error = errorOf(await handler.request(request(method, payload)));
+    assert.equal(error.code, 'NOTIFICATIONS_INVALID_INPUT', method);
+    assert.equal(error.retryable, false);
+    assert.match(
+      error.message,
+      new RegExp(`^${method.replaceAll('.', '\\.')} payload is invalid: `, 'u'),
+    );
+  }
+  assert.deepEqual(calls, []);
+  assert.deepEqual(reported, []);
+}
+
+// An answer the contract rejects is NOTIFICATIONS_CONFIGURATION_REQUIRED, not retryable, and reported.
+{
+  const reported: string[] = [];
+  const handler = createNotificationsV2BridgeHandler({
+    provider: {
+      ...minimal,
+      getPermission: async () => ({ topics: { a: 'maybe' as never } }),
+      openSettings: async () => undefined as never,
+      getCapabilities: async () => ({ ...capabilities, availability: 'sometimes' as never }),
+    },
+    label: 'Fixture',
+    onError: (_error, { method }) => reported.push(method),
+  });
+  for (const [method, payload] of [
+    ['notifications.v2.getPermission', { topics: ['a'] }],
+    ['notifications.v2.openSettings', protocol],
+    ['notifications.v2.getCapabilities', protocol],
+  ] as const) {
+    const error = errorOf(await handler.request(request(method, payload)));
+    assert.equal(error.code, 'NOTIFICATIONS_CONFIGURATION_REQUIRED', method);
+    assert.equal(error.retryable, false);
+    assert.match(
+      error.message,
+      new RegExp(
+        `^The Fixture notifications provider answered ${method.replaceAll('.', '\\.')} with invalid data: `,
+        'u',
+      ),
+    );
+  }
+  assert.deepEqual(reported, [
+    'notifications.v2.getPermission',
+    'notifications.v2.openSettings',
+    'notifications.v2.getCapabilities',
+  ]);
+}
+
+// Failures: a NotificationError keeps its code, flag, and a readable host code; others are normalized.
+{
+  let failure: unknown;
+  const handler = createNotificationsV2BridgeHandler({
+    provider: {
+      ...minimal,
+      requestPermission: async () => {
+        throw failure;
+      },
+    },
+  });
+  const answer = async (error: unknown) => {
+    failure = error;
+    return errorOf(
+      await handler.request(request('notifications.v2.requestPermission', { topics: ['a'] })),
+    );
+  };
+  assert.deepEqual(
+    await answer(new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', { message: 'refused', hostCode: 'HOST_1' })),
+    {
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      message: 'refused (host code HOST_1)',
+      retryable: false,
+    },
+  );
+  // A host code outside the pattern is left out of the message.
+  for (const hostCode of ['bad code (x)', '', 'x'.repeat(129), 'CODE)\n(host code FORGED']) {
+    assert.deepEqual(
+      await answer(new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', { message: 'refused', hostCode })),
+      { code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', message: 'refused', retryable: false },
+      JSON.stringify(hostCode),
+    );
+  }
+  assert.deepEqual(
+    await answer(new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: 'busy', retryable: false })),
+    { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', message: 'busy', retryable: false },
+  );
+  // A PlatformOperationError keeps a notifications code and its flag.
+  assert.deepEqual(
+    await answer(new PlatformOperationError({ code: 'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED', message: 'old host' })),
+    { code: 'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED', message: 'old host', retryable: false },
+  );
+  // Any other code is temporarily unavailable, with its flag.
+  for (const retryable of [true, false]) {
+    assert.deepEqual(
+      await answer(new PlatformOperationError({ code: 'HOST_SOMETHING', message: 'gone', retryable })),
+      {
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        message: 'notifications.v2.requestPermission failed: gone',
+        retryable,
+      },
+    );
+  }
+  // Anything else is a retryable host failure.
+  assert.deepEqual(await answer(new Error('boom')), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.v2.requestPermission failed: boom',
+    retryable: true,
+  });
+  assert.deepEqual(await answer('text'), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.v2.requestPermission failed: text',
+    retryable: true,
+  });
+}
+
+// unexpectedFailureMessage keeps an unnormalized failure's text on the host; onError sees it.
+{
+  const reported: { readonly method: string; readonly error: unknown }[] = [];
+  const handler = createNotificationsV2BridgeHandler({
+    provider: {
+      ...minimal,
+      getPermission: async () => {
+        throw new Error('redis://internal-host:6379 timed out');
+      },
+      requestPermission: async () => {
+        throw new PlatformOperationError({
+          code: 'CONTEXT_FAILED',
+          message: 'no context',
+          retryable: false,
+        });
+      },
+    },
+    unexpectedFailureMessage: (method) => `${method} failed on the host.`,
+    onError: (error, { method }) => reported.push({ method, error }),
+  });
+  const response = await handler.request(
+    request('notifications.v2.getPermission', { topics: ['a'] }),
+  );
+  assert.deepEqual(errorOf(response), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.v2.getPermission failed on the host.',
+    retryable: true,
+  });
+  assert.doesNotMatch(JSON.stringify(response), /internal-host/u);
+  // A PlatformOperationError is the provider's own normalized failure and keeps its message.
+  assert.deepEqual(
+    errorOf(await handler.request(request('notifications.v2.requestPermission', { topics: ['a'] }))),
+    {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: no context',
+      retryable: false,
+    },
+  );
+  assert.equal(reported.length, 2);
+  assert.equal(reported[0]?.method, 'notifications.v2.getPermission');
+  assert.match(String(reported[0]?.error), /internal-host/u);
+  // An unsupported method and a method outside v2 are reported only when they are failures the handler answers.
+  await handler.request(request('notifications.v2.listLocal', protocol));
+  await handler.request(request('storage.load', {}));
+  assert.deepEqual(
+    reported.map((entry) => entry.method),
+    [
+      'notifications.v2.getPermission',
+      'notifications.v2.requestPermission',
+      'notifications.v2.listLocal',
+    ],
+  );
+}
+
+// A hook that throws or rejects changes nothing.
+{
+  for (const onError of [
+    () => {
+      throw new Error('log sink down');
+    },
+    (() => Promise.reject(new Error('log sink down'))) as unknown as () => void,
+  ]) {
+    const handler = createNotificationsV2BridgeHandler({
+      provider: {
+        ...minimal,
+        getPermission: async () => {
+          throw new Error('boom');
+        },
+      },
+      onError,
+    });
+    assert.equal(
+      errorOf(await handler.request(request('notifications.v2.getPermission', { topics: ['a'] }))).code,
+      'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    );
+  }
+}
+
+// A provider whose methods read `this` is called on itself.
+{
+  class Provider implements NotificationProvider {
+    readonly provider = 'fixture';
+    private readonly pending = [{ key: 'k', topic: 't', fireAt: '2026-10-21T09:00:00+09:00' }];
+    async getCapabilities() {
+      return capabilities;
+    }
+    async getPermission() {
+      return { topics: {} };
+    }
+    async requestPermission() {
+      return { snapshot: { topics: {} }, outcomes: {} };
+    }
+    async listLocal() {
+      return this.pending;
+    }
+    subscribe() {
+      return () => {};
+    }
+  }
+  const handler = createNotificationsV2BridgeHandler({ provider: new Provider() });
+  assert.deepEqual(await handler.request(request('notifications.v2.listLocal', protocol)), {
+    id: 'notifications.v2.listLocal:test',
+    ok: true,
+    data: { pending: [{ key: 'k', topic: 't', fireAt: '2026-10-21T09:00:00+09:00' }] },
+  });
+}
+
+// Events: numbered per handler from 0, the provider attached for the first listener only.
+{
+  const emitters: ((event: NotificationEvent) => void)[] = [];
+  let subscribes = 0;
+  const provider: NotificationProvider = {
+    ...minimal,
+    subscribe(listener) {
+      subscribes += 1;
+      emitters.push(listener);
+      // A buffered cold open reaches the first listener as it attaches.
+      listener({ type: 'opened', channel: 'remote', source: 'cold', route: '/' });
+      return () => {};
+    },
+  };
+  const handler = createNotificationsV2BridgeHandler({ provider });
+  assert.equal(subscribes, 0);
+  const first: BridgeNotificationsEvent[] = [];
+  const second: BridgeNotificationsEvent[] = [];
+  handler.subscribe((envelope) => first.push(envelope));
+  handler.subscribe((envelope) => second.push(envelope));
+  assert.equal(subscribes, 1);
+  emitters[0]?.({ type: 'received', channel: 'local' });
+  assert.deepEqual(first, [
+    {
+      protocol: 'mpgd.notifications.v2',
+      sequence: 0,
+      event: { type: 'opened', channel: 'remote', source: 'cold', route: '/' },
+    },
+    {
+      protocol: 'mpgd.notifications.v2',
+      sequence: 1,
+      event: { type: 'received', channel: 'local' },
+    },
+  ]);
+  assert.deepEqual(second, [first[1]]);
+  // Another handler is another session, numbered from 0 again.
+  const other: BridgeNotificationsEvent[] = [];
+  createNotificationsV2BridgeHandler({ provider }).subscribe((envelope) => other.push(envelope));
+  assert.equal(other[0]?.sequence, 0);
+}
+
+console.log('notifications v2 bridge handler tests passed');
