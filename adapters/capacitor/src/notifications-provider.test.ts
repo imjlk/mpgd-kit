@@ -445,6 +445,78 @@ describe('Capacitor notifications provider: endpoints', () => {
     });
   });
 
+  it('publishes the newest token when permission corrections overlap', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    let calls = 0;
+    let releaseOlder: ((state: { readonly display: 'denied' }) => void) | undefined;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      checkPermissions: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return { display: 'granted' };
+        }
+        if (calls === 2) {
+          return new Promise((resolve) => {
+            releaseOlder = resolve;
+          });
+        }
+        return { display: 'denied' };
+      },
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android',
+      topics,
+      push: sdks.push!,
+      local,
+      app: null,
+      onError: () => undefined,
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await settle();
+    await provider.getPermission({ topics: [] });
+    sdks.emitPush('tokenReceived', { token: 'tok-older' });
+    await settle();
+    expect(releaseOlder).toBeDefined();
+    sdks.emitPush('tokenReceived', { token: 'tok-newer' });
+    await settle();
+    releaseOlder?.({ display: 'denied' });
+    await settle();
+    const endpoints = events.filter((event) => event.type === 'endpoint-changed');
+    expect(endpoints.at(-1)).toMatchObject({
+      type: 'endpoint-changed',
+      registration: {
+        address: { kind: 'fcm-token', value: 'tok-newer', permission: 'blocked' },
+      },
+    });
+    expect(endpoints.some((event) => event.type === 'endpoint-changed'
+      && event.registration.address.kind === 'fcm-token'
+      && event.registration.address.value === 'tok-older'
+      && event.registration.address.permission === 'blocked')).toBe(false);
+  });
+
+  it('is configuration-required on Android when a push-only shell cannot create channels', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android', local: false });
+    const { createChannel: _createChannel, ...push } = sdks.push!;
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android',
+      topics: topics.filter((topic) => topic.purpose !== 'advertising'),
+      push,
+      app: null,
+    });
+    expect((await provider.getCapabilities()).availability).toBe('configuration-required');
+    await expect(provider.register?.()).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      message: expect.stringContaining('createChannel'),
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdks.emitPush('tokenReceived', { token: 'tok-1' });
+    await settle();
+    expect(events).toEqual([]);
+  });
+
   it('announces a rotated token with a fresh permission read, not the last one', async () => {
     const { provider, sdks } = setup();
     const events: NotificationEvent[] = [];
@@ -971,7 +1043,7 @@ describe('Capacitor notifications provider: local reminders', () => {
     expect((await provider.listLocal?.())?.length).toBe(63);
   });
 
-  it('omits Android rows whose fireAt is already past', async () => {
+  it('keeps a past Android alarm that is not in the shade, and omits one that is', async () => {
     const { provider, sdks } = setup();
     grant(sdks);
     await provider.scheduleLocal?.(reminder);
@@ -982,9 +1054,46 @@ describe('Capacitor notifications provider: local reminders', () => {
         mpgdTopic: 'energy-full',
         mpgdFireAt: '2020-01-01T00:00:00Z',
       },
+      delivered: true,
+    });
+    sdks.addStoredLocal({
+      id: 10,
+      extra: {
+        mpgdKey: 'doze',
+        mpgdTopic: 'energy-full',
+        mpgdFireAt: '2020-01-02T00:00:00Z',
+      },
+    });
+    const pending = await provider.listLocal?.();
+    expect(pending).toEqual([
+      { key: 'doze', topic: 'energy-full', fireAt: '2020-01-02T00:00:00Z' },
+      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' },
+    ]);
+    await provider.cancelLocal?.({ keys: pending?.map((entry) => entry.key) ?? [] });
+    expect(sdks.localOperations.filter((entry) => entry.op === 'cancel').map((entry) => entry.key))
+      .toEqual(['doze', 'energy']);
+    expect((await sdks.local!.getPending()).notifications.map((entry) => entry.id)).toEqual([9]);
+  });
+
+  it('keeps a past Android row when delivered notifications cannot be read', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    const { getDeliveredNotifications: _delivered, ...local } = sdks.local!;
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android',
+      topics,
+      local: local as LocalNotificationSdk,
+      app: null,
+    });
+    sdks.addStoredLocal({
+      id: 9,
+      extra: {
+        mpgdKey: 'doze',
+        mpgdTopic: 'energy-full',
+        mpgdFireAt: '2020-01-01T00:00:00Z',
+      },
     });
     expect(await provider.listLocal?.()).toEqual([
-      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' },
+      { key: 'doze', topic: 'energy-full', fireAt: '2020-01-01T00:00:00Z' },
     ]);
   });
 
@@ -998,8 +1107,42 @@ describe('Capacitor notifications provider: local reminders', () => {
     ]);
   });
 
-  it('restores an evicted reminder when iOS does not keep the new one pending', async () => {
+  it('confirms an iOS add that lands after the first few pending reads', async () => {
     const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    // Four misses: the old four-poll check would give up before the row appears.
+    sdks.delayNextIosAdd(4);
+    expect(await provider.scheduleLocal?.(reminder)).toEqual({ status: 'scheduled' });
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' },
+    ]);
+  });
+
+  it('does not treat the old pending row as a completed replacement', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    await provider.scheduleLocal?.(reminder);
+    sdks.holdNextIosAdd();
+    let settled = false;
+    const replacing = provider.scheduleLocal?.({
+      ...reminder,
+      fireAt: '2026-10-12T07:00:00Z',
+      body: 'Updated',
+    }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await settle();
+    expect(settled).toBe(false);
+    sdks.releaseIosAdds();
+    await expect(replacing).resolves.toEqual({ status: 'replaced' });
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T07:00:00Z' },
+    ]);
+  });
+
+  it('does not fail or restore when an iOS add is still unconfirmed', async () => {
+    const { provider, sdks } = setup({ platform: 'ios', scheduleConfirmBudgetMs: 0 });
     grant(sdks);
     for (let id = 1; id <= 63; id += 1) {
       sdks.addForeignPending(id);
@@ -1011,12 +1154,12 @@ describe('Capacitor notifications provider: local reminders', () => {
       route: '/far',
     });
     sdks.dropNextIosAdd();
-    await expect(provider.scheduleLocal?.({ ...reminder, key: 'near' })).rejects.toMatchObject({
-      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-    });
-    expect(await provider.listLocal?.()).toEqual([
-      { key: 'far', topic: 'energy-full', fireAt: '2026-10-20T00:00:00Z' },
-    ]);
+    await expect(provider.scheduleLocal?.({ ...reminder, key: 'near' }))
+      .resolves.toEqual({ status: 'scheduled' });
+    expect(await provider.listLocal?.()).toEqual([]);
+    expect(sdks.localOperations.filter((entry) => entry.op === 'cancel').map((entry) => entry.key))
+      .toEqual(['far']);
+    expect(sdks.scheduled.filter((entry) => entry.extra['mpgdKey'] === 'far')).toHaveLength(1);
   });
 });
 

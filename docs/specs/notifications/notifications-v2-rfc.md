@@ -1806,7 +1806,14 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   posts to `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose,
   and creating the provider throws when a channel would mix advertising with
   other topics. It creates the channels at start, because a push needs its
-  channel before it arrives, and tries again after a failure.
+  channel before it arrives, and tries again after a failure. A push-only
+  Android shell whose messaging plugin has no `createChannel` is
+  `configuration-required` when the catalog names a channel, so `register()`
+  does not hand the backend a token for a channel that cannot be created.
+  `listLocal` omits an Android row only when it is visible in the shade. A
+  past `fireAt` that is not delivered stays listed: Doze can defer an inexact
+  alarm past its time while the plugin still has it pending, and cancellation
+  reads `listLocal`.
 - **Opt-out action.** The provider registers the advertising opt-out action
   natively as the action type `mpgd-advertising` with the action
   `advertising-opt-out`, through `@capacitor/local-notifications`.

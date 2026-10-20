@@ -102,20 +102,24 @@ export interface FakeNotificationSdks extends NotificationConformanceHostActor {
   addForeignPending(id: number): void;
   /**
    * A stored local row, as Android `getPending` returns an already-fired
-   * one-shot. It is not a schedule call.
+   * one-shot. It is not a schedule call. `delivered` puts it in the shade.
    */
   addStoredLocal(entry: {
     readonly id: number;
     readonly title?: string;
     readonly body?: string;
     readonly extra: Readonly<Record<string, string>>;
+    readonly delivered?: boolean;
   }): void;
   /**
-   * The next iOS `schedule` resolves without inserting, and the row appears
-   * on the getPending call after the one that misses it (`center.add` has
-   * not finished when the plugin resolves).
+   * The next iOS `schedule` resolves without inserting. The row stays invisible
+   * for `misses` getPending calls (default 1), then the next one sees it.
    */
-  delayNextIosAdd(): void;
+  delayNextIosAdd(misses?: number): void;
+  /** The next iOS `schedule` stays invisible to getPending until `releaseIosAdds`. */
+  holdNextIosAdd(): void;
+  /** Makes a held iOS add visible to the next getPending. */
+  releaseIosAdds(): void;
   /** The next iOS `schedule` resolves and the row never becomes pending. */
   dropNextIosAdd(): void;
   /** Holds `createChannel` until `releaseChannels`. */
@@ -157,7 +161,12 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
   let tapCount = 0;
   let iosAddsToDelay = 0;
   let iosAddsToDrop = 0;
-  const deferredAdds: LocalNotificationSdkSchema[] = [];
+  let nextIosAddMisses = 1;
+  const deferredAdds: {
+    readonly notification: LocalNotificationSdkSchema;
+    missesLeft: number;
+  }[] = [];
+  const deliveredIds = new Set<number>();
   let channelHold: Promise<void> = Promise.resolve();
   let releaseChannelHold = (): void => undefined;
 
@@ -252,10 +261,11 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
         }
         if (input.platform === 'ios' && iosAddsToDelay > 0) {
           iosAddsToDelay -= 1;
-          deferredAdds.push(notification);
+          deferredAdds.push({ notification, missesLeft: nextIosAddMisses });
           continue;
         }
         pending.set(notification.id, notification);
+        deliveredIds.delete(notification.id);
       }
       return { notifications: notifications.map(({ id }) => ({ id })) };
     },
@@ -275,13 +285,22 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
     },
     async getPending() {
       await failure('local.getPending');
-      // A delayed iOS add is invisible to the getPending that races center.add,
-      // and visible to the next one.
+      // A delayed iOS add is invisible for its remaining misses. The call that
+      // exhausts them still returns the previous snapshot; the next one sees it.
       const visible = [...pending.values()];
-      for (const notification of deferredAdds) {
-        pending.set(notification.id, notification);
+      for (const deferred of deferredAdds) {
+        if (deferred.missesLeft > 0) {
+          deferred.missesLeft -= 1;
+        }
       }
-      deferredAdds.length = 0;
+      for (let index = deferredAdds.length - 1; index >= 0; index -= 1) {
+        const deferred = deferredAdds[index];
+        if (deferred !== undefined && deferred.missesLeft <= 0) {
+          pending.set(deferred.notification.id, deferred.notification);
+          deliveredIds.delete(deferred.notification.id);
+          deferredAdds.splice(index, 1);
+        }
+      }
       return {
         // As the plugin reports them: id, title, body, and extra.
         notifications: visible.map((entry) => ({
@@ -290,6 +309,10 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
           extra: { ...entry.extra },
         })),
       };
+    },
+    async getDeliveredNotifications() {
+      await failure('local.getDeliveredNotifications');
+      return { notifications: [...deliveredIds].map((id) => ({ id })) };
     },
     async createChannel(channel) {
       await channelHold;
@@ -378,10 +401,30 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
       pending.set(id, { id, extra: {} });
     },
     addStoredLocal(entry) {
-      pending.set(entry.id, { id: entry.id, extra: { ...entry.extra } });
+      pending.set(entry.id, {
+        id: entry.id,
+        extra: { ...entry.extra },
+        ...(entry.title === undefined ? {} : { title: entry.title }),
+        ...(entry.body === undefined ? {} : { body: entry.body }),
+      });
+      if (entry.delivered === true) {
+        deliveredIds.add(entry.id);
+      }
     },
-    delayNextIosAdd() {
+    delayNextIosAdd(misses = 1) {
       iosAddsToDelay += 1;
+      nextIosAddMisses = misses;
+    },
+    holdNextIosAdd() {
+      iosAddsToDelay += 1;
+      nextIosAddMisses = Number.POSITIVE_INFINITY;
+    },
+    releaseIosAdds() {
+      for (const deferred of deferredAdds) {
+        pending.set(deferred.notification.id, deferred.notification);
+        deliveredIds.delete(deferred.notification.id);
+      }
+      deferredAdds.length = 0;
     },
     dropNextIosAdd() {
       iosAddsToDrop += 1;

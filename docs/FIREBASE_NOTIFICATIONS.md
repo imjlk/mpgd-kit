@@ -60,6 +60,15 @@ initializer refuses a game or shell that lists it; remove it first.
    `mpgd-requested`, or `mpgd-advertising` by purpose). Advertising always
    has its own channel, so a player can turn it off in system settings. The
    starter names them in `src/platform/capacitorNotifications.ts`.
+   `register()` does not return a token until those channels exist. A
+   push-only shell whose messaging plugin has no `createChannel` is
+   `configuration-required` rather than announcing an address for channels
+   it cannot create.
+
+<!--
+@link ../adapters/capacitor/src/notifications-provider.ts#createCapacitorNotificationProvider register waits for Android channels and refuses a token when createChannel is absent.
+@evidence docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor A push needs its channel before it arrives.
+-->
 3. `SCHEDULE_EXACT_ALARM`: the local-notifications plugin adds it to the
    merged manifest, but reminders are inexact (Android 14 denies the
    permission to new installs, and Play restricts it to alarm and calendar

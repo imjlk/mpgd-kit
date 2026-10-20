@@ -126,6 +126,15 @@ export interface LocalNotificationSdk {
   schedule(options: { readonly notifications: LocalNotificationSdkSchema[] }): Promise<unknown>;
   cancel(options: { readonly notifications: { readonly id: number }[] }): Promise<void>;
   getPending(): Promise<{ readonly notifications: readonly LocalNotificationSdkEntry[] }>;
+  /**
+   * Notifications currently visible in the shade. Android `getPending` also
+   * keeps a fired one-shot in storage; a row here has fired. Absent on a
+   * partial fake, which then cannot tell that row from an alarm Doze has
+   * not delivered yet.
+   */
+  getDeliveredNotifications?(): Promise<{
+    readonly notifications: readonly { readonly id: number }[];
+  }>;
   createChannel(channel: NotificationSdkChannel): Promise<void>;
   /**
    * On iOS this sets the app's notification categories, which remote

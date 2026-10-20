@@ -209,7 +209,7 @@ const gateway = createCapacitorPlatformGateway({ ..., providers: [notifications]
 ```
 
 <!--
-@link src/notifications-provider.ts#createCapacitorNotificationProvider Android omits advertising from remote purposes, waits for channels before register, ignores a dismiss, and confirms an iOS schedule.
+@link src/notifications-provider.ts#createCapacitorNotificationProvider Android omits advertising from remote purposes, waits for channels before register, refuses a token when channels cannot be created, ignores a dismiss, confirms an iOS schedule by content, and keeps a Doze-deferred alarm visible to cancellation.
 @evidence ../../docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor An Android FCM notification message cannot carry the opt-out action, and a killed-app tap is only in connectionOptions.notificationResponse.
 -->
 Create it once, early in startup: it registers its native listeners when it
@@ -262,10 +262,14 @@ is created, which is how a cold-start open reaches it.
   `permission-required` without calling the plugin, whose own `schedule` would
   prompt on Android 13+.
   iOS `schedule` resolves before `center.add` finishes, so the provider
-  checks `getPending` for the id before it answers `scheduled` and restores
-  any reminder it evicted when the id is missing. Android `listLocal` omits
-  stored one-shots whose `fireAt` is already past: `getPending` keeps those
-  rows after they fire.
+  checks `getPending` for the reminder's key, `fireAt`, and route — not only
+  its id — and waits with a bounded backoff before it answers. An add still
+  missing when that wait ends is not a failure: `center.add` has no deadline,
+  and failing it would restore a reminder evicted to make room while the new
+  add may still be in flight. Android `listLocal` omits a stored row only
+  when `getDeliveredNotifications` shows it in the shade. A past `fireAt`
+  that is not delivered stays listed: Doze can defer an inexact alarm past
+  its time while it is still pending, and cancellation reads `listLocal`.
   - Reminders are inexact (`isExactNotification: false`; the plugin's default
     would open the exact-alarm settings screen) but may fire in Android's Doze
     mode (`allowWhileIdle: true`; Android lets such alarms fire about once per
@@ -275,15 +279,18 @@ is created, which is how a cold-start open reaches it.
     the topic's Android channel. Operations run one at a time, in call order.
   - iOS keeps at most 64 pending, so the provider keeps the nearest: at the
     ceiling it cancels the farthest of its reminders before it schedules a
-    nearer one, and puts the farthest back when that schedule fails. Android
-    declares no ceiling, but its alarm manager refuses an app with about 500
-    pending alarms.
+    nearer one, and puts the farthest back when that schedule is rejected.
+    An add the plugin accepted but that is not yet pending is not a rejection,
+    so the farthest is not put back then. Android declares no ceiling, but its
+    alarm manager refuses an app with about 500 pending alarms.
 - **Channels.** Each topic posts to its mapping's `channelId`, or to
   `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose
   (`capacitorNotificationChannelId`). Creating the provider throws when a
   channel would mix advertising with other topics, so a player can always turn
   advertising off in system settings. Name the channels with the `channels`
-  option.
+  option. A push-only Android shell whose messaging plugin has no
+  `createChannel` is `configuration-required` when the catalog names a
+  channel: `register()` throws and a token is not announced.
 - **Topics.** Only topics this target maps count. A topic the catalog does
   not declare, or declares without a mapping for the target, reads
   `unsupported`, answers `unavailable` to a request and `unsupported` to
