@@ -590,7 +590,7 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
           recipientKey: 'toss-user',
           agreementFailReasons: ['NOT_AGREED', reason],
         }),
-      /agreementFailReasons entries must be 1 to 1024 characters once trimmed/u,
+      /agreementFailReasons\[1\]: entries must be 1 to 1024 characters once trimmed/u,
     );
   }
   const { mtls: defaults, calls } = fakeMtls([success({ msgCount: 1 })]);

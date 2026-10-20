@@ -219,7 +219,8 @@ export function workerNotificationProviders(
         mtls: countingMtls(env.AIT_PARTNER_MTLS),
       });
     } catch (error) {
-      // The provider checks the base URL and the timeout range; name the setting they came from.
+      // The provider checks the base URL, the timeout range, and the agreement
+      // reasons; name the setting they came from.
       throw new Error(
         `MPGD_AIT_NOTIFICATIONS: ${error instanceof Error ? error.message : String(error)}`,
       );

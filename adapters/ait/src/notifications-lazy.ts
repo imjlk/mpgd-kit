@@ -32,8 +32,9 @@ const retryDelaysMs = [1_000, 4_000, 15_000];
  *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and the next call loads again.
  * - `subscribe` attaches to the bridge channel, through the bridge
  *   provider's own `subscribe` (which skips other protocols and drops an
- *   invalid envelope), only once the chunk has loaded. The host emits the launch's cold open to its first listener when
- *   that listener attaches, so nothing is missed, and the host claims the
+ *   invalid envelope), only once the chunk has loaded. The host emits the
+ *   launch's cold open to its first listener when that listener attaches,
+ *   so nothing is missed, and the host claims the
  *   launch for the event only when the event can be delivered: a game that
  *   unsubscribes first, or whose chunk never loads, leaves the launch to the
  *   launch intent. A subscriber waiting for a failed load attaches on the

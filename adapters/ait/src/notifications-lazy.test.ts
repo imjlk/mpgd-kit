@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { BridgeNotificationsEvent } from '@mpgd/bridge';
-import type { NotificationEvent } from '@mpgd/platform/notifications';
+import type { NotificationEvent, NotificationProvider } from '@mpgd/platform/notifications';
 
 import * as bridgeClient from './notifications-bridge.js';
 import {
@@ -121,6 +121,41 @@ describe('createLazyAitBridgeNotificationProvider', () => {
       topics: { a: 'unknown' },
     });
     expect(loader.calls).toBe(1);
+  });
+
+  it('subscribes through the one bridge provider its methods use', async () => {
+    const events = channel();
+    const created: NotificationProvider[] = [];
+    const subscribes: number[] = [];
+    const module: AitBridgeNotificationClientModule = {
+      createAitBridgeNotificationProvider(input) {
+        const bridged = bridgeClient.createAitBridgeNotificationProvider(input);
+        created.push(bridged);
+        return {
+          ...bridged,
+          subscribe(listener) {
+            subscribes.push(created.length);
+            return bridged.subscribe(listener);
+          },
+        };
+      },
+    };
+    const provider = createLazyAitBridgeNotificationProvider(
+      {
+        provider: 'apps-in-toss',
+        request: async () => ({ topics: { a: 'unknown' } }),
+        subscribe: (listener) => events.subscribe(listener),
+      },
+      { load: async () => module },
+    );
+    const seen: NotificationEvent[] = [];
+    provider.subscribe((event) => seen.push(event));
+    await expect(provider.getPermission({ topics: ['a'] })).resolves.toEqual({ topics: { a: 'unknown' } });
+    events.emit(opened('/d'));
+    expect(routes(seen)).toEqual(['/d']);
+    // One bridge provider serves both the methods and the subscription.
+    expect(created).toHaveLength(1);
+    expect(subscribes).toEqual([1]);
   });
 
   it('reads envelopes through the bridge provider: other protocols skipped, invalid ones dropped', async () => {

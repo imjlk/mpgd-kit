@@ -154,10 +154,12 @@ export interface CreateAitFunctionalMessageDeliveryProviderOptions {
   readonly agreementErrorCodes?: readonly string[];
   /**
    * `reachedFailReason` texts (trimmed) that mean the recipient has not
-   * agreed to the template. Each is 1 to 1,024 characters once trimmed: the
-   * provider reads at most 1,024 characters of a `reachedFailReason`, so a
-   * longer entry could never match, and an empty one would match a blank
-   * reason. The provider refuses either at creation.
+   * agreed to the template. Each is 1 to 1,024 characters (UTF-16 code
+   * units) once trimmed: the provider reads at most the first 1,024
+   * characters of a `reachedFailReason` and then trims it, so a longer entry
+   * could never match, and an empty one would match a blank reason. The
+   * provider refuses either at creation. A received reason with leading
+   * whitespace loses as much of its end to that cut.
    */
   readonly agreementFailReasons?: readonly string[];
   /** Further `FAIL` error codes that mean this recipient cannot receive the message. */
@@ -251,7 +253,9 @@ export function createAitFunctionalMessageDeliveryProvider(
   const agreementErrorCodes = new Set(options.agreementErrorCodes ?? []);
   const recipientErrorCodes = new Set(options.recipientErrorCodes ?? []);
   const agreementFailReasons = new Set(
-    (options.agreementFailReasons ?? []).map(readAgreementFailReason),
+    (options.agreementFailReasons ?? []).map((reason, index) =>
+      readAgreementFailReason(reason, index),
+    ),
   );
 
   // Documented codes come first (RFC "Delivery providers -> Apps in Toss"),
@@ -355,11 +359,11 @@ export function createAitFunctionalMessageDeliveryProvider(
 }
 
 /** One `agreementFailReasons` entry, trimmed, or a `TypeError` for one that could never match. */
-function readAgreementFailReason(reason: unknown): string {
+function readAgreementFailReason(reason: unknown, index: number): string {
   const trimmed = typeof reason === 'string' ? reason.trim() : '';
   if (trimmed.length === 0 || trimmed.length > maximumFailReasonLength) {
     throw new TypeError(
-      `agreementFailReasons entries must be 1 to ${maximumFailReasonLength} characters once trimmed: a reachedFailReason is read up to ${maximumFailReasonLength} characters, so a longer entry could never match and an empty one would match a blank reason.`,
+      `agreementFailReasons[${index}]: entries must be 1 to ${maximumFailReasonLength} characters once trimmed: a reachedFailReason is read up to ${maximumFailReasonLength} characters, so a longer entry could never match and an empty one would match a blank reason.`,
     );
   }
   return trimmed;
