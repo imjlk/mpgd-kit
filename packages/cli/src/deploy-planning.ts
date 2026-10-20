@@ -459,8 +459,8 @@ function assertGameOwnedNativePaths(
       );
     }
     const expanded = value
-      .replaceAll('${MPGD_GAME_ROOT}', root)
-      .replaceAll('${MPGD_GAME_APP_ROOT}', root);
+      .replaceAll('${MPGD_GAME_ROOT}', () => root)
+      .replaceAll('${MPGD_GAME_APP_ROOT}', () => root);
     const candidate = resolve(root, expanded);
     let ancestor = candidate;
     while (!existsSync(ancestor)) {

@@ -453,7 +453,7 @@ function migrateKnownRunner(source: string, template: string): string | undefine
     if (defaults.length !== 1) {
       return undefined;
     }
-    const rendered = template.replace("'__DEFAULT_KIT_PATH__'", JSON.stringify(defaults[0]));
+    const rendered = template.replace("'__DEFAULT_KIT_PATH__'", () => JSON.stringify(defaults[0]));
     const canonical = (value: unknown): string => JSON.stringify(value, (key, item: unknown) =>
       ['start', 'end', 'raw'].includes(key) ? undefined : item,
     );

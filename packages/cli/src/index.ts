@@ -3659,7 +3659,14 @@ function createGameApp(input: {
       content: file.content,
     });
 
-    return prepared === undefined ? [] : [{ ...file, content: renderTemplate(prepared, context) }];
+    return prepared === undefined
+      ? []
+      : [
+          {
+            ...file,
+            content: renderTemplate(prepared, context, file.relativePath),
+          },
+        ];
   });
 
   if (input.dryRun) {
@@ -3953,10 +3960,10 @@ function assertValidGameTitle(title: string): void {
     throw new Error('Game title cannot be empty.');
   }
 
-  if (/[\u0000-\u001f<>"'\\]/u.test(title)) {
-    throw new Error(
-      'Game title cannot contain control characters, quotes, backslashes, or angle brackets.',
-    );
+  // Quotes, backslashes, and `$` are allowed: JSON files and JS string literals
+  // escape them. `<` would break the generated HTML title.
+  if (/[\u0000-\u001f<>]/u.test(title)) {
+    throw new Error('Game title cannot contain control characters or angle brackets.');
   }
 }
 
@@ -3993,32 +4000,92 @@ interface TemplateFile {
   readonly content: string;
 }
 
+/**
+ * String replacements treat `$&`, `$'`, `` $` ``, and `$$` as patterns.
+ * A function replacer inserts `value` literally.
+ */
+function replaceLiteral(content: string, placeholder: string, value: string): string {
+  return content.replaceAll(placeholder, () => value);
+}
+
+/** Interior of a JSON string, without the surrounding quotes. */
+function jsonStringContents(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
+/**
+ * Placeholders substituted inside an existing JSON string. Structural
+ * fragments (`__TSCONFIG_EXTENDS_LINE__` and the workspace include/exclude
+ * lists) stay raw so their quotes remain JSON syntax.
+ */
+function jsonEscapedPlaceholder(placeholder: string): boolean {
+  return placeholder === '__GAME_TITLE__'
+    || placeholder === '__GAME_NAME__'
+    || placeholder === '__PACKAGE_NAME__'
+    || placeholder === '__DEVVIT_APP_NAME__'
+    || placeholder === '__DEFAULT_KIT_PATH__'
+    || placeholder === '__WORKSPACE_I18N_BUILD_PREFIX__'
+    || placeholder === '__TSCONFIG_ROOT_DIR__'
+    || placeholder === '__LEGAL_LAST_UPDATED__'
+    || placeholder === '__MPGD_DEPENDENCY_VERSION__'
+    || placeholder.startsWith('__MPGD_DEPENDENCY_VERSION_');
+}
+
+/** Interior of a single-quoted JS string. Backslash first, then quote. */
+function singleQuotedContents(value: string): string {
+  return value.replaceAll('\\', () => '\\\\').replaceAll("'", () => "\\'");
+}
+
 function renderTemplate(
   content: string,
   context: ReturnType<typeof createTemplateContext>,
+  relativePath: string,
 ): string {
-  let rendered = content
-    .replaceAll("from '@mpgd/cli/devvit'", `from ${context.devvitOutputPluginImport}`)
-    .replaceAll('__GAME_NAME__', context.gameName)
-    .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
-    .replaceAll('__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral)
-    .replaceAll('__GAME_TITLE__', context.gameTitle)
-    .replaceAll('__LEGAL_LAST_UPDATED__', context.legalLastUpdated)
-    .replaceAll('__PACKAGE_NAME__', context.packageName)
-    .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.defaultDependencyVersion)
-    .replaceAll('__TSCONFIG_EXTENDS_LINE__', context.tsconfigExtendsLine)
-    .replaceAll('__TSCONFIG_ROOT_DIR__', context.tsconfigRootDir)
-    .replaceAll('__TSCONFIG_WORKSPACE_INCLUDES__', context.tsconfigWorkspaceIncludes)
-    .replaceAll('__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes)
-    .replaceAll('__WORKSPACE_I18N_BUILD_PREFIX__', context.workspaceI18nBuildPrefix)
-    .replaceAll('__DEFAULT_KIT_PATH__', context.defaultKitPath)
-    .replaceAll('__RECOMMENDED_MATRIX_TARGETS__', context.recommendedMatrixTargets)
-    .replaceAll('__PNPM_WORKSPACE_KIT_PACKAGES__', context.pnpmWorkspaceKitPackages)
-    .replaceAll('__PASCAL_NAME__', context.pascalName)
-    .replaceAll('__CAMEL_NAME__', context.camelName);
+  // `.webmanifest` is JSON. Hosted PWA deploy and Microsoft Store submission parse it.
+  const jsonFile = relativePath.endsWith('.json') || relativePath.endsWith('.webmanifest');
+  const typescriptFile = relativePath.endsWith('.ts');
+  const insert = (placeholder: string, value: string): string => {
+    if (jsonFile && jsonEscapedPlaceholder(placeholder)) {
+      return jsonStringContents(value);
+    }
+    // Template titles sit in single quotes (`title: '__GAME_TITLE__'`).
+    if (typescriptFile && placeholder === '__GAME_TITLE__') {
+      return singleQuotedContents(value);
+    }
+    return value;
+  };
+  const pairs: ReadonlyArray<readonly [string, string]> = [
+    [`from '@mpgd/cli/devvit'`, `from ${context.devvitOutputPluginImport}`],
+    ['__GAME_NAME__', context.gameName],
+    ['__DEVVIT_APP_NAME__', context.devvitAppName],
+    // Longer than `__GAME_TITLE__`, so a title is not written into the literal name.
+    ['__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral],
+    ['__GAME_TITLE__', context.gameTitle],
+    ['__LEGAL_LAST_UPDATED__', context.legalLastUpdated],
+    ['__PACKAGE_NAME__', context.packageName],
+    ['__MPGD_DEPENDENCY_VERSION__', context.defaultDependencyVersion],
+    ['__TSCONFIG_EXTENDS_LINE__', context.tsconfigExtendsLine],
+    ['__TSCONFIG_ROOT_DIR__', context.tsconfigRootDir],
+    ['__TSCONFIG_WORKSPACE_INCLUDES__', context.tsconfigWorkspaceIncludes],
+    ['__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes],
+    ['__WORKSPACE_I18N_BUILD_PREFIX__', context.workspaceI18nBuildPrefix],
+    ['__DEFAULT_KIT_PATH__', context.defaultKitPath],
+    ['__RECOMMENDED_MATRIX_TARGETS__', context.recommendedMatrixTargets],
+    ['__PNPM_WORKSPACE_KIT_PACKAGES__', context.pnpmWorkspaceKitPackages],
+    ['__PASCAL_NAME__', context.pascalName],
+    ['__CAMEL_NAME__', context.camelName],
+  ];
+  let rendered = content;
+  for (const [placeholder, value] of pairs) {
+    rendered = replaceLiteral(rendered, placeholder, insert(placeholder, value));
+  }
 
   for (const replacement of context.mpgdDependencyVersionReplacements) {
-    rendered = rendered.replaceAll(replacement.placeholder, replacement.version);
+    rendered = replaceLiteral(
+      rendered,
+      replacement.placeholder,
+      insert(replacement.placeholder, replacement.version),
+    );
   }
 
   return rendered;
@@ -4170,8 +4237,8 @@ function resolveStandaloneNativeBuild(
     const candidate = path.resolve(
       gameRoot,
       configuredPath
-        .replaceAll('${MPGD_GAME_ROOT}', gameRoot)
-        .replaceAll('${MPGD_GAME_APP_ROOT}', gameRoot),
+        .replaceAll('${MPGD_GAME_ROOT}', () => gameRoot)
+        .replaceAll('${MPGD_GAME_APP_ROOT}', () => gameRoot),
     );
     let existingAncestor = candidate;
     while (!existsSync(existingAncestor)) {
@@ -4396,10 +4463,15 @@ function replaceTargetTokens(
   },
 ): unknown {
   if (typeof value === 'string') {
-    return value
-      .replaceAll('${MPGD_KIT_PATH}', context.kitPath)
-      .replaceAll('${MPGD_GAME_ROOT}', context.gameRoot)
-      .replaceAll('${MPGD_GAME_APP_ROOT}', context.gameRoot);
+    return replaceLiteral(
+      replaceLiteral(
+        replaceLiteral(value, '${MPGD_KIT_PATH}', context.kitPath),
+        '${MPGD_GAME_ROOT}',
+        context.gameRoot,
+      ),
+      '${MPGD_GAME_APP_ROOT}',
+      context.gameRoot,
+    );
   }
 
   if (Array.isArray(value)) {
