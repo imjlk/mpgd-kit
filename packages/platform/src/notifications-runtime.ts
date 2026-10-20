@@ -212,12 +212,14 @@ export interface CreateNotificationRuntimeInput {
    */
   readonly registryEntry?: NotificationDeliveryProviderEntry;
   /**
-   * Loads the registry entry at `start()` when `registryEntry` is absent, for
-   * example from the game-services Worker's `GET /providers`. Until it
-   * answers, calls run without the comparison. A load that fails is
-   * reported through `onError` and the runtime starts without the entry, so
-   * a backend it cannot reach does not turn notifications off; the next
-   * `start()` loads it again. An entry once loaded is kept.
+   * Loads the registry entry when `start()` runs without `registryEntry`,
+   * for example from the game-services Worker's `GET /providers`. The load
+   * runs in the background: `start()` does not wait for it, and calls run
+   * without the comparison until it answers. A load that fails is reported
+   * through `onError` and `runUntilIdle`, and the runtime goes on without the
+   * entry, so a backend it cannot reach does not turn notifications off;
+   * the next `start()` loads it again. An entry once loaded is kept for the
+   * runtime's life.
    */
   readonly loadRegistryEntry?: () => Promise<NotificationDeliveryProviderEntry | undefined>;
   /**
@@ -559,6 +561,8 @@ export function createNotificationRuntime(
   let configurationIssue: string | undefined;
   /** The entry `loadRegistryEntry` answered, kept across starts. */
   let loadedRegistryEntry: NotificationDeliveryProviderEntry | undefined;
+  /** The load in flight, so overlapping starts share one. */
+  let registryEntryLoad: Promise<void> | undefined;
   /** The provider's latest registration, from `register()` or `endpoint-changed`. */
   let latestRegistration: NotificationEndpointRegistration | undefined;
   const background = new Set<Promise<void>>();
@@ -1350,18 +1354,29 @@ export function createNotificationRuntime(
       unsubscribeProvider ??= provider.subscribe(onProviderEvent);
       unsubscribeAuthentication ??= backend.onAuthenticated(onAuthenticated);
       const capabilities = await provider.getCapabilities();
-      let entry = input.registryEntry ?? loadedRegistryEntry;
-      if (entry === undefined && input.loadRegistryEntry !== undefined) {
-        try {
-          entry = await input.loadRegistryEntry();
-          loadedRegistryEntry = entry;
-        } catch (error) {
-          fail(error);
-        }
+      const compare = (entry: NotificationDeliveryProviderEntry | undefined): void => {
+        configurationIssue = entry === undefined || !capabilities.remote.supported
+          ? undefined
+          : notificationRegistryMismatch(capabilities, entry);
+      };
+      const known = input.registryEntry ?? loadedRegistryEntry;
+      compare(known);
+      const load = input.loadRegistryEntry;
+      if (known === undefined && load !== undefined && registryEntryLoad === undefined) {
+        // In the background, so a backend that is slow or never answers holds
+        // up neither the start nor its reconciling; a failure is reported.
+        const loading = (async () => {
+          try {
+            const loaded = await load();
+            loadedRegistryEntry = loaded;
+            compare(loaded);
+          } finally {
+            registryEntryLoad = undefined;
+          }
+        })();
+        registryEntryLoad = loading;
+        track(loading);
       }
-      configurationIssue = entry === undefined || !capabilities.remote.supported
-        ? undefined
-        : notificationRegistryMismatch(capabilities, entry);
       // A backend that cannot answer does not fail the start; the next read reconciles.
       await settle(reconcileLocal());
       await settle(refreshRegistration(true));
