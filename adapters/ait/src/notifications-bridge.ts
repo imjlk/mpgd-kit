@@ -78,11 +78,11 @@ export interface CreateAitBridgeNotificationProviderInput {
  * protocol is ignored, and an invalid one is dropped with a warning.
  *
  * `getCapabilities` fails closed with `NOTIFICATIONS_CONFIGURATION_REQUIRED`
- * when the host serves another provider id or speaks another major version
- * of the notifications protocol than this game (`notificationsProtocolVersion`),
- * as the commerce evidence registry compares commerce protocol majors: the
- * host wrapper and the game are built separately, and a host on another
- * major may read the same payloads differently. The gateway then reports
+ * when the host serves another provider id or speaks a notifications
+ * protocol version this game's (`notificationsProtocolVersion`) is not
+ * compatible with (`isCompatibleNotificationsProtocolVersion`): the host
+ * wrapper and the game are built separately, and an incompatible host may
+ * read the same payloads differently. The gateway then reports
  * notifications as `configuration-required`.
  */
 export function createAitBridgeNotificationProvider(
@@ -116,8 +116,7 @@ export function createAitBridgeNotificationProvider(
           message: `The bridge serves notifications provider ${answer.provider}, not ${input.provider}.`,
         });
       }
-      const hostMajor = protocolMajorOf(answer.protocolVersion);
-      if (hostMajor === undefined || hostMajor !== protocolMajorOf(notificationsProtocolVersion)) {
+      if (!isCompatibleNotificationsProtocolVersion(answer.protocolVersion, notificationsProtocolVersion)) {
         throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
           message: `The bridge speaks notifications protocol ${
             answer.protocolVersion.slice(0, 64)
@@ -168,9 +167,37 @@ function readAitBridgeNotificationEvent(envelope: unknown): NotificationEvent | 
   }
 }
 
-/** The major version of a protocol version such as `2.0.0-draft.1`, or `undefined` for one without it. */
-function protocolMajorOf(version: string): string | undefined {
-  return /^(0|[1-9][0-9]*)\./u.exec(version)?.[1];
+/**
+ * Whether a host speaking notifications protocol `host` can serve a game
+ * speaking `game`, both semantic versions such as `2.0.0-draft.1`. While
+ * either is a pre-release, the draft contract can change between drafts, so
+ * the versions must be equal, or share the major and the whole pre-release
+ * tag (`draft.1`): `2.0.0-draft.1` does not serve `2.0.0-draft.2` or `2.0.0`.
+ * Between two releases, the major decides, as the commerce evidence registry
+ * compares commerce protocol versions. A version that is not a semantic
+ * version is never compatible.
+ */
+export function isCompatibleNotificationsProtocolVersion(host: string, game: string): boolean {
+  const hostVersion = parseProtocolVersion(host);
+  const gameVersion = parseProtocolVersion(game);
+  if (hostVersion === undefined || gameVersion === undefined) {
+    return false;
+  }
+  // Two releases have no pre-release tag, so this compares their majors;
+  // with a pre-release on either side, the tags must match too (an exact
+  // match has both).
+  return hostVersion.major === gameVersion.major && hostVersion.prerelease === gameVersion.prerelease;
+}
+
+const protocolVersionPattern =
+  /^(0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+
+function parseProtocolVersion(
+  version: string,
+): { readonly major: string; readonly prerelease: string | undefined } | undefined {
+  const match = protocolVersionPattern.exec(version);
+  const major = match?.[1];
+  return major === undefined ? undefined : { major, prerelease: match?.[2] };
 }
 
 function toNotificationError(error: unknown): NotificationError {

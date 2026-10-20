@@ -2,4 +2,4 @@
 npm/@mpgd/adapter-ait: patch (Fixed)
 ---
 
-The Apps in Toss game-side notifications provider fails closed when the host answers `notifications.v2.getCapabilities` with another major notifications protocol version than the game's `notificationsProtocolVersion` (or a version without a major): `getCapabilities` throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`, so the gateway reports notifications as `configuration-required`, as it already did for another provider id.
+The Apps in Toss game-side notifications provider fails closed when the host answers `notifications.v2.getCapabilities` with a notifications protocol version the game's `notificationsProtocolVersion` is not compatible with: while either is a pre-release (now `2.0.0-draft.1`), the host must share the major and the whole pre-release tag, so `2.0.0-draft.1` does not accept `2.0.0-draft.2` or `2.0.0`; between releases, the major decides; anything that is not a semantic version is refused. In that case `getCapabilities` throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`, so the gateway reports notifications as `configuration-required`, as it already did for another provider id.

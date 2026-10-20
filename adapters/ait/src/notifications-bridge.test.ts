@@ -22,6 +22,7 @@ import {
 import {
   createAitBridgeNotificationProvider,
   createAitNotificationsV2BridgeHandler,
+  isCompatibleNotificationsProtocolVersion,
 } from './notifications-bridge.js';
 import { createAitNotificationCapabilities } from './notifications-provider.js';
 
@@ -252,21 +253,60 @@ describe('createAitBridgeNotificationProvider', () => {
     })).getCapabilities())).resolves.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
   });
 
-  it('fails closed on a host that speaks another major notifications protocol version', async () => {
+  it('fails closed on a host whose notifications protocol version this game cannot use', async () => {
     const capabilitiesAt = (protocolVersion: string) => answering(() => ({
       protocolVersion,
       provider: 'apps-in-toss',
       capabilities: createAitNotificationCapabilities(),
     })).getCapabilities();
-    for (const compatible of ['2.0.0-draft.1', '2.0.0', '2.3.1']) {
+    // The game speaks 2.0.0-draft.1: only the same draft of major 2 serves it.
+    for (const compatible of ['2.0.0-draft.1', '2.1.0-draft.1', '2.0.0-draft.1+build.7']) {
       await expect(capabilitiesAt(compatible)).resolves.toEqual(createAitNotificationCapabilities());
     }
-    for (const incompatible of ['3.0.0', '1.9.0', '20.0.0', '02.0.0', 'v2.0.0', '2', 'draft']) {
+    for (const incompatible of [
+      '2.0.0-draft.2',
+      '2.0.0',
+      '2.3.1',
+      '2.0.0-draft',
+      '3.0.0-draft.1',
+      '02.0.0-draft.1',
+      'v2.0.0-draft.1',
+      '2',
+      'draft',
+    ]) {
       await expect(failureOf(capabilitiesAt(incompatible))).resolves.toMatchObject({
         code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
         retryable: false,
         message: expect.stringContaining(`notifications protocol ${incompatible};`),
       });
+    }
+  });
+
+  it('compares pre-release protocol versions exactly by tag and releases by major', () => {
+    const cases: readonly (readonly [string, string, boolean])[] = [
+      // Draft against draft: the same tag on the same major only.
+      ['2.0.0-draft.1', '2.0.0-draft.1', true],
+      ['2.0.0-draft.1', '2.0.0-draft.2', false],
+      ['2.0.0-draft.2', '2.0.0-draft.1', false],
+      ['2.4.0-draft.1', '2.0.0-draft.1', true],
+      ['3.0.0-draft.1', '2.0.0-draft.1', false],
+      // Draft against final, either way round.
+      ['2.0.0-draft.1', '2.0.0', false],
+      ['2.0.0', '2.0.0-draft.1', false],
+      ['2.0.0-rc.1', '2.0.0', false],
+      // Final against final: the major decides.
+      ['2.0.0', '2.0.0', true],
+      ['2.3.1', '2.0.0', true],
+      ['2.0.0', '2.9.4', true],
+      ['3.0.0', '2.0.0', false],
+      ['2.0.0+host.5', '2.0.0', true],
+      // Not semantic versions.
+      ['2.0', '2.0.0', false],
+      ['2.0.0', 'latest', false],
+      ['', '2.0.0', false],
+    ];
+    for (const [host, game, compatible] of cases) {
+      expect(isCompatibleNotificationsProtocolVersion(host, game), `${host} for ${game}`).toBe(compatible);
     }
   });
 

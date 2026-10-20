@@ -2243,12 +2243,17 @@ Other rules the profiles encode:
     Devvit server bridge exposes none.
 - **Protocol version.** `getCapabilities` answers `protocolVersion`, the
   host's `notificationsProtocolVersion`. The Apps in Toss client, whose host
-  wrapper is built separately from the game, refuses a host on another major
-  version, or one without a numeric major, with
-  `NOTIFICATIONS_CONFIGURATION_REQUIRED`, as it refuses a host that serves
-  another provider id; the gateway then reports `configuration-required`.
-  The in-process Capacitor bridge and the Devvit client, built with their
-  hosts, do not check the major (the Devvit client checks the provider id). Like the provider-id check, it guards
+  wrapper is built separately from the game, refuses an incompatible host
+  with `NOTIFICATIONS_CONFIGURATION_REQUIRED`, as it refuses a host that
+  serves another provider id; the gateway then reports
+  `configuration-required`. While either version is a pre-release (the
+  draft is `2.0.0-draft.1`), a compatible host shares the major and the whole
+  pre-release tag, because a draft can change between drafts: `draft.1` does
+  not serve `draft.2` or the release. Between releases, the major decides. A
+  version that is not a semantic version is incompatible. The in-process
+  Capacitor bridge and the Devvit client, built with their hosts, do not
+  check the version (the Devvit client checks the provider id). Like the
+  provider-id check, the version check guards
   `getCapabilities`, the read behind `PlatformCapabilities.notifications`;
   it does not refuse the other methods.
 - **What N3 landed.** When N3 landed no transport served v2; P1–P3 add the
@@ -2629,8 +2634,8 @@ in Toss fixes.
     and retryable flag, and an unexpected failure shaped like a platform
     failure (a platform `code` and a boolean `retryable`) keeps its flag, so
     its `retryable: false` is no longer made retryable.
-- The Apps in Toss game-side client fails closed on a host on another
-  notifications protocol major, and its lazy chunk reads events through the
+- The Apps in Toss game-side client fails closed on a host whose
+  notifications protocol version is incompatible (above), and its lazy chunk reads events through the
   bridge provider instead of a second copy of the envelope filter.
 - The Apps in Toss functional-message provider refuses an
   `agreementFailReasons` entry that is empty or longer than 1,024 characters
