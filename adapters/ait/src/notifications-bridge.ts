@@ -17,6 +17,7 @@ import {
   NotificationError,
   notificationsProtocol,
   notificationsProtocolVersion,
+  type NotificationCapabilities,
   type NotificationEvent,
   type NotificationProvider,
   type NotificationProviderId,
@@ -77,13 +78,26 @@ export interface CreateAitBridgeNotificationProviderInput {
  * otherwise. An event envelope of another
  * protocol is ignored, and an invalid one is dropped with a warning.
  *
- * `getCapabilities` fails closed with `NOTIFICATIONS_CONFIGURATION_REQUIRED`
- * when the host serves another provider id or speaks a notifications
- * protocol version this game's (`notificationsProtocolVersion`) is not
- * compatible with (`isCompatibleNotificationsProtocolVersion`): the host
+ * The host must be one this game can use: it serves `input.provider` and a
+ * notifications protocol version this game's (`notificationsProtocolVersion`)
+ * is compatible with (`isCompatibleNotificationsProtocolVersion`). The host
  * wrapper and the game are built separately, and an incompatible host may
- * read the same payloads differently. The gateway then reports
- * notifications as `configuration-required`.
+ * read the same payloads differently, so the provider fails closed:
+ *
+ * - The verdict comes from a capability read. `getCapabilities` reads and
+ *   judges every time; any other method, before the first verdict, reads
+ *   once first (concurrent calls share that read). A read that fails, or an
+ *   answer that breaks the contract, gives no verdict: the method rejects
+ *   with that failure, and the next call reads again.
+ * - Once a host is judged incompatible, every method rejects with
+ *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`, `getCapabilities` included, so
+ *   the gateway reports notifications as `configuration-required`.
+ * - `subscribe` is synchronous and cannot wait for a read. With no verdict
+ *   yet it attaches at once and starts a read, because the host hands its
+ *   buffered cold open to its first listener when that listener attaches;
+ *   if the read then finds the host incompatible, every subscription is
+ *   detached and receives nothing more. With an incompatible verdict,
+ *   `subscribe` does not attach at all.
  */
 export function createAitBridgeNotificationProvider(
   input: CreateAitBridgeNotificationProviderInput,
@@ -107,41 +121,115 @@ export function createAitBridgeNotificationProvider(
       });
     }
   };
+
+  /** `undefined` until a read judges the host; then compatible, or the reason it is not. */
+  let verdict: { readonly compatible: true } | { readonly compatible: false; readonly message: string } | undefined;
+  let reading: Promise<NotificationCapabilities> | undefined;
+  /** Detaches every live subscription; called when the host is judged incompatible. */
+  const subscriptions = new Set<() => void>();
+  const incompatible = (message: string): NotificationError =>
+    new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', { message });
+  const judge = (answer: BridgeNotificationsV2Result<'notifications.v2.getCapabilities'>): void => {
+    let message: string | undefined;
+    if (answer.provider !== input.provider) {
+      message = `The bridge serves notifications provider ${answer.provider}, not ${input.provider}.`;
+    } else if (!isCompatibleNotificationsProtocolVersion(
+      answer.protocolVersion,
+      notificationsProtocolVersion,
+    )) {
+      message = `The bridge speaks notifications protocol ${
+        answer.protocolVersion.slice(0, 64)
+      }; this game speaks ${notificationsProtocolVersion}.`;
+    }
+    if (message === undefined) {
+      verdict = { compatible: true };
+      return;
+    }
+    verdict = { compatible: false, message };
+    const detaches = [...subscriptions];
+    subscriptions.clear();
+    for (const detach of detaches) {
+      try {
+        detach();
+      } catch (error) {
+        console.warn('AIT notifications subscription could not detach.', error);
+      }
+    }
+  };
+  /** One capability read, shared by concurrent callers; a failure is not a verdict. */
+  const read = (): Promise<NotificationCapabilities> => {
+    reading ??= (async () => {
+      try {
+        const answer = await send('notifications.v2.getCapabilities', { protocol: notificationsProtocol });
+        judge(answer);
+        if (verdict?.compatible === false) {
+          throw incompatible(verdict.message);
+        }
+        return answer.capabilities;
+      } finally {
+        reading = undefined;
+      }
+    })();
+    return reading;
+  };
+  /** Resolves when the host is known to be compatible; rejects otherwise. */
+  const ready = async (): Promise<void> => {
+    if (verdict === undefined) {
+      await read();
+    } else if (!verdict.compatible) {
+      throw incompatible(verdict.message);
+    }
+  };
+  const call = async <TResult>(run: () => Promise<TResult>): Promise<TResult> => {
+    await ready();
+    return run();
+  };
+
   return {
     provider: input.provider,
     async getCapabilities() {
-      const answer = await send('notifications.v2.getCapabilities', { protocol: notificationsProtocol });
-      if (answer.provider !== input.provider) {
-        throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-          message: `The bridge serves notifications provider ${answer.provider}, not ${input.provider}.`,
-        });
+      if (verdict?.compatible === false) {
+        throw incompatible(verdict.message);
       }
-      if (!isCompatibleNotificationsProtocolVersion(answer.protocolVersion, notificationsProtocolVersion)) {
-        throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-          message: `The bridge speaks notifications protocol ${
-            answer.protocolVersion.slice(0, 64)
-          }; this game speaks ${notificationsProtocolVersion}.`,
-        });
-      }
-      return answer.capabilities;
+      return read();
     },
-    getPermission: (request) => send('notifications.v2.getPermission', request),
-    requestPermission: (request) => send('notifications.v2.requestPermission', request),
-    async register() {
-      return (await send('notifications.v2.register', { protocol: notificationsProtocol }))
-        .registration;
-    },
-    async openSettings() {
-      return (await send('notifications.v2.openSettings', { protocol: notificationsProtocol }))
-        .status;
-    },
+    getPermission: (request) => call(() => send('notifications.v2.getPermission', request)),
+    requestPermission: (request) => call(() => send('notifications.v2.requestPermission', request)),
+    register: () =>
+      call(async () =>
+        (await send('notifications.v2.register', { protocol: notificationsProtocol })).registration),
+    openSettings: () =>
+      call(async () => (await send('notifications.v2.openSettings', { protocol: notificationsProtocol })).status),
     subscribe(listener) {
-      return input.subscribe((envelope) => {
+      if (verdict?.compatible === false) {
+        console.warn(`AIT notifications events are not attached: ${verdict.message}`);
+        return () => {};
+      }
+      let closed = false;
+      const unsubscribe = input.subscribe((envelope) => {
+        if (closed) {
+          return;
+        }
         const event = readAitBridgeNotificationEvent(envelope);
         if (event !== undefined) {
           listener(event);
         }
       });
+      const detach = (): void => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        subscriptions.delete(detach);
+        unsubscribe();
+      };
+      subscriptions.add(detach);
+      if (verdict === undefined) {
+        // A failed read leaves the subscription attached and is read again
+        // by the next call; only an incompatible verdict detaches it.
+        void read().catch(() => {});
+      }
+      return detach;
     },
   };
 }

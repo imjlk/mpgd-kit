@@ -4,10 +4,26 @@ import type { BridgeNotificationsEvent } from '@mpgd/bridge';
 import type { NotificationEvent, NotificationProvider } from '@mpgd/platform/notifications';
 
 import * as bridgeClient from './notifications-bridge.js';
+import { createAitNotificationCapabilities } from './notifications-provider.js';
 import {
   createLazyAitBridgeNotificationProvider,
   type AitBridgeNotificationClientModule,
 } from './notifications-lazy.js';
+
+/**
+ * A host that answers the capability read as a compatible Apps in Toss host
+ * (the bridge provider reads it before its first other method) and every
+ * other method with `data`.
+ */
+function answering(data: unknown) {
+  return async (method: string): Promise<unknown> => method === 'notifications.v2.getCapabilities'
+    ? {
+        protocolVersion: '2.0.0-draft.1',
+        provider: 'apps-in-toss',
+        capabilities: createAitNotificationCapabilities(),
+      }
+    : data;
+}
 
 // Every test injects the loader, so nothing here waits on a real dynamic
 // import or on wall-clock time: each load is a promise the test settles.
@@ -98,7 +114,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: { a: 'unknown' } }),
+        request: answering({ topics: { a: 'unknown' } }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -143,7 +159,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: { a: 'unknown' } }),
+        request: answering({ topics: { a: 'unknown' } }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: async () => module },
@@ -188,7 +204,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: (listener) => {
           subscribeCalls += 1;
           if (subscribeCalls === 2) {
@@ -236,7 +252,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -256,7 +272,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: { a: 'unknown' } }),
+        request: answering({ topics: { a: 'unknown' } }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -288,7 +304,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -312,7 +328,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const quiet = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: () => () => {},
       },
       { load: loader.load },

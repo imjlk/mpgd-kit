@@ -282,6 +282,169 @@ describe('createAitBridgeNotificationProvider', () => {
     }
   });
 
+  describe('compatibility verdict', () => {
+    const capabilitiesAnswer = (protocolVersion = '2.0.0-draft.1', provider = 'apps-in-toss') => ({
+      protocolVersion,
+      provider,
+      capabilities: createAitNotificationCapabilities(),
+    });
+    /** A host whose capability answer the test sets, recording each request and each listener. */
+    function host(capabilities: () => unknown) {
+      const methods: string[] = [];
+      const listeners = new Set<(event: BridgeNotificationsEvent) => void>();
+      const provider = createAitBridgeNotificationProvider({
+        provider: 'apps-in-toss',
+        request: async (method) => {
+          methods.push(method);
+          if (method === 'notifications.v2.getCapabilities') {
+            return capabilities();
+          }
+          if (method === 'notifications.v2.register') {
+            return { registration: null };
+          }
+          if (method === 'notifications.v2.openSettings') {
+            return { status: 'unavailable' };
+          }
+          if (method === 'notifications.v2.requestPermission') {
+            return { snapshot: { topics: { a: 'unknown' } }, outcomes: { a: 'unavailable' } };
+          }
+          return { topics: { a: 'unknown' } };
+        },
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      });
+      const emit = (route: string) => {
+        for (const listener of [...listeners]) {
+          listener({
+            protocol: 'mpgd.notifications.v2',
+            sequence: 0,
+            event: { type: 'opened', channel: 'remote', source: 'cold', route },
+          });
+        }
+      };
+      return { provider, methods, listeners, emit };
+    }
+    const settle = async () => {
+      for (let turn = 0; turn < 10; turn += 1) {
+        await Promise.resolve();
+      }
+    };
+
+    it('reads capabilities once before the first other method, shared by concurrent calls', async () => {
+      const { provider, methods } = host(() => capabilitiesAnswer());
+      await Promise.all([
+        provider.getPermission({ topics: ['a'] }),
+        provider.requestPermission({ topics: ['a'] }),
+      ]);
+      expect(methods.filter((method) => method === 'notifications.v2.getCapabilities')).toHaveLength(1);
+      expect(methods[0]).toBe('notifications.v2.getCapabilities');
+      await provider.getPermission({ topics: ['a'] });
+      await provider.register?.();
+      await provider.openSettings?.();
+      expect(methods.filter((method) => method === 'notifications.v2.getCapabilities')).toHaveLength(1);
+      // getCapabilities itself reads every time.
+      await provider.getCapabilities();
+      expect(methods.filter((method) => method === 'notifications.v2.getCapabilities')).toHaveLength(2);
+    });
+
+    for (const [name, answer] of [
+      ['another protocol version', capabilitiesAnswer('2.0.0-draft.2')],
+      ['another provider id', capabilitiesAnswer('2.0.0-draft.1', 'fcm')],
+    ] as const) {
+      it(`refuses every method once the host is judged incompatible (${name})`, async () => {
+        const { provider, methods } = host(() => answer);
+        await expect(failureOf(provider.getPermission({ topics: ['a'] }))).resolves.toMatchObject({
+          code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+          retryable: false,
+        });
+        expect(methods).toEqual(['notifications.v2.getCapabilities']);
+        for (const call of [
+          () => provider.getCapabilities(),
+          () => provider.getPermission({ topics: ['a'] }),
+          () => provider.requestPermission({ topics: ['a'] }),
+          () => provider.register?.() ?? Promise.resolve(),
+          () => provider.openSettings?.() ?? Promise.resolve(),
+        ]) {
+          await expect(failureOf(call())).resolves.toMatchObject({
+            code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+            retryable: false,
+          });
+        }
+        // The verdict is cached: nothing more reached the host.
+        expect(methods).toEqual(['notifications.v2.getCapabilities']);
+      });
+    }
+
+    it('does not cache a failed or invalid read as a verdict', async () => {
+      let answer: () => unknown = () => {
+        throw new PlatformOperationError({ code: 'AIT_BRIDGE_TIMEOUT', message: 'slow', retryable: true });
+      };
+      const { provider, methods } = host(() => answer());
+      await expect(failureOf(provider.getPermission({ topics: ['a'] }))).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        retryable: true,
+      });
+      answer = () => ({ protocolVersion: '2.0.0-draft.1' });
+      await expect(failureOf(provider.getPermission({ topics: ['a'] }))).resolves.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      });
+      answer = () => capabilitiesAnswer();
+      await expect(provider.getPermission({ topics: ['a'] })).resolves.toEqual({ topics: { a: 'unknown' } });
+      expect(methods).toEqual([
+        'notifications.v2.getCapabilities',
+        'notifications.v2.getCapabilities',
+        'notifications.v2.getCapabilities',
+        'notifications.v2.getPermission',
+      ]);
+    });
+
+    it('detaches subscriptions when the read finds the host incompatible, and attaches none after', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const { provider, methods, listeners, emit } = host(() => capabilitiesAnswer('3.0.0'));
+        const seen: NotificationEvent[] = [];
+        provider.subscribe((event) => seen.push(event));
+        // Attached at once, so the host's cold open reaches it, and a read started.
+        expect(listeners.size).toBe(1);
+        expect(methods).toEqual(['notifications.v2.getCapabilities']);
+        await settle();
+        expect(listeners.size).toBe(0);
+        emit('/late');
+        expect(seen).toEqual([]);
+        // With the verdict known, a new subscription does not attach.
+        const unsubscribe = provider.subscribe((event) => seen.push(event));
+        expect(listeners.size).toBe(0);
+        unsubscribe();
+        expect(methods).toEqual(['notifications.v2.getCapabilities']);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('keeps subscriptions on a compatible host or after a failed read', async () => {
+      let answer: () => unknown = () => {
+        throw new PlatformOperationError({ code: 'AIT_BRIDGE_TIMEOUT', retryable: true });
+      };
+      const { provider, listeners, emit } = host(() => answer());
+      const seen: NotificationEvent[] = [];
+      const unsubscribe = provider.subscribe((event) => seen.push(event));
+      await settle();
+      // The read failed: no verdict, the subscription stays.
+      expect(listeners.size).toBe(1);
+      emit('/a');
+      answer = () => capabilitiesAnswer();
+      await provider.getCapabilities();
+      emit('/b');
+      expect(seen.map((event) => (event.type === 'opened' ? event.route : undefined))).toEqual(['/a', '/b']);
+      unsubscribe();
+      expect(listeners.size).toBe(0);
+    });
+  });
+
   it('compares pre-release protocol versions exactly by tag and releases by major', () => {
     const cases: readonly (readonly [string, string, boolean])[] = [
       // Draft against draft: the same tag on the same major only.

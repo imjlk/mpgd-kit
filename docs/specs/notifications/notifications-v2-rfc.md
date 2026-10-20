@@ -2252,10 +2252,17 @@ Other rules the profiles encode:
   not serve `draft.2` or the release. Between releases, the major decides. A
   version that is not a semantic version is incompatible. The in-process
   Capacitor bridge and the Devvit client, built with their hosts, do not
-  check the version (the Devvit client checks the provider id). Like the
-  provider-id check, the version check guards
-  `getCapabilities`, the read behind `PlatformCapabilities.notifications`;
-  it does not refuse the other methods.
+  check the version (the Devvit client checks the provider id).
+  - The verdict comes from a capability read. `getCapabilities` reads and
+    judges every time; any other method, before the first verdict, reads
+    once first. A read that fails or breaks the contract gives no verdict,
+    so the next call reads again.
+  - Once the host is judged incompatible, every method answers
+    `NOTIFICATIONS_CONFIGURATION_REQUIRED` without reaching it.
+  - `subscribe` is synchronous and the host hands its buffered cold open to
+    its first listener, so a subscription made before any verdict attaches
+    at once and starts a read; an incompatible verdict detaches every
+    subscription, and after it `subscribe` attaches nothing.
 - **What N3 landed.** When N3 landed no transport served v2; P1–P3 add the
   providers.
   P1 serves it on the Apps in Toss host bridge, and the Apps in Toss gateway
