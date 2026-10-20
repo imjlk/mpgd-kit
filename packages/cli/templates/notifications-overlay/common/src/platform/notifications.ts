@@ -13,7 +13,7 @@ import {
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
 
 import notificationTopicsJson from '../../notifications/topics.json';
-import { resolveStarterServerSession } from './gameServices';
+import { resolveStarterServerSession } from './serverSession';
 import { routeNotificationOpens, type NotificationOpenRoutes } from './notificationOpens';
 import {
   createStarterNotificationSettings,
@@ -67,7 +67,7 @@ export interface StarterNotificationBackend {
  * (`@mpgd/game-services/notifications/client`), when the game has both a
  * game-services URL (`VITE_MPGD_GAME_SERVICES_URL`, as the commerce client
  * uses) and a server-backed session (`setStarterServerSession` in
- * `gameServices.ts`), and the target exposes a notifications provider.
+ * `serverSession.ts`), and the target exposes a notifications provider.
  * Otherwise `undefined`: the notification settings screen then asks only for
  * the OS or host permission and shows no reminder, advertising, or night
  * switch, because nothing could record them.
@@ -94,7 +94,7 @@ export function createStarterNotificationBackend(
     warnOnce(
       platform,
       '[notifications] VITE_MPGD_GAME_SERVICES_URL is set but no server session is: call setStarterServerSession '
-        + '(src/platform/gameServices.ts) before the game starts. The settings screen shows no switch until then.',
+        + '(src/platform/serverSession.ts) before the game starts. The settings screen shows no switch until then.',
     );
     return undefined;
   }
@@ -103,7 +103,8 @@ export function createStarterNotificationBackend(
       // The session's credentials never travel in clear text or to a private host in production.
       warnOnce(
         platform,
-        '[notifications] VITE_MPGD_GAME_SERVICES_URL must be a public https URL in production; notifications stay off.',
+        '[notifications] VITE_MPGD_GAME_SERVICES_URL must be an absolute http(s) URL, and a public https URL '
+          + 'without credentials in production; notifications stay off.',
       );
       return undefined;
     }

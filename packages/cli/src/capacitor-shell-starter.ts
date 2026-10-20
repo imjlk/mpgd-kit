@@ -23,6 +23,7 @@ import {
   notificationsCapacitorGatewayModules,
   notificationsCapacitorGateways,
   notificationsCapacitorSupportFiles,
+  notificationsCapacitorTemplateSupportFiles,
   notificationsGameDependencies,
   notificationsMessagingFirebaseRange,
   notificationsMessagingPlugin,
@@ -3334,6 +3335,14 @@ function planNotificationsProvider(input: {
     for (const file of notificationsCapacitorSupportFiles) {
       if (readExisting(safeDestination(gameRoot, file)) === undefined) {
         files.push({ path: file, content: starterFile(overlayRoot, file) });
+      }
+    }
+    // Base-template modules they import, missing from a game an earlier release created.
+    if (input.templateRoot !== undefined) {
+      for (const file of notificationsCapacitorTemplateSupportFiles) {
+        if (readExisting(safeDestination(gameRoot, file)) === undefined) {
+          files.push({ path: file, content: readTemplateFile(input.templateRoot, file) });
+        }
       }
     }
     warnings.push(

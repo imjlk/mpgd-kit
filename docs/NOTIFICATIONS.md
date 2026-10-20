@@ -119,7 +119,7 @@ Rules the starter's settings screen follows, and your own screen must too:
 > `createStarterNotificationBackend` builds both when the game has a
 > game-services URL (`VITE_MPGD_GAME_SERVICES_URL`) and sets its
 > server-backed session with `setStarterServerSession`
-> (`src/platform/gameServices.ts`): the signed-in `{ playerId, sessionId }`,
+> (`src/platform/serverSession.ts`): the signed-in `{ playerId, sessionId }`,
 > a sign-in subscription, and the session's header, which the commerce
 > client then sends too. Without them it returns `undefined`, and the
 > settings screen asks for the OS or host permission (and withdraws a Devvit

@@ -66,7 +66,7 @@ game has both:
 - a game-services URL, `VITE_MPGD_GAME_SERVICES_URL`, the one the commerce
   client uses (https in production); and
 - a server-backed session, which the game sets with
-  `setStarterServerSession` in `src/platform/gameServices.ts` at the top of
+  `setStarterServerSession` in `src/platform/serverSession.ts` at the top of
   `src/main.ts`, before `bootstrap()`: the signed-in `{ playerId, sessionId }`
   (`undefined` until the player signs in), a sign-in subscription, and the
   session's `Authorization` header. The commerce client then sends the same

@@ -5,7 +5,6 @@ import {
   createGameServicesRuntime,
   resolveGameServicesAuthorityMode,
   resolveGameServicesTransport,
-  type GameServicesHeaderResolver,
   type GameServicesRuntime,
   type GameServicesRuntimeMode,
   type MonetizationOperationStore,
@@ -16,6 +15,7 @@ import type { PurchasePresentationEvent } from '@mpgd/game-runtime/ads';
 
 import { resolveStarterCommerceProducts } from './commerceProducts';
 import { createStorageMonetizationOperationStore } from './monetizationJournal';
+import { resolveStarterServerSession } from './serverSession';
 
 const productCatalog = productCatalogJson as ProductCatalog;
 
@@ -28,49 +28,6 @@ export interface StarterMonetizationPorts {
   readonly operationStore: MonetizationOperationStore;
   readonly reconciliation?: GameActionReconciliationPort;
   readonly purchasePresentation?: { subscribe(listener: (event: PurchasePresentationEvent) => void): () => void };
-}
-
-/**
- * The game's server-backed session: who is signed in to the game backend,
- * and the `Authorization` header for that session. The starter has none, so
- * `resolveStarterServerSession` returns `undefined`. Return yours there (for
- * example over a `GuestSessionCoordinator` from `@mpgd/game-services` and
- * your identity service): the commerce client then sends its header, and,
- * in a game created with `--providers notifications`, the notifications
- * runtime uses the same session and header for the game-services Worker's
- * notification routes.
- */
-export interface StarterServerSession {
-  /**
-   * The signed-in player and session, or `undefined` while signed out.
-   * `sessionId` stays the same across token refreshes: it is the
-   * `sessionId` your identity service answers to the Worker's
-   * `authenticateNotificationSession`.
-   */
-  current(): { readonly playerId: string; readonly sessionId: string } | undefined;
-  /** Calls `listener` when a session becomes current (sign-in, restore, account switch); returns the unsubscribe. */
-  onAuthenticated(
-    listener: (session: { readonly playerId: string; readonly sessionId: string }) => void,
-  ): () => void;
-  /** The current session's request headers, such as `{ authorization: 'Bearer …' }`. */
-  readonly getHeaders: GameServicesHeaderResolver;
-}
-
-let serverSession: StarterServerSession | undefined;
-
-/** The game's server-backed session; `undefined` until the game sets one with `setStarterServerSession`. */
-export function resolveStarterServerSession(): StarterServerSession | undefined {
-  return serverSession;
-}
-
-/**
- * Sets the game's server-backed session. Call it at the top of `main.ts`,
- * before `bootstrap()`: `createStarterGameServices` reads it once, and the
- * notification settings and opens read it until a backend exists. Its
- * `current()` may answer `undefined` until the player signs in.
- */
-export function setStarterServerSession(session: StarterServerSession | undefined): void {
-  serverSession = session;
 }
 
 export type StarterBackendMode = GameServicesRuntimeMode;

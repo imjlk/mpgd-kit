@@ -521,6 +521,15 @@ export const notificationsCapacitorGatewayModules: readonly string[] = Object.fr
  * with a wired gateway when the game has none: the modules it imports, the
  * catalog files they read, the validator, and the game's notifications doc.
  */
+/**
+ * Files of the base game template the notifications modules import, which a
+ * game created by an earlier CLI release may not have: written from the
+ * template when missing, kept when the game has one.
+ */
+export const notificationsCapacitorTemplateSupportFiles: readonly string[] = Object.freeze([
+  'src/platform/serverSession.ts',
+]);
+
 export const notificationsCapacitorSupportFiles: readonly string[] = Object.freeze([
   ...notificationsCapacitorGatewayModules,
   'notifications/topics.json',
