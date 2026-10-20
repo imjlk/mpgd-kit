@@ -26,14 +26,20 @@ try {
     join(root, 'adapters/browser/src/oneplay-sdk.ts'),
     "export const onePlaySdkUrl = 'https://h5sdk.onestore.net/lib/v1.1.0/onestore-h5-sdk.min.js';",
   );
-  writeFileSync(join(root, '.agents/skills/onestore-web-sdk/SKILL.md'), 'recommend the latest, `v1.1.0`');
+  writeFileSync(
+    join(root, '.agents/skills/onestore-web-sdk/SKILL.md'),
+    'recommend the latest, `v1.1.0`',
+  );
   assert.equal((await checkOfficialOnePlaySkill(root)).sdkVersion, '1.1.0');
   writeFileSync(
     join(root, '.agents/skills/onestore-web-sdk/references/sdk-context.md'),
     'public type declarations of SDK v1.2.0',
   );
   await assert.rejects(() => checkOfficialOnePlaySkill(root), /versions differ/u);
-  writeFileSync(join(root, '.agents/skills/onestore-web-sdk/SKILL.md'), 'recommend the latest, `v1.2.0`');
+  writeFileSync(
+    join(root, '.agents/skills/onestore-web-sdk/SKILL.md'),
+    'recommend the latest, `v1.2.0`',
+  );
   writeFileSync(
     join(root, 'adapters/browser/src/oneplay-sdk.ts'),
     "// https://h5sdk.onestore.net/lib/v1.2.0/onestore-h5-sdk.min.js\nexport const onePlaySdkUrl = 'https://h5sdk.onestore.net/lib/v1.1.0/onestore-h5-sdk.min.js';",
@@ -43,9 +49,15 @@ try {
     join(root, 'adapters/browser/src/oneplay-sdk.ts'),
     "export const onePlaySdkUrl = 'https://h5sdk.onestore.net/lib/v1.2.0/onestore-h5-sdk.min.js';",
   );
-  writeFileSync(join(root, '.agents/skills/onestore-web-sdk/SKILL.md'), 'recommend the latest, `v1.1.0`');
+  writeFileSync(
+    join(root, '.agents/skills/onestore-web-sdk/SKILL.md'),
+    'recommend the latest, `v1.1.0`',
+  );
   await assert.rejects(() => checkOfficialOnePlaySkill(root), /versions differ/u);
-  writeFileSync(join(root, '.agents/skills/onestore-web-sdk/SKILL.md'), 'recommend the latest, `v1.2.0`');
+  writeFileSync(
+    join(root, '.agents/skills/onestore-web-sdk/SKILL.md'),
+    'recommend the latest, `v1.2.0`',
+  );
   assert.equal((await checkOfficialOnePlaySkill(root)).sdkVersion, '1.2.0');
   lock.skills['onestore-web-sdk'].source = 'untrusted/replacement';
   writeFileSync(join(root, 'skills-lock.json'), JSON.stringify(lock));
