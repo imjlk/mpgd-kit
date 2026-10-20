@@ -1623,9 +1623,10 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `accepted` when `msgCount` is above 0 or any channel sent it. Otherwise
     it is `rejected`: reason `agreement` when a `fail` entry's
     `reachedFailReason` is one the deployment names
-    (`agreementFailReasons`, each 1 to 1,024 characters once trimmed, as the
-    provider reads at most 1,024 characters of a reason; it refuses others at
-    creation), otherwise `recipient`, also when the `fail` lists are empty.
+    (`agreementFailReasons`, each 1 to 1,024 characters once trimmed; the
+    provider reads at most the first 1,024 characters of a reason and refuses
+    any other entry at creation), otherwise `recipient`, also when the `fail`
+    lists are empty.
   - **Limits.** 15,000 per minute per app (the registry's `rate`), and 10 per
     minute per user (a provider limit).
 - **Devvit.** It runs inside the Devvit server, not the game-services Worker,
@@ -2228,21 +2229,28 @@ Other rules the profiles encode:
 - **Host handler.** Every host that serves v2 from a `NotificationProvider`
   (the Apps in Toss host, the Capacitor in-process bridge, the Devvit server)
   does it through `createNotificationsV2BridgeHandler` in
-  `@mpgd/bridge/notifications`: it checks each payload
-  (`NOTIFICATIONS_INVALID_INPUT`) and answer, answers
-  `NOTIFICATIONS_UNSUPPORTED` for a method the provider lacks (`openSettings`
-  answers `unavailable`), names a host code of `[A-Za-z0-9_.:-]{1,128}` at
-  the end of the message as `(host code <code>)`, which
-  `readBridgeNotificationsHostCode` reads back, and numbers events per
-  session from 0.
-- **Protocol version.** `getCapabilities` answers the host's
-  `notificationsProtocolVersion`. A game-side client whose host is built
-  separately (the Apps in Toss wrapper) refuses a host on another major
+  `@mpgd/bridge/notifications`.
+  - It checks each payload (`NOTIFICATIONS_INVALID_INPUT`) and each answer
+    (`NOTIFICATIONS_CONFIGURATION_REQUIRED`).
+  - A method the provider lacks answers `NOTIFICATIONS_UNSUPPORTED`, with
+    two exceptions: `openSettings` answers `unavailable`, and a host created
+    with `registerOptional` (Apps in Toss) answers `register` with no
+    address.
+  - A host code of `[A-Za-z0-9_.:-]{1,128}` is named at the end of the
+    message as `(host code <code>)`, which `readBridgeNotificationsHostCode`
+    reads back on the game side.
+  - Events are numbered per handler from 0, one handler per session; the
+    Devvit server carries none.
+- **Protocol version.** `getCapabilities` answers `protocolVersion`, the
+  host's `notificationsProtocolVersion`. The Apps in Toss client, whose host
+  wrapper is built separately from the game, refuses a host on another major
   version, or one without a numeric major, with
-  `NOTIFICATIONS_CONFIGURATION_REQUIRED`, as it refuses another provider id,
-  so the gateway reports `configuration-required`. Like the provider-id
-  check, it guards the capability read, which readiness reads; it does not
-  refuse the other methods.
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED`, as it refuses a host that serves
+  another provider id; the gateway then reports `configuration-required`.
+  The in-process Capacitor bridge and the Devvit client, built with their
+  hosts, do not check. Like the provider-id check, it guards
+  `getCapabilities`, the read behind `PlatformCapabilities.notifications`;
+  it does not refuse the other methods.
 - **What N3 landed.** When N3 landed no transport served v2; P1–P3 add the
   providers.
   P1 serves it on the Apps in Toss host bridge, and the Apps in Toss gateway
@@ -2595,7 +2603,9 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   - The shared host-side `notifications.v2` bridge handler (landed in B1,
     below), and bulk sends (open question 5).
 
-**What B1 landed.**
+**What B1 landed.** B1 is a follow-up to the first release wave: the shared
+host-side handler that the P3 and C1 notes left open, and three small Apps
+in Toss fixes.
 
 - `createNotificationsV2BridgeHandler` and `readBridgeNotificationsHostCode`
   in `@mpgd/bridge/notifications` (see [Bridge and versioning](#bridge)).
@@ -2604,13 +2614,20 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   only what differs: the label in messages, no address for an Apps in Toss
   provider without `register`, and on Devvit a fixed message for an
   unexpected failure plus the server-side `onError` log. The Devvit webview
-  client is the game side and stays separate. Codes, retryable flags, and
-  events are unchanged, apart from two answers that tightened: a provider
-  that answers `register` or `openSettings` with `undefined` on the Apps in
-  Toss host now answers `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and the
-  Capacitor bridge maps a non-notifications `PlatformOperationError` code to
-  `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` itself (its game-side client
-  already did).
+  client is the game side and stays separate. For providers that throw this
+  repository's errors, codes, retryable flags, and events are unchanged,
+  apart from answers that tightened:
+  - On the Apps in Toss host, a provider that answers `register` or
+    `openSettings` with `undefined` now answers
+    `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+  - The Capacitor bridge maps a non-notifications `PlatformOperationError`
+    code to `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` itself (its game-side
+    client already did), and names a host code only when it matches the
+    pattern above.
+  - Failures are read by shape as well as by class, so a provider built
+    against another copy of `@mpgd/platform` keeps its notifications code
+    and retryable flag, and an unexpected failure that carries
+    `retryable: false` is no longer made retryable.
 - The Apps in Toss game-side client fails closed on a host on another
   notifications protocol major, and its lazy chunk reads events through the
   bridge provider instead of a second copy of the envelope filter.
@@ -2618,8 +2635,9 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   `agreementFailReasons` entry that is empty or longer than 1,024 characters
   once trimmed, since it reads at most 1,024 characters of a
   `reachedFailReason`.
-- Left to follow-ups: bulk sends (open question 5), and native rendering of
-  Android advertising pushes (above).
+- Left to follow-ups: bulk sends (open question 5); native rendering of
+  Android advertising pushes and the runtime's backend client (both
+  above).
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
