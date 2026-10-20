@@ -1143,6 +1143,22 @@ try {
       { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', baseUrl: 'not a url' } },
       /^MPGD_AIT_NOTIFICATIONS: /u,
     ],
+    // An agreement reason the provider could never match (empty, or over the
+    // 1,024 characters of a reachedFailReason it reads) is refused at startup.
+    [
+      { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', agreementFailReasons: ['  '] } },
+      /^MPGD_AIT_NOTIFICATIONS: agreementFailReasons\[0\]: entries must be 1 to 1024 characters/u,
+    ],
+    [
+      {
+        ...aitEnv,
+        MPGD_AIT_NOTIFICATIONS: {
+          recipientKey: 'toss-user',
+          agreementFailReasons: ['NOT_AGREED', 'x'.repeat(1_025)],
+        },
+      },
+      /^MPGD_AIT_NOTIFICATIONS: agreementFailReasons\[1\]: entries must be 1 to 1024 characters/u,
+    ],
     [
       {
         ...aitEnv,
