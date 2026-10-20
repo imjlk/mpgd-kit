@@ -149,6 +149,12 @@ export interface NotificationRuntimeState {
   readonly registration?: NotificationRuntimePersistedRegistration;
   /** Set by `unregister()`; `register()` or the next authentication clears it. */
   readonly unbound?: boolean;
+  /**
+   * With `unbound`: the session signed in when `unregister()` ran. Another
+   * session found at start or on a read is a sign-in the runtime did not
+   * observe, so it binds again.
+   */
+  readonly unboundSession?: { readonly player: string; readonly session: string };
 }
 
 /**
@@ -267,10 +273,24 @@ export function notificationRuntimeStateOf(value: unknown): NotificationRuntimeS
   }
   const record = value as Readonly<Record<string, unknown>>;
   const registration = persistedRegistrationOf(record['registration']);
+  const unboundSession = record['unbound'] === true
+    ? unboundSessionOf(record['unboundSession'])
+    : undefined;
   return {
     ...(registration === undefined ? {} : { registration }),
     ...(record['unbound'] === true ? { unbound: true } : {}),
+    ...(unboundSession === undefined ? {} : { unboundSession }),
   };
+}
+
+function unboundSessionOf(value: unknown): NotificationRuntimeState['unboundSession'] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const { player, session } = value as Readonly<Record<string, unknown>>;
+  return typeof player === 'string' && player.length > 0 && typeof session === 'string' && session.length > 0
+    ? { player, session }
+    : undefined;
 }
 
 function persistedRegistrationOf(value: unknown): NotificationRuntimePersistedRegistration | undefined {
@@ -321,6 +341,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 interface MutableRuntimeState {
   registration?: NotificationRuntimePersistedRegistration;
   unbound?: boolean;
+  unboundSession?: { readonly player: string; readonly session: string };
 }
 
 /**
@@ -481,6 +502,9 @@ export function createNotificationRuntime(
     const snapshot: NotificationRuntimeState = {
       ...(current.registration === undefined ? {} : { registration: current.registration }),
       ...(current.unbound === true ? { unbound: true } : {}),
+      ...(current.unbound === true && current.unboundSession !== undefined
+        ? { unboundSession: current.unboundSession }
+        : {}),
     };
     let saved: void | Promise<void>;
     try {
@@ -898,6 +922,7 @@ export function createNotificationRuntime(
         const persisted = kept ?? await loadState();
         if (persisted.unbound === true) {
           delete persisted.unbound;
+          delete persisted.unboundSession;
           // The backend dropped the endpoint at the unbind: the registration
           // kept from before it is no longer acknowledged, so it is sent again.
           delete persisted.registration;
@@ -924,21 +949,37 @@ export function createNotificationRuntime(
       }
     });
   /**
-   * Re-sends the registration once the one the backend last acknowledged for
-   * this player and session is older than 7 days, so the endpoint of a device
-   * in use never goes stale, and at once when it was acknowledged for another
-   * session: one that started while the runtime was not listening (before
-   * `start()`, or between `stop()` and `start()`) is an authentication the
-   * runtime would otherwise miss. Runs at start and on reads.
+   * Catches the registration up with the session signed in now. At start and
+   * on reads:
+   * - while unbound, a session other than the one `unregister()` left is a
+   *   sign-in the runtime did not observe (before `start()`, or while
+   *   stopped), so the installation binds again;
+   * - a registration acknowledged for another player or session is sent for
+   *   this one, for the same reason;
+   * - a device registration acknowledged more than 7 days ago is sent again,
+   *   so the endpoint of a device in use never goes stale.
+   * At start only, with nothing acknowledged yet, the registration is sent
+   * for a session that was already signed in.
    */
-  const refreshRegistration = async (): Promise<void> => {
+  const refreshRegistration = async (atStart: boolean): Promise<void> => {
     const session = backend.session();
     if (session === undefined) {
       return;
     }
     const persisted = kept ?? await loadState();
+    if (persisted.unbound === true) {
+      const left = persisted.unboundSession;
+      if (left === undefined || (left.player === session.player && left.session === session.id)) {
+        return;
+      }
+      await registerCurrent(false, true);
+      return;
+    }
     const last = persisted.registration;
-    if (persisted.unbound === true || last === undefined) {
+    if (last === undefined) {
+      if (atStart) {
+        await registerCurrent(false);
+      }
       return;
     }
     const otherSession = last.player !== session.player || last.session !== session.id;
@@ -1265,7 +1306,7 @@ export function createNotificationRuntime(
         : notificationRegistryMismatch(capabilities, input.registryEntry);
       // A backend that cannot answer does not fail the start; the next read reconciles.
       await settle(reconcileLocal());
-      await settle(refreshRegistration());
+      await settle(refreshRegistration(true));
     },
     stop() {
       unsubscribeProvider?.();
@@ -1325,7 +1366,7 @@ export function createNotificationRuntime(
       if (records !== undefined) {
         await settle(reconcileLocal());
       }
-      await settle(refreshRegistration());
+      await settle(refreshRegistration(false));
       return {
         ...(states.app === undefined ? {} : { app: states.app }),
         topics: states.topics,
@@ -1525,12 +1566,18 @@ export function createNotificationRuntime(
           persisted = kept ?? await loadState();
         } catch (error) {
           loadFailure = { error };
-          persisted = {};
           // A load another call started meanwhile may have set the state; the
-          // unbound state is written over the stored one either way.
-          kept ??= persisted;
+          // unbound state goes on whichever object is kept, and is written
+          // over the stored one either way.
+          kept ??= {};
+          persisted = kept;
         }
         persisted.unbound = true;
+        if (session === undefined) {
+          delete persisted.unboundSession;
+        } else {
+          persisted.unboundSession = { player: session.player, session: session.id };
+        }
         const saveFailures: unknown[] = [];
         /** Saves the state; a failure is collected, and a synchronous save answers synchronously. */
         const save = (): void | Promise<void> => {

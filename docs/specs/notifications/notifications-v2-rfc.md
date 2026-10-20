@@ -589,7 +589,8 @@ Runtime rules:
     7 days, so the endpoint of a device in use never goes stale, or was
     acknowledged for another player or session, so a sign-in the runtime did
     not observe (one before its start, or while it was stopped) still moves
-    the installation; and on `register()`.
+    the installation; at start, for a player already signed in, when no
+    registration was acknowledged yet; and on `register()`.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the
@@ -611,7 +612,10 @@ Runtime rules:
       fails, such as on an offline logout, and then throws the unbind's
       error.
     - The installation stays unbound, across restarts, until `register()` or
-      the next authentication.
+      the next authentication. A session other than the one signed in when
+      `unregister()` ran counts as that authentication even when the runtime
+      did not observe it, so the runtime keeps that session with the unbound
+      state.
 - **Local reminders.** On start, on authentication, and after each backend
   read, the runtime compares `listLocal()` with the latest backend preference
   and permission and cancels the reminders that no longer pass, because a
