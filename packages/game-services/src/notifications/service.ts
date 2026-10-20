@@ -7,6 +7,7 @@ import {
   createNotificationReminderIdempotencyKey,
   evaluateNotificationDelivery,
   evaluateNotificationReminderConsent,
+  fillNotificationTemplate,
   isNotificationTimestamp,
   isSameNotificationNotice,
   isValidNotificationTimeZone,
@@ -347,7 +348,10 @@ export interface NotificationService {
    * each endpoint reported, or the host read, for any provider the player
    * can be reached on; a refusal stores nothing. Otherwise the reminder with
    * this key is stored or replaced, and a send of the previous one that
-   * still waits (deferred or in flight) is stopped.
+   * still waits (deferred, or in flight with no live claim) is stopped. A
+   * row a holder has claimed is left so an acceptance the provider already
+   * took can be recorded; that holder does not call the provider if the
+   * reminder was cancelled or replaced before the call.
    */
   setReminder(
     session: NotificationSession,
@@ -924,6 +928,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }>();
     const rows: NotificationSendRow[] = [];
     const refusals: NotificationDeliveryRefusal[] = [];
+    let checked = 0;
+    let hostFailure: unknown;
     for (const recipient of recipients) {
       const id = recipient.provider.entry.provider;
       let inputs = perProvider.get(id);
@@ -935,8 +941,22 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const evaluate = (permission: NotificationPermissionState | undefined) =>
         decide(request, origin, recipient, consent, held.history, permission, at);
       // One read per provider and send, made only once a recipient needs it.
-      const { decision } = earlyRefusal(recipient.provider, evaluate)
-        ?? evaluate(await (held.permission ??= readServerPermission(recipient.provider, request)));
+      // A host that cannot answer is skipped; the send fails only when no
+      // provider could be checked and none passed.
+      let decision: NotificationDeliveryDecision;
+      try {
+        const early = earlyRefusal(recipient.provider, evaluate);
+        decision = early === undefined
+          ? evaluate(await (held.permission ??= readServerPermission(recipient.provider, request))).decision
+          : early.decision;
+        checked += 1;
+      } catch (error) {
+        if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE') {
+          hostFailure ??= error;
+          continue;
+        }
+        throw error;
+      }
       const row = {
         key: recipient.rowKey,
         provider: id,
@@ -959,6 +979,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       } else {
         refusals.push(decision);
       }
+    }
+    if (checked === 0 && rows.length === 0 && hostFailure !== undefined) {
+      throw hostFailure;
     }
     return { rows, refusals };
   };
@@ -1043,8 +1066,19 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
+   * True when a reminder send must not reach the provider: its schedule entry
+   * is gone, or names another time or content. Assigned once the reminder
+   * helpers below exist; `runRow` only calls it after this factory returns.
+   * A schedule read that fails counts as stopped, so a cancel is never
+   * outlived by a replay.
+   */
+  let sendWasStopped: (send: NotificationStoredSend) => Promise<boolean> = async () => false;
+
+  /**
    * Claims one row, runs the gate for it immediately before the provider
    * call, and stores the answer. Answers the row's refusal, if any.
+   * A notice the game recorded since the claim, or a reminder cancelled or
+   * replaced since the claim, is dropped instead of sent.
    */
   const runRow = async (
     sendKey: string,
@@ -1072,15 +1106,20 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         && !await noticeListed(held.send.request.player, held.send.origin.notice, at)
       ) {
         // The game gave the notice while the push waited: it is not sent again.
+        // A lost compare-and-set is retried; a row another holder claimed is
+        // left for that holder, which checks again immediately before the call.
         const rows = rowsWith(held.send, row, { kind: 'remove' });
-        await store.updateSend({
+        const dropped = await store.updateSend({
           key: sendKey,
           version: held.version,
           send: rows.length === 0
             ? undefined
             : { ...held.send, rows, changedAt: formatNotificationInstant(at) },
         });
-        return {};
+        if (dropped) {
+          return {};
+        }
+        continue;
       }
       const token = newToken();
       // The replay window opens at the first claim that may reach the
@@ -1196,6 +1235,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await complete(sendKey, row, token, { kind: 'remove' }, at);
       return { refusal: decision.status === 'allowed' ? noEndpoint() : decision };
     }
+    if (
+      (send.origin.kind === 'notice'
+        && !await noticeListed(send.request.player, send.origin.notice, nowMs()))
+      || (send.origin.kind === 'reminder' && await sendWasStopped(send))
+    ) {
+      // Recorded, cancelled, or replaced while this claim resolved the
+      // recipient. Drop while the claim still holds; a lost compare-and-set
+      // is retried until it wins or the claim is gone.
+      await complete(sendKey, row, token, { kind: 'remove' }, nowMs());
+      return {};
+    }
     const answer = await callProvider(recipient, send.request, topic, decision, at);
     const answeredAt = nowMs();
     switch (answer.status) {
@@ -1237,7 +1287,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
           report(
             new Error(
-              'Ambiguous answers for a day: the delivery stays in flight and is not replayed again.',
+              answer.providerCode === undefined
+                ? 'Ambiguous answers for a day: the delivery stays in flight and is not replayed again.'
+                : `Ambiguous answers for a day (${answer.providerCode}): the delivery stays in flight and is not replayed again.`,
             ),
             'dispatch.abandoned',
             { sendKey, provider: row.provider, rowKey: row.key },
@@ -1755,12 +1807,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 
   /**
    * Stops a reminder's send that still waits: the rows not delivered yet
-   * (deferred, queued, or in flight) are dropped, and a send the scheduler
-   * is still making loses its key, so no row of it is ever stored. Only a
-   * send of `fingerprint` (the reminder's own content) is stopped, since the
-   * send key names only the key and time: a send of other content at the key
-   * belongs to the reminder that replaced this one. A send the provider may
-   * already have accepted cannot be recalled. Answers whether anything waited.
+   * (deferred, queued, or in flight with no live claim) are dropped, and a
+   * send the scheduler is still making loses its key, so no row of it is
+   * ever stored. A row whose claim lease is still live is left: its holder
+   * may already have called the provider, and deleting the row makes
+   * `complete` a no-op, which drops the idempotency key and lets the same
+   * key and time send again. The holder drops the row itself if the reminder
+   * was cancelled or replaced before the call. Only a send of `fingerprint`
+   * (the reminder's own content) is stopped, since the send key names only
+   * the key and time: a send of other content at the key belongs to the
+   * reminder that replaced this one. A send the provider may already have
+   * accepted cannot be recalled. Answers whether anything waited.
    */
   const stopReminderSend = async (
     player: string,
@@ -1774,23 +1831,50 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       return false;
     }
     for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+      const at = nowMs();
       const held = await store.getSend(key);
       if (held === undefined || held.send.origin.kind !== 'reminder' || held.send.fingerprint !== fingerprint) {
         return false;
       }
       const { send } = held;
-      const kept = send.rows.filter((row) => row.state.status === 'delivered');
+      const kept = send.rows.filter((row) =>
+        row.state.status === 'delivered' || liveClaim(row, at));
       if (send.rows.length > 0 && kept.length === send.rows.length) {
         return false;
       }
       const next = kept.length === 0
         ? undefined
-        : { ...send, rows: kept, changedAt: formatNotificationInstant(nowMs()) };
+        : { ...send, rows: kept, changedAt: formatNotificationInstant(at) };
       if (await store.updateSend({ key, version: held.version, send: next })) {
         return true;
       }
     }
     throw busy(key);
+  };
+
+  sendWasStopped = async (send) => {
+    if (send.origin.kind !== 'reminder') {
+      return false;
+    }
+    try {
+      const held = await store.getScheduleEntry({
+        player: send.request.player,
+        id: reminderEntryId(send.origin.key),
+      });
+      const item = held?.entry.item;
+      if (item?.kind !== 'reminder') {
+        return true;
+      }
+      const sameTime = createNotificationReminderIdempotencyKey({
+        player: send.request.player,
+        key: send.origin.key,
+        fireAt: item.fireAt,
+      }) === send.key;
+      return !sameTime || reminderFingerprint(send.request.player, item) !== send.fingerprint;
+    } catch (error) {
+      report(error, 'scheduler.reread', send.key);
+      return true;
+    }
   };
 
   /** Moves an entry's due time later after a failure, so a broken item does not fill every run. */
@@ -2702,6 +2786,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       let refusal: keyof typeof reminderRefusalRank | undefined;
       let passed = false;
       let mapped = false;
+      let evaluated = false;
+      let hostFailure: unknown;
       let linkRefusal: string | undefined;
       for (const recipient of candidates) {
         const topic = topicFor(recipient.provider, recipient.target, reminder.topic, origin);
@@ -2711,9 +2797,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         mapped = true;
         // The gate's link step, at set time: a provider whose sends need a
         // link takes the reminder's (by its mapping rule) or the mapping's.
+        // A link rule that does not compile is the deployment's, and fails
+        // the set even when another provider would pass.
         const linkIssue = reminderLinkIssue(recipient.provider, topic, reminder.link);
         if (linkIssue !== undefined) {
-          linkRefusal ??= linkIssue;
+          if (linkIssue.configuration) {
+            throw invalidInput(`Invalid reminder: ${linkIssue.message}`);
+          }
+          linkRefusal ??= linkIssue.message;
           continue;
         }
         const id = recipient.provider.entry.provider;
@@ -2722,7 +2813,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           permission = readServerPermission(recipient.provider, request);
           permissions.set(id, permission);
         }
-        const serverPermission = await permission;
+        let serverPermission: NotificationPermissionState | undefined;
+        try {
+          serverPermission = await permission;
+          evaluated = true;
+        } catch (error) {
+          if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE') {
+            hostFailure ??= error;
+            continue;
+          }
+          throw error;
+        }
         const refused = evaluateNotificationReminderConsent({
           entry: recipient.provider.entry,
           topic,
@@ -2746,9 +2847,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         if (linkRefusal !== undefined) {
           throw invalidInput(`Invalid reminder: ${linkRefusal}`);
         }
+        if (!evaluated && hostFailure !== undefined) {
+          throw hostFailure;
+        }
         // Mapped for none of the player's targets (or none reached): nothing could deliver it.
         return { status: mapped ? 'permission-required' : 'unavailable' };
       }
+      // A placeholder the fire would throw on is refused now, before the
+      // previous reminder's send is stopped or this one is written.
+      assertReminderCopyFills(declaring, reminder.topic, reminder.templateData, catalog);
       // One reminder per key: setting it replaces the previous one and, before
       // the write, stops the previous one's send that waits; a scheduler run
       // that fires the previous one meanwhile then fails to mark it and stops
@@ -2888,35 +2995,93 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 }
 
 /**
+ * Fills every locale copy, and a target mapping's own title and body, with
+ * the reminder's template data. A placeholder without a value is
+ * `NOTIFICATIONS_INVALID_INPUT` now, not a reminder that is stored and then
+ * dropped when it fires.
+ */
+function assertReminderCopyFills(
+  providers: readonly RegisteredNotificationProvider[],
+  topicId: string,
+  templateData: NotificationTemplateData | undefined,
+  catalog: NotificationServiceCatalog,
+): void {
+  const data = templateData ?? {};
+  for (const provider of providers) {
+    if (provider.entry.content === 'host-template') {
+      continue;
+    }
+    for (const target of provider.targets) {
+      const topic = catalog.topicsFor(target).find((declared) =>
+        declared.id === topicId && declared.channels.includes('remote'));
+      if (topic === undefined) {
+        continue;
+      }
+      const mappedTitle = topic.mapping?.['title'];
+      const mappedBody = topic.mapping?.['body'];
+      const texts: string[] = typeof mappedTitle === 'string' && typeof mappedBody === 'string'
+        ? [mappedTitle, mappedBody]
+        : topic.copy === undefined
+          ? []
+          : Object.values(topic.copy).flatMap((localeCopy) => [localeCopy.title, localeCopy.body]);
+      for (const text of texts) {
+        try {
+          fillNotificationTemplate(text, data);
+        } catch (error) {
+          throw invalidInput(`Invalid reminder: ${describe(error)}`, error);
+        }
+      }
+    }
+  }
+}
+
+/** A holder still owns the row: its claim lease has not ended. */
+function liveClaim(row: NotificationSendRow, at: number): boolean {
+  return row.state.status === 'in-flight'
+    && row.state.claim !== undefined
+    && Date.parse(row.state.leaseUntil) > at;
+}
+
+/**
  * Why a reminder's `link` cannot reach the player through `provider`, or
  * `undefined`. A provider whose entry needs a link (Devvit) needs the
  * reminder's or the topic mapping's, as the gate does at send time
  * (`link-missing`), and a given link must match the provider's mapping rule
  * for `link`, so a bad one is refused when it is set rather than spent when
- * it fires.
+ * it fires. A rule that does not compile is a configuration error, not a
+ * pass: an uncompilable pattern must not fail open.
  */
 function reminderLinkIssue(
   provider: RegisteredNotificationProvider,
   topic: NotificationTopicDeclaration,
   link: string | undefined,
-): string | undefined {
+): { readonly configuration: boolean; readonly message: string } | undefined {
   if (link !== undefined) {
     const pattern = provider.validation.mapping['link']?.pattern;
     if (pattern !== undefined) {
       let rule: RegExp;
       try {
         rule = new RegExp(pattern, 'u');
-      } catch {
-        return undefined;
+      } catch (error) {
+        return {
+          configuration: true,
+          message: `provider ${provider.entry.provider}'s link rule does not compile (${describe(error)}).`,
+        };
       }
       if (!rule.test(link)) {
-        return `link does not match provider ${provider.entry.provider}'s link rule.`;
+        return {
+          configuration: false,
+          message: `link does not match provider ${provider.entry.provider}'s link rule.`,
+        };
       }
     }
     return undefined;
   }
   if (provider.entry.link && typeof topic.mapping?.['link'] !== 'string') {
-    return `provider ${provider.entry.provider} sends need a link, and neither the reminder nor the topic mapping has one.`;
+    return {
+      configuration: false,
+      message: `provider ${provider.entry.provider} sends need a link, and neither the reminder nor the topic mapping has one.`,
+    };
   }
   return undefined;
 }
@@ -3252,7 +3417,9 @@ function deliveryAnswerOf(answer: unknown): NotificationRemoteDeliveryAnswer | u
           }
         : { status: 'rejected', reason: answer.reason };
     case 'ambiguous':
-      return { status: 'ambiguous' };
+      return typeof answer.providerCode === 'string'
+        ? { status: 'ambiguous', providerCode: answer.providerCode.slice(0, 64) }
+        : { status: 'ambiguous' };
     default:
       return undefined;
   }

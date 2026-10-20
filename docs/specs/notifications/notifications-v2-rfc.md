@@ -832,8 +832,14 @@ Inputs follow the v1 bounds:
 `set` rejects `templateData` while any provider that would deliver the
 topic is host-template, whether or not the player is reached through it
 now, because template context stays on the server as in v1 and the
-reminder may reach the player there when it fires. Invalid input throws
+reminder may reach the player there when it fires. `set` also fills every
+locale copy a free-form provider would send, and a target mapping's own
+title and body, with that `templateData` before it writes. A placeholder
+without a value throws `NOTIFICATIONS_INVALID_INPUT`, so the reminder is
+not stored only to be dropped when it fires. Invalid input throws
 `NOTIFICATIONS_INVALID_INPUT`.
+
+<!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 
 Before scheduling locally, the runtime applies, in this order, the parts of
 the [policy gate](#policy-gate) it can evaluate on the client:
@@ -872,7 +878,10 @@ past is due at once, behind the reminders already due, and keeps its
   When the player can be reached on none, it checks each such provider
   without a recipient: a device provider answers `permission-required`, and
   a platform-user provider answers from its records or its host read, so
-  the reminder may be stored and find no recipient when it fires.
+  the reminder may be stored and find no recipient when it fires. A host
+  read that fails is skipped. The set throws
+  `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` only when no provider could be
+  checked and none passed.
 - **Which answer.** One provider that passes stores the reminder, which goes
   to every provider the player has a recipient on when it fires. Otherwise
   the refusal of the furthest gate step answers: `advertising-consent-missing`,
@@ -924,7 +933,12 @@ the pending reminder, and cancelling removes it.
 - Replacing or cancelling also stops a send of the reminder that waits
   (`deferred`) or whose provider answer was `ambiguous` (`in-flight`); the
   scheduler replays neither, and `cancel` answers `remote`.
-- A send the provider may already have accepted cannot be recalled.
+- A send the provider may already have accepted cannot be recalled. A row
+  whose claim lease is still live is not deleted: its holder records the
+  acceptance, and does not call the provider if the reminder was cancelled
+  or replaced before the call. Deleting that row would drop the idempotency
+  key and let the same key and time send again.
+  <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 - **Races with the scheduler.** The scheduler stores a reminder's send first
   and marks the reminder fired after, so a run that stops in between leaves
   the reminder pending and the next run finds its send. A set stops the

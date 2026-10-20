@@ -247,6 +247,10 @@ invitation to buy.
      Devvit needs its pre-approved `title` (60) and `body` (100 characters).
    - **Copy** must include the catalog's `defaultLocale`; `{{name}}`
      placeholders are filled from the reminder's or send's template data.
+     A server reminder whose data cannot fill every locale copy, or the
+     target mapping's own title and body, is refused when it is set.
+     <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
+     <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#reminders -->
 2. Run `pnpm validate:notifications`.
 3. Give the Worker the new catalog (`MPGD_NOTIFICATIONS_CATALOG`) and, for
    Reddit, redeploy the Devvit app, whose server reads the catalog at build
