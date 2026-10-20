@@ -11,10 +11,14 @@ import {
   assertGeneratedManifests,
   assertOutsideKit,
   assertRegistryOnly,
+  awaitPublishedPackageSpecs,
+  collectPublishedPackageSpecs,
   consumerEnvironment,
   exactVersion,
   isWithin,
   publishedMetadata,
+  retryTransientTarball404,
+  selectPublishedVersion,
 } from './published-starter-consumer.mjs';
 
 await test('consumer drops source loaders, credentials and checkout executables', () => {
@@ -59,7 +63,10 @@ await test('publication waits for both full and abbreviated install metadata', a
   let pauses = 0;
   const requests: string[] = [];
   const metadata = await publishedMetadata(name, version, async (input, init) => {
-      assert.equal(String(input), 'https://registry.npmjs.org/@mpgd%2Fcli');
+    if (String(input) === dist.tarball) {
+      return new Response('', { status: 200 });
+    }
+    assert.equal(String(input), 'https://registry.npmjs.org/@mpgd%2Fcli');
     const accept = new Headers(init?.headers).get('accept') ?? '';
     requests.push(accept);
     const visible = accept === 'application/json' || pauses > 0;
@@ -91,6 +98,55 @@ await test('checkout executable aliases are removed from the consumer PATH', () 
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
+});
+
+await test('publication retries until the registry tarball is fetchable', async () => {
+  const name = '@mpgd/adapter-browser';
+  const version = '0.11.4';
+  const tarball = 'https://registry.npmjs.org/@mpgd/adapter-browser/-/adapter-browser-0.11.4.tgz';
+  const dist = { integrity: 'sha512-fixture', tarball };
+  let pauses = 0;
+  let tarballMisses = 0;
+  const metadata = await publishedMetadata(name, version, async (input) => {
+    if (String(input) === tarball) {
+      tarballMisses++;
+      if (tarballMisses < 3) {
+        return new Response('', { status: 404 });
+      }
+      return new Response('', { status: 200 });
+    }
+    return Response.json({ name, versions: { [version]: { name, version, dist } } });
+  }, () => {
+    pauses++;
+    return Promise.resolve();
+  });
+  assert.ok(tarballMisses >= 3, 'metadata visibility must not skip a missing tarball');
+  assert.ok(pauses >= 1, 'a tarball 404 must use the publication backoff');
+  assert.equal(metadata.tarball, tarball);
+});
+
+await test('publication retries when disposing a tarball response fails', async () => {
+  const name = '@mpgd/cli';
+  const version = '0.50.1';
+  const tarball = 'https://registry.npmjs.org/cli.tgz';
+  const dist = { integrity: 'sha512-fixture', tarball };
+  let tarballProbes = 0;
+  const metadata = await publishedMetadata(name, version, async (input) => {
+    if (String(input) === tarball) {
+      tarballProbes += 1;
+      if (tarballProbes === 1) {
+        return new Response(new ReadableStream({
+          cancel() {
+            return Promise.reject(new TypeError('socket closed while cancelling tarball'));
+          },
+        }), { status: 200 });
+      }
+      return new Response('', { status: 200 });
+    }
+    return Response.json({ name, versions: { [version]: { name, version, dist } } });
+  }, () => Promise.resolve());
+  assert.ok(tarballProbes >= 2, 'a cancel failure must not skip the next tarball probe');
+  assert.equal(metadata.tarball, tarball);
 });
 
 await test('publication retries network timeouts and transient registry responses', async () => {
@@ -191,6 +247,84 @@ await test('containment distinguishes siblings and ancestors', () => {
   assert.equal(isWithin(root, resolve(root, 'node_modules')), true);
   assert.equal(isWithin(root, resolve('consumer-other')), false);
   assert.equal(isWithin(root, resolve(root, '..')), false);
+});
+
+await test('install retries only transient npm tarball 404s', async () => {
+  let pauses = 0;
+  let calls = 0;
+  const recovered = await retryTransientTarball404(async () => {
+    calls++;
+    if (calls < 3) {
+      return {
+        status: 1,
+        stderr: 'ERR_PNPM_FETCH_404 GET https://registry.npmjs.org/@mpgd/adapter-browser/-/adapter-browser-0.11.4.tgz',
+      };
+    }
+    return { status: 0, stdout: 'ok' };
+  }, async () => {
+    pauses++;
+  });
+  assert.equal(calls, 3);
+  assert.equal(pauses, 2);
+  assert.equal(recovered.status, 0);
+  const fatalCalls = calls;
+  const fatal = await retryTransientTarball404(async () => {
+    calls++;
+    return { status: 1, stderr: 'ERR_PNPM_UNEXPECTED_STORE' };
+  }, async () => {
+    pauses++;
+  });
+  assert.equal(calls, fatalCalls + 1);
+  assert.equal(pauses, 2);
+  assert.equal(fatal.status, 1);
+});
+
+await test('generated caret specs wait for the highest matching tarball', async () => {
+  assert.equal(selectPublishedVersion(['0.11.3', '0.11.4', '0.12.0'], '^0.11.4'), '0.11.4');
+  assert.equal(selectPublishedVersion(['1.2.3', '1.9.0', '2.0.0'], '^1.2.3'), '1.9.0');
+  assert.equal(selectPublishedVersion(['0.0.4', '0.0.5'], '^0.0.4'), '0.0.4');
+  assert.equal(selectPublishedVersion(['0.11.3'], '0.11.4'), undefined);
+  const fixture = mkdtempSync(resolve(tmpdir(), 'mpgd-published-specs-'));
+  try {
+    const app = resolve(fixture, 'apps/target-web');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(resolve(fixture, 'package.json'), JSON.stringify({
+      dependencies: { '@mpgd/adapter-browser': '^0.11.4', phaser: '^4.0.0' },
+    }));
+    writeFileSync(resolve(app, 'package.json'), JSON.stringify({
+      devDependencies: { '@mpgd/cli': '0.52.0' },
+    }));
+    assert.deepEqual(collectPublishedPackageSpecs(fixture), [
+      { name: '@mpgd/adapter-browser', spec: '^0.11.4' },
+      { name: '@mpgd/cli', spec: '0.52.0' },
+    ]);
+    const tarball = 'https://registry.npmjs.org/@mpgd/adapter-browser/-/adapter-browser-0.11.4.tgz';
+    let misses = 0;
+    await awaitPublishedPackageSpecs(collectPublishedPackageSpecs(fixture).filter((spec) => spec.name === '@mpgd/adapter-browser'), async (input) => {
+      if (String(input) === tarball) {
+        misses++;
+        return new Response('', { status: misses < 2 ? 404 : 200 });
+      }
+      return Response.json({
+        name: '@mpgd/adapter-browser',
+        versions: {
+          '0.11.3': {
+            name: '@mpgd/adapter-browser',
+            version: '0.11.3',
+            dist: { integrity: 'sha512-old', tarball: 'https://registry.npmjs.org/old.tgz' },
+          },
+          '0.11.4': {
+            name: '@mpgd/adapter-browser',
+            version: '0.11.4',
+            dist: { integrity: 'sha512-new', tarball },
+          },
+        },
+      });
+    }, async () => undefined);
+    assert.ok(misses >= 2, 'caret resolution must probe the selected dist.tarball');
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 await test('consumer cannot discover a different Kit checkout through its ancestors', () => {
