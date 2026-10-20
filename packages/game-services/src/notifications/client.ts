@@ -1,0 +1,473 @@
+import {
+  assertNotificationConsentRecord,
+  assertNotificationDeliveryProviderEntry,
+  assertNotificationNotice,
+  isNotificationErrorCode,
+  NotificationError,
+  type NotificationConsentRecord,
+  type NotificationDeliveryProviderEntry,
+  type NotificationErrorCode,
+  type NotificationNotice,
+} from '@mpgd/platform/notifications';
+import type {
+  NotificationRuntimeBackend,
+  NotificationRuntimeReminderSetStatus,
+  NotificationRuntimeSession,
+} from '@mpgd/platform/notifications-runtime';
+
+import {
+  GameServicesHeaderResolutionError,
+  resolveGameServicesRequestHeaders,
+  type GameServicesHeaderResolver,
+} from '../request-headers.js';
+
+/**
+ * The game-services notifications client: the notifications runtime's
+ * backend (`NotificationRuntimeBackend` from
+ * `@mpgd/platform/notifications-runtime`) over the game-services Worker's
+ * session routes under `/game-services/notifications` (see
+ * docs/CLOUDFLARE_WORKER_DEPLOY.md, "Sessions" and "Client routes").
+ *
+ * The Worker learns the player, the session, and the installation from the
+ * `Authorization` header alone, through its `GAME_SERVICES_NOTIFICATIONS_AUTH`
+ * binding (the identity Worker's `authenticateNotificationSession`); no
+ * request carries a player or an installation. The client learns which
+ * session is current from the game's identity, which also supplies the
+ * header through the same resolver the game gives its commerce client.
+ *
+ * No platform SDK, DOM, or Phaser import: only `fetch`.
+ */
+
+/** The Worker's route prefix for notifications. */
+export const gameServicesNotificationsRoutePrefix = '/game-services/notifications';
+
+/** The server-backed session the game is signed in with. */
+export interface GameServicesNotificationSession {
+  readonly playerId: string;
+  /**
+   * Stable for the session's life, across token refreshes (its refresh
+   * family): the `sessionId` the identity service answers to the Worker's
+   * `authenticateNotificationSession`. A new sign-in starts a new one.
+   */
+  readonly sessionId: string;
+}
+
+/**
+ * The game's identity as the notifications client needs it. The game wires
+ * it to its own session holder (for example a `GuestSessionCoordinator`
+ * from `@mpgd/game-services`, whose view names `serverUserId` and a session
+ * id); the kit does not create sessions.
+ */
+export interface GameServicesNotificationIdentity {
+  /** The current session, or `undefined` while signed out. */
+  current(): GameServicesNotificationSession | undefined;
+  /**
+   * Calls `listener` when a session becomes current: a sign-in, a session
+   * restored at launch, or an account switch. Returns the unsubscribe. A
+   * repeat for the session already announced (a token refresh) is ignored.
+   */
+  onAuthenticated(listener: (session: GameServicesNotificationSession) => void): () => void;
+}
+
+/** The part of the Fetch API the client uses; `globalThis.fetch` satisfies it. */
+export type GameServicesNotificationsFetch = (
+  url: string,
+  init: {
+    readonly method: 'GET' | 'POST';
+    readonly headers: Record<string, string>;
+    readonly body?: string;
+  },
+) => Promise<GameServicesNotificationsFetchResponse>;
+
+export interface GameServicesNotificationsFetchResponse {
+  readonly status: number;
+  readonly headers?: { get(name: string): string | null };
+  text(): Promise<string>;
+}
+
+export interface CreateGameServicesNotificationsClientInput {
+  /** The game-services Worker's origin, as the commerce client takes it (`VITE_MPGD_GAME_SERVICES_URL`). */
+  readonly baseUrl: string;
+  readonly identity: GameServicesNotificationIdentity;
+  /** Defaults to `globalThis.fetch`. */
+  readonly fetch?: GameServicesNotificationsFetch;
+  /** Static headers sent with every request. */
+  readonly headers?: Readonly<Record<string, string>>;
+  /** Resolves the session's `Authorization` header at request time, as for the commerce client. */
+  readonly getHeaders?: GameServicesHeaderResolver;
+  /**
+   * The catalog target a device registration is for (`android`, `ios`): the
+   * Worker applies that target's topic mapping to the device and refuses a
+   * registration without it when one provider serves two targets.
+   */
+  readonly target?: string;
+}
+
+/** The registry the Worker publishes at `GET /providers`. */
+export interface GameServicesNotificationProviders {
+  readonly protocolVersion: string;
+  readonly providers: readonly NotificationDeliveryProviderEntry[];
+  /** Each served target and the provider id that delivers to it. */
+  readonly targets: Readonly<Record<string, string>>;
+}
+
+export interface GameServicesNotificationsClient extends NotificationRuntimeBackend {
+  /**
+   * The registry the Worker publishes (`GET /providers`, no session needed):
+   * pass `providers.find((entry) => entry.provider === provider.provider)` as
+   * the runtime's `registryEntry`.
+   */
+  getProviders(): Promise<GameServicesNotificationProviders>;
+}
+
+/**
+ * A failed notifications request, with the `NotificationError` code the
+ * runtime acts on and what the Worker answered.
+ *
+ * - 401: the session is not authenticated (signed out, token expired, or
+ *   the session ended): `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, retryable
+ *   once the game has a session again.
+ * - 404 on a session route: the Worker serves no notifications for sessions
+ *   (no catalog, or no `GAME_SERVICES_NOTIFICATIONS_AUTH` binding), and 405:
+ *   the Worker does not serve this client's routes;
+ *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`, not retryable.
+ * - 400 and 413: `NOTIFICATIONS_INVALID_INPUT` (or the code the Worker names).
+ * - 429 and 503: `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with the
+ *   `Retry-After` the Worker sent.
+ * - Another status names the code the Worker answered when it is a
+ *   notifications code; otherwise a 5xx is
+ *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` and a 4xx
+ *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+ * - No answer (the request failed, or the header resolver did):
+ *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with `status` 0.
+ */
+export class GameServicesNotificationsRequestError extends NotificationError {
+  /** The HTTP status, or 0 when no answer arrived. */
+  readonly status: number;
+  /** The route, such as `/consent`. */
+  readonly route: string;
+  /** The `error` the Worker answered, such as `UNAUTHORIZED`. */
+  readonly serverCode: string | undefined;
+  /** The `Retry-After` seconds the Worker sent with a retryable answer. */
+  readonly retryAfterSeconds: number | undefined;
+
+  constructor(input: {
+    readonly code: NotificationErrorCode;
+    readonly route: string;
+    readonly status: number;
+    readonly message: string;
+    readonly serverCode?: string;
+    readonly retryAfterSeconds?: number;
+    readonly cause?: unknown;
+  }) {
+    super(input.code, {
+      message: input.message,
+      ...(input.cause === undefined ? {} : { cause: input.cause }),
+    });
+    this.status = input.status;
+    this.route = input.route;
+    this.serverCode = input.serverCode;
+    this.retryAfterSeconds = input.retryAfterSeconds;
+  }
+}
+
+const reminderSetStatuses: readonly NotificationRuntimeReminderSetStatus[] = [
+  'scheduled',
+  'replaced',
+  'permission-required',
+  'request-missing',
+  'preference-off',
+  'advertising-consent-missing',
+  'capacity-exceeded',
+  'unavailable',
+];
+
+type Route =
+  | '/providers'
+  | '/consent'
+  | '/endpoints'
+  | '/endpoints/unregister'
+  | '/notices'
+  | '/notices/shown'
+  | '/reminders'
+  | '/reminders/cancel';
+
+/**
+ * Creates the client. Every session call needs a current session and sends
+ * the headers the resolver gives for it; without a session it throws
+ * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` and sends nothing.
+ */
+export function createGameServicesNotificationsClient(
+  input: CreateGameServicesNotificationsClientInput,
+): GameServicesNotificationsClient {
+  const baseUrl = input.baseUrl.trim().replace(/\/+$/u, '');
+  if (baseUrl.length === 0) {
+    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+      message: 'The game-services notifications client needs a baseUrl.',
+    });
+  }
+  const { identity } = input;
+  if (input.target !== undefined && (typeof input.target !== 'string' || input.target.length === 0)) {
+    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+      message: 'The notifications client target must be a non-empty string.',
+    });
+  }
+
+  const sessionOf = (session: GameServicesNotificationSession | undefined): NotificationRuntimeSession | undefined =>
+    session !== undefined
+      && typeof session.playerId === 'string'
+      && session.playerId.length > 0
+      && typeof session.sessionId === 'string'
+      && session.sessionId.length > 0
+      ? { id: session.sessionId, player: session.playerId }
+      : undefined;
+  const requireSession = (route: Route): NotificationRuntimeSession => {
+    const session = sessionOf(identity.current());
+    if (session === undefined) {
+      throw new GameServicesNotificationsRequestError({
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        route,
+        status: 0,
+        message: `${route} needs a signed-in player; no request was sent.`,
+      });
+    }
+    return session;
+  };
+
+  const request = async (
+    route: Route,
+    method: 'GET' | 'POST',
+    body: unknown,
+    authenticated: boolean,
+  ): Promise<Readonly<Record<string, unknown>>> => {
+    const fetcher = input.fetch ?? globalFetch();
+    let headers: Readonly<Record<string, string>>;
+    try {
+      headers = await resolveGameServicesRequestHeaders({
+        headers: input.headers,
+        // The public registry read needs no credentials, so it works signed out.
+        getHeaders: authenticated ? input.getHeaders : undefined,
+      });
+    } catch (error) {
+      throw new GameServicesNotificationsRequestError({
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        route,
+        status: 0,
+        message: `${route}: the session's request headers could not be resolved; no request was sent.`,
+        cause: error instanceof GameServicesHeaderResolutionError ? error : undefined,
+      });
+    }
+    let response: GameServicesNotificationsFetchResponse;
+    let text: string;
+    try {
+      response = await fetcher(`${baseUrl}${gameServicesNotificationsRoutePrefix}${route}`, {
+        method,
+        headers: method === 'POST' ? { ...headers, 'content-type': 'application/json' } : { ...headers },
+        ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
+      });
+      text = await response.text();
+    } catch (error) {
+      throw new GameServicesNotificationsRequestError({
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        route,
+        status: 0,
+        message: `${route}: the game-services Worker could not be reached.`,
+        cause: error,
+      });
+    }
+    const parsed = parseJson(text);
+    if (response.status >= 200 && response.status < 300) {
+      if (parsed === undefined) {
+        throw contractBroken(route, response.status, 'the answer is not a JSON object');
+      }
+      return parsed;
+    }
+    throw errorOf(route, response, parsed);
+  };
+
+  return {
+    session: () => sessionOf(identity.current()),
+    onAuthenticated(listener) {
+      let announced: NotificationRuntimeSession | undefined;
+      return identity.onAuthenticated((session) => {
+        const next = sessionOf(session);
+        if (next === undefined || (announced?.id === next.id && announced.player === next.player)) {
+          return;
+        }
+        announced = next;
+        listener(next);
+      });
+    },
+    async recordConsent(record) {
+      requireSession('/consent');
+      const answer = await request('/consent', 'POST', { record }, true);
+      checked('/consent', () => assertNotificationConsentRecord(answer['record']));
+    },
+    async listConsent() {
+      requireSession('/consent');
+      const answer = await request('/consent', 'GET', undefined, true);
+      const records = answer['records'];
+      if (!Array.isArray(records)) {
+        throw contractBroken('/consent', 200, 'records is not a list');
+      }
+      return records.map((record: unknown): NotificationConsentRecord =>
+        checked('/consent', () => assertNotificationConsentRecord(record)));
+    },
+    async registerEndpoint(registration) {
+      requireSession('/endpoints');
+      await request(
+        '/endpoints',
+        'POST',
+        { registration, ...(input.target === undefined ? {} : { target: input.target }) },
+        true,
+      );
+    },
+    async unregisterEndpoint({ provider, player }) {
+      const session = sessionOf(identity.current());
+      if (session === undefined || session.player !== player) {
+        // The Worker unbinds the session's installation from the session's
+        // player. Another player's session must not send it: the leaving
+        // player's session already ended, and its end unbound what it registered.
+        return;
+      }
+      await request('/endpoints/unregister', 'POST', { provider }, true);
+    },
+    async setReminder(reminder) {
+      requireSession('/reminders');
+      const answer = await request('/reminders', 'POST', { reminder }, true);
+      const status = answer['status'];
+      if (!reminderSetStatuses.includes(status as NotificationRuntimeReminderSetStatus)) {
+        throw contractBroken('/reminders', 200, `status ${JSON.stringify(status)} is not a reminder status`);
+      }
+      return status as NotificationRuntimeReminderSetStatus;
+    },
+    async cancelReminder({ key }) {
+      requireSession('/reminders/cancel');
+      const answer = await request('/reminders/cancel', 'POST', { key }, true);
+      if (typeof answer['cancelled'] !== 'boolean') {
+        throw contractBroken('/reminders/cancel', 200, 'cancelled is not a boolean');
+      }
+      return answer['cancelled'];
+    },
+    async listNotices() {
+      requireSession('/notices');
+      const answer = await request('/notices', 'GET', undefined, true);
+      const notices = answer['notices'];
+      if (!Array.isArray(notices)) {
+        throw contractBroken('/notices', 200, 'notices is not a list');
+      }
+      return notices.map((notice: unknown): NotificationNotice =>
+        checked('/notices', () => assertNotificationNotice(notice)));
+    },
+    async recordNotice({ channel, kind, record, dueBy }) {
+      requireSession('/notices/shown');
+      await request('/notices/shown', 'POST', { notice: { kind, record, dueBy }, channel }, true);
+    },
+    async getProviders() {
+      const answer = await request('/providers', 'GET', undefined, false);
+      const { protocolVersion, providers, targets } = answer;
+      if (
+        typeof protocolVersion !== 'string'
+        || !Array.isArray(providers)
+        || typeof targets !== 'object'
+        || targets === null
+        || Array.isArray(targets)
+        || !Object.values(targets).every((provider) => typeof provider === 'string')
+      ) {
+        throw contractBroken('/providers', 200, 'the registry is not { protocolVersion, providers, targets }');
+      }
+      return {
+        protocolVersion,
+        providers: providers.map((entry: unknown) =>
+          checked('/providers', () => assertNotificationDeliveryProviderEntry(entry))),
+        targets: { ...(targets as Readonly<Record<string, string>>) },
+      };
+    },
+  };
+}
+
+function globalFetch(): GameServicesNotificationsFetch {
+  const fetcher = (globalThis as { readonly fetch?: GameServicesNotificationsFetch }).fetch;
+  if (fetcher === undefined) {
+    throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+      message: 'globalThis.fetch is unavailable; give the notifications client a fetch.',
+    });
+  }
+  return fetcher;
+}
+
+function parseJson(text: string): Readonly<Record<string, unknown>> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Readonly<Record<string, unknown>>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An answer that breaks the route's contract: the Worker, not the game, is wrong. */
+function contractBroken(route: Route, status: number, issue: string): GameServicesNotificationsRequestError {
+  return new GameServicesNotificationsRequestError({
+    code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    route,
+    status,
+    message: `${route}: the game-services Worker answered outside the notifications contract: ${issue}.`,
+  });
+}
+
+function checked<Value>(route: Route, read: () => Value): Value {
+  try {
+    return read();
+  } catch (error) {
+    throw contractBroken(route, 200, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function errorOf(
+  route: Route,
+  response: GameServicesNotificationsFetchResponse,
+  body: Readonly<Record<string, unknown>> | undefined,
+): GameServicesNotificationsRequestError {
+  const { status } = response;
+  const serverCode = typeof body?.['error'] === 'string' ? body['error'] : undefined;
+  const serverMessage = typeof body?.['message'] === 'string' ? body['message'] : undefined;
+  const retryAfterHeader = response.headers?.get('retry-after') ?? null;
+  const retryAfter = retryAfterHeader === null || retryAfterHeader.trim() === ''
+    ? Number.NaN
+    : Number(retryAfterHeader);
+  const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : undefined;
+  let code: NotificationErrorCode;
+  let message: string;
+  if (status === 401) {
+    code = 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE';
+    message = `${route}: the game-services session is not authenticated (signed out, expired, or ended).`;
+  } else if (status === 404 || status === 405) {
+    code = 'NOTIFICATIONS_CONFIGURATION_REQUIRED';
+    message = route === '/providers'
+      ? `${route}: the game-services Worker serves no notifications (no MPGD_NOTIFICATIONS_CATALOG).`
+      : `${route}: the game-services Worker serves no notifications for sessions `
+        + '(no MPGD_NOTIFICATIONS_CATALOG or no GAME_SERVICES_NOTIFICATIONS_AUTH binding).';
+  } else if (status === 400 || status === 413) {
+    code = serverCode !== undefined && isNotificationErrorCode(serverCode) ? serverCode : 'NOTIFICATIONS_INVALID_INPUT';
+    message = `${route}: ${serverMessage ?? 'the game-services Worker refused the request as invalid.'}`;
+  } else if (status === 429 || status === 503) {
+    code = 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE';
+    message = `${route}: ${serverMessage ?? 'the game-services Worker is busy; retry later.'}`;
+  } else if (serverCode !== undefined && isNotificationErrorCode(serverCode)) {
+    code = serverCode;
+    message = `${route}: ${serverMessage ?? `the game-services Worker answered ${serverCode}.`}`;
+  } else {
+    code = status >= 500 ? 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' : 'NOTIFICATIONS_CONFIGURATION_REQUIRED';
+    message = `${route}: the game-services Worker answered ${status}${serverCode === undefined ? '' : ` ${serverCode}`}.`;
+  }
+  return new GameServicesNotificationsRequestError({
+    code,
+    route,
+    status,
+    message,
+    ...(serverCode === undefined ? {} : { serverCode }),
+    ...(retryAfterSeconds === undefined || code !== 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' ? {} : { retryAfterSeconds }),
+  });
+}
