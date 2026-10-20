@@ -156,10 +156,14 @@ export interface GameServicesNotificationsClient extends NotificationRuntimeBack
  *   answered): `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with that status. A
  *   2xx with JSON outside the route's contract:
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
- * - Nothing sent: `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with `status` 0,
- *   when no player is signed in, the header resolver failed, the player
- *   signed out or changed while the headers were resolved, or the request
- *   did not reach the Worker.
+ * - `status` 0, `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, nothing sent: no
+ *   signed-in player with a session id, the header resolver failed, or the
+ *   player signed out or changed while the headers were resolved.
+ * - `status` 0, `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, no answer read: the
+ *   request failed in transit or its body could not be read, so the Worker
+ *   may have handled it. Retrying may repeat it: reminders and endpoints
+ *   replace by key, but an advertising or night consent record is written
+ *   again.
  */
 export class GameServicesNotificationsRequestError extends NotificationError {
   /** The HTTP status, or 0 when no answer arrived. */
