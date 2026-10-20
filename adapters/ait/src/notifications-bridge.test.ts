@@ -372,6 +372,36 @@ describe('createAitNotificationsV2BridgeHandler', () => {
       .resolves.toMatchObject({ ok: true, data: { status: 'unavailable' } });
   });
 
+  it('carries a host code to the game-side provider', async () => {
+    const handler = createAitNotificationsV2BridgeHandler({
+      ...base,
+      requestPermission: async () => {
+        throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+          message: 'Toss refused the agreement.',
+          hostCode: 'NOTIFICATION_AGREEMENT_FAILED',
+        });
+      },
+    });
+    const provider = createAitBridgeNotificationProvider({
+      provider: 'apps-in-toss',
+      request: async (method, payload) => {
+        const response = await handler.request(request(method, payload));
+        if (!response.ok) {
+          throw new PlatformOperationError(response.error);
+        }
+        return response.data;
+      },
+      subscribe: () => () => {},
+    });
+    const failure = await provider.requestPermission({ topics: ['a'] }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(NotificationError);
+    expect(failure).toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      hostCode: 'NOTIFICATION_AGREEMENT_FAILED',
+      retryable: false,
+    });
+  });
+
   it('numbers the provider events per handler from 0', () => {
     let emit: ((event: NotificationEvent) => void) | undefined;
     const handler = createAitNotificationsV2BridgeHandler({

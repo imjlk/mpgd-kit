@@ -6,6 +6,7 @@ import {
 import {
   assertBridgeNotificationsV2Result,
   createNotificationsV2BridgeHandler,
+  readBridgeNotificationsHostCode,
   type BridgeNotificationsV2Payload,
   type BridgeNotificationsV2Result,
   type NotificationsV2BridgeHandler,
@@ -150,10 +151,6 @@ export function readAitBridgeNotificationEvent(envelope: unknown): NotificationE
   }
 }
 
-/** The host codes the bridge carries; the shared host handler names only these in a message. */
-const hostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
-const hostCodePattern = new RegExp(`\\(host code (${hostCodeCharacters})\\)$`, 'u');
-
 function toNotificationError(error: unknown): NotificationError {
   if (error instanceof NotificationError) {
     return error;
@@ -168,7 +165,7 @@ function toNotificationError(error: unknown): NotificationError {
   if (isNotificationErrorCode(failure.code)) {
     // The host handler names the host's own code in the message; it is the
     // only place a bridge error can carry it.
-    const hostCode = message === undefined ? undefined : hostCodePattern.exec(message)?.[1];
+    const hostCode = message === undefined ? undefined : readBridgeNotificationsHostCode(message);
     return new NotificationError(failure.code, {
       ...(message === undefined ? {} : { message }),
       ...explicit,

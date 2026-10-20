@@ -1,6 +1,7 @@
 import type { BridgeNotificationsV2Method } from '@mpgd/bridge';
 import {
   assertBridgeNotificationsV2Result,
+  readBridgeNotificationsHostCode,
   type BridgeNotificationsV2Payload,
   type BridgeNotificationsV2Result,
 } from '@mpgd/bridge/notifications';
@@ -15,10 +16,7 @@ import {
   type NotificationProvider,
 } from '@mpgd/platform/notifications';
 
-import {
-  devvitHostCodeCharacters,
-  devvitNotificationProviderId,
-} from './notifications-contract.js';
+import { devvitNotificationProviderId } from './notifications-contract.js';
 
 /**
  * The webview side of notifications v2 on Devvit, loaded in its own chunk
@@ -161,8 +159,6 @@ function defaultLocale(): string | undefined {
   return typeof navigatorLike?.language === 'string' ? navigatorLike.language : undefined;
 }
 
-const hostCodePattern = new RegExp(`\\(host code (${devvitHostCodeCharacters})\\)$`, 'u');
-
 function toNotificationError(error: unknown): NotificationError {
   if (error instanceof NotificationError) {
     return error;
@@ -173,7 +169,7 @@ function toNotificationError(error: unknown): NotificationError {
   const message = typeof failure.message === 'string' ? failure.message : undefined;
   const explicit = typeof failure.retryable === 'boolean' ? { retryable: failure.retryable } : {};
   if (isNotificationErrorCode(failure.code)) {
-    const hostCode = message === undefined ? undefined : hostCodePattern.exec(message)?.[1];
+    const hostCode = message === undefined ? undefined : readBridgeNotificationsHostCode(message);
     return new NotificationError(failure.code, {
       ...(message === undefined ? {} : { message }),
       ...explicit,
