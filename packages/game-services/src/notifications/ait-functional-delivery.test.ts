@@ -112,6 +112,7 @@ function provider(
       mtls: fake.mtls,
       recipientKey: 'toss-user',
       baseUrl: 'https://ait-partner.example',
+      allowUnlistedHost: true,
       ...options,
     }),
   };
@@ -322,40 +323,49 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
   });
 }
 
-// The deployment's codes come before the documented ones, 4095 included.
+// Documented codes win over a deployment list, 4095 and 5004 included.
 {
   const { provider: asAgreement } = provider(
-    [fail('4095', { retryAfterSeconds: 30 }), fail('5004')],
-    { agreementErrorCodes: ['4095', '5004'] },
+    [fail('4095', { retryAfterSeconds: 30 }), fail('5004'), fail('7777')],
+    { agreementErrorCodes: ['4095', '5004', '7777'] },
   );
   assert.deepEqual(await asAgreement.send(request), {
-    status: 'rejected',
-    reason: 'agreement',
+    status: 'rate-limited',
     providerCode: '4095',
+    retryAfterSeconds: 30,
+  });
+  assert.deepEqual(await asAgreement.send(request), {
+    status: 'rejected',
+    reason: 'configuration',
+    providerCode: '5004',
   });
   assert.deepEqual(await asAgreement.send(request), {
     status: 'rejected',
     reason: 'agreement',
-    providerCode: '5004',
+    providerCode: '7777',
   });
-  const { provider: asRecipient } = provider([fail('4095'), fail(4095), fail('5004')], {
-    recipientErrorCodes: ['4095', '5004'],
-  });
+  const { provider: asRecipient } = provider(
+    [fail('4095'), fail(4095), fail('5004'), fail('8888')],
+    { recipientErrorCodes: ['4095', '5004', '8888'] },
+  );
   assert.deepEqual(await asRecipient.send(request), {
-    status: 'rejected',
-    reason: 'recipient',
+    status: 'rate-limited',
     providerCode: '4095',
   });
-  // A numeric code is read as the same digits.
+  // A numeric code is read as the same digits, and still cannot override 4095.
   assert.deepEqual(await asRecipient.send(request), {
-    status: 'rejected',
-    reason: 'recipient',
+    status: 'rate-limited',
     providerCode: '4095',
   });
   assert.deepEqual(await asRecipient.send(request), {
     status: 'rejected',
-    reason: 'recipient',
+    reason: 'configuration',
     providerCode: '5004',
+  });
+  assert.deepEqual(await asRecipient.send(request), {
+    status: 'rejected',
+    reason: 'recipient',
+    providerCode: '8888',
   });
   // A code in both sets is an agreement rejection; HTTP 429 stays rate-limited.
   const { provider: both } = provider([fail('7777'), fail('4095', undefined, 429)], {
@@ -562,11 +572,27 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     calls[0]?.url,
     'https://apps-in-toss-api.toss.im/api-partner/v1/apps-in-toss/messenger/send-message',
   );
+  for (const baseUrl of [
+    'https://ait.example',
+    'https://apps-in-toss-api.toss.im.evil.example',
+    'https://not-apps-in-toss-api.toss.im',
+    'https://apps-in-toss-api.toss.im:8443',
+    'https://user:pass@apps-in-toss-api.toss.im',
+  ]) {
+    assert.throws(
+      () =>
+        createAitFunctionalMessageDeliveryProvider({ mtls, recipientKey: 'toss-user', baseUrl }),
+      baseUrl.includes('user:pass')
+        ? /credential-free HTTPS/u
+        : /host must be apps-in-toss-api\.toss\.im/u,
+    );
+  }
   const { mtls: prefixed, calls: prefixedCalls } = fakeMtls([success({ msgCount: 1 })]);
   await createAitFunctionalMessageDeliveryProvider({
     mtls: prefixed,
     recipientKey: 'toss-user',
     baseUrl: 'https://proxy.example/ait',
+    allowUnlistedHost: true,
   }).send(request);
   assert.equal(
     prefixedCalls[0]?.url,

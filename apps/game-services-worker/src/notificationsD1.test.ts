@@ -14,7 +14,11 @@ import {
 } from '@mpgd/platform/notifications';
 import { Miniflare } from 'miniflare';
 
-import { createD1NotificationStore } from './notificationsD1.js';
+import {
+  createD1NotificationStore,
+  d1NotificationPurgeBatch,
+  d1NotificationPurgeMaxBatches,
+} from './notificationsD1.js';
 
 const miniflare = new Miniflare({
   modules: true,
@@ -204,6 +208,75 @@ try {
   );
   now += 31 * 86_400_000;
   assert.deepEqual(await service.purge(), { sends: 1, history: 1, endpoints: 1 });
+
+  // Purge deletes in bounded statements, and stops after the per-call cap.
+  {
+    const statements: string[] = [];
+    const recording = {
+      prepare(sql: string) {
+        statements.push(sql);
+        return db.prepare(sql);
+      },
+      batch: (batch: D1PreparedStatement[]) => db.batch(batch),
+      dump: () => db.dump(),
+      exec: (query: string) => db.exec(query),
+    } as D1Database;
+    const bounded = createD1NotificationStore(recording);
+    for (const table of [
+      'notification_sends',
+      'notification_delivery_history',
+      'notification_endpoints',
+    ]) {
+      await db.prepare(`DELETE FROM ${table}`).run();
+    }
+    const extra = d1NotificationPurgeBatch + 1;
+    for (let index = 0; index < extra; index += 1) {
+      await db.prepare(`INSERT INTO notification_sends
+        (send_key, version, player_id, in_flight, changed_at_ms, send_json)
+        VALUES (?, 'v', 'p-purge', 0, 1, '{}')`).bind(`purge-send-${index}`).run();
+      await db.prepare(`INSERT INTO notification_delivery_history
+        (send_key, provider, player_id, topic, at_ms)
+        VALUES (?, 'fcm', 'p-purge', 't', 1)`).bind(`purge-hist-${index}`).run();
+      await db.prepare(`INSERT INTO notification_endpoints (
+          provider, installation_id, player_id, address_kind, address_value, permission, status,
+          session_id, last_registered_at_ms, invalidated_at_ms, endpoint_json
+        ) VALUES ('fcm', ?, 'p-purge', 'fcm-token', ?, 'granted', 'invalid', 's-purge', 1, 1, '{}')`)
+        .bind(`purge-i-${index}`, `purge-tok-${index}`)
+        .run();
+    }
+    statements.length = 0;
+    const future = '2099-01-01T00:00:00Z';
+    assert.deepEqual(await bounded.purge({
+      sendsChangedBefore: future,
+      historyBefore: future,
+      invalidEndpointsBefore: future,
+      staleEndpointsBefore: future,
+      sessionEndpointsBefore: future,
+    }), { sends: extra, history: extra, endpoints: extra });
+    const deletes = statements.filter((sql) => sql.includes('rowid IN'));
+    assert.ok(
+      deletes.length > 0 && deletes.every((sql) => sql.includes('LIMIT ?')),
+      deletes.join('\n'),
+    );
+    assert.equal(deletes.filter((sql) => sql.includes('notification_sends')).length, 2);
+    const capped = d1NotificationPurgeBatch * d1NotificationPurgeMaxBatches;
+    for (let index = 0; index < capped + 1; index += 1) {
+      await db.prepare(`INSERT INTO notification_sends
+        (send_key, version, player_id, in_flight, changed_at_ms, send_json)
+        VALUES (?, 'v', 'p-purge', 0, 1, '{}')`).bind(`cap-send-${index}`).run();
+    }
+    const cappedCounts = await bounded.purge({
+      sendsChangedBefore: future,
+      historyBefore: future,
+      invalidEndpointsBefore: future,
+      staleEndpointsBefore: future,
+      sessionEndpointsBefore: future,
+    });
+    assert.equal(cappedCounts.sends, capped);
+    const left = await db.prepare('SELECT COUNT(*) AS count FROM notification_sends')
+      .first<{ count: number }>();
+    assert.equal(left?.count, 1);
+  }
   console.info('D1 notification store passed.');
 } finally {
   await miniflare.dispose();

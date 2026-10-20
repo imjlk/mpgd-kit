@@ -75,8 +75,8 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
   }
 
   /** The cron trigger: notification purges and the scheduler (reminders, notice pushes, due rows). */
-  override async scheduled(_controller: ScheduledController): Promise<void> {
-    await runScheduledNotifications(this.env);
+  override async scheduled(controller: ScheduledController): Promise<void> {
+    await runScheduledNotifications(this.env, { cron: controller.cron });
   }
 }
 

@@ -117,6 +117,21 @@ assert.match(
   /SceneDelegateProxy\.shared\.scene\(scene, openURLContexts: URLContexts\)/,
 );
 assert.match(sceneDelegate, /SceneDelegateProxy\.shared\.scene\(scene, continue: userActivity\)/);
+assert.match(
+  sceneDelegate,
+  /connectionOptions\.notificationResponse/,
+  'A killed-app notification tap is only in connectionOptions.notificationResponse',
+);
+assert.match(
+  sceneDelegate,
+  /capacitorViewDidAppear/,
+  'Cold-start notification taps must be forwarded once the bridge has loaded plugins',
+);
+assert.match(
+  sceneDelegate,
+  /userNotificationCenter/,
+  'Cold-start notification taps must reach the UNUserNotificationCenter delegate',
+);
 assert.match(appDelegate, /configurationForConnecting connectingSceneSession/);
 assert.match(xcodeProject, /SceneDelegate\.swift in Sources/);
 for (const name of ['Info.plist', 'Info-Smoke.plist']) {
