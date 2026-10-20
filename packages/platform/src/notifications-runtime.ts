@@ -118,7 +118,9 @@ export interface NotificationRuntimeBackend {
   /**
    * Unbinds the session's installation from `player`, the player whose
    * session sent the unbind; an installation another player took over since
-   * stays bound.
+   * stays bound. Unlike the other calls, it may answer without a request when
+   * `player` is no longer signed in: that session's end unbinds what it
+   * registered (the game-services client does).
    */
   unregisterEndpoint(input: { readonly provider: string; readonly player: string }): Promise<void>;
   /** Checks gate steps 3 to 5, then stores or replaces the session player's reminder with this key. */
@@ -167,6 +169,8 @@ export interface NotificationRuntimeState {
  * change, with the whole state. Either may answer synchronously. A value
  * `load` answers that is not a runtime state reads as an empty one. One
  * runtime owns a storage: a game with two runtimes gives each its own key.
+ * The state holds the last registration as sent, push address included (an
+ * FCM token): an address, not a credential, kept like other game data.
  */
 export interface NotificationRuntimeStorage {
   load(): unknown;
@@ -432,9 +436,9 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   again, across restarts, until `register()` or the next authentication. A
  *   session found at start or on a read other than the one `unregister()`
  *   left (any session, when none was signed in then) is such an
- *   authentication even when the runtime did not observe it; so are a
- *   registration acknowledged for another session and, at start, a session
- *   with nothing acknowledged yet.
+ *   authentication even when the runtime did not observe it. While bound, a
+ *   registration acknowledged for another session is sent again for this
+ *   one, and so is, at start, one for a session with nothing acknowledged.
  * - Reminders: one key across both routes, and `cancel` removes it from each
  *   route that has it. Local ones pass the client gate steps (permission,
  *   then the topic preference from the backend, then quiet hours, which move

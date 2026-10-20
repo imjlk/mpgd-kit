@@ -421,9 +421,11 @@ The gateway gains `notificationsV2?: NotificationProvider` next to the v1
 
 ### Runtime {#runtime}
 
-Games do not call the provider directly. The game-services client composes
-the provider with the backend in one notifications runtime, which the
-conformance runner drives as the `game` actor:
+Games do not call the provider directly. The notifications runtime
+(`createNotificationRuntime` in `@mpgd/platform/notifications-runtime`)
+composes the provider with the backend, such as the game-services client
+over the Worker's routes; the conformance runner drives it as the `game`
+actor:
 
 ```ts
 export interface NotificationConsentRecord {
@@ -2279,7 +2281,8 @@ written for one fixture profile and declares in `appliesTo` the capability
 fields its scenario depends on. A provider in P1–P3 runs, through a
 `createProvider` hook as commerce providers do, every vector whose
 `appliesTo` its own capabilities satisfy; the reference runtime runs all of
-them with fixture providers.
+them with fixture providers. Since R1 the reference runtime is the
+production runtime from `@mpgd/platform/notifications-runtime`.
 
 How a real provider is judged:
 

@@ -734,6 +734,9 @@ for (const refused of [
   'https://169.254.169.254',
   'https://[::1]',
   'https://[fd00::1]',
+  'https://[::ffff:7f00:1]',
+  'https://[::ffff:10.0.0.1]',
+  'https://a.localhost',
   'not a url',
   '',
 ]) {

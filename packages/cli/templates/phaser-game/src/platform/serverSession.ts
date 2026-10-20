@@ -5,11 +5,10 @@ import type { GameServicesHeaderResolver } from '@mpgd/game-services';
  * and the `Authorization` header for that session. The starter has none, so
  * `resolveStarterServerSession` returns `undefined`. Set yours with
  * `setStarterServerSession` (for example over a `GuestSessionCoordinator`
- * from `@mpgd/game-services` and your identity service): the commerce client
- * then sends its header, and,
- * in a game created with `--providers notifications`, the notifications
- * runtime uses the same session and header for the game-services Worker's
- * notification routes.
+ * from `@mpgd/game-services` and your identity service). The commerce client
+ * then sends its header. In a game created with `--providers notifications`,
+ * the notifications runtime uses the same session and header for the
+ * game-services Worker's notification routes.
  */
 export interface StarterServerSession {
   /**
@@ -28,12 +27,20 @@ export interface StarterServerSession {
 }
 
 let serverSession: StarterServerSession | undefined;
-/** Whether something read the session already, so a later change cannot reach it. */
-let read = false;
+/** Whether the commerce client read the session already: it reads it once. */
+let readOnce = false;
 
-/** The game's server-backed session; `undefined` until the game sets one with `setStarterServerSession`. */
-export function resolveStarterServerSession(): StarterServerSession | undefined {
-  read = true;
+/**
+ * The game's server-backed session; `undefined` until the game sets one with
+ * `setStarterServerSession`. `once` marks a reader that keeps what it reads
+ * (the commerce client), so a later change warns.
+ */
+export function resolveStarterServerSession(
+  options: { readonly once?: boolean } = {},
+): StarterServerSession | undefined {
+  if (options.once === true) {
+    readOnce = true;
+  }
   return serverSession;
 }
 
@@ -42,13 +49,14 @@ export function resolveStarterServerSession(): StarterServerSession | undefined 
  * before `bootstrap()`: `createStarterGameServices` reads it once, and the
  * notification settings and opens read it until a backend exists. Its
  * `current()` may answer `undefined` until the player signs in. A session
- * set after the commerce client was created does not reach it, which this
- * warns about.
+ * set after the commerce client was created does not reach that client,
+ * which this warns about.
  */
 export function setStarterServerSession(session: StarterServerSession | undefined): void {
-  if (read && session !== serverSession) {
+  if (readOnce && session !== undefined && session !== serverSession) {
     console.warn(
-      '[game-services] setStarterServerSession ran after the session was first read; call it before bootstrap().',
+      '[game-services] setStarterServerSession ran after the commerce client was created; '
+        + "it does not send this session's header. Call it before bootstrap().",
     );
   }
   serverSession = session;

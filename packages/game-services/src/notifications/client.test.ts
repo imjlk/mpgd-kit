@@ -366,7 +366,9 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
       retryable: true,
     },
     // A success that breaks the route's contract is the Worker's fault, never retried.
-    { status: 200, text: 'not json', code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
+    // A success page that is not JSON (a captive portal) is not the Worker's: retryable.
+    { status: 200, text: '<html>Sign in to the Wi-Fi</html>', code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true },
+    { status: 200, text: '[]', code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
     { status: 200, body: { records: 'none' }, code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
     { status: 200, body: { records: [{ kind: 'mystery' }] }, code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false },
   ];
@@ -441,6 +443,25 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
   assert.equal(sent.length, 0);
   assert.ok(!unresolved.message.includes('rt-secret'));
   assert.ok(!String((unresolved.cause as Error | undefined)?.message).includes('rt-secret'));
+}
+
+// An account switch while the headers resolve: the first player's call is not sent with the next player's token.
+{
+  const { identity, signIn } = identityOf(session);
+  const { fetch, sent } = fakeFetch(() => ({ status: 200, body: {} }));
+  const client = createGameServicesNotificationsClient({
+    baseUrl: 'https://services.example',
+    identity,
+    fetch,
+    getHeaders: async () => {
+      signIn({ playerId: 'p-2', sessionId: 's-2' });
+      return { authorization: 'Bearer token-of-p-2' };
+    },
+  });
+  const switched = await rejection(client.recordConsent(record));
+  assert.equal(switched.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(switched.status, 0);
+  assert.equal(sent.length, 0);
 }
 
 // Inputs.

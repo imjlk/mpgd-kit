@@ -130,7 +130,12 @@ Rules the starter's settings screen follows, and your own screen must too:
 > client then sends too. Without them it returns `undefined`, and the
 > settings screen asks for the OS or host permission (and withdraws a Devvit
 > opt-in the game rendered), shows no reminder, advertising, or night
-> switch, and says why.
+> switch, and says why. The runtime keeps its last registration, push
+> address included, in the platform storage, like other game data. A game
+> created before this release has no `serverSession.ts`; `mpgd target init
+> capacitor --providers notifications` writes one, and its commerce client
+> sends the header only once `gameServices.ts` passes it, as the starter's
+> now does.
 
 Notification opens are hints, never grants: an open carries a route and
 untrusted data, and anything worth claiming goes through the server. The

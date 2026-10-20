@@ -94,7 +94,12 @@ export interface GameServicesNotificationsFetchResponse {
 }
 
 export interface CreateGameServicesNotificationsClientInput {
-  /** The game-services Worker's origin, as the commerce client takes it (`VITE_MPGD_GAME_SERVICES_URL`). */
+  /**
+   * The game-services Worker's origin, as the commerce client takes it
+   * (`VITE_MPGD_GAME_SERVICES_URL`). The client sends the session's
+   * credentials to it as given: in a production build, check it with
+   * `isPublicGameServicesUrl` from `@mpgd/game-services` first.
+   */
   readonly baseUrl: string;
   readonly identity: GameServicesNotificationIdentity;
   /** Defaults to `globalThis.fetch`. */
@@ -243,11 +248,17 @@ export function createGameServicesNotificationsClient(
     return session;
   };
 
+  /**
+   * Sends one request. For a session route, `session` is the session the call
+   * began for: if another is current once the headers are resolved (an
+   * account switch during a token refresh), nothing is sent, so one player's
+   * call never goes out with the next player's credentials.
+   */
   const request = async (
     route: Route,
     method: 'GET' | 'POST',
     body: unknown,
-    authenticated: boolean,
+    session: NotificationRuntimeSession | undefined,
   ): Promise<Readonly<Record<string, unknown>>> => {
     const fetcher = input.fetch ?? globalFetch();
     let headers: Readonly<Record<string, string>>;
@@ -255,7 +266,7 @@ export function createGameServicesNotificationsClient(
       headers = await resolveGameServicesRequestHeaders({
         headers: input.headers,
         // The public registry read needs no credentials, so it works signed out.
-        getHeaders: authenticated ? input.getHeaders : undefined,
+        getHeaders: session === undefined ? undefined : input.getHeaders,
       });
     } catch (error) {
       throw new GameServicesNotificationsRequestError({
@@ -265,6 +276,17 @@ export function createGameServicesNotificationsClient(
         message: `${route}: the session's request headers could not be resolved; no request was sent.`,
         cause: error instanceof GameServicesHeaderResolutionError ? error : undefined,
       });
+    }
+    if (session !== undefined) {
+      const now = sessionOf(identity.current());
+      if (now === undefined || now.id !== session.id || now.player !== session.player) {
+        throw new GameServicesNotificationsRequestError({
+          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          route,
+          status: 0,
+          message: `${route}: the session changed while its request headers were resolved; no request was sent.`,
+        });
+      }
     }
     let response: GameServicesNotificationsFetchResponse;
     let text: string;
@@ -286,12 +308,22 @@ export function createGameServicesNotificationsClient(
     }
     const parsed = parseJson(text);
     if (response.status >= 200 && response.status < 300) {
+      if (parsed === 'not-json') {
+        // A success page that is not JSON came from something in between (a
+        // captive portal, a proxy), not from the Worker: try again later.
+        throw new GameServicesNotificationsRequestError({
+          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          route,
+          status: response.status,
+          message: `${route}: the answer was not JSON; something between the game and the Worker answered.`,
+        });
+      }
       if (parsed === undefined) {
         throw contractBroken(route, response.status, 'the answer is not a JSON object');
       }
       return parsed;
     }
-    throw errorOf(route, response, parsed);
+    throw errorOf(route, response, parsed === 'not-json' ? undefined : parsed);
   };
 
   return {
@@ -310,13 +342,13 @@ export function createGameServicesNotificationsClient(
       });
     },
     async recordConsent(record) {
-      requireSession('/consent');
-      const answer = await request('/consent', 'POST', { record }, true);
+      const session = requireSession('/consent');
+      const answer = await request('/consent', 'POST', { record }, session);
       checked('/consent', () => assertNotificationConsentRecord(answer['record']));
     },
     async listConsent() {
-      requireSession('/consent');
-      const answer = await request('/consent', 'GET', undefined, true);
+      const session = requireSession('/consent');
+      const answer = await request('/consent', 'GET', undefined, session);
       const records = answer['records'];
       if (!Array.isArray(records)) {
         throw contractBroken('/consent', 200, 'records is not a list');
@@ -325,12 +357,12 @@ export function createGameServicesNotificationsClient(
         checked('/consent', () => assertNotificationConsentRecord(record)));
     },
     async registerEndpoint(registration) {
-      requireSession('/endpoints');
+      const session = requireSession('/endpoints');
       await request(
         '/endpoints',
         'POST',
         { registration, ...(input.target === undefined ? {} : { target: input.target }) },
-        true,
+        session,
       );
     },
     async unregisterEndpoint({ provider, player }) {
@@ -341,11 +373,11 @@ export function createGameServicesNotificationsClient(
         // player's session already ended, and its end unbound what it registered.
         return;
       }
-      await request('/endpoints/unregister', 'POST', { provider }, true);
+      await request('/endpoints/unregister', 'POST', { provider }, session);
     },
     async setReminder(reminder) {
-      requireSession('/reminders');
-      const answer = await request('/reminders', 'POST', { reminder }, true);
+      const session = requireSession('/reminders');
+      const answer = await request('/reminders', 'POST', { reminder }, session);
       const status = answer['status'];
       if (!reminderSetStatuses.includes(status as NotificationRuntimeReminderSetStatus)) {
         throw contractBroken('/reminders', 200, `status ${JSON.stringify(status)} is not a reminder status`);
@@ -353,16 +385,16 @@ export function createGameServicesNotificationsClient(
       return status as NotificationRuntimeReminderSetStatus;
     },
     async cancelReminder({ key }) {
-      requireSession('/reminders/cancel');
-      const answer = await request('/reminders/cancel', 'POST', { key }, true);
+      const session = requireSession('/reminders/cancel');
+      const answer = await request('/reminders/cancel', 'POST', { key }, session);
       if (typeof answer['cancelled'] !== 'boolean') {
         throw contractBroken('/reminders/cancel', 200, 'cancelled is not a boolean');
       }
       return answer['cancelled'];
     },
     async listNotices() {
-      requireSession('/notices');
-      const answer = await request('/notices', 'GET', undefined, true);
+      const session = requireSession('/notices');
+      const answer = await request('/notices', 'GET', undefined, session);
       const notices = answer['notices'];
       if (!Array.isArray(notices)) {
         throw contractBroken('/notices', 200, 'notices is not a list');
@@ -371,11 +403,11 @@ export function createGameServicesNotificationsClient(
         checked('/notices', () => assertNotificationNotice(notice)));
     },
     async recordNotice({ channel, kind, record, dueBy }) {
-      requireSession('/notices/shown');
-      await request('/notices/shown', 'POST', { notice: { kind, record, dueBy }, channel }, true);
+      const session = requireSession('/notices/shown');
+      await request('/notices/shown', 'POST', { notice: { kind, record, dueBy }, channel }, session);
     },
     async getProviders() {
-      const answer = await request('/providers', 'GET', undefined, false);
+      const answer = await request('/providers', 'GET', undefined, undefined);
       const { protocolVersion, providers, targets } = answer;
       if (
         typeof protocolVersion !== 'string'
@@ -407,15 +439,17 @@ function globalFetch(): GameServicesNotificationsFetch {
   return fetcher;
 }
 
-function parseJson(text: string): Readonly<Record<string, unknown>> | undefined {
+/** The JSON object an answer holds, `undefined` for other JSON, or `'not-json'`. */
+function parseJson(text: string): Readonly<Record<string, unknown>> | undefined | 'not-json' {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? parsed as Readonly<Record<string, unknown>>
-      : undefined;
+    parsed = JSON.parse(text);
   } catch {
-    return undefined;
+    return 'not-json';
   }
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? parsed as Readonly<Record<string, unknown>>
+    : undefined;
 }
 
 /** An answer that breaks the route's contract: the Worker, not the game, is wrong. */

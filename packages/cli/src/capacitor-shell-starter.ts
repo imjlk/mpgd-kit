@@ -3341,7 +3341,7 @@ function planNotificationsProvider(input: {
     if (input.templateRoot !== undefined) {
       for (const file of notificationsCapacitorTemplateSupportFiles) {
         if (readExisting(safeDestination(gameRoot, file)) === undefined) {
-          files.push({ path: file, content: readTemplateFile(input.templateRoot, file) });
+          files.push({ path: file, content: starterFile(input.templateRoot, file) });
         }
       }
     }

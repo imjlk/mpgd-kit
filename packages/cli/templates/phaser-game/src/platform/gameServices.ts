@@ -48,7 +48,7 @@ export function createStarterGameServices(input: {
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
 }): StarterGameServices {
-  const session = resolveStarterServerSession();
+  const session = resolveStarterServerSession({ once: true });
   return createGameServicesRuntime({
     gateway: input.gateway,
     playerId: input.playerId,
