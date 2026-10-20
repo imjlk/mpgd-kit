@@ -1,5 +1,33 @@
 # @mpgd/cli
 
+## 0.53.0 — 2026-10-20
+
+### Added
+
+- [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `mpgd game create --providers notifications` (and `@mpgd/create-game --providers notifications`) adds the notifications v2 starter to a new Phaser or lite game:
+  
+  - `notifications/topics.json`, a topic catalog with the starter topics `daily-ready` and `streak-at-risk` (`requested`: off until the player turns them on), `friend-challenge` (`service`), a sample `advertising` topic for iOS (an Android FCM push cannot carry the opt-out action until the shell renders advertising natively, a follow-up), and the `consent-notice` topic with every `notices.copy` variant in Korean and English (decree art. 62-2 and 62-3 wording, `{{consentDate}}` in each);
+  - `notifications/deployment.json` with `advertisingRules: "kr"` and an advertising sender whose contact placeholder `pnpm validate:notifications` refuses until it is replaced;
+  - the Android and iOS gateways register the Capacitor notifications provider (FCM and local reminders, named Android channels, the opt-out action, and `openCapacitorNotificationSettings`); the Reddit gateway exposes the game-rendered opt-in and the Reddit login prompt; the generated Devvit server serves the opt-in and runs the notifications service in its scheduler tasks; the Apps in Toss wrapper reads the catalog's `targets.ait` mappings;
+  - `integrations.notifications: "available"` for `android`, `ios`, and `ait` (Reddit stays `approval-required` until Reddit approves the app) and `integrations.identityUpgrade: "available"` for `reddit`;
+  - a game-rendered notification settings screen (a Phaser scene, or a DOM panel in the lite template) for the OS or host permission, reminder topics, 광고성 정보 수신동의, and night consent, recorded through the notifications runtime and shown from the player's latest backend consent records (never a device-side copy); night consent is offered only while advertising consent is granted and is withdrawn with it; and `docs/NOTIFICATIONS.md`.
+  
+  The game declares `@capacitor-firebase/messaging` 8.5.2, `@capacitor/local-notifications` 8.3.1, and `firebase` 12.19.0. Without `--providers notifications` a generated game is unchanged. — Thanks @imjlk!
+- [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `mpgd target init capacitor --providers notifications` adds notifications to an existing game's game-owned Capacitor shell: it installs `@capacitor-firebase/messaging` and `@capacitor/local-notifications` into the shell (at the game's installed versions, else 8.5.2 and 8.3.1) and declares them and `firebase` in the game (a game's own `firebase` must be in the messaging plugin's peer range, `^12.6.0` for the starter's plugin, or the initializer stops before writing), syncs a preserved native project, and, when a Capacitor gateway is still the template's (store-wired or not), wires the notifications provider into it and writes the starter modules and catalog the gateway reads, keeping any the game already has. A game-owned gateway is only checked. It refuses a game or shell that lists `@capacitor/push-notifications`, drops `SCHEDULE_EXACT_ALARM` from a newly generated Android project's manifest, and warns about an existing manifest that keeps it, about missing `google-services.json` and `GoogleService-Info.plist`, and that the settings screen is not added to an existing game. `mpgd.native-shell.json` records the plugins under `providers.notifications`. — Thanks @imjlk!
+
+### Changed
+
+- [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `@mpgd/adapter-ait/notification-config` exports `extractAitNotificationTopicConfig(catalog, { target, sourceLabel })`, which reads the `notificationTopics` of `installAitHostBridge` from a notification topic catalog's `targets.ait` mappings (`templateSetCode`, `agreement`). The catalog is checked with `validateNotificationTopicCatalog` from `@mpgd/catalog` (now a dependency) and the Apps in Toss registry entry, so for the Apps in Toss target the wrapper refuses what `pnpm validate:notifications` refuses, including an advertising topic mapped for Apps in Toss; other targets' mappings and the deployment are left to `pnpm validate:notifications`.
+  
+  The generated Apps in Toss wrapper reads the game's notification topic catalog at build time (`MPGD_NOTIFICATION_TOPICS_FILE`, else `notifications/topics.json` when it exists) and passes its Apps in Toss topics to the host bridge, so notifications v2 agreements and landings work once the game maps its console templates. Without a catalog or a mapping the wrapper behaves as before. — Thanks @imjlk!
+
+### Patch changes
+
+- [51c191fb](https://github.com/imjlk/mpgd-kit/commit/51c191fba835645cc6d4b09aa8ff11b16d06ff4f) Document the official ONEstore Web SDK skill installation and explicit refresh workflow for ONEplay consumers, with a local SDK version drift check and game-owned lifecycle/authentication acceptance requirements.
+  
+  Check the actual exported SDK URL rather than comments, and correct the installed sample with a shared browser bootstrap and mandatory server purchase verification hook. Preserve these local corrections when refreshing the official skill. — Thanks @imjlk!
+- Updated dependencies: @mpgd/adapter-ait@0.20.0, @mpgd/adapter-browser@0.11.4, @mpgd/adapter-capacitor@0.12.0, @mpgd/adapter-devvit@0.13.2, @mpgd/adapter-verse8@0.7.4, @mpgd/analytics@0.4.13, @mpgd/bridge@0.14.1, @mpgd/capacitor-play-billing@0.3.4, @mpgd/capacitor-storekit@0.3.4, @mpgd/catalog@0.10.4, @mpgd/game-runtime@0.7.4, @mpgd/game-services@0.26.0, @mpgd/i18n@0.6.18, @mpgd/platform@0.26.0, @mpgd/target-config@0.23.4
+
 ## 0.52.0 — 2026-10-19
 
 ### Patch changes

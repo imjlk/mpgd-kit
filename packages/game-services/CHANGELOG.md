@@ -1,5 +1,17 @@
 # @mpgd/game-services
 
+## 0.26.0 — 2026-10-20
+
+### Changed
+
+- [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) Under the Korean advertising rules, `assertNotificationDeployment` refuses an advertising sender name, contact, or opt-out line that is still a common template marker (a `REPLACE-WITH-…` marker; a whole value that is an unreplaced `__TOKEN__`, `{{token}}`, `${token}`, `<token>`, or `[token]`; a reserved `example.com` address; or only `TODO`/`TBD`/`CHANGEME`/`PLACEHOLDER`/`XXX`), so a backend built from the starter's deployment file fails closed instead of sending advertising with an unusable sender line. `isNotificationPlaceholderText` and `notificationDeploymentPlaceholders` export the check, and `assertNotificationDeployment(input, { allowPlaceholders: true })` lets a validator report placeholders itself.
+  
+  `createNotificationService` and `createNotificationServiceCatalog` in `@mpgd/game-services` assert the deployment, so they now throw for such a deployment, and the game-services Worker reports its notifications as misconfigured. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.4.13, @mpgd/catalog@0.10.4, @mpgd/platform@0.26.0
+
 ## 0.25.1 — 2026-10-19
 
 ### Patch changes
