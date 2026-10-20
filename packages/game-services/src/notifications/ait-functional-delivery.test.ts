@@ -207,6 +207,22 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
   assert.equal(nothing.status === 'rejected' ? nothing.reason : undefined, 'recipient');
 }
 
+// The longest agreement reason the provider can read still matches, padding trimmed.
+{
+  const longest = 'x'.repeat(1_024);
+  const { provider: ait } = provider(
+    [
+      success({
+        msgCount: 0,
+        fail: { sentPush: [{ contentId: 'p-4', reachedFailReason: `${longest}${'y'.repeat(10)}` }] },
+      }),
+    ],
+    { agreementFailReasons: [`  ${longest} `] },
+  );
+  const answer = await ait.send(request);
+  assert.equal(answer.status === 'rejected' ? answer.reason : undefined, 'agreement');
+}
+
 // FAIL business errors.
 {
   const { provider: ait } = provider(
@@ -565,6 +581,18 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     () => createAitFunctionalMessageDeliveryProvider({ mtls, recipientKey: 'email' as never }),
     /recipientKey/u,
   );
+  // An agreement reason the provider could never match is refused at creation.
+  for (const reason of ['', '   ', 'x'.repeat(1_025), ` ${'x'.repeat(1_025)} `, 7 as never]) {
+    assert.throws(
+      () =>
+        createAitFunctionalMessageDeliveryProvider({
+          mtls,
+          recipientKey: 'toss-user',
+          agreementFailReasons: ['NOT_AGREED', reason],
+        }),
+      /agreementFailReasons entries must be 1 to 1024 characters once trimmed/u,
+    );
+  }
   const { mtls: defaults, calls } = fakeMtls([success({ msgCount: 1 })]);
   await createAitFunctionalMessageDeliveryProvider({ mtls: defaults, recipientKey: 'toss-user' })
     .send(request);
