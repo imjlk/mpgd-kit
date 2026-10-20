@@ -1,3 +1,8 @@
+import {
+  createCoordinatedCommerceProvider,
+  type CoordinatedCommerceOptions,
+} from '../commerce/index.js';
+import { forward } from '../forward.js';
 import type {
   PlatformEvidenceEnvelope,
   PlatformGateway,
@@ -515,188 +520,37 @@ export type PurchasePresentationEvent = PlatformPurchasePresentationEvent;
 export interface CoordinatedPlatformGateway extends PlatformGateway {
   dispose(): void;
 }
-// Derived from the gateway so this entry never imports the typia-backed
-// `@mpgd/platform/commerce` module (see the headless type-check).
-type CommerceProviderSource = NonNullable<PlatformGateway['commerce']>;
-type PurchaseRequestInput = Parameters<CommerceProviderSource['requestPurchase']>[0];
-type PurchaseOutcome = Awaited<ReturnType<CommerceProviderSource['requestPurchase']>>;
-interface PurchaseFlight {
-  readonly key: string;
-  readonly promise: Promise<PurchaseOutcome>;
-  lease?: FullScreenPresentationLease;
-  called: boolean;
-  settled: boolean;
-  closed: boolean;
-  started: boolean;
-  sequence: number;
-}
-
 /** Games receive this gateway so direct gateway calls use the same native surface. */
 export function createCoordinatedPlatformGateway(input: Parameters<typeof createCoordinatedAdProvider>[0] & {
   readonly gateway: PlatformGateway;
-  /** Trusted native facts only. A purchase business result alone defaults to unknown. */
-  readonly classifyPurchasePresentation?: (result: PurchaseOutcome) => 'closed' | 'not-started' | 'unknown';
-  readonly purchasePresentation?: { subscribe(listener: (event: PurchasePresentationEvent) => void): () => void };
+  readonly classifyPurchasePresentation?: CoordinatedCommerceOptions['classifyPurchasePresentation'];
+  readonly purchasePresentation?: CoordinatedCommerceOptions['purchasePresentation'];
 }): CoordinatedPlatformGateway {
-  const ads = createCoordinatedAdProvider(input);
   const source = input.gateway.commerce;
-  const purchasePresentation = input.purchasePresentation ?? source?.presentation;
-  // The purchase lease is held only when something trusted can release it: the
-  // provider's own presentation facts, the game's `purchasePresentation`, or a
-  // `classifyPurchasePresentation`. A purchase result alone proves nothing
-  // about the payment surface, so without any of them a lease would stay
-  // `unknown` for the rest of the session and block every ad.
-  const coordinatesPurchases = source !== undefined
-    && (purchasePresentation !== undefined || input.classifyPurchasePresentation !== undefined);
-  const history = new Map<string, string>();
-  const purchases = new Map<string, PurchaseFlight>();
-  let last: PurchaseFlight | undefined;
-  let disposed = false;
-  let detached = false;
-  function maybeDetach(): void {
-    if (!disposed || detached || [...purchases.values()].some((flight) => flight.called && !flight.closed)) {
-      return;
-    }
-    detached = true;
-    if (unsubscribe !== undefined) {
-      observe(unsubscribe, input.onObserverError);
-    }
+  // Preserve legacy gateway behavior when no native presentation contract is installed.
+  // Standalone commerce instead fails closed for hosts that require strict exclusion.
+  const commerce = source !== undefined && (input.purchasePresentation !== undefined
+    || source.presentation !== undefined || input.classifyPurchasePresentation !== undefined)
+    ? createCoordinatedCommerceProvider({
+      provider: source, presentation: input.presentation,
+      ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
+      ...(input.classifyPurchasePresentation === undefined ? {} : { classifyPurchasePresentation: input.classifyPurchasePresentation }),
+      ...(input.maxRememberedInvocations === undefined ? {} : { maxRememberedInvocations: input.maxRememberedInvocations }),
+      ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
+    }) : undefined;
+  let ads: CoordinatedAdProvider;
+  try {
+    ads = createCoordinatedAdProvider(input);
+  } catch (error) {
+    commerce?.dispose();
+    throw error;
   }
-  function close(flight: PurchaseFlight): void {
-    flight.closed = true;
-    flight.lease?.confirmClosed();
-    if (flight.settled) {
-      purchases.delete(flight.key);
-    }
-    maybeDetach();
-  }
-  const unsubscribe = purchasePresentation?.subscribe((event) => {
-    observe(() => {
-      const flight = purchases.get(event.idempotencyKey);
-      if (flight === undefined || !flight.called || flight.closed) {
-        return;
-      }
-      if (!Number.isSafeInteger(event.sequence) || event.sequence <= flight.sequence) {
-        return;
-      }
-      if (!['open', 'closed', 'not-started', 'unknown'].includes(event.state)) {
-        return;
-      }
-      flight.sequence = event.sequence;
-      if (event.state === 'not-started' && flight.started) {
-        flight.lease?.markUnknown();
-        return;
-      }
-      if (event.state === 'closed' || event.state === 'not-started') {
-        close(flight);
-      } else if (event.state === 'open') {
-        flight.started = true;
-        flight.lease?.markStarted();
-      } else {
-        flight.lease?.markUnknown();
-      }
-    }, input.onObserverError);
-  });
-  const commerce = source === undefined || !coordinatesPurchases ? source : forward(source, {
-    requestPurchase(supplied: PurchaseRequestInput): Promise<PurchaseOutcome> {
-      if (disposed) { return Promise.reject(new PresentationExecutionError('disposed')); }
-      const request: PurchaseRequestInput = Object.freeze({
-        logicalId: supplied.logicalId,
-        source: supplied.source,
-        idempotencyKey: supplied.idempotencyKey,
-        ...(supplied.offerId === undefined ? {} : { offerId: supplied.offerId }),
-        ...(supplied.quantity === undefined ? {} : { quantity: supplied.quantity }),
-      });
-      if (typeof request.idempotencyKey !== 'string' || request.idempotencyKey.trim() === '' || request.idempotencyKey.length > 512
-        || typeof request.logicalId !== 'string' || request.logicalId.trim() === '' || request.logicalId.length > 512
-        || !['shop', 'stage_fail', 'result', 'event'].includes(request.source)) {
-        return Promise.reject(new TypeError('Invalid purchase presentation input.'));
-      }
-      const key = request.idempotencyKey;
-      const fingerprint = JSON.stringify([request.logicalId, request.source, request.offerId ?? null, request.quantity ?? null]);
-      const prior = history.get(key);
-      if (prior !== undefined) {
-        if (prior !== fingerprint) { return Promise.reject(new PresentationExecutionError('key-conflict')); }
-        const flight = purchases.get(key) ?? (last?.key === key ? last : undefined);
-        return flight?.promise ?? Promise.reject(new PresentationExecutionError('already-completed'));
-      }
-      if (history.size >= (input.maxRememberedInvocations ?? 1024)) {
-        return Promise.reject(new PresentationExecutionError('history-full'));
-      }
-      const flight: PurchaseFlight = {
-        key, called: false, settled: false, closed: false, started: false, sequence: 0,
-        promise: Promise.resolve().then(async () => {
-          try {
-            if (disposed) { throw new PresentationExecutionError('disposed'); }
-            flight.lease = input.presentation.acquire({ kind: 'purchase', invocationId: key });
-            if (disposed) { close(flight); throw new PresentationExecutionError('disposed'); }
-            flight.called = true;
-            const result = await source.requestPurchase(request);
-            const state = input.classifyPurchasePresentation?.(result) ?? 'unknown';
-            if (state !== 'closed' && state !== 'not-started' && state !== 'unknown') {
-              throw new TypeError('Invalid purchase presentation observation.');
-            }
-            if (state === 'not-started' && flight.started && !flight.closed) {
-              throw new TypeError('Purchase observation contradicts native presentation.');
-            }
-            if (state === 'unknown') { if (!flight.closed) { flight.lease.markUnknown(); } } else { close(flight); }
-            return result;
-          } catch (error) {
-            if (flight.called && !flight.closed) { flight.lease?.markUnknown(); }
-            throw error;
-          } finally {
-            flight.settled = true;
-            if (!flight.called) { history.delete(key); purchases.delete(key); } else {
-              last = flight;
-              if (flight.closed) { purchases.delete(key); }
-            }
-            maybeDetach();
-          }
-        }),
-      };
-      history.set(key, fingerprint);
-      purchases.set(key, flight);
-      void flight.promise.catch(() => {});
-      return flight.promise;
-    },
-  });
   return forward(input.gateway, {
     ads: forward(input.gateway.ads, toAdAdapter(ads)),
     ...(commerce === undefined ? {} : { commerce }),
     dispose(): void {
-      disposed = true;
       ads.dispose();
-      maybeDetach();
+      commerce?.dispose();
     },
   }) as CoordinatedPlatformGateway;
-}
-
-/** Preserve prototype methods and their receivers, including optional port methods. */
-function forward<T extends object>(source: T, overrides: Partial<T> | object): T {
-  const methods = new Map<PropertyKey, { original: unknown; bound: unknown }>();
-  return new Proxy({} as T, {
-    get(_target, key) {
-      if (Object.hasOwn(overrides, key)) {
-        return Reflect.get(overrides, key);
-      }
-      const value: unknown = Reflect.get(source, key, source);
-      if (typeof value !== 'function') {
-        return value;
-      }
-      const prior = methods.get(key);
-      if (prior?.original === value) {
-        return prior.bound;
-      }
-      const bound: unknown = value.bind(source);
-      methods.set(key, { original: value, bound });
-      return bound;
-    },
-    has: (_target, key) => Object.hasOwn(overrides, key) || key in source,
-    ownKeys: () => [...new Set([...Reflect.ownKeys(source), ...Reflect.ownKeys(overrides)])],
-    getOwnPropertyDescriptor: (_target, key) =>
-      key in source || Object.hasOwn(overrides, key)
-        ? { configurable: true, enumerable: true, writable: false, value: undefined }
-        : undefined,
-    getPrototypeOf: () => Reflect.getPrototypeOf(source),
-  });
 }

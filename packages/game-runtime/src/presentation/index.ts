@@ -29,7 +29,7 @@ export interface FullScreenPresentationScope {
 }
 
 export class PresentationExecutionError extends Error {
-  constructor(readonly code: 'busy' | 'disposed' | 'key-conflict' | 'history-full' | 'already-completed') {
+  constructor(readonly code: 'busy' | 'disposed' | 'key-conflict' | 'history-full' | 'already-completed' | 'presentation-unavailable') {
     super(`Presentation cannot start: ${code}`);
     this.name = 'PresentationExecutionError';
   }

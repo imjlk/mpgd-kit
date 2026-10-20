@@ -160,6 +160,42 @@ keys from reopening the SDK; only active/uncertain results and the last settled
 result are retained. The idempotency key, `logicalId`, `source`, `offerId`, and
 `quantity` of a replayed key must match its first request.
 
+### Checkout-only hosts
+
+`@mpgd/game-runtime/commerce` exports `createCoordinatedCommerceProvider` for
+apps that compose commerce separately from a full gateway or have no advertising
+provider. Share the same `FullScreenPresentationScope` with any ads added later.
+
+```ts
+import { createCoordinatedCommerceProvider } from '@mpgd/game-runtime/commerce';
+
+const commerce = createCoordinatedCommerceProvider({
+  provider: nativeCommerce,
+  presentation: appPresentation,
+  // Omit if nativeCommerce.presentation already provides trusted native facts.
+  purchasePresentation: nativePurchaseSurface,
+});
+// Feed commerce to the existing server-backed purchase reconciler.
+// At app-owner teardown (not on every view change):
+commerce.dispose();
+```
+
+Unlike the legacy gateway's compatibility pass-through, this standalone API
+rejects new checkout with `PresentationExecutionError.code ===
+'presentation-unavailable'` when neither native facts nor a trusted classifier
+are supplied. Catalog reads, unfinished-purchase recovery, transaction events
+and finalization still forward with their original receiver. Do not install an
+empty event source to bypass this gate: once launched, an unknown sheet retains
+its lease until a matching native close/non-launch observation arrives, even
+after the business promise rejects or the wrapper is disposed.
+
+This extracts the existing gateway coordinator; gateway behavior remains
+compatible. It does not add Billing/StoreKit native close events, treat app
+resume or transaction callbacks as closure, or grant currency. Games using
+plugins without such events must keep new checkout disabled until their host
+implements and verifies those facts. Server verification, fulfillment and
+persistent receipt idempotency remain owned by game-services.
+
 `canShow` is an injected placement policy. No target-specific branch belongs in
 the game flow. Availability and preparation gate SDK calls; a shared busy surface
 blocks purchases, rewarded ads, and interstitials together. The adapter-level
@@ -526,3 +562,5 @@ scene shutdown wiring. Importing the module creates no DOM or lifecycle listener
 
 The opt-in `./impact` and `./phaser/impact` entries provide deterministic recipe
 matching and scene-owned pooled rendering. See [configuration and gotchas](docs/impact-feedback.md).
+
+[Standalone commerce verification record](docs/2026-10-20-standalone-commerce.md).
