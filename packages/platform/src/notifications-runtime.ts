@@ -898,6 +898,9 @@ export function createNotificationRuntime(
         const persisted = kept ?? await loadState();
         if (persisted.unbound === true) {
           delete persisted.unbound;
+          // The backend dropped the endpoint at the unbind: the registration
+          // kept from before it is no longer acknowledged, so it is sent again.
+          delete persisted.registration;
           const saved = saveState(persisted);
           if (saved !== undefined) {
             await saved;
@@ -1510,6 +1513,8 @@ export function createNotificationRuntime(
       const unbinding = enqueue('register', async () => {
         // The unbind is tried even when the stored state cannot be read; the
         // unbound state is then kept in memory and saved over it.
+        // A load that never settles still holds the unbind up; the storage
+        // port is expected to answer or fail.
         let loadFailure: { readonly error: unknown } | undefined;
         let persisted: MutableRuntimeState;
         try {
@@ -1517,6 +1522,8 @@ export function createNotificationRuntime(
         } catch (error) {
           loadFailure = { error };
           persisted = {};
+          // A load another call started meanwhile may have set the state; the
+          // unbound state is written over the stored one either way.
           kept ??= persisted;
         }
         persisted.unbound = true;
@@ -1554,17 +1561,14 @@ export function createNotificationRuntime(
         } catch (error) {
           unbindFailure = { error };
         }
-        // The unbind's error is thrown first; the others still reach onError and runUntilIdle.
-        const failures = [
-          ...(unbindFailure === undefined ? [] : [unbindFailure.error]),
-          ...(loadFailure === undefined ? [] : [loadFailure.error]),
-          ...saveFailures,
-        ];
-        for (const error of failures.slice(1)) {
+        // Only the unbind's own error is thrown, so a caller can tell a
+        // logout that did not reach the backend; the storage's failures reach
+        // onError and runUntilIdle.
+        for (const error of [...(loadFailure === undefined ? [] : [loadFailure.error]), ...saveFailures]) {
           fail(error);
         }
-        if (failures.length > 0) {
-          throw failures[0];
+        if (unbindFailure !== undefined) {
+          throw unbindFailure.error;
         }
       });
       // The device's pending local reminders belong to the player leaving.

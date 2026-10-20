@@ -276,7 +276,7 @@ describe('createNotificationRuntime storage', () => {
 
   it('still unbinds when the stored state cannot be read, and saves the unbound state', async () => {
     const storage = asyncStorage();
-    const { host, backend, create } = setup(storage.port);
+    const { clock, host, backend, create } = setup(storage.port);
     const runtime = create();
     await runtime.start();
     backend.authenticate('p-1');
@@ -287,12 +287,77 @@ describe('createNotificationRuntime storage', () => {
     // A second runtime whose loads fail logs the same player out.
     storage.failNextLoads(2);
     runtime.stop();
-    const restarted = create();
-    const error = await restarted.unregister().then(() => undefined, (failure: unknown) => failure);
+    const errors: unknown[] = [];
+    const restarted = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      storage: storage.port,
+      onError: (error) => errors.push(error),
+    });
+    // The unbind reached the backend, so the logout succeeds; the storage's failure is reported.
+    await restarted.unregister();
     expect(backend.endpoints).toEqual([]);
-    expect((error as NotificationError).code).toBe('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
-    expect((error as NotificationError).message).toContain('could not read');
     expect(storage.stored).toEqual({ unbound: true });
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as NotificationError).code).toBe('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+    expect((errors[0] as NotificationError).message).toContain('could not read');
+  });
+
+  it('resolves unregister() when only saving after the unbind fails, and binds again at the next authentication', async () => {
+    const storage = asyncStorage();
+    const errors: unknown[] = [];
+    const { clock, host, backend, create } = setup(storage.port, { onError: (error) => errors.push(error) });
+    const runtime = create();
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.runUntilIdle();
+    // The save before the unbind goes through; the one after it fails.
+    let saves = 0;
+    const flaky = storage.port;
+    const port: NotificationRuntimeStorage = {
+      load: () => flaky.load(),
+      save(state) {
+        saves += 1;
+        if (saves === 2) {
+          throw new Error('disk full');
+        }
+        return flaky.save(state);
+      },
+    };
+    runtime.stop();
+    const restarted = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      storage: port,
+      onError: (error) => errors.push(error),
+    });
+    await restarted.start();
+    await restarted.unregister();
+    expect(backend.endpoints).toEqual([]);
+    expect(errors.map((error) => (error as Error).message)).toEqual([
+      expect.stringContaining('could not save'),
+    ]);
+    // Storage still names the registration it had before the unbind, next to the unbound state.
+    expect(storage.stored).toMatchObject({ unbound: true, registration: { session: 'session-1' } });
+    errors.length = 0;
+    await restarted.runUntilIdle().catch(() => undefined);
+    restarted.stop();
+
+    // After a restart in the same session, the next authentication binds again despite that record.
+    const again = create();
+    await again.start();
+    backend.authenticate('p-1');
+    await again.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => [endpoint.value, endpoint.player])).toEqual([['tok-1', 'p-1']]);
   });
 
   it('throws the unbind error when the save fails too, and reports the save failure', async () => {
@@ -355,6 +420,9 @@ describe('createNotificationRuntime storage', () => {
     expect(notificationRuntimeStateOf({ registration: { ...registration, at: 'yesterday' } })).toEqual({});
     expect(notificationRuntimeStateOf({
       registration: { ...registration, registration: { provider: 'fcm', address: [] } },
+    })).toEqual({});
+    expect(notificationRuntimeStateOf({
+      registration: { ...registration, registration: { provider: 'fcm', address: { value: 't' } } },
     })).toEqual({});
   });
 

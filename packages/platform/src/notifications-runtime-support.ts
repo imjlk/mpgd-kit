@@ -17,7 +17,7 @@ import {
  */
 
 /** Events a provider or runtime keeps for its first listener. */
-export const eventBufferLimit = 64;
+const eventBufferLimit = 64;
 
 /**
  * Buffers an event for the first listener, keeping at most
@@ -100,7 +100,7 @@ export function isBoundedText(value: unknown): boolean {
   return typeof value === 'string' && value.length > 0 && value.length <= 16_384;
 }
 
-export function timestampOrUndefined(value: unknown): string | undefined {
+function timestampOrUndefined(value: unknown): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
