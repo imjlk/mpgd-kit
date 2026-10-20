@@ -1,27 +1,20 @@
 import {
   bridgeNotificationsEventProtocol,
-  createBridgeError,
-  createBridgeEventSource,
-  isBridgeNotificationsV2Method,
-  type BridgeEventStream,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
-  type BridgeRequest,
-  type BridgeResponse,
 } from '@mpgd/bridge';
 import {
-  assertBridgeNotificationsV2Payload,
   assertBridgeNotificationsV2Result,
+  createNotificationsV2BridgeHandler,
   type BridgeNotificationsV2Payload,
   type BridgeNotificationsV2Result,
+  type NotificationsV2BridgeHandler,
 } from '@mpgd/bridge/notifications';
-import { PlatformOperationError } from '@mpgd/platform';
 import {
   assertNotificationEventEnvelope,
   isNotificationErrorCode,
   NotificationError,
   notificationsProtocol,
-  notificationsProtocolVersion,
   type NotificationEvent,
   type NotificationProvider,
   type NotificationProviderId,
@@ -37,163 +30,25 @@ import {
  * module imports no Apps in Toss SDK.
  */
 
-export interface AitNotificationsV2BridgeHandler
-  extends BridgeEventStream<BridgeNotificationsEvent> {
-  /** Answers one of the nine `notifications.v2.*` methods. */
-  request(input: BridgeRequest): Promise<BridgeResponse>;
-}
+export type AitNotificationsV2BridgeHandler = NotificationsV2BridgeHandler;
 
 /**
- * Host side. A payload the validator rejects answers
- * `NOTIFICATIONS_INVALID_INPUT`, a method the provider does not implement
- * `NOTIFICATIONS_UNSUPPORTED`, and an answer the contract rejects
- * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, because the provider broke it. A
- * thrown `NotificationError` crosses as `{ code, message, retryable }`, with
- * its `hostCode` named in the message. Events go out through
- * `createBridgeEventSource`, numbered per handler from 0; the provider is
- * attached for the first bridge listener, so its buffered cold open reaches
- * that listener.
+ * Host side: `createNotificationsV2BridgeHandler` from
+ * `@mpgd/bridge/notifications`, which checks every payload and answer, maps
+ * failures fail-closed with the host code named in the message, and numbers
+ * the provider's events per handler from 0, attaching the provider for the
+ * first bridge listener so its buffered cold open reaches that listener. A
+ * provider without `register` answers no address (`null`), as the Apps in
+ * Toss profile always offers registration.
  */
 export function createAitNotificationsV2BridgeHandler(
   provider: NotificationProvider,
 ): AitNotificationsV2BridgeHandler {
-  const events = createBridgeEventSource(bridgeNotificationsEventProtocol, provider);
-
-  const serve = async (method: BridgeNotificationsV2Method, payload: unknown): Promise<unknown> => {
-    switch (method) {
-      case 'notifications.v2.getCapabilities':
-        validPayload(method, payload);
-        return {
-          protocolVersion: notificationsProtocolVersion,
-          provider: provider.provider,
-          capabilities: await provider.getCapabilities(),
-        };
-      case 'notifications.v2.getPermission':
-        return provider.getPermission(validPayload(method, payload));
-      case 'notifications.v2.requestPermission':
-        return provider.requestPermission(validPayload(method, payload));
-      case 'notifications.v2.revokePermission': {
-        const request = validPayload(method, payload);
-        return implemented(provider.revokePermission, method).call(provider, request);
-      }
-      case 'notifications.v2.register':
-        validPayload(method, payload);
-        return { registration: (await provider.register?.()) ?? null };
-      case 'notifications.v2.scheduleLocal': {
-        const request = validPayload(method, payload);
-        return implemented(provider.scheduleLocal, method).call(provider, request);
-      }
-      case 'notifications.v2.cancelLocal': {
-        const request = validPayload(method, payload);
-        await implemented(provider.cancelLocal, method).call(provider, request);
-        return { cancelled: true };
-      }
-      case 'notifications.v2.listLocal':
-        validPayload(method, payload);
-        return { pending: await implemented(provider.listLocal, method).call(provider) };
-      case 'notifications.v2.openSettings':
-        validPayload(method, payload);
-        return { status: (await provider.openSettings?.()) ?? 'unavailable' };
-    }
-  };
-
-  return {
-    async request(request) {
-      if (!isBridgeNotificationsV2Method(request.method)) {
-        return createBridgeError(
-          request.id,
-          'UNSUPPORTED_METHOD',
-          `${request.method} is not a notifications v2 method.`,
-        );
-      }
-      const method = request.method;
-      try {
-        const data = await serve(method, request.payload);
-        return { id: request.id, ok: true, data: validResult(method, data) };
-      } catch (error) {
-        return toBridgeError(request, error);
-      }
-    },
-    // The source carries this protocol only, so every envelope is a notifications one.
-    subscribe: (listener) =>
-      events.subscribe((envelope) => listener(envelope as BridgeNotificationsEvent)),
-  };
-}
-
-class InvalidPayloadError extends Error {
-  override readonly name = 'InvalidPayloadError';
-}
-
-function validPayload<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  payload: unknown,
-): BridgeNotificationsV2Payload<TMethod> {
-  try {
-    return assertBridgeNotificationsV2Payload(method, payload);
-  } catch (error) {
-    throw new InvalidPayloadError(
-      `${method} payload is invalid: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-function validResult<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  data: unknown,
-): BridgeNotificationsV2Result<TMethod> {
-  try {
-    return assertBridgeNotificationsV2Result(method, data);
-  } catch (error) {
-    throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `The notifications provider answered ${method} with invalid data: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      cause: error,
-    });
-  }
-}
-
-function implemented<TMethod>(method: TMethod | undefined, name: string): TMethod {
-  if (method === undefined) {
-    throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
-      message: `The Apps in Toss notifications provider does not implement ${name}.`,
-    });
-  }
-  return method;
-}
-
-function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
-  if (error instanceof InvalidPayloadError) {
-    return createBridgeError(request.id, 'NOTIFICATIONS_INVALID_INPUT', error.message);
-  }
-  if (error instanceof NotificationError) {
-    return createBridgeError(
-      request.id,
-      error.code,
-      error.hostCode === undefined || !hostCodeValue.test(error.hostCode)
-        ? error.message
-        : `${error.message} (host code ${error.hostCode})`,
-      error.retryable,
-    );
-  }
-  if (error instanceof PlatformOperationError) {
-    return isNotificationErrorCode(error.code)
-      ? createBridgeError(request.id, error.code, error.message, error.retryable)
-      : createBridgeError(
-          request.id,
-          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-          `${request.method} failed: ${error.message}`,
-          error.retryable,
-        );
-  }
-  // A failure the provider did not normalize is a host failure the game may retry.
-  return createBridgeError(
-    request.id,
-    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-    `${request.method} failed: ${error instanceof Error ? error.message : String(error)}`,
-    true,
-  );
+  return createNotificationsV2BridgeHandler({
+    provider,
+    label: 'Apps in Toss',
+    registerOptional: true,
+  });
 }
 
 // Game side.
@@ -295,9 +150,8 @@ export function readAitBridgeNotificationEvent(envelope: unknown): NotificationE
   }
 }
 
-/** The host codes the bridge carries; the host handler names only these in a message. */
+/** The host codes the bridge carries; the shared host handler names only these in a message. */
 const hostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
-const hostCodeValue = new RegExp(`^${hostCodeCharacters}$`, 'u');
 const hostCodePattern = new RegExp(`\\(host code (${hostCodeCharacters})\\)$`, 'u');
 
 function toNotificationError(error: unknown): NotificationError {
