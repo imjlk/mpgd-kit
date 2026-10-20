@@ -103,6 +103,25 @@ export interface CreateAitSandboxBridgeOptions {
   readonly appName?: string;
 }
 
+/**
+ * A host published before `promotions.recoverReward` rejects that literal in
+ * `parseBridgeRequest`. Its generated validator does not list the method, and
+ * the request wrapper reports `AIT_BRIDGE_REQUEST_FAILED` rather than
+ * `UNSUPPORTED_METHOD`. A current host that already lists the method, or any
+ * other `AIT_BRIDGE_REQUEST_FAILED`, is a real failure and must still throw.
+ */
+function isPreRecoveryPromotionHost(error: unknown): boolean {
+  if (!(error instanceof PlatformOperationError)) {
+    return false;
+  }
+  if (error.code === 'UNSUPPORTED_METHOD') {
+    return true;
+  }
+  return error.code === 'AIT_BRIDGE_REQUEST_FAILED'
+    && error.message.includes('invalid type on $input.method')
+    && !error.message.includes('"promotions.recoverReward"');
+}
+
 export function createAitPlatformGateway(input: {
   readonly appVersion: string;
   readonly buildId: string;
@@ -272,13 +291,15 @@ export function createAitPlatformGateway(input: {
       getAvailability: (payload) =>
         request<PromotionRewardAvailability>('promotions.getAvailability', payload),
       grantReward: (payload) => request<PromotionRewardResult>('promotions.grantReward', payload),
-      // Hosts published before this method answer UNSUPPORTED_METHOD. Recovery
-      // must stay non-dispatching, so that absence is pending rather than an exception.
+      // Hosts published before this method either answer UNSUPPORTED_METHOD or
+      // reject the literal in parseBridgeRequest and wrap that as
+      // AIT_BRIDGE_REQUEST_FAILED. Recovery must stay non-dispatching, so that
+      // absence is pending rather than an exception. Other host failures still throw.
       recoverReward: async (payload) => {
         try {
           return await request<PromotionRewardResult>('promotions.recoverReward', payload);
         } catch (error) {
-          if (error instanceof PlatformOperationError && error.code === 'UNSUPPORTED_METHOD') {
+          if (isPreRecoveryPromotionHost(error)) {
             return { status: 'pending' };
           }
           throw error;

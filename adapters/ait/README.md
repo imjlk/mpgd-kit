@@ -101,18 +101,19 @@ includes a bounded `errorCode`. Raw provider messages are deliberately excluded.
 best effort and stops blocking the native response after three seconds. Its failure cannot turn a
 successful payment into a failure.
 
-Explicit failures now retain the pending marker with their code. A restarted host reports that code
+Explicit failures retain the pending marker with their code. A restarted host reports that code
 again and returns `failed` without another SDK call. The resolver may still return a verified receipt;
 only an explicit authority `retry` decision can remove the marker and reach authorization again.
-If storing that code fails, the same host process still treats the claim as an explicit failure and
+A stored failure is not short-circuited in memory, so that retry can clear it in the same process.
+If storing the code fails, the same host process still treats the claim as an explicit failure and
 does not take the retry path. A process restart cannot recover a code that was never stored.
 A client-reported failure is **not** independent proof that no payment happened. Neither the observer
 nor a timeout should reset the server's monetary dispatch fence. A legacy failure whose marker was
 already removed cannot recover its old error code.
 
 <!--
-@link src/host.ts#createAitHostBridge Grant and recover share one per-claim lock, re-read storage before payout, and keep undurable receipts out of cache eviction.
-@link src/index.ts#createAitPlatformGateway An older host's unsupported recoverReward method is pending, not an exception.
+@link src/host.ts#createAitHostBridge Grant and recover share one idempotency-key lock, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, and fail closed when a scoped marker's campaignId does not match its key.
+@link src/index.ts#createAitPlatformGateway An older host's unsupported recoverReward method, including a protocol validator rejection, is pending, not an exception.
 -->
 
 `gateway.promotions.recoverReward({ campaignId, idempotencyKey })` is an optional recovery-only
@@ -121,7 +122,8 @@ a new installation without local state. It never calls the authorizer or native 
 a resolver's `retry` result leaves pending storage untouched. An explicit `grantReward` request
 is still required for a newly authorized payment. An unknown provider outcome remains pending;
 this API cannot reconstruct a lost provider key or prove non-payment. Grant and recover for the
-same campaign and idempotency key run one at a time. After authorization, and again immediately
+same idempotency key run one at a time, including when the campaigns differ, so two campaigns
+cannot both bind one unscoped legacy marker. After authorization, and again immediately
 before the native payout, grant re-reads storage and the bridge-local receipt cache and returns
 a granted receipt instead of paying again.
 
@@ -134,7 +136,14 @@ receipt contract is the same for markerless and existing-marker resolution. New 
 `v1` marker, which was keyed only by the idempotency key, is still readable. The first campaign
 that reconciles an unbound legacy marker binds it; another campaign does not receive that receipt.
 Server-issued idempotency keys should stay unique across campaigns. A legacy marker that could not
-be copied remains fenced in the current process by that binding.
+be copied remains fenced in the current process by that binding. An authority `retry` also removes
+that migrated copy, so it cannot block the authorized payout. A v2 marker whose embedded
+`campaignId` does not match its key stays pending and is not overwritten or paid again.
+
+An older host that does not implement `promotions.recoverReward` answers `{ status: 'pending' }`
+instead of throwing. That includes a host whose protocol validator rejects the method and whose
+request wrapper reports `AIT_BRIDGE_REQUEST_FAILED`, not only an `UNSUPPORTED_METHOD` fallback.
+`grantReward` is unchanged and still throws. Other host failures still throw.
 
 Undefined/malformed SDK responses and exceptions retain a bounded diagnostic code in the pending
 marker. They remain ambiguous, not confirmed non-payment. Thrown provider codes are preserved when

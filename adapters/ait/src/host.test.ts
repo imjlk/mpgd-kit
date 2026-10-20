@@ -2622,6 +2622,183 @@ describe('AIT production host bridge', () => {
     expect(grantPromotionReward).toHaveBeenCalledTimes(1);
   });
 
+  it('does not credit one unscoped legacy receipt to two campaigns at once', async () => {
+    const legacyKey = 'mpgd:ait:promotion-grant:v1:shared-claim';
+    const values = new Map<string, string>([
+      [legacyKey, JSON.stringify({ status: 'granted', receiptKey: 'legacy-receipt' })],
+    ]);
+    let legacyReads = 0;
+    let releaseFirstLegacyRead: () => void = () => {};
+    let markFirstLegacyRead: () => void = () => {};
+    const firstLegacyRead = new Promise<void>((resolve) => {
+      markFirstLegacyRead = resolve;
+    });
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        CAMPAIGN_A: { promotionCode: 'PROMO_A', amount: 1 },
+        CAMPAIGN_B: { promotionCode: 'PROMO_B', amount: 1 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async (key) => {
+            if (key === legacyKey) {
+              legacyReads += 1;
+              if (legacyReads === 1) {
+                markFirstLegacyRead();
+                await new Promise<void>((resolve) => {
+                  releaseFirstLegacyRead = resolve;
+                });
+              }
+            }
+            return values.get(key) ?? null;
+          },
+          removeItem: async (key) => { values.delete(key); },
+          setItem: async (key, value) => { values.set(key, value); },
+        },
+      }),
+    });
+    const recoverA = request(bridge, 'promotions.recoverReward', {
+      campaignId: 'CAMPAIGN_A',
+      idempotencyKey: 'shared-claim',
+    });
+    await firstLegacyRead;
+    const recoverB = request(bridge, 'promotions.recoverReward', {
+      campaignId: 'CAMPAIGN_B',
+      idempotencyKey: 'shared-claim',
+    });
+    for (let step = 0; step < 20; step += 1) {
+      await Promise.resolve();
+    }
+    expect(legacyReads).toBe(1);
+    releaseFirstLegacyRead();
+    const results = await Promise.all([recoverA, recoverB]);
+    expect(results.filter((result) => (
+      typeof result === 'object'
+      && result !== null
+      && (result as { status?: string }).status === 'granted'
+    ))).toEqual([{ status: 'granted', receiptKey: 'legacy-receipt' }]);
+    expect(grantPromotionReward).toHaveBeenCalledTimes(0);
+    expect([...values.values()].filter((value) => value.includes('legacy-receipt'))).toHaveLength(1);
+  });
+
+  it('lets an authority retry clear a stored explicit failure without a second overlapping payout', async () => {
+    const values = new Map<string, string>();
+    let releaseRetry: (value: { readonly key: string }) => void = () => {};
+    let markRetryStarted: () => void = () => {};
+    const retryStarted = new Promise<void>((resolve) => {
+      markRetryStarted = resolve;
+    });
+    const grantPromotionReward = vi.fn(() => {
+      if (grantPromotionReward.mock.calls.length === 1) {
+        return Promise.resolve('ERROR');
+      }
+      markRetryStarted();
+      return new Promise<{ readonly key: string }>((resolve) => {
+        releaseRetry = resolve;
+      });
+    });
+    const resolvePendingPromotionGrant = vi.fn(async () => ({ status: 'retry' as const }));
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({
+        grantPromotionReward: grantPromotionReward as unknown as AitHostDependencies['grantPromotionReward'],
+        storage: createMemoryStorage(values),
+      }),
+    });
+    const claim = { campaignId: 'DAILY', idempotencyKey: 'stored-explicit-failure' };
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({ status: 'failed' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+    expect([...values.values()].some((value) => value.includes('errorCode'))).toBe(true);
+    const firstRetry = request(bridge, 'promotions.grantReward', claim);
+    const secondRetry = request(bridge, 'promotions.grantReward', claim);
+    const entered = await Promise.race([
+      retryStarted.then(() => 'started' as const),
+      Promise.all([firstRetry, secondRetry]).then(() => 'settled' as const),
+    ]);
+    expect(entered).toBe('started');
+    expect(grantPromotionReward).toHaveBeenCalledTimes(2);
+    releaseRetry({ key: 'retried-receipt' });
+    await expect(firstRetry).resolves.toEqual({ status: 'granted', receiptKey: 'retried-receipt' });
+    await expect(secondRetry).resolves.toEqual({ status: 'granted', receiptKey: 'retried-receipt' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(2);
+    expect(resolvePendingPromotionGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes the migrated v2 marker when a legacy pending claim is authorized to retry', async () => {
+    const legacyKey = 'mpgd:ait:promotion-grant:v1:legacy-retry';
+    const values = new Map<string, string>([
+      [legacyKey, JSON.stringify({ status: 'pending', pendingSince: '2026-07-22T00:00:00.000Z' })],
+    ]);
+    const grantPromotionReward = vi.fn(async () => ({ key: 'paid-once' }));
+    const resolvePendingPromotionGrant = vi.fn(async () => {
+      if (resolvePendingPromotionGrant.mock.calls.length > 1) {
+        throw new Error('resolver must not be consulted again');
+      }
+      return { status: 'retry' as const };
+    });
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: createMemoryStorage(values),
+      }),
+    });
+    const claim = { campaignId: 'DAILY', idempotencyKey: 'legacy-retry' };
+    const [first, second] = await Promise.all([
+      request(bridge, 'promotions.grantReward', claim),
+      request(bridge, 'promotions.grantReward', claim),
+    ]);
+    expect([first, second]).toEqual([
+      { status: 'granted', receiptKey: 'paid-once' },
+      { status: 'granted', receiptKey: 'paid-once' },
+    ]);
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+    expect(resolvePendingPromotionGrant).toHaveBeenCalledTimes(1);
+    expect(values.has(legacyKey)).toBe(false);
+    expect([...values.values()].some((value) => {
+      const state = JSON.parse(value) as { status?: string };
+      return state.status === 'pending';
+    })).toBe(false);
+  });
+
+  it('does not pay again when a scoped marker names a different campaign', async () => {
+    const storageKey = `mpgd:ait:promotion-grant:v2:${encodeURIComponent('CAMPAIGN_A')}:${encodeURIComponent('mismatch')}`;
+    const original = JSON.stringify({
+      status: 'granted',
+      receiptKey: 'already-paid',
+      campaignId: 'CAMPAIGN_B',
+    });
+    const values = new Map<string, string>([[storageKey, original]]);
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        CAMPAIGN_A: { promotionCode: 'PROMO_A', amount: 1 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant: async () => ({ status: 'retry' as const }),
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: createMemoryStorage(values),
+      }),
+    });
+    const claim = { campaignId: 'CAMPAIGN_A', idempotencyKey: 'mismatch' };
+    const [first, second] = await Promise.all([
+      request(bridge, 'promotions.grantReward', claim),
+      request(bridge, 'promotions.grantReward', claim),
+    ]);
+    expect(first).toEqual({ status: 'pending' });
+    expect(second).toEqual({ status: 'pending' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(0);
+    expect(values.get(storageKey)).toBe(original);
+  });
+
   it('returns a protocol error for a malformed runtime bridge call', async () => {
     const bridge = createAitHostBridge({ dependencies: createDependencies() });
     const response: unknown = await Reflect.apply(bridge.request, bridge, [null]);

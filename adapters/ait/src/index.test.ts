@@ -9,6 +9,7 @@ import {
 import { createUnsupportedCommerceCapabilities } from '@mpgd/platform';
 import { adProtocol, adProtocolVersion } from '@mpgd/platform/ads';
 
+import { createAitHostBridge } from './host';
 import { createAitPlatformGateway, createAitSandboxBridge, type GamePlatformBridge } from './index';
 
 describe('adapter-ait', () => {
@@ -102,6 +103,110 @@ describe('adapter-ait', () => {
       campaignId: 'DAILY',
       idempotencyKey: 'old-host-recover',
     })).resolves.toEqual({ status: 'pending' });
+  });
+
+  it('treats a pre-recovery host protocol rejection as pending without hiding other host failures', async () => {
+    const host = createAitHostBridge();
+    const probe = await host.request({
+      id: 'unknown-method',
+      method: 'promotions.notPublished' as unknown as BridgeRequest['method'],
+      payload: { campaignId: 'DAILY', idempotencyKey: 'old-host' },
+      meta: {
+        target: 'ait',
+        appVersion: '1.0.0',
+        buildId: 'test',
+        sentAt: '2026-07-19T00:00:00.000Z',
+      },
+    } as BridgeRequest);
+    expect(probe.ok).toBe(false);
+    if (probe.ok) {
+      throw new Error('expected the generated method validator to reject an unknown method');
+    }
+    expect(probe.error.code).toBe('AIT_BRIDGE_REQUEST_FAILED');
+    expect(probe.error.message).toContain('invalid type on $input.method');
+    const preRecoveryMessage = probe.error.message
+      .replace(' | "promotions.recoverReward"', '')
+      .replace('"promotions.recoverReward" | ', '');
+    expect(preRecoveryMessage).not.toContain('"promotions.recoverReward"');
+
+    let nativeGrants = 0;
+    const claim = { campaignId: 'DAILY', idempotencyKey: 'old-host' };
+    const preRecovery: GamePlatformBridge = {
+      async request(input) {
+        if (input.method === 'promotions.grantReward') {
+          nativeGrants += 1;
+          return { id: input.id, ok: true, data: { status: 'granted', receiptKey: 'must-not-pay' } };
+        }
+        if (input.method === 'promotions.recoverReward') {
+          return {
+            id: input.id,
+            ok: false,
+            error: {
+              code: 'AIT_BRIDGE_REQUEST_FAILED',
+              message: preRecoveryMessage,
+              retryable: probe.error.retryable,
+            },
+          };
+        }
+        return { id: input.id, ok: true, data: {} };
+      },
+    };
+    const gateway = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: preRecovery,
+    });
+    await expect(Promise.all([
+      gateway.promotions?.recoverReward?.(claim),
+      gateway.promotions?.recoverReward?.(claim),
+    ])).resolves.toEqual([{ status: 'pending' }, { status: 'pending' }]);
+    expect(nativeGrants).toBe(0);
+
+    const unrelated: GamePlatformBridge = {
+      async request(input) {
+        if (input.method === 'promotions.grantReward') {
+          nativeGrants += 1;
+        }
+        return {
+          id: input.id,
+          ok: false,
+          error: {
+            code: 'AIT_BRIDGE_REQUEST_FAILED',
+            message: 'AIT promotion campaignId must contain 1 to 128 characters.',
+            retryable: true,
+          },
+        };
+      },
+    };
+    await expect(createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: unrelated,
+    }).promotions?.recoverReward?.(claim)).rejects.toMatchObject({
+      code: 'AIT_BRIDGE_REQUEST_FAILED',
+    });
+    expect(nativeGrants).toBe(0);
+
+    const listedByCurrentValidator: GamePlatformBridge = {
+      async request(input) {
+        return {
+          id: input.id,
+          ok: false,
+          error: {
+            code: probe.error.code,
+            message: probe.error.message,
+            retryable: probe.error.retryable,
+          },
+        };
+      },
+    };
+    await expect(createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'test',
+      bridge: listedByCurrentValidator,
+    }).promotions?.recoverReward?.(claim)).rejects.toMatchObject({
+      code: 'AIT_BRIDGE_REQUEST_FAILED',
+    });
   });
 
   it('classifies a missing bridge as a non-retryable configuration failure', async () => {

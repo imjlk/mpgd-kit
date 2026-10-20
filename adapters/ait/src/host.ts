@@ -947,10 +947,12 @@ function promotionClaimKey(campaignId: string, idempotencyKey: string): string {
 }
 
 /**
- * Serialize grant and recover for one campaign claim. A queued caller runs
+ * Serialize grant and recover for one idempotency key, including across
+ * campaigns. A legacy v1 marker is not campaign-scoped; two campaigns must
+ * not both read it before the first binding lands. A queued caller runs
  * after the holder finishes, so a recover that finds nothing does not swallow
  * a later grant, and a grant cannot overwrite a receipt recover just wrote.
- * Callbacks must not re-enter the same claim: that waits on itself.
+ * Callbacks must not re-enter the same idempotency key: that waits on itself.
  */
 function withPromotionClaimLock<T>(
   memory: PromotionClaimMemory,
@@ -958,7 +960,10 @@ function withPromotionClaimLock<T>(
   idempotencyKey: string,
   work: () => Promise<T>,
 ): Promise<T> {
-  const key = promotionClaimKey(campaignId, idempotencyKey);
+  // The campaign is part of the caller's claim, not of this lock. Splitting
+  // the lock by campaign lets two campaigns bind one unscoped v1 receipt.
+  void campaignId;
+  const key = idempotencyKey;
   const previous = memory.inFlight.get(key) ?? Promise.resolve();
   const run = previous.then(work, work);
   const settled = run.then(
@@ -1076,12 +1081,27 @@ function evictDurableExplicitFailures(memory: PromotionClaimMemory): void {
   }
 }
 
-function explicitFailureCode(
+/** A stored failure is resolved from the marker. Only a lost diagnostic write stays process-local. */
+function undurableExplicitFailureCode(
   memory: PromotionClaimMemory,
   campaignId: string,
   idempotencyKey: string,
 ): string | undefined {
-  return memory.explicitFailures.get(promotionClaimKey(campaignId, idempotencyKey));
+  const key = promotionClaimKey(campaignId, idempotencyKey);
+  if (!memory.undurableFailures.has(key)) {
+    return undefined;
+  }
+  return memory.explicitFailures.get(key);
+}
+
+function forgetExplicitFailure(
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
+): void {
+  const key = promotionClaimKey(campaignId, idempotencyKey);
+  memory.explicitFailures.delete(key);
+  memory.undurableFailures.delete(key);
 }
 
 async function grantLockedAitPromotionReward(input: {
@@ -1162,7 +1182,11 @@ async function returnExplicitFailure(input: {
   readonly observer?: AitPromotionGrantObserver;
   readonly memory: PromotionClaimMemory;
 }): Promise<PromotionRewardResult | undefined> {
-  const errorCode = explicitFailureCode(input.memory, input.campaignId, input.idempotencyKey);
+  const errorCode = undurableExplicitFailureCode(
+    input.memory,
+    input.campaignId,
+    input.idempotencyKey,
+  );
   if (errorCode === undefined) {
     return undefined;
   }
@@ -1486,7 +1510,7 @@ async function persistPromotionDiagnostic(
   }
   try {
     const loaded = await loadPromotionGrantRecord(storage, memory, campaignId, idempotencyKey);
-    if (loaded.serialized !== null && isGrantedPromotionRecord(loaded.serialized)) {
+    if (loaded.campaignMismatch || (loaded.serialized !== null && isGrantedPromotionRecord(loaded.serialized))) {
       return;
     }
   } catch {
@@ -1572,6 +1596,13 @@ async function resolvePersistedPromotionGrant(
     input.campaignId,
     input.idempotencyKey,
   );
+  if (loaded.campaignMismatch) {
+    console.warn(
+      'AIT persisted promotion campaign does not match its storage key; keeping the claim pending.',
+      input.campaignId,
+    );
+    return { result: { status: 'pending' } };
+  }
   if (loaded.serialized === null) {
     return {};
   }
@@ -1714,7 +1745,13 @@ async function resolvePersistedPromotionGrant(
         return { result: pendingResult };
       }
       if (input.memory !== undefined) {
-        const blocked = explicitFailureCode(input.memory, input.campaignId, input.idempotencyKey);
+        // A lost diagnostic write has no durable code for the resolver to clear.
+        // A stored failure must not block that decision.
+        const blocked = undurableExplicitFailureCode(
+          input.memory,
+          input.campaignId,
+          input.idempotencyKey,
+        );
         if (blocked !== undefined) {
           return { result: { status: 'failed' } };
         }
@@ -1728,7 +1765,23 @@ async function resolvePersistedPromotionGrant(
           return { result: cached };
         }
       }
-      return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+      // Migration copies a legacy marker to the scoped key before this read's
+      // storageKey is updated. Remove that copy too, or a later read finds the
+      // pending marker and asks the resolver again.
+      if (loaded.legacy) {
+        const migrated = await removeInvalidPersistedPromotionGrant(
+          input.storage,
+          promotionGrantScopedStorageKey(input.campaignId, input.idempotencyKey),
+        );
+        if (migrated.result !== undefined) {
+          return migrated;
+        }
+      }
+      const removed = await removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+      if (removed.result === undefined && input.memory !== undefined) {
+        forgetExplicitFailure(input.memory, input.campaignId, input.idempotencyKey);
+      }
+      return removed;
     }
     console.warn(
       'AIT persisted promotion state has an unknown status; keeping the claim pending.',
@@ -1780,20 +1833,25 @@ async function loadPromotionGrantRecord(
   memory: PromotionClaimMemory | undefined,
   campaignId: string,
   idempotencyKey: string,
-): Promise<{ readonly storageKey: string; readonly legacy: boolean; readonly serialized: string | null }> {
+): Promise<{
+  readonly storageKey: string;
+  readonly legacy: boolean;
+  readonly serialized: string | null;
+  readonly campaignMismatch: boolean;
+}> {
   const scopedKey = promotionGrantScopedStorageKey(campaignId, idempotencyKey);
   const scoped = await storage.getItem(scopedKey);
   if (scoped !== null) {
     const bound = readStoredCampaignId(scoped);
     if (bound !== undefined && bound !== campaignId) {
-      return { storageKey: scopedKey, legacy: false, serialized: null };
+      return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: true };
     }
-    return { storageKey: scopedKey, legacy: false, serialized: scoped };
+    return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: false };
   }
   const legacyKey = promotionGrantLegacyStorageKey(idempotencyKey);
   const legacy = await storage.getItem(legacyKey);
   if (legacy === null) {
-    return { storageKey: scopedKey, legacy: false, serialized: null };
+    return { storageKey: scopedKey, legacy: false, serialized: null, campaignMismatch: false };
   }
   const bound = readStoredCampaignId(legacy);
   const inProcess = memory?.legacyBindings.get(idempotencyKey);
@@ -1801,9 +1859,9 @@ async function loadPromotionGrantRecord(
     (bound !== undefined && bound !== campaignId)
     || (bound === undefined && inProcess !== undefined && inProcess !== campaignId)
   ) {
-    return { storageKey: scopedKey, legacy: false, serialized: null };
+    return { storageKey: scopedKey, legacy: false, serialized: null, campaignMismatch: false };
   }
-  return { storageKey: legacyKey, legacy: true, serialized: legacy };
+  return { storageKey: legacyKey, legacy: true, serialized: legacy, campaignMismatch: false };
 }
 
 async function writePromotionGrantRecord(
