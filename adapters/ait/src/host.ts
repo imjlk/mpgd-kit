@@ -994,7 +994,14 @@ function rememberGrantedReceipt(
   memory.explicitFailures.delete(key);
   memory.undurableFailures.delete(key);
   memory.receipts.delete(key);
-  memory.receipts.set(key, observation);
+  // Copy the validated fields. The observer receives the caller's object and
+  // may mutate it; the cache must not share that reference.
+  memory.receipts.set(key, {
+    campaignId: observation.campaignId,
+    idempotencyKey: observation.idempotencyKey,
+    status: 'granted',
+    receiptKey: observation.receiptKey,
+  });
   evictDurablePromotionReceipts(memory);
 }
 
@@ -1875,18 +1882,41 @@ async function writePromotionGrantRecord(
     promotionGrantScopedStorageKey(campaignId, idempotencyKey),
     JSON.stringify({ ...record, campaignId }),
   );
-  memory?.legacyBindings.set(idempotencyKey, campaignId);
+  const legacyKey = promotionGrantLegacyStorageKey(idempotencyKey);
+  let legacy: string | null;
   try {
-    const legacyKey = promotionGrantLegacyStorageKey(idempotencyKey);
-    const legacy = await storage.getItem(legacyKey);
-    if (legacy === null) {
-      return;
+    legacy = await storage.getItem(legacyKey);
+  } catch {
+    // A failed read cannot prove the unscoped marker is gone.
+    memory?.legacyBindings.set(idempotencyKey, campaignId);
+    return;
+  }
+  if (legacy === null) {
+    memory?.legacyBindings.delete(idempotencyKey);
+    return;
+  }
+  const bound = readStoredCampaignId(legacy);
+  if (bound !== undefined && bound !== campaignId) {
+    return;
+  }
+  memory?.legacyBindings.set(idempotencyKey, campaignId);
+  // Stamp the campaign onto the v1 marker before deletion. A failed remove
+  // then still fences a restarted bridge; the process-local map does not.
+  let stamped = false;
+  try {
+    const parsed: unknown = JSON.parse(legacy);
+    const stampedRecord = isRecord(parsed) ? { ...parsed, campaignId } : { campaignId };
+    await storage.setItem(legacyKey, JSON.stringify(stampedRecord));
+    stamped = true;
+  } catch { /* Removal is the other durable fence. */ }
+  try {
+    await storage.removeItem(legacyKey);
+    memory?.legacyBindings.delete(idempotencyKey);
+  } catch {
+    if (!stamped) {
+      throw new Error('AIT legacy promotion marker could not be bound or removed.');
     }
-    const bound = readStoredCampaignId(legacy);
-    if (bound === undefined || bound === campaignId) {
-      await storage.removeItem(legacyKey);
-    }
-  } catch { /* The scoped record is authoritative. */ }
+  }
 }
 
 async function migrateLegacyPromotionGrant(

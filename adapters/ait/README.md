@@ -136,7 +136,9 @@ receipt contract is the same for markerless and existing-marker resolution. New 
 `v1` marker, which was keyed only by the idempotency key, is still readable. The first campaign
 that reconciles an unbound legacy marker binds it; another campaign does not receive that receipt.
 Server-issued idempotency keys should stay unique across campaigns. A legacy marker that could not
-be copied remains fenced in the current process by that binding. An authority `retry` also removes
+be copied remains fenced in the current process by that binding. The campaign id is written onto
+the legacy marker before it is removed, so a failed delete still fences a restarted bridge.
+An authority `retry` also removes
 that migrated copy, so it cannot block the authorized payout. A v2 marker whose embedded
 `campaignId` does not match its key stays pending and is not overwritten or paid again.
 

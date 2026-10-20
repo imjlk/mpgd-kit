@@ -2799,6 +2799,123 @@ describe('AIT production host bridge', () => {
     expect(values.get(storageKey)).toBe(original);
   });
 
+  it('stamps a legacy receipt before a failed removal so a restarted bridge cannot credit it twice', async () => {
+    const legacyKey = 'mpgd:ait:promotion-grant:v1:restart-claim';
+    const values = new Map<string, string>([
+      [legacyKey, JSON.stringify({ status: 'granted', receiptKey: 'legacy-receipt' })],
+    ]);
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const storage = {
+      getItem: async (key: string) => values.get(key) ?? null,
+      setItem: async (key: string, value: string) => { values.set(key, value); },
+      removeItem: async (key: string) => {
+        if (key === legacyKey) {
+          throw new Error('legacy remove failed');
+        }
+        values.delete(key);
+      },
+    };
+    const create = () => createAitHostBridge({
+      promotionRewards: {
+        CAMPAIGN_A: { promotionCode: 'PROMO_A', amount: 1 },
+        CAMPAIGN_B: { promotionCode: 'PROMO_B', amount: 1 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    await expect(request(create(), 'promotions.recoverReward', {
+      campaignId: 'CAMPAIGN_A',
+      idempotencyKey: 'restart-claim',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'legacy-receipt' });
+    expect(JSON.parse(values.get(legacyKey) ?? '{}')).toMatchObject({
+      campaignId: 'CAMPAIGN_A',
+      receiptKey: 'legacy-receipt',
+    });
+    const restarted = create();
+    const [again, other] = await Promise.all([
+      request(restarted, 'promotions.recoverReward', {
+        campaignId: 'CAMPAIGN_A',
+        idempotencyKey: 'restart-claim',
+      }),
+      request(restarted, 'promotions.recoverReward', {
+        campaignId: 'CAMPAIGN_B',
+        idempotencyKey: 'restart-claim',
+      }),
+    ]);
+    expect(again).toEqual({ status: 'granted', receiptKey: 'legacy-receipt' });
+    expect(other).toEqual({ status: 'pending' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(0);
+  });
+
+  it('does not let an observer mutation replace a cached receipt and cause another payout', async () => {
+    const values = new Map<string, string>();
+    const grantPromotionReward = vi.fn(async () => ({ key: 'real-receipt' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant: async () => ({ status: 'retry' as const }),
+      observePromotionGrant: async (observation) => {
+        const mutable = observation as { receiptKey?: string; status?: string };
+        mutable.receiptKey = 'forged-receipt';
+        mutable.status = 'pending';
+      },
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => { values.delete(key); },
+          setItem: async (key, value) => {
+            if (value.includes('real-receipt')) {
+              throw new Error('receipt storage full');
+            }
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+    const claim = { campaignId: 'DAILY', idempotencyKey: 'observer-mutation' };
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey: 'real-receipt',
+    });
+    const [first, second] = await Promise.all([
+      request(bridge, 'promotions.grantReward', claim),
+      request(bridge, 'promotions.grantReward', claim),
+    ]);
+    expect(first).toEqual({ status: 'granted', receiptKey: 'real-receipt' });
+    expect(second).toEqual({ status: 'granted', receiptKey: 'real-receipt' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops an in-process legacy binding after the unscoped marker is removed', async () => {
+    const legacyKey = 'mpgd:ait:promotion-grant:v1:reappeared-claim';
+    const values = new Map<string, string>([
+      [legacyKey, JSON.stringify({ status: 'granted', receiptKey: 'first-receipt' })],
+    ]);
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-pay' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        CAMPAIGN_A: { promotionCode: 'PROMO_A', amount: 1 },
+        CAMPAIGN_B: { promotionCode: 'PROMO_B', amount: 1 },
+      },
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: createMemoryStorage(values),
+      }),
+    });
+    await expect(request(bridge, 'promotions.recoverReward', {
+      campaignId: 'CAMPAIGN_A',
+      idempotencyKey: 'reappeared-claim',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'first-receipt' });
+    expect(values.has(legacyKey)).toBe(false);
+    values.set(legacyKey, JSON.stringify({ status: 'granted', receiptKey: 'reappeared-receipt' }));
+    await expect(request(bridge, 'promotions.recoverReward', {
+      campaignId: 'CAMPAIGN_B',
+      idempotencyKey: 'reappeared-claim',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'reappeared-receipt' });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(0);
+  });
+
   it('returns a protocol error for a malformed runtime bridge call', async () => {
     const bridge = createAitHostBridge({ dependencies: createDependencies() });
     const response: unknown = await Reflect.apply(bridge.request, bridge, [null]);
