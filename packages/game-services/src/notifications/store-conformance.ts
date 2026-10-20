@@ -198,6 +198,16 @@ export async function runNotificationStoreConformance(
     undefined,
     'endpoints: the cleared end reads back',
   );
+  equal(
+    await store.extendSessionEndpoints({ sessionId: 'extended', expiresAt: at(180_000) }),
+    0,
+    'endpoints: a cleared end stays cleared when a later end is reported',
+  );
+  equal(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'i-5' }))?.sessionExpiresAt,
+    undefined,
+    'endpoints: extending a cleared session does not restore an end',
+  );
   await store.removeSessionEndpoints({ sessionId: 'extended' });
   await store.removeSessionEndpoints({ sessionId: 'other' });
   equal(
@@ -345,6 +355,30 @@ export async function runNotificationStoreConformance(
     ['k-2', 'k-4'],
     'sends: due earliest first, limited',
   );
+  for (const key of ['k-tie-b', 'k-tie-a'] as const) {
+    await store.createSend({
+      ...send,
+      key,
+      request: { ...send.request, idempotencyKey: key },
+      rows: [{
+        ...send.rows[0],
+        key: `${key}:i-1`,
+        state: { status: 'deferred', reason: 'quiet-hours', until: at(5) },
+      } as NotificationStoredSend['rows'][number]],
+    });
+  }
+  deepEqual(
+    await store.listDueSends({ at: at(5), limit: 10 }),
+    ['k-tie-a', 'k-tie-b'],
+    'sends: the same due time is ordered by key',
+  );
+  for (const key of ['k-tie-a', 'k-tie-b'] as const) {
+    const held = await store.getSend(key);
+    ok(
+      await store.updateSend({ key, version: held?.version ?? '', send: undefined }),
+      'sends: the tie-break fixtures are removed before purge',
+    );
+  }
 
   // History: one entry per send and provider, read from a time on.
   await store.addHistory({

@@ -1986,4 +1986,510 @@ const pending = (h: Harness) =>
   assert.deepEqual(h.errors, ['scheduler.round']);
 }
 
+// A notice recorded while a claimed push resolves its recipient is not sent.
+{
+  let onEndpoint: (() => Promise<void>) | undefined;
+  const h = harness({
+    queue: true,
+    topics: [weekend, noticeTopic],
+    deployment: kr,
+    notices: true,
+    store: (inner) => ({
+      ...inner,
+      async getEndpoint(input) {
+        const hook = onEndpoint;
+        onEndpoint = undefined;
+        await hook?.();
+        return inner.getEndpoint(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2026-10-25T15:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.jobs.length, 1, 'the notice waits for its job');
+  assert.equal(h.fcm.calls.length, 0);
+  const listed = await h.service.listNotices(session('p-1'));
+  assert.equal(listed.length, 1);
+  onEndpoint = () => h.service.recordNoticeShown(session('p-1'), listed[0]);
+  await h.service.dispatch(h.jobs[0] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 0, 'a notice recorded before the provider call is not sent');
+  assert.equal(
+    h.store.inspect().sends.some((send) => send.key.startsWith('notice:')),
+    false,
+    'the waiting notice row is dropped',
+  );
+}
+
+// A lost drop of a recorded notice is retried until the row is gone.
+{
+  let failDrops = 0;
+  const h = harness({
+    queue: true,
+    topics: [weekend, noticeTopic],
+    deployment: kr,
+    notices: true,
+    store: (inner) => ({
+      ...inner,
+      async updateSend(input) {
+        const held = await inner.getSend(input.key);
+        const dropping = held !== undefined
+          && (input.send === undefined || input.send.rows.length < held.send.rows.length);
+        if (failDrops > 0 && dropping) {
+          failDrops -= 1;
+          await inner.updateSend({ key: input.key, version: held.version, send: held.send });
+          return false;
+        }
+        return inner.updateSend(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2026-10-25T15:00:00Z');
+  await h.service.runScheduler();
+  const listed = await h.service.listNotices(session('p-1'));
+  await h.service.recordNoticeShown(session('p-1'), listed[0]);
+  failDrops = 1;
+  await h.service.dispatch(h.jobs[0] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 0);
+  assert.equal(
+    h.store.inspect().sends.some((send) => send.key.startsWith('notice:')),
+    false,
+    'a lost compare-and-set does not leave the recorded notice queued',
+  );
+}
+
+// Cancel during a live claim does not drop the row the holder must settle, so a re-set does not send twice.
+{
+  let releaseSend: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const calls: NotificationRemoteDeliveryRequest[] = [];
+  const holding: NotificationRemoteDeliveryProvider & { readonly calls: typeof calls } = {
+    id: 'fcm',
+    calls,
+    async send(request) {
+      calls.push(request);
+      entered?.();
+      await new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      return { status: 'accepted' };
+    },
+  };
+  const time = clock('2026-10-19T03:00:00Z');
+  const store = createInMemoryNotificationStore();
+  const jobs: NotificationDispatchJob[] = [];
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: holding, targets: ['vector'] },
+    ]),
+    catalog: {
+      defaultLocale: 'ko',
+      topicsFor: () => [challenge],
+    },
+    queue: {
+      async enqueue(batch) {
+        jobs.push(...batch);
+      },
+    },
+    now: time.now,
+    random: () => 0,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok-p-1', permission: 'granted' },
+    },
+  });
+  const fireAt = '2026-10-19T03:00:00Z';
+  await service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  await service.runScheduler();
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const dispatched = service.dispatch(jobs[0] as NotificationDispatchJob);
+  await started;
+  assert.equal(calls.length, 1, 'the holder has called the provider');
+  await service.cancelReminder(session('p-1'), { key: 'k' });
+  assert.equal(store.inspect().sends.length, 1, 'the live claim is not deleted');
+  releaseSend?.();
+  await dispatched;
+  assert.equal(store.inspect().sends[0]?.rows[0]?.state.status, 'delivered');
+  await service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  await service.runScheduler();
+  assert.equal(calls.length, 1, 'the same key and time is not sent again');
+}
+
+// A cancel that lands after the claim and before the provider call does not send.
+{
+  let cancelOnRead: (() => Promise<void>) | undefined;
+  const h = harness({
+    queue: true,
+    store: (inner) => ({
+      ...inner,
+      async getEndpoint(input) {
+        const hook = cancelOnRead;
+        cancelOnRead = undefined;
+        await hook?.();
+        return inner.getEndpoint(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'k',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T03:00:00Z',
+  });
+  await h.service.runScheduler();
+  cancelOnRead = () => h.service.cancelReminder(session('p-1'), { key: 'k' }).then(() => undefined);
+  await h.service.dispatch(h.jobs[0] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 0, 'cancelled before the call');
+  assert.deepEqual(h.store.inspect().sends, []);
+}
+
+// One provider's host read failing does not fail a set another provider can pass.
+{
+  const hostCalls: string[] = [];
+  const host: NotificationRemoteDeliveryProvider = {
+    id: 'host',
+    async send() {
+      hostCalls.push('send');
+      return { status: 'accepted' };
+    },
+    async readPermission() {
+      hostCalls.push('read');
+      throw new Error('host down');
+    },
+  };
+  const hostEntry: NotificationDeliveryProviderEntry = {
+    ...platformEntry,
+    provider: 'host',
+    permission: { scope: 'app', serverReadable: true, allowance: 'persistent' },
+  };
+  const fcm = fakeProvider('fcm');
+  const time = clock('2026-10-19T03:00:00Z');
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: hostEntry, delivery: host, targets: ['host'] },
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: time.now,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  assert.deepEqual(
+    await service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    { status: 'scheduled' },
+    'the readable host is skipped; the device provider passes',
+  );
+  assert.deepEqual(hostCalls, ['read']);
+  const onlyHost = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: hostEntry, delivery: host, targets: ['host'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: time.now,
+  });
+  await expectCode(
+    onlyHost.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    'a set nobody could check still fails',
+  );
+}
+
+// Missing template values are refused at set time, before anything is written.
+{
+  const bilingual: NotificationTopicDeclaration = {
+    ...challenge,
+    copy: {
+      ko: { title: '안녕 {{name}}', body: '본문' },
+      en: { title: 'Hi {{name}}', body: 'Body {{extra}}' },
+    },
+  };
+  const h = harness({ topics: [bilingual] });
+  await register(h, 'p-1');
+  await h.service.setReminder(session('p-1'), {
+    key: 'kept',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T04:00:00Z',
+    templateData: { name: 'Kim', extra: 1 },
+  });
+  await expectCode(
+    h.service.setReminder(session('p-1'), {
+      key: 'kept',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T05:00:00Z',
+      templateData: { name: 'Kim' },
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'a locale copy the fire would fail to fill',
+  );
+  assert.equal(
+    pending(h)[0]?.dueAt,
+    '2026-10-19T04:00:00Z',
+    'the previous reminder is not stopped',
+  );
+  assert.deepEqual(h.store.inspect().sends, []);
+  const mapped: NotificationTopicDeclaration = {
+    ...challenge,
+    mapping: { title: 'Hello {{name}}', body: 'ready' },
+  };
+  const mappingHarness = harness({ topics: [mapped] });
+  await register(mappingHarness, 'p-1');
+  await expectCode(
+    mappingHarness.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'a mapping title the fire would fail to fill',
+  );
+  assert.deepEqual(mappingHarness.store.inspect().schedule, []);
+}
+
+// An uncompilable link rule is a configuration error at set time, not a pass.
+{
+  const linked = fakeProvider('linked');
+  const broken: NotificationDeliveryProviderEntry = {
+    ...platformEntry,
+    provider: 'linked',
+    link: true,
+  };
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      {
+        entry: { ...broken, mapping: { link: { required: false, pattern: '(' } } },
+        delivery: linked,
+        targets: ['linked'],
+      },
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['vector'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await service.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  await expectCode(
+    service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+      link: 't3_ok',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'an uncompilable link rule',
+  );
+  assert.equal(linked.calls.length, 0);
+}
+
+// A host-template provider's mapping title and body are filled at set time.
+// Catalog copy is not: the host renders that. templateData is still rejected,
+// so a placeholder in the mapping cannot be satisfied and must not be stored.
+{
+  const mapped: NotificationTopicDeclaration = {
+    ...challenge,
+    mapping: { title: 'Hello {{name}}', body: 'ready', templateSetCode: 'x', agreement: 'none' },
+  };
+  const host = harness({
+    topics: [mapped],
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  await expectCode(
+    host.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'a host-template mapping title the fire would fail to fill',
+  );
+  assert.deepEqual(host.store.inspect().schedule, []);
+  const plain: NotificationTopicDeclaration = {
+    ...challenge,
+    mapping: { title: 'Hello', body: 'ready', templateSetCode: 'x', agreement: 'none' },
+  };
+  const plainHost = harness({
+    topics: [plain],
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  assert.deepEqual(
+    await plainHost.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    { status: 'scheduled' },
+    'mapping text with no placeholder stands in for the host template',
+  );
+  // Catalog copy is not what a host template sends, so its placeholders are not a set-time failure.
+  const copyOnly: NotificationTopicDeclaration = {
+    ...challenge,
+    copy: { ko: { title: 'Hi {{name}}', body: 'Body' } },
+    mapping: { templateSetCode: 'x', agreement: 'none' },
+  };
+  const copyHost = harness({
+    topics: [copyOnly],
+    fcmEntry: { ...templateEntry, provider: 'fcm' },
+  });
+  assert.deepEqual(
+    await copyHost.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    { status: 'scheduled' },
+  );
+}
+
+// An uncompilable link rule fails the set for every declaring provider, not only until the first candidate passes.
+{
+  const brokenEntry = {
+    ...platformEntry,
+    provider: 'broken',
+    link: true,
+    mapping: { link: { required: false, pattern: '(' } },
+  };
+  const passingStore = createInMemoryNotificationStore();
+  const passingFirst = createNotificationService({
+    store: passingStore,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['vector'] },
+      { entry: brokenEntry, delivery: fakeProvider('broken'), targets: ['broken'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await passingFirst.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await expectCode(
+    passingFirst.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+      link: 't3_ok',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'a later candidate has an uncompilable link rule',
+  );
+  assert.deepEqual(passingStore.inspect().schedule, []);
+  // The broken provider is not reached now, so it is not a candidate, but it would deliver the topic later.
+  const unreachedStore = createInMemoryNotificationStore();
+  const unreached = createNotificationService({
+    store: unreachedStore,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['vector'] },
+      { entry: brokenEntry, delivery: fakeProvider('broken'), targets: ['broken'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [challenge] },
+    resolvePlatformRecipient: () => undefined,
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await unreached.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await expectCode(
+    unreached.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt: '2026-10-19T04:00:00Z',
+      link: 't3_ok',
+    }),
+    'NOTIFICATIONS_INVALID_INPUT',
+    'an unreached declaring provider has an uncompilable link rule',
+  );
+  assert.deepEqual(unreachedStore.inspect().schedule, []);
+}
+
+// A live claim of other content at the same key and time does not spend the replacement.
+{
+  let replaceOnRead: (() => Promise<void>) | undefined;
+  const other: NotificationTopicDeclaration = { ...challenge, id: 'match-ready' };
+  const h = harness({
+    queue: true,
+    topics: [challenge, other],
+    store: (inner) => ({
+      ...inner,
+      async getEndpoint(input) {
+        const hook = replaceOnRead;
+        replaceOnRead = undefined;
+        await hook?.();
+        return inner.getEndpoint(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  await h.service.runScheduler();
+  const claimed = h.jobs[0] as NotificationDispatchJob;
+  replaceOnRead = async () => {
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt });
+    await h.service.runScheduler();
+  };
+  await h.service.dispatch(claimed);
+  assert.equal(h.fcm.calls.length, 0, 'the holder drops the row without calling the provider');
+  const waiting = pending(h);
+  assert.equal(waiting.length, 1, 'the replacement stays pending while the old claim was live');
+  const topic = waiting[0]?.item.kind === 'reminder' ? waiting[0].item.topic : undefined;
+  assert.equal(topic, 'match-ready');
+  h.time.advance(60);
+  const queued = h.jobs.length;
+  await h.service.runScheduler();
+  for (const job of h.jobs.slice(queued)) {
+    await h.service.dispatch(job);
+  }
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.topic.id),
+    ['match-ready'],
+    'the replacement is sent once the old claim is dropped',
+  );
+  assert.deepEqual(pending(h), []);
+}
+
 console.info('Notifications scheduler tests passed.');
