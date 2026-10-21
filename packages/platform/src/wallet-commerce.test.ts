@@ -34,6 +34,7 @@ import {
   planCreditDebits,
   readCreditWalletSpendEvidence,
   resolveCommerceBillingAuthority,
+  sameCreditAmount,
   selectEligibleCreditLots,
   type CreditEntitlement,
   type CreditLot,
@@ -213,6 +214,43 @@ describe('credit lot rules', () => {
     expect(creditPriceMultiple(6, 4)).toBeUndefined();
     expect(creditPriceMultiple(0.3, 0.1)).toBe(3);
     expect(creditPriceMultiple(4, 0)).toBeUndefined();
+  });
+
+  it('does not treat a shortfall within an absolute epsilon as covered', () => {
+    // Hand-checked on the old helper: sameCreditAmount(0, 1e-9) was true.
+    expect(sameCreditAmount(0, 1e-9)).toBe(false);
+    expect(planCreditDebits([], 1e-9)).toMatchObject({
+      status: 'rejected',
+      error: { code: 'INSUFFICIENT_BALANCE', retryable: false },
+    });
+    expect(planCreditDebits([lot({ lotId: 'empty', remaining: 0 })], 1e-9)).toMatchObject({
+      status: 'rejected',
+      error: { code: 'INSUFFICIENT_BALANCE' },
+    });
+    // Half of a tiny price is still a shortfall; relative noise cannot cover it.
+    expect(planCreditDebits([lot({ lotId: 'half', remaining: 5e-10, amount: 5e-10 })], 1e-9))
+      .toMatchObject({ status: 'rejected', error: { code: 'INSUFFICIENT_BALANCE' } });
+    // A lot that actually holds the tiny price is debited, not skipped as dust.
+    expect(planCreditDebits([lot({ lotId: 'dust', remaining: 1e-9, amount: 1e-9 })], 1e-9)).toEqual({
+      status: 'debited',
+      debits: [{ lotId: 'dust', amount: 1e-9 }],
+    });
+    const fractional = planCreditDebits([
+      lot({ lotId: 'tenth', remaining: 0.1, amount: 0.1 }),
+      lot({ lotId: 'fifth', remaining: 0.2, amount: 0.2, createdAt: '2026-10-02T00:00:00Z' }),
+    ], 0.3);
+    expect(fractional.status).toBe('debited');
+    if (fractional.status === 'debited') {
+      expect(fractional.debits.reduce((sum, debit) => sum + debit.amount, 0)).toBeGreaterThanOrEqual(0.3);
+    }
+    // 0.7 + 0.1 lands slightly under 0.8; that float residue still covers.
+    expect(planCreditDebits([
+      lot({ lotId: 'seven', remaining: 0.7, amount: 0.7 }),
+      lot({ lotId: 'tenth-b', remaining: 0.1, amount: 0.1, createdAt: '2026-10-02T00:00:00Z' }),
+    ], 0.8)).toMatchObject({ status: 'debited' });
+    expect(creditPriceMultiple(1e-9, 1e-9)).toBe(1);
+    expect(creditPriceMultiple(1e-9, 2e-9)).toBeUndefined();
+    expect(creditPriceMultiple(0.3, 0.1)).toBe(3);
   });
 
   it('builds membership renewal keys and stable subscription event ids', () => {
@@ -837,6 +875,44 @@ describe('createCreditCommerceProvider', () => {
     providerNow = '2026-12-25T00:00:00Z';
     expect(await bare.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-5', source: 'shop' }))
       .toMatchObject({ outcome: 'purchased', purchase: { purchasedAt: '2026-12-24T00:00:00Z' } });
+  });
+
+  it('does not purchase a tiny offer the wallet did not pay for', async () => {
+    const dust: CreditOffer = {
+      ...packOffer,
+      logicalId: 'dust',
+      storeSku: 'dust.1',
+      price: { currency, amount: 1e-9 },
+    };
+    const { client, wallet } = createClientFixture({ offers: [dust] });
+    const provider = createCreditCommerceProvider(client, {
+      titleId: 'title-a',
+      billingAuthority: 'host',
+    });
+    expect(await provider.requestPurchase({ logicalId: 'dust', idempotencyKey: 'op-empty', source: 'shop' }))
+      .toMatchObject({ outcome: 'failed', error: { code: 'INSUFFICIENT_BALANCE', retryable: false } });
+    expect(wallet.debits).toEqual([]);
+    expect(wallet.entitlements).toEqual([]);
+    const unpaid = createCreditCommerceProvider({
+      ...client,
+      async spend() {
+        return {
+          status: 'debited',
+          entitlementId: 'op-unpaid',
+          debits: [],
+          createdAt: '2026-10-01T00:00:00Z',
+        };
+      },
+    }, { titleId: 'title-a', billingAuthority: 'host' });
+    expect(await unpaid.requestPurchase({ logicalId: 'dust', idempotencyKey: 'op-unpaid', source: 'shop' }))
+      .toMatchObject({ outcome: 'failed', error: { code: 'INVALID_RESPONSE' } });
+    wallet.creditFromGrant(grant('le-dust', 1e-9));
+    expect(await provider.requestPurchase({ logicalId: 'dust', idempotencyKey: 'op-paid', source: 'shop' }))
+      .toMatchObject({
+        outcome: 'purchased',
+        purchase: { transactionId: 'op-paid', quantity: 1 },
+      });
+    expect(wallet.debits).toEqual([{ idempotencyKey: 'op-paid', lotId: 'le-dust', amount: 1e-9 }]);
   });
 
   it('refuses a debited answer that does not add up to the price', async () => {

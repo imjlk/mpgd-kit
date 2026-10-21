@@ -398,20 +398,62 @@ export function sumCreditDebits(debits: readonly CreditDebit[]): number {
   return debits.reduce((sum, debit) => sum + debit.amount, 0);
 }
 
-/** Tolerance for comparing credit amounts, which the contract allows to be fractional. */
+/**
+ * Relative scale for credit-amount comparisons. Amounts may be fractional, so
+ * equality allows float noise, but the noise is a fraction of the amount. An
+ * absolute 1e-9 would treat a price of 1e-9 as already paid (`sameCreditAmount(0, 1e-9)`).
+ */
 const creditAmountEpsilon = 1e-9;
 
+/**
+ * True when two credit amounts differ only by relative float noise.
+ * The gap cannot be the whole amount, so a zero and a positive price are not equal.
+ */
 export function sameCreditAmount(left: number, right: number): boolean {
-  return Math.abs(left - right) <= creditAmountEpsilon;
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return false;
+  }
+  const difference = Math.abs(left - right);
+  const scale = Math.max(Math.abs(left), Math.abs(right));
+  if (scale === 0) {
+    return true;
+  }
+  return difference <= creditAmountEpsilon * scale;
 }
 
-/** The whole number of `unit` prices in `amount`, or `undefined` when `amount` is not a positive multiple. */
+/**
+ * True when `paid` meets `price`. A shortfall of the whole price is never met.
+ * Float noise may leave `paid` above `price`, or a relative sliver under it
+ * that cannot be the price itself. Zero does not meet a positive price, so an
+ * empty debit list is not a spend.
+ */
+function creditAmountCovers(paid: number, price: number): boolean {
+  if (!Number.isFinite(paid) || !Number.isFinite(price) || !(paid > 0) || !(price > 0)) {
+    return false;
+  }
+  if (paid >= price) {
+    return true;
+  }
+  const shortfall = price - paid;
+  return shortfall < price && shortfall <= creditAmountEpsilon * price;
+}
+
+/** The whole number of `unit` prices in `amount`, or `undefined` when `amount` does not cover a positive multiple. */
 export function creditPriceMultiple(amount: number, unit: number): number | undefined {
   if (!(unit > 0) || !(amount > 0) || !Number.isFinite(amount) || !Number.isFinite(unit)) {
     return undefined;
   }
   const multiple = Math.round(amount / unit);
-  return multiple >= 1 && sameCreditAmount(multiple * unit, amount) ? multiple : undefined;
+  if (!Number.isFinite(multiple) || multiple < 1) {
+    return undefined;
+  }
+  const product = multiple * unit;
+  // `amount` must cover the units. Relative noise may put `product` slightly
+  // above `amount`; an absolute gap is not a whole number of units.
+  if (!creditAmountCovers(amount, product) || !sameCreditAmount(product, amount)) {
+    return undefined;
+  }
+  return multiple;
 }
 
 export type CreditDebitPlan =
@@ -421,7 +463,9 @@ export type CreditDebitPlan =
 /**
  * Plans the debits of `amount` across eligible lots in spend order without
  * mutating them. A spend the lots cannot cover is rejected with
- * `INSUFFICIENT_BALANCE` and plans nothing.
+ * `INSUFFICIENT_BALANCE` and plans nothing. A shortfall is never a debit,
+ * including one within an absolute 1e-9, and an empty debit list is not a
+ * debit of a positive amount.
  */
 export function planCreditDebits(eligible: readonly CreditLot[], amount: number): CreditDebitPlan {
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -434,30 +478,37 @@ export function planCreditDebits(eligible: readonly CreditLot[], amount: number)
       },
     };
   }
+  const insufficient = (available: number): CreditDebitPlan => ({
+    status: 'rejected',
+    error: {
+      code: 'INSUFFICIENT_BALANCE',
+      retryable: false,
+      message: `Eligible balance ${available} cannot cover ${amount}.`,
+    },
+  });
   const ordered = [...eligible].sort(compareCreditLotSpendOrder);
   const available = sumCreditLotRemaining(ordered);
-  if (available < amount && !sameCreditAmount(available, amount)) {
-    return {
-      status: 'rejected',
-      error: {
-        code: 'INSUFFICIENT_BALANCE',
-        retryable: false,
-        message: `Eligible balance ${available} cannot cover ${amount}.`,
-      },
-    };
+  if (!creditAmountCovers(available, amount)) {
+    return insufficient(available);
   }
   const debits: CreditDebit[] = [];
   let remaining = amount;
   for (const lot of ordered) {
-    if (remaining <= creditAmountEpsilon) {
+    if (!(remaining > 0)) {
       break;
     }
     const debit = Math.min(lot.remaining, remaining);
-    if (debit <= 0) {
+    if (!(debit > 0)) {
       continue;
     }
     debits.push({ lotId: lot.lotId, amount: debit });
     remaining -= debit;
+  }
+  const paid = sumCreditDebits(debits);
+  // The loop must not report a debit it did not take. A positive price with
+  // an empty list, or a sum that does not cover, is still insufficient.
+  if (debits.length === 0 || !creditAmountCovers(paid, amount)) {
+    return insufficient(paid);
   }
   return { status: 'debited', debits };
 }
@@ -1094,14 +1145,20 @@ export function createCreditCommerceProvider(
       if (spend.status === 'rejected') {
         return failed(spend.error);
       }
-      // A debited answer that does not add up to the price is not a purchase.
-      if (!sameCreditAmount(sumCreditDebits(spend.debits), spendInput.amount)) {
+      // A debited answer that does not cover the price is not a purchase.
+      // An empty debit list never covers a positive price, and a shortfall
+      // within an absolute epsilon is still a shortfall.
+      const paid = sumCreditDebits(spend.debits);
+      if (
+        spend.debits.length === 0
+        || !creditAmountCovers(paid, spendInput.amount)
+        || !sameCreditAmount(paid, spendInput.amount)
+      ) {
         return failed(
           invalidResponse(
             'spend',
             new RangeError(
-              `Debits for ${offer.logicalId} sum to ${sumCreditDebits(spend.debits)}, `
-                + `not ${spendInput.amount}.`,
+              `Debits for ${offer.logicalId} sum to ${paid}, not ${spendInput.amount}.`,
             ),
           ).toCommerceErrorInfo(),
         );
