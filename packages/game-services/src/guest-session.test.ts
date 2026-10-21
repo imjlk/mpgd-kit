@@ -470,4 +470,239 @@ function backendFixture() {
   assert.throws(() => coordinator.getHeaders(), { code: 'GUEST_SESSION_NOT_READY' });
 }
 
+/**
+ * A backend whose answers the test scripts: each issue, refresh, and bind
+ * returns the next session, numbered, with the given ids.
+ */
+function familyBackend() {
+  let count = 0;
+  const next = (ids: { readonly sessionId: string; readonly sessionFamilyId?: string }) => {
+    count += 1;
+    return {
+      ...session(`access-${count}`, `refresh-${count}`),
+      ...ids,
+    };
+  };
+  const answers = {
+    issue: { sessionId: 'issued-session' } as { readonly sessionId: string; readonly sessionFamilyId?: string },
+    refresh: [] as { readonly sessionId: string; readonly sessionFamilyId?: string }[],
+    bind: { sessionId: 'bound-session' } as { readonly sessionId: string; readonly sessionFamilyId?: string },
+  };
+  const backend: GuestSessionBackend = {
+    async issueGuest() {
+      return next(answers.issue);
+    },
+    async refresh() {
+      const ids = answers.refresh.shift();
+      if (ids === undefined) {
+        throw new Error('no scripted refresh');
+      }
+      return next(ids);
+    },
+    async revoke() {},
+    async bindAccount() {
+      return { status: 'bound', session: { ...next(answers.bind), identityLevel: 'authenticated' } };
+    },
+  };
+  return { backend, answers };
+}
+
+// A backend without family ids: refreshes keep the first session id as the family.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  const seen: string[] = [];
+  const unsubscribe = coordinator.onSession((view) =>
+    seen.push(`${view.sessionId}/${view.sessionFamilyId}`),
+  );
+  assert.equal(coordinator.current(), undefined);
+  const started = await coordinator.start();
+  assert.equal(started.sessionFamilyId, 'issued-session');
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'issued-session');
+  server.answers.refresh.push({ sessionId: 'rotated-1' }, { sessionId: 'rotated-2' });
+  assert.equal((await coordinator.refresh()).sessionFamilyId, 'issued-session');
+  assert.equal((await coordinator.refresh()).sessionId, 'rotated-2');
+  assert.equal(coordinator.current()?.sessionFamilyId, 'issued-session');
+  assert.equal(coordinator.current()?.sessionId, 'rotated-2');
+  assert.deepEqual(seen, [
+    'issued-session/issued-session',
+    'rotated-1/issued-session',
+    'rotated-2/issued-session',
+  ]);
+  // A bound account under a new session id may be a new family on the backend: start one.
+  assert.deepEqual(
+    await coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' }),
+    {
+      status: 'bound',
+    },
+  );
+  assert.equal(coordinator.current()?.sessionFamilyId, 'bound-session');
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'bound-session');
+  // A bind that keeps the session id keeps the family.
+  server.answers.bind = { sessionId: 'bound-session' };
+  await coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-2' });
+  assert.equal(coordinator.current()?.sessionFamilyId, 'bound-session');
+  unsubscribe();
+  server.answers.refresh.push({ sessionId: 'rotated-3' });
+  await coordinator.refresh();
+  assert.equal(seen.length, 5, 'an unsubscribed listener hears nothing more');
+  // Logout removes the saved family with the token.
+  await coordinator.logout();
+  assert.equal(coordinator.current(), undefined);
+  assert.equal(native.values.size, 0);
+}
+
+// Restore from secure storage keeps the saved family; a backend family id always wins.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  const first = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await first.start();
+  server.answers.refresh.push({ sessionId: 'rotated-1' });
+  await first.refresh();
+  // The next launch: a new coordinator over the same storage.
+  server.answers.refresh.push({ sessionId: 'restored-session' });
+  const second = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  const restored = await second.start();
+  assert.equal(restored.sessionId, 'restored-session');
+  assert.equal(restored.sessionFamilyId, 'issued-session');
+  // The backend names the family: it replaces the derived one, and is saved.
+  server.answers.refresh.push({ sessionId: 'rotated-2', sessionFamilyId: 'backend-family' });
+  assert.equal((await second.refresh()).sessionFamilyId, 'backend-family');
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'backend-family');
+  // A later answer without one continues the backend's family.
+  server.answers.refresh.push({ sessionId: 'rotated-3' });
+  assert.equal((await second.refresh()).sessionFamilyId, 'backend-family');
+}
+
+// Without a readable saved family, a restore starts a family at the restored session id.
+{
+  const native = credentialFixture();
+  native.values.set('mpgd.guest.refresh', 'stored-refresh');
+  const server = familyBackend();
+  server.answers.refresh.push({ sessionId: 'restored-session' });
+  let failFamilyLoad = true;
+  const credentials: SecureCredentialStore = {
+    ...native.credentials,
+    async load(input) {
+      if (input.key === 'mpgd.guest.refresh.family' && failFamilyLoad) {
+        failFamilyLoad = false;
+        throw new Error('native load failed');
+      }
+      return native.credentials.load(input);
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  assert.equal((await coordinator.start()).sessionFamilyId, 'restored-session');
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'restored-session');
+}
+
+// A family saved for an older token is never read for a new guest.
+{
+  const native = credentialFixture();
+  native.values.set('mpgd.guest.refresh.family', 'stale-family');
+  const server = familyBackend();
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  assert.equal((await coordinator.start()).sessionFamilyId, 'issued-session');
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'issued-session');
+}
+
+// A family that cannot be saved is removed, so a restore never reads an older one.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  const saves: string[] = [];
+  let failFamilySave = false;
+  const credentials: SecureCredentialStore = {
+    ...native.credentials,
+    async save(input) {
+      if (input.key === 'mpgd.guest.refresh.family' && failFamilySave) {
+        throw new Error('native save failed');
+      }
+      saves.push(input.key);
+      return native.credentials.save(input);
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await coordinator.start();
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'issued-session');
+  // An unchanged family is not written again.
+  server.answers.refresh.push({ sessionId: 'rotated-1' });
+  await coordinator.refresh();
+  assert.deepEqual(saves, [
+    'mpgd.guest.refresh',
+    'mpgd.guest.refresh.family',
+    'mpgd.guest.refresh',
+  ]);
+  failFamilySave = true;
+  await coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' });
+  // The session is active with its new family; only the saved copy is gone.
+  assert.equal(coordinator.current()?.sessionFamilyId, 'bound-session');
+  assert.equal(native.values.has('mpgd.guest.refresh.family'), false);
+  assert.equal(native.values.get('mpgd.guest.refresh'), 'refresh-3');
+  // The next change writes it again.
+  failFamilySave = false;
+  server.answers.refresh.push({ sessionId: 'rotated-2' });
+  await coordinator.refresh();
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'bound-session');
+}
+
+// A malformed family id is an invalid response; a listener that throws does not fail start().
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  server.answers.issue = { sessionId: 'issued-session', sessionFamilyId: ' ' };
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_INVALID_RESPONSE' });
+  assert.equal(native.values.size, 0);
+
+  const healthy = familyBackend();
+  const listening = createGuestSessionCoordinator({
+    backend: healthy.backend,
+    credentials: credentialFixture().credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  listening.onSession(() => {
+    throw new Error('listener failed');
+  });
+  assert.equal((await listening.start()).sessionFamilyId, 'issued-session');
+}
+
 console.info('Guest session coordinator conformance passed.');

@@ -259,6 +259,16 @@ normalized to token-free coordinator codes, not forwarded with raw messages.
 `getHeaders()` can be passed as the Game Services runtime's
 `getHeaders` resolver. The public session view omits both bearer tokens.
 
+Each view also carries `sessionFamilyId`, the stable session-family id: one
+value for the session's whole life, whatever its `sessionId` does on refresh.
+A backend should send it (`sessionFamilyId` in its session answers, the same
+id its identity service answers to the notifications Worker). A backend that
+omits it gets a derived id that changes only where the backend's family might
+have: at a new guest, at a bound account whose `sessionId` changed, and at a
+restore whose saved family (`<credentialKey>.family` in the same secure
+storage, removed at logout) cannot be read. `current()` reads the active view
+and `onSession(listener)` hears each new one.
+
 Binding an external account never switches to a different server user on a
 client callback. It does not merge purchases, currency, or progress. Use the
 existing `progress-link` nonce/idempotency service separately for a

@@ -25,6 +25,15 @@ export interface ServerGuestSessionCredentials {
   readonly serverUserId: string;
   /** May rotate on refresh or binding; serverUserId remains the ownership key. */
   readonly sessionId: string;
+  /**
+   * The stable session-family id: one value for the session's whole life,
+   * across every refresh, which a new guest (and any new sign-in) replaces.
+   * It is the `sessionId` the identity service answers to the notifications
+   * Worker's `authenticateNotificationSession`. Optional on the wire: when a
+   * backend omits it, the coordinator derives one (see
+   * `createGuestSessionCoordinator`).
+   */
+  readonly sessionFamilyId?: string;
   readonly identityLevel: 'guest' | 'authenticated';
   readonly accessToken: string;
   readonly refreshToken: string;
@@ -32,7 +41,19 @@ export interface ServerGuestSessionCredentials {
 }
 
 /** Identity view: neither bearer token is returned to game code. */
-export type ServerGuestSessionView = Omit<ServerGuestSessionCredentials, 'accessToken' | 'refreshToken'>;
+export interface ServerGuestSessionView {
+  readonly serverUserId: string;
+  /** May rotate on refresh or binding. */
+  readonly sessionId: string;
+  /**
+   * The stable session-family id: the backend's, or the one the coordinator
+   * derived when the backend sent none. Use it, not `sessionId`, wherever a
+   * session must keep one id across refreshes (the notifications client).
+   */
+  readonly sessionFamilyId: string;
+  readonly identityLevel: 'guest' | 'authenticated';
+  readonly accessExpiresAt: string;
+}
 
 export type AccountBindingOutcome =
   | { readonly status: 'bound' | 'already-bound'; readonly session: ServerGuestSessionCredentials }
@@ -79,6 +100,15 @@ export class GuestSessionCoordinatorError extends Error {
 
 export interface GuestSessionCoordinator {
   start(): Promise<ServerGuestSessionView>;
+  /** The active session's view, or `undefined` before `start()` settles, after a failure, and after logout. */
+  current(): ServerGuestSessionView | undefined;
+  /**
+   * Calls `listener` with the new view each time a session becomes active:
+   * `start()`, each `refresh()`, and a bound `bindAccount()`. A refresh in
+   * the same family repeats the family id. Returns the unsubscribe. A
+   * listener that throws does not fail the operation.
+   */
+  onSession(listener: (session: ServerGuestSessionView) => void): () => void;
   refresh(): Promise<ServerGuestSessionView>;
   bindAccount(input: {
     readonly externalProof: string;
@@ -90,9 +120,28 @@ export interface GuestSessionCoordinator {
 
 const defaultCredentialKey = 'mpgd.guest.refresh';
 
+/** The credentials the coordinator holds, with the family id resolved. */
+type ActiveGuestSession = ServerGuestSessionCredentials & { readonly sessionFamilyId: string };
+
 /**
  * Serializes token mutation and closes synchronously on logout. Native secure
  * storage failures never fall back to ordinary game storage or mint a new guest.
+ *
+ * The session-family id is the backend's `sessionFamilyId` whenever it sends
+ * one. A backend that omits it gets a derived id, which only ever changes in
+ * the safe direction (a new id where the backend's family might be new):
+ * - `issueGuest` starts a family at the new `sessionId`;
+ * - a refresh keeps the family, however the `sessionId` rotates;
+ * - a bound account keeps it while the `sessionId` stays, and starts one at
+ *   the new `sessionId` when that changes;
+ * - a restore from secure storage keeps the family saved with the refresh
+ *   token (`<credentialKey>.family`), or starts one at the restored
+ *   `sessionId` when none can be read;
+ * - logout removes the saved family with the token.
+ * The derived id is not the identity service's id, and does not need to be: the
+ * notifications runtime only compares it with the id it registered under,
+ * and registers again when it changes. Saving the family is best effort: a
+ * failed save leaves no saved family, so the next restore starts one.
  */
 export function createGuestSessionCoordinator(input: {
   readonly backend: GuestSessionBackend;
@@ -108,8 +157,12 @@ export function createGuestSessionCoordinator(input: {
   if (credentialKey.trim() === '') {
     throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
   }
+  const familyKey = `${credentialKey}.family`;
   const now = input.now ?? Date.now;
-  let current: ServerGuestSessionCredentials | undefined;
+  let current: ActiveGuestSession | undefined;
+  /** The family id last written to secure storage, as far as this coordinator knows. */
+  let savedFamily: string | undefined;
+  const listeners = new Set<(session: ServerGuestSessionView) => void>();
   let status: 'idle' | 'active' | 'failed' | 'closed' = 'idle';
   let tail: Promise<void> = Promise.resolve();
   let startInFlight: Promise<ServerGuestSessionView> | undefined;
@@ -128,7 +181,7 @@ export function createGuestSessionCoordinator(input: {
     }
   }
 
-  function requireCurrent(): ServerGuestSessionCredentials {
+  function requireCurrent(): ActiveGuestSession {
     if (status !== 'active' || current === undefined) {
       throw new GuestSessionCoordinatorError('GUEST_SESSION_NOT_READY');
     }
@@ -157,7 +210,18 @@ export function createGuestSessionCoordinator(input: {
     }
   }
 
-  async function persist(next: ServerGuestSessionCredentials): Promise<void> {
+  /** The family saved with the stored refresh token, or `undefined` when none can be read. */
+  async function loadStoredFamily(): Promise<string | undefined> {
+    try {
+      const stored = await input.credentials.load({ key: familyKey });
+      return typeof stored === 'string' && stored.trim() !== '' ? stored : undefined;
+    } catch {
+      // A family that cannot be read starts a new one: at worst one more registration.
+      return undefined;
+    }
+  }
+
+  async function persist(next: ActiveGuestSession): Promise<void> {
     try {
       await input.credentials.save({ key: credentialKey, value: next.refreshToken });
     } catch {
@@ -172,6 +236,28 @@ export function createGuestSessionCoordinator(input: {
     current = next;
     if (status !== 'closed') {
       status = 'active';
+    }
+    if (savedFamily !== next.sessionFamilyId) {
+      try {
+        await input.credentials.save({ key: familyKey, value: next.sessionFamilyId });
+        savedFamily = next.sessionFamilyId;
+      } catch {
+        // Never leave an older family next to this token: a restore would
+        // read it for a family the backend may have replaced.
+        savedFamily = undefined;
+        await input.credentials.remove({ key: familyKey }).catch(() => undefined);
+      }
+    }
+  }
+
+  /** Tells the listeners, after an operation made `session` active. */
+  function announce(session: ServerGuestSessionView): void {
+    for (const listener of [...listeners]) {
+      try {
+        listener(session);
+      } catch {
+        // A listener's failure is the game's; the session is active regardless.
+      }
     }
   }
 
@@ -190,12 +276,24 @@ export function createGuestSessionCoordinator(input: {
       startInFlight = enqueue(async () => {
         assertOpen();
         const stored = await loadStoredRefreshToken();
-        const next = validateSession(stored === null
-          ? await fromBackend(() => input.backend.issueGuest({ installationId: input.installationId }))
-          : await fromBackend(() => input.backend.refresh({ refreshToken: stored })));
+        let next: ActiveGuestSession;
+        if (stored === null) {
+          // A new guest is a new family; a family saved for an older token is not read.
+          next = withFamily(validateSession(await fromBackend(
+            () => input.backend.issueGuest({ installationId: input.installationId }),
+          )), undefined);
+        } else {
+          const family = await loadStoredFamily();
+          savedFamily = family;
+          next = withFamily(validateSession(await fromBackend(
+            () => input.backend.refresh({ refreshToken: stored }),
+          )), family);
+        }
         await persist(next);
         assertOpen();
-        return view(next);
+        const active = view(next);
+        announce(active);
+        return active;
       }).finally(() => { startInFlight = undefined; });
       return startInFlight;
     },
@@ -206,13 +304,15 @@ export function createGuestSessionCoordinator(input: {
       }
       refreshInFlight = enqueue(async () => {
         const previous = requireCurrent();
-        const next = validateSession(await fromBackend(() => input.backend.refresh({
+        const next = withFamily(validateSession(await fromBackend(() => input.backend.refresh({
           refreshToken: previous.refreshToken,
-        })));
+        }))), previous.sessionFamilyId);
         assertSameOwner(previous, next);
         await persist(next);
         assertOpen();
-        return view(next);
+        const active = view(next);
+        announce(active);
+        return active;
       }).finally(() => { refreshInFlight = undefined; });
       return refreshInFlight;
     },
@@ -239,15 +339,30 @@ export function createGuestSessionCoordinator(input: {
         if (result.status !== 'bound' && result.status !== 'already-bound') {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
         }
-        const next = validateSession(result.session);
+        const bound = validateSession(result.session);
+        // The same session id is the same session; a new one may be a new family.
+        const next = withFamily(
+          bound,
+          bound.sessionId === previous.sessionId ? previous.sessionFamilyId : undefined,
+        );
         assertSameOwner(previous, next);
         if (next.identityLevel !== 'authenticated') {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
         }
         await persist(next);
         assertOpen();
+        announce(view(next));
         return { status: result.status };
       });
+    },
+    current() {
+      return status === 'active' && current !== undefined ? view(current) : undefined;
+    },
+    onSession(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
     getHeaders() {
       assertOpen();
@@ -285,6 +400,9 @@ export function createGuestSessionCoordinator(input: {
         } catch {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_LOGOUT_UNCERTAIN');
         }
+        // Without its token a saved family is never read (a new guest starts its own).
+        await input.credentials.remove({ key: familyKey }).catch(() => undefined);
+        savedFamily = undefined;
         current = undefined;
       });
       logoutInFlight = attempt;
@@ -297,13 +415,22 @@ export function createGuestSessionCoordinator(input: {
   };
 }
 
-function view(session: ServerGuestSessionCredentials): ServerGuestSessionView {
+function view(session: ActiveGuestSession): ServerGuestSessionView {
   return {
     serverUserId: session.serverUserId,
     sessionId: session.sessionId,
+    sessionFamilyId: session.sessionFamilyId,
     identityLevel: session.identityLevel,
     accessExpiresAt: session.accessExpiresAt,
   };
+}
+
+/** The backend's family id, else the family it continues, else a new one at its session id. */
+function withFamily(
+  session: ServerGuestSessionCredentials,
+  continued: string | undefined,
+): ActiveGuestSession {
+  return { ...session, sessionFamilyId: session.sessionFamilyId ?? continued ?? session.sessionId };
 }
 
 // A server may already have consumed the previous refresh token. Persist a
@@ -312,6 +439,8 @@ function validateSession(value: unknown): ServerGuestSessionCredentials {
   if (!isRecord(value)
     || typeof value.serverUserId !== 'string' || value.serverUserId.trim() === ''
     || typeof value.sessionId !== 'string' || value.sessionId.trim() === ''
+    || (value.sessionFamilyId !== undefined
+      && (typeof value.sessionFamilyId !== 'string' || value.sessionFamilyId.trim() === ''))
     || (value.identityLevel !== 'guest' && value.identityLevel !== 'authenticated')
     || typeof value.accessToken !== 'string' || value.accessToken.trim() === ''
     || typeof value.refreshToken !== 'string' || value.refreshToken.trim() === ''
@@ -322,6 +451,7 @@ function validateSession(value: unknown): ServerGuestSessionCredentials {
   return {
     serverUserId: value.serverUserId,
     sessionId: value.sessionId,
+    ...(value.sessionFamilyId === undefined ? {} : { sessionFamilyId: value.sessionFamilyId }),
     identityLevel: value.identityLevel,
     accessToken: value.accessToken,
     refreshToken: value.refreshToken,
