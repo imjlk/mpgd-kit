@@ -487,6 +487,7 @@ type ScriptedSession = {
 
 function familyBackend() {
   let count = 0;
+  let refreshCalls = 0;
   const next = (ids: ScriptedSession) => {
     count += 1;
     return {
@@ -504,6 +505,7 @@ function familyBackend() {
       return next(answers.issue);
     },
     async refresh() {
+      refreshCalls += 1;
       const ids = answers.refresh.shift();
       if (ids === undefined) {
         throw new Error('no scripted refresh');
@@ -521,6 +523,10 @@ function familyBackend() {
     /** Sessions answered so far (issue, refresh, and bind). */
     get count() {
       return count;
+    },
+    /** Refreshes the backend was asked for, answered or not. */
+    get refreshCalls() {
+      return refreshCalls;
     },
   };
 }
@@ -871,44 +877,74 @@ function familyBackend() {
   assert.equal(server.count, 1);
 
   // Within a minute of expiry: the token is answered at once and refreshed in the background.
+  const iso = (ms: number) => new Date(ms).toISOString();
+  /** Lets a background refresh settle (a macrotask after every pending microtask). */
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   clock = Date.parse(expires) - 30_000;
   server.answers.refresh.push({ sessionId: 'rotated-1' });
   assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-1' });
-  await coordinator.refresh(); // Joins the background refresh.
-  assert.equal(server.count, 2);
+  await settle();
+  assert.equal(server.refreshCalls, 1);
   assert.deepEqual(serverSession.current(), {
     playerId: 'server-user-1',
     sessionId: 'issued-session',
   });
-  // Once per token: the new token (with the same expiry) is not refreshed again.
-  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-2' });
-  assert.equal(server.count, 2);
-  // A token that lives shorter than the lead: at most one background refresh per interval.
-  const soon = new Date(Date.parse(expires) + 10_000).toISOString();
-  server.answers.refresh.push({ sessionId: 'rotated-2', accessExpiresAt: soon });
-  await coordinator.refresh();
-  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-3' });
-  assert.equal(server.count, 3);
+  // Once per token: the new token (with the same expiry) is not refreshed again, even after the interval.
   clock += 10_000;
-  const later = new Date(Date.parse(expires) + 60 * 60 * 1000).toISOString();
-  server.answers.refresh.push({ sessionId: 'rotated-3', accessExpiresAt: later });
-  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-3' });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-2' });
+  await settle();
+  assert.equal(server.refreshCalls, 1);
+  // A token that lives shorter than the lead: at most one background refresh per interval.
+  server.answers.refresh.push({
+    sessionId: 'rotated-2',
+    accessExpiresAt: iso(Date.parse(expires) + 10_000),
+  });
   await coordinator.refresh();
-  assert.equal(server.count, 4);
+  server.answers.refresh.push({
+    sessionId: 'rotated-3',
+    accessExpiresAt: iso(Date.parse(expires) + 20_000),
+  });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-3' });
+  await settle();
+  assert.equal(server.refreshCalls, 3);
+  // access-4 is another token inside the lead, but the interval has not passed.
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-4' });
+  await settle();
+  assert.equal(server.refreshCalls, 3);
+  clock += 10_000;
+  const later = iso(Date.parse(expires) + 60 * 60 * 1000);
+  server.answers.refresh.push({ sessionId: 'rotated-4', accessExpiresAt: later });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-4' });
+  await settle();
+  assert.equal(server.refreshCalls, 4);
   // A failed background refresh still answers the valid token...
   clock = Date.parse(later) - 30_000;
-  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-4' });
-  await coordinator.refresh().catch(() => undefined);
-  assert.equal(server.count, 4);
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-5' });
+  await settle();
+  assert.equal(server.refreshCalls, 5);
+  assert.equal(server.count, 5);
   // ...and is tried again once the token expired: concurrent callers share one refresh.
   clock = Date.parse(later);
-  const latest = new Date(Date.parse(later) + 60 * 60 * 1000).toISOString();
-  server.answers.refresh.push({ sessionId: 'rotated-4', accessExpiresAt: latest });
+  const latest = iso(Date.parse(later) + 60 * 60 * 1000);
+  server.answers.refresh.push({ sessionId: 'rotated-5', accessExpiresAt: latest });
   assert.deepEqual(await Promise.all([serverSession.getHeaders(), serverSession.getHeaders()]), [
-    { authorization: 'Bearer access-5' },
-    { authorization: 'Bearer access-5' },
+    { authorization: 'Bearer access-6' },
+    { authorization: 'Bearer access-6' },
   ]);
-  assert.equal(server.count, 5);
+  assert.equal(server.refreshCalls, 6);
+  // A clock that went back does not hold the background refresh off.
+  clock = Date.parse(latest) - 30_000;
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-6' });
+  await settle();
+  assert.equal(server.refreshCalls, 7);
+  const earlier = iso(Date.parse(latest) - 40 * 60 * 1000);
+  server.answers.refresh.push({ sessionId: 'rotated-6', accessExpiresAt: earlier });
+  await coordinator.refresh();
+  clock = Date.parse(earlier) - 30_000;
+  server.answers.refresh.push({ sessionId: 'rotated-7', accessExpiresAt: latest });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-7' });
+  await settle();
+  assert.equal(server.refreshCalls, 9);
   // An expired token whose refresh fails throws the refresh's error.
   clock = Date.parse(latest);
   await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_BACKEND_FAILED' });

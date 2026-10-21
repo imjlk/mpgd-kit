@@ -586,7 +586,10 @@ export function createGuestServerSession(
         } else if (
           expiresAt - refreshAheadMs <= at
           && refreshedAheadFor !== active.accessExpiresAt
-          && (lastRefreshAheadAt === undefined || at - lastRefreshAheadAt >= guestServerSessionRefreshAheadIntervalMs)
+          // A clock that went back counts as the interval passed.
+          && (lastRefreshAheadAt === undefined
+            || at < lastRefreshAheadAt
+            || at - lastRefreshAheadAt >= guestServerSessionRefreshAheadIntervalMs)
         ) {
           refreshedAheadFor = active.accessExpiresAt;
           lastRefreshAheadAt = at;
