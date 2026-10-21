@@ -2,4 +2,4 @@
 npm/@mpgd/adapter-verse8: patch
 ---
 
-Keep Verse8 purchase follow-up re-reads when a signal carries no new purchase id. An empty `purchases` list, or a list of ids already reported, still schedules re-reads at `verse8PurchaseFollowUpDelaysMs` until the Agent8 record appears. A signal that names a new purchase id still does not. The provider does not grant; it only re-reads the purchase source.
+Keep Verse8 purchase follow-up re-reads when a signal carries no new purchase id. An empty `purchases` list, or a list of ids already reported, still schedules re-reads at `verse8PurchaseFollowUpDelaysMs` until the Agent8 record appears. A signal that names a new purchase id still does not schedule re-reads, and does not cancel a window already waiting on an earlier purchase. Follow-up reads are not started after the last listener unsubscribes. A purchase is treated as newly reported when it is emitted, including after the reported-id bound is full. The provider does not grant; it only re-reads the purchase source.

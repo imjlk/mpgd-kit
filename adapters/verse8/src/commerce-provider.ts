@@ -122,7 +122,9 @@ export interface CreateVerse8CommerceProviderInput {
    * or only ids already reported — is followed by re-reads at
    * `verse8PurchaseFollowUpDelaysMs` until one finds a new record, since the
    * Agent8 event may land after the dialog closed. A signal that names a new
-   * purchase id does not schedule those re-reads.
+   * purchase id does not schedule those re-reads, and does not cancel a
+   * window already waiting on an earlier purchase. No follow-up is started
+   * after the last listener unsubscribes.
    */
   readonly onPurchasesChanged?: (listener: Verse8PurchasesChangeListener) => () => void;
 }
@@ -237,16 +239,17 @@ export function createVerse8CommerceProvider(
   /**
    * Reports a recorded purchase once. The purchase is built before any
    * bookkeeping, so a record the contract rejects is neither marked reported
-   * nor emitted.
+   * nor emitted. Returns whether this call emitted the purchase. The reported
+   * set is bounded, so a size comparison cannot answer that.
    */
-  const reportPurchase = (recorded: Verse8RecordedPurchase): void => {
+  const reportPurchase = (recorded: Verse8RecordedPurchase): boolean => {
     if (reportedPurchases.has(recorded.purchaseId)) {
-      return;
+      return false;
     }
     const product = productsByPlatformId.get(recorded.productId);
     if (product === undefined) {
       // A purchase of a product this build does not sell is not this game's.
-      return;
+      return false;
     }
     let purchase: StorePurchase;
     try {
@@ -254,22 +257,28 @@ export function createVerse8CommerceProvider(
     } catch (error) {
       // One invalid record must not hide the others.
       console.warn('Verse8 recorded purchase was not reported.', errorMessage(error));
-      return;
+      return false;
     }
     reportedPurchases.add(recorded.purchaseId);
     bound(reportedPurchases);
     emit({ type: 'purchaseUpdated', purchase });
+    return true;
   };
 
   /** Re-reads the recorded purchases and reports the ones not reported yet. */
-  const refreshPurchases = async (): Promise<void> => {
+  const refreshPurchases = async (): Promise<number> => {
+    let reported = 0;
     for (const recorded of await readRecordedPurchases()) {
-      reportPurchase(recorded);
+      if (reportPurchase(recorded)) {
+        reported += 1;
+      }
     }
+    return reported;
   };
 
   /** Reports the purchases a signal carries; the read that follows confirms the rest. */
-  const reportSignalledPurchases = (purchases: readonly Verse8RecordedPurchase[]): void => {
+  const reportSignalledPurchases = (purchases: readonly Verse8RecordedPurchase[]): number => {
+    let reported = 0;
     for (const recorded of purchases.slice(0, maximumVerse8ReportedPurchases)) {
       if (
         readVerse8Identifier(recorded.purchaseId) === undefined
@@ -277,19 +286,20 @@ export function createVerse8CommerceProvider(
       ) {
         continue;
       }
-      reportPurchase(recorded);
+      if (reportPurchase(recorded)) {
+        reported += 1;
+      }
     }
+    return reported;
   };
   /** Re-reads in the background; resolves with the number of purchases newly reported. */
   const refreshInBackground = async (): Promise<number> => {
-    const before = reportedPurchases.size;
     try {
-      await refreshPurchases();
+      return await refreshPurchases();
     } catch (error) {
       console.warn('Verse8 recorded-purchase refresh failed.', errorMessage(error));
       return 0;
     }
-    return reportedPurchases.size - before;
   };
   /**
    * The Agent8 event may land after the dialog closed. Follow up only when
@@ -304,15 +314,20 @@ export function createVerse8CommerceProvider(
   };
   const refreshWithFollowUps = (signalReportedNew: boolean): void => {
     void refreshInBackground().then((reported) => {
-      if (disposed) {
+      if (disposed || listeners.size === 0) {
         return;
       }
-      if (signalReportedNew || reported > 0) {
-        // The purchase is already visible. Pending re-reads have nothing new to find.
+      if (reported > 0) {
+        // A re-read found a record. Pending re-reads for it have nothing new to find.
         cancelFollowUps();
         return;
       }
-      // One window of follow-ups at a time; a new signal restarts it.
+      if (signalReportedNew) {
+        // This signal's purchase is already visible. Suppress a window for it
+        // without cancelling one that may belong to an earlier unsettled purchase.
+        return;
+      }
+      // One window of follow-ups at a time; a new empty signal restarts it.
       cancelFollowUps();
       for (const delay of verse8PurchaseFollowUpDelaysMs) {
         const timer = setTimeout(() => {
@@ -346,14 +361,9 @@ export function createVerse8CommerceProvider(
       return;
     }
     detachPurchaseSignal = subscribeToPurchaseChanges((change) => {
-      const before = reportedPurchases.size;
-      if (change?.purchases !== undefined && Array.isArray(change.purchases)) {
-        reportSignalledPurchases(change.purchases);
-      }
-      const signalReportedNew = reportedPurchases.size > before;
-      if (signalReportedNew) {
-        cancelFollowUps();
-      }
+      const signalReportedNew = change?.purchases !== undefined && Array.isArray(change.purchases)
+        ? reportSignalledPurchases(change.purchases) > 0
+        : false;
       refreshWithFollowUps(signalReportedNew);
     });
   };
@@ -537,10 +547,12 @@ export function createVerse8CommerceProvider(
 /**
  * Delays of the re-reads that follow a purchase signal that reported no new
  * purchase id (no list, an empty list, or only ids already reported): the
- * Agent8 event may land seconds after the dialog closed. The
- * window ends at the first read that finds a new record, so a settled
- * purchase costs no further reads; after the window, `restorePurchases`
- * (the reconciler's manual restore) and the next signal are the readers.
+ * Agent8 event may land seconds after the dialog closed. A later signal that
+ * already reported a new id leaves an open window running. The window is not
+ * started once the last listener has left. The window ends at the first read
+ * that finds a new record, so a settled purchase costs no further reads;
+ * after the window, `restorePurchases` (the reconciler's manual restore) and
+ * the next signal are the readers.
  */
 export const verse8PurchaseFollowUpDelaysMs: readonly number[] = Object.freeze([
   1_000, 3_000, 7_000, 15_000, 30_000, 60_000, 120_000, 300_000,

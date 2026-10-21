@@ -466,6 +466,113 @@ describe('createVerse8CommerceProvider', () => {
     fixture.provider.dispose();
   });
 
+  it('does not follow up a newly reported purchase id after the reported-id bound is full', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture({
+      signalled: true,
+      recorded: Array.from({ length: maximumVerse8ReportedPurchases }, (_, index) => ({
+        purchaseId: String(index + 1),
+        productId: 'coins-100',
+        quantity: 1,
+      })),
+    });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    expect(events).toHaveLength(maximumVerse8ReportedPurchases);
+    fixture.listPurchases.mockClear();
+
+    const nextId = String(maximumVerse8ReportedPurchases + 1);
+    fixture.signal({
+      purchases: [{ purchaseId: nextId, productId: 'coins-100', quantity: 1 }],
+    });
+    expect(events.some((event) =>
+      event.type === 'purchaseUpdated' && event.purchase.transactionId === nextId)).toBe(true);
+    await flush();
+    const callsAfterSignal = fixture.listPurchases.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(callsAfterSignal);
+    fixture.provider.dispose();
+  });
+
+  it('does not follow up when the immediate re-read reports a new id after the bound is full', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture({
+      signalled: true,
+      recorded: Array.from({ length: maximumVerse8ReportedPurchases }, (_, index) => ({
+        purchaseId: String(index + 1),
+        productId: 'coins-100',
+        quantity: 1,
+      })),
+    });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    fixture.listPurchases.mockClear();
+
+    const nextId = String(maximumVerse8ReportedPurchases + 1);
+    fixture.recorded.push({ purchaseId: nextId, productId: 'coins-100', quantity: 1 });
+    fixture.signal({ purchases: [] });
+    await flush();
+    expect(events.at(-1)).toMatchObject({ purchase: { transactionId: nextId } });
+    const callsAfterRead = fixture.listPurchases.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(callsAfterRead);
+    fixture.provider.dispose();
+  });
+
+  it('keeps follow-ups for an earlier unsettled purchase when a later signal reports a new id', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture({ signalled: true });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    fixture.listPurchases.mockClear();
+
+    fixture.signal({ purchases: [] });
+    await flush();
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(1);
+
+    fixture.signal({
+      purchases: [{ purchaseId: 'b', productId: 'coins-100', quantity: 1 }],
+    });
+    await flush();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ purchase: { transactionId: 'b' } });
+
+    fixture.recorded.push({ purchaseId: 'a', productId: 'remove-ads', quantity: 1 });
+    await vi.advanceTimersByTimeAsync(verse8PurchaseFollowUpDelaysMs[0] ?? 0);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ purchase: { transactionId: 'a', logicalId: 'REMOVE_ADS' } });
+    fixture.provider.dispose();
+  });
+
+  it('does not follow up after the last listener unsubscribes during the immediate re-read', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture({ signalled: true });
+    const unsubscribe = fixture.provider.subscribe(() => {});
+    await flush();
+    fixture.listPurchases.mockClear();
+    let release = (): void => {};
+    fixture.listPurchases.mockImplementation(
+      () => new Promise((resolve) => {
+        release = () => {
+          resolve([]);
+        };
+      }),
+    );
+    fixture.signal({ purchases: [] });
+    await flush();
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    release();
+    await flush();
+    const callsAfterUnsubscribe = fixture.listPurchases.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(callsAfterUnsubscribe);
+    fixture.provider.dispose();
+  });
+
   it('validates verse8.agent8-event.v1 evidence the way a server registry entry must', () => {
     expect(() => assertVerse8Agent8EventEvidence({ schema: 'other', payload: {} })).toThrow(TypeError);
     expect(() => assertVerse8Agent8EventEvidence({
