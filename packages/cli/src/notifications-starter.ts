@@ -537,6 +537,7 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
  */
 export const notificationsCapacitorTemplateSupportFiles: readonly string[] = Object.freeze([
   'src/platform/serverSession.ts',
+  'src/platform/developmentServerSession.ts',
 ]);
 
 /** Whether a Capacitor gateway already registers a notifications provider. */

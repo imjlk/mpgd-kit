@@ -6,9 +6,17 @@ import { createNotificationConformanceHost } from '@mpgd/platform/notifications-
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
 
 import {
+  createGuestServerSession,
+  createGuestSessionCoordinator,
+  type GuestSessionBackend,
+} from '@mpgd/game-services';
+
+import {
   createStarterWorkerNotificationBackend,
   type StarterWorkerNotificationInput,
+  type StarterWorkerSession,
 } from '../templates/notifications-overlay/common/src/platform/notificationBackend.js';
+import { resolveStarterDevelopmentServerSession } from '../templates/phaser-game/src/platform/developmentServerSession.js';
 
 /**
  * The starter's Worker notifications backend: which targets get one, and
@@ -235,6 +243,96 @@ try {
     assert.equal(reported.length, 1);
     await backend.runtime.getPermission({ topics: ['daily-ready'] });
     console.error = () => undefined;
+  }
+  // The guest-session adapter is the starter's server session as it stands.
+  {
+    const guestBackend: GuestSessionBackend = {
+      issueGuest: async () => {
+        throw new Error('not called');
+      },
+      refresh: async () => {
+        throw new Error('not called');
+      },
+      revoke: async () => undefined,
+      bindAccount: async () => ({ status: 'conflict' }),
+    };
+    const guest: StarterWorkerSession = createGuestServerSession(
+      createGuestSessionCoordinator({
+        backend: guestBackend,
+        credentials: {
+          load: async () => null,
+          save: async () => undefined,
+          remove: async () => undefined,
+        },
+        installationId: 'install-1',
+      }),
+    );
+    assert.equal(guest.current(), undefined);
+  }
+
+  // The development session: only on the dev server, outside production, with a valid value.
+  {
+    const originalWarn = console.warn;
+    const warned: unknown[] = [];
+    console.warn = (...args: unknown[]) => warned.push(args);
+    const errors: unknown[] = [];
+    console.error = (...args: unknown[]) => errors.push(args);
+    try {
+      const resolve = (dev: boolean, mode: string, value: string | undefined) =>
+        resolveStarterDevelopmentServerSession({ dev, mode, value });
+      assert.equal(resolve(false, 'development', 'player-1'), undefined);
+      assert.equal(resolve(true, 'development', undefined), undefined);
+      assert.equal(resolve(true, 'development', '  '), undefined);
+      assert.equal(warned.length + errors.length, 0);
+      // A production mode, or an id the Worker would refuse, is ignored with a reason.
+      assert.equal(resolve(true, 'production', 'player-1'), undefined);
+      assert.equal(resolve(true, 'development', 'player 1'), undefined);
+      assert.equal(resolve(true, 'development', 'player-1.device-1.extra'), undefined);
+      assert.equal(errors.length, 3);
+      assert.equal(warned.length, 0);
+      const defaulted = resolve(true, 'development', 'player-1');
+      assert.deepEqual(defaulted?.current(), {
+        playerId: 'player-1',
+        sessionId: 'dev-dev-installation',
+      });
+      const named = resolve(true, 'staging', ' player-2.device-2 ');
+      assert.ok(named !== undefined);
+      assert.deepEqual(named.current(), { playerId: 'player-2', sessionId: 'dev-device-2' });
+      assert.deepEqual(await named.getHeaders(), {
+        authorization: 'Bearer mpgd-dev.player-2.dev-device-2.device-2',
+      });
+      assert.equal(warned.length, 2);
+
+      // The starter's Worker backend sends its header on the session routes.
+      const authorizations: (string | undefined)[] = [];
+      const backend = createStarterWorkerNotificationBackend(
+        gateway('android'),
+        input({
+          baseUrl: 'http://localhost:8787',
+          session: named,
+          fetch: async (url, init) => {
+            authorizations.push(init.headers['authorization']);
+            return url.endsWith('/providers')
+              ? {
+                  status: 200,
+                  text: async () =>
+                    JSON.stringify({
+                      protocolVersion: '2.0.0-draft.1',
+                      providers: [fcmEntry],
+                      targets: { android: 'fcm' },
+                    }),
+                }
+              : { status: 200, text: async () => JSON.stringify({ records: [] }) };
+          },
+        }),
+      );
+      assert.ok(backend !== undefined);
+      assert.deepEqual(await backend.listConsent(), []);
+      assert.ok(authorizations.includes('Bearer mpgd-dev.player-2.dev-device-2.device-2'));
+    } finally {
+      console.warn = originalWarn;
+      console.error = () => undefined;
+    }
   }
 } finally {
   console.error = originalError;

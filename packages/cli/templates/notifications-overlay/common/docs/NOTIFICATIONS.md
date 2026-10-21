@@ -74,8 +74,18 @@ game has both:
   identity service answers to the Worker's `authenticateNotificationSession`
   for this session's header, the same across token refreshes (see the kit's
   `docs/CLOUDFLARE_WORKER_DEPLOY.md`, "Sessions"). Do not pass a per-token
-  or rotating id: a `GuestSessionCoordinator` view's `sessionId` may rotate
-  on refresh, so it is not that id.
+  or rotating id. With a guest-session backend, pass
+  `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it
+  answers the coordinator's `sessionFamilyId` (not a view's `sessionId`,
+  which may rotate on refresh), and refreshes the access token for each
+  request's header.
+
+  ```ts
+  // src/main.ts, before bootstrap()
+  const guest = createGuestSessionCoordinator({ backend, credentials, installationId });
+  setStarterServerSession(createGuestServerSession(guest));
+  void guest.start();
+  ```
 
 Without either, it returns `undefined` and the settings screen asks only
 for the OS or host permission (and withdraws a Devvit opt-in the game
@@ -102,3 +112,42 @@ Night consent adds to 광고성 정보 수신동의: the screen offers it only w
 advertising consent is granted, and turning advertising consent off also
 withdraws a granted night consent in the same call (two records, two result
 notices).
+
+## Try it locally
+
+You can see the settings switches record consent before you have an
+identity service, against the kit's game-services Worker on your machine:
+
+1. In mpgd-kit, run the Worker with the memory store (the default in
+   `apps/game-services-worker/wrangler.toml`), this game's catalog and
+   deployment, and the development sessions flag:
+
+   ```sh
+   cd <mpgd-kit>/apps/game-services-worker
+   pnpm exec wrangler dev --port 8787 \
+     --var MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS:true \
+     --var "MPGD_NOTIFICATIONS_CATALOG:$(node -p 'JSON.stringify(require("<game>/notifications/topics.json"))')" \
+     --var "MPGD_NOTIFICATIONS_DEPLOYMENT:$(node -p 'JSON.stringify(require("<game>/notifications/deployment.json"))')"
+   ```
+
+   Add an FCM service-account key (`FCM_SERVICE_ACCOUNT`, in a `.dev.vars`
+   file you never commit) only to send real pushes.
+2. Start this game's dev server with the Worker URL and a development
+   session, `<playerId>` or `<playerId>.<installationId>` (letters, digits,
+   `_`, `-`):
+
+   ```sh
+   VITE_MPGD_GAME_SERVICES_URL=http://localhost:8787 \
+   VITE_MPGD_DEV_NOTIFICATION_SESSION=player-1 \
+   pnpm dev
+   ```
+
+`src/platform/developmentServerSession.ts` then signs the game in as that
+player with `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`,
+which the Worker accepts only with the flag. Anyone can write that header,
+so it authenticates nothing: the session exists only on the Vite dev server
+(`import.meta.env.DEV`) outside the production mode, and the Worker refuses
+the flag with its D1 store and ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
+is bound. A session the game sets with `setStarterServerSession` replaces it.
+The commerce client sends the same header; a local Worker with
+`GAME_SERVICES_INGRESS_AUTH` bound refuses it.
