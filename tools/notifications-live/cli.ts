@@ -9,6 +9,7 @@ import {
   assertLiveWorkerOrigin,
   developmentSessionAuthorization,
   LiveDriverUsageError,
+  maxLiveFireInSeconds,
   runNotificationsLiveDriver,
   type LiveDriverOptions,
 } from './driver';
@@ -75,36 +76,64 @@ function missing(flag: string): never {
   throw new LiveDriverUsageError(`${flag} is required.`);
 }
 
+/** An option's value, treating an empty one as missing. */
+function given(value: string | undefined): string | undefined {
+  return value === undefined || value.length === 0 ? undefined : value;
+}
+
+/**
+ * `parseArgs` in strict mode, except that a stray positional is refused
+ * without quoting it: an unquoted `--auth-env Bearer <token>` would
+ * otherwise print the token in the error.
+ */
+function parseOptions<const Options extends NonNullable<Parameters<typeof parseArgs>[0]>['options']>(
+  args: readonly string[],
+  options: Options,
+): ReturnType<typeof parseArgs<{ args: string[]; options: Options; strict: true; allowPositionals: true }>>['values'] {
+  const { values, positionals } = parseArgs({
+    args: [...args],
+    options,
+    strict: true,
+    allowPositionals: true,
+  });
+  if (positionals.length > 0) {
+    throw new LiveDriverUsageError(
+      `${positionals.length} unexpected argument(s); a value goes right after its --option (quote values with spaces).`,
+    );
+  }
+  return values;
+}
+
 /** A whole number from an option, or a usage error naming the option. */
-function wholeNumber(text: string, flag: string): number {
-  if (!/^\d{1,6}$/u.test(text)) {
+function wholeNumber(text: string, flag: string, max: number): number {
+  if (!/^\d+$/u.test(text)) {
     throw new LiveDriverUsageError(`${flag} ${JSON.stringify(text)} is not a whole number.`);
   }
-  return Number(text);
+  const value = Number(text);
+  if (value > max) {
+    throw new LiveDriverUsageError(`${flag} is at most ${max}.`);
+  }
+  return value;
 }
 
 function commandEnv(args: readonly string[]): void {
-  const { values } = parseArgs({
-    args: [...args],
-    options: {
-      'service-account': { type: 'string' },
-      out: { type: 'string' },
-      game: { type: 'string' },
-      catalog: { type: 'string' },
-      deployment: { type: 'string' },
-      'project-id': { type: 'string' },
-      force: { type: 'boolean', default: false },
-    },
-    strict: true,
+  const values = parseOptions(args, {
+    'service-account': { type: 'string' },
+    out: { type: 'string' },
+    game: { type: 'string' },
+    catalog: { type: 'string' },
+    deployment: { type: 'string' },
+    'project-id': { type: 'string' },
+    force: { type: 'boolean', default: false },
   });
-  const game = values.game;
+  const game = given(values.game);
   const result = writeLiveWorkerEnvFile({
-    catalogPath: values.catalog
+    catalogPath: given(values.catalog)
       ?? (game === undefined ? missing('--game or --catalog') : join(game, 'notifications', 'topics.json')),
-    deploymentPath: values.deployment
+    deploymentPath: given(values.deployment)
       ?? (game === undefined ? missing('--game or --deployment') : join(game, 'notifications', 'deployment.json')),
-    serviceAccountPath: values['service-account'] ?? missing('--service-account'),
-    outPath: values.out ?? missing('--out'),
+    serviceAccountPath: given(values['service-account']) ?? missing('--service-account'),
+    outPath: given(values.out) ?? missing('--out'),
     repositoryRoot: resolveKitRoot(),
     ...(values['project-id'] === undefined ? {} : { projectId: values['project-id'] }),
     overwrite: values.force,
@@ -123,22 +152,18 @@ function commandEnv(args: readonly string[]): void {
 }
 
 function commandEmulator(args: readonly string[]): number {
-  const { values } = parseArgs({
-    args: [...args],
-    options: {
-      'app-id': { type: 'string' },
-      serial: { type: 'string' },
-      port: { type: 'string', default: '8787' },
-      reverse: { type: 'boolean', default: false },
-    },
-    strict: true,
+  const values = parseOptions(args, {
+    'app-id': { type: 'string' },
+    serial: { type: 'string' },
+    port: { type: 'string', default: '8787' },
+    reverse: { type: 'boolean', default: false },
   });
   const adb = androidAdb();
   const report = checkLiveEmulator(
     {
-      appId: values['app-id'] ?? missing('--app-id'),
+      appId: given(values['app-id']) ?? missing('--app-id'),
       ...(values.serial === undefined ? {} : { serial: values.serial }),
-      port: wholeNumber(values.port, '--port'),
+      port: wholeNumber(values.port, '--port', 65_535),
       reverse: values.reverse,
     },
     (adbArgs) => {
@@ -146,6 +171,7 @@ function commandEmulator(args: readonly string[]): number {
       return {
         status: result.error === undefined ? (result.status ?? 1) : 1,
         stdout: result.stdout ?? '',
+        stderr: result.error === undefined ? (result.stderr ?? '') : result.error.message,
       };
     },
   );
@@ -154,7 +180,7 @@ function commandEmulator(args: readonly string[]): number {
   }
   if (report.serial !== undefined) {
     console.info(
-      `Watch the app with: ${JSON.stringify(adb)} -s ${report.serial} logcat -v time Capacitor:V Capacitor/Console:V FirebaseMessaging:V '*:S'`,
+      `Watch the app with: "${adb}" -s ${report.serial} logcat -v time Capacitor:V Capacitor/Console:V FirebaseMessaging:V '*:S'`,
     );
   }
   return report.ok ? 0 : 1;
@@ -176,23 +202,19 @@ export function parseRunArguments(
     readonly now: () => Date;
   },
 ): LiveDriverOptions {
-  const { values } = parseArgs({
-    args: [...args],
-    options: {
-      worker: { type: 'string' },
-      staging: { type: 'string' },
-      player: { type: 'string' },
-      session: { type: 'string' },
-      installation: { type: 'string' },
-      'auth-env': { type: 'string' },
-      target: { type: 'string', default: 'android' },
-      topic: { type: 'string', default: 'daily-ready' },
-      'fire-in': { type: 'string', default: '5' },
-      'fcm-token-file': { type: 'string' },
-      advertising: { type: 'string' },
-      'no-scheduler': { type: 'boolean', default: false },
-    },
-    strict: true,
+  const values = parseOptions(args, {
+    worker: { type: 'string' },
+    staging: { type: 'string' },
+    player: { type: 'string' },
+    session: { type: 'string' },
+    installation: { type: 'string' },
+    'auth-env': { type: 'string' },
+    target: { type: 'string', default: 'android' },
+    topic: { type: 'string', default: 'daily-ready' },
+    'fire-in': { type: 'string', default: '5' },
+    'fcm-token-file': { type: 'string' },
+    advertising: { type: 'string' },
+    'no-scheduler': { type: 'boolean', default: false },
   });
   if (values.staging !== undefined && values.worker === undefined) {
     throw new LiveDriverUsageError(
@@ -222,14 +244,18 @@ export function parseRunArguments(
     }
     const value = input.env[name]?.trim();
     if (value === undefined || value.length === 0) {
+      // Named only when it looks like a variable, not an opaque token pasted by mistake.
+      const shown = /^[A-Z][A-Z0-9_]{0,63}$/u.test(name)
+        ? `$${name}`
+        : 'The variable --auth-env names';
       throw new LiveDriverUsageError(
-        `$${name} is empty; it holds the session's Authorization header value.`,
+        `${shown} is empty; it holds the session's Authorization header value.`,
       );
     }
     authorization = value;
     sessionLabel = `the session in $${name}`;
   } else {
-    const playerId = values.player ?? missing('--player or --auth-env');
+    const playerId = given(values.player) ?? missing('--player or --auth-env');
     authorization = developmentSessionAuthorization({
       playerId,
       sessionId: values.session ?? 'live-driver',
@@ -237,10 +263,7 @@ export function parseRunArguments(
     });
     sessionLabel = `development session for player ${playerId}`;
   }
-  const fireIn = wholeNumber(values['fire-in'], '--fire-in');
-  if (fireIn > 3600) {
-    throw new LiveDriverUsageError('--fire-in is at most 3600 seconds.');
-  }
+  const fireIn = wholeNumber(values['fire-in'], '--fire-in', maxLiveFireInSeconds);
   let fcmToken: string | undefined;
   if (values['fcm-token-file'] !== undefined) {
     fcmToken = input.readTokenFile(assertLiveReadablePath(values['fcm-token-file'])).trim();
@@ -271,8 +294,13 @@ async function commandRun(args: readonly string[]): Promise<number> {
   });
   const report = await runNotificationsLiveDriver(options, {
     // A redirect is refused: the URL guard checked this origin, not another.
-    fetch: async (url, init) =>
-      await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(15_000) }),
+    fetch: async (url, init) => {
+      const response = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+      if (response.status >= 300 && response.status < 400) {
+        throw new Error(`the Worker answered a redirect (${response.status}); the driver does not follow it`);
+      }
+      return response;
+    },
     log: (line) => console.info(line),
     now: () => Date.now(),
     sleep: async (ms) => await new Promise<void>((done) => setTimeout(done, ms)),
@@ -282,7 +310,7 @@ async function commandRun(args: readonly string[]): Promise<number> {
 
 function commandDryRun(args: readonly string[]): number {
   if (args.length > 0) {
-    throw new LiveDriverUsageError(`dry-run takes no arguments (got ${args.join(' ')}).`);
+    throw new LiveDriverUsageError('dry-run takes no arguments.');
   }
   const root = resolveKitRoot();
   const result = spawnSync(
@@ -304,7 +332,7 @@ function commandDryRun(args: readonly string[]): number {
 async function main(argv: readonly string[]): Promise<number> {
   // `pnpm notifications:live -- run ...` passes the separator through.
   const [command, ...rest] = argv[0] === '--' ? argv.slice(1) : argv;
-  if (command === undefined || command === 'help' || rest.includes('--help') || ['--help', '-h'].includes(command)) {
+  if (command === undefined || command === 'help' || ['--help', '-h'].some((flag) => flag === command || rest.includes(flag))) {
     console.info(usage);
     return 0;
   }

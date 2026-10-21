@@ -91,9 +91,15 @@ export function assertLiveWorkerOrigin(raw: string, staging?: string): LiveWorke
   if (url.username !== '' || url.password !== '') {
     throw new LiveDriverUsageError('--worker must not carry credentials.');
   }
-  if ((url.pathname !== '/' && url.pathname !== '') || url.search !== '' || url.hash !== '') {
+  // An http(s) URL's path is at least '/'.
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
     throw new LiveDriverUsageError(
       '--worker is the Worker origin only, such as http://127.0.0.1:8787.',
+    );
+  }
+  if (url.hostname.endsWith('.')) {
+    throw new LiveDriverUsageError(
+      `--worker ${url.hostname} ends with a dot; name the host without it.`,
     );
   }
   if (isLocalHostname(url.hostname)) {
@@ -103,11 +109,6 @@ export function assertLiveWorkerOrigin(raw: string, staging?: string): LiveWorke
     throw new LiveDriverUsageError(
       `${url.hostname} is not this machine. The driver writes test records; to run it against a `
         + 'test deployment, name its host with --staging <host>.',
-    );
-  }
-  if (url.hostname.endsWith('.')) {
-    throw new LiveDriverUsageError(
-      `--worker ${url.hostname} ends with a dot; name the host without it.`,
     );
   }
   if (staging.toLowerCase() !== url.hostname.toLowerCase()) {
@@ -256,6 +257,37 @@ interface Answer {
 /** Stops the run at a failed step: later steps depend on it. */
 class StepFailed extends Error {}
 
+/** A request that got no readable answer. */
+class TransportFailed extends Error {}
+
+/** What a `providers` failure most likely means. */
+function providersHint(status: number): string | undefined {
+  if (status === 404) {
+    return 'notifications are off: the Worker has no MPGD_NOTIFICATIONS_CATALOG.';
+  }
+  if (status === 500) {
+    return 'the notifications configuration is broken; read the Worker log.';
+  }
+  return undefined;
+}
+
+/**
+ * A `deliverNotification` answer: the service's own (`{ status, ... }`), or
+ * the Worker RPC's wrapper around it (`{ ok: true, value }` or
+ * `{ ok: false, error: { code } }`).
+ */
+function deliveryAnswer(result: unknown): { readonly status: unknown; readonly alreadyProcessed: boolean } {
+  const record = typeof result === 'object' && result !== null ? result as JsonObject : {};
+  if (record['ok'] === false) {
+    const error = record['error'] as JsonObject | undefined;
+    return { status: `error ${String(error?.['code'])}`, alreadyProcessed: false };
+  }
+  const value = record['ok'] === true && typeof record['value'] === 'object' && record['value'] !== null
+    ? record['value'] as JsonObject
+    : record;
+  return { status: value['status'], alreadyProcessed: value['alreadyProcessed'] === true };
+}
+
 type JsonObject = Readonly<Record<string, unknown>>;
 
 /** The answer's `field` as a list of objects, or `undefined` when it is not a list. */
@@ -269,6 +301,12 @@ function listField(answer: Answer, field: string): readonly JsonObject[] | undef
 }
 
 const maxPrintedAnswer = 600;
+/** The latest test reminder the driver sets, in seconds from now. */
+export const maxLiveFireInSeconds = 3600;
+/** The set-and-cancel check's reminder: far enough ahead that no scheduler run takes it first. */
+const spareReminderSeconds = 3600;
+/** Waited past fireAt before the scheduler runs, for clock rounding. */
+const dueMarginMs = 1000;
 const reminderSetHints: Readonly<Record<string, string>> = {
   'permission-required':
     'no endpoint with a granted permission is registered for this player: allow notifications in the app '
@@ -284,6 +322,8 @@ const reminderSetHints: Readonly<Record<string, string>> = {
 export function redactLiveSecrets(text: string, secrets: readonly string[]): string {
   let result = text;
   for (const secret of secrets) {
+    // A string this short would blank common text out of the log; every
+    // secret the driver holds (a bearer token, an FCM token) is far longer.
     if (secret.length >= 4) {
       result = result.split(secret).join('<redacted>');
     }
@@ -310,7 +350,9 @@ export function redactLiveSecrets(text: string, secrets: readonly string[]): str
  * 9. With `deliver` and `dependencies.deliver`: one `deliverNotification` send.
  * 10. `GET /notices`; with `advertisingTextVersion`, advertising consent is
  *     recorded, its result notice listed, recorded as shown, and gone.
- * 11. An endpoint the driver registered is unregistered.
+ * 11. Clean-up, which only warns: after a failure, the reminders still
+ *     pending are cancelled; an endpoint the driver registered is
+ *     unregistered.
  */
 export async function runNotificationsLiveDriver(
   options: LiveDriverOptions,
@@ -335,7 +377,8 @@ export async function runNotificationsLiveDriver(
     print(`FAIL ${name}: ${detail}`);
     throw new StepFailed(detail);
   };
-  const call = async (
+  /** One request; a transport failure throws `TransportFailed` and records nothing. */
+  const transport = async (
     method: 'GET' | 'POST',
     route: string,
     body?: unknown,
@@ -358,8 +401,7 @@ export async function runNotificationsLiveDriver(
       });
     } catch (error) {
       const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      return fail(
-        `${method} ${route}`,
+      throw new TransportFailed(
         `the Worker could not be reached (${reason}). Is wrangler dev running?`,
       );
     }
@@ -368,10 +410,7 @@ export async function runNotificationsLiveDriver(
       text = await response.text();
     } catch (error) {
       const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      return fail(
-        `${method} ${route}`,
-        `the answer (${response.status}) could not be read (${reason}).`,
-      );
+      throw new TransportFailed(`the answer (${response.status}) could not be read (${reason}).`);
     }
     let parsed: Readonly<Record<string, unknown>> | undefined;
     try {
@@ -389,6 +428,22 @@ export async function runNotificationsLiveDriver(
     }`);
     return { status: response.status, body: parsed, text };
   };
+  /** One request of a step; a transport failure fails the step. */
+  const call = async (
+    method: 'GET' | 'POST',
+    route: string,
+    body?: unknown,
+    authenticated = true,
+  ): Promise<Answer> => {
+    try {
+      return await transport(method, route, body, authenticated);
+    } catch (error) {
+      if (error instanceof TransportFailed) {
+        return fail(`${method} ${route}`, error.message);
+      }
+      throw error;
+    }
+  };
   const expectStatus = (name: string, answer: Answer, status: number, hint?: string): void => {
     if (answer.status !== status) {
       const code = typeof answer.body?.['error'] === 'string' ? ` (${answer.body['error']})` : '';
@@ -401,8 +456,14 @@ export async function runNotificationsLiveDriver(
   const fireAt = (secondsFromNow: number): string =>
     new Date(dependencies.now() + secondsFromNow * 1000).toISOString();
   const reminderKey = `live-${options.runId}`;
-  if (!Number.isInteger(options.fireInSeconds) || options.fireInSeconds < 0 || options.fireInSeconds > 3600) {
-    throw new LiveDriverUsageError('fireInSeconds is whole seconds from 0 to 3600.');
+  if (
+    !Number.isInteger(options.fireInSeconds)
+    || options.fireInSeconds < 0
+    || options.fireInSeconds > maxLiveFireInSeconds
+  ) {
+    throw new LiveDriverUsageError(
+      `fireInSeconds is whole seconds from 0 to ${maxLiveFireInSeconds}.`,
+    );
   }
   if (options.triggerScheduler && !options.worker.local) {
     throw new LiveDriverUsageError(
@@ -413,19 +474,12 @@ export async function runNotificationsLiveDriver(
   print(`Worker ${options.worker.origin} (${options.worker.local ? 'local' : 'staging'}), ${options.sessionLabel}, `
     + `target ${options.target}, topic ${options.topic}, run ${options.runId}`);
   let registered: string | undefined;
+  /** Reminders this run set that are still pending; cancelled if the run fails. */
+  const pending = new Set<string>();
   try {
     // 1. The registry.
     const providers = await call('GET', '/providers', undefined, false);
-    expectStatus(
-      'providers',
-      providers,
-      200,
-      providers.status === 404
-        ? 'notifications are off: the Worker has no MPGD_NOTIFICATIONS_CATALOG.'
-        : providers.status === 500
-          ? 'the notifications configuration is broken; read the Worker log.'
-          : undefined,
-    );
+    expectStatus('providers', providers, 200, providersHint(providers.status));
     const targets = providers.body?.['targets'];
     const provider = typeof targets === 'object' && targets !== null
       ? (targets as Readonly<Record<string, unknown>>)[options.target]
@@ -518,11 +572,13 @@ export async function runNotificationsLiveDriver(
     // 6. Set and cancel by key.
     const spareKey = `${reminderKey}-cancel`;
     const spare = await call('POST', '/reminders', {
-      reminder: { key: spareKey, topic: options.topic, fireAt: fireAt(3600) },
+      reminder: { key: spareKey, topic: options.topic, fireAt: fireAt(spareReminderSeconds) },
     });
     expectStatus('reminder-cancel', spare, 200);
     const spareStatus = spare.body?.['status'];
-    if (spareStatus !== 'scheduled' && spareStatus !== 'replaced') {
+    if (spareStatus === 'scheduled' || spareStatus === 'replaced') {
+      pending.add(spareKey);
+    } else {
       fail(
         'reminder-cancel',
         `a reminder answered ${JSON.stringify(spareStatus)}: ${reminderSetHints[String(spareStatus)] ?? 'see the RFC "Reminders".'}`,
@@ -533,6 +589,7 @@ export async function runNotificationsLiveDriver(
     if (cancelled.body?.['cancelled'] !== true) {
       fail('reminder-cancel', 'cancelling a pending reminder did not answer cancelled: true.');
     }
+    pending.delete(spareKey);
     record('reminder-cancel', 'pass', 'a pending reminder is set and cancelled by key');
 
     // 7. The test reminder.
@@ -542,7 +599,9 @@ export async function runNotificationsLiveDriver(
     });
     expectStatus('reminder', reminder, 200);
     const reminderStatus = reminder.body?.['status'];
-    if (reminderStatus !== 'scheduled' && reminderStatus !== 'replaced') {
+    if (reminderStatus === 'scheduled' || reminderStatus === 'replaced') {
+      pending.add(reminderKey);
+    } else {
       fail(
         'reminder',
         `answered ${JSON.stringify(reminderStatus)}: ${reminderSetHints[String(reminderStatus)] ?? 'see the RFC "Reminders".'}`,
@@ -563,7 +622,7 @@ export async function runNotificationsLiveDriver(
       const wait = Date.parse(due) - dependencies.now();
       if (wait > 0) {
         print(`     waiting ${Math.ceil(wait / 1000)} s for the reminder to be due`);
-        await dependencies.sleep(wait + 1000);
+        await dependencies.sleep(wait + dueMarginMs);
       }
       const scheduled = await call(
         'GET',
@@ -585,6 +644,7 @@ export async function runNotificationsLiveDriver(
           'the reminder is still pending after the scheduler ran: was it due? Read the Worker log.',
         );
       }
+      pending.delete(reminderKey);
       // Taken is not delivered: a provider refusal shows only in the Worker log.
       record(
         'scheduler',
@@ -609,15 +669,16 @@ export async function runNotificationsLiveDriver(
           ...(options.deliver.templateData === undefined ? {} : { templateData: options.deliver.templateData }),
         });
         print(`     deliverNotification ${options.deliver.topic} -> ${JSON.stringify(result)}`);
-        const answer = result as { readonly status?: unknown; readonly alreadyProcessed?: unknown } | undefined;
-        if (answer?.status !== 'delivered') {
-          fail('deliver', `deliverNotification answered ${JSON.stringify(answer?.status)}`);
+        const answer = deliveryAnswer(result);
+        if (answer.status !== 'delivered') {
+          fail('deliver', `deliverNotification answered ${JSON.stringify(answer.status)}`);
         }
         // A replay of an earlier run's key answers delivered without a new push.
+        const replayed = answer.alreadyProcessed;
         record(
           'deliver',
-          answer.alreadyProcessed === true ? 'warn' : 'pass',
-          answer.alreadyProcessed === true
+          replayed ? 'warn' : 'pass',
+          replayed
             ? 'deliverNotification answered an earlier send of this key; no new push'
             : 'deliverNotification answered "delivered"',
         );
@@ -684,21 +745,34 @@ export async function runNotificationsLiveDriver(
       throw error;
     }
   } finally {
-    // 11. Leave no endpoint of the driver's own session behind.
-    if (registered !== undefined) {
+    // 11. Clean-up never fails a run: each step warns at worst. A failed run
+    // cancels the reminders it left pending, so no push arrives later; a
+    // passing run leaves only a reminder the deployed cron is meant to send.
+    const failed = steps.some((step) => step.result === 'fail');
+    const cleanUp = async (name: string, route: string, body: unknown, done: (answer: Answer) => boolean) => {
       try {
-        const removed = await call('POST', '/endpoints/unregister', { provider: registered });
-        steps.push({
-          name: 'unregister-endpoint',
-          result: removed.status === 200 ? 'pass' : 'warn',
-          detail: `answered ${removed.status}`,
-        });
-        print(
-          `${removed.status === 200 ? 'PASS' : 'WARN'} unregister-endpoint: answered ${removed.status}`,
-        );
-      } catch {
-        // Reported by call(); the run's result stands.
+        const answer = await transport('POST', route, body);
+        record(name, done(answer) ? 'pass' : 'warn', `answered ${answer.status}`);
+      } catch (error) {
+        if (!(error instanceof TransportFailed)) {
+          throw error;
+        }
+        record(name, 'warn', error.message);
       }
+    };
+    if (failed) {
+      for (const key of pending) {
+        await cleanUp(
+          'cancel-leftover-reminder',
+          '/reminders/cancel',
+          { key },
+          (answer) => answer.status === 200,
+        );
+      }
+    }
+    if (registered !== undefined) {
+      await cleanUp('unregister-endpoint', '/endpoints/unregister', { provider: registered }, (answer) =>
+        answer.status === 200);
     }
   }
   const ok = steps.every((step) => step.result !== 'fail');

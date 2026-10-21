@@ -1,3 +1,5 @@
+import { LiveDriverUsageError } from './driver';
+
 /**
  * Checks an Android emulator (or device) before a live notifications run:
  * one device online, Google Play services present (FCM needs them), the
@@ -10,6 +12,8 @@
 export interface AdbResult {
   readonly status: number;
   readonly stdout: string;
+  /** What adb said on failure (`device offline`, `unauthorized`, ...), when the runner keeps it. */
+  readonly stderr?: string;
 }
 
 /** Runs `adb` with these arguments; the CLI gives `spawnSync`, the tests a fake. */
@@ -48,6 +52,10 @@ const appIdPattern = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/u;
 export function onlineAdbSerials(devicesOutput: string): readonly string[] {
   const lines = devicesOutput.split(/\r?\n/u);
   const header = lines.findIndex((line) => line.trim().startsWith('List of devices'));
+  if (header < 0) {
+    // Not a device list: nothing in it names a device.
+    return [];
+  }
   return lines
     .slice(header + 1)
     .map((line) => line.trim().split(/\s+/u))
@@ -106,10 +114,12 @@ class AdbCallFailed extends Error {}
 
 export function checkLiveEmulator(options: EmulatorCheckOptions, adb: AdbRunner): EmulatorCheckReport {
   if (!appIdPattern.test(options.appId)) {
-    throw new Error(`--app-id ${JSON.stringify(options.appId)} is not an Android package name.`);
+    throw new LiveDriverUsageError(
+      `--app-id ${JSON.stringify(options.appId)} is not an Android package name.`,
+    );
   }
   if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65_535) {
-    throw new Error(`--port ${options.port} is not a TCP port.`);
+    throw new LiveDriverUsageError(`--port ${options.port} is not a TCP port.`);
   }
   const lines: EmulatorCheckLine[] = [];
   const add = (result: EmulatorCheckLine['result'], check: string, detail: string): void => {
@@ -117,10 +127,11 @@ export function checkLiveEmulator(options: EmulatorCheckOptions, adb: AdbRunner)
   };
   const devices = adb(['devices']);
   if (devices.status !== 0) {
+    const said = devices.stderr?.trim().split(/\r?\n/u)[0];
     add(
       'fail',
       'adb',
-      'adb devices failed: is the Android SDK platform-tools installed (ANDROID_HOME)?',
+      `adb devices failed${said ? ` (${said})` : ''}: is the Android SDK platform-tools installed (ANDROID_HOME)?`,
     );
     return { ok: false, lines };
   }
@@ -132,17 +143,32 @@ export function checkLiveEmulator(options: EmulatorCheckOptions, adb: AdbRunner)
   }
   add('pass', 'device', serial);
   /** One adb call on the device; a failed call stops the check, so it is never read as an empty answer. */
+  const failure = (args: readonly string[], result: AdbResult, hint: string): AdbCallFailed => {
+    const said = result.stderr?.trim().split(/\r?\n/u)[0];
+    return new AdbCallFailed(
+      `adb -s ${serial} ${args.join(' ')} failed (exit ${result.status}${said ? `: ${said}` : ''}): ${hint}`,
+    );
+  };
   const onDevice = (...args: string[]): string => {
     const result = adb(['-s', serial, ...args]);
     if (result.status !== 0) {
-      throw new AdbCallFailed(
-        `adb -s ${serial} ${args.join(' ')} failed (exit ${result.status}): is the device still online?`,
-      );
+      throw failure(args, result, 'is the device still online?');
     }
     return result.stdout;
   };
-  const installedPackage = (name: string): boolean =>
-    listsAndroidPackage(onDevice('shell', 'pm', 'list', 'packages', name), name);
+  const installedPackage = (name: string): boolean => {
+    const args = ['shell', 'pm', 'list', 'packages', name];
+    const result = adb(['-s', serial, ...args]);
+    if (result.status === 0) {
+      return listsAndroidPackage(result.stdout, name);
+    }
+    // Some builds exit non-zero when nothing matches: that is "not
+    // installed" while the device still answers, and an adb failure if not.
+    if (result.stdout.trim() === '' && adb(['-s', serial, 'shell', 'true']).status === 0) {
+      return false;
+    }
+    throw failure(args, result, 'is the device still online?');
+  };
   try {
     if (onDevice('shell', 'getprop', 'sys.boot_completed').trim() !== '1') {
       add(
@@ -209,7 +235,15 @@ export function checkLiveEmulator(options: EmulatorCheckOptions, adb: AdbRunner)
 
     let reversed = listsAdbReverse(onDevice('reverse', '--list'), options.port);
     if (!reversed && options.reverse) {
-      onDevice('reverse', `tcp:${options.port}`, `tcp:${options.port}`);
+      const forward = ['reverse', `tcp:${options.port}`, `tcp:${options.port}`];
+      const set = adb(['-s', serial, ...forward]);
+      if (set.status !== 0) {
+        throw failure(
+          forward,
+          set,
+          `is the port taken by another forward? Try adb -s ${serial} reverse --remove tcp:${options.port}.`,
+        );
+      }
       reversed = listsAdbReverse(onDevice('reverse', '--list'), options.port);
     }
     if (reversed) {

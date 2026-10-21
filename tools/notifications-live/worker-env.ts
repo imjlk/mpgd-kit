@@ -3,13 +3,17 @@ import {
   lstatSync,
   readFileSync,
   realpathSync,
-  unlinkSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { parseFcmServiceAccount } from '@mpgd/game-services/notifications';
+import {
+  createFcmProviderRegistration,
+  parseFcmServiceAccount,
+} from '@mpgd/game-services/notifications';
 
 import {
   readNotificationDeploymentFile,
@@ -85,33 +89,59 @@ function isWithin(parent: string, child: string): boolean {
   return inside === '' || (inside !== '..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside));
 }
 
-/** A path through its symbolic links when it exists, else as given; the case-folded file systems compare folded. */
+/** Folds a path the way macOS and Windows compare names: Unicode NFC, and case there. */
+function folded(path: string): string {
+  const normal = path.normalize('NFC');
+  return process.platform === 'darwin' || process.platform === 'win32'
+    ? normal.toLowerCase()
+    : normal;
+}
+
+/** A path through its symbolic links when it exists, else as given, folded. */
 function canonical(path: string): string {
-  const real = existsSync(path) ? realpathSync.native(path) : path;
-  return process.platform === 'darwin' || process.platform === 'win32' ? real.toLowerCase() : real;
+  return folded(existsSync(path) ? realpathSync.native(path) : path);
 }
 
 /**
  * Refuses a path the live kit must never read: the maintainer's mise
- * secrets (`~/.config/mise`), which hold release credentials, not test ones.
- * Both the path and the directory are compared through their symbolic links.
+ * configuration and secrets (`~/.config/mise`, `$XDG_CONFIG_HOME/mise`,
+ * `$MISE_CONFIG_DIR`), which hold release credentials, not test ones. Both
+ * the path and each directory are compared as given and through their
+ * symbolic links.
  */
-export function assertLiveReadablePath(path: string, home = homedir()): string {
+export function assertLiveReadablePath(
+  path: string,
+  home = homedir(),
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
   const absolute = resolve(path);
-  const forbidden = join(home, '.config', 'mise');
-  const candidates = [absolute, canonical(absolute)];
-  const roots = [forbidden, canonical(forbidden)];
-  const folded = process.platform === 'darwin' || process.platform === 'win32';
-  if (candidates.some((candidate) =>
-    roots.some((root) =>
-      isWithin(folded ? root.toLowerCase() : root, folded ? candidate.toLowerCase() : candidate),
+  const forbidden = [
+    join(home, '.config', 'mise'),
+    ...(env.XDG_CONFIG_HOME === undefined || env.XDG_CONFIG_HOME === '' ? [] : [join(env.XDG_CONFIG_HOME, 'mise')]),
+    ...(env.MISE_CONFIG_DIR === undefined || env.MISE_CONFIG_DIR === '' ? [] : [resolve(env.MISE_CONFIG_DIR)]),
+  ];
+  const candidates = [folded(absolute), canonical(absolute)];
+  const hit = forbidden.find((directory) =>
+    [folded(directory), canonical(directory)].some((root) =>
+      candidates.some((candidate) => isWithin(root, candidate)),
     ),
-  )) {
-    throw new LiveDriverUsageError(
-      `The live kit does not read ${forbidden}; pass the test file itself.`,
-    );
+  );
+  if (hit !== undefined) {
+    throw new LiveDriverUsageError(`The live kit does not read ${hit}; pass the test file itself.`);
   }
   return absolute;
+}
+
+/** A JSON file on one line, as the game ships it; a file that went away is a usage error. */
+function oneLineJson(path: string, flag: string): string {
+  try {
+    return JSON.stringify(JSON.parse(readFileSync(path, 'utf8')));
+  } catch (error) {
+    const code = (error as { readonly code?: unknown }).code;
+    throw new LiveDriverUsageError(
+      `${flag} ${path} could not be read as JSON (${typeof code === 'string' ? code : 'not JSON'}).`,
+    );
+  }
 }
 
 /** The nearest directory at or above `directory` that holds a `.git`, if any. */
@@ -139,25 +169,25 @@ function assertOutsideRepository(outPath: string, repositoryRoot: string): strin
     : enclosingRepository(realDirectory);
   if (repository !== undefined) {
     throw new LiveDriverUsageError(
-      `--out ${absolute} is inside the repository ${repository}; the env file holds the service-account key. `
-        + 'Write it outside every checkout, for example under ~/.mpgd/.',
+      `--out ${absolute} is inside the git checkout ${repository} (a dotfiles repository counts too); `
+        + 'the env file holds the service-account key. Write it outside every checkout.',
     );
   }
+  const existing = lstatSync(absolute, { throwIfNoEntry: false });
   // A link would write the key wherever it points.
-  if (lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+  if (existing?.isSymbolicLink() === true) {
     throw new LiveDriverUsageError(`--out ${absolute} is a symbolic link; name the file itself.`);
+  }
+  if (existing !== undefined && !existing.isFile()) {
+    throw new LiveDriverUsageError(`--out ${absolute} exists and is not a file.`);
   }
   return join(realDirectory, basename(absolute));
 }
 
-const projectIdPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u;
-
 export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnvResult {
   const outPath = assertOutsideRepository(input.outPath, input.repositoryRoot);
-  if (input.projectId !== undefined && !projectIdPattern.test(input.projectId)) {
-    throw new LiveDriverUsageError(
-      '--project-id is not a Firebase project id (6 to 30 a-z, 0-9, -).',
-    );
+  if (input.overwrite !== true && existsSync(outPath)) {
+    throw new LiveDriverUsageError(`--out ${outPath} exists (EEXIST); pass --force to replace it.`);
   }
   const catalogPath = assertLiveReadablePath(input.catalogPath);
   const deploymentPath = assertLiveReadablePath(input.deploymentPath);
@@ -192,26 +222,49 @@ export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnv
       }`,
     );
   }
-  const variables: readonly (readonly [string, string])[] = [
-    ['MPGD_STORE', 'memory'],
-    ['MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS', 'true'],
+  try {
+    // The provider the Worker builds checks the project id (the key's, or
+    // --project-id) by the kit's own rule; building it sends nothing.
+    createFcmProviderRegistration({
+      serviceAccount: account,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+    });
+  } catch {
+    throw new LiveDriverUsageError(
+      input.projectId === undefined
+        ? "The key's project_id is not a Firebase project id; pass the Firebase project's id with --project-id."
+        : '--project-id is not a Firebase project id.',
+    );
+  }
+  /** Name, value, and whether the value is JSON text (which may carry a quote as \u0027). */
+  const variables: readonly (readonly [string, string, boolean])[] = [
+    ['MPGD_STORE', 'memory', false],
+    ['MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS', 'true', false],
     // The files as the game ships them (validated above), on one line.
-    ['MPGD_NOTIFICATIONS_CATALOG', JSON.stringify(JSON.parse(readFileSync(catalogPath, 'utf8')))],
-    ['MPGD_NOTIFICATIONS_DEPLOYMENT', JSON.stringify(JSON.parse(readFileSync(deploymentPath, 'utf8')))],
-    ['FCM_SERVICE_ACCOUNT', accountText],
-    ...(input.projectId === undefined ? [] : [['FCM_PROJECT_ID', input.projectId] as const]),
+    ['MPGD_NOTIFICATIONS_CATALOG', oneLineJson(catalogPath, '--catalog'), true],
+    ['MPGD_NOTIFICATIONS_DEPLOYMENT', oneLineJson(deploymentPath, '--deployment'), true],
+    ['FCM_SERVICE_ACCOUNT', accountText, true],
+    ...(input.projectId === undefined ? [] : [['FCM_PROJECT_ID', input.projectId, false] as const]),
   ];
   const text = [
     '# Written by `pnpm notifications:live env` for one local `wrangler dev --env-file` run.',
     '# It holds a Firebase service-account key: keep it out of every repository and delete it after the test.',
-    ...variables.map(([name, value]) => `${name}=${formatLiveEnvValue(value, { json: true })}`),
+    ...variables.map(([name, value, json]) => `${name}=${formatLiveEnvValue(value, { json })}`),
     '',
   ].join('\n');
-  if (input.overwrite === true && existsSync(outPath)) {
-    // Created again rather than truncated, so the key is never under an older, wider mode.
-    unlinkSync(outPath);
+  // Written to a new 0600 file beside it, then renamed over it: the key is
+  // never under an older, wider mode, and a failed write keeps the old file.
+  const staged = join(dirname(outPath), `.${basename(outPath)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(staged, text, { mode: 0o600, flag: 'wx' });
+    renameSync(staged, outPath);
+  } catch (error) {
+    rmSync(staged, { force: true });
+    const code = (error as { readonly code?: unknown }).code;
+    throw new LiveDriverUsageError(
+      `--out ${outPath} could not be written (${typeof code === 'string' ? code : 'error'}).`,
+    );
   }
-  writeFileSync(outPath, text, { mode: 0o600, flag: 'wx' });
   return {
     outPath,
     projectId: input.projectId ?? account.projectId,

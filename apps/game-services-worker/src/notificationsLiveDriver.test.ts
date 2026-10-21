@@ -14,7 +14,11 @@ import {
 } from '../../../tools/notifications-live/driver';
 import { writeLiveWorkerEnvFile } from '../../../tools/notifications-live/worker-env';
 import { createWorkerFetchHandler, type GameServicesWorkerEnv } from './handler.js';
-import { deliverWorkerNotification, runScheduledNotifications } from './notificationsHandler.js';
+import {
+  asWorkerNotificationRpcResult,
+  deliverWorkerNotification,
+  runScheduledNotifications,
+} from './notificationsHandler.js';
 
 /**
  * The live-test kit's dry run (docs/NOTIFICATIONS_LIVE_TEST.md): the env
@@ -200,7 +204,7 @@ try {
         outPath: join(root, 'apps', 'game-services-worker', '.live.env'),
         repositoryRoot: root,
       }),
-    /inside the repository/u,
+    /inside the git checkout/u,
   );
   const vars = readEnvFileAsWrangler(readFileSync(envFile, 'utf8'));
   assert.deepEqual(
@@ -266,7 +270,9 @@ try {
     sleep: async (ms) => {
       throw new Error(`The dry run does not wait (asked for ${ms} ms).`);
     },
-    deliver: async (input) => await deliverWorkerNotification(workerEnv, input),
+    // As the service binding answers it: the RPC wrapper around the service's answer.
+    deliver: async (input) =>
+      await asWorkerNotificationRpcResult(() => deliverWorkerNotification(workerEnv, input)),
   });
   const deviceToken = 'dry-run-device-token-0123456789';
   const authorization = developmentSessionAuthorization({

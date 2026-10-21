@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -26,7 +27,7 @@ import {
   type LiveDriverOptions,
 } from './driver';
 import { parseRunArguments } from './cli';
-import { checkLiveEmulator, type AdbResult } from './emulator';
+import { checkLiveEmulator, onlineAdbSerials, type AdbResult } from './emulator';
 import { assertLiveReadablePath, formatLiveEnvValue, writeLiveWorkerEnvFile } from './worker-env';
 
 // The live kit's pure parts. The driver itself runs against the in-process
@@ -136,18 +137,22 @@ await test('the kit never reads the mise secrets directory', () => {
 
 /**
  * A fake adb: answers by the arguments after `-s <serial>`; an unknown call
- * answers empty, and `fail` makes one call exit non-zero.
+ * answers empty, and each call in `failing` exits non-zero with adb's own
+ * complaint on stderr.
  */
-function fakeAdb(answers: Readonly<Record<string, string>>, calls: string[][], fail?: string) {
+function fakeAdb(answers: Readonly<Record<string, string>>, calls: string[][], failing: readonly string[] = []) {
   return (args: readonly string[]): AdbResult => {
     calls.push([...args]);
     const key = (args[0] === '-s' ? args.slice(2) : args).join(' ');
-    if (key === fail) {
-      return { status: 1, stdout: '' };
+    if (failing.includes(key)) {
+      return { status: 1, stdout: '', stderr: 'error: device offline\n' };
     }
     return { status: 0, stdout: answers[key] ?? '' };
   };
 }
+
+/** Every adb call any check in this file made, for the allow-list. */
+const everyAdbCall: string[][] = [];
 
 /** Every adb call the check may make: reads, and the one forward it was asked for. */
 function isAllowedAdbCall(args: readonly string[]): boolean {
@@ -156,6 +161,7 @@ function isAllowedAdbCall(args: readonly string[]): boolean {
     /^devices$/u,
     /^shell getprop (?:sys\.boot_completed|ro\.build\.version\.sdk)$/u,
     /^shell pm list packages [A-Za-z0-9_.]+$/u,
+    /^shell true$/u,
     /^shell dumpsys package [A-Za-z0-9_.]+$/u,
     /^reverse --list$/u,
     /^reverse tcp:(\d+) tcp:\1$/u,
@@ -244,8 +250,12 @@ await test('the emulator check names what is missing, and an adb failure as an a
     'fail app',
     'warn reverse',
   ]);
-  const lines = (answers: Readonly<Record<string, string>>, options: { serial?: string } = {}, fail?: string) =>
-    checkLiveEmulator({ appId: 'dev.example.live', port: 8787, reverse: true, ...options }, fakeAdb(answers, [], fail))
+  const lines = (
+    answers: Readonly<Record<string, string>>,
+    options: { serial?: string } = {},
+    failing: readonly string[] = [],
+  ) =>
+    checkLiveEmulator({ appId: 'dev.example.live', port: 8787, reverse: true, ...options }, fakeAdb(answers, everyAdbCall, failing))
       .lines.map((line) => `${line.result} ${line.check}: ${line.detail}`);
   assert.match(
     lines({ devices: 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\n' })[0] ?? '',
@@ -254,13 +264,26 @@ await test('the emulator check names what is missing, and an adb failure as an a
   assert.match(lines(readyDevice, { serial: 'emulator-5558' })[0] ?? '', /emulator-5558 is not online/u);
   assert.match(lines({ devices: 'List of devices attached\n' })[0] ?? '', /no emulator or device is online/u);
   assert.match(lines({ ...readyDevice, 'shell getprop sys.boot_completed': '' }).at(-1) ?? '', /fail boot/u);
-  // A device that drops mid-check is an adb failure, not a missing Play services.
+  // A device that drops mid-check is an adb failure, not a missing Play services; adb's own words come along.
   assert.match(
-    lines(readyDevice, {}, 'shell pm list packages com.google.android.gms').at(-1) ?? '',
-    /^fail adb: .*pm list packages com\.google\.android\.gms failed/u,
+    lines(readyDevice, {}, ['shell pm list packages com.google.android.gms', 'shell true']).at(-1) ?? '',
+    /^fail adb: .*pm list packages com\.google\.android\.gms failed \(exit 1: error: device offline\)/u,
   );
-  assert.match(lines(readyDevice, {}, 'reverse tcp:8787 tcp:8787').at(-1) ?? '', /^fail adb: .*reverse tcp:8787 tcp:8787 failed/u);
-  assert.match(lines({ ...readyDevice, devices: '' }, {}, 'devices')[0] ?? '', /^fail adb: adb devices failed/u);
+  // A pm that exits non-zero for no match on a device that still answers: not installed.
+  assert.ok(
+    lines(readyDevice, {}, ['shell pm list packages com.google.android.gms']).some((line) =>
+      line.startsWith('fail google-play-services')),
+  );
+  assert.match(
+    lines(readyDevice, {}, ['reverse tcp:8787 tcp:8787']).at(-1) ?? '',
+    /^fail adb: .*reverse tcp:8787 tcp:8787 failed .*reverse --remove tcp:8787/u,
+  );
+  assert.match(
+    lines({ ...readyDevice, devices: '' }, {}, ['devices'])[0] ?? '',
+    /^fail adb: adb devices failed \(error: device offline\)/u,
+  );
+  // Output without the device list header lists no device.
+  assert.deepEqual(onlineAdbSerials('* daemon not running\nemulator-5554\tdevice\n'), []);
   // The permission line: refused, never requested, or skipped below API 33 and when the level is unknown.
   assert.ok(lines({
     ...readyDevice,
@@ -273,8 +296,16 @@ await test('the emulator check names what is missing, and an adb failure as an a
   assert.ok(lines({ ...readyDevice, 'shell getprop ro.build.version.sdk': '' }).includes(
     'warn android-version: could not read ro.build.version.sdk; the permission check is skipped.',
   ));
-  assert.throws(() => checkLiveEmulator({ appId: 'not an id', port: 8787, reverse: false }, fakeAdb({}, [])));
-  assert.throws(() => checkLiveEmulator({ appId: 'dev.example.live', port: 0, reverse: false }, fakeAdb({}, [])));
+  assert.throws(
+    () => checkLiveEmulator({ appId: 'not an id', port: 8787, reverse: false }, fakeAdb({}, [])),
+    LiveDriverUsageError,
+  );
+  assert.throws(
+    () => checkLiveEmulator({ appId: 'dev.example.live', port: 65_536, reverse: false }, fakeAdb({}, [])),
+    LiveDriverUsageError,
+  );
+  // Across every branch above, only reads and the one forward.
+  assert.deepEqual(everyAdbCall.filter((args) => !isAllowedAdbCall(args)), []);
 });
 
 await test('run arguments: the session, the guard, and numbers are checked, and no secret is echoed', () => {
@@ -307,6 +338,7 @@ await test('run arguments: the session, the guard, and numbers are checked, and 
     [['--player', 'p', '--fire-in', ''], /--fire-in "" is not a whole number/u],
     [['--player', 'p', '--fire-in', '1e3'], /not a whole number/u],
     [['--player', 'p', '--fire-in', '9999'], /at most 3600/u],
+    [['--player', 'p', '--fire-in', '72000000'], /at most 3600/u],
     [[], /--player or --auth-env is required/u],
   ] as const) {
     let thrown: unknown;
@@ -319,11 +351,23 @@ await test('run arguments: the session, the guard, and numbers are checked, and 
     assert.match(thrown.message, message, args.join(' '));
     assert.ok(!thrown.message.includes('pasted-secret'));
   }
+  // An unquoted pasted token is a stray positional: refused without quoting it.
+  assert.throws(() => parse(['--auth-env', 'Bearer', 'tok-pasted-value']), (error: unknown) =>
+    error instanceof LiveDriverUsageError && /unexpected argument/u.test(error.message)
+    && !error.message.includes('tok-pasted-value'));
+  // An opaque value that happens to look like a name is not repeated when it is unset.
+  assert.throws(() => parse(['--auth-env', 'abc123opaque']), (error: unknown) =>
+    error instanceof LiveDriverUsageError && !error.message.includes('abc123opaque'));
+  assert.throws(() => parse(['--player', '']), /--player or --auth-env is required/u);
   assert.throws(() => parse(['--player', 'p', '--unknown']), (error: unknown) =>
     (error as { readonly code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION');
 });
 
-await test('the env file never lands in a repository, through a link, or under a wider mode', () => {
+await test('the env file never lands in a repository, through a link, or under a wider mode', (context) => {
+  if (insideGitCheckout(tmpdir())) {
+    context.skip('the temporary directory is inside a git checkout');
+    return;
+  }
   const scratch = mkdtempSync(join(tmpdir(), 'mpgd-live-kit-'));
   try {
     const repository = join(scratch, 'kit');
@@ -346,12 +390,12 @@ await test('the env file never lands in a repository, through a link, or under a
     const input = { catalogPath: catalog, deploymentPath: deployment, serviceAccountPath: key, repositoryRoot: repository };
 
     // A directory whose name starts with two dots is still inside.
-    assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(repository, '..hidden', 'live.env') }), /inside the repository/u);
+    assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(repository, '..hidden', 'live.env') }), /inside the git checkout/u);
     // So is any other checkout.
     const other = join(scratch, 'other');
     mkdirSync(join(other, '.git'), { recursive: true });
     mkdirSync(join(other, 'sub'));
-    assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(other, 'sub', 'live.env') }), /inside the repository/u);
+    assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(other, 'sub', 'live.env') }), /inside the git checkout/u);
     // A link would write the key where it points.
     symlinkSync(join(repository, 'target.env'), join(outside, 'link.env'));
     assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(outside, 'link.env') }), /symbolic link/u);
@@ -362,7 +406,13 @@ await test('the env file never lands in a repository, through a link, or under a
     );
     assert.throws(
       () => writeLiveWorkerEnvFile({ ...input, projectId: 'Bad\\', outPath: join(outside, 'a.env') }),
-      /--project-id/u,
+      /--project-id is not a Firebase project id/u,
+    );
+    // An existing directory is not replaced, with or without --force.
+    mkdirSync(join(outside, 'dir.env'));
+    assert.throws(
+      () => writeLiveWorkerEnvFile({ ...input, outPath: join(outside, 'dir.env'), overwrite: true }),
+      /not a file/u,
     );
     // Replacing a file recreates it with mode 0600.
     const out = join(outside, 'live.env');
@@ -398,10 +448,32 @@ await test('the mise directory is refused through links and case', () => {
         /does not read/u,
       );
     }
+    // mise's other homes.
+    assert.throws(
+      () => assertLiveReadablePath(join(scratch, 'xdg', 'mise', 'config.toml'), home, { XDG_CONFIG_HOME: join(scratch, 'xdg') }),
+      /does not read/u,
+    );
+    assert.throws(
+      () => assertLiveReadablePath(join(scratch, 'm', 'x.toml'), home, { MISE_CONFIG_DIR: join(scratch, 'm') }),
+      /does not read/u,
+    );
+    assert.equal(assertLiveReadablePath(join(scratch, 'key.json'), home, {}), join(scratch, 'key.json'));
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+/** Whether a directory is inside a git checkout (the env file refuses to be written there). */
+function insideGitCheckout(directory: string): boolean {
+  for (let current = directory; ; current = dirname(current)) {
+    if (existsSync(join(current, '.git'))) {
+      return true;
+    }
+    if (dirname(current) === current) {
+      return false;
+    }
+  }
+}
 
 /** A scripted Worker for the driver's own branches; the real one runs in the dry run. */
 function scriptedWorker(script: {
@@ -490,11 +562,28 @@ await test('the driver waits for the reminder, flags a replayed send, and stops 
 
   const broken = await runNotificationsLiveDriver(scriptedOptions, dependencies(scriptedWorker({ scheduledStatus: 404 }).fetch));
   assert.equal(broken.ok, false);
-  assert.deepEqual(broken.steps.at(-1), {
+  assert.deepEqual(broken.steps.find((step) => step.result === 'fail'), {
     name: 'scheduler',
     result: 'fail',
     detail: 'the scheduled route answered 404: is this wrangler dev 4.x?',
   });
+  // The failed run cancels the reminder it left pending, so no push arrives later.
+  assert.deepEqual(broken.steps.at(-1), { name: 'cancel-leftover-reminder', result: 'pass', detail: 'answered 200' });
+
+  // A clean-up that cannot reach the Worker warns; it never fails a run that passed.
+  const flaky = scriptedWorker();
+  const report = await runNotificationsLiveDriver(
+    { ...scriptedOptions, fcmToken: 'fcm-token-for-cleanup-0123', fireInSeconds: 0 },
+    dependencies(async (url, init) => {
+      if (url.endsWith('/endpoints/unregister')) {
+        throw new Error('connection reset');
+      }
+      return url.endsWith('/endpoints') ? { status: 200, text: async () => '{}' } : await flaky.fetch(url, init);
+    }),
+  );
+  assert.ok(report.ok, lines.join('\n'));
+  assert.equal(report.steps.at(-1)?.name, 'unregister-endpoint');
+  assert.equal(report.steps.at(-1)?.result, 'warn');
 
   await assert.rejects(
     runNotificationsLiveDriver({ ...scriptedOptions, fireInSeconds: Number.NaN }, dependencies(scriptedWorker().fetch)),
@@ -525,7 +614,9 @@ await test('an answer that echoes a secret is redacted before it is cut', async 
   );
   assert.equal(report.ok, false);
   const log = lines.join('\n');
-  for (const secret of [token.slice(0, 12), 'mpgd-dev.p-kit', scriptedOptions.authorization]) {
+  // The 600-character cut falls inside the token: only the redaction marker may stand there.
+  assert.ok(log.includes(`${'x'.repeat(590)}<redacted>`), log);
+  for (const secret of [token.slice(0, 10), 'mpgd-dev.p-kit', scriptedOptions.authorization]) {
     assert.ok(!log.includes(secret), `the log shows ${secret}`);
   }
   assert.ok(report.steps.every((step) => !step.detail.includes(token)));
