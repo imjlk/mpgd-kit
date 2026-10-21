@@ -1,6 +1,14 @@
 import { execFile as execFileCallback, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -213,6 +221,9 @@ export function applyKitUpgrade(
     ...plan.manifestDigests,
     ...plan.lockfileDigests,
   })) {
+    // Re-check links before the digest read. readFileSync follows a symlink,
+    // so a same-bytes swap would otherwise look unchanged.
+    assertOwnedUpgradePath(upgradeWriteAnchor(plan, file), file);
     const current = readFileSync(file, 'utf8');
     if (digest(current) !== expected) {
       throw new Error('File changed after upgrade planning: ' + file);
@@ -235,16 +246,18 @@ export function applyKitUpgrade(
         section[update.packageName] = update.next;
         parsed[update.section] = section;
       }
-      writeFileSync(manifest, stringifyLike(source, parsed));
+      writeUpgradeFile(plan, manifest, stringifyLike(source, parsed));
     }
     for (const root of plan.workspaceRoots) {
+      const lockfile = path.join(root, 'pnpm-lock.yaml');
+      assertOwnedUpgradePath(upgradeWriteAnchor(plan, lockfile), lockfile);
       runLockfileUpdate(root);
     }
   } catch (error) {
     const restoreFailures: string[] = [];
     for (const [file, original] of snapshots) {
       try {
-        writeFileSync(file, original);
+        writeUpgradeFile(plan, file, original);
       } catch (restoreError) {
         restoreFailures.push(file + ': ' + formatError(restoreError));
       }
@@ -582,6 +595,99 @@ function stringifyLike(original: string, value: JsonObject): string {
   const newline = original.includes('\r\n') ? '\r\n' : '\n';
   return JSON.stringify(value, null, indent).replaceAll('\n', newline)
     + (original.endsWith('\n') ? newline : '');
+}
+
+function upgradeWriteAnchor(plan: KitUpgradePlan, file: string): string {
+  const resolved = path.resolve(file);
+  if (inside(plan.gameRoot, resolved)) {
+    return plan.gameRoot;
+  }
+  let anchor = plan.gameRoot;
+  while (!inside(anchor, resolved)) {
+    const parent = path.dirname(anchor);
+    if (parent === anchor) {
+      throw new Error('Refusing to write outside the planned upgrade directory: ' + file);
+    }
+    anchor = parent;
+  }
+  let anchorStat;
+  try {
+    anchorStat = lstatSync(anchor);
+  } catch (error) {
+    throw new Error('Refusing to write through a symbolic link: ' + anchor, { cause: error });
+  }
+  if (anchorStat.isSymbolicLink()) {
+    throw new Error('Refusing to write through a symbolic link: ' + anchor);
+  }
+  const anchorReal = realpathSync(anchor);
+  // Compare with the game root captured at planning time. A fresh realpath of
+  // both sides would follow a parent swapped for a symlink and look consistent.
+  if (!inside(anchorReal, plan.gameRoot) && path.resolve(anchorReal) !== path.resolve(plan.gameRoot)) {
+    throw new Error('Refusing to write through a symbolic link: ' + anchor);
+  }
+  return anchor;
+}
+
+function assertOwnedUpgradePath(anchor: string, file: string): void {
+  const resolved = path.resolve(file);
+  if (!inside(anchor, resolved)) {
+    throw new Error('Refusing to write outside the planned upgrade directory: ' + file);
+  }
+  const relative = path.relative(anchor, resolved);
+  const parts = relative.split(path.sep).filter((part) => part !== '' && part !== '.');
+  let current = anchor;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part === undefined) {
+      continue;
+    }
+    current = path.join(current, part);
+    const isFinal = index === parts.length - 1;
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT') && isFinal) {
+        return;
+      }
+      throw new Error('Upgrade file disappeared before write: ' + file, { cause: error });
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error('Refusing to write through a symbolic link: ' + current);
+    }
+  }
+  if (!inside(realpathSync(anchor), realpathSync(resolved))) {
+    throw new Error('Refusing to write through a symbolic link: ' + file);
+  }
+}
+
+function writeUpgradeFile(plan: KitUpgradePlan, file: string, source: string): void {
+  const anchor = upgradeWriteAnchor(plan, file);
+  assertOwnedUpgradePath(anchor, file);
+  const temporary = `${file}.mpgd-${randomUUID()}.tmp`;
+  try {
+    let mode = 0o644;
+    try {
+      const stat = lstatSync(file);
+      if (stat.isSymbolicLink()) {
+        throw new Error('Refusing to write through a symbolic link: ' + file);
+      }
+      mode = stat.mode & 0o777;
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) {
+        throw error;
+      }
+    }
+    writeFileSync(temporary, source, { flag: 'wx', mode });
+    assertOwnedUpgradePath(anchor, file);
+    renameSync(temporary, file);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return error !== null && typeof error === 'object' && 'code' in error && error.code === code;
 }
 
 function inside(root: string, candidate: string): boolean {

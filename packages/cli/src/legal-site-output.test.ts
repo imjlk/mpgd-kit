@@ -1,0 +1,175 @@
+import assert from 'node:assert/strict';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { runMpgdCli } from './index.js';
+
+const page = (title: string): string =>
+  `<!doctype html>\n<html lang="en"><head><title>${title}</title></head><body><p>${title}</p></body></html>\n`;
+
+function linkDirectory(target: string, link: string): void {
+  symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+function writeLegalSources(legalDir: string): void {
+  mkdirSync(legalDir, { recursive: true });
+  writeFileSync(path.join(legalDir, 'privacy.html'), page('Privacy'));
+  writeFileSync(path.join(legalDir, 'support.html'), page('Support'));
+  writeFileSync(path.join(legalDir, 'terms.html'), page('Terms'));
+}
+
+async function inProject(project: string, run: () => Promise<void>): Promise<void> {
+  const previous = process.cwd();
+  process.chdir(project);
+  try {
+    await run();
+  } finally {
+    process.chdir(previous);
+  }
+}
+
+function outsidePrivacy(outside: string): string {
+  return path.join(outside, 'privacy', 'index.html');
+}
+
+await test('refuses legal site writes through a symlinked artifacts directory', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-link-'));
+  const project = path.join(root, 'project');
+  const outside = path.join(root, 'outside');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    mkdirSync(outside);
+    linkDirectory(outside, path.join(project, 'artifacts'));
+    await inProject(project, async () => {
+      await assert.rejects(
+        runMpgdCli(['legal', 'build']),
+        /symbolic link|must be inside the project root/u,
+      );
+    });
+    assert.equal(existsSync(outsidePrivacy(outside)), false);
+    assert.equal(existsSync(path.join(project, 'artifacts', 'legal-site', 'privacy', 'index.html')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('refuses a legal out-dir whose canonical path leaves the project', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-out-'));
+  const project = path.join(root, 'project');
+  const outside = path.join(root, 'outside');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    mkdirSync(outside);
+    linkDirectory(outside, path.join(project, 'linked-out'));
+    await inProject(project, async () => {
+      await assert.rejects(
+        runMpgdCli(['legal', 'build', '--out-dir', 'linked-out']),
+        /symbolic link|must be inside the project root/u,
+      );
+    });
+    assert.equal(existsSync(outsidePrivacy(outside)), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('refuses legal sources reached through a symlink', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-src-'));
+  const project = path.join(root, 'project');
+  const outside = path.join(root, 'outside-legal');
+  try {
+    writeLegalSources(outside);
+    mkdirSync(project);
+    linkDirectory(outside, path.join(project, 'legal'));
+    await inProject(project, async () => {
+      await assert.rejects(
+        runMpgdCli(['legal', 'build', '--out-dir', 'site']),
+        /symbolic link|must be inside the project root/u,
+      );
+    });
+    assert.equal(existsSync(path.join(project, 'site', 'privacy', 'index.html')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('refuses an in-project symlink component on the legal out-dir', async () => {
+  if (process.platform === 'win32') {
+    return;
+  }
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-inside-link-'));
+  const project = path.join(root, 'project');
+  const realOut = path.join(project, 'real-out');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    mkdirSync(realOut);
+    symlinkSync(realOut, path.join(project, 'linked-out'), 'dir');
+    await inProject(project, async () => {
+      await assert.rejects(
+        runMpgdCli(['legal', 'build', '--out-dir', 'linked-out']),
+        /symbolic link/u,
+      );
+    });
+    assert.equal(existsSync(path.join(realOut, 'privacy', 'index.html')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('builds a legal site inside the project and replaces it without staging leftovers', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-ok-'));
+  const project = path.join(root, 'project');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    await inProject(project, async () => {
+      await runMpgdCli(['legal', 'build', '--out-dir', 'artifacts/legal-site']);
+      await runMpgdCli(['legal', 'check', '--out-dir', 'artifacts/legal-site']);
+      const privacy = readPrivacy(project);
+      assert.match(privacy, /<title>Privacy<\/title>/u);
+      await runMpgdCli(['legal', 'build', '--out-dir', 'artifacts/legal-site']);
+      assert.equal(readPrivacy(project), privacy);
+    });
+    const names = readdirSync(project);
+    assert.equal(names.some((name) => name.startsWith('.mpgd-legal-')), false);
+    assert.equal(existsSync(path.join(project, 'artifacts', 'legal-site', '_headers')), true);
+    assert.equal(existsSync(path.join(project, 'artifacts', 'legal-site', 'legal-site.json')), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('still rejects a legal out-dir that lexically leaves the project', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-lexical-'));
+  const project = path.join(root, 'project');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    await inProject(project, async () => {
+      await assert.rejects(
+        runMpgdCli(['legal', 'build', '--out-dir', '../outside']),
+        /must be inside the project root/u,
+      );
+    });
+    assert.equal(lstatSync(project).isDirectory(), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function readPrivacy(project: string): string {
+  return readFileSync(
+    path.join(project, 'artifacts', 'legal-site', 'privacy', 'index.html'),
+    'utf8',
+  );
+}

@@ -23,6 +23,7 @@ import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import { buildAssetPackTarget } from './asset-pack-target.js';
 import { publishAssetPacks } from './asset-pack-publish.js';
+import { assertLegalProjectPath, publishLegalSiteFiles } from './legal-site-output.js';
 import { assertAssetPackTargetPolicy } from '@mpgd/target-config/asset-packs';
 import {
   materializeCapacitorShellStarter,
@@ -3396,10 +3397,14 @@ function buildLegalSite(input: {
 }): BuildLegalSiteResult {
   const legalDir = path.resolve(process.cwd(), input.legalDir);
   const outDir = path.resolve(process.cwd(), input.outDir);
+  assertLegalProjectPath('legal-dir', legalDir);
+  assertLegalProjectPath('out-dir', outDir);
   const outputs = createLegalSiteOutputs(legalDir, outDir);
 
   if (input.check) {
+    assertLegalProjectPath('out-dir', outDir);
     const stale = outputs.filter((output) => {
+      assertLegalProjectPath('out-dir', output.file);
       if (!existsSync(output.file)) {
         return true;
       }
@@ -3421,10 +3426,7 @@ function buildLegalSite(input: {
     };
   }
 
-  for (const output of outputs) {
-    mkdirSync(path.dirname(output.file), { recursive: true });
-    writeFileSync(output.file, output.content);
-  }
+  publishLegalSiteFiles(outDir, outputs);
 
   return {
     outDir,
@@ -3435,18 +3437,10 @@ function createLegalSiteOutputs(
   legalDir: string,
   outDir: string,
 ): readonly { readonly file: string; readonly content: string }[] {
-  const relativeLegalDir = path.relative(process.cwd(), legalDir);
-  const relativeOutDir = path.relative(process.cwd(), outDir);
+  assertLegalProjectPath('legal-dir', legalDir);
+  assertLegalProjectPath('out-dir', outDir);
 
-  if (relativeLegalDir.startsWith('..') || path.isAbsolute(relativeLegalDir)) {
-    throw new Error(`legal-dir must be inside the project root: ${legalDir}`);
-  }
-
-  if (relativeOutDir.startsWith('..') || path.isAbsolute(relativeOutDir)) {
-    throw new Error(`out-dir must be inside the project root: ${outDir}`);
-  }
-
-  const sourceRoot = toTemplatePath(relativeLegalDir || '.');
+  const sourceRoot = toTemplatePath(path.relative(process.cwd(), legalDir) || '.');
   const outputs = legalPageSlugs.map((slug) => {
     const sourceFile = path.join(legalDir, `${slug}.html`);
 
