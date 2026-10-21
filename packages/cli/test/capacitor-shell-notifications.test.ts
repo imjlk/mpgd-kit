@@ -14,6 +14,7 @@ import {
 import {
   capacitorGatewayRegistersNotifications,
   notificationsCapacitorSupportFiles,
+  notificationsCapacitorTemplateSupportFiles,
   notificationsGameDependencies,
   wireCapacitorGatewayNotifications,
 } from '../src/notifications-starter.js';
@@ -137,6 +138,7 @@ try {
       androidGateway,
       iosGateway,
       ...notificationsCapacitorSupportFiles,
+      ...notificationsCapacitorTemplateSupportFiles,
       'package.json',
     ]) {
       assert.ok(plan.changedFiles.includes(file), `the plan lists ${file}`);

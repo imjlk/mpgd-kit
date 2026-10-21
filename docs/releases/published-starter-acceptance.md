@@ -8,8 +8,13 @@ matrix job fails, is cancelled, or is unexpectedly skipped.
 
 The release publisher records its actual verified checkout SHA and CLI/create-game
 versions in a same-run artifact. The consumer checks out that exact commit and
+<!--
+@link ../../tools/smoke/published-starter-consumer.mjs#publishedMetadata Confirms registry metadata and dist.tarball availability before the published consumer installs.
+@link ../../tools/smoke/published-starter-consumer.mjs#retryTransientTarball404 Retries pnpm install when the registry tarball is not yet fetchable.
+-->
 allows about six minutes of retries for those exact public npm versions to become
-visible in both full and abbreviated package-manager metadata after publication.
+visible in both full and abbreviated package-manager metadata, and for each
+version's `dist.tarball` to answer HEAD or a ranged GET, after publication.
 It never falls back to `latest`. PR runs use
 their base commit's released versions; manual runs may supply exact stable
 `cli_version` and `create_version` inputs. Generated manifests remain unchanged;
@@ -55,7 +60,11 @@ The plain-Node `.mjs` harness is a documented published-JavaScript consumer
 exception, checked by `tsconfig.bootstrap-js.json`. Its bootstrap installs pinned
 `npm-package-arg` and `yaml` from public npm to validate every generated manifest,
 including child apps, plus workspace overrides, catalogs and package extensions
-before installing the generated game.
+before installing the generated game. Direct `@mpgd` exact pins and caret ranges
+in that tree are waited on the same way, including tarball availability, before
+`pnpm install`. Installs retry a bounded number of times when pnpm reports
+`ERR_PNPM_FETCH_404`, which covers transitive packages whose metadata is visible
+before the CDN object exists.
 Only registry versions, ranges, tags and npm aliases are accepted; Git, local
 paths, tarball URLs and local patches fail the check. No repository dependency
 or compiler loader is used by this bootstrap. Transient metadata request failures

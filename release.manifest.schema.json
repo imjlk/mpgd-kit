@@ -16,7 +16,7 @@
   ],
   "properties": {
     "releaseId": { "type": "string", "minLength": 1 },
-    "gitSha": { "type": "string", "minLength": 1 },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "kitGitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "gameVersion": { "type": "string", "minLength": 1 },
     "releaseIdentity": {

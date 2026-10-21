@@ -284,6 +284,31 @@ try {
 
 console.log('D1 entitlement evidence idempotency smoke passed');
 
+// A replica SELECT after INSERT OR IGNORE must not miss the row this request
+// just wrote. The default binding misses; only the first-primary session sees it.
+const replicaLag = createReplicaLagEntitlementDatabase();
+const replicaStore = createD1GameServicesStore(replicaLag.db);
+const replicaGrant = {
+  playerId: 'replica-player',
+  grantId: 'COINS_100',
+  source: 'purchase',
+  idempotencyKey: 'replica-purchase',
+  grantedAt: '2026-07-14T00:00:00.000Z',
+  payload: { target: 'android' },
+} as const satisfies EntitlementLedgerGrant;
+const replicaRecorded = await replicaStore.recordEntitlementGrant(replicaGrant);
+assertEqual(
+  replicaRecorded.alreadyProcessed,
+  false,
+  'a primary-session read-back must see the entitlement row the insert just wrote',
+);
+assertEqual(
+  replicaLag.sessionConstraint,
+  'first-primary',
+  'the grant insert and read-back must share a first-primary D1 session',
+);
+console.log('D1 entitlement primary-session read-back smoke passed');
+
 async function applyMigration(db: D1Database, name: string): Promise<void> {
   const migration = await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8');
   await db.exec(toD1ExecScript(migration));
@@ -336,4 +361,77 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
   }
+}
+
+/**
+ * Default binding reads miss a row this request just inserted. The session
+ * created with `first-primary` is the only connection that can see it.
+ */
+function createReplicaLagEntitlementDatabase(): {
+  readonly db: D1Database;
+  sessionConstraint: string | undefined;
+} {
+  const inserted = new Map<string, {
+    ledger_entry_id: string;
+    player_id: string;
+    grant_id: string;
+    source: EntitlementLedgerGrant['source'];
+    idempotency_key: string;
+    granted_at: string;
+    grant_json: string | null;
+    payload_json: string;
+    evidence_verification_id: string | null;
+  }>();
+  const state: { sessionConstraint: string | undefined } = { sessionConstraint: undefined };
+
+  const prepare = (query: string, session: boolean) => {
+    let bound: readonly unknown[] = [];
+    const statement = {
+      bind(...values: readonly unknown[]) {
+        bound = values;
+        return statement;
+      },
+      async run() {
+        if (session && query.includes('INSERT')) {
+          inserted.set(String(bound[4]), {
+            ledger_entry_id: String(bound[0]),
+            player_id: String(bound[1]),
+            grant_id: String(bound[2]),
+            source: bound[3] as EntitlementLedgerGrant['source'],
+            idempotency_key: String(bound[4]),
+            granted_at: String(bound[5]),
+            grant_json: bound[6] === null ? null : String(bound[6]),
+            payload_json: String(bound[7]),
+            evidence_verification_id: bound[8] === null || bound[8] === undefined
+              ? null
+              : String(bound[8]),
+          });
+        }
+        return { success: true as const, meta: { changes: 1 }, results: [] };
+      },
+      async first() {
+        if (!session || !query.includes('idempotency_key')) {
+          return null;
+        }
+        return inserted.get(String(bound[2])) ?? null;
+      },
+      async all() {
+        return { success: true as const, meta: {}, results: [] };
+      },
+    };
+    return statement;
+  };
+
+  return {
+    db: {
+      prepare: (query: string) => prepare(query, false),
+      withSession(constraint?: string) {
+        state.sessionConstraint = constraint;
+        return { prepare: (query: string) => prepare(query, true) };
+      },
+    } as unknown as D1Database,
+    get sessionConstraint() {
+      return state.sessionConstraint;
+    },
+  };
 }

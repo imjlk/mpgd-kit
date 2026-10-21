@@ -95,7 +95,10 @@ export const devvitNotificationHostCodes = Object.freeze({
  *   turns `prompt` into `denied` once a decision is recorded).
  * - **Requests.** Already opted in is `already-granted` without a second
  *   opt-in; otherwise `optInCurrentUser` answers `granted`. A refused opt-in
- *   (`success: false`, such as an app not yet approved) throws
+ *   (`success: false`) is re-read with `isOptedIn`. If that read is
+ *   `granted`, a concurrent request already opted the user in and the
+ *   observed state is returned (`already-granted`), not a permanent
+ *   configuration error. If the user is still out, it throws
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
  *   `DEVVIT_OPT_IN_REFUSED`, which is not retryable: Devvit documents no
  *   transient refusal, and a refusal the game retried would loop. A plugin
@@ -103,8 +106,10 @@ export const devvitNotificationHostCodes = Object.freeze({
  * - **Revocation.** `optOutCurrentUser` for a user who is opted in (one who
  *   is already out needs none, which Devvit might refuse), the `denied`
  *   outcome for every mapped topic (`unavailable` for the others, and no
- *   opt-out when none is mapped), and the state the opt-out produced:
- *   `prompt`, not opted in.
+ *   opt-out when none is mapped). A refused opt-out is re-read the same
+ *   way: still opted in throws `DEVVIT_OPT_OUT_REFUSED`; already out returns
+ *   the observed `prompt` state. A successful opt-out answers the state it
+ *   produced (`prompt`), not a second read that could be stale.
  * - **Unmapped topics.** A topic the catalog does not map for `reddit`
  *   reads `unsupported` in every snapshot.
  * - **Registration.** A logged-in user registers `{ kind: 'platform-user' }`;
@@ -199,9 +204,16 @@ export function createDevvitServerNotificationProvider(
         const response = await plugin(() => input.notifications.optInCurrentUser(), 'optInCurrentUser');
         const failure = refused(response, devvitNotificationHostCodes.optInRefused, 'the opt-in');
         if (failure !== undefined) {
-          throw failure;
+          // Both of two concurrent requests can see not-granted and call
+          // opt-in. The duplicate answers success:false. That is a permanent
+          // configuration error only when a re-read still shows the user out.
+          if ((await read(userId)) !== 'granted') {
+            throw failure;
+          }
+          outcome = 'already-granted';
+        } else {
+          outcome = 'granted';
         }
-        outcome = 'granted';
       }
       return { snapshot: snapshotOf(topics, 'granted'), outcomes: outcomesWith(topics, outcome) };
     },
@@ -219,7 +231,9 @@ export function createDevvitServerNotificationProvider(
       if ((await read(userId)) === 'granted') {
         const response = await plugin(() => input.notifications.optOutCurrentUser(), 'optOutCurrentUser');
         const failure = refused(response, devvitNotificationHostCodes.optOutRefused, 'the opt-out');
-        if (failure !== undefined) {
+        if (failure !== undefined && (await read(userId)) === 'granted') {
+          // Still opted in: the refusal stands. Already out: a concurrent
+          // opt-out won, and the observed state is the one returned below.
           throw failure;
         }
       }

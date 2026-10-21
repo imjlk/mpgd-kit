@@ -576,7 +576,12 @@ numeric attempt metrics on processed decisions and ranked entries. Apply
 `0004_entitlement_evidence.sql` next to persist provider verification identities
 and enforce source-scoped evidence replay protection, and
 `0006_entitlement_revocations.sql` for the commerce v2 `revoke` entries behind
-the ledger status read (it only adds a table and indexes).
+the ledger status read (it only adds a table and indexes). Entitlement grant
+writes read the inserted row back on the same `first-primary` D1 session, so a
+replica cannot miss the row and fail the request after the unique indexes have
+already recorded the grant.
+
+<!-- @link ../apps/game-services-worker/src/d1Store.ts#D1GameServicesStore.recordEntitlementGrant Insert and read-back share a first-primary session. -->
 
 Durable leaderboard providers should also run
 `@mpgd/game-services/verified-leaderboard-durability-conformance`. Its fault
@@ -617,7 +622,9 @@ in-Worker Play boundary (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` with the
 `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` service that mints Android Publisher
 access tokens from the game-owned service account, plus
 `GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING` or the explicit
-`GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"` opt-in), finalized by
+`GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"` opt-in; the Worker
+refuses to start if that flag is set without `GAME_SERVICES_INGRESS_AUTH`),
+finalized by
 that boundary or by a `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` service,
 or, when the binding acknowledges purchases itself,
 `GAME_SERVICES_ANDROID_VERIFIER_FINALIZES = "true"` (the entry is published
@@ -682,7 +689,11 @@ response to the authenticated mpgd player. If a game accepts promotion
 redemptions or other purchases made outside the app, where Google does not
 return an account identifier, it must explicitly set
 `allowUnboundAuthenticatedPlayer: true` and bind `playerId` to the logged-in
-account before calling this boundary. A configured resolver that unexpectedly
+account before calling this boundary. The Worker sets that opt-in only from
+`GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"`, and refuses to start
+unless `GAME_SERVICES_INGRESS_AUTH` is also bound. Without that binding the
+public verify route would grant an unbound Play token to whatever `playerId`
+the body names. A configured resolver that unexpectedly
 returns no identifier fails closed unless that opt-in is present. Unbound mode
 also rejects responses carrying either `obfuscatedExternalAccountId` or
 `obfuscatedExternalProfileId`; a purchase associated with another app account
@@ -691,6 +702,8 @@ that set BillingClient's profile identifier must also provide
 `resolveObfuscatedProfileId`; profile-bearing provider responses fail closed
 when no expected profile is available, and both identifiers are matched when
 the response carries both.
+
+<!-- @link ../apps/game-services-worker/src/handler.ts#assertGooglePlayUnboundPlayerRequiresIngressAuth Refuses to start when the unbound Play flag is set without ingress auth. -->
 
 Generated games bind purchases with the reference module
 `src/platform/commerceAccountBinding.ts` (commerce v2 PR C3): Play's

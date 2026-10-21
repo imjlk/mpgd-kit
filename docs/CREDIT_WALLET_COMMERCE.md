@@ -31,8 +31,16 @@ client** against its own wallet service, under its own open `StoreId`:
   client subscription): `fetchProducts` lists the offers (memberships omitted
   where the billing authority is `store` or the client cannot report active
   subscriptions), `requestPurchase` spends the offer price times the quantity
-  and answers `purchased` only when the wallet's debits add up to that price,
-  with `adapter-settled` evidence (`credit-wallet.spend.v1`, carrying the
+  and answers `purchased` only when the wallet's debits cover that price. A
+  shortfall does not cover it. Float residue may sit a few units in the last
+  place under the price, or above it; that allowance is capped at an absolute
+  `1e-9` and does not grow with the price, so one credit short of a large price
+  is not a payment. A sum of many fractional lots is compensated, so rounding
+  of the additions is not a shortfall, and a gap that is a material fraction of
+  a subnormal price is not a payment either. An empty debit list is never a
+  purchase of a positive price.
+  <!-- @link ../packages/platform/src/commerce-wallet.ts#createCreditCommerceProvider Rejects a debited answer whose sum does not cover the price, including an empty debit list. -->
+  The answer carries `adapter-settled` evidence (`credit-wallet.spend.v1`, carrying the
   debits and the wallet's entitlement id) and no `settlement` pointer (see the
   paragraph on settlement below), and the wallet's `createdAt` as `purchasedAt`,
   so a replay and a later `getAvailablePurchases` read show the same
@@ -57,7 +65,7 @@ client** against its own wallet service, under its own open `StoreId`:
   `options.capabilities` overrides it, `options.currencies` names the catalog
   currencies an offer may be priced in, and `options.now` is the fallback
   clock. A malformed client answer, including a `subscription`-kind offer
-  without membership terms or debits that do not add up, is
+  without membership terms or debits that do not cover the price, is
   `INVALID_RESPONSE`; an undeclared offer currency is
   `CONFIGURATION_REQUIRED`; a wallet `INSUFFICIENT_BALANCE` is returned as a
   `failed` outcome with that code.
@@ -68,7 +76,10 @@ client** against its own wallet service, under its own open `StoreId`:
   `title`), `selectEligibleCreditLots` and `compareCreditLotSpendOrder`
   (earliest `expiresAt` first with no expiry last, then `title` before
   `cross-title`, then oldest `createdAt`, then `lotId`), `planCreditDebits`
-  (debits nothing on `INSUFFICIENT_BALANCE`), `createMembershipRenewalKey`
+  (debits nothing on `INSUFFICIENT_BALANCE`, including when the unpaid gap is
+  the whole price or an empty list would otherwise be reported as debited),
+  <!-- @link ../packages/platform/src/commerce-wallet.ts#planCreditDebits A shortfall, including one credit of a large price, plans nothing. -->
+  `createMembershipRenewalKey`
   (`membership:<subscriptionId>:<periodIndex>`), and
   `createCreditSubscriptionEventId` (`<subscriptionId>:<periodIndex>:<type>`),
   `parseIsoDuration` / `addIsoDuration(at, period, times)` (positive periods

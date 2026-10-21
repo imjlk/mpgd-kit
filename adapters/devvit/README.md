@@ -58,7 +58,14 @@ Reddit approves. The profile follows the
   send needs a post (`t3_`) or comment (`t1_`) link, from the send or the
   topic's mapping. Titles are at most 60 and bodies at most 100 Unicode code
   points of the filled text. Devvit allows 2 sends per user per day and 25,000
-  per app per day. Players' own calls take `devvitNotificationSession(userId)`.
+  per app per day. Players' own calls take
+  `devvitNotificationSessionFromContext(context)` so the player is the
+  request's `context.userId`. `devvitNotificationSession(userId)` remains
+  for a caller that already holds that id.
+
+<!--
+@link ./src/server/notifications-delivery.ts#devvitNotificationSessionFromContext Builds the session from the request context user id.
+-->
   Two `devvit.json` scheduler tasks keep its work moving:
   `mpgd-notifications-dispatch` (every minute, the service's `runScheduler`:
   due server reminders and due sends, in rounds of 10, starting no round

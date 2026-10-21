@@ -28,11 +28,11 @@ Show the full table; the point is to show what is already done too. Cite evidenc
 | A7 | Save before quit | If the game calls `quit()` itself, it saves before the call (`exit` does not fire on that path) |
 | A8 | Back key | `onBackPressed` is registered and is a **synchronous function** (no async) |
 | A9 | pause / resume | Listeners exist, handling is idempotent, `ringerSilent` from `resume` is applied |
-| A10 | Rewarded ads | `requestId` is passed to `showRewardedAsync`, and the reward branch is `status === "rewarded"` only |
+| A10 | Rewarded ads | `requestId` passed to `showRewardedAsync` is issued by the game server and bound to the authenticated session, the selected placement, and that attempt's idempotency key, not minted on the client, and the reward branch is `status === "rewarded"` only. The SDK call uses the ONEconsole placement id when it differs from the logical catalog id |
 | A10-1 | Ad preload | `loadRewarded` / `loadInterstitial` is called early, when the game starts (recommended; without it the first ad takes longer) |
 | A11 | Reward granting | Whether the client grants currency directly (if so, needs confirmation: granting through the server postback is the policy) |
 | A12 | Purchase | `reason` branches for `purchase` (`user_cancelled`, etc.) and the hook for server-side `purchaseToken` verification |
-| A12-1 | developerPayload | `purchase` requests include `developerPayload`, **the slot for the information needed to grant the item (such as a user identifier).** It is optional: transaction identifiers correlate the purchase result and PNS. Require a reliable server-owned account/order mapping, for example an opaque developerPayload bound to an authenticated intent. Also check that it is at most 200 bytes in UTF-8 |
+| A12-1 | developerPayload | `purchase` requests include a server-issued opaque `developerPayload` bound to an authenticated checkout intent for the selected product and checkout idempotency key. The SDK `productId` is the ONEconsole SKU when it differs from the logical catalog id. It is optional for the SDK: transaction identifiers correlate the purchase result and PNS. Require a reliable server-owned account/order mapping, for example an opaque developerPayload bound to an authenticated intent. It must not be a user identifier or other account key, and it is at most 200 bytes in UTF-8 |
 | A13 | External navigation | `openDeeplink` is used instead of `window.top.location` or `window.open` |
 | A14 | Frame-busting code | Frame-busting code such as `window.parent !== window` checks (should be **missing**) |
 | A15 | Forbidden APIs | Use of `alert` / `confirm` / `prompt` / `print` (should be **missing**) |
@@ -43,8 +43,8 @@ Show the full table; the point is to show what is already done too. Cite evidenc
 | A20 | Listener timing | `pause` / `resume` / `exit` listeners are registered before `initializeAsync()` (recommended; events can arrive right after init) |
 | A21 | Calls into the game | When SDK code and game code are separate scripts, SDK code calls the game object only after it exists (waits with `whenGame` from SKILL.md or an equivalent). The `initializeAsync()` result can arrive before the game script runs |
 
-If items that need values (placementId, productId, SDK URL, how requestId is issued) are empty, give
-the fill-in form from SKILL.md under the table.
+If items that need values (logical catalog placement ID, ONEconsole placement ID, logical catalog product ID, ONEconsole product ID, SDK URL, how requestId is issued, how checkout intent is issued) are empty, give
+the fill-in form from SKILL.md under the table. Do not copy an ONEconsole ID into the logical catalog slot.
 
 ## List B: pre-release check
 
@@ -60,7 +60,7 @@ needs confirmation → passed count.
 | B3 | Frame-busting code left in | The game does not load at all |
 | B4 | An `X-Frame-Options: DENY/SAMEORIGIN` response, or `frame-ancestors` without both `https://*.onestore.co.kr` and `https://*.onestore.net` | The game does not load, or **registration review rejects it** (server setting; if the code does not show it, needs confirmation) |
 | B5 | Served over HTTP, or redirected to another origin | Blocked as mixed content, or may fail to load or communicate |
-| B6 | `requestId` missing for rewarded ads | Every ad fails with `invalid_request` |
+| B6 | `requestId` missing or client-generated for rewarded ads | Every ad fails with `invalid_request`, or the postback cannot be bound to the authenticated session |
 | B7 | The SDK is loaded from somewhere other than the official CDN (`https://h5sdk.onestore.net/lib/{{version}}/…`) | Depends on a self-hosted or unofficial copy. Replace it with the official URL |
 | B8 | SDK code calls the game object before the game script has run | The game may never start: always in a regular browser, and in the app depending on timing |
 

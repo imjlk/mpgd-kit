@@ -57,6 +57,9 @@ type LeaderboardRow = {
   recorded_at: string;
 };
 
+/** `D1Database` and `D1DatabaseSession` both prepare statements. */
+type D1Queryable = Pick<D1Database, 'prepare'>;
+
 export function createD1GameServicesStore(db: D1Database): GameServicesStore {
   return new D1GameServicesStore(db);
 }
@@ -69,8 +72,12 @@ class D1GameServicesStore implements GameServicesStore {
   ): Promise<EntitlementLedgerResult> {
     const grant = assertEntitlementLedgerGrant(input);
     const ledgerEntryId = createEntitlementLedgerEntryId(grant);
+    // The insert and the read-back share one primary session. A later SELECT on
+    // the default binding can hit a replica that has not seen this write and
+    // throw even though the unique indexes already recorded the grant.
+    const session = this.db.withSession('first-primary');
 
-    const result = await this.db
+    const result = await session
       .prepare(
         `INSERT OR IGNORE INTO entitlement_transactions (
           ledger_entry_id,
@@ -97,7 +104,7 @@ class D1GameServicesStore implements GameServicesStore {
       )
       .run();
 
-    const transaction = await this.findEntitlementTransactionByIdempotency(grant);
+    const transaction = await this.findEntitlementTransactionByIdempotency(grant, session);
 
     if (transaction === undefined) {
       if (
@@ -105,7 +112,7 @@ class D1GameServicesStore implements GameServicesStore {
         && await this.findEntitlementTransactionByEvidenceVerificationId({
           source: grant.source,
           evidenceVerificationId: grant.evidenceVerificationId,
-        }) !== undefined
+        }, session) !== undefined
       ) {
         throw new EvidenceAlreadyProcessedError();
       }
@@ -113,7 +120,7 @@ class D1GameServicesStore implements GameServicesStore {
       const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
       if (
         platformEvidenceIdentity !== undefined
-        && await this.findEntitlementTransactionByPlatformEvidence(platformEvidenceIdentity)
+        && await this.findEntitlementTransactionByPlatformEvidence(platformEvidenceIdentity, session)
           !== undefined
       ) {
         throw new EvidenceAlreadyProcessedError();
@@ -132,8 +139,8 @@ class D1GameServicesStore implements GameServicesStore {
     readonly source: EntitlementLedgerGrant['source'];
     readonly playerId: string;
     readonly idempotencyKey: string;
-  }): Promise<ProductGrantTransaction | undefined> {
-    const row = await this.db
+  }, db: D1Queryable = this.db): Promise<ProductGrantTransaction | undefined> {
+    const row = await db
       .prepare(
         `SELECT * FROM entitlement_transactions
          WHERE source = ? AND player_id = ? AND idempotency_key = ?`,
@@ -342,8 +349,8 @@ class D1GameServicesStore implements GameServicesStore {
   async findEntitlementTransactionByEvidenceVerificationId(input: {
     readonly source: EntitlementLedgerGrant['source'];
     readonly evidenceVerificationId: string;
-  }): Promise<ProductGrantTransaction | undefined> {
-    const row = await this.db
+  }, db: D1Queryable = this.db): Promise<ProductGrantTransaction | undefined> {
+    const row = await db
       .prepare(
         `SELECT * FROM entitlement_transactions
          WHERE source = ? AND evidence_verification_id = ?`,
@@ -356,13 +363,14 @@ class D1GameServicesStore implements GameServicesStore {
 
   async findEntitlementTransactionByPlatformEvidence(
     input: EntitlementPlatformEvidenceIdentity,
+    db: D1Queryable = this.db,
   ): Promise<ProductGrantTransaction | undefined> {
     const evidenceJsonPath = input.source === 'purchase'
       ? '$.platformTransactionId'
       : '$.platformImpressionId';
     // The predicates match the partial unique index of migration 0004, so the
     // lookup is an index probe rather than a table scan.
-    const row = await this.db
+    const row = await db
       .prepare(
         `SELECT * FROM entitlement_transactions
          WHERE source = ?

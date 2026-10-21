@@ -129,6 +129,11 @@ assert.match(
   byPath(phaser, 'src/scenes/LobbyScene.ts'),
   /scene\.start\(notificationSettingsSceneKey\)/u,
 );
+const settingsScene = byPath(phaser, 'src/scenes/NotificationSettingsScene.ts');
+assert.match(settingsScene, /const listTextWidth = 840;/u);
+assert.match(settingsScene, /wordWrap: \{ width: listTextWidth \}/u);
+assert.match(settingsScene, /setOrigin\(0\.5, 0\)/u);
+assert.match(settingsScene, /placeListBelowOutcome\(\)/u);
 const manifest = JSON.parse(byPath(phaser, 'package.json')) as {
   readonly scripts: Record<string, string>;
   readonly dependencies: Record<string, string>;

@@ -102,6 +102,7 @@ function setup(options: {
     app: sdks.app,
     timeZone: () => 'Asia/Seoul',
     locale: () => undefined,
+    now: () => Date.parse('2026-10-12T03:00:00Z'),
     ...(options.openSettings === undefined ? {} : { openSettings: options.openSettings }),
   });
   const requests: BridgeRequest[] = [];

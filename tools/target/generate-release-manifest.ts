@@ -497,10 +497,70 @@ function getSourceGitSha(kitGitSha: string): string {
   const configuredGitSha = readOptionalString(process.env.MPGD_SOURCE_GIT_SHA);
 
   if (configuredGitSha !== undefined) {
-    return configuredGitSha;
+    return requireFullGitSha(configuredGitSha, 'MPGD_SOURCE_GIT_SHA');
   }
 
-  return kitGitSha;
+  if (isInRepoKitBuild()) {
+    return inRepoKitSourceGitSha(kitGitSha);
+  }
+
+  throw new Error(
+    'MPGD_SOURCE_GIT_SHA is required for a downstream game build and must be a lowercase '
+    + '40-character SHA. Refusing to record the kit revision as the game revision.',
+  );
+}
+
+/**
+ * In-repo kit builds have no separate game checkout. Record the kit revision
+ * as the game revision only for those builds, never for a downstream game.
+ */
+function inRepoKitSourceGitSha(kitGitSha: string): string {
+  return requireFullGitSha(kitGitSha, 'in-repo kit source Git SHA');
+}
+
+function isInRepoKitBuild(): boolean {
+  if (process.env.MPGD_NATIVE_PACKAGED_BUILD === '1') {
+    return false;
+  }
+
+  const targetsFile = readOptionalString(process.env.MPGD_PLATFORM_TARGETS_FILE);
+
+  if (targetsFile === undefined) {
+    return true;
+  }
+
+  return isInsideDirectory(resolveKitRoot(), targetsFile);
+}
+
+function isInsideDirectory(root: string, candidate: string): boolean {
+  let resolvedRoot: string;
+
+  try {
+    resolvedRoot = realpathSync(root);
+  } catch {
+    return false;
+  }
+
+  const resolvedCandidate = resolve(candidate);
+  let comparable = resolvedCandidate;
+
+  try {
+    comparable = realpathSync(resolvedCandidate);
+  } catch {
+    // A missing targets file is compared lexically so a downstream path still fails closed.
+  }
+
+  const rel = relative(resolvedRoot, comparable);
+
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function requireFullGitSha(value: string, label: string): string {
+  if (!/^[0-9a-f]{40}$/u.test(value)) {
+    throw new Error(`${label} must be a lowercase 40-character SHA.`);
+  }
+
+  return value;
 }
 
 function resolveKitGitSha(): string {

@@ -192,7 +192,7 @@ const valid = assertNotificationTopicCatalog(
         optOutRoute: '/settings/notifications',
         deferrable: false,
         copy: { ko: { title: '주말 이벤트', body: '주말 이벤트가 시작됐어요.' } },
-        targets: { android: { channelId: 'advertising' }, ios: {} },
+        targets: { ios: {} },
       },
     ],
   },
@@ -468,7 +468,11 @@ assert.equal(
   true,
   'a host-template provider cannot carry the advertising label even if it lists the purpose',
 );
-assert.deepEqual(issuesOf(catalogWith({ ...advertising, targets: { android: {} } })), []);
+assert.deepEqual(issuesOf(catalogWith({ ...advertising, targets: { android: {} } })), [
+  'topics[0].targets.android: an advertising topic must not map to android until the shell '
+    + 'renders the opt-out action; an Android FCM notification message cannot carry it',
+]);
+assert.deepEqual(issuesOf(catalogWith({ ...advertising, targets: { ios: {} } })), []);
 
 // Any topic with the remote channel maps only to a provider whose purposes
 // include its purpose, or gate step 1 refuses every send (`purpose-unsupported`).
@@ -858,7 +862,8 @@ assert.deepEqual(issuesOf(catalogWith({ ...baseTopic, copy: { ko: { title: 1, bo
 // An advertising topic needs the deployment's rules, and under the Korean
 // rules the sender and the notice topic; a provider without an expiry or the
 // opt-out action cannot carry it then.
-const advertisingTopic = { ...advertising, targets: { android: {} } };
+const advertisingTopic = { ...advertising, targets: { ios: {} } };
+const advertisingNotice = { ...noticeTopic, targets: { ios: {} } };
 const advertisingCatalog = catalogWith(advertisingTopic);
 assert.deepEqual(
   validateNotificationTopicCatalog(advertisingCatalog, { targetProviders }).issues.map(
@@ -876,7 +881,7 @@ assert.deepEqual(
 // The catalog's notices block is the one notice setting: the deployment names
 // no notice topic.
 assert.deepEqual(
-  issuesOf(withNotices('consent-notice', advertisingTopic, noticeTopic), krDeployment),
+  issuesOf(withNotices('consent-notice', advertisingTopic, advertisingNotice), krDeployment),
   [],
 );
 // Without an advertising topic, or under 'none', no notice topic is needed.
@@ -894,7 +899,7 @@ for (const [deployment, path] of [
   [{ ...krDeployment, advertisingOptOutLine: '  ' }, 'deployment.advertisingOptOutLine'],
 ] as const) {
   assert.deepEqual(
-    validateNotificationTopicCatalog(withNotices('consent-notice', advertisingTopic, noticeTopic), {
+    validateNotificationTopicCatalog(withNotices('consent-notice', advertisingTopic, advertisingNotice), {
       targetProviders,
       deployment,
     }).issues.map((issue) => issue.path),
@@ -916,7 +921,11 @@ const noExpiry: NotificationProviderRegistryEntry = {
   expiry: false,
 };
 assert.ok(
-  validateNotificationTopicCatalog(withNotices('consent-notice', advertisingTopic, noticeTopic), {
+  validateNotificationTopicCatalog(withNotices(
+    'consent-notice',
+    { ...advertising, targets: { android: {} } },
+    noticeTopic,
+  ), {
     targetProviders: { android: noExpiry },
     deployment: krDeployment,
   }).issues.some((issue) =>

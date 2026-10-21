@@ -39,9 +39,15 @@ fails until the advertising sender's contact placeholder is replaced.
 
 ## What each target supports {#targets}
 
+<!--
+@link ../adapters/capacitor/src/notifications-provider.ts#createCapacitorNotificationProvider Android and iOS remote purposes match the standard FCM registry, including advertising.
+@link ../packages/catalog/src/notification-topics.ts#validateNotificationTopicCatalog An advertising topic must not map to android until the shell renders the opt-out action.
+@evidence specs/notifications/notifications-v2-rfc.md#profile-capacitor Map no advertising topic to Android until the shell renders the opt-out action.
+-->
+
 | Target | Consent UI | Remote | Local reminders | Opens | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Android (Capacitor) | OS dialog for the app; on Android 13+ two denials leave only settings (a dismissed dialog counts none) | FCM, `service` and `requested`; no advertising until the shell renders it with the opt-out action | yes, inexact | push data `route` | Channels per purpose; an advertising topic, once mapped, gets its own. |
+| Android (Capacitor) | OS dialog for the app; on Android 13+ two denials leave only settings (a dismissed dialog counts none) | FCM, all three purposes, matching the standard registry. Map no advertising topic to Android until the shell renders the opt-out action; the catalog validator refuses that mapping | yes, inexact | push data `route` | Channels per purpose; an advertising topic, once the shell can render it, gets its own. |
 | iOS (Capacitor) | OS dialog, once; a denial leaves only settings | FCM (relayed to APNs), all three purposes | yes, at most 64 pending | push data `route` | Advertising pushes carry the opt-out action through the `mpgd-advertising` category. |
 | Apps in Toss | A Toss sheet per topic, from a tap | Functional messages (`service`, `requested`) through the partner API | no | landing URL per console template | No advertising, and functional messages may not carry benefits or retention content: check that a reminder qualifies before mapping it (the starter maps none). Each topic maps `targets.ait` to the console template code and `agreement`. Toss gives no read, so the backend record decides. |
 | Reddit (Devvit) | The game's own toggle, from a tap; the player must be logged in | Devvit notifications (`service`, `requested`), copy pre-approved by Devvit admins | no | the linked post | Gated beta: keep `integrations.notifications` at `approval-required` until Reddit approves the app. Each send needs a post or comment link. |
@@ -108,15 +114,37 @@ Rules the starter's settings screen follows, and your own screen must too:
   `setTopicPreference`, and `setAdvertisingConsent` with the consent text
   version. The backend's policy gate decides every send from those records.
 
-> **The runtime is not in the kit yet.** Composing the provider with the
-> backend needs a game-services client for the Worker's notification routes,
-> and those routes need the identity side's session binding. Until both ship,
-> `createStarterNotificationBackend` in the starter returns `undefined`. The
-> settings screen then asks for the OS or host permission (and withdraws a
-> Devvit opt-in the game rendered), shows no reminder, advertising, or night
-> switch, and says why. Return your own `NotificationRuntime` there, with
-> `listConsent` reading the player's consent records (`GET /consent` on the
-> game-services Worker), if your backend implements the routes.
+> **The runtime needs a session.** `createNotificationRuntime` in
+> `@mpgd/platform/notifications-runtime` composes the provider with a
+> backend; `createGameServicesNotificationsClient` in
+> `@mpgd/game-services/notifications/client` is that backend over the
+> game-services Worker's notification routes. The Worker binds each request
+> to the session its `Authorization` header names, through the identity
+> service's `NotificationSessions` binding, which lives in the game's own
+> identity Worker ([Sessions](./CLOUDFLARE_WORKER_DEPLOY.md)). The starter's
+> `createStarterNotificationBackend` builds both when the game has a
+> game-services URL (`VITE_MPGD_GAME_SERVICES_URL`) and sets its
+> server-backed session with `setStarterServerSession`
+> (`src/platform/serverSession.ts`): the signed-in `{ playerId, sessionId }`,
+> a sign-in subscription, and the session's header, which the commerce
+> client then sends too. `sessionId` must be the stable session-family id:
+> the `sessionId` the identity service answers to
+> `authenticateNotificationSession` for that header, the same across token
+> refreshes. A `GuestSessionCoordinator` view's `sessionId` may rotate on
+> refresh, so do not pass it as that id. Without a URL or a session (or
+> with a production URL the commerce rule refuses, or no notifications
+> provider) it returns `undefined`, and the settings screen asks for the OS or host
+> permission (and withdraws a Devvit opt-in the game rendered), shows no
+> reminder, advertising, or night switch, and says why. A Reddit game gets
+> no Worker backend either: its notifications backend is the Devvit server.
+> The runtime compares its provider with the Worker's registry entry for the
+> target (`GET /providers`), and runs without the check when the Worker
+> cannot be reached or lists no entry for the target. The runtime keeps its last registration, push
+> address included, in the platform storage, like other game data. A game
+> created before this release has no `serverSession.ts`; `mpgd target init
+> capacitor --providers notifications` writes one, and its commerce client
+> sends the header only once `gameServices.ts` passes it, as the starter's
+> now does.
 
 Notification opens are hints, never grants: an open carries a route and
 untrusted data, and anything worth claiming goes through the server. The
@@ -247,6 +275,12 @@ invitation to buy.
      Devvit needs its pre-approved `title` (60) and `body` (100 characters).
    - **Copy** must include the catalog's `defaultLocale`; `{{name}}`
      placeholders are filled from the reminder's or send's template data.
+     A server reminder whose data cannot fill every locale copy, or the
+     target mapping's own title and body, is refused when it is set,
+     including a host-template provider whose mapping supplies its own title
+     and body (its catalog copy is not filled).
+     <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
+     <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#reminders -->
 2. Run `pnpm validate:notifications`.
 3. Give the Worker the new catalog (`MPGD_NOTIFICATIONS_CATALOG`) and, for
    Reddit, redeploy the Devvit app, whose server reads the catalog at build

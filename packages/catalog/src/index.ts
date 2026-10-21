@@ -11,12 +11,23 @@ export type AdPlacementTarget = string;
 /** Currencies a catalog accepts when it declares none. The kit adds no wallet currency literal. */
 export const defaultCatalogCurrencies = Object.freeze(['coin', 'gem'] as const);
 
+/**
+ * A ledger quantity: finite, greater than zero, and a safe integer.
+ * Scaling `amount * quantity` of two safe integers stays finite, and JSON
+ * round-trips the same integer.
+ */
+type PositiveLedgerAmount = number
+  & tags.Minimum<1>
+  & tags.Maximum<9007199254740991>
+  & tags.MultipleOf<1>;
+
 export type ProductGrant =
   | {
       readonly type: 'currency';
       /** Must be declared by the catalog's `currencies` list (default `coin`, `gem`). */
       readonly currency: string & tags.MinLength<1>;
-      readonly amount: number;
+      /** Positive safe integer credited to `currency`. */
+      readonly amount: PositiveLedgerAmount;
     }
   | {
       readonly type: 'entitlement';
@@ -56,11 +67,13 @@ export interface FrequencyCap {
 export type AdReward =
   | {
       readonly type: 'continue';
-      readonly amount: number;
+      /** Positive safe integer count of continues. Not a fraction or a duration. */
+      readonly amount: PositiveLedgerAmount;
     }
   | {
       readonly type: 'currency';
-      readonly amount: number;
+      /** Positive safe integer credited to `currency`. */
+      readonly amount: PositiveLedgerAmount;
       /** Validated against the product catalog's declared currencies by `validate:ads`. */
       readonly currency: string & tags.MinLength<1>;
     };
@@ -104,6 +117,10 @@ export function assertProductCatalog(input: unknown): ProductCatalog {
       );
     }
   }
+  assertUniqueLogicalIds(
+    catalog.products.map((product) => product.id),
+    'product',
+  );
   assertUniqueNormalizedPlatformIdentifiers(
     catalog.products.map((product) => ({
       logicalId: product.id,
@@ -144,6 +161,10 @@ export function assertAdPlacements(input: unknown): AdPlacements {
     || [...sharingTargets].some((target) => target.trim() !== target || target.length === 0)) {
     throw new Error('Shared placement targets must be unique non-empty identifiers.');
   }
+  assertUniqueLogicalIds(
+    placements.placements.map((placement) => placement.id),
+    'ad placement',
+  );
   assertUniqueNormalizedPlatformIdentifiers(
     placements.placements.map((placement) => ({
       logicalId: placement.id,
@@ -185,6 +206,19 @@ function readOwnPlatformIdentifier(
 function normalizePlatformIdentifier(identifier: string | undefined): string | undefined {
   const normalized = identifier?.trim();
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+function assertUniqueLogicalIds(
+  ids: readonly string[],
+  kind: 'product' | 'ad placement',
+): void {
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) {
+      throw new Error(`Duplicate ${kind} id: ${id}.`);
+    }
+    seen.add(id);
+  }
 }
 
 function assertUniqueNormalizedPlatformIdentifiers(
