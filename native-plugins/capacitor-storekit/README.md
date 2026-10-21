@@ -54,11 +54,15 @@ over `getProducts` (subscription lookups are empty without a native call);
 a non-UUID one with `STOREKIT_CONFIGURATION_ERROR`, and the store never
 opens), answering `purchased` with the transaction, `launched` for a pending
 Ask to Buy, and `cancelled` for a dismissed sheet; `getAvailablePurchases`
-over `getTransactions`, listing unfinished transactions once (a current
-non-consumable entitlement the native side marks `unfinished: false` is not
-listed, a `revokedAt` maps to `state: 'revoked'`, and one malformed
+over `getTransactions`, listing unfinished transactions and finished durables
+once (a current non-consumable entitlement the native side marks
+`unfinished: false` stays listed so a finish that raced the ledger grant can
+still be verified; the server ledger dedupes. A finished consumable is not
+listed. A `revokedAt` maps to `state: 'revoked'`, and one malformed
 transaction is reported as a `purchaseError` without blocking its siblings);
-`finishTransaction({ transactionId, ledgerEntryId })` over the native finish;
+`finishTransaction({ transactionId, ledgerEntryId })` resolves the session
+app account token and finishes only a listed, non-revoked transaction bound
+to that token;
 `restorePurchases` over `sync`; `transactionUpdated` as `purchaseUpdated`;
 and an availability probe as `getAvailability`, probing the configured
 SKUs batch by batch until one is sold. Every purchase carries the
@@ -161,12 +165,17 @@ Call the reconciler (`monetizationRecovery.reconcile()` from
 `@mpgd/game-services`) on startup, on resume, and after the iOS plugin emits
 `transactionUpdated` for a delayed transaction (Ask to Buy, an interrupted
 checkout, a transaction finished on another device): the events can be missed
-while the game is closed, so `getAvailablePurchases` (`Transaction.unfinished`)
-is the source of truth. The reconciler sends only transactions whose
+while the game is closed, so `getAvailablePurchases` (`Transaction.unfinished`,
+plus finished non-consumables still in `currentEntitlements`) is the source
+of truth. The reconciler sends only transactions whose
 `appAccountToken` matches the current authenticated game account, verifies
 each one on the backend under its original idempotency key or returns the
 existing ledger grant, and calls `finishTransaction` only after a verified
-response with a ledger entry id. Permanently rejected and account-mismatched
+response with a ledger entry id. The StoreKit SDK and the native plugin both
+refuse to finish a transaction whose app account token is missing or does
+not match that session. A caller who can read the token from the plugin can
+still present it with a forged ledger entry id; that remaining hole needs a
+signed server finish capability. Permanently rejected and account-mismatched
 transactions are not finished: the client cannot prove content delivery for
 them, so persist that terminal result in the game-owned operation journal and
 do not run an automatic retry loop for it. An unknown backend result stays

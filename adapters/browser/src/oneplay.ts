@@ -7,7 +7,11 @@ import {
 } from '@mpgd/platform';
 import { toAdAdapter } from '@mpgd/platform/ads';
 import { createBrowserPlatformGateway, type BrowserPlatformGatewayOptions } from './index.js';
-import { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
+import {
+  clearOnePlayFullscreenOwner,
+  createOnePlayAdProvider,
+  type OnePlayRewardRequestPort,
+} from './oneplay-ads.js';
 import {
   createOnePlayCommerceProvider,
   type OnePlayCommerceProduct,
@@ -64,6 +68,7 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
   const exits = new Set<() => void>();
   const audio = new Set<(muted: boolean) => void>();
   const back = new Set<(event: NativeBackButtonEvent) => boolean | Promise<boolean>>();
+  const fullscreenScope = {};
   const report = (error: unknown) => {
     try {
       options.onError?.(error);
@@ -135,11 +140,11 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
       for (const handler of [...back].reverse()) {
         try {
           const result = handler({ canGoBack: false });
-          if (result === true) {
+          if (result === true || isPromiseLike(result)) {
+            if (isPromiseLike(result)) {
+              void Promise.resolve(result).catch(report);
+            }
             return true;
-          }
-          if (result instanceof Promise) {
-            void result.catch(report);
           }
         } catch (error) {
           report(error);
@@ -194,6 +199,9 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
     async dispose() {
       if (!disposed) {
         disposed = true;
+        if (host !== undefined) {
+          clearOnePlayFullscreenOwner(host, fullscreenScope);
+        }
         detach();
         pauses.clear();
         resumes.clear();
@@ -250,6 +258,7 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
     createOnePlayAdProvider({
       ...(host === undefined ? {} : { sdk: host }),
       placementIds,
+      fullscreenScope,
       ...(rewardRequests === undefined ? {} : { rewardRequests }),
     }),
   );
@@ -257,6 +266,7 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
   // Always installed: without the SDK, the server port, or products it reports why it cannot sell.
   const commerce = createOnePlayCommerceProvider({
     ...(host === undefined ? {} : { sdk: host }),
+    fullscreenScope,
     ...(products === undefined ? {} : { products }),
     ...(commerceServer === undefined ? {} : { server: commerceServer }),
   });
@@ -315,6 +325,12 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
     sharing: {}, leaderboard: { submitScore: async () => ({ submitted: false }), open: async () => {} },
   };
 }
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === 'object' || typeof value === 'function')
+    && value !== null
+    && typeof (value as { readonly then?: unknown }).then === 'function';
+}
+
 function validEnvironment(info: unknown): info is OnePlayEnvironment {
   if (typeof info !== 'object' || info === null) {
     return false;

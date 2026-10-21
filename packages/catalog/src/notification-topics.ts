@@ -134,7 +134,8 @@ export type NotificationTopicCatalogValidation =
  *   with the `remote` channel maps only to a provider whose `purposes`
  *   include its purpose, an `advertising` topic maps only to a provider that
  *   delivers advertising as free-form content (under the Korean rules, also
- *   with an expiry and actions, and able to carry the notice topic), and a
+ *   with an expiry and actions, and able to carry the notice topic) and must
+ *   not map to `android` until the shell renders the opt-out action, and a
  *   topic on a free-form provider has its own text: `copy`, or a `title` and
  *   a `body` in the mapping, except the notice topic, whose text is
  *   `notices.copy`;
@@ -344,7 +345,18 @@ function mappingIssues(
   // Gate step 1 refuses a send whose purpose the provider does not deliver,
   // and advertising unless the provider delivers it as free-form content,
   // which can carry the label and the sender, and under the Korean rules with
-  // an expiry and the opt-out action.
+  // an expiry and the opt-out action. An Android FCM notification message
+  // cannot carry that action, and the shell does not render it yet, so an
+  // advertising topic must not map to `android` even when the shared FCM
+  // registry lists the purpose (the client declares the same list so pairing
+  // does not mismatch).
+  if (topic.purpose === 'advertising' && target === 'android') {
+    issues.push({
+      path: at,
+      message: 'an advertising topic must not map to android until the shell '
+        + 'renders the opt-out action; an Android FCM notification message cannot carry it',
+    });
+  }
   if (topic.purpose === 'advertising') {
     if (!provider.purposes.includes('advertising') || provider.content !== 'free-form') {
       issues.push({

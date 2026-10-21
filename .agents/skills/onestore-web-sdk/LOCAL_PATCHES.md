@@ -1,10 +1,16 @@
 # Local integration corrections
 
-The installed upstream skill lock records the upstream revision, not these local edits.
-`references/game-template.html.txt` adds a shared game bootstrap and a mandatory game-owned
-purchase verification/reconciliation hook (Kit review #398). After running `skills add`,
-review and reapply these corrections if upstream has not incorporated them. The template
-hook intentionally fails closed until the game supplies its authenticated backend.
-Tower uses the tested PlatformGateway implementation instead of this illustrative HTML.
+`skills-lock.json` `computedHash` is the reviewed SHA-256 of this installed skill directory after the local corrections below, not the raw `npx skills` hash of upstream. `pnpm oneplay:skill:check` recomputes that digest (every regular file, CRLF normalized to LF at the byte level for text files only and without decoding file bytes, other files hashed unchanged, paths sorted with `en` localeCompare, each entry an 8-byte big-endian length of the UTF-8 relative path, those path bytes, an 8-byte big-endian length of the file bytes, then those bytes) and rejects a mismatch. It also rejects a refresh that drops the corrections below even if the lock hash is rewritten.
 
-The payment checklist distinguishes transaction correlation from account mapping; PNS is a backup signal rather than a delivery guarantee.
+After `npx skills add ONE-store/onestore_web_sdk_skills`, reapply these corrections and update `computedHash` to the new reviewed hash before the drift check can pass. Do not adopt upstream text that tells the client to invent `developerPayload` or `requestId`.
+
+## Corrections
+
+- `references/game-template.html.txt` adds a shared game bootstrap and a mandatory game-owned purchase verification hook. That hook fails closed until the game supplies its authenticated backend. Tower uses the tested PlatformGateway implementation instead of this illustrative HTML.
+- `references/sdk-context.md` treats PNS as a backup signal, not a delivery guarantee. Independently verify purchases through the server API. Do not grant from the client purchase result or from PNS alone.
+- `SKILL.md` section 4, `references/checks.md` A12-1, `references/sdk-context.md`, and the HTML sample require a server-issued opaque developerPayload bound to an authenticated checkout intent. They do not accept an account key in that slot.
+- The HTML sample obtains `developerPayload` from `issueCheckoutIntent({ productId, platformProductId, idempotencyKey })` and `requestId` from `issueRewardRequest({ placementId, platformPlacementId, idempotencyKey })`. Both throw until the game implements the authenticated server endpoint. The logical catalog id and the ONEconsole id are separate: the SDK call uses the ONEconsole id. An unknown rewarded-ad outcome leaves the button disabled until reload and reconciliation. Client-generated request ids are not allowed.
+- `references/checks.md` A10 and B6 require a server-issued `requestId` bound to the authenticated session, not merely a present `requestId`. `references/sdk-context.md` requires that server-issued request id; issuing it on the server is not optional. There is no separate doctor runner in `tools/oneplay`; the drift check keeps this wording.
+- `SKILL.md` required-values table and copyable form include checkout-intent issuance. That endpoint belongs to the game server, not ONEconsole. They also collect the logical catalog placement ID and logical catalog product ID separately from the ONEconsole placement ID and SKU. Copying the ONEconsole ID into the logical slot makes the authenticated issuer fail its catalog lookup when the two differ.
+
+The payment checklist distinguishes transaction correlation from account mapping.

@@ -1,5 +1,13 @@
 # @mpgd/platform
 
+## 0.27.0 — 2026-10-21
+
+### Added
+
+- [f772a896](https://github.com/imjlk/mpgd-kit/commit/f772a8964437d512349736e609668792b480fbc1) `@mpgd/platform/notifications-runtime` is the production notifications runtime (RFC "Runtime"): `createNotificationRuntime({ provider, backend, catalog, defaultLocale })` composes a target's provider with the game backend for the authenticated player and returns the `NotificationRuntime` with `start`, `stop`, and `runUntilIdle`. The backend is the `NotificationRuntimeBackend` port, which `@mpgd/game-services/notifications/client` implements over the game-services Worker. What survives a restart (the last acknowledged registration and the unbound state after `unregister()`) goes through the `NotificationRuntimeStorage` port: `createNotificationRuntimeStorage({ storage: gateway.storage })` keeps it under one platform storage key, and without a port it lives in memory. A storage read or write that fails surfaces as a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and `onError` observes background failures as they happen. `loadRegistryEntry` fetches the backend's registry entry at `start()` (for example the Worker's `GET /providers`); a load that fails is reported and the runtime starts without the comparison. A sign-in the runtime did not observe (before `start()`, or while stopped) still registers at the next start or read: when the last acknowledged registration names another player or session, when nothing was acknowledged yet, and after `unregister()` when the session differs from the one it left.
+  
+  `createNotificationConformanceRuntime` now returns this runtime, so every conformance vector exercises production code; its inputs and the vector results are unchanged. Its runtime now also behaves as above where no vector looks: it registers for a sign-in it did not observe, keeps `unboundSession` in the storage object, and reads that object through `notificationRuntimeStateOf`, so a hand-built object that is not a runtime state reads as empty. `NotificationConformanceBackendClient`, `NotificationConformanceSession`, and `NotificationConformanceReminderSetStatus` extend or alias the new runtime types. — Thanks @imjlk!
+
 ## 0.26.0 — 2026-10-20
 
 ### Changed

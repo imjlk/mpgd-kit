@@ -25,6 +25,8 @@ const defaultSnapshotLimit = 10;
 const defaultTransactionAttempts = 3;
 const maximumTransactionAttempts = 32;
 const keyPrefixPattern = /^[A-Za-z0-9:_-]{1,128}$/;
+/** The commit marker's value; its SET replies `OK`, which `@devvit/redis` always maps. */
+const commitMarkerValue = '1';
 
 export interface DevvitVerifiedLeaderboardRedisMember {
   readonly member: string;
@@ -71,6 +73,8 @@ interface BoardKeys {
   readonly attempts: string;
   readonly entries: string;
   readonly ranking: string;
+  /** SET last in every write. Its `OK` always maps, so an abort cannot look committed. */
+  readonly commitMarker: string;
   readonly watched: string[];
 }
 
@@ -182,14 +186,25 @@ export function createDevvitRedisVerifiedLeaderboardService(
           await transaction.hSet(keys.attempts, {
             [attemptMember]: serializeAttemptDecision(request.attempt, response),
           });
+          // `@devvit/redis` `TxClient.exec()` resolves an aborted WATCH as `[]`
+          // and drops zero or nil replies. The marker's `OK` always maps, so a
+          // committed EXEC answers at least that reply even when the array is
+          // shorter than the queued commands. Only an empty, `null`, or all-nil
+          // result is an abort. Requiring `results.length === queued` would
+          // retry a landed score whose zero replies Devvit dropped.
+          await transaction.set(keys.commitMarker, commitMarkerValue);
           const results = await transaction.exec();
 
-          if (results === null || (Array.isArray(results) && results.length === 0)) {
-            continue;
+          if (results !== null && !Array.isArray(results)) {
+            throw new Error('Devvit Redis transaction returned an unsupported response.');
           }
 
-          if (!Array.isArray(results)) {
-            throw new Error('Devvit Redis transaction returned an unsupported response.');
+          if (
+            results === null
+            || results.length === 0
+            || results.every((reply) => reply === null || reply === undefined)
+          ) {
+            continue;
           }
 
           return response;
@@ -268,6 +283,7 @@ async function createBoardKeys(keyPrefix: string, leaderboardId: string): Promis
     attempts: `${base}:attempts`,
     entries: `${base}:entries`,
     ranking: `${base}:ranking`,
+    commitMarker: `${keyPrefix}:commit`,
   };
 
   return {

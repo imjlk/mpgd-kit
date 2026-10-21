@@ -512,6 +512,7 @@ export const notificationsCapacitorGateways: Readonly<Record<'android' | 'ios', 
 export const notificationsCapacitorGatewayModules: readonly string[] = Object.freeze([
   'src/platform/capacitorNotifications.ts',
   'src/platform/notifications.ts',
+  'src/platform/notificationBackend.ts',
   'src/platform/notificationSettings.ts',
   'src/platform/notificationOpens.ts',
 ]);
@@ -527,6 +528,15 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
   'notifications/deployment.json',
   'tools/validate-notifications.ts',
   'docs/NOTIFICATIONS.md',
+]);
+
+/**
+ * Files of the base game template the notifications modules import, which a
+ * game created by an earlier CLI release may not have: written from the
+ * template when missing, kept when the game has one.
+ */
+export const notificationsCapacitorTemplateSupportFiles: readonly string[] = Object.freeze([
+  'src/platform/serverSession.ts',
 ]);
 
 /** Whether a Capacitor gateway already registers a notifications provider. */

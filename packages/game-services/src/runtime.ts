@@ -267,6 +267,16 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
+/**
+ * Whether a game-services URL may carry a session's credentials in a
+ * production build: an absolute https URL with no credentials and a public
+ * host, the rule the authoritative commerce backend follows. The
+ * notifications client's starter wiring uses it too.
+ */
+export function isPublicGameServicesUrl(baseUrl: string): boolean {
+  return isPublicHttpsUrl(parseAbsoluteUrl(baseUrl.trim()));
+}
+
 function isPublicHttpsUrl(url: URL | undefined): boolean {
   return url !== undefined
     && url.protocol === 'https:'

@@ -7,6 +7,7 @@ import {
   GameServicesBackendError,
   GameServicesBackendTransportError,
   GameServicesHeaderResolutionError,
+  isPublicGameServicesUrl,
   resolveGameServicesAuthorityMode,
   resolveGameServicesTransport,
   type GameServicesBackendApi,
@@ -710,6 +711,39 @@ assertEqual(
   'unsupported_target',
   'unsupported targets should report their reason',
 );
+
+// The production URL rule the starter's notifications wiring shares with commerce.
+for (const accepted of [
+  'https://services.example',
+  'https://services.example/api/',
+  ' https://8.8.8.8 ',
+]) {
+  if (!isPublicGameServicesUrl(accepted)) {
+    throw new Error(`isPublicGameServicesUrl refused ${accepted}.`);
+  }
+}
+for (const refused of [
+  'http://services.example',
+  'https://user:pw@services.example',
+  'https://localhost',
+  'https://localhost.',
+  'https://game.local',
+  'https://127.0.0.1',
+  'https://10.0.0.5',
+  'https://192.168.1.2',
+  'https://169.254.169.254',
+  'https://[::1]',
+  'https://[fd00::1]',
+  'https://[::ffff:7f00:1]',
+  'https://[::ffff:10.0.0.1]',
+  'https://a.localhost',
+  'not a url',
+  '',
+]) {
+  if (isPublicGameServicesUrl(refused)) {
+    throw new Error(`isPublicGameServicesUrl accepted ${refused}.`);
+  }
+}
 
 console.log('GameServices runtime authority smoke test passed.');
 

@@ -30,6 +30,13 @@ export interface FakeNotificationRedis extends DevvitNotificationRedis {
   /** Marks a key as written by another client without changing it, as a WATCH sees it. */
   touch(key: string): void;
   keys(): readonly string[];
+  /**
+   * Makes `hMGet` throw. Devvit documents it as an allowlisted command that
+   * may be disabled per app; the store must not call it.
+   */
+  disableHMGet(): void;
+  /** The allowlisted command the store must not call. Throws after `disableHMGet`. */
+  hMGet(key: string, fields: string[]): Promise<(string | null)[]>;
 }
 
 type Entry =
@@ -41,6 +48,7 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
   const data = new Map<string, Entry>();
   const versions = new Map<string, number>();
   let aborted = 0;
+  let hmGetDisabled = false;
   const tick = (): Promise<void> => new Promise((resolve) => {
     setImmediate(resolve);
   });
@@ -226,8 +234,14 @@ export function createFakeNotificationRedis(): FakeNotificationRedis {
     },
     async hMGet(key, fields) {
       await tick();
+      if (hmGetDisabled) {
+        throw new Error('Redis command not allowed: HMGET');
+      }
       const stored = hash(key, false);
       return fields.map((field) => stored?.get(field) ?? null);
+    },
+    disableHMGet() {
+      hmGetDisabled = true;
     },
     async zRange(key, start, stop, options) {
       await tick();
