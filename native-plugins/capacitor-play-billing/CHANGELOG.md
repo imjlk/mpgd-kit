@@ -1,5 +1,12 @@
 # @mpgd/capacitor-play-billing
 
+## 0.3.6 — 2026-10-21
+
+### Patch changes
+
+- [bdb34e19](https://github.com/imjlk/mpgd-kit/commit/bdb34e199439f523784bc80bf48de5b822800fc1) Unfinished Google Play purchases whose SKU is no longer in the client catalog, and purchases that name more than one product id, are listed and emitted with their token and product ids. The reconciler can submit a retired SKU when a logical id is still known. Otherwise it fails that purchase's catalog lookup visibly instead of dropping the token. The client still does not acknowledge or consume; the server finalizer does that only after a ledger grant, and it has no path that can acknowledge a token without a logical product id. — Thanks @imjlk!
+- Updated dependencies: @mpgd/adapter-capacitor@0.12.2, @mpgd/bridge@0.14.3, @mpgd/game-services@0.27.1, @mpgd/platform@0.27.1
+
 ## 0.3.5 — 2026-10-21
 
 ### Patch changes

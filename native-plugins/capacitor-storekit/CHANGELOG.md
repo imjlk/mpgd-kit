@@ -1,5 +1,12 @@
 # @mpgd/capacitor-storekit
 
+## 0.3.6 — 2026-10-21
+
+### Patch changes
+
+- [e1404d85](https://github.com/imjlk/mpgd-kit/commit/e1404d8538a84c4cdc42e5b90690876208bb30c4) Keep a finished App Store durable listed so a finish that raced the ledger grant can still be verified, and finish a transaction only when its app account token matches the session. `commerce.v2.finishTransaction` uses that same check. A forged ledger entry id paired with a token read from the plugin is still not a signed server finish capability. — Thanks @imjlk!
+- Updated dependencies: @mpgd/adapter-capacitor@0.12.2, @mpgd/bridge@0.14.3, @mpgd/game-services@0.27.1, @mpgd/platform@0.27.1
+
 ## 0.3.5 — 2026-10-21
 
 ### Patch changes

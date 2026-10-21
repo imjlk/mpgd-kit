@@ -1,5 +1,12 @@
 # @mpgd/adapter-devvit
 
+## 0.13.4 — 2026-10-21
+
+### Patch changes
+
+- [0e87e83e](https://github.com/imjlk/mpgd-kit/commit/0e87e83e893dcbfa00a17f54b0d7a943a2e328b3) Page Devvit paid orders until the cursor ends, and fail the listing when the scan cap leaves pages unread, so a still-paid order behind newer canceled orders is not treated as delivered. A verified-leaderboard Redis transaction now ends with a commit marker and treats an empty or nil-only EXEC as an abort. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.14.3, @mpgd/game-services@0.27.1, @mpgd/platform@0.27.1
+
 ## 0.13.3 — 2026-10-21
 
 ### Patch changes

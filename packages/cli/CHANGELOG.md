@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.54.1 — 2026-10-21
+
+### Patch changes
+
+- [fef49ab1](https://github.com/imjlk/mpgd-kit/commit/fef49ab1919026405c27c3d8466825c346a4dcaa) `mpgd target build` and `mpgd target build-all` no longer record `uncommitted` or the kit commit as the game revision when the game checkout cannot be resolved. A missing or invalid `MPGD_SOURCE_GIT_SHA` fails those builds. Verification and preparation commands (`target smoke`, `smoke-all`, `doctor`, icon operations, and submission preflight) do not require a resolvable game revision. Release manifests now require `gitSha` to be a lowercase 40-character SHA, matching `kitGitSha`, and require effective-config and icon digests to be lowercase 64-character SHA-256 hex. — Thanks @imjlk!
+- [dbc4e240](https://github.com/imjlk/mpgd-kit/commit/dbc4e2401f39563fc65ab0fb0663ff772297b8e9) `mpgd legal build` keeps legal sources and the generated site inside the project. A symlinked `artifacts` directory, a symlinked legal page such as `legal/privacy.html`, or any other symlink component on `legal-dir` or `out-dir`, is refused, including when the link target is also inside the project. The site is published by renaming a temporary directory created on the destination filesystem, so a crash cannot leave a truncated page and a mounted `artifacts` directory does not fail the rename with `EXDEV`.
+  
+  `mpgd kit upgrade` re-checks the planned game root, manifests, and lockfiles for symlink components immediately before each write, including rollback, and publishes those writes by renaming a temporary file. A game directory or parent swapped for a symlink after planning is no longer followed, and a `package.json` or lockfile swapped for a same-bytes symlink is no longer followed. — Thanks @imjlk!
+- Updated dependencies: @mpgd/adapter-ait@0.20.2, @mpgd/adapter-browser@0.11.6, @mpgd/adapter-capacitor@0.12.2, @mpgd/adapter-devvit@0.13.4, @mpgd/adapter-verse8@0.7.6, @mpgd/analytics@0.4.15, @mpgd/bridge@0.14.3, @mpgd/capacitor-play-billing@0.3.6, @mpgd/capacitor-storekit@0.3.6, @mpgd/catalog@0.10.6, @mpgd/game-runtime@0.7.6, @mpgd/game-services@0.27.1, @mpgd/i18n@0.6.20, @mpgd/platform@0.27.1, @mpgd/target-config@0.23.6
+
 ## 0.54.0 — 2026-10-21
 
 ### Patch changes
