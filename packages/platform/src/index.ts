@@ -239,6 +239,11 @@ export type PromotionRewardResult =
       readonly status: 'granted';
       /** Opaque provider receipt used by the game backend to finalize the authorized claim. */
       readonly receiptKey: string;
+      /** Optional host-carried result of an already completed authority request. This is untrusted
+       * metadata, not payout evidence. The game must validate its schema, account/campaign/claim,
+       * receipt and freshness before skipping a duplicate finalize. Missing/invalid metadata must
+       * retain normal authoritative recovery. Never persist it or forward it as a server grant. */
+      readonly authorityConfirmation?: unknown;
     }
   | {
       readonly status: 'pending' | 'unavailable' | 'failed';
