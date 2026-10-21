@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const fixtureRoot = resolve('node_modules/.cache/mpgd-cli-game-release-inputs');
@@ -86,6 +87,8 @@ writeFileSync(process.env.MPGD_CAPTURE_FILE, JSON.stringify({
     }),
     'blank explicit fallback',
   );
+  assertMissingGameRevisionFailsClosed();
+  assertInvalidSourceGitShaFailsClosed();
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
 }
@@ -149,6 +152,97 @@ function runCliCapture(
   }
 
   return JSON.parse(readFileSync(captureFile, 'utf8')) as Record<string, string>;
+}
+
+function assertMissingGameRevisionFailsClosed(): void {
+  const outsideRoot = mkdtempSync(join(tmpdir(), 'mpgd-cli-game-sha-'));
+
+  try {
+    const outsideGame = join(outsideRoot, 'game');
+    const outsideTargets = join(outsideGame, 'mpgd.targets.json');
+    const captureFile = join(outsideRoot, 'captured.json');
+    mkdirSync(outsideGame, { recursive: true });
+    writeJson(join(outsideGame, 'package.json'), {
+      name: '@fixture/game',
+      version: '1.2.3',
+    });
+    writeJson(outsideTargets, {
+      targets: {
+        reddit: {
+          kind: 'devvit-web',
+          gameApp: '.',
+          wrapperApp: 'apps/target-devvit',
+          adapter: 'devvit',
+          webDir: 'apps/target-devvit/dist/client',
+          artifact: 'devvit',
+        },
+      },
+    });
+
+    const output = runCliExpectFailure(captureFile, outsideTargets);
+    assert.match(output, /game source Git revision/u);
+    assert.equal(output.includes('uncommitted'), false);
+    assert.equal(existsSync(captureFile), false);
+  } finally {
+    rmSync(outsideRoot, { force: true, recursive: true });
+  }
+}
+
+function assertInvalidSourceGitShaFailsClosed(): void {
+  const captureFile = join(fixtureRoot, 'captured-invalid-sha.json');
+  const output = runCliExpectFailure(captureFile, targetsFile, {
+    MPGD_SOURCE_GIT_SHA: 'uncommitted',
+  });
+  assert.match(output, /lowercase 40-character game source SHA/u);
+  assert.equal(existsSync(captureFile), false);
+}
+
+function runCliExpectFailure(
+  captureFile: string,
+  selectedTargetsFile: string,
+  overrides: NodeJS.ProcessEnv = {},
+): string {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  delete env.APP_VERSION;
+  delete env.MPGD_SOURCE_GIT_SHA;
+  delete env.MPGD_PRODUCT_CATALOG_FILE;
+  delete env.MPGD_AD_PLACEMENTS_FILE;
+  Object.assign(env, overrides, { MPGD_CAPTURE_FILE: captureFile });
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      'tools/run-ttsx.mjs',
+      '--mpgd-cli',
+      'packages/cli/src/bin.ts',
+      'target',
+      'build',
+      'reddit',
+      '--targets-file',
+      selectedTargetsFile,
+      '--kit-path',
+      kitRoot,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env,
+      timeout: 30_000,
+    },
+  );
+
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  assert.notEqual(
+    result.status,
+    0,
+    `CLI fixture unexpectedly succeeded:\\n${result.stderr || result.stdout || '(no output)'}`,
+  );
+
+  return result.stderr || result.stdout || '(no output)';
 }
 
 function assertReleaseInputs(captured: Record<string, string>, source: string): void {

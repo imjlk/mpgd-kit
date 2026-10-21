@@ -19,6 +19,7 @@ import {
 } from '@mpgd/release-manifest';
 
 import { requireCanonicalAppVersion } from '../target/app-version';
+import { resolveReleaseProvenance } from '../target/generate-release-manifest';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-release-manifest-'));
 const firstCatalogFile = join(tempDir, 'catalog-v1.json');
@@ -54,6 +55,7 @@ const nestedKitParent = join(tempDir, 'game-repository');
 const fakeGitDir = join(tempDir, 'bin');
 const firstKitGitSha = '1111111111111111111111111111111111111111';
 const secondKitGitSha = '2222222222222222222222222222222222222222';
+const gameSourceGitSha = 'cccccccccccccccccccccccccccccccccccccccc';
 let manifestRunCount = 0;
 
 try {
@@ -72,11 +74,11 @@ try {
 
   runManifest('web-preview', firstCatalogFile, matchingManifestFile, {
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   runManifest('microsoft-store', firstCatalogFile, matchingManifestFile, {
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
 
   const matchingManifest = readManifest(matchingManifestFile);
@@ -166,7 +168,7 @@ try {
   );
 
   assertManifestMatchesTopLevelSchema(matchingManifest);
-  assert.equal(matchingManifest.gitSha, 'game-source-sha');
+  assert.equal(matchingManifest.gitSha, gameSourceGitSha);
   assert.equal(matchingManifest.kitGitSha, firstKitGitSha);
   assert.match(matchingManifest.kitGitSha, /^[0-9a-f]{40}$/u);
   for (const invalidKitGitSha of [
@@ -182,6 +184,52 @@ try {
       /kitGitSha must be a lowercase 40-character SHA/u,
     );
   }
+  for (const invalidGitSha of [
+    'uncommitted',
+    'game-source-sha',
+    'a'.repeat(39),
+    'A'.repeat(40),
+    `sha256:${'a'.repeat(64)}`,
+  ]) {
+    assert.throws(
+      () => assertReleaseManifest({ ...matchingManifest, gitSha: invalidGitSha }),
+      /gitSha must be a lowercase 40-character SHA/u,
+    );
+  }
+  const webPreviewTarget = matchingManifest.targets['web-preview'];
+  assert.ok(webPreviewTarget);
+  assert.throws(
+    () =>
+      assertReleaseManifest({
+        ...matchingManifest,
+        targets: {
+          'web-preview': {
+            ...webPreviewTarget,
+            effectiveConfig: {
+              ...webPreviewTarget.effectiveConfig,
+              digest: `sha256:${'a'.repeat(64)}`,
+            },
+          },
+        },
+      }),
+    /effectiveConfig\.digest must be a lowercase 64-character SHA-256/u,
+  );
+  assert.throws(
+    () =>
+      assertReleaseManifest({
+        ...matchingManifest,
+        targets: {
+          'web-preview': {
+            ...webPreviewTarget,
+            iconManifest: {
+              ...webPreviewTarget.iconManifest,
+              sourceSha256: 'not-a-digest',
+            },
+          },
+        },
+      }),
+    /iconManifest\.sourceSha256 must be a lowercase 64-character SHA-256/u,
+  );
   assert.deepEqual(Object.keys(matchingManifest.targets).sort(), [
     'microsoft-store',
     'web-preview',
@@ -203,7 +251,7 @@ try {
   writeFileSync(legacyManifestFile, `${JSON.stringify(legacyManifest, null, 2)}\n`);
   runManifest('web-preview', firstCatalogFile, legacyManifestFile, {
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   const mergedLegacyManifest = readManifest(legacyManifestFile);
   assert.deepEqual(mergedLegacyManifest.releaseIdentity, {
@@ -218,7 +266,7 @@ try {
   runManifest('web-preview', firstCatalogFile, legacyPrereleaseManifestFile, {
     appVersion: '1.0.0-v42',
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   const legacyPrereleaseManifest = { ...readManifest(legacyPrereleaseManifestFile) };
   Reflect.deleteProperty(legacyPrereleaseManifest, 'releaseIdentity');
@@ -230,7 +278,7 @@ try {
     appVersion: '1.0.0',
     kitGitShas: [firstKitGitSha],
     releaseRevision: 42,
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   assert.deepEqual(Object.keys(readManifest(legacyPrereleaseManifestFile).targets), [
     'microsoft-store',
@@ -239,12 +287,12 @@ try {
   runManifest('web-preview', firstCatalogFile, releaseIdentityManifestFile, {
     kitGitShas: [firstKitGitSha],
     releaseRevision: 42,
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   runManifest('microsoft-store', firstCatalogFile, releaseIdentityManifestFile, {
     kitGitShas: [firstKitGitSha],
     releaseRevision: 42,
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   const releaseIdentityManifest = readManifest(releaseIdentityManifestFile);
   assert.deepEqual(releaseIdentityManifest.releaseIdentity, {
@@ -260,7 +308,7 @@ try {
   runManifest('web-preview', firstCatalogFile, releaseIdentityManifestFile, {
     kitGitShas: [firstKitGitSha],
     releaseRevision: 43,
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   assert.deepEqual(Object.keys(readManifest(releaseIdentityManifestFile).targets), ['web-preview']);
 
@@ -272,51 +320,51 @@ try {
       expectedReleaseLabel: '1.0.0-v99',
       kitGitShas: [firstKitGitSha],
       releaseRevision: 43,
-      sourceGitSha: 'game-source-sha',
+      sourceGitSha: gameSourceGitSha,
     },
   );
   assert.match(invalidReleaseLabelOutput, /Release identity label must equal 1\.0\.0-v43/u);
 
   runManifest('web-preview', firstCatalogFile, manifestFile, {
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   runManifest('microsoft-store', secondCatalogFile, manifestFile, {
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
 
   const manifest = readManifest(manifestFile);
 
   assert.equal(manifest.catalogVersion, 'game-v2');
-  assert.equal(manifest.gitSha, 'game-source-sha');
+  assert.equal(manifest.gitSha, gameSourceGitSha);
   assert.equal(manifest.kitGitSha, firstKitGitSha);
   assert.deepEqual(Object.keys(manifest.targets), ['microsoft-store']);
 
   runManifest('web-preview', firstCatalogFile, kitMismatchManifestFile, {
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   runManifest('microsoft-store', firstCatalogFile, kitMismatchManifestFile, {
     kitGitShas: [secondKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
 
   const kitMismatchManifest = readManifest(kitMismatchManifestFile);
 
-  assert.equal(kitMismatchManifest.gitSha, 'game-source-sha');
+  assert.equal(kitMismatchManifest.gitSha, gameSourceGitSha);
   assert.equal(kitMismatchManifest.kitGitSha, secondKitGitSha);
   assert.deepEqual(Object.keys(kitMismatchManifest.targets), ['microsoft-store']);
 
   runManifest('web-preview', firstCatalogFile, iconMismatchManifestFile, {
     iconSourceSha: 'a'.repeat(64),
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   runManifest('microsoft-store', firstCatalogFile, iconMismatchManifestFile, {
     iconSourceSha: 'b'.repeat(64),
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   assert.deepEqual(Object.keys(readManifest(iconMismatchManifestFile).targets), [
     'microsoft-store',
@@ -325,12 +373,12 @@ try {
   runManifest('web-preview', firstCatalogFile, iconConfigMismatchManifestFile, {
     iconSharedConfigSha: 'c'.repeat(64),
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   runManifest('microsoft-store', firstCatalogFile, iconConfigMismatchManifestFile, {
     iconSharedConfigSha: 'd'.repeat(64),
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   assert.deepEqual(Object.keys(readManifest(iconConfigMismatchManifestFile).targets), [
     'microsoft-store',
@@ -339,12 +387,12 @@ try {
   runManifest('web-preview', firstCatalogFile, targetRenderOverrideManifestFile, {
     iconRenderConfigSha: 'e'.repeat(64),
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   runManifest('microsoft-store', firstCatalogFile, targetRenderOverrideManifestFile, {
     iconRenderConfigSha: 'f'.repeat(64),
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   assert.deepEqual(Object.keys(readManifest(targetRenderOverrideManifestFile).targets).sort(), [
     'microsoft-store',
@@ -353,7 +401,7 @@ try {
   runManifest('web-preview', firstCatalogFile, targetRenderOverrideManifestFile, {
     iconRenderConfigSha: '1'.repeat(64),
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   assert.deepEqual(Object.keys(readManifest(targetRenderOverrideManifestFile).targets), [
     'web-preview',
@@ -368,13 +416,54 @@ try {
   assert.equal(snapshotManifest.gitSha, firstKitGitSha);
   assert.equal(snapshotManifest.kitGitSha, firstKitGitSha);
 
+  const previousPackaged = process.env.MPGD_NATIVE_PACKAGED_BUILD;
+  const previousPackagedSha = process.env.MPGD_PACKAGED_KIT_GIT_SHA;
+  const previousSourceSha = process.env.MPGD_SOURCE_GIT_SHA;
+  process.env.MPGD_NATIVE_PACKAGED_BUILD = '1';
+  process.env.MPGD_PACKAGED_KIT_GIT_SHA = firstKitGitSha;
+  delete process.env.MPGD_SOURCE_GIT_SHA;
+  assert.throws(
+    () => resolveReleaseProvenance(),
+    /Refusing to record the kit revision as the game revision/u,
+  );
+  restoreEnv('MPGD_NATIVE_PACKAGED_BUILD', previousPackaged);
+  restoreEnv('MPGD_PACKAGED_KIT_GIT_SHA', previousPackagedSha);
+  restoreEnv('MPGD_SOURCE_GIT_SHA', previousSourceSha);
+
+  const externalTargetsOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    join(tempDir, 'external-targets-release-manifest.json'),
+    {
+      expectedGitReadCount: 1,
+      kitGitShas: [firstKitGitSha],
+      targetsFile: tempDir,
+    },
+  );
+  assert.match(externalTargetsOutput, /Refusing to record the kit revision as the game revision/u);
+  assert.equal(existsSync(join(tempDir, 'external-targets-release-manifest.json')), false);
+
+  const uncommittedShaOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    join(tempDir, 'uncommitted-sha-release-manifest.json'),
+    {
+      expectedGitReadCount: 1,
+      kitGitShas: [firstKitGitSha],
+      sourceGitSha: 'uncommitted',
+    },
+  );
+  assert.match(uncommittedShaOutput, /lowercase 40-character SHA/u);
+  assert.doesNotMatch(uncommittedShaOutput, /Release manifest:/u);
+  assert.equal(existsSync(join(tempDir, 'uncommitted-sha-release-manifest.json')), false);
+
   const generatedEffectiveConfigFile = join(generatedBeforeProvenanceDir, 'web-preview.json');
 
   runManifest('web-preview', firstCatalogFile, generatedBeforeProvenanceManifestFile, {
     dirtyWhenPathExists: generatedEffectiveConfigFile,
     effectiveConfigDir: generatedBeforeProvenanceDir,
     kitGitShas: [firstKitGitSha],
-    sourceGitSha: 'game-source-sha',
+    sourceGitSha: gameSourceGitSha,
   });
   assert.equal(existsSync(generatedEffectiveConfigFile), true);
 
@@ -386,7 +475,7 @@ try {
       expectedGitReadCount: 1,
       gitExitCode: 65,
       kitGitShas: [firstKitGitSha],
-      sourceGitSha: 'game-source-sha',
+      sourceGitSha: gameSourceGitSha,
     },
   );
 
@@ -400,7 +489,7 @@ try {
     {
       expectedGitReadCount: 1,
       kitGitShas: [''],
-      sourceGitSha: 'game-source-sha',
+      sourceGitSha: gameSourceGitSha,
     },
   );
 
@@ -415,7 +504,7 @@ try {
       expectedGitReadCount: 0,
       gitStatusOutput: 'M  packages/release-manifest/src/index.ts',
       kitGitShas: [firstKitGitSha],
-      sourceGitSha: 'game-source-sha',
+      sourceGitSha: gameSourceGitSha,
     },
   );
 
@@ -430,7 +519,7 @@ try {
       expectedGitReadCount: 0,
       gitStatusOutput: '?? release-output/untracked-artifact.js',
       kitGitShas: [firstKitGitSha],
-      sourceGitSha: 'game-source-sha',
+      sourceGitSha: gameSourceGitSha,
     },
   );
 
@@ -445,7 +534,7 @@ try {
       expectedGitReadCount: 0,
       gitTopLevel: nestedKitParent,
       kitGitShas: [firstKitGitSha],
-      sourceGitSha: 'game-source-sha',
+      sourceGitSha: gameSourceGitSha,
     },
   );
 
@@ -460,7 +549,7 @@ try {
       expectedGitReadCount: 0,
       kitGitShas: [firstKitGitSha],
       kitPath: nestedKitParent,
-      sourceGitSha: 'game-source-sha',
+      sourceGitSha: gameSourceGitSha,
     },
   );
 
@@ -488,6 +577,15 @@ interface RunManifestOptions {
   readonly expectedReleaseLabel?: string;
   readonly releaseRevision?: number;
   readonly sourceGitSha?: string;
+  readonly targetsFile?: string;
+}
+
+function restoreEnv(name: string, previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = previous;
+  }
 }
 
 function runManifest(
@@ -558,6 +656,13 @@ function spawnManifest(
     MPGD_TEST_GIT_SHA_LATER: options.kitGitShas[1] ?? options.kitGitShas[0],
     PATH: [fakeGitDir, process.env.PATH].filter(Boolean).join(delimiter),
   };
+
+  if (options.targetsFile !== undefined) {
+    env.MPGD_PLATFORM_TARGETS_FILE = options.targetsFile;
+  }
+
+  delete env.MPGD_NATIVE_PACKAGED_BUILD;
+  delete env.MPGD_PACKAGED_KIT_GIT_SHA;
 
   if (options.releaseRevision === undefined) {
     delete env.MPGD_RELEASE_REVISION;
@@ -658,6 +763,10 @@ function assertReleaseManifestSchema(): void {
   const schema = JSON.parse(readFileSync('release.manifest.schema.json', 'utf8')) as {
     readonly required?: readonly string[];
     readonly properties?: {
+      readonly gitSha?: {
+        readonly type?: string;
+        readonly pattern?: string;
+      };
       readonly kitGitSha?: {
         readonly type?: string;
         readonly pattern?: string;
@@ -677,11 +786,18 @@ function assertReleaseManifestSchema(): void {
       };
     };
   };
+  const gitShaSchema = schema.properties?.gitSha;
   const kitGitShaSchema = schema.properties?.kitGitSha;
   const releaseRevisionSchema = schema.properties?.releaseIdentity?.properties?.releaseRevision;
 
+  assert.equal(schema.required?.includes('gitSha'), true);
   assert.equal(schema.required?.includes('kitGitSha'), true);
   assert.equal(schema.required?.includes('targetConfigVersion'), true);
+  assert.ok(gitShaSchema, 'gitSha schema must exist.');
+  assert.deepEqual(gitShaSchema, {
+    type: 'string',
+    pattern: '^[0-9a-f]{40}$',
+  });
   assert.ok(kitGitShaSchema, 'kitGitSha schema must exist.');
   assert.deepEqual(kitGitShaSchema, {
     type: 'string',

@@ -4314,8 +4314,10 @@ function createGameOwnedReleaseEnv(
   baseEnv: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   const monetizationFiles = resolveGameOwnedMonetizationFiles(gameRoot, baseEnv);
-  const sourceGitSha = readOptionalString(baseEnv.MPGD_SOURCE_GIT_SHA)
-    ?? readSourceGitSha(gameRoot);
+  const configuredSourceGitSha = readOptionalString(baseEnv.MPGD_SOURCE_GIT_SHA);
+  const sourceGitSha = configuredSourceGitSha === undefined
+    ? readSourceGitSha(gameRoot)
+    : requireSourceGitSha(configuredSourceGitSha);
   const appVersion = readOptionalString(baseEnv.APP_VERSION)
     ?? readGamePackageVersion(gameRoot);
 
@@ -4386,10 +4388,21 @@ function readSourceGitSha(gameRoot: string): string {
   });
 
   if (result.error !== undefined || result.status !== 0) {
-    return 'uncommitted';
+    throw new Error(
+      `Failed to resolve the game source Git revision for ${gameRoot}. `
+      + 'Set MPGD_SOURCE_GIT_SHA to its lowercase 40-character commit SHA.',
+    );
   }
 
-  return result.stdout.trim() || 'uncommitted';
+  return requireSourceGitSha(result.stdout.trim());
+}
+
+function requireSourceGitSha(value: string): string {
+  if (!/^[0-9a-f]{40}$/u.test(value)) {
+    throw new Error('MPGD_SOURCE_GIT_SHA must be a lowercase 40-character game source SHA.');
+  }
+
+  return value;
 }
 
 function readGamePackageVersion(gameRoot: string): string | undefined {
