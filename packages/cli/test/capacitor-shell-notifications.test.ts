@@ -247,6 +247,28 @@ try {
     );
   }
 
+  // A game that keeps its own serverSession.ts (an earlier release's) gets no
+  // developmentServerSession.ts, which nothing in it would import, and a warning.
+  {
+    const root = createGame();
+    roots.push(root);
+    const ownSession = "// the game's own session module\nexport {};\n";
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(root, 'src/platform/serverSession.ts'), ownSession);
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(plan.changedFiles.includes('src/platform/serverSession.ts'), false);
+    assert.equal(plan.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+    assert.ok(
+      plan.warnings.some((warning) => /predates development notification sessions/u.test(warning)),
+    );
+    applyCapacitorShellStarter(plan);
+    assert.equal(
+      readFileSync(path.join(root, 'src/platform/serverSession.ts'), 'utf8'),
+      ownSession,
+    );
+    assert.equal(existsSync(path.join(root, 'src/platform/developmentServerSession.ts')), false);
+  }
+
   // With the store plugins on an unwired legacy gateway, the gateway gets the
   // store wiring and the notifications wiring on top of it.
   {

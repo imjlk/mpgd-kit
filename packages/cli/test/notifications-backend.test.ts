@@ -16,7 +16,10 @@ import {
   type StarterWorkerNotificationInput,
   type StarterWorkerSession,
 } from '../templates/notifications-overlay/common/src/platform/notificationBackend.js';
-import { resolveStarterDevelopmentServerSession } from '../templates/phaser-game/src/platform/developmentServerSession.js';
+import {
+  createStarterServerSessionSlot,
+  resolveStarterDevelopmentServerSession,
+} from '../templates/phaser-game/src/platform/developmentServerSession.js';
 
 /**
  * The starter's Worker notifications backend: which targets get one, and
@@ -244,6 +247,65 @@ try {
     await backend.runtime.getPermission({ topics: ['daily-ready'] });
     console.error = () => undefined;
   }
+  // The session slot behind serverSession.ts: the game's own session wins, and
+  // a change after a reader kept the old session warns.
+  {
+    type Session = { readonly name: string };
+    const slotWith = (development: Session | undefined) => {
+      const warnings: string[] = [];
+      let developmentReads = 0;
+      const slot = createStarterServerSessionSlot<Session>({
+        development: () => {
+          developmentReads += 1;
+          return development;
+        },
+        warn: (message) => warnings.push(message),
+      });
+      return { slot, warnings, reads: () => developmentReads };
+    };
+    const dev = { name: 'dev' };
+    const own = { name: 'own' };
+    // Without a development session: nothing until the game sets one.
+    {
+      const { slot, warnings, reads } = slotWith(undefined);
+      assert.equal(slot.resolve(), undefined);
+      assert.equal(slot.resolve(), undefined);
+      assert.equal(reads(), 1);
+      slot.set(own);
+      assert.equal(slot.resolve({ once: true }), own);
+      slot.set(own);
+      assert.deepEqual(warnings, []);
+      // A change after the commerce client read the session warns.
+      slot.set({ name: 'other' });
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0] ?? '', /after the commerce client was created/u);
+    }
+    // A development session is handed out until the game sets its own, even `undefined`.
+    {
+      const { slot, warnings } = slotWith(dev);
+      assert.equal(slot.resolve(), dev);
+      slot.set(own);
+      assert.equal(slot.resolve(), own);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0] ?? '', /after the development session/u);
+      slot.set(undefined);
+      assert.equal(
+        slot.resolve(),
+        undefined,
+        'a cleared session never falls back to the development one',
+      );
+    }
+    // A game that sets its session first never sees the development one, or a warning.
+    {
+      const { slot, warnings, reads } = slotWith(dev);
+      slot.set(undefined);
+      assert.equal(slot.resolve({ once: true }), undefined);
+      slot.set(own);
+      assert.equal(reads(), 0);
+      assert.match(warnings[0] ?? '', /after the commerce client was created/u);
+    }
+  }
+
   // The guest-session adapter is the starter's server session as it stands.
   {
     const guestBackend: GuestSessionBackend = {
@@ -284,18 +346,21 @@ try {
       assert.equal(resolve(true, 'development', undefined), undefined);
       assert.equal(resolve(true, 'development', '  '), undefined);
       assert.equal(warned.length + errors.length, 0);
-      // A production mode, or an id the Worker would refuse, is ignored with a reason.
+      // Any mode but development is off; an id the Worker would refuse is ignored with a reason.
       assert.equal(resolve(true, 'production', 'player-1'), undefined);
+      assert.equal(errors.length, 0);
       assert.equal(resolve(true, 'development', 'player 1'), undefined);
       assert.equal(resolve(true, 'development', 'player-1.device-1.extra'), undefined);
-      assert.equal(errors.length, 3);
+      assert.equal(errors.length, 2);
       assert.equal(warned.length, 0);
       const defaulted = resolve(true, 'development', 'player-1');
       assert.deepEqual(defaulted?.current(), {
         playerId: 'player-1',
         sessionId: 'dev-dev-installation',
       });
-      const named = resolve(true, 'staging', ' player-2.device-2 ');
+      // Only the development mode: a staging build run with NODE_ENV=development has `dev` set too.
+      assert.equal(resolve(true, 'staging', 'player-1'), undefined);
+      const named = resolve(true, 'development', ' player-2.device-2 ');
       assert.ok(named !== undefined);
       assert.deepEqual(named.current(), { playerId: 'player-2', sessionId: 'dev-device-2' });
       assert.deepEqual(await named.getHeaders(), {

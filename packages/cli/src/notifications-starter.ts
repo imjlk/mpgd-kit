@@ -533,12 +533,32 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
 /**
  * Files of the base game template the notifications modules import, which a
  * game created by an earlier CLI release may not have: written from the
- * template when missing, kept when the game has one.
+ * template when missing, kept when the game has one. A file listed in
+ * `notificationsCapacitorTemplateSupportImporters` is written only together
+ * with its importer.
  */
 export const notificationsCapacitorTemplateSupportFiles: readonly string[] = Object.freeze([
   'src/platform/serverSession.ts',
   'src/platform/developmentServerSession.ts',
 ]);
+
+/**
+ * Template support files only one other support file imports: the importer,
+ * and the warning for a game that keeps its own importer (an earlier
+ * `serverSession.ts`). Such a game would never import the file, and its
+ * `@mpgd/game-services` may predate what the file imports, so the file is
+ * not written for it.
+ */
+export const notificationsCapacitorTemplateSupportImporters: Readonly<
+  Record<string, { readonly importer: string; readonly warning: string }>
+> = Object.freeze({
+  'src/platform/developmentServerSession.ts': {
+    importer: 'src/platform/serverSession.ts',
+    warning: 'src/platform/serverSession.ts predates development notification sessions '
+      + '(VITE_MPGD_DEV_NOTIFICATION_SESSION); to try notifications locally, copy serverSession.ts and '
+      + 'developmentServerSession.ts from the starter template.',
+  },
+});
 
 /** Whether a Capacitor gateway already registers a notifications provider. */
 export function capacitorGatewayRegistersNotifications(source: string): boolean {

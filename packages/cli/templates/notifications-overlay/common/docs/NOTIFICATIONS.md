@@ -87,7 +87,8 @@ game has both:
   void guest.start();
   ```
 
-Without either, it returns `undefined` and the settings screen asks only
+Without either (on the Vite dev server, a development session counts as a
+session; see "Try it locally"), it returns `undefined` and the settings screen asks only
 for the OS or host permission (and withdraws a Devvit opt-in the game
 rendered). With them, the runtime registers the device for the signed-in
 player, keeps its registration state in the platform storage, and
@@ -118,20 +119,31 @@ notices).
 You can see the settings switches record consent before you have an
 identity service, against the kit's game-services Worker on your machine:
 
-1. In mpgd-kit, run the Worker with the memory store (the default in
-   `apps/game-services-worker/wrangler.toml`), this game's catalog and
-   deployment, and the development sessions flag:
+1. Fill in `advertisingSender` in `notifications/deployment.json` (the
+   Worker refuses a placeholder). In mpgd-kit, give the Worker this game's
+   catalog and deployment and the development sessions flag in
+   `apps/game-services-worker/.dev.vars` (local variables, never
+   committed), then run it with the memory store, the default in its
+   `wrangler.toml`:
 
    ```sh
-   cd <mpgd-kit>/apps/game-services-worker
-   pnpm exec wrangler dev --port 8787 \
-     --var MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS:true \
-     --var "MPGD_NOTIFICATIONS_CATALOG:$(node -p 'JSON.stringify(require("<game>/notifications/topics.json"))')" \
-     --var "MPGD_NOTIFICATIONS_DEPLOYMENT:$(node -p 'JSON.stringify(require("<game>/notifications/deployment.json"))')"
+   cd <mpgd-kit>
+   node - <game>/notifications/topics.json <game>/notifications/deployment.json \
+     > apps/game-services-worker/.dev.vars <<'EOF'
+   const fs = require('node:fs');
+   // One line of JSON in single quotes, with any ' written as \u0027.
+   const value = (file) =>
+     `'${JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8'))).replaceAll("'", '\\u0027')}'`;
+   console.log('MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true');
+   console.log(`MPGD_NOTIFICATIONS_CATALOG=${value(process.argv[2])}`);
+   console.log(`MPGD_NOTIFICATIONS_DEPLOYMENT=${value(process.argv[3])}`);
+   EOF
+   pnpm --dir apps/game-services-worker dev --port 8787
    ```
 
-   Add an FCM service-account key (`FCM_SERVICE_ACCOUNT`, in a `.dev.vars`
-   file you never commit) only to send real pushes.
+   The Worker logs once that sessions are not authenticated. Add an FCM
+   service-account key (`FCM_SERVICE_ACCOUNT`) to `.dev.vars` only to send
+   real pushes.
 2. Start this game's dev server with the Worker URL and a development
    session, `<playerId>` or `<playerId>.<installationId>` (letters, digits,
    `_`, `-`):
@@ -146,8 +158,10 @@ identity service, against the kit's game-services Worker on your machine:
 player with `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`,
 which the Worker accepts only with the flag. Anyone can write that header,
 so it authenticates nothing: the session exists only on the Vite dev server
-(`import.meta.env.DEV`) outside the production mode, and the Worker refuses
+(`import.meta.env.DEV`) in the `development` mode, and the Worker refuses
 the flag with its D1 store and ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
-is bound. A session the game sets with `setStarterServerSession` replaces it.
+is bound. Calling `setStarterServerSession`, even with `undefined`, turns it
+off; a call after the game used it warns, since the commerce client and the
+notifications backend keep the session they first read.
 The commerce client sends the same header; a local Worker with
 `GAME_SERVICES_INGRESS_AUTH` bound refuses it.
