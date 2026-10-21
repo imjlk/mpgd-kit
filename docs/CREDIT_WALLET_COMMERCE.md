@@ -35,7 +35,10 @@ client** against its own wallet service, under its own open `StoreId`:
   shortfall does not cover it. Float residue may sit a few units in the last
   place under the price, or above it; that allowance is capped at an absolute
   `1e-9` and does not grow with the price, so one credit short of a large price
-  is not a payment. An empty debit list is never a purchase of a positive price.
+  is not a payment. A sum of many fractional lots is compensated, so rounding
+  of the additions is not a shortfall, and a gap that is a material fraction of
+  a subnormal price is not a payment either. An empty debit list is never a
+  purchase of a positive price.
   <!-- @link ../packages/platform/src/commerce-wallet.ts#createCreditCommerceProvider Rejects a debited answer whose sum does not cover the price, including an empty debit list. -->
   The answer carries `adapter-settled` evidence (`credit-wallet.spend.v1`, carrying the
   debits and the wallet's entitlement id) and no `settlement` pointer (see the

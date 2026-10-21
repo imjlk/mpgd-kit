@@ -263,8 +263,40 @@ describe('credit lot rules', () => {
       expect(creditPriceMultiple(balance, price), String(price)).toBeUndefined();
       expect(planCreditDebits([lot({ lotId: 'exact', remaining: price, amount: price })], price), String(price))
         .toEqual({ status: 'debited', debits: [{ lotId: 'exact', amount: price }] });
-    }
-  });
+      }
+      });
+
+      it('covers a price paid by many fractional lots', () => {
+      const lots = Array.from({ length: 100 }, (_, index) => lot({
+        lotId: `tenth-${index}`,
+        remaining: 0.1,
+        amount: 0.1,
+      }));
+      const plan = planCreditDebits(lots, 10);
+      expect(plan).toMatchObject({ status: 'debited' });
+      if (plan.status === 'debited') {
+        expect(plan.debits).toHaveLength(100);
+        expect(plan.debits.reduce((sum, debit) => sum + debit.amount, 0)).toBeCloseTo(10, 10);
+      }
+      });
+
+      it('does not treat half of a subnormal price as covered', () => {
+      const price = 2 * Number.MIN_VALUE;
+      expect(planCreditDebits([
+        lot({ lotId: 'half-min', remaining: Number.MIN_VALUE, amount: Number.MIN_VALUE }),
+      ], price)).toMatchObject({ status: 'rejected', error: { code: 'INSUFFICIENT_BALANCE' } });
+      });
+
+      it('covers a finite price from one lot when the other lots would overflow the sum', () => {
+      const plan = planCreditDebits([
+        lot({ lotId: 'max-a', remaining: Number.MAX_VALUE, amount: Number.MAX_VALUE }),
+        lot({ lotId: 'max-b', remaining: Number.MAX_VALUE, amount: Number.MAX_VALUE, createdAt: '2026-10-02T00:00:00Z' }),
+      ], Number.MAX_VALUE);
+      expect(plan).toEqual({
+        status: 'debited',
+        debits: [{ lotId: 'max-a', amount: Number.MAX_VALUE }],
+      });
+      });
 
   it('builds membership renewal keys and stable subscription event ids', () => {
     expect(createMembershipRenewalKey('op-1', 2)).toBe('membership:op-1:2');
@@ -965,6 +997,53 @@ describe('createCreditCommerceProvider', () => {
     expect(await underpaid.requestPurchase({ logicalId: 'vault', idempotencyKey: 'op-short', source: 'shop' }))
       .toMatchObject({ outcome: 'failed', error: { code: 'INVALID_RESPONSE' } });
     expect(await underpaid.getAvailablePurchases()).toEqual([]);
+  });
+
+  it('purchases a price paid by many fractional debits', async () => {
+    const offer: CreditOffer = {
+      ...packOffer,
+      logicalId: 'tenths',
+      storeSku: 'tenths.1',
+      price: { currency, amount: 10 },
+    };
+    const { client } = createClientFixture({ offers: [offer] });
+    const provider = createCreditCommerceProvider({
+      ...client,
+      async spend() {
+        return {
+          status: 'debited',
+          entitlementId: 'op-tenths',
+          debits: Array.from({ length: 100 }, (_, index) => ({ lotId: `tenth-${index}`, amount: 0.1 })),
+          createdAt: '2026-10-01T00:00:00Z',
+        };
+      },
+    }, { titleId: 'title-a', billingAuthority: 'host' });
+    expect(await provider.requestPurchase({ logicalId: 'tenths', idempotencyKey: 'op-tenths', source: 'shop' }))
+      .toMatchObject({ outcome: 'purchased', purchase: { transactionId: 'op-tenths' } });
+  });
+
+  it('does not purchase a subnormal offer paid at half price', async () => {
+    const price = 2 * Number.MIN_VALUE;
+    const offer: CreditOffer = {
+      ...packOffer,
+      logicalId: 'speck',
+      storeSku: 'speck.1',
+      price: { currency, amount: price },
+    };
+    const { client } = createClientFixture({ offers: [offer] });
+    const provider = createCreditCommerceProvider({
+      ...client,
+      async spend() {
+        return {
+          status: 'debited',
+          entitlementId: 'op-speck',
+          debits: [{ lotId: 'le-speck', amount: Number.MIN_VALUE }],
+          createdAt: '2026-10-01T00:00:00Z',
+        };
+      },
+    }, { titleId: 'title-a', billingAuthority: 'host' });
+    expect(await provider.requestPurchase({ logicalId: 'speck', idempotencyKey: 'op-speck', source: 'shop' }))
+      .toMatchObject({ outcome: 'failed', error: { code: 'INVALID_RESPONSE' } });
   });
 
   it('redeems only with the ledger entry id of the grant', async () => {

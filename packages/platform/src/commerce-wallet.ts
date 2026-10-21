@@ -391,11 +391,31 @@ export function selectEligibleCreditLots(
 }
 
 export function sumCreditLotRemaining(lots: readonly CreditLot[]): number {
-  return lots.reduce((sum, lot) => sum + lot.remaining, 0);
+  return sumCreditAmounts(lots.map((lot) => lot.remaining));
 }
 
 export function sumCreditDebits(debits: readonly CreditDebit[]): number {
-  return debits.reduce((sum, debit) => sum + debit.amount, 0);
+  return sumCreditAmounts(debits.map((debit) => debit.amount));
+}
+
+/**
+ * Compensated sum. A long run of fractional lots (`100 × 0.1`) is the price
+ * it adds up to, not a shortfall left by naive addition. A non-finite term
+ * makes the sum non-finite.
+ */
+function sumCreditAmounts(amounts: readonly number[]): number {
+  let sum = 0;
+  let compensation = 0;
+  for (const amount of amounts) {
+    if (!Number.isFinite(amount)) {
+      return Number.NaN;
+    }
+    const corrected = amount - compensation;
+    const next = sum + corrected;
+    compensation = (next - sum) - corrected;
+    sum = next;
+  }
+  return sum;
 }
 
 /**
@@ -431,7 +451,13 @@ function creditAmountUlp(value: number): number {
 /** Noise two amounts may differ by. Capped so it cannot grow into a credit. */
 function creditAmountNoise(left: number, right: number): number {
   const scale = Math.max(Math.abs(left), Math.abs(right));
-  return Math.min(creditAmountUlpSlop * creditAmountUlp(scale), creditAmountAbsoluteCap);
+  // A few ULPs of a subnormal price are most of that price. The relative
+  // bound underflows to zero there, so only an exact payment covers it.
+  const relative = scale * Number.EPSILON;
+  if (!Number.isFinite(relative) || relative === 0) {
+    return 0;
+  }
+  return Math.min(creditAmountUlpSlop * creditAmountUlp(scale), creditAmountAbsoluteCap, relative);
 }
 
 /**
@@ -494,6 +520,37 @@ export type CreditDebitPlan =
   | { readonly status: 'rejected'; readonly error: CommerceErrorInfo };
 
 /**
+ * True when the lots meet `amount` without adding a lot that would overflow
+ * the running total. A lot that meets the unpaid gap covers the price by
+ * itself; summing it with an already huge total is not required.
+ */
+function creditLotsCover(lots: readonly CreditLot[], amount: number): boolean {
+  let sum = 0;
+  let compensation = 0;
+  for (const lot of lots) {
+    const remaining = lot.remaining;
+    if (!Number.isFinite(remaining) || !(remaining > 0)) {
+      continue;
+    }
+    const unpaid = amount - sum;
+    if (!(unpaid > 0) || remaining >= unpaid) {
+      return true;
+    }
+    const corrected = remaining - compensation;
+    const next = sum + corrected;
+    if (!Number.isFinite(next)) {
+      return true;
+    }
+    compensation = (next - sum) - corrected;
+    sum = next;
+    if (creditAmountCovers(sum, amount)) {
+      return true;
+    }
+  }
+  return creditAmountCovers(sum, amount);
+}
+
+/**
  * Plans the debits of `amount` across eligible lots in spend order without
  * mutating them. A spend the lots cannot cover is rejected with
  * `INSUFFICIENT_BALANCE` and plans nothing. A shortfall is never a debit,
@@ -520,9 +577,11 @@ export function planCreditDebits(eligible: readonly CreditLot[], amount: number)
     },
   });
   const ordered = [...eligible].sort(compareCreditLotSpendOrder);
-  const available = sumCreditLotRemaining(ordered);
-  if (!creditAmountCovers(available, amount)) {
-    return insufficient(available);
+  // Stop once a lot meets the unpaid gap. Summing every lot first overflows
+  // to Infinity when two finite lots are `Number.MAX_VALUE`, and then a
+  // price the first lot covers is rejected.
+  if (!creditLotsCover(ordered, amount)) {
+    return insufficient(sumCreditLotRemaining(ordered));
   }
   const debits: CreditDebit[] = [];
   let remaining = amount;
