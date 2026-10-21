@@ -1,6 +1,7 @@
 import type { SecureCredentialStore } from '@mpgd/platform';
 
 import type { GameServicesNotificationIdentity } from './notifications/client.js';
+import type { GameServicesHeaderResolver } from './request-headers.js';
 
 import {
   createGuestServerSession,
@@ -477,9 +478,16 @@ function backendFixture() {
  * A backend whose answers the test scripts: each issue, refresh, and bind
  * returns the next session, numbered, with the given ids.
  */
+/** The ids (and optionally the access expiry) of one scripted session answer. */
+type ScriptedSession = {
+  readonly sessionId: string;
+  readonly sessionFamilyId?: string;
+  readonly accessExpiresAt?: string;
+};
+
 function familyBackend() {
   let count = 0;
-  const next = (ids: { readonly sessionId: string; readonly sessionFamilyId?: string }) => {
+  const next = (ids: ScriptedSession) => {
     count += 1;
     return {
       ...session(`access-${count}`, `refresh-${count}`),
@@ -487,9 +495,9 @@ function familyBackend() {
     };
   };
   const answers = {
-    issue: { sessionId: 'issued-session' } as { readonly sessionId: string; readonly sessionFamilyId?: string },
-    refresh: [] as { readonly sessionId: string; readonly sessionFamilyId?: string }[],
-    bind: { sessionId: 'bound-session' } as { readonly sessionId: string; readonly sessionFamilyId?: string },
+    issue: { sessionId: 'issued-session' } as ScriptedSession,
+    refresh: [] as ScriptedSession[],
+    bind: { sessionId: 'bound-session' } as ScriptedSession,
   };
   const backend: GuestSessionBackend = {
     async issueGuest() {
@@ -507,7 +515,14 @@ function familyBackend() {
       return { status: 'bound', session: { ...next(answers.bind), identityLevel: 'authenticated' } };
     },
   };
-  return { backend, answers };
+  return {
+    backend,
+    answers,
+    /** Sessions answered so far (issue, refresh, and bind). */
+    get count() {
+      return count;
+    },
+  };
 }
 
 // A backend without family ids: refreshes keep the first session id as the family.
@@ -839,8 +854,10 @@ function familyBackend() {
     now: () => clock,
   });
   const serverSession = createGuestServerSession(coordinator, { now: () => clock });
-  // It is the notifications client's identity as it stands.
+  // It is the notifications client's identity and a header resolver as it stands.
   const identity: GameServicesNotificationIdentity = serverSession;
+  const resolver: GameServicesHeaderResolver = serverSession.getHeaders;
+  void resolver;
   const announced: string[] = [];
   identity.onAuthenticated((active) => announced.push(`${active.playerId}/${active.sessionId}`));
   assert.equal(serverSession.current(), undefined);
@@ -851,29 +868,63 @@ function familyBackend() {
     sessionId: 'issued-session',
   });
   assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-1' });
-  // Within a minute of expiry, getHeaders refreshes first; the family, and so the session id, stays.
+  assert.equal(server.count, 1);
+
+  // Within a minute of expiry: the token is answered at once and refreshed in the background.
   clock = Date.parse(expires) - 30_000;
   server.answers.refresh.push({ sessionId: 'rotated-1' });
-  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-2' });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-1' });
+  await coordinator.refresh(); // Joins the background refresh.
+  assert.equal(server.count, 2);
   assert.deepEqual(serverSession.current(), {
     playerId: 'server-user-1',
     sessionId: 'issued-session',
   });
-  // A failed refresh still answers the token while it is valid, and throws once it is not.
-  clock = Date.parse(expires) - 30_000;
+  // Once per token: the new token (with the same expiry) is not refreshed again.
   assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-2' });
-  clock = Date.parse(expires);
-  await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_NOT_READY' });
+  assert.equal(server.count, 2);
+  // A token that lives shorter than the lead: at most one background refresh per interval.
+  const soon = new Date(Date.parse(expires) + 10_000).toISOString();
+  server.answers.refresh.push({ sessionId: 'rotated-2', accessExpiresAt: soon });
+  await coordinator.refresh();
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-3' });
+  assert.equal(server.count, 3);
+  clock += 10_000;
+  const later = new Date(Date.parse(expires) + 60 * 60 * 1000).toISOString();
+  server.answers.refresh.push({ sessionId: 'rotated-3', accessExpiresAt: later });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-3' });
+  await coordinator.refresh();
+  assert.equal(server.count, 4);
+  // A failed background refresh still answers the valid token...
+  clock = Date.parse(later) - 30_000;
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-4' });
+  await coordinator.refresh().catch(() => undefined);
+  assert.equal(server.count, 4);
+  // ...and is tried again once the token expired: concurrent callers share one refresh.
+  clock = Date.parse(later);
+  const latest = new Date(Date.parse(later) + 60 * 60 * 1000).toISOString();
+  server.answers.refresh.push({ sessionId: 'rotated-4', accessExpiresAt: latest });
+  assert.deepEqual(await Promise.all([serverSession.getHeaders(), serverSession.getHeaders()]), [
+    { authorization: 'Bearer access-5' },
+    { authorization: 'Bearer access-5' },
+  ]);
+  assert.equal(server.count, 5);
+  // An expired token whose refresh fails throws the refresh's error.
+  clock = Date.parse(latest);
+  await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_BACKEND_FAILED' });
+  assert.deepEqual(announced, ['server-user-1/issued-session']);
+
+  // A binding that starts a new family is a new session; the refreshes were not.
   clock = now();
-  // A binding that starts a new family is a new session; the refresh was not.
+  const unsubscribeLater = serverSession.onAuthenticated(() => {
+    throw new Error('unsubscribed');
+  });
+  unsubscribeLater();
+  const fromNow: string[] = [];
+  serverSession.onAuthenticated((active) => fromNow.push(active.sessionId));
   await coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' });
   assert.deepEqual(announced, ['server-user-1/issued-session', 'server-user-1/bound-session']);
-  // A subscription made while a session is active does not hear that session again.
-  const later: string[] = [];
-  serverSession.onAuthenticated((active) => later.push(active.sessionId));
-  server.answers.refresh.push({ sessionId: 'rotated-2' });
-  await coordinator.refresh();
-  assert.deepEqual(later, []);
+  assert.deepEqual(fromNow, ['bound-session']);
   await coordinator.logout();
   assert.equal(serverSession.current(), undefined);
   await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_CLOSED' });

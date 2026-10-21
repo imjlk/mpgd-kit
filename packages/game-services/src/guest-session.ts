@@ -276,6 +276,15 @@ export function createGuestSessionCoordinator(input: {
     }
   }
 
+  /** Saves `next`, makes it the active session unless logout closed it, and announces it. */
+  async function activate(next: ActiveGuestSession): Promise<ServerGuestSessionView> {
+    await persist(next);
+    assertOpen();
+    const active = view(next);
+    announce(active);
+    return active;
+  }
+
   /** Tells the listeners, after an operation made `session` active. */
   function announce(session: ServerGuestSessionView): void {
     for (const listener of [...listeners]) {
@@ -317,11 +326,7 @@ export function createGuestSessionCoordinator(input: {
             () => input.backend.refresh({ refreshToken: stored }),
           )), family);
         }
-        await persist(next);
-        assertOpen();
-        const active = view(next);
-        announce(active);
-        return active;
+        return activate(next);
       }).finally(() => { startInFlight = undefined; });
       return startInFlight;
     },
@@ -336,11 +341,7 @@ export function createGuestSessionCoordinator(input: {
           refreshToken: previous.refreshToken,
         }))), previous.sessionFamilyId);
         assertSameOwner(previous, next);
-        await persist(next);
-        assertOpen();
-        const active = view(next);
-        announce(active);
-        return active;
+        return activate(next);
       }).finally(() => { refreshInFlight = undefined; });
       return refreshInFlight;
     },
@@ -377,9 +378,7 @@ export function createGuestSessionCoordinator(input: {
         if (next.identityLevel !== 'authenticated') {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
         }
-        await persist(next);
-        assertOpen();
-        announce(view(next));
+        await activate(next);
         return { status: result.status };
       });
     },
@@ -521,10 +520,14 @@ export interface GuestServerSession {
     listener: (session: { readonly playerId: string; readonly sessionId: string }) => void,
   ): () => void;
   /**
-   * The `Authorization` header, refreshing the session first when its
-   * access token expires within `refreshAheadMs`. A failed refresh still
-   * answers the current token while it is valid; otherwise this throws the
-   * coordinator's error (`GUEST_SESSION_NOT_READY` and so on).
+   * The `Authorization` header. An expired access token is refreshed first,
+   * and a failed refresh throws its error (`GUEST_SESSION_BACKEND_FAILED`,
+   * `GUEST_SESSION_OWNERSHIP_CONFLICT`, ...). A token that expires within
+   * `refreshAheadMs` is answered at once while a refresh runs in the
+   * background: once per token, and at most once per
+   * `guestServerSessionRefreshAheadIntervalMs`, so a backend whose tokens
+   * live shorter than the lead is not refreshed on every request; a failed
+   * background refresh is retried when the token has expired.
    */
   getHeaders(): Promise<Readonly<Record<'authorization', string>>>;
 }
@@ -532,11 +535,15 @@ export interface GuestServerSession {
 /** How long before its access token expires `createGuestServerSession` refreshes a session: one minute. */
 export const defaultGuestServerSessionRefreshAheadMs = 60_000;
 
+/** The least time between two background refreshes of `createGuestServerSession`. */
+export const guestServerSessionRefreshAheadIntervalMs = 10_000;
+
 /**
  * Reads a `GuestSessionCoordinator` as a server-backed session, with the
  * session-family id as the session id, which the notifications client and
  * the Worker need (it must not change on refresh). The game still starts
- * the coordinator, binds accounts, and logs out through it.
+ * the coordinator, binds accounts, and logs out through it. Pass it the
+ * coordinator's `now`, if that has one, so both read expiry on one clock.
  */
 export function createGuestServerSession(
   coordinator: GuestSessionCoordinator,
@@ -547,6 +554,9 @@ export function createGuestServerSession(
     throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
   }
   const now = options.now ?? Date.now;
+  /** The token (by its expiry) a background refresh last ran for, and when. */
+  let refreshedAheadFor: string | undefined;
+  let lastRefreshAheadAt: number | undefined;
   const sessionOf = (active: ServerGuestSessionView | undefined) =>
     active === undefined
       ? undefined
@@ -567,11 +577,21 @@ export function createGuestServerSession(
     },
     async getHeaders() {
       const active = coordinator.current();
-      if (active !== undefined && Date.parse(active.accessExpiresAt) - refreshAheadMs <= now()) {
-        try {
+      if (active !== undefined) {
+        const expiresAt = Date.parse(active.accessExpiresAt);
+        const at = now();
+        if (expiresAt <= at) {
+          // Concurrent callers share the coordinator's one refresh.
           await coordinator.refresh();
-        } catch {
-          // The current token may still be valid; getHeaders() says if it is not.
+        } else if (
+          expiresAt - refreshAheadMs <= at
+          && refreshedAheadFor !== active.accessExpiresAt
+          && (lastRefreshAheadAt === undefined || at - lastRefreshAheadAt >= guestServerSessionRefreshAheadIntervalMs)
+        ) {
+          refreshedAheadFor = active.accessExpiresAt;
+          lastRefreshAheadAt = at;
+          // The token is still valid: answer it now; a failure is retried once it expires.
+          coordinator.refresh().catch(() => undefined);
         }
       }
       return coordinator.getHeaders();

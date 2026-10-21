@@ -273,8 +273,9 @@ a backend must give a binding that starts a new family a new `sessionId`.
 server-backed session the notifications client and the starter's
 `setStarterServerSession` take: `current()` answers the server user as
 `playerId` and the family id as `sessionId`, `onAuthenticated` hears a new
-family (not a refresh), and `getHeaders()` refreshes the session first when
-its access token expires within a minute.
+family (not a refresh), and `getHeaders()` refreshes an expired access token
+before answering, and one that expires within a minute in the background
+(once per token, at most every ten seconds).
 
 Binding an external account never switches to a different server user on a
 client callback. It does not merge purchases, currency, or progress. Use the
