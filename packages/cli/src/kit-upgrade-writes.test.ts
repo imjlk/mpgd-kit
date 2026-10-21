@@ -64,6 +64,58 @@ await test('does not follow a package.json swapped for a same-bytes symlink', as
   }
 });
 
+await test('does not follow a game root swapped for a symlink after planning', async () => {
+  const { root, game } = gameFixture('mpgd-upgrade-root-link-');
+  const outside = path.join(root, 'outside');
+  try {
+    const plan = await planKitUpgrade(game, lookup);
+    const manifest = readFileSync(path.join(game, 'package.json'), 'utf8');
+    const lockfile = readFileSync(path.join(game, 'pnpm-lock.yaml'), 'utf8');
+    rmSync(game, { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, 'package.json'), manifest);
+    writeFileSync(path.join(outside, 'pnpm-lock.yaml'), lockfile);
+    symlinkSync(outside, game, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.throws(() => applyKitUpgrade(plan, () => undefined), /symbolic link/u);
+    assert.equal(readFileSync(path.join(outside, 'package.json'), 'utf8'), manifest);
+    assert.equal(readFileSync(path.join(outside, 'pnpm-lock.yaml'), 'utf8'), lockfile);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('does not follow a game root whose parent was swapped for a symlink', async () => {
+  const container = realpathSync(mkdtempSync(path.join(tmpdir(), 'mpgd-upgrade-root-parent-')));
+  const holder = path.join(container, 'holder');
+  const game = path.join(holder, 'game');
+  const outsideGame = path.join(container, 'outside', 'game');
+  try {
+    mkdirSync(game, { recursive: true });
+    writeJson(path.join(game, 'package.json'), {
+      name: 'sample-game',
+      devDependencies: { '@mpgd/cli': '0.33.2' },
+    });
+    writeFileSync(path.join(game, 'pnpm-lock.yaml'), 'lock before\n');
+    const plan = await planKitUpgrade(game, lookup);
+    const manifest = readFileSync(path.join(game, 'package.json'), 'utf8');
+    const lockfile = readFileSync(path.join(game, 'pnpm-lock.yaml'), 'utf8');
+    mkdirSync(outsideGame, { recursive: true });
+    writeFileSync(path.join(outsideGame, 'package.json'), manifest);
+    writeFileSync(path.join(outsideGame, 'pnpm-lock.yaml'), lockfile);
+    rmSync(holder, { recursive: true });
+    symlinkSync(
+      path.dirname(outsideGame),
+      holder,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    assert.throws(() => applyKitUpgrade(plan, () => undefined), /symbolic link/u);
+    assert.equal(readFileSync(path.join(outsideGame, 'package.json'), 'utf8'), manifest);
+    assert.equal(readFileSync(path.join(outsideGame, 'pnpm-lock.yaml'), 'utf8'), lockfile);
+  } finally {
+    rmSync(container, { recursive: true, force: true });
+  }
+});
+
 await test('does not follow a manifest parent swapped for a symlink', async () => {
   const { root, game } = gameFixture('mpgd-upgrade-parent-link-');
   const wrapper = path.join(game, 'apps', 'target-a');

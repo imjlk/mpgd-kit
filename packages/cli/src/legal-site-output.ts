@@ -27,10 +27,13 @@ export function assertLegalProjectPath(label: string, resolved: string): void {
   }
 }
 
-/** Stage the site in a temp directory, then publish with rename. */
+/** Stage the site beside the destination, then publish with rename. */
 export function publishLegalSiteFiles(outDir: string, outputs: readonly LegalSiteFile[]): void {
   assertLegalProjectPath('out-dir', outDir);
-  const staging = path.join(realpathSync(process.cwd()), `.mpgd-legal-${randomUUID()}`);
+  // A temp dir on the project root is a different filesystem when out-dir is a
+  // mount or sits under a bind-mounted artifacts directory. Rename then fails
+  // with EXDEV. Stage on the destination filesystem instead.
+  const staging = path.join(legalStagingParent(outDir), `.mpgd-legal-${randomUUID()}`);
   let publishedDirectory = false;
   try {
     for (const output of outputs) {
@@ -74,6 +77,53 @@ export function publishLegalSiteFiles(outDir: string, outputs: readonly LegalSit
     if (!publishedDirectory) {
       rmSync(staging, { recursive: true, force: true });
     }
+  }
+}
+
+/**
+ * Parent for the staging directory. An existing out-dir may itself be a mount,
+ * so stage inside it. A missing out-dir is created on its nearest existing
+ * ancestor, which is the filesystem the later rename must stay on.
+ */
+function legalStagingParent(outDir: string): string {
+  const existing = lstatIfPresent(outDir);
+  if (existing !== undefined) {
+    if (existing.isSymbolicLink()) {
+      throw new Error(`Refusing to write legal site output through a symbolic link: ${outDir}`);
+    }
+    if (!existing.isDirectory()) {
+      throw new Error(`Legal site output path is not a directory: ${outDir}`);
+    }
+    return outDir;
+  }
+  let current = path.dirname(outDir);
+  for (;;) {
+    const stat = lstatIfPresent(current);
+    if (stat !== undefined) {
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Refusing to write legal site output through a symbolic link: ${current}`);
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(`Legal site output path is not a directory: ${current}`);
+      }
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`out-dir must be inside the project root: ${outDir}`);
+    }
+    current = parent;
+  }
+}
+
+function lstatIfPresent(target: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(target);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
+      return undefined;
+    }
+    throw error;
   }
 }
 

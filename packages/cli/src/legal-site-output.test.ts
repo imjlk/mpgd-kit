@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -85,6 +86,29 @@ await test('refuses a legal out-dir whose canonical path leaves the project', as
   }
 });
 
+await test('refuses a legal page file that is a symlink to an outside file', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-page-link-'));
+  const project = path.join(root, 'project');
+  const outside = path.join(root, 'secret.html');
+  const source = path.join(project, 'legal', 'privacy.html');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    writeFileSync(outside, page('Outside secret'));
+    rmSync(source);
+    symlinkSync(outside, source);
+    await inProject(project, async () => {
+      await assert.rejects(
+        runMpgdCli(['legal', 'build', '--out-dir', 'site']),
+        /symbolic link|must be inside the project root/u,
+      );
+    });
+    assert.equal(existsSync(path.join(project, 'site', 'privacy', 'index.html')), false);
+    assert.equal(readFileSync(outside, 'utf8').includes('Outside secret'), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 await test('refuses legal sources reached through a symlink', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-src-'));
   const project = path.join(root, 'project');
@@ -163,6 +187,59 @@ await test('still rejects a legal out-dir that lexically leaves the project', as
     });
     assert.equal(lstatSync(project).isDirectory(), true);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('stages a new legal site on the destination directory filesystem', async () => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    return;
+  }
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-stage-new-'));
+  const project = path.join(root, 'project');
+  const artifacts = path.join(project, 'artifacts');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    mkdirSync(artifacts);
+    // The project root cannot accept the old cwd staging directory. A
+    // destination ancestor that is a mount would fail the same way with EXDEV.
+    chmodSync(project, 0o555);
+    await inProject(project, async () => {
+      await runMpgdCli(['legal', 'build', '--out-dir', 'artifacts/legal-site']);
+    });
+    assert.match(readPrivacy(project), /<title>Privacy<\/title>/u);
+    assert.equal(existsSync(path.join(project, 'artifacts', 'legal-site', '_headers')), true);
+    assert.equal(readdirSync(artifacts).some((name) => name.startsWith('.mpgd-legal-')), false);
+  } finally {
+    chmodSync(project, 0o755);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('stages into an existing legal out-dir instead of its parent filesystem', async () => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    return;
+  }
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-stage-mount-'));
+  const project = path.join(root, 'project');
+  const artifacts = path.join(project, 'artifacts');
+  const outDir = path.join(artifacts, 'legal-site');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    mkdirSync(outDir, { recursive: true });
+    chmodSync(artifacts, 0o555);
+    chmodSync(project, 0o555);
+    await inProject(project, async () => {
+      await runMpgdCli(['legal', 'build', '--out-dir', 'artifacts/legal-site']);
+    });
+    assert.match(
+      readFileSync(path.join(outDir, 'privacy', 'index.html'), 'utf8'),
+      /<title>Privacy<\/title>/u,
+    );
+    assert.equal(readdirSync(outDir).some((name) => name.startsWith('.mpgd-legal-')), false);
+  } finally {
+    chmodSync(project, 0o755);
+    chmodSync(artifacts, 0o755);
     rmSync(root, { recursive: true, force: true });
   }
 });

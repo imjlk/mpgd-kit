@@ -599,9 +599,6 @@ function stringifyLike(original: string, value: JsonObject): string {
 
 function upgradeWriteAnchor(plan: KitUpgradePlan, file: string): string {
   const resolved = path.resolve(file);
-  if (inside(plan.gameRoot, resolved)) {
-    return plan.gameRoot;
-  }
   let anchor = plan.gameRoot;
   while (!inside(anchor, resolved)) {
     const parent = path.dirname(anchor);
@@ -610,6 +607,9 @@ function upgradeWriteAnchor(plan: KitUpgradePlan, file: string): string {
     }
     anchor = parent;
   }
+  // In-game files used to return plan.gameRoot before this check. A game
+  // directory or parent swapped for a symlink after planning then skipped
+  // lstat/realpath, and assertOwnedUpgradePath only inspects children.
   let anchorStat;
   try {
     anchorStat = lstatSync(anchor);
@@ -622,7 +622,10 @@ function upgradeWriteAnchor(plan: KitUpgradePlan, file: string): string {
   const anchorReal = realpathSync(anchor);
   // Compare with the game root captured at planning time. A fresh realpath of
   // both sides would follow a parent swapped for a symlink and look consistent.
-  if (!inside(anchorReal, plan.gameRoot) && path.resolve(anchorReal) !== path.resolve(plan.gameRoot)) {
+  if (
+    !inside(anchorReal, plan.gameRoot)
+    && path.resolve(anchorReal) !== path.resolve(plan.gameRoot)
+  ) {
     throw new Error('Refusing to write through a symbolic link: ' + anchor);
   }
   return anchor;

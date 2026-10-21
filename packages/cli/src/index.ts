@@ -3443,10 +3443,13 @@ function createLegalSiteOutputs(
   const sourceRoot = toTemplatePath(path.relative(process.cwd(), legalDir) || '.');
   const outputs = legalPageSlugs.map((slug) => {
     const sourceFile = path.join(legalDir, `${slug}.html`);
-
+    // existsSync and readFileSync follow a page symlink. Check the file
+    // itself, not only the legal directory, immediately before reading it.
+    assertLegalProjectPath('legal-dir', sourceFile);
     if (!existsSync(sourceFile)) {
       throw new Error(`Missing legal page source: ${sourceFile}`);
     }
+    assertLegalProjectPath('legal-dir', sourceFile);
 
     return {
       file: path.join(outDir, slug, 'index.html'),
