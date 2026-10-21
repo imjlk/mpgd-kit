@@ -499,3 +499,82 @@ function assertSameOwner(
     throw new GuestSessionCoordinatorError('GUEST_SESSION_OWNERSHIP_CONFLICT');
   }
 }
+
+/**
+ * A guest session as the game-services clients read a server-backed
+ * session: the starter's `StarterServerSession`, and the notifications
+ * client's identity and header resolver.
+ */
+export interface GuestServerSession {
+  /**
+   * The active session, or `undefined` while none is: `playerId` is the
+   * server user, and `sessionId` is the session-family id, which stays the
+   * same across refreshes.
+   */
+  current(): { readonly playerId: string; readonly sessionId: string } | undefined;
+  /**
+   * Calls `listener` when a session becomes current after the subscription:
+   * the first `start()`, or a binding that starts a new family. A refresh in
+   * the same family is not announced. Returns the unsubscribe.
+   */
+  onAuthenticated(
+    listener: (session: { readonly playerId: string; readonly sessionId: string }) => void,
+  ): () => void;
+  /**
+   * The `Authorization` header, refreshing the session first when its
+   * access token expires within `refreshAheadMs`. A failed refresh still
+   * answers the current token while it is valid; otherwise this throws the
+   * coordinator's error (`GUEST_SESSION_NOT_READY` and so on).
+   */
+  getHeaders(): Promise<Readonly<Record<'authorization', string>>>;
+}
+
+/** How long before its access token expires `createGuestServerSession` refreshes a session: one minute. */
+export const defaultGuestServerSessionRefreshAheadMs = 60_000;
+
+/**
+ * Reads a `GuestSessionCoordinator` as a server-backed session, with the
+ * session-family id as the session id, which the notifications client and
+ * the Worker need (it must not change on refresh). The game still starts
+ * the coordinator, binds accounts, and logs out through it.
+ */
+export function createGuestServerSession(
+  coordinator: GuestSessionCoordinator,
+  options: { readonly refreshAheadMs?: number; readonly now?: () => number } = {},
+): GuestServerSession {
+  const refreshAheadMs = options.refreshAheadMs ?? defaultGuestServerSessionRefreshAheadMs;
+  if (!Number.isFinite(refreshAheadMs) || refreshAheadMs < 0) {
+    throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
+  }
+  const now = options.now ?? Date.now;
+  const sessionOf = (active: ServerGuestSessionView | undefined) =>
+    active === undefined
+      ? undefined
+      : { playerId: active.serverUserId, sessionId: active.sessionFamilyId };
+  return {
+    current: () => sessionOf(coordinator.current()),
+    onAuthenticated(listener) {
+      // The session current at subscription is not a new one; its refreshes are not either.
+      let announced = sessionOf(coordinator.current());
+      return coordinator.onSession((active) => {
+        const next = { playerId: active.serverUserId, sessionId: active.sessionFamilyId };
+        if (announced?.playerId === next.playerId && announced.sessionId === next.sessionId) {
+          return;
+        }
+        announced = next;
+        listener(next);
+      });
+    },
+    async getHeaders() {
+      const active = coordinator.current();
+      if (active !== undefined && Date.parse(active.accessExpiresAt) - refreshAheadMs <= now()) {
+        try {
+          await coordinator.refresh();
+        } catch {
+          // The current token may still be valid; getHeaders() says if it is not.
+        }
+      }
+      return coordinator.getHeaders();
+    },
+  };
+}

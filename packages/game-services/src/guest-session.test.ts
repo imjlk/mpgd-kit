@@ -1,6 +1,9 @@
 import type { SecureCredentialStore } from '@mpgd/platform';
 
+import type { GameServicesNotificationIdentity } from './notifications/client.js';
+
 import {
+  createGuestServerSession,
   createGuestSessionCoordinator,
   GuestSessionCoordinatorError,
   type GuestSessionBackend,
@@ -822,6 +825,61 @@ function familyBackend() {
   assert.equal(coordinator.current()?.sessionFamilyId, 'bound-session');
   await coordinator.logout();
   assert.equal(native.values.has('mpgd.guest.refresh'), false);
+}
+
+// The server session over a coordinator: the family id is the session id the clients see.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  let clock = now();
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now: () => clock,
+  });
+  const serverSession = createGuestServerSession(coordinator, { now: () => clock });
+  // It is the notifications client's identity as it stands.
+  const identity: GameServicesNotificationIdentity = serverSession;
+  const announced: string[] = [];
+  identity.onAuthenticated((active) => announced.push(`${active.playerId}/${active.sessionId}`));
+  assert.equal(serverSession.current(), undefined);
+  await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_NOT_READY' });
+  await coordinator.start();
+  assert.deepEqual(serverSession.current(), {
+    playerId: 'server-user-1',
+    sessionId: 'issued-session',
+  });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-1' });
+  // Within a minute of expiry, getHeaders refreshes first; the family, and so the session id, stays.
+  clock = Date.parse(expires) - 30_000;
+  server.answers.refresh.push({ sessionId: 'rotated-1' });
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-2' });
+  assert.deepEqual(serverSession.current(), {
+    playerId: 'server-user-1',
+    sessionId: 'issued-session',
+  });
+  // A failed refresh still answers the token while it is valid, and throws once it is not.
+  clock = Date.parse(expires) - 30_000;
+  assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-2' });
+  clock = Date.parse(expires);
+  await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_NOT_READY' });
+  clock = now();
+  // A binding that starts a new family is a new session; the refresh was not.
+  await coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' });
+  assert.deepEqual(announced, ['server-user-1/issued-session', 'server-user-1/bound-session']);
+  // A subscription made while a session is active does not hear that session again.
+  const later: string[] = [];
+  serverSession.onAuthenticated((active) => later.push(active.sessionId));
+  server.answers.refresh.push({ sessionId: 'rotated-2' });
+  await coordinator.refresh();
+  assert.deepEqual(later, []);
+  await coordinator.logout();
+  assert.equal(serverSession.current(), undefined);
+  await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_CLOSED' });
+  assert.throws(() => createGuestServerSession(coordinator, { refreshAheadMs: -1 }), {
+    code: 'GUEST_SESSION_INVALID_INPUT',
+  });
 }
 
 console.info('Guest session coordinator conformance passed.');

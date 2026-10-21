@@ -269,6 +269,12 @@ restore whose saved family (`<credentialKey>.family` in the same secure
 storage, written before the token and removed at logout) cannot be read. Such
 a backend must give a binding that starts a new family a new `sessionId`.
 `current()` reads the active view and `onSession(listener)` hears each new one.
+`createGuestServerSession(coordinator)` reads the coordinator as the
+server-backed session the notifications client and the starter's
+`setStarterServerSession` take: `current()` answers the server user as
+`playerId` and the family id as `sessionId`, `onAuthenticated` hears a new
+family (not a refresh), and `getHeaders()` refreshes the session first when
+its access token expires within a minute.
 
 Binding an external account never switches to a different server user on a
 client callback. It does not merge purchases, currency, or progress. Use the
