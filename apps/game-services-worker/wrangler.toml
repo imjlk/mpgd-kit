@@ -122,8 +122,9 @@ head_sampling_rate = 1
 # Android verifier must be paired with a Play finalizer or the Worker refuses
 # to start. Either run the Play boundary in this Worker (the package name plus
 # a private service that mints Android Publisher access tokens from the
-# game-owned service account; bind the account-id resolver or opt into
-# unbound players only when ingress auth already binds playerId) ...
+# game-owned service account; bind the account-id resolver, or opt into
+# unbound players only together with GAME_SERVICES_INGRESS_AUTH. The Worker
+# refuses to start if the unbound flag is set without that binding) ...
 #
 # GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME = "com.example.game"
 # GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"
