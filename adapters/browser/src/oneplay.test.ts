@@ -97,7 +97,7 @@ function commerceFixture() {
   const server = {
     issueIntent: vi.fn(async () => ({ developerPayload: 'server-intent' })),
   };
-  return { sdk, purchase, products, server, emit: f.emit };
+  return { sdk, purchase, products, server, emit: f.emit, listeners: f.listeners };
 }
 function purchaseInput(idempotencyKey: string, overrides: Partial<RequestPurchaseInput> = {}): RequestPurchaseInput {
   return { logicalId: 'COINS', source: 'shop', idempotencyKey, ...overrides };
@@ -854,6 +854,8 @@ describe('ONE play H5 adapter', () => {
       await expect(commerce.requestPurchase(purchaseInput('during'))).rejects.toMatchObject({ code: 'IN_PROGRESS' });
       finish?.({ status: 'rewarded', requestId: 'server-request' });
       await vi.advanceTimersByTimeAsync(0);
+      // A late terminal result must close the runtime lease. It is not a grant.
+      expect(events).toEqual(['requested', 'unknown', 'closed']);
       expect(events).not.toContain('reward-earned');
       expect(reward.rewardGranted).toBe(false);
       expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toEqual({ state: 'available' });
@@ -901,6 +903,256 @@ describe('ONE play H5 adapter', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it.each(['background', 'payment'] as const)(
+    'does not treat a %s pause as an opened ad, so a rejection releases occupancy without granting',
+    async (reason) => {
+      const f = commerceFixture();
+      f.sdk.ads.showInterstitialAsync = async () => {
+        f.emit('pause', { reason });
+        throw new Error('bridge lost');
+      };
+      const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds, showTimeoutMs: 40, recoveryTimeoutMs: 40 });
+      const events: string[] = [];
+      provider.subscribe((event) => events.push(event.type));
+      const commerce = createOnePlayCommerceProvider(f);
+      await expect(provider.show(show)).resolves.toMatchObject({
+        outcome: 'failed',
+        presentation: 'not-started',
+        reason: 'transient-failure',
+      });
+      expect(events).toEqual(['requested', 'failed']);
+      expect(events).not.toContain('reward-earned');
+      expect(await provider.getAvailability(show)).toEqual({ state: 'available' });
+      await expect(commerce.requestPurchase(purchaseInput(`after-${reason}`))).resolves.toMatchObject({ outcome: 'purchased' });
+    },
+  );
+  it('releases occupancy when the show call throws synchronously and does not grant', async () => {
+    const f = commerceFixture();
+    f.sdk.ads.showRewardedAsync = () => {
+      throw new Error('sync bridge');
+    };
+    const provider = createOnePlayAdProvider({
+      sdk: f.sdk,
+      placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } },
+      rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) },
+      showTimeoutMs: 40,
+      recoveryTimeoutMs: 40,
+    });
+    const events: string[] = [];
+    provider.subscribe((event) => events.push(event.type));
+    const commerce = createOnePlayCommerceProvider(f);
+    const reward = await toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'sync-throw' });
+    expect(reward.rewardGranted).toBe(false);
+    expect(reward.status).toBe('failed');
+    expect(reward.evidence).toBeUndefined();
+    expect(events).toEqual(['requested', 'failed']);
+    expect(events).not.toContain('reward-earned');
+    expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toEqual({ state: 'available' });
+    await expect(commerce.requestPurchase(purchaseInput('after-sync-throw'))).resolves.toMatchObject({ outcome: 'purchased' });
+    expect(f.listeners.get('pause')?.size ?? 0).toBe(0);
+  });
+  it('emits failed when a timed-out show later rejects before an ad pause and does not grant', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = commerceFixture();
+      let rejectShow: ((error: unknown) => void) | undefined;
+      f.sdk.ads.showInterstitialAsync = () => new Promise((_resolve, reject) => {
+        rejectShow = reject;
+      });
+      const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds, showTimeoutMs: 20, recoveryTimeoutMs: 5_000 });
+      const events: string[] = [];
+      provider.subscribe((event) => events.push(event.type));
+      const pending = provider.show(show);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(pending).resolves.toMatchObject({ outcome: 'pending', presentation: 'unknown' });
+      expect(events).toEqual(['requested', 'unknown']);
+      rejectShow?.(new Error('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual(['requested', 'unknown', 'failed']);
+      expect(events).not.toContain('reward-earned');
+      expect(await provider.getAvailability(show)).toEqual({ state: 'available' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('emits failed when a timed-out show later returns no fill and does not grant', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = commerceFixture();
+      let finish: ((result: { status: 'failed'; reason: string; requestId: string }) => void) | undefined;
+      f.sdk.ads.showRewardedAsync = () => new Promise((resolve) => {
+        finish = resolve;
+      });
+      const provider = createOnePlayAdProvider({
+        sdk: f.sdk,
+        placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } },
+        rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) },
+        showTimeoutMs: 20,
+        recoveryTimeoutMs: 5_000,
+      });
+      const events: string[] = [];
+      provider.subscribe((event) => events.push(event.type));
+      const pending = toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'late-nofill' });
+      await vi.advanceTimersByTimeAsync(20);
+      const reward = await pending;
+      expect(reward.rewardGranted).toBe(false);
+      finish?.({ status: 'failed', reason: 'no_fill', requestId: 'server-request' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual(['requested', 'unknown', 'failed']);
+      expect(events).not.toContain('reward-earned');
+      expect(reward.rewardGranted).toBe(false);
+      expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toEqual({ state: 'available' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('keeps a timed-out show locked when a later rewarded result names another request and does not grant', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = commerceFixture();
+      let finish: ((result: { status: 'rewarded'; requestId: string }) => void) | undefined;
+      f.sdk.ads.showRewardedAsync = () => new Promise((resolve) => {
+        finish = resolve;
+      });
+      const provider = createOnePlayAdProvider({
+        sdk: f.sdk,
+        placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } },
+        rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) },
+        showTimeoutMs: 20,
+        recoveryTimeoutMs: 5_000,
+      });
+      const events: string[] = [];
+      provider.subscribe((event) => events.push(event.type));
+      const pending = toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'late-mismatch' });
+      await vi.advanceTimersByTimeAsync(20);
+      const reward = await pending;
+      finish?.({ status: 'rewarded', requestId: 'other-request' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual(['requested', 'unknown']);
+      expect(events).not.toContain('reward-earned');
+      expect(reward.rewardGranted).toBe(false);
+      expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toMatchObject({ reason: 'busy' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('does not clear another gateway ad occupancy or cancel its show on dispose', async () => {
+    const f = commerceFixture();
+    f.sdk.ads.showInterstitialAsync = () => new Promise(() => {});
+    const owning = await createOnePlayPlatformGateway({
+      sdk: f.sdk,
+      products: f.products,
+      commerceServer: f.server,
+      placementIds,
+    });
+    const other = await createOnePlayPlatformGateway({
+      sdk: f.sdk,
+      products: f.products,
+      commerceServer: f.server,
+      placementIds,
+    });
+    const showInterstitial = owning.ads.showInterstitial;
+    if (showInterstitial === undefined) {
+      throw new Error('ONE play interstitial is missing.');
+    }
+    let adSettled = false;
+    const hungAd = showInterstitial({ placementId: 'STAGE_END_INTERSTITIAL' });
+    void hungAd.then(() => {
+      adSettled = true;
+    }, () => {
+      adSettled = true;
+    });
+    await Promise.resolve();
+    await other.lifecycle.dispose?.();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(adSettled).toBe(false);
+    await expect(createOnePlayCommerceProvider(f).requestPurchase(purchaseInput('still-open'))).rejects.toMatchObject({
+      code: 'IN_PROGRESS',
+    });
+    expect(f.purchase).not.toHaveBeenCalled();
+    await owning.lifecycle.dispose?.();
+    await expect(createOnePlayCommerceProvider(f).requestPurchase(purchaseInput('after-owner-dispose'))).resolves.toMatchObject({
+      outcome: 'purchased',
+    });
+  });
+  it('does not clear another gateway checkout occupancy on dispose', async () => {
+    const f = commerceFixture();
+    let purchases = 0;
+    f.purchase.mockImplementation(async (input) => {
+      purchases += 1;
+      if (purchases === 1) {
+        return new Promise(() => {});
+      }
+      return {
+        orderId: 'order',
+        purchaseTimeMillis: 1,
+        purchaseId: 'purchase',
+        purchaseToken: 'token',
+        productId: input.productId,
+        developerPayload: input.developerPayload,
+      };
+    });
+    const owning = await createOnePlayPlatformGateway({
+      sdk: f.sdk,
+      products: f.products,
+      commerceServer: f.server,
+    });
+    const other = await createOnePlayPlatformGateway({
+      sdk: f.sdk,
+      products: f.products,
+      commerceServer: f.server,
+    });
+    const hungCheckout = owning.commerce?.requestPurchase(purchaseInput('owner-checkout'));
+    await Promise.resolve();
+    await other.lifecycle.dispose?.();
+    await Promise.resolve();
+    await expect(createOnePlayCommerceProvider(f).requestPurchase(purchaseInput('still-open'))).rejects.toMatchObject({
+      code: 'IN_PROGRESS',
+    });
+    expect(purchases).toBe(1);
+    await owning.lifecycle.dispose?.();
+    await expect(createOnePlayCommerceProvider(f).requestPurchase(purchaseInput('after-owner-dispose'))).resolves.toMatchObject({
+      outcome: 'purchased',
+    });
+    void hungCheckout;
+  });
+  it('consumes a cross-realm thenable from a back handler and observes its rejection', async () => {
+    const f = fixture();
+    let host: (() => boolean) | undefined;
+    f.sdk.onBackPressed = (callback) => {
+      host = callback;
+    };
+    const errors: unknown[] = [];
+    const gateway = await createOnePlayPlatformGateway({
+      sdk: f.sdk,
+      storage: f.storage,
+      onError: (error) => {
+        errors.push(error);
+      },
+    });
+    let older = 0;
+    gateway.lifecycle.onBackButton?.(() => {
+      older += 1;
+      return false;
+    });
+    const rejection = new Error('back failed');
+    const foreign = {
+      then(_onFulfilled: (value: boolean) => void, onRejected?: (error: unknown) => void) {
+        queueMicrotask(() => onRejected?.(rejection));
+      },
+    };
+    expect(foreign instanceof Promise).toBe(false);
+    gateway.lifecycle.onBackButton?.(() => foreign as Promise<boolean>);
+    expect(host?.()).toBe(true);
+    expect(older).toBe(0);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(errors).toEqual([rejection]);
+    await gateway.lifecycle.dispose?.();
   });
   it('consumes the host back event when a handler returns a promise', async () => {
     const f = fixture();

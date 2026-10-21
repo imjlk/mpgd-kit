@@ -23,18 +23,28 @@ export interface OnePlayRewardRequestPort {
 }
 /** Shared across gateways and checkout. Dispose and a bounded recovery can clear it; resume cannot. */
 export const onePlayFullscreenOwners = new WeakMap<OnePlaySdk, object>();
-const onePlayOccupancyCancels = new WeakMap<OnePlaySdk, Set<() => void>>();
+const onePlayOwnerScopes = new WeakMap<object, object>();
+const onePlayOccupancyCancels = new WeakMap<OnePlaySdk, Map<object, Set<() => void>>>();
 const defaultShowTimeoutMs = 60_000;
 const defaultRecoveryTimeoutMs = 5 * 60_000;
 
-/** Drop shared fullscreen occupancy and any show/recovery timers for this SDK. */
-export function clearOnePlayFullscreenOwner(sdk: OnePlaySdk): void {
-  onePlayFullscreenOwners.delete(sdk);
-  const cancels = onePlayOccupancyCancels.get(sdk);
+/** Tag occupancy so dispose of one gateway cannot clear another gateway's ad or checkout. */
+export function claimOnePlayFullscreenOwner(sdk: OnePlaySdk, owner: object, scope: object): void {
+  onePlayFullscreenOwners.set(sdk, owner);
+  onePlayOwnerScopes.set(owner, scope);
+}
+
+/** Drop fullscreen occupancy and show/recovery timers created by this gateway scope. */
+export function clearOnePlayFullscreenOwner(sdk: OnePlaySdk, scope: object): void {
+  const owner = onePlayFullscreenOwners.get(sdk);
+  if (owner !== undefined && onePlayOwnerScopes.get(owner) === scope) {
+    onePlayFullscreenOwners.delete(sdk);
+  }
+  const cancels = onePlayOccupancyCancels.get(sdk)?.get(scope);
   if (cancels === undefined) {
     return;
   }
-  onePlayOccupancyCancels.delete(sdk);
+  onePlayOccupancyCancels.get(sdk)?.delete(scope);
   for (const cancel of cancels) {
     try {
       cancel();
@@ -42,10 +52,12 @@ export function clearOnePlayFullscreenOwner(sdk: OnePlaySdk): void {
   }
 }
 
-function bindOccupancyCancel(sdk: OnePlaySdk, cancel: () => void): () => void {
-  const set = onePlayOccupancyCancels.get(sdk) ?? new Set();
+function bindOccupancyCancel(sdk: OnePlaySdk, scope: object, cancel: () => void): () => void {
+  const scoped = onePlayOccupancyCancels.get(sdk) ?? new Map();
+  const set = scoped.get(scope) ?? new Set();
   set.add(cancel);
-  onePlayOccupancyCancels.set(sdk, set);
+  scoped.set(scope, set);
+  onePlayOccupancyCancels.set(sdk, scoped);
   return () => {
     set.delete(cancel);
   };
@@ -66,8 +78,11 @@ export function createOnePlayAdProvider(input: {
   readonly showTimeoutMs?: number;
   /** After an unresolved or paused rejection, release occupancy if no terminal result arrives. */
   readonly recoveryTimeoutMs?: number;
+  /** Gateway identity for dispose. Omitted providers keep a private scope another gateway cannot clear. */
+  readonly fullscreenScope?: object;
 }): AdProvider {
   const { sdk, rewardRequests } = input;
+  const fullscreenScope = input.fullscreenScope ?? {};
   const showTimeoutMs = requireTimeout(
     input.showTimeoutMs,
     defaultShowTimeoutMs,
@@ -141,7 +156,7 @@ export function createOnePlayAdProvider(input: {
         for (const listener of listeners) { try { listener(observation); } catch { /* Observers cannot alter native ownership. */ } }
       };
       const owner = {};
-      onePlayFullscreenOwners.set(sdk, owner);
+      claimOnePlayFullscreenOwner(sdk, owner, fullscreenScope);
       const release = () => { if (onePlayFullscreenOwners.get(sdk) === owner) { onePlayFullscreenOwners.delete(sdk); } };
       const promise = Promise.resolve().then(async (): Promise<AdShowResult> => {
         const abandoned = (): AdShowResult => ({
@@ -174,7 +189,9 @@ export function createOnePlayAdProvider(input: {
         emit({ type: 'requested', ...(claimEvidence === undefined ? {} : { claimEvidence }) });
         let opened = false;
         let dropped = false;
-        const onPause = () => { opened = true; };
+        const onPause = (event: { readonly reason: string }) => {
+          if (event.reason === 'ad') { opened = true; }
+        };
         sdk.on('pause', onPause);
         const pendingResult = (): AdShowResult => ({
           ...base,
@@ -201,7 +218,7 @@ export function createOnePlayAdProvider(input: {
           release();
           resolveRace?.({ kind: 'dropped' });
         };
-        const unbind = bindOccupancyCancel(sdk, drop);
+        const unbind = bindOccupancyCancel(sdk, fullscreenScope, drop);
         const armRecovery = () => {
           if (dropped) { return; }
           recoveryTimer = setTimeout(() => {
@@ -210,9 +227,7 @@ export function createOnePlayAdProvider(input: {
             endWatch();
           }, recoveryTimeoutMs);
         };
-        const sdkCall = request.format === 'rewarded' && requestId !== undefined
-          ? sdk.ads.showRewardedAsync({ placementId: placement.platformId, requestId })
-          : sdk.ads.showInterstitialAsync({ placementId: placement.platformId });
+        let sdkCall: Promise<OnePlayAdResult> | undefined;
         const raced = await new Promise<
           | { readonly kind: 'value'; readonly value: OnePlayAdResult }
           | { readonly kind: 'rejected' }
@@ -221,35 +236,52 @@ export function createOnePlayAdProvider(input: {
         >((done) => {
           resolveRace = done;
           showTimer = setTimeout(() => done({ kind: 'timeout' }), showTimeoutMs);
-          sdkCall.then(
-            (value) => {
-              if (showTimer !== undefined) { clearTimeout(showTimer); showTimer = undefined; }
-              done({ kind: 'value', value });
-            },
-            () => {
-              if (showTimer !== undefined) { clearTimeout(showTimer); showTimer = undefined; }
-              done({ kind: 'rejected' });
-            },
-          );
+          const rejectCall = () => {
+            if (showTimer !== undefined) { clearTimeout(showTimer); showTimer = undefined; }
+            done({ kind: 'rejected' });
+          };
+          try {
+            const invoked = request.format === 'rewarded' && requestId !== undefined
+              ? sdk.ads.showRewardedAsync({ placementId: placement.platformId, requestId })
+              : sdk.ads.showInterstitialAsync({ placementId: placement.platformId });
+            sdkCall = invoked;
+            invoked.then(
+              (value) => {
+                if (showTimer !== undefined) { clearTimeout(showTimer); showTimer = undefined; }
+                done({ kind: 'value', value });
+              },
+              rejectCall,
+            );
+          } catch {
+            rejectCall();
+          }
         });
         if (dropped || raced.kind === 'dropped') { endWatch(); return pendingResult(); }
         if (raced.kind === 'timeout') {
           emit({ type: 'unknown' });
           armRecovery();
-          void sdkCall.then(
-            (value) => {
-              if (dropped || !terminalAdResult(request.format, requestId, value)) { return; }
+          const late = sdkCall;
+          if (late !== undefined) {
+            const emitTerminal = (event: { type: 'closed' } | { type: 'failed'; reason: AdReason }) => {
+              if (dropped) { return; }
               clearTimers();
               release();
               endWatch();
-            },
-            () => {
-              if (dropped || opened) { return; }
-              clearTimers();
-              release();
-              endWatch();
-            },
-          );
+              // A late rewarded status is correlation only. Never emit reward-earned.
+              emit(event);
+            };
+            void late.then(
+              (value) => {
+                if (dropped || !terminalAdResult(request.format, requestId, value)) { return; }
+                const reason = value.status === 'failed' ? noStartReason(value.reason) : undefined;
+                emitTerminal(reason === undefined ? { type: 'closed' } : { type: 'failed', reason });
+              },
+              () => {
+                if (dropped || opened) { return; }
+                emitTerminal({ type: 'failed', reason: 'transient-failure' });
+              },
+            );
+          }
           return pendingResult();
         }
         if (raced.kind === 'rejected') {
