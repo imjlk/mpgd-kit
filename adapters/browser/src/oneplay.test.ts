@@ -11,7 +11,10 @@ import {
   type OnePlaySdk,
 } from './oneplay.js';
 import { toAdAdapter, type AdPresentationEvent } from '@mpgd/platform/ads';
-import type { PlatformPurchasePresentationEvent } from '@mpgd/platform';
+import {
+  commercePresentationAttempt,
+  type PlatformPurchasePresentationEvent,
+} from '@mpgd/platform';
 import {
   assertStorePurchase,
   CommerceError,
@@ -194,6 +197,15 @@ describe('ONE play H5 adapter', () => {
     expect(f.purchase).not.toHaveBeenCalled();
     await ad;
     expect(await commerce.requestPurchase(purchaseInput('retry'))).toMatchObject({ outcome: 'purchased' });
+  });
+  it('echoes a coordinator attempt without granting or changing an ordinary checkout', async () => {
+    const f = commerceFixture();
+    const commerce = createOnePlayCommerceProvider(f);
+    const facts = recordPresentation(commerce);
+    const request = purchaseInput('attempt');
+    Object.defineProperty(request, commercePresentationAttempt, { value: 2 });
+    await expect(commerce.requestPurchase(request)).resolves.toMatchObject({ outcome: 'purchased' });
+    expect(facts).toEqual([{ idempotencyKey: 'attempt', sequence: 1, state: 'closed', attempt: 2 }]);
   });
   it('keeps purchase support independent from product detail support', async () => {
     const f = commerceFixture();

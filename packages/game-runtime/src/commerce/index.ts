@@ -1,4 +1,8 @@
-import type { PlatformGateway, PlatformPurchasePresentationEvent } from '@mpgd/platform';
+import {
+  commercePresentationAttempt,
+  type PlatformGateway,
+  type PlatformPurchasePresentationEvent,
+} from '@mpgd/platform';
 import { forward } from '../forward.js';
 import { observe, type ObserverErrorHandler } from '../observers.js';
 import {
@@ -22,9 +26,10 @@ interface PurchaseFlight {
   started: boolean;
   sequence: number;
   notStarted: boolean;
-  /** The settled result was a retryable failure, independent of presentation timing. */
+  /** The settled result or rejection was explicitly retryable, independent of presentation timing. */
   failedRetryable: boolean;
   retryable: boolean;
+  attempt: number;
 }
 
 export type CoordinatedCommerceProvider = CommerceProviderSource & { dispose(): void };
@@ -50,7 +55,7 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
   if (!Number.isSafeInteger(capacity) || capacity < 1) {
     throw new TypeError('Invalid purchase history capacity.');
   }
-  const history = new Map<string, { fingerprint: string; sequence: number; retryable: boolean }>();
+  const history = new Map<string, { fingerprint: string; sequence: number; retryable: boolean; attempt: number; nativeSequence: number }>();
   const listeners = new Set<(event: PlatformPurchasePresentationEvent) => void>();
   function publish(flight: PurchaseFlight, state: PlatformPurchasePresentationEvent['state']): void {
     const entry = history.get(flight.key);
@@ -91,13 +96,24 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       if (flight === undefined || !flight.called || flight.closed) {
         return;
       }
-      if (!Number.isSafeInteger(event.sequence) || event.sequence <= flight.sequence) {
+      if (typeof event.attempt === 'number' && event.attempt !== flight.attempt) {
+        return;
+      }
+      const entry = history.get(flight.key);
+      if (entry === undefined) {
+        return;
+      }
+      // Untagged providers keep one increasing sequence. Tagged providers restart
+      // it per attempt, so only their own generation uses a local cursor.
+      const tagged = typeof event.attempt === 'number';
+      const floor = tagged ? flight.sequence : entry.nativeSequence;
+      if (!Number.isSafeInteger(event.sequence) || event.sequence <= floor) {
         return;
       }
       if (!['open', 'closed', 'not-started', 'unknown'].includes(event.state)) {
         return;
       }
-      flight.sequence = event.sequence;
+      if (tagged) { flight.sequence = event.sequence; } else { entry.nativeSequence = event.sequence; }
       if (event.state === 'not-started' && flight.started) {
         flight.lease?.markUnknown();
         publish(flight, 'unknown');
@@ -137,20 +153,20 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       if (purchasePresentation === undefined && input.classifyPurchasePresentation === undefined) {
         return Promise.reject(new PresentationExecutionError('presentation-unavailable'));
       }
-      const request: PurchaseRequestInput = Object.freeze({
+      const suppliedRequest = {
         logicalId: supplied.logicalId,
         source: supplied.source,
         idempotencyKey: supplied.idempotencyKey,
         ...(supplied.offerId === undefined ? {} : { offerId: supplied.offerId }),
         ...(supplied.quantity === undefined ? {} : { quantity: supplied.quantity }),
-      });
-      if (typeof request.idempotencyKey !== 'string' || request.idempotencyKey.trim() === '' || request.idempotencyKey.length > 512
-        || typeof request.logicalId !== 'string' || request.logicalId.trim() === '' || request.logicalId.length > 512
-        || !['shop', 'stage_fail', 'result', 'event'].includes(request.source)) {
+      };
+      if (typeof suppliedRequest.idempotencyKey !== 'string' || suppliedRequest.idempotencyKey.trim() === '' || suppliedRequest.idempotencyKey.length > 512
+        || typeof suppliedRequest.logicalId !== 'string' || suppliedRequest.logicalId.trim() === '' || suppliedRequest.logicalId.length > 512
+        || !['shop', 'stage_fail', 'result', 'event'].includes(suppliedRequest.source)) {
         return Promise.reject(new TypeError('Invalid purchase presentation input.'));
       }
-      const key = request.idempotencyKey;
-      const fingerprint = JSON.stringify([request.logicalId, request.source, request.offerId ?? null, request.quantity ?? null]);
+      const key = suppliedRequest.idempotencyKey;
+      const fingerprint = JSON.stringify([suppliedRequest.logicalId, suppliedRequest.source, suppliedRequest.offerId ?? null, suppliedRequest.quantity ?? null]);
       const prior = history.get(key);
       if (prior !== undefined) {
         if (prior.fingerprint !== fingerprint) { return Promise.reject(new PresentationExecutionError('key-conflict')); }
@@ -160,10 +176,12 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       if (prior === undefined && history.size >= capacity) {
         return Promise.reject(new PresentationExecutionError('history-full'));
       }
-      const entry = prior ?? { fingerprint, sequence: 0, retryable: false };
+      const entry = prior ?? { fingerprint, sequence: 0, retryable: false, attempt: 0, nativeSequence: 0 };
       entry.retryable = false;
+      entry.attempt += 1;
+      const request = Object.freeze({ ...suppliedRequest, [commercePresentationAttempt]: entry.attempt });
       const flight: PurchaseFlight = {
-        key, called: false, settled: false, closed: false, started: false, sequence: 0, notStarted: false, failedRetryable: false, retryable: false,
+        key, called: false, settled: false, closed: false, started: false, sequence: 0, notStarted: false, failedRetryable: false, retryable: false, attempt: entry.attempt,
         promise: Promise.resolve().then(async () => {
           try {
             if (disposed) { throw new PresentationExecutionError('disposed'); }
@@ -183,11 +201,15 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
               publish(flight, state);
               if (state === 'unknown') { flight.lease.markUnknown(); } else { close(flight); }
             }
-            flight.failedRetryable = result.outcome === 'failed' && result.error.retryable;
+            flight.failedRetryable = result.outcome === 'failed' && result.error.retryable === true;
             flight.retryable = flight.failedRetryable && flight.notStarted && !flight.started;
             return result;
           } catch (error) {
             if (flight.called && !flight.closed) { flight.lease?.markUnknown(); }
+            if (explicitlyRetryable(error)) {
+              flight.failedRetryable = true;
+              if (flight.notStarted && !flight.started) { flight.retryable = true; }
+            }
             throw error;
           } finally {
             flight.settled = true;
@@ -215,4 +237,8 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       maybeDetach();
     },
   }) as CoordinatedCommerceProvider;
+}
+
+function explicitlyRetryable(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'retryable' in error && error.retryable === true;
 }

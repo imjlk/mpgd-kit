@@ -1,4 +1,5 @@
 import {
+  commercePresentationAttempt,
   type CommerceCapabilities,
   type PlatformProviderAvailability,
   type PlatformPurchasePresentationEvent,
@@ -226,8 +227,17 @@ export function createOnePlayCommerceProvider(input: {
       }
       const product = products.find((candidate) => candidate.id === request.logicalId);
       let sequence = 0;
+      const echoedAttempt = Reflect.get(request, commercePresentationAttempt);
+      const attempt = typeof echoedAttempt === 'number' && Number.isSafeInteger(echoedAttempt) && echoedAttempt > 0
+        ? echoedAttempt
+        : undefined;
       const emit = (state: PlatformPurchasePresentationEvent['state']) => {
-        const event = Object.freeze({ idempotencyKey: request.idempotencyKey, sequence: ++sequence, state });
+        const event = Object.freeze({
+          idempotencyKey: request.idempotencyKey,
+          sequence: ++sequence,
+          state,
+          ...(attempt === undefined ? {} : { attempt }),
+        });
         for (const listener of listeners) { try { listener(event); } catch { /* Observers cannot change native ownership. */ } }
       };
       const notStarted = (error: CommerceError): Promise<RequestPurchaseResult> => {

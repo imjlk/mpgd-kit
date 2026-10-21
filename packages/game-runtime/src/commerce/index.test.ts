@@ -2,6 +2,7 @@ import { createCommerceReconciler } from '@mpgd/game-services/commerce-reconcile
 import { createInMemoryMonetizationOperationStore } from '@mpgd/game-services/monetization-operation-store';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  commercePresentationAttempt,
   createUnsupportedCommerceCapabilities,
   type PlatformGateway,
   type PlatformPurchasePresentationEvent,
@@ -211,7 +212,13 @@ describe('reconciler non-launch retries', () => {
           attempts += 1;
           const state = attempts === 1 ? 'not-started' : 'closed';
           for (const listener of events) {
-            listener({ idempotencyKey: input.idempotencyKey, sequence: 1, state });
+            const attempt = Reflect.get(input, commercePresentationAttempt);
+            listener({
+              idempotencyKey: input.idempotencyKey,
+              sequence: 1,
+              state,
+              ...(typeof attempt === 'number' ? { attempt } : {}),
+            });
           }
           return attempts === 1
             ? { outcome: 'failed', error: { code: 'NETWORK', retryable: true } }
@@ -313,5 +320,117 @@ describe('reconciler non-launch retries', () => {
       expect(f.provider.requestPurchase).toHaveBeenCalledOnce();
       f.controlled.dispose();
     }
+  });
+  it('retries a rejected pre-launch failure after a trusted not-started fact', async () => {
+    let attempts = 0;
+    const f = fixture(true, async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        f.emit('not-started', 1);
+        throw Object.assign(new Error('offline'), { code: 'NETWORK', retryable: true });
+      }
+      return { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } };
+    });
+    await expect(f.controlled.requestPurchase(request)).rejects.toMatchObject({ retryable: true });
+    await expect(f.controlled.requestPurchase(request)).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(attempts).toBe(2);
+    f.controlled.dispose();
+  });
+  it('does not retry a rejection that is not explicitly retryable or that already opened', async () => {
+    const unproven = fixture(true, async () => {
+      throw Object.assign(new Error('offline'), { code: 'NETWORK', retryable: true });
+    });
+    const unprovenFirst = unproven.controlled.requestPurchase(request);
+    await expect(unprovenFirst).rejects.toMatchObject({ retryable: true });
+    expect(unproven.controlled.requestPurchase(request)).toBe(unprovenFirst);
+    expect(unproven.provider.requestPurchase).toHaveBeenCalledOnce();
+    unproven.controlled.dispose();
+
+    const opened = fixture(true, async () => {
+      opened.emit('open', 1);
+      throw Object.assign(new Error('offline'), { code: 'NETWORK', retryable: true });
+    });
+    const openedFirst = opened.controlled.requestPurchase(request);
+    await expect(openedFirst).rejects.toThrow('offline');
+    expect(opened.controlled.requestPurchase(request)).toBe(openedFirst);
+    expect(opened.provider.requestPurchase).toHaveBeenCalledOnce();
+    opened.controlled.dispose();
+  });
+  it('ignores a previous attempt event when the provider echoes the attempt', async () => {
+    let attempts = 0;
+    let emit: (event: PlatformPurchasePresentationEvent) => void = () => {};
+    const facts = {
+      subscribe(listener: (event: PlatformPurchasePresentationEvent) => void) {
+        emit = listener;
+        return () => {};
+      },
+    };
+    const base = fixture(false);
+    const provider: Commerce = {
+      ...base.provider,
+      presentation: facts,
+      requestPurchase: async (input) => {
+        attempts += 1;
+        const attempt = Reflect.get(input, commercePresentationAttempt);
+        if (typeof attempt !== 'number') {
+          throw new Error('missing attempt');
+        }
+        if (attempts === 1) {
+          emit({ idempotencyKey: input.idempotencyKey, sequence: 1, state: 'not-started', attempt });
+          return { outcome: 'failed', error: { code: 'NETWORK', retryable: true } };
+        }
+        return new Promise<Result>(() => {});
+      },
+    };
+    const controlled = createCoordinatedCommerceProvider({
+      provider,
+      presentation: base.presentation,
+    });
+    await expect(controlled.requestPurchase(request)).resolves.toMatchObject({ outcome: 'failed' });
+    const second = controlled.requestPurchase(request);
+    await Promise.resolve();
+    emit({ idempotencyKey: request.idempotencyKey, sequence: 1, state: 'not-started', attempt: 1 });
+    expect(base.presentation.getSnapshot().owner).toBeDefined();
+    emit({ idempotencyKey: request.idempotencyKey, sequence: 1, state: 'open', attempt: 2 });
+    expect(base.presentation.getSnapshot().status).toBe('busy');
+    expect(attempts).toBe(2);
+    void second;
+    controlled.dispose();
+  });
+  it('does not let a delayed untagged event from the previous attempt release the next sheet', async () => {
+    let attempts = 0;
+    let emit: (event: PlatformPurchasePresentationEvent) => void = () => {};
+    const facts = {
+      subscribe(listener: (event: PlatformPurchasePresentationEvent) => void) {
+        emit = listener;
+        return () => {};
+      },
+    };
+    const base = fixture(false);
+    const provider: Commerce = {
+      ...base.provider,
+      presentation: facts,
+      requestPurchase: async (input) => {
+        attempts += 1;
+        if (attempts === 1) {
+          emit({ idempotencyKey: input.idempotencyKey, sequence: 10, state: 'not-started' });
+          return { outcome: 'failed', error: { code: 'NETWORK', retryable: true } };
+        }
+        return new Promise<Result>(() => {});
+      },
+    };
+    const controlled = createCoordinatedCommerceProvider({
+      provider,
+      presentation: base.presentation,
+    });
+    await expect(controlled.requestPurchase(request)).resolves.toMatchObject({ outcome: 'failed' });
+    const second = controlled.requestPurchase(request);
+    await Promise.resolve();
+    emit({ idempotencyKey: request.idempotencyKey, sequence: 10, state: 'not-started' });
+    expect(base.presentation.getSnapshot().owner).toBeDefined();
+    emit({ idempotencyKey: request.idempotencyKey, sequence: 11, state: 'open' });
+    expect(base.presentation.getSnapshot().status).toBe('busy');
+    void second;
+    controlled.dispose();
   });
 });

@@ -194,12 +194,16 @@ observations through `presentation.subscribe`, so a server-backed reconciler can
 retain a proven unopened, retryable attempt in its durable requested state.
 Only a retryable failure with a trusted `not-started` fact may start a new flight
 under the same unchanged identity. That fact still releases the key when it
-arrives after the provider has already returned the retryable failure. A
-purchased, launched, opened, or non-retryable result does not reopen, and the
-fact never grants. Concurrent calls still coalesce; changed arguments and
-uncertain/opened outcomes never reopen checkout. Published event sequences
-increase across retries even when a native provider restarts its own sequence
-for each call.
+arrives after the provider has already returned the retryable failure, including
+when the provider rejects with `retryable: true` instead of resolving a failed
+result. A purchased, launched, opened, or non-retryable result does not reopen,
+and the fact never grants. A provider that restarts its native sequence echoes
+the attempt generation on the request so a delayed event from the previous
+attempt cannot release the next sheet. Concurrent calls still coalesce; changed
+arguments and uncertain/opened outcomes never reopen checkout. Published event
+sequences increase across retries even when a native provider restarts its own
+sequence for each call. A fact that arrives after the reconciler has journaled
+`failed` does not reopen that record.
 
 This extracts the existing gateway coordinator; gateway behavior remains
 compatible. It does not add Billing/StoreKit native close events, treat app
