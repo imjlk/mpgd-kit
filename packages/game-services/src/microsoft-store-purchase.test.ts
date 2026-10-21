@@ -488,25 +488,80 @@ assert.equal(
   await generationOwnershipStore.claim({ ...newPurchase, playerId: 'player-other' }),
   undefined,
 );
-assert.deepEqual(await generationOwnershipStore.claim(newPurchase), newPurchase);
+assert.deepEqual(await generationOwnershipStore.claim(newPurchase), oldGeneration);
 await generationOwnershipStore.release(oldGeneration);
-assert.deepEqual(await generationOwnershipStore.get(newPurchase), newPurchase);
+assert.equal(await generationOwnershipStore.get(newPurchase), undefined);
+assert.deepEqual(await generationOwnershipStore.claim(newPurchase), newPurchase);
 
 const advancedOwnershipStore = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
 const advancedOwnershipHarness = createHarness({
   recoveryOwnershipStore: advancedOwnershipStore,
 });
+advancedOwnershipHarness.client.consumeProduct = async () => {
+  throw new Error('consume still pending');
+};
 assert.deepEqual(
   await advancedOwnershipHarness.boundary.claimRecoveryOwnership(
     createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'stale-generation'),
   ),
   { status: 'granted', idempotencyKey: 'stale-generation' },
 );
-const nextCollectionItemId = 'collection-item-20-next';
+const unconsumedGrant = await advancedOwnershipHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'stale-generation' }),
+);
+assert.equal(unconsumedGrant.verified, true);
+assert.equal(unconsumedGrant.alreadyProcessed, false);
+assert.equal(unconsumedGrant.finalization?.status, 'pending');
+assert.equal(
+  advancedOwnershipHarness.events.filter((event) => event === 'ledger:stale-generation').length,
+  1,
+);
 const nextModifiedDate = '2030-01-02T04:04:05.0000000+00:00';
 advancedOwnershipHarness.client.queryResponse = {
   items: [{
-    id: nextCollectionItemId,
+    id: collectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+    transactionId: 'provider-order-id',
+  }],
+};
+assert.deepEqual(
+  await advancedOwnershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'fresh-generation'),
+  ),
+  { status: 'denied' },
+);
+const { idempotencyKey: ignoredFreshGeneration, ...generationlessRefresh } =
+  createRecoveryOwnershipInput('player-microsoft-store');
+void ignoredFreshGeneration;
+assert.deepEqual(
+  await advancedOwnershipHarness.boundary.hasRecoveryOwnership(generationlessRefresh),
+  { status: 'granted', idempotencyKey: 'stale-generation' },
+);
+const refreshedGrant = await advancedOwnershipHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'fresh-generation' }),
+);
+assert.equal(refreshedGrant.verified, false);
+assert.equal(refreshedGrant.reason, 'MICROSOFT_STORE_RECOVERY_OWNERSHIP_REQUIRED');
+assert.equal(
+  advancedOwnershipHarness.events.filter((event) => event.startsWith('ledger:')).length,
+  1,
+);
+const replayedGrant = await advancedOwnershipHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'stale-generation' }),
+);
+assert.equal(replayedGrant.verified, true);
+assert.equal(replayedGrant.alreadyProcessed, true);
+assert.equal(
+  advancedOwnershipHarness.events.filter((event) => event.startsWith('ledger:')).length,
+  1,
+);
+advancedOwnershipHarness.client.queryResponse = {
+  items: [{
+    id: 'collection-item-20-next',
     modifiedDate: nextModifiedDate,
     productId: storeId,
     productKind: 'UnmanagedConsumable',
@@ -518,26 +573,577 @@ assert.deepEqual(
   await advancedOwnershipHarness.boundary.claimRecoveryOwnership(
     createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'fresh-generation'),
   ),
-  { status: 'granted', idempotencyKey: 'fresh-generation' },
+  { status: 'denied' },
 );
-const advancedOwnershipResult = await advancedOwnershipHarness.backend.purchases.verifyPurchase(
+assert.deepEqual(
+  await advancedOwnershipHarness.boundary.hasRecoveryOwnership(generationlessRefresh),
+  { status: 'denied' },
+);
+const rotatedItemGrant = await advancedOwnershipHarness.backend.purchases.verifyPurchase(
   createRequest({ idempotencyKey: 'fresh-generation' }),
 );
-assert.equal(advancedOwnershipResult.verified, true);
-assert.equal(advancedOwnershipResult.alreadyProcessed, false);
-assert.equal(advancedOwnershipHarness.events.includes('ledger:fresh-generation'), true);
+assert.equal(rotatedItemGrant.verified, false);
+assert.equal(
+  advancedOwnershipHarness.events.filter((event) => event.startsWith('ledger:')).length,
+  1,
+);
 
-// Generated recovery keys must fit the same request contract as explicit checkout keys.
+// An already-granted exact generation must still finalize after Collections rotates the
+// item and transaction ids. The stored verification id stays the ledger key, so the
+// rotated listing is not a second grant. A different generation stays denied until release.
+const rotatedGeneration = 'exact-rotated-generation';
+const rotatedCollectionItemId = 'collection-item-20-rotated';
+const rotatedTransactionId = 'rotated-order-id';
+const rotatedOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+let rotatedReleaseAllowed = false;
+const rotatedHarness = createHarness({
+  recoveryOwnershipStore: {
+    claim: (ownership) => rotatedOwnership.claim(ownership),
+    get: (ownership) => rotatedOwnership.get(ownership),
+    async release(ownership) {
+      if (!rotatedReleaseAllowed) {
+        throw new Error('ownership release unavailable');
+      }
+      await rotatedOwnership.release(ownership);
+    },
+  },
+});
+assert.deepEqual(
+  await rotatedHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, rotatedGeneration),
+  ),
+  { status: 'granted', idempotencyKey: rotatedGeneration },
+);
+const rotatedFirstGrant = await rotatedHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: rotatedGeneration }),
+);
+assert.equal(rotatedFirstGrant.verified, true);
+assert.equal(rotatedFirstGrant.alreadyProcessed, false);
+assert.equal(rotatedFirstGrant.finalization?.status, 'pending');
+assert.equal(
+  rotatedFirstGrant.finalization?.reason,
+  'MICROSOFT_STORE_RECOVERY_OWNERSHIP_RELEASE_UNAVAILABLE',
+);
+const rotatedLedgerBefore = await rotatedHarness.store.listEntitlementTransactions();
+assert.equal(rotatedLedgerBefore.length, 1);
+const rotatedVerificationId = rotatedLedgerBefore[0]?.evidenceVerificationId;
+assert.equal(
+  rotatedVerificationId,
+  `microsoft-store:${storeId}:${collectionItemId}:provider-order-id`,
+);
+rotatedHarness.client.queryResponse = {
+  items: [{
+    id: rotatedCollectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+    transactionId: rotatedTransactionId,
+  }],
+};
+assert.deepEqual(
+  await rotatedHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'fresh-after-rotation'),
+  ),
+  { status: 'denied' },
+);
+assert.deepEqual(
+  await rotatedHarness.boundary.hasRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, rotatedGeneration),
+  ),
+  { status: 'granted', idempotencyKey: rotatedGeneration },
+);
+const { idempotencyKey: ignoredRotatedGeneration, ...rotatedGenerationless } =
+  createRecoveryOwnershipInput('player-microsoft-store');
+void ignoredRotatedGeneration;
+assert.deepEqual(
+  await rotatedHarness.boundary.hasRecoveryOwnership(
+    rotatedGenerationless,
+  ),
+  { status: 'denied' },
+);
+const rotatedFreshGrant = await rotatedHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'fresh-after-rotation' }),
+);
+assert.equal(rotatedFreshGrant.verified, false);
+assert.equal((await rotatedHarness.store.listEntitlementTransactions()).length, 1);
+rotatedReleaseAllowed = true;
+const rotatedExactRetry = await rotatedHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: rotatedGeneration }),
+);
+assert.equal(rotatedExactRetry.verified, true);
+assert.equal(rotatedExactRetry.alreadyProcessed, true);
+assert.equal(rotatedExactRetry.ledgerEntryId, rotatedFirstGrant.ledgerEntryId);
+assert.equal(rotatedExactRetry.finalization?.status, 'completed');
+assert.equal(rotatedExactRetry.finalization?.action, 'consume');
+const rotatedLedgerAfter = await rotatedHarness.store.listEntitlementTransactions();
+assert.equal(rotatedLedgerAfter.length, 1);
+assert.equal(rotatedLedgerAfter[0]?.evidenceVerificationId, rotatedVerificationId);
+assert.equal(rotatedHarness.client.consumeTrackingIds.length, 2);
+assert.equal(
+  rotatedHarness.client.consumeTrackingIds[0],
+  rotatedHarness.client.consumeTrackingIds[1],
+);
+assert.deepEqual(
+  await rotatedHarness.boundary.hasRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, rotatedGeneration),
+  ),
+  { status: 'denied' },
+);
+assert.deepEqual(
+  await rotatedHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'purchase-after-release'),
+  ),
+  { status: 'granted', idempotencyKey: 'purchase-after-release' },
+);
+
+// The same exact generation can consume when the retry echo uses the rotated item id.
+// The ledger key remains the stored verification id.
+const echoedOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+let echoedReleaseAllowed = false;
+const echoedHarness = createHarness({
+  recoveryOwnershipStore: {
+    claim: (ownership) => echoedOwnership.claim(ownership),
+    get: (ownership) => echoedOwnership.get(ownership),
+    async release(ownership) {
+      if (!echoedReleaseAllowed) {
+        throw new Error('ownership release unavailable');
+      }
+      await echoedOwnership.release(ownership);
+    },
+  },
+});
+echoedHarness.client.consumeProduct = async () => {
+  throw new Error('consume still pending');
+};
+assert.deepEqual(
+  await echoedHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'echo-generation'),
+  ),
+  { status: 'granted', idempotencyKey: 'echo-generation' },
+);
+const echoedFirstGrant = await echoedHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'echo-generation' }),
+);
+assert.equal(echoedFirstGrant.verified, true);
+assert.equal(echoedFirstGrant.finalization?.status, 'pending');
+assert.equal((await echoedHarness.store.listEntitlementTransactions()).length, 1);
+echoedHarness.client.queryResponse = {
+  items: [{
+    id: rotatedCollectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+    transactionId: rotatedTransactionId,
+  }],
+};
+const echoedFreshGrant = await echoedHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'echo-fresh-generation' }),
+);
+assert.equal(echoedFreshGrant.verified, false);
+assert.equal((await echoedHarness.store.listEntitlementTransactions()).length, 1);
+echoedReleaseAllowed = true;
+echoedHarness.client.consumeProduct = async (input) => {
+  echoedHarness.events.push(`provider:consume:${input.storeId}`);
+  echoedHarness.client.consumeTrackingIds.push(input.trackingId);
+  return {
+    itemId: rotatedCollectionItemId,
+    productId: input.storeId,
+    trackingId: input.trackingId,
+    newQuantity: 1,
+  };
+};
+const echoedRetry = await echoedHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'echo-generation' }),
+);
+assert.equal(echoedRetry.verified, true);
+assert.equal(echoedRetry.alreadyProcessed, true);
+assert.equal(echoedRetry.ledgerEntryId, echoedFirstGrant.ledgerEntryId);
+assert.equal(
+  echoedRetry.finalization?.status,
+  'completed',
+  JSON.stringify(echoedRetry.finalization),
+);
+assert.equal((await echoedHarness.store.listEntitlementTransactions()).length, 1);
+assert.equal(
+  (await echoedHarness.store.listEntitlementTransactions())[0]?.evidenceVerificationId,
+  `microsoft-store:${storeId}:${collectionItemId}:provider-order-id`,
+);
+
+// A repurchase whose tracking-id retry reports the current balance, not a second
+// consume, releases the stale claim and then admits the new generation.
+const repurchaseOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const repurchaseHarness = createHarness({
+  recoveryOwnershipStore: repurchaseOwnership,
+});
+assert.deepEqual(
+  await repurchaseHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'first-purchase'),
+  ),
+  { status: 'granted', idempotencyKey: 'first-purchase' },
+);
+repurchaseHarness.client.consumeProduct = async () => {
+  throw new Error('release still pending');
+};
+const firstPurchase = await repurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'first-purchase' }),
+);
+assert.equal(firstPurchase.verified, true);
+assert.equal((await repurchaseHarness.store.listEntitlementTransactions()).length, 1);
+repurchaseHarness.client.queryResponse = {
+  items: [{
+    id: rotatedCollectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+    transactionId: rotatedTransactionId,
+  }],
+};
+repurchaseHarness.client.consumeProduct = async (input) => ({
+  itemId: rotatedCollectionItemId,
+  productId: input.storeId,
+  trackingId: input.trackingId,
+  newQuantity: 1,
+});
+const fulfilledRetry = await repurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'first-purchase' }),
+);
+assert.equal(fulfilledRetry.verified, true);
+assert.equal(fulfilledRetry.alreadyProcessed, true);
+assert.equal(
+  fulfilledRetry.finalization?.status,
+  'completed',
+  JSON.stringify(fulfilledRetry.finalization),
+);
+assert.equal((await repurchaseHarness.store.listEntitlementTransactions()).length, 1);
+assert.deepEqual(
+  await repurchaseHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'repurchase'),
+  ),
+  { status: 'granted', idempotencyKey: 'repurchase' },
+);
+const repurchaseGrant = await repurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'repurchase' }),
+);
+assert.equal(repurchaseGrant.verified, true);
+assert.equal(repurchaseGrant.alreadyProcessed, false);
+const repurchaseRows = await repurchaseHarness.store.listEntitlementTransactions();
+assert.equal(
+  repurchaseRows.length,
+  2,
+  repurchaseRows.map((row) => `${row.idempotencyKey}:${row.evidenceVerificationId}`).join(' | '),
+);
+assert.equal(
+  repurchaseRows[0]?.evidenceVerificationId,
+  `microsoft-store:${storeId}:${collectionItemId}:provider-order-id`,
+);
+if (repurchaseRows[1]?.evidenceVerificationId === repurchaseRows[0]?.evidenceVerificationId) {
+  throw new Error('repurchase reused the fulfilled verification id');
+}
+
+// A tracking-id retry is a prior-fulfillment confirmation only when Consume
+// reports a numeric current balance and the granted item. A missing or
+// malformed balance, or an unrelated item, must keep the claim.
+const confirmationOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const confirmationHarness = createHarness({
+  recoveryOwnershipStore: confirmationOwnership,
+});
+assert.deepEqual(
+  await confirmationHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput(
+      'player-microsoft-store',
+      inAppOfferToken,
+      'confirmation-generation',
+    ),
+  ),
+  { status: 'granted', idempotencyKey: 'confirmation-generation' },
+);
+confirmationHarness.client.consumeProduct = async () => {
+  throw new Error('first consume still pending');
+};
+const confirmationGrant = await confirmationHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'confirmation-generation' }),
+);
+assert.equal(confirmationGrant.verified, true);
+assert.equal(confirmationGrant.finalization?.status, 'pending');
+assert.equal((await confirmationHarness.store.listEntitlementTransactions()).length, 1);
+for (const response of [
+  { name: 'omitted-balance', body: {} },
+  { name: 'null-balance', body: { newQuantity: null, itemId: collectionItemId } },
+  { name: 'string-balance', body: { newQuantity: '1', itemId: collectionItemId } },
+  { name: 'fractional-balance', body: { newQuantity: 1.5, itemId: collectionItemId } },
+  { name: 'negative-balance', body: { newQuantity: -1, itemId: collectionItemId } },
+  { name: 'unrelated-item', body: { newQuantity: 1, itemId: 'other-item' } },
+  { name: 'missing-item', body: { newQuantity: 1 } },
+]) {
+  confirmationHarness.client.consumeProduct = async (input) => ({
+    ...response.body,
+    trackingId: input.trackingId,
+  });
+  const retry = await confirmationHarness.backend.purchases.verifyPurchase(
+    createRequest({ idempotencyKey: 'confirmation-generation' }),
+  );
+  assert.equal(retry.verified, true, response.name);
+  assert.equal(retry.alreadyProcessed, true, response.name);
+  assert.equal(
+    retry.finalization?.status,
+    'pending',
+    `${response.name}:${JSON.stringify(retry.finalization)}`,
+  );
+  assert.equal(
+    retry.finalization?.reason,
+    'MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH',
+    response.name,
+  );
+}
+assert.deepEqual(
+  await confirmationHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput(
+      'player-microsoft-store',
+      inAppOfferToken,
+      'confirmation-repurchase',
+    ),
+  ),
+  { status: 'denied' },
+);
+assert.equal((await confirmationHarness.store.listEntitlementTransactions()).length, 1);
+confirmationHarness.client.consumeProduct = async (input) => ({
+  itemId: collectionItemId,
+  productId: input.storeId,
+  trackingId: input.trackingId,
+  newQuantity: 1,
+});
+const confirmedRetry = await confirmationHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'confirmation-generation' }),
+);
+assert.equal(confirmedRetry.verified, true);
+assert.equal(confirmedRetry.alreadyProcessed, true);
+assert.equal(
+  confirmedRetry.finalization?.status,
+  'completed',
+  JSON.stringify(confirmedRetry.finalization),
+);
+assert.equal((await confirmationHarness.store.listEntitlementTransactions()).length, 1);
+
+// Without transactionId, modifiedDate distinguishes a later purchase. While the
+// claim is unreleased, a changed date must not mint a generation or a ledger row.
+const dateFenceOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const dateFenceHarness = createHarness({
+  recoveryOwnershipStore: dateFenceOwnership,
+});
+dateFenceHarness.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+dateFenceHarness.client.consumeProduct = async () => {
+  throw new Error('consume still pending');
+};
+assert.deepEqual(
+  await dateFenceHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'date-generation'),
+  ),
+  { status: 'granted', idempotencyKey: 'date-generation' },
+);
+const dateGrant = await dateFenceHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'date-generation' }),
+);
+assert.equal(dateGrant.verified, true);
+assert.equal(dateGrant.alreadyProcessed, false);
+const dateRowsBefore = await dateFenceHarness.store.listEntitlementTransactions();
+assert.equal(dateRowsBefore.length, 1);
+const dateVerificationId = dateRowsBefore[0]?.evidenceVerificationId;
+assert.equal(dateVerificationId, `microsoft-store:${storeId}:${collectionItemId}:${modifiedDate}`);
+dateFenceHarness.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+assert.deepEqual(
+  await dateFenceHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput(
+      'player-microsoft-store',
+      inAppOfferToken,
+      'date-fresh-generation',
+    ),
+  ),
+  { status: 'denied' },
+);
+const { idempotencyKey: ignoredDateGeneration, ...dateGenerationless } =
+  createRecoveryOwnershipInput('player-microsoft-store');
+void ignoredDateGeneration;
+assert.deepEqual(
+  await dateFenceHarness.boundary.hasRecoveryOwnership(
+    dateGenerationless,
+  ),
+  { status: 'granted', idempotencyKey: 'date-generation' },
+);
+const dateFreshGrant = await dateFenceHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'date-fresh-generation' }),
+);
+assert.equal(dateFreshGrant.verified, false);
+assert.equal(dateFreshGrant.reason, 'MICROSOFT_STORE_RECOVERY_OWNERSHIP_REQUIRED');
+const dateReplay = await dateFenceHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'date-generation' }),
+);
+assert.equal(dateReplay.verified, true);
+assert.equal(dateReplay.alreadyProcessed, true);
+assert.equal(dateReplay.ledgerEntryId, dateGrant.ledgerEntryId);
+assert.equal((await dateFenceHarness.store.listEntitlementTransactions()).length, 1);
+assert.equal(
+  (await dateFenceHarness.store.listEntitlementTransactions())[0]?.evidenceVerificationId,
+  dateVerificationId,
+);
+dateFenceHarness.client.consumeProduct = async (input) => ({
+  itemId: collectionItemId,
+  productId: input.storeId,
+  trackingId: input.trackingId,
+  newQuantity: 0,
+});
+const dateFinalized = await dateFenceHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'date-generation' }),
+);
+assert.equal(dateFinalized.verified, true);
+assert.equal(dateFinalized.alreadyProcessed, true);
+assert.equal(dateFinalized.finalization?.status, 'completed');
+assert.equal((await dateFenceHarness.store.listEntitlementTransactions()).length, 1);
+assert.equal(
+  (await dateFenceHarness.store.listEntitlementTransactions())[0]?.evidenceVerificationId,
+  dateVerificationId,
+);
+
+// After that claim is consumed and released, the same item id with a new
+// modifiedDate and no transactionId is a new purchase and grants once.
+const dateRepurchaseOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const dateRepurchaseHarness = createHarness({
+  recoveryOwnershipStore: dateRepurchaseOwnership,
+});
+dateRepurchaseHarness.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+assert.deepEqual(
+  await dateRepurchaseHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'date-first'),
+  ),
+  { status: 'granted', idempotencyKey: 'date-first' },
+);
+const dateFirst = await dateRepurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'date-first' }),
+);
+assert.equal(dateFirst.verified, true);
+assert.equal(dateFirst.alreadyProcessed, false);
+assert.equal(dateFirst.finalization?.status, 'completed');
+const dateFirstRows = await dateRepurchaseHarness.store.listEntitlementTransactions();
+assert.equal(dateFirstRows.length, 1);
+assert.equal(
+  dateFirstRows[0]?.evidenceVerificationId,
+  `microsoft-store:${storeId}:${collectionItemId}:${modifiedDate}`,
+);
+dateRepurchaseHarness.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+assert.deepEqual(
+  await dateRepurchaseHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'date-repurchase'),
+  ),
+  { status: 'granted', idempotencyKey: 'date-repurchase' },
+);
+const dateRepurchase = await dateRepurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'date-repurchase' }),
+);
+assert.equal(dateRepurchase.verified, true);
+assert.equal(dateRepurchase.alreadyProcessed, false);
+const dateRepurchaseRows = await dateRepurchaseHarness.store.listEntitlementTransactions();
+assert.equal(
+  dateRepurchaseRows.length,
+  2,
+  dateRepurchaseRows.map((row) => `${row.idempotencyKey}:${row.evidenceVerificationId}`).join(' | '),
+);
+assert.equal(
+  dateRepurchaseRows[1]?.evidenceVerificationId,
+  `microsoft-store:${storeId}:${collectionItemId}:${nextModifiedDate}`,
+);
+if (dateRepurchaseRows[1]?.evidenceVerificationId === dateRepurchaseRows[0]?.evidenceVerificationId) {
+  throw new Error('repurchase without transactionId reused the fulfilled verification id');
+}
+
+const legacyVerificationId =
+  `microsoft-store:${storeId}:${collectionItemId}:${modifiedDate}`;
+const legacyEvents: string[] = [];
+const legacyHarness = createHarness({ events: legacyEvents });
+legacyHarness.client.nextConsumeResponse = {
+  itemId: collectionItemId,
+  trackingId: 'legacy-tracking',
+  newQuantity: 0,
+};
+const legacyGrant = await legacyHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'legacy-generation' }),
+);
+assert.equal(legacyGrant.verified, true);
+assert.equal(legacyGrant.alreadyProcessed, false);
+const legacyRows = await legacyHarness.store.listEntitlementTransactions();
+assert.equal(legacyRows.length, 1);
+assert.equal(legacyRows[0]?.evidenceVerificationId, legacyVerificationId);
+legacyHarness.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+    transactionId: 'provider-order-id',
+  }],
+};
+const legacyReplay = await legacyHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'legacy-generation-retry' }),
+);
+assert.equal(legacyReplay.verified, true);
+assert.equal(legacyReplay.alreadyProcessed, true);
+assert.equal(legacyReplay.ledgerEntryId, legacyGrant.ledgerEntryId);
+assert.equal((await legacyHarness.store.listEntitlementTransactions()).length, 1);
+assert.equal(legacyEvents.filter((event) => event.startsWith('ledger:')).length, 1);
+
+// A changed collection item is not a new purchase while the previous claim is unreleased,
+// even when the item id is long enough to have previously minted a hashed generation.
 const boundedRecoveryHarness = createHarness({
   recoveryOwnershipStore: createInMemoryMicrosoftStoreRecoveryOwnershipStore(),
 });
 await boundedRecoveryHarness.boundary.claimRecoveryOwnership(
   createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'earlier-checkout'),
 );
-const longCollectionItemId = `collection-${'a'.repeat(240)}`;
 boundedRecoveryHarness.client.queryResponse = {
   items: [{
-    id: longCollectionItemId,
+    id: `collection-${'a'.repeat(240)}`,
     modifiedDate,
     productId: storeId,
     productKind: 'UnmanagedConsumable',
@@ -547,37 +1153,13 @@ boundedRecoveryHarness.client.queryResponse = {
 };
 const { idempotencyKey: _previousGeneration, ...withoutGeneration } =
   createRecoveryOwnershipInput('player-microsoft-store');
-const boundedRecovery = await boundedRecoveryHarness.boundary.hasRecoveryOwnership(
+assert.deepEqual(await boundedRecoveryHarness.boundary.hasRecoveryOwnership(
   withoutGeneration,
-);
-if (boundedRecovery.status !== 'granted') {
-  throw new Error('Expected a new generation for the same owner’s next purchase.');
-}
-assert.equal(
-  boundedRecovery.idempotencyKey.length <= 256,
-  true,
-  'recovery key exceeds request limit',
-);
-assert.deepEqual(
-  await boundedRecoveryHarness.boundary.hasRecoveryOwnership(withoutGeneration),
-  boundedRecovery,
-);
-boundedRecoveryHarness.client.consumeProduct = async (input) => {
-  boundedRecoveryHarness.client.consumeTrackingIds.push(input.trackingId);
-  return { itemId: longCollectionItemId, trackingId: input.trackingId, newQuantity: 0 };
-};
-const recoveredRequest = createRequest({ idempotencyKey: boundedRecovery.idempotencyKey });
-const boundedResult = await boundedRecoveryHarness.backend.purchases.verifyPurchase(
-  recoveredRequest,
-);
-assert.equal(boundedResult.verified, true);
-assert.equal(boundedResult.finalization?.status, 'completed');
-const replayedBoundedResult = await boundedRecoveryHarness.backend.purchases.verifyPurchase(
-  recoveredRequest,
-);
-assert.equal(replayedBoundedResult.alreadyProcessed, true);
-assert.equal(replayedBoundedResult.finalization?.status, 'completed');
-assert.equal(new Set(boundedRecoveryHarness.client.consumeTrackingIds).size, 1);
+), { status: 'denied' });
+assert.deepEqual(boundedRecoveryHarness.events, [
+  `provider:query:${storeId}`,
+  `provider:query:${storeId}`,
+]);
 
 const oversizedGenerationHarness = createHarness({
   recoveryOwnershipStore: createInMemoryMicrosoftStoreRecoveryOwnershipStore(),
