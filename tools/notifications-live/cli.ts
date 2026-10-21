@@ -71,11 +71,16 @@ function androidAdb(): string {
   return existsSync(bundled) ? bundled : 'adb';
 }
 
-function required(value: string | undefined, flag: string): string {
-  if (value === undefined || value.length === 0) {
-    throw new LiveDriverUsageError(`${flag} is required.\n\n${usage}`);
+function missing(flag: string): never {
+  throw new LiveDriverUsageError(`${flag} is required.`);
+}
+
+/** A whole number from an option, or a usage error naming the option. */
+function wholeNumber(text: string, flag: string): number {
+  if (!/^\d{1,6}$/u.test(text)) {
+    throw new LiveDriverUsageError(`${flag} ${JSON.stringify(text)} is not a whole number.`);
   }
-  return value;
+  return Number(text);
 }
 
 function commandEnv(args: readonly string[]): void {
@@ -94,11 +99,12 @@ function commandEnv(args: readonly string[]): void {
   });
   const game = values.game;
   const result = writeLiveWorkerEnvFile({
-    catalogPath: values.catalog ?? (game === undefined ? required(undefined, '--game or --catalog') : join(game, 'notifications', 'topics.json')),
+    catalogPath: values.catalog
+      ?? (game === undefined ? missing('--game or --catalog') : join(game, 'notifications', 'topics.json')),
     deploymentPath: values.deployment
-      ?? (game === undefined ? required(undefined, '--game or --deployment') : join(game, 'notifications', 'deployment.json')),
-    serviceAccountPath: required(values['service-account'], '--service-account'),
-    outPath: required(values.out, '--out'),
+      ?? (game === undefined ? missing('--game or --deployment') : join(game, 'notifications', 'deployment.json')),
+    serviceAccountPath: values['service-account'] ?? missing('--service-account'),
+    outPath: values.out ?? missing('--out'),
     repositoryRoot: resolveKitRoot(),
     ...(values['project-id'] === undefined ? {} : { projectId: values['project-id'] }),
     overwrite: values.force,
@@ -130,14 +136,17 @@ function commandEmulator(args: readonly string[]): number {
   const adb = androidAdb();
   const report = checkLiveEmulator(
     {
-      appId: required(values['app-id'], '--app-id'),
+      appId: values['app-id'] ?? missing('--app-id'),
       ...(values.serial === undefined ? {} : { serial: values.serial }),
-      port: Number(values.port),
+      port: wholeNumber(values.port, '--port'),
       reverse: values.reverse,
     },
     (adbArgs) => {
       const result = spawnSync(adb, [...adbArgs], { encoding: 'utf8', timeout: 30_000 });
-      return { status: result.status ?? 1, stdout: result.stdout ?? '' };
+      return {
+        status: result.error === undefined ? (result.status ?? 1) : 1,
+        stdout: result.stdout ?? '',
+      };
     },
   );
   for (const line of report.lines) {
@@ -145,21 +154,36 @@ function commandEmulator(args: readonly string[]): number {
   }
   if (report.serial !== undefined) {
     console.info(
-      `Watch the app with: ${adb} -s ${report.serial} logcat -v time Capacitor:V Capacitor/Console:V FirebaseMessaging:V '*:S'`,
+      `Watch the app with: ${JSON.stringify(adb)} -s ${report.serial} logcat -v time Capacitor:V Capacitor/Console:V FirebaseMessaging:V '*:S'`,
     );
   }
   return report.ok ? 0 : 1;
 }
 
-async function commandRun(args: readonly string[]): Promise<number> {
+const environmentVariableName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
+/**
+ * The driver's options from `run`'s arguments: the Worker URL guard, the
+ * session (a development session from --player, or a real one from the
+ * variable --auth-env names), and the numbers checked. `readTokenFile`
+ * reads --fcm-token-file. Never echoes a secret in an error.
+ */
+export function parseRunArguments(
+  args: readonly string[],
+  input: {
+    readonly env: Readonly<Record<string, string | undefined>>;
+    readonly readTokenFile: (path: string) => string;
+    readonly now: () => Date;
+  },
+): LiveDriverOptions {
   const { values } = parseArgs({
     args: [...args],
     options: {
-      worker: { type: 'string', default: 'http://127.0.0.1:8787' },
+      worker: { type: 'string' },
       staging: { type: 'string' },
       player: { type: 'string' },
-      session: { type: 'string', default: 'live-driver' },
-      installation: { type: 'string', default: 'live-driver' },
+      session: { type: 'string' },
+      installation: { type: 'string' },
       'auth-env': { type: 'string' },
       target: { type: 'string', default: 'android' },
       topic: { type: 'string', default: 'daily-ready' },
@@ -170,59 +194,85 @@ async function commandRun(args: readonly string[]): Promise<number> {
     },
     strict: true,
   });
-  const worker = assertLiveWorkerOrigin(values.worker, values.staging);
-  if (values.player !== undefined && values['auth-env'] !== undefined) {
+  if (values.staging !== undefined && values.worker === undefined) {
     throw new LiveDriverUsageError(
-      'Pass --player (a development session) or --auth-env, not both.',
+      '--staging names the host of --worker; pass --worker https://<host> too.',
+    );
+  }
+  const worker = assertLiveWorkerOrigin(values.worker ?? 'http://127.0.0.1:8787', values.staging);
+  if (values.staging !== undefined && worker.local) {
+    throw new LiveDriverUsageError(
+      '--staging is for a deployed Worker; a local --worker needs no --staging.',
     );
   }
   let authorization: string;
   let sessionLabel: string;
-  if (values['auth-env'] !== undefined) {
-    const name = values['auth-env'];
-    const value = process.env[name];
-    if (value === undefined || value.trim().length === 0) {
+  const name = values['auth-env'];
+  if (name !== undefined) {
+    if (values.player !== undefined || values.session !== undefined || values.installation !== undefined) {
+      throw new LiveDriverUsageError(
+        '--auth-env is a real session; --player, --session, and --installation are for a development one.',
+      );
+    }
+    if (!environmentVariableName.test(name)) {
+      // Never echoed: a value pasted here instead of a name would be the secret itself.
+      throw new LiveDriverUsageError(
+        '--auth-env takes the name of an environment variable that holds the Authorization value.',
+      );
+    }
+    const value = input.env[name]?.trim();
+    if (value === undefined || value.length === 0) {
       throw new LiveDriverUsageError(
         `$${name} is empty; it holds the session's Authorization header value.`,
       );
     }
-    authorization = value.trim();
+    authorization = value;
     sessionLabel = `the session in $${name}`;
   } else {
-    const playerId = required(values.player, '--player or --auth-env');
+    const playerId = values.player ?? missing('--player or --auth-env');
     authorization = developmentSessionAuthorization({
       playerId,
-      sessionId: values.session,
-      installationId: values.installation,
+      sessionId: values.session ?? 'live-driver',
+      installationId: values.installation ?? 'live-driver',
     });
     sessionLabel = `development session for player ${playerId}`;
   }
-  const fireIn = Number(values['fire-in']);
-  if (!Number.isInteger(fireIn) || fireIn < 0 || fireIn > 3600) {
-    throw new LiveDriverUsageError('--fire-in is whole seconds from 0 to 3600.');
+  const fireIn = wholeNumber(values['fire-in'], '--fire-in');
+  if (fireIn > 3600) {
+    throw new LiveDriverUsageError('--fire-in is at most 3600 seconds.');
   }
   let fcmToken: string | undefined;
   if (values['fcm-token-file'] !== undefined) {
-    fcmToken = readFileSync(assertLiveReadablePath(values['fcm-token-file']), 'utf8').trim();
+    fcmToken = input.readTokenFile(assertLiveReadablePath(values['fcm-token-file'])).trim();
     if (fcmToken.length === 0) {
       throw new LiveDriverUsageError('--fcm-token-file is empty.');
     }
   }
-  const options: LiveDriverOptions = {
+  return {
     worker,
     authorization,
     sessionLabel,
     ...(values.player === undefined ? {} : { playerId: values.player }),
     target: values.target,
     topic: values.topic,
-    runId: new Date().toISOString().replace(/[^0-9]/gu, '').slice(0, 14),
+    runId: input.now().toISOString().replace(/[^0-9]/gu, '').slice(0, 14),
     fireInSeconds: fireIn,
     ...(fcmToken === undefined ? {} : { fcmToken }),
     triggerScheduler: worker.local && !values['no-scheduler'],
     ...(values.advertising === undefined ? {} : { advertisingTextVersion: values.advertising }),
   };
+}
+
+async function commandRun(args: readonly string[]): Promise<number> {
+  const options = parseRunArguments(args, {
+    env: process.env,
+    readTokenFile: (path) => readFileSync(path, 'utf8'),
+    now: () => new Date(),
+  });
   const report = await runNotificationsLiveDriver(options, {
-    fetch: async (url, init) => await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }),
+    // A redirect is refused: the URL guard checked this origin, not another.
+    fetch: async (url, init) =>
+      await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(15_000) }),
     log: (line) => console.info(line),
     now: () => Date.now(),
     sleep: async (ms) => await new Promise<void>((done) => setTimeout(done, ms)),
@@ -230,7 +280,10 @@ async function commandRun(args: readonly string[]): Promise<number> {
   return report.ok ? 0 : 1;
 }
 
-function commandDryRun(): number {
+function commandDryRun(args: readonly string[]): number {
+  if (args.length > 0) {
+    throw new LiveDriverUsageError(`dry-run takes no arguments (got ${args.join(' ')}).`);
+  }
   const root = resolveKitRoot();
   const result = spawnSync(
     process.execPath,
@@ -242,11 +295,19 @@ function commandDryRun(): number {
     ],
     { cwd: root, stdio: 'inherit' },
   );
+  if (result.error !== undefined) {
+    throw result.error;
+  }
   return result.status ?? 1;
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  const [command, ...rest] = argv;
+  // `pnpm notifications:live -- run ...` passes the separator through.
+  const [command, ...rest] = argv[0] === '--' ? argv.slice(1) : argv;
+  if (command === undefined || command === 'help' || rest.includes('--help') || ['--help', '-h'].includes(command)) {
+    console.info(usage);
+    return 0;
+  }
   switch (command) {
     case 'env':
       commandEnv(rest);
@@ -256,20 +317,36 @@ async function main(argv: readonly string[]): Promise<number> {
     case 'run':
       return await commandRun(rest);
     case 'dry-run':
-      return commandDryRun();
+      return commandDryRun(rest);
     default:
-      console.error(usage);
-      return command === undefined || command === '--help' || command === '-h' ? 0 : 1;
+      throw new LiveDriverUsageError(`Unknown command ${JSON.stringify(command)}.`);
   }
+}
+
+/** Errors the user fixes by changing the command: printed with the usage, exit 2. */
+function isUsageError(error: unknown): boolean {
+  if (error instanceof LiveDriverUsageError) {
+    return true;
+  }
+  const code = (error as { readonly code?: unknown } | undefined)?.code;
+  return typeof code === 'string' && code.startsWith('ERR_PARSE_ARGS_');
 }
 
 if (isCliEntrypoint(import.meta.url)) {
   try {
     process.exitCode = await main(process.argv.slice(2));
   } catch (error) {
-    // Usage, argument, and file errors: the message says what to fix. None
-    // carries a secret (the key file's parse errors are replaced above).
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 2;
+    // No message here carries a secret: the kit's own errors never quote
+    // one, and the key file's parse errors are replaced before they get here.
+    if (isUsageError(error)) {
+      console.error(`${(error as Error).message}\n\n${usage}`);
+      process.exitCode = 2;
+    } else {
+      console.error(error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+      if (process.env.MPGD_DEBUG === '1' && error instanceof Error && error.stack !== undefined) {
+        console.error(error.stack);
+      }
+      process.exitCode = 1;
+    }
   }
 }

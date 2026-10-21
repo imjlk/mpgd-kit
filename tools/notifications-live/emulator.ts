@@ -40,11 +40,16 @@ export interface EmulatorCheckReport {
 
 const appIdPattern = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/u;
 
-/** The serials `adb devices` lists as online (`device`), not `offline` or `unauthorized`. */
+/**
+ * The serials `adb devices` lists as online (`device`), not `offline` or
+ * `unauthorized`. Lines before the `List of devices attached` header (the
+ * daemon's start-up notes) are ignored.
+ */
 export function onlineAdbSerials(devicesOutput: string): readonly string[] {
-  return devicesOutput
-    .split(/\r?\n/u)
-    .slice(1)
+  const lines = devicesOutput.split(/\r?\n/u);
+  const header = lines.findIndex((line) => line.trim().startsWith('List of devices'));
+  return lines
+    .slice(header + 1)
     .map((line) => line.trim().split(/\s+/u))
     .filter((fields) => fields.length >= 2 && fields[1] === 'device')
     .map((fields) => fields[0] ?? '')
@@ -56,12 +61,48 @@ export function listsAndroidPackage(listOutput: string, name: string): boolean {
   return listOutput.split(/\r?\n/u).some((line) => line.trim() === `package:${name}`);
 }
 
-/** `granted=true` / `granted=false` of a runtime permission in `dumpsys package <app>`, or `undefined`. */
+/**
+ * `granted=true` / `granted=false` of a runtime permission in `dumpsys
+ * package <app>`, or `undefined`. The name must start its line, so a
+ * permission that only ends with it does not match; the first user's
+ * section (user 0) comes first.
+ */
 export function dumpsysPermissionGranted(dumpsysOutput: string, permission: string): boolean | undefined {
   const escaped = permission.replaceAll('.', '\\.');
-  const match = new RegExp(`${escaped}: granted=(true|false)`, 'u').exec(dumpsysOutput);
+  const match = new RegExp(`^\\s*${escaped}: granted=(true|false)`, 'mu').exec(dumpsysOutput);
   return match === null ? undefined : match[1] === 'true';
 }
+
+/** Whether `adb reverse --list` has exactly this forward (device port to host port). */
+export function listsAdbReverse(listOutput: string, port: number): boolean {
+  return listOutput.split(/\r?\n/u).some((line) => {
+    const fields = line.trim().split(/\s+/u);
+    return fields.at(-2) === `tcp:${port}` && fields.at(-1) === `tcp:${port}`;
+  });
+}
+
+function deviceProblem(online: readonly string[], serial: string | undefined): string {
+  if (online.length === 0) {
+    return 'no emulator or device is online: start one (emulator -avd <name>) and wait for it to boot.';
+  }
+  if (serial === undefined) {
+    return `${online.length} devices are online (${online.join(', ')}); pick one with --serial.`;
+  }
+  return `${serial} is not online (${online.join(', ')}).`;
+}
+
+function permissionDetail(granted: boolean | undefined): string {
+  if (granted === true) {
+    return 'POST_NOTIFICATIONS is granted';
+  }
+  if (granted === false) {
+    return "POST_NOTIFICATIONS is not granted yet: turn notifications on from the game's settings screen (a tap), not with adb.";
+  }
+  return "POST_NOTIFICATIONS is not in the app's runtime permissions: not requested yet, or not in its manifest.";
+}
+
+/** An adb call that failed: the device went away, or adb could not run. */
+class AdbCallFailed extends Error {}
 
 export function checkLiveEmulator(options: EmulatorCheckOptions, adb: AdbRunner): EmulatorCheckReport {
   if (!appIdPattern.test(options.appId)) {
@@ -86,94 +127,109 @@ export function checkLiveEmulator(options: EmulatorCheckOptions, adb: AdbRunner)
   const online = onlineAdbSerials(devices.stdout);
   const serial = options.serial ?? (online.length === 1 ? online[0] : undefined);
   if (serial === undefined || !online.includes(serial)) {
-    add(
-      'fail',
-      'device',
-      online.length === 0
-        ? 'no emulator or device is online: start one (emulator -avd <name>) and wait for it to boot.'
-        : options.serial === undefined
-          ? `${online.length} devices are online (${online.join(', ')}); pick one with --serial.`
-          : `${options.serial} is not online (${online.join(', ') || 'none'}).`,
-    );
+    add('fail', 'device', deviceProblem(online, options.serial));
     return { ok: false, lines };
   }
   add('pass', 'device', serial);
-  const shell = (...args: string[]): AdbResult => adb(['-s', serial, 'shell', ...args]);
+  /** One adb call on the device; a failed call stops the check, so it is never read as an empty answer. */
+  const onDevice = (...args: string[]): string => {
+    const result = adb(['-s', serial, ...args]);
+    if (result.status !== 0) {
+      throw new AdbCallFailed(
+        `adb -s ${serial} ${args.join(' ')} failed (exit ${result.status}): is the device still online?`,
+      );
+    }
+    return result.stdout;
+  };
+  const installedPackage = (name: string): boolean =>
+    listsAndroidPackage(onDevice('shell', 'pm', 'list', 'packages', name), name);
+  try {
+    if (onDevice('shell', 'getprop', 'sys.boot_completed').trim() !== '1') {
+      add(
+        'fail',
+        'boot',
+        'the device is online but has not finished booting; wait and run this again.',
+      );
+      return { ok: false, serial, lines };
+    }
+    const sdk = Number(onDevice('shell', 'getprop', 'ro.build.version.sdk').trim());
+    const sdkKnown = Number.isInteger(sdk) && sdk > 0;
+    if (!sdkKnown) {
+      add(
+        'warn',
+        'android-version',
+        'could not read ro.build.version.sdk; the permission check is skipped.',
+      );
+    } else {
+      add(
+        'pass',
+        'android-version',
+        sdk >= 33
+          ? `API ${sdk} (notifications need the runtime POST_NOTIFICATIONS permission)`
+          : `API ${sdk}`,
+      );
+    }
 
-  const sdk = Number(shell('getprop', 'ro.build.version.sdk').stdout.trim());
-  add(
-    Number.isInteger(sdk) && sdk > 0 ? 'pass' : 'warn',
-    'android-version',
-    Number.isInteger(sdk) && sdk > 0
-      ? `API ${sdk}${sdk >= 33 ? ' (notifications need the runtime POST_NOTIFICATIONS permission)' : ''}`
-      : 'could not read ro.build.version.sdk',
-  );
+    if (installedPackage('com.google.android.gms')) {
+      add('pass', 'google-play-services', 'com.google.android.gms is installed');
+    } else {
+      add(
+        'fail',
+        'google-play-services',
+        'no Google Play services: FCM cannot deliver. Use a "Google APIs" or "Google Play" system image.',
+      );
+    }
+    if (installedPackage('com.android.vending')) {
+      add('pass', 'google-play-store', 'com.android.vending is installed');
+    } else {
+      add(
+        'warn',
+        'google-play-store',
+        'no Play Store app: a "Google APIs" image works, but update Play services there if FCM registration fails.',
+      );
+    }
 
-  const gms = listsAndroidPackage(
-    shell('pm', 'list', 'packages', 'com.google.android.gms').stdout,
-    'com.google.android.gms',
-  );
-  add(
-    gms ? 'pass' : 'fail',
-    'google-play-services',
-    gms
-      ? 'com.google.android.gms is installed'
-      : 'no Google Play services: FCM cannot deliver. Use a "Google APIs" or "Google Play" system image.',
-  );
-  const store = listsAndroidPackage(
-    shell('pm', 'list', 'packages', 'com.android.vending').stdout,
-    'com.android.vending',
-  );
-  add(
-    store ? 'pass' : 'warn',
-    'google-play-store',
-    store
-      ? 'com.android.vending is installed'
-      : 'no Play Store app: a "Google APIs" image works, but update Play services there if FCM registration fails.',
-  );
+    const installed = installedPackage(options.appId);
+    if (installed) {
+      add('pass', 'app', `${options.appId} is installed`);
+    } else {
+      add(
+        'fail',
+        'app',
+        `${options.appId} is not installed: build and install the game's shell first.`,
+      );
+    }
+    if (installed && sdkKnown && sdk >= 33) {
+      const granted = dumpsysPermissionGranted(
+        onDevice('shell', 'dumpsys', 'package', options.appId),
+        'android.permission.POST_NOTIFICATIONS',
+      );
+      add(granted === true ? 'pass' : 'warn', 'notification-permission', permissionDetail(granted));
+    }
 
-  const installed = listsAndroidPackage(
-    shell('pm', 'list', 'packages', options.appId).stdout,
-    options.appId,
-  );
-  add(
-    installed ? 'pass' : 'fail',
-    'app',
-    installed
-      ? `${options.appId} is installed`
-      : `${options.appId} is not installed: build and install the game's shell first.`,
-  );
-  if (installed && sdk >= 33) {
-    const granted = dumpsysPermissionGranted(
-      shell('dumpsys', 'package', options.appId).stdout,
-      'android.permission.POST_NOTIFICATIONS',
-    );
-    add(
-      granted === true ? 'pass' : 'warn',
-      'notification-permission',
-      granted === true
-        ? 'POST_NOTIFICATIONS is granted'
-        : granted === false
-          ? "POST_NOTIFICATIONS is not granted yet: turn notifications on from the game's settings screen (a tap), not with adb."
-          : 'POST_NOTIFICATIONS was not requested yet.',
-    );
+    let reversed = listsAdbReverse(onDevice('reverse', '--list'), options.port);
+    if (!reversed && options.reverse) {
+      onDevice('reverse', `tcp:${options.port}`, `tcp:${options.port}`);
+      reversed = listsAdbReverse(onDevice('reverse', '--list'), options.port);
+    }
+    if (reversed) {
+      add(
+        'pass',
+        'reverse',
+        `the device's 127.0.0.1:${options.port} reaches this machine's ${options.port}`,
+      );
+    } else {
+      add(
+        'warn',
+        'reverse',
+        `run: adb -s ${serial} reverse tcp:${options.port} tcp:${options.port} (or pass --reverse)`,
+      );
+    }
+  } catch (error) {
+    if (!(error instanceof AdbCallFailed)) {
+      throw error;
+    }
+    add('fail', 'adb', error.message);
   }
-
-  const forward = `tcp:${options.port} tcp:${options.port}`;
-  const hasReverse = (): boolean =>
-    adb(['-s', serial, 'reverse', '--list']).stdout.split(/\r?\n/u).some((line) =>
-      line.trim().endsWith(forward),
-    );
-  if (!hasReverse() && options.reverse) {
-    adb(['-s', serial, 'reverse', `tcp:${options.port}`, `tcp:${options.port}`]);
-  }
-  const reversed = hasReverse();
-  add(
-    reversed ? 'pass' : 'warn',
-    'reverse',
-    reversed
-      ? `the device's 127.0.0.1:${options.port} reaches this machine's ${options.port}`
-      : `run: adb -s ${serial} reverse tcp:${options.port} tcp:${options.port} (or pass --reverse)`,
-  );
   return { ok: lines.every((line) => line.result !== 'fail'), serial, lines };
 }

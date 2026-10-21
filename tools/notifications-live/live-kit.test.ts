@@ -25,6 +25,7 @@ import {
   type LiveDriverFetch,
   type LiveDriverOptions,
 } from './driver';
+import { parseRunArguments } from './cli';
 import { checkLiveEmulator, type AdbResult } from './emulator';
 import { assertLiveReadablePath, formatLiveEnvValue, writeLiveWorkerEnvFile } from './worker-env';
 
@@ -133,29 +134,54 @@ await test('the kit never reads the mise secrets directory', () => {
   );
 });
 
-/** A fake adb: answers by the arguments after `-s <serial>`. */
-function fakeAdb(answers: Readonly<Record<string, string>>, calls: string[][]) {
+/**
+ * A fake adb: answers by the arguments after `-s <serial>`; an unknown call
+ * answers empty, and `fail` makes one call exit non-zero.
+ */
+function fakeAdb(answers: Readonly<Record<string, string>>, calls: string[][], fail?: string) {
   return (args: readonly string[]): AdbResult => {
     calls.push([...args]);
     const key = (args[0] === '-s' ? args.slice(2) : args).join(' ');
-    const stdout = answers[key];
-    return stdout === undefined ? { status: 0, stdout: '' } : { status: 0, stdout };
+    if (key === fail) {
+      return { status: 1, stdout: '' };
+    }
+    return { status: 0, stdout: answers[key] ?? '' };
   };
 }
 
+/** Every adb call the check may make: reads, and the one forward it was asked for. */
+function isAllowedAdbCall(args: readonly string[]): boolean {
+  const call = (args[0] === '-s' ? args.slice(2) : args).join(' ');
+  return [
+    /^devices$/u,
+    /^shell getprop (?:sys\.boot_completed|ro\.build\.version\.sdk)$/u,
+    /^shell pm list packages [A-Za-z0-9_.]+$/u,
+    /^shell dumpsys package [A-Za-z0-9_.]+$/u,
+    /^reverse --list$/u,
+    /^reverse tcp:(\d+) tcp:\1$/u,
+  ].some((pattern) => pattern.test(call));
+}
+
+const readyDevice: Readonly<Record<string, string>> = {
+  devices: '* daemon not running; starting now at tcp:5037\n* daemon started successfully\nList of devices attached\r\nemulator-5554\tdevice\r\n\r\n',
+  'shell getprop sys.boot_completed': '1\n',
+  'shell getprop ro.build.version.sdk': '34\n',
+  'shell pm list packages com.google.android.gms':
+    'package:com.google.android.gms\npackage:com.google.android.gms.policy_sidecar_aps\n',
+  'shell pm list packages com.android.vending': 'package:com.android.vending\n',
+  'shell pm list packages dev.example.live': 'package:dev.example.live\n',
+  'shell dumpsys package dev.example.live': [
+    '    runtime permissions:',
+    '      dev.example.live.android.permission.POST_NOTIFICATIONS: granted=false',
+    '      android.permission.POST_NOTIFICATIONS: granted=true, flags=[ USER_SET ]',
+    '',
+  ].join('\n'),
+};
+
 await test('the emulator check reads the device and sets only the port forward', () => {
-  const ready = {
-    devices: 'List of devices attached\nemulator-5554\tdevice\n\n',
-    'shell getprop ro.build.version.sdk': '34\n',
-    'shell pm list packages com.google.android.gms': 'package:com.google.android.gms\npackage:com.google.android.gms.policy_sidecar_aps\n',
-    'shell pm list packages com.android.vending': 'package:com.android.vending\n',
-    'shell pm list packages dev.example.live': 'package:dev.example.live\n',
-    'shell dumpsys package dev.example.live':
-      '    runtime permissions:\n      android.permission.POST_NOTIFICATIONS: granted=true, flags=[ USER_SET ]\n',
-  };
   const calls: string[][] = [];
   let reversed = false;
-  const adb = fakeAdb(ready, calls);
+  const adb = fakeAdb(readyDevice, calls);
   const report = checkLiveEmulator(
     { appId: 'dev.example.live', port: 8787, reverse: true },
     (args) => {
@@ -163,7 +189,8 @@ await test('the emulator check reads the device and sets only the port forward',
         reversed = true;
       }
       if (args.join(' ') === '-s emulator-5554 reverse --list') {
-        return { status: 0, stdout: reversed ? 'emulator-5554 tcp:8787 tcp:8787\n' : '' };
+        calls.push([...args]);
+        return { status: 0, stdout: reversed ? 'emulator-5554 tcp:18787 tcp:8787\nemulator-5554 tcp:8787 tcp:8787\n' : '' };
       }
       return adb(args);
     },
@@ -180,19 +207,33 @@ await test('the emulator check reads the device and sets only the port forward',
     'pass reverse',
   ]);
   assert.ok(reversed);
-  // Only reads, and the one forward it was asked for.
-  const writes = calls.filter((args) => !['devices', 'shell', 'reverse'].includes(args[0] === '-s' ? (args[2] ?? '') : (args[0] ?? '')));
-  assert.deepEqual(writes, []);
+  // Reads, and the one forward it was asked for: nothing grants, installs, or changes settings.
+  assert.deepEqual(calls.filter((args) => !isAllowedAdbCall(args)), []);
+  assert.ok(!isAllowedAdbCall(['-s', 'emulator-5554', 'shell', 'pm', 'grant', 'dev.example.live', 'android.permission.POST_NOTIFICATIONS']));
 
+  // Without --reverse nothing is set, and a forward to another host port does not count.
+  const unset: string[][] = [];
+  const noReverse = checkLiveEmulator(
+    { appId: 'dev.example.live', port: 8787, reverse: false },
+    fakeAdb({ ...readyDevice, 'reverse --list': 'emulator-5554 tcp:8787 tcp:9999\n' }, unset),
+  );
+  assert.equal(noReverse.lines.at(-1)?.result, 'warn');
+  assert.ok(unset.every((args) => !args.includes('tcp:8787') || args.includes('--list')));
+});
+
+await test('the emulator check names what is missing, and an adb failure as an adb failure', () => {
   // An image without Play services, the app missing, and two devices online.
   const bare = checkLiveEmulator(
     { appId: 'dev.example.live', serial: 'emulator-5556', port: 8787, reverse: false },
-    fakeAdb({
-      devices: 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\nR58M\tunauthorized\n',
-      'shell getprop ro.build.version.sdk': '35',
-      'shell pm list packages com.google.android.gms': '',
-      'shell pm list packages dev.example.live': 'package:dev.example.live.debug\n',
-    }, []),
+    fakeAdb(
+      {
+        devices: 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\nR58M\tunauthorized\nemulator-5558\toffline\n',
+        'shell getprop sys.boot_completed': '1',
+        'shell getprop ro.build.version.sdk': '35',
+        'shell pm list packages dev.example.live': 'package:dev.example.live.debug\n',
+      },
+      [],
+    ),
   );
   assert.equal(bare.ok, false);
   assert.deepEqual(bare.lines.map((line) => `${line.result} ${line.check}`), [
@@ -203,13 +244,83 @@ await test('the emulator check reads the device and sets only the port forward',
     'fail app',
     'warn reverse',
   ]);
-  const ambiguous = checkLiveEmulator(
-    { appId: 'dev.example.live', port: 8787, reverse: false },
-    fakeAdb({ devices: 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\n' }, []),
+  const lines = (answers: Readonly<Record<string, string>>, options: { serial?: string } = {}, fail?: string) =>
+    checkLiveEmulator({ appId: 'dev.example.live', port: 8787, reverse: true, ...options }, fakeAdb(answers, [], fail))
+      .lines.map((line) => `${line.result} ${line.check}: ${line.detail}`);
+  assert.match(
+    lines({ devices: 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\n' })[0] ?? '',
+    /--serial/u,
   );
-  assert.equal(ambiguous.ok, false);
-  assert.match(ambiguous.lines[0]?.detail ?? '', /--serial/u);
+  assert.match(lines(readyDevice, { serial: 'emulator-5558' })[0] ?? '', /emulator-5558 is not online/u);
+  assert.match(lines({ devices: 'List of devices attached\n' })[0] ?? '', /no emulator or device is online/u);
+  assert.match(lines({ ...readyDevice, 'shell getprop sys.boot_completed': '' }).at(-1) ?? '', /fail boot/u);
+  // A device that drops mid-check is an adb failure, not a missing Play services.
+  assert.match(
+    lines(readyDevice, {}, 'shell pm list packages com.google.android.gms').at(-1) ?? '',
+    /^fail adb: .*pm list packages com\.google\.android\.gms failed/u,
+  );
+  assert.match(lines(readyDevice, {}, 'reverse tcp:8787 tcp:8787').at(-1) ?? '', /^fail adb: .*reverse tcp:8787 tcp:8787 failed/u);
+  assert.match(lines({ ...readyDevice, devices: '' }, {}, 'devices')[0] ?? '', /^fail adb: adb devices failed/u);
+  // The permission line: refused, never requested, or skipped below API 33 and when the level is unknown.
+  assert.ok(lines({
+    ...readyDevice,
+    'shell dumpsys package dev.example.live': '      android.permission.POST_NOTIFICATIONS: granted=false\n',
+  }).includes("warn notification-permission: POST_NOTIFICATIONS is not granted yet: turn notifications on from the game's settings screen (a tap), not with adb."));
+  assert.ok(lines({ ...readyDevice, 'shell dumpsys package dev.example.live': '' }).some((line) =>
+    line.startsWith('warn notification-permission: POST_NOTIFICATIONS is not in the app')));
+  assert.ok(!lines({ ...readyDevice, 'shell getprop ro.build.version.sdk': '32' }).some((line) =>
+    line.includes('notification-permission')));
+  assert.ok(lines({ ...readyDevice, 'shell getprop ro.build.version.sdk': '' }).includes(
+    'warn android-version: could not read ro.build.version.sdk; the permission check is skipped.',
+  ));
   assert.throws(() => checkLiveEmulator({ appId: 'not an id', port: 8787, reverse: false }, fakeAdb({}, [])));
+  assert.throws(() => checkLiveEmulator({ appId: 'dev.example.live', port: 0, reverse: false }, fakeAdb({}, [])));
+});
+
+await test('run arguments: the session, the guard, and numbers are checked, and no secret is echoed', () => {
+  const now = () => new Date('2026-10-21T12:34:56.000Z');
+  const parse = (args: readonly string[], env: Readonly<Record<string, string>> = {}) =>
+    parseRunArguments(args, { env, readTokenFile: () => ' token-from-file \n', now });
+  const local = parse(['--player', 'live-1']);
+  assert.equal(local.authorization, 'Bearer mpgd-dev.live-1.live-driver.live-driver');
+  assert.equal(local.worker.origin, 'http://127.0.0.1:8787');
+  assert.equal(local.runId, '20261021123456');
+  assert.equal(local.fireInSeconds, 5);
+  assert.equal(local.triggerScheduler, true);
+  assert.equal(parse(['--player', 'live-1', '--no-scheduler']).triggerScheduler, false);
+  assert.equal(parse(['--player', 'live-1', '--fcm-token-file', '/tmp/token']).fcmToken, 'token-from-file');
+  const staged = parse(
+    ['--worker', 'https://svc-staging.example.com', '--staging', 'svc-staging.example.com', '--auth-env', 'LIVE_AUTH'],
+    { LIVE_AUTH: '  Bearer real-session  ' },
+  );
+  assert.equal(staged.authorization, 'Bearer real-session');
+  assert.equal(staged.triggerScheduler, false);
+  assert.equal(staged.playerId, undefined);
+  const secret = 'Bearer pasted-secret';
+  for (const [args, message] of [
+    [['--auth-env', secret], /name of an environment variable/u],
+    [['--auth-env', 'EMPTY'], /\$EMPTY is empty/u],
+    [['--auth-env', 'LIVE_AUTH', '--player', 'p'], /development one/u],
+    [['--auth-env', 'LIVE_AUTH', '--session', 's'], /development one/u],
+    [['--staging', 'svc-staging.example.com', '--player', 'p'], /pass --worker/u],
+    [['--worker', 'http://127.0.0.1:8787', '--staging', 'x-staging.example.com', '--player', 'p'], /needs no --staging/u],
+    [['--player', 'p', '--fire-in', ''], /--fire-in "" is not a whole number/u],
+    [['--player', 'p', '--fire-in', '1e3'], /not a whole number/u],
+    [['--player', 'p', '--fire-in', '9999'], /at most 3600/u],
+    [[], /--player or --auth-env is required/u],
+  ] as const) {
+    let thrown: unknown;
+    try {
+      parse(args, { LIVE_AUTH: 'Bearer real-session', EMPTY: ' ' });
+    } catch (error) {
+      thrown = error;
+    }
+    assert.ok(thrown instanceof LiveDriverUsageError, `${args.join(' ')}: ${String(thrown)}`);
+    assert.match(thrown.message, message, args.join(' '));
+    assert.ok(!thrown.message.includes('pasted-secret'));
+  }
+  assert.throws(() => parse(['--player', 'p', '--unknown']), (error: unknown) =>
+    (error as { readonly code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION');
 });
 
 await test('the env file never lands in a repository, through a link, or under a wider mode', () => {
