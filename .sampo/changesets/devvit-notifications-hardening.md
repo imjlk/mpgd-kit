@@ -1,5 +1,0 @@
----
-npm/@mpgd/adapter-devvit: patch
----
-
-Harden Devvit notifications v2. History reads use `hGetAll` instead of allowlisted `hMGet`, so a send still plans when that command is disabled. A length or content `enqueue` refusal is `rejected` with reason `configuration` once, instead of an ambiguous replay, and only when the message also shows refusal evidence (too long, exceeds, invalid, not allowed, or not found); a field name alone stays ambiguous. A throw from WATCH or the planning read that is transient retries inside the store's attempt budget, as does an EXEC throw that proves the transaction aborted before commit (the 20-transaction cap, the 5-second timeout). A connection loss thrown by EXEC is not retried, because the reply may have been lost after commit. A refused opt-in or opt-out re-reads `isOptedIn` and returns the observed state, so a duplicate concurrent call is not a permanent configuration error. `devvitNotificationSessionFromContext` builds the session from the request context; `devvitNotificationSession` remains.
