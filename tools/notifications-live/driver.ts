@@ -56,8 +56,16 @@ function isLocalHostname(hostname: string): boolean {
     || host.endsWith('.localhost');
 }
 
-/** Whether a host name has a label (other than its last) that marks a test environment. */
+/**
+ * Whether a host name has a label (other than its last) that marks a test
+ * environment, whole or as a `-` separated part. A heuristic, and the second
+ * of two opt-ins: the maintainer also names the host with `--staging`. A
+ * name with a trailing dot is refused, so its last label is the real TLD.
+ */
 export function hasTestEnvironmentLabel(hostname: string): boolean {
+  if (hostname.endsWith('.')) {
+    return false;
+  }
   const labels = hostname.toLowerCase().split('.');
   return labels.slice(0, -1).some((label) =>
     label.split('-').some((part) => liveTestEnvironmentLabels.includes(part)),
@@ -95,6 +103,11 @@ export function assertLiveWorkerOrigin(raw: string, staging?: string): LiveWorke
     throw new LiveDriverUsageError(
       `${url.hostname} is not this machine. The driver writes test records; to run it against a `
         + 'test deployment, name its host with --staging <host>.',
+    );
+  }
+  if (url.hostname.endsWith('.')) {
+    throw new LiveDriverUsageError(
+      `--worker ${url.hostname} ends with a dot; name the host without it.`,
     );
   }
   if (staging.toLowerCase() !== url.hostname.toLowerCase()) {
@@ -135,6 +148,25 @@ export function developmentSessionAuthorization(input: {
     }
   }
   return `Bearer mpgd-dev.${input.playerId}.${input.sessionId}.${input.installationId}`;
+}
+
+/**
+ * The session a development `Authorization` value names, or `undefined`
+ * when it is not one: the inverse of `developmentSessionAuthorization`, for
+ * a stand-in session binding (the dry run) that must accept exactly what
+ * the driver sends.
+ */
+export function parseDevelopmentSessionAuthorization(
+  authorization: string,
+): { readonly playerId: string; readonly sessionId: string; readonly installationId: string } | undefined {
+  const match = /^Bearer mpgd-dev\.([^.]+)\.([^.]+)\.([^.]+)$/u.exec(authorization);
+  if (match === null) {
+    return undefined;
+  }
+  const [, playerId = '', sessionId = '', installationId = ''] = match;
+  return [playerId, sessionId, installationId].every((part) => developmentSessionPart.test(part))
+    ? { playerId, sessionId, installationId }
+    : undefined;
 }
 
 /** The part of the Fetch API the driver uses. */
@@ -288,14 +320,20 @@ export async function runNotificationsLiveDriver(
   if (options.fcmToken !== undefined) {
     secrets.push(options.fcmToken);
   }
-  const print = (line: string): void => dependencies.log(redactLiveSecrets(line, secrets));
+  const redact = (text: string): string => redactLiveSecrets(text, secrets);
+  const print = (line: string): void => dependencies.log(redact(line));
   const steps: LiveDriverStep[] = [];
-  const record = (name: string, result: LiveDriverStepResult, detail: string): void => {
-    steps.push({ name, result, detail });
+  /** Records a step that passed, warned, or was skipped. */
+  const record = (name: string, result: Exclude<LiveDriverStepResult, 'fail'>, detail: string): void => {
+    steps.push({ name, result, detail: redact(detail) });
     print(`${result.toUpperCase().padEnd(4)} ${name}: ${detail}`);
-    if (result === 'fail') {
-      throw new StepFailed(detail);
-    }
+  };
+  /** Records a failed step and stops the run: later steps depend on it. */
+  // Typed on the binding, so a call narrows like a throw.
+  const fail: (name: string, detail: string) => never = (name, detail) => {
+    steps.push({ name, result: 'fail', detail: redact(detail) });
+    print(`FAIL ${name}: ${detail}`);
+    throw new StepFailed(detail);
   };
   const call = async (
     method: 'GET' | 'POST',
@@ -320,14 +358,21 @@ export async function runNotificationsLiveDriver(
       });
     } catch (error) {
       const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      record(
+      return fail(
         `${method} ${route}`,
-        'fail',
         `the Worker could not be reached (${reason}). Is wrangler dev running?`,
       );
-      throw new StepFailed(reason);
     }
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      return fail(
+        `${method} ${route}`,
+        `the answer (${response.status}) could not be read (${reason}).`,
+      );
+    }
     let parsed: Readonly<Record<string, unknown>> | undefined;
     try {
       const value: unknown = text.length === 0 ? undefined : JSON.parse(text);
@@ -337,18 +382,18 @@ export async function runNotificationsLiveDriver(
     } catch {
       parsed = undefined;
     }
-    const shown = Array.from(text);
+    // Redacted before it is cut, so a secret across the cut cannot leave a prefix behind.
+    const shown = Array.from(redact(text));
     print(`     ${method} ${route}${authenticated ? '' : ' (no Authorization)'} -> ${response.status} ${
-      shown.length > maxPrintedAnswer ? `${shown.slice(0, maxPrintedAnswer).join('')}…` : text
+      shown.length > maxPrintedAnswer ? `${shown.slice(0, maxPrintedAnswer).join('')}…` : shown.join('')
     }`);
     return { status: response.status, body: parsed, text };
   };
   const expectStatus = (name: string, answer: Answer, status: number, hint?: string): void => {
     if (answer.status !== status) {
       const code = typeof answer.body?.['error'] === 'string' ? ` (${answer.body['error']})` : '';
-      record(
+      fail(
         name,
-        'fail',
         `expected ${status}, got ${answer.status}${code}${hint === undefined ? '' : `: ${hint}`}`,
       );
     }
@@ -356,6 +401,9 @@ export async function runNotificationsLiveDriver(
   const fireAt = (secondsFromNow: number): string =>
     new Date(dependencies.now() + secondsFromNow * 1000).toISOString();
   const reminderKey = `live-${options.runId}`;
+  if (!Number.isInteger(options.fireInSeconds) || options.fireInSeconds < 0 || options.fireInSeconds > 3600) {
+    throw new LiveDriverUsageError('fireInSeconds is whole seconds from 0 to 3600.');
+  }
   if (options.triggerScheduler && !options.worker.local) {
     throw new LiveDriverUsageError(
       'The scheduler route exists only on a local wrangler dev Worker; pass --no-scheduler.',
@@ -383,12 +431,10 @@ export async function runNotificationsLiveDriver(
       ? (targets as Readonly<Record<string, unknown>>)[options.target]
       : undefined;
     if (typeof provider !== 'string') {
-      record(
+      fail(
         'providers',
-        'fail',
         `the Worker serves no provider for ${options.target}: is FCM_SERVICE_ACCOUNT set?`,
       );
-      return { ok: false, steps, reminderKey };
     }
     record(
       'providers',
@@ -420,8 +466,7 @@ export async function runNotificationsLiveDriver(
     );
     const records = listField(consent, 'records');
     if (records === undefined) {
-      record('session', 'fail', 'GET /consent answered no records list.');
-      return { ok: false, steps, reminderKey };
+      return fail('session', 'GET /consent answered no records list.');
     }
     record('session', 'pass', `${records.length} consent record(s) for this player`);
 
@@ -466,7 +511,7 @@ export async function runNotificationsLiveDriver(
     expectStatus('topic-preference', preference, 200);
     const preferenceRecord = preference.body?.['record'] as JsonObject | undefined;
     if (preferenceRecord?.['kind'] !== 'topic-preference' || preferenceRecord['state'] !== 'granted') {
-      record('topic-preference', 'fail', 'the answer is not the granted topic-preference record.');
+      fail('topic-preference', 'the answer is not the granted topic-preference record.');
     }
     record('topic-preference', 'pass', `${options.topic} is on for this player`);
 
@@ -478,20 +523,15 @@ export async function runNotificationsLiveDriver(
     expectStatus('reminder-cancel', spare, 200);
     const spareStatus = spare.body?.['status'];
     if (spareStatus !== 'scheduled' && spareStatus !== 'replaced') {
-      record(
+      fail(
         'reminder-cancel',
-        'fail',
         `a reminder answered ${JSON.stringify(spareStatus)}: ${reminderSetHints[String(spareStatus)] ?? 'see the RFC "Reminders".'}`,
       );
     }
     const cancelled = await call('POST', '/reminders/cancel', { key: spareKey });
     expectStatus('reminder-cancel', cancelled, 200);
     if (cancelled.body?.['cancelled'] !== true) {
-      record(
-        'reminder-cancel',
-        'fail',
-        'cancelling a pending reminder did not answer cancelled: true.',
-      );
+      fail('reminder-cancel', 'cancelling a pending reminder did not answer cancelled: true.');
     }
     record('reminder-cancel', 'pass', 'a pending reminder is set and cancelled by key');
 
@@ -503,9 +543,8 @@ export async function runNotificationsLiveDriver(
     expectStatus('reminder', reminder, 200);
     const reminderStatus = reminder.body?.['status'];
     if (reminderStatus !== 'scheduled' && reminderStatus !== 'replaced') {
-      record(
+      fail(
         'reminder',
-        'fail',
         `answered ${JSON.stringify(reminderStatus)}: ${reminderSetHints[String(reminderStatus)] ?? 'see the RFC "Reminders".'}`,
       );
     }
@@ -533,25 +572,24 @@ export async function runNotificationsLiveDriver(
         false,
       );
       if (scheduled.status < 200 || scheduled.status >= 300) {
-        record(
+        fail(
           'scheduler',
-          'fail',
           `the scheduled route answered ${scheduled.status}: is this wrangler dev 4.x?`,
         );
       }
       const taken = await call('POST', '/reminders/cancel', { key: reminderKey });
       expectStatus('scheduler', taken, 200);
       if (taken.body?.['cancelled'] !== false) {
-        record(
+        fail(
           'scheduler',
-          'fail',
           'the reminder is still pending after the scheduler ran: was it due? Read the Worker log.',
         );
       }
+      // Taken is not delivered: a provider refusal shows only in the Worker log.
       record(
         'scheduler',
         'pass',
-        'the scheduler took the reminder; the push is on its way (Worker log, then the device).',
+        'the scheduler took the reminder; confirm the send in the Worker log and on the device.',
       );
     }
 
@@ -571,11 +609,17 @@ export async function runNotificationsLiveDriver(
           ...(options.deliver.templateData === undefined ? {} : { templateData: options.deliver.templateData }),
         });
         print(`     deliverNotification ${options.deliver.topic} -> ${JSON.stringify(result)}`);
-        const status = (result as { readonly status?: unknown } | undefined)?.status;
+        const answer = result as { readonly status?: unknown; readonly alreadyProcessed?: unknown } | undefined;
+        if (answer?.status !== 'delivered') {
+          fail('deliver', `deliverNotification answered ${JSON.stringify(answer?.status)}`);
+        }
+        // A replay of an earlier run's key answers delivered without a new push.
         record(
           'deliver',
-          status === 'delivered' ? 'pass' : 'fail',
-          `deliverNotification answered ${JSON.stringify(status)}`,
+          answer.alreadyProcessed === true ? 'warn' : 'pass',
+          answer.alreadyProcessed === true
+            ? 'deliverNotification answered an earlier send of this key; no new push'
+            : 'deliverNotification answered "delivered"',
         );
       }
     }
@@ -585,9 +629,9 @@ export async function runNotificationsLiveDriver(
     expectStatus('notices', notices, 200);
     const listedNotices = listField(notices, 'notices');
     if (listedNotices === undefined) {
-      record('notices', 'fail', 'GET /notices answered no notices list.');
+      return fail('notices', 'GET /notices answered no notices list.');
     }
-    record('notices', 'pass', `${listedNotices?.length ?? 0} notice(s) listed`);
+    record('notices', 'pass', `${listedNotices.length} notice(s) listed`);
     if (options.advertisingTextVersion !== undefined) {
       const advertising = await call('POST', '/consent', {
         record: {
@@ -606,7 +650,7 @@ export async function runNotificationsLiveDriver(
         record(
           'advertising-notice',
           'warn',
-          "no advertising result notice: the deployment's advertisingRules is not kr.",
+          "no advertising result notice: the deployment's advertisingRules is not kr (or not set).",
         );
       } else {
         const noticeRecord = notice['record'] as JsonObject | undefined;
@@ -625,12 +669,13 @@ export async function runNotificationsLiveDriver(
         const still = (listField(after, 'notices') ?? []).some(
           (entry) => entry['variant'] === notice['variant'],
         );
+        if (still) {
+          fail('advertising-notice', 'the notice is still listed after it was recorded as shown.');
+        }
         record(
           'advertising-notice',
-          still ? 'fail' : 'pass',
-          still
-            ? 'the notice is still listed after it was recorded as shown.'
-            : `${String(notice['variant'])} listed, shown, and gone`,
+          'pass',
+          `${String(notice['variant'])} listed, shown, and gone`,
         );
       }
     }

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   assertLiveWorkerOrigin,
   developmentSessionAuthorization,
+  parseDevelopmentSessionAuthorization,
   runNotificationsLiveDriver,
   wranglerDevScheduledRoute,
   type LiveDriverDependencies,
@@ -50,9 +51,13 @@ function kitRoot(): string {
 }
 
 /**
- * What wrangler 4's `--env-file` makes of the file: dotenv's line rule
- * (quotes stripped, no unescaping inside ' or `), then dotenv-expand
- * (`$NAME` and `${NAME}` expanded, `\$` turned into `$`).
+ * What wrangler 4's `--env-file` makes of the file, modelled on the dotenv
+ * 16 and dotenv-expand 12.0.2 that wrangler 4.107 bundles (neither is a
+ * dependency this test can import): dotenv's line rule (quotes stripped, no
+ * unescaping inside ' or `), then dotenv-expand (`$NAME` and `${NAME}`
+ * expanded, `\$` turned into `$`). `wrangler dev --env-file` does not let
+ * the process environment override the file's values. The kit's own
+ * `wrangler dev` run of a written file served the same catalog and key.
  */
 function readEnvFileAsWrangler(text: string): Record<string, string> {
   const line = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/gmu;
@@ -130,6 +135,9 @@ try {
     readFileSync(join(overlay, 'topics.json'), 'utf8').replaceAll('__GAME_TITLE__', title),
   ) as { topics: { id: string; quietHours?: unknown; frequency?: unknown; copy: Record<string, { body: string }> }[] };
   const reminderBody = "It's ready: $HOME and ${HOME} stay literal.";
+  // The send goes out in the catalog's default locale.
+  const challengeBody = catalog.topics.find((topic) => topic.id === 'friend-challenge')?.copy['ko']?.body ?? '';
+  assert.match(challengeBody, /\{\{friend\}\}/u);
   for (const topic of catalog.topics) {
     delete topic.quietHours;
     delete topic.frequency;
@@ -221,12 +229,7 @@ try {
   /** D1's development session, until it lands: `Bearer mpgd-dev.<player>.<session>.<installation>`. */
   const developmentSessions = {
     async authenticateNotificationSession({ authorization }: { readonly authorization: string }) {
-      const match = /^Bearer mpgd-dev\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{1,64})$/u.exec(
-        authorization,
-      );
-      return match === null
-        ? null
-        : { playerId: match[1] ?? '', sessionId: match[2] ?? '', installationId: match[3] ?? '' };
+      return parseDevelopmentSessionAuthorization(authorization) ?? null;
     },
   };
   assert.equal(vars.MPGD_STORE, 'memory');
@@ -309,7 +312,7 @@ try {
   // The reminder went out through the scheduler with the env file's copy intact, then the send.
   assert.deepEqual(sends, [
     { token: deviceToken, body: reminderBody },
-    { token: deviceToken, body: 'Dry Run 님이 도전장을 보냈어요.' },
+    { token: deviceToken, body: challengeBody.replace('{{friend}}', 'Dry Run') },
   ]);
   // The log carries neither the session token, the device token, nor the key.
   const log = lines.join('\n');

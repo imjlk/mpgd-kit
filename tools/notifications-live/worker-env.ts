@@ -1,6 +1,13 @@
-import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { parseFcmServiceAccount } from '@mpgd/game-services/notifications';
 
@@ -47,61 +54,111 @@ export interface LiveWorkerEnvResult {
 }
 
 /**
- * The dotenv value wrangler 4 reads back as `value`: quoted with `'` (or
- * `` ` `` when the text has a `'`), with `$` escaped, since wrangler expands
- * `$NAME` and `${NAME}` in every value and turns `\$` back into `$`.
+ * The dotenv value wrangler 4 reads back as `value` (wrangler 4.107 bundles
+ * dotenv 16 and dotenv-expand 12): single-quoted, so dotenv leaves `\n`
+ * escapes alone, with `$` escaped, since dotenv-expand expands `$NAME` and
+ * `${NAME}` in every value and turns `\$` back into `$`. A `'` cannot be
+ * escaped inside single quotes: JSON text (`json: true`) carries it as
+ * `\u0027`, which JSON reads back as `'`; any other value with one is
+ * refused.
  */
-export function formatLiveEnvValue(value: string): string {
+export function formatLiveEnvValue(value: string, options: { readonly json?: boolean } = {}): string {
   if (/[\r\n]/u.test(value)) {
     throw new LiveDriverUsageError('An env file value must be one line.');
   }
-  const escaped = value.replaceAll('$', '\\$');
-  for (const quote of ["'", '`']) {
-    if (!escaped.includes(quote)) {
-      return `${quote}${escaped}${quote}`;
-    }
+  if (value.endsWith('\\')) {
+    throw new LiveDriverUsageError('An env file value must not end with a backslash.');
   }
-  throw new LiveDriverUsageError("A value holds both ' and `; the env file cannot quote it.");
+  let escaped = value.replaceAll('$', '\\$');
+  if (escaped.includes("'")) {
+    if (options.json !== true) {
+      throw new LiveDriverUsageError("An env file value must not hold a '.");
+    }
+    escaped = escaped.replaceAll("'", '\\u0027');
+  }
+  return `'${escaped}'`;
+}
+
+/** Whether `child` is `parent` or inside it (both absolute). */
+function isWithin(parent: string, child: string): boolean {
+  const inside = relative(parent, child);
+  return inside === '' || (inside !== '..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside));
+}
+
+/** A path through its symbolic links when it exists, else as given; the case-folded file systems compare folded. */
+function canonical(path: string): string {
+  const real = existsSync(path) ? realpathSync.native(path) : path;
+  return process.platform === 'darwin' || process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
 /**
  * Refuses a path the live kit must never read: the maintainer's mise
  * secrets (`~/.config/mise`), which hold release credentials, not test ones.
+ * Both the path and the directory are compared through their symbolic links.
  */
 export function assertLiveReadablePath(path: string, home = homedir()): string {
   const absolute = resolve(path);
-  const real = existsSync(absolute) ? realpathSync(absolute) : absolute;
-  for (const forbidden of [join(home, '.config', 'mise')]) {
-    const inside = relative(forbidden, real);
-    if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))) {
-      throw new LiveDriverUsageError(
-        `The live kit does not read ${forbidden}; pass the test file itself.`,
-      );
-    }
-  }
-  return absolute;
-}
-
-function assertOutsideRepository(outPath: string, repositoryRoot: string): string {
-  const absolute = resolve(outPath);
-  // The directory must exist; resolve it through symbolic links.
-  const directory = dirname(absolute);
-  if (!existsSync(directory)) {
-    throw new LiveDriverUsageError(`--out directory ${directory} does not exist.`);
-  }
-  const target = join(realpathSync(directory), absolute.slice(directory.length + 1));
-  const inside = relative(realpathSync(repositoryRoot), target);
-  if (!inside.startsWith('..') && !isAbsolute(inside)) {
+  const forbidden = join(home, '.config', 'mise');
+  const candidates = [absolute, canonical(absolute)];
+  const roots = [forbidden, canonical(forbidden)];
+  const folded = process.platform === 'darwin' || process.platform === 'win32';
+  if (candidates.some((candidate) =>
+    roots.some((root) =>
+      isWithin(folded ? root.toLowerCase() : root, folded ? candidate.toLowerCase() : candidate),
+    ),
+  )) {
     throw new LiveDriverUsageError(
-      `--out ${absolute} is inside the repository; the env file holds the service-account key. `
-        + 'Write it outside the checkout, for example under ~/.mpgd/.',
+      `The live kit does not read ${forbidden}; pass the test file itself.`,
     );
   }
   return absolute;
 }
 
+/** The nearest directory at or above `directory` that holds a `.git`, if any. */
+function enclosingRepository(directory: string): string | undefined {
+  for (let current = directory; ; current = dirname(current)) {
+    if (existsSync(join(current, '.git'))) {
+      return current;
+    }
+    if (dirname(current) === current) {
+      return undefined;
+    }
+  }
+}
+
+function assertOutsideRepository(outPath: string, repositoryRoot: string): string {
+  const absolute = resolve(outPath);
+  // The directory must exist; it is compared through its symbolic links.
+  const directory = dirname(absolute);
+  if (!existsSync(directory)) {
+    throw new LiveDriverUsageError(`--out directory ${directory} does not exist.`);
+  }
+  const realDirectory = realpathSync.native(directory);
+  const repository = isWithin(canonical(repositoryRoot), canonical(realDirectory))
+    ? repositoryRoot
+    : enclosingRepository(realDirectory);
+  if (repository !== undefined) {
+    throw new LiveDriverUsageError(
+      `--out ${absolute} is inside the repository ${repository}; the env file holds the service-account key. `
+        + 'Write it outside every checkout, for example under ~/.mpgd/.',
+    );
+  }
+  // A link would write the key wherever it points.
+  if (lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+    throw new LiveDriverUsageError(`--out ${absolute} is a symbolic link; name the file itself.`);
+  }
+  return join(realDirectory, basename(absolute));
+}
+
+const projectIdPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u;
+
 export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnvResult {
   const outPath = assertOutsideRepository(input.outPath, input.repositoryRoot);
+  if (input.projectId !== undefined && !projectIdPattern.test(input.projectId)) {
+    throw new LiveDriverUsageError(
+      '--project-id is not a Firebase project id (6 to 30 a-z, 0-9, -).',
+    );
+  }
   const catalogPath = assertLiveReadablePath(input.catalogPath);
   const deploymentPath = assertLiveReadablePath(input.deploymentPath);
   const serviceAccountPath = assertLiveReadablePath(input.serviceAccountPath);
@@ -111,15 +168,24 @@ export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnv
     referenceNotificationTargetRegistry(),
     deployment,
   );
+  let raw: string;
+  try {
+    raw = readFileSync(serviceAccountPath, 'utf8');
+  } catch (error) {
+    const code = (error as { readonly code?: unknown }).code;
+    throw new LiveDriverUsageError(
+      `--service-account ${serviceAccountPath} could not be read (${typeof code === 'string' ? code : 'error'}).`,
+    );
+  }
   let account: ReturnType<typeof parseFcmServiceAccount>;
   let accountText: string;
   try {
-    const raw = readFileSync(serviceAccountPath, 'utf8');
     account = parseFcmServiceAccount(raw);
     // One line: the key's private_key keeps its \n escapes inside the JSON string.
     accountText = JSON.stringify(JSON.parse(raw));
   } catch (error) {
-    // parseFcmServiceAccount names a missing field, never a value.
+    // parseFcmServiceAccount names a missing field, never a value; a JSON
+    // parse error may quote the file, so it is not repeated.
     throw new LiveDriverUsageError(
       `--service-account is not a Firebase service-account key: ${
         error instanceof TypeError && error.message.startsWith('The FCM') ? error.message : 'not JSON'
@@ -138,12 +204,14 @@ export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnv
   const text = [
     '# Written by `pnpm notifications:live env` for one local `wrangler dev --env-file` run.',
     '# It holds a Firebase service-account key: keep it out of every repository and delete it after the test.',
-    ...variables.map(([name, value]) => `${name}=${formatLiveEnvValue(value)}`),
+    ...variables.map(([name, value]) => `${name}=${formatLiveEnvValue(value, { json: true })}`),
     '',
   ].join('\n');
-  writeFileSync(outPath, text, { mode: 0o600, flag: input.overwrite === true ? 'w' : 'wx' });
-  // An overwritten file keeps its old mode; the key is for this user only.
-  chmodSync(outPath, 0o600);
+  if (input.overwrite === true && existsSync(outPath)) {
+    // Created again rather than truncated, so the key is never under an older, wider mode.
+    unlinkSync(outPath);
+  }
+  writeFileSync(outPath, text, { mode: 0o600, flag: 'wx' });
   return {
     outPath,
     projectId: input.projectId ?? account.projectId,
