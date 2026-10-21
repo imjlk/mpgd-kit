@@ -199,6 +199,154 @@ describe('adapter-browser', () => {
     ).resolves.toBe('unavailable');
   });
 
+  it('does not claim a score was submitted when no native leaderboard is installed', async () => {
+    const gateway = createBrowserPlatformGateway();
+
+    expect((await gateway.getCapabilities()).nativeLeaderboard).toBe(false);
+    await expect(gateway.leaderboard.submitScore({
+      leaderboardId: 'daily',
+      score: 10,
+      runId: 'run-1',
+      submittedAt: '2026-10-21T00:00:00.000Z',
+    })).resolves.toEqual({ submitted: false });
+  });
+
+  it('fills missing launch keys from nested queryParams and lets direct params win', async () => {
+    const gateway = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?puzzleId=direct-puzzle&${nestedQueryParams({
+        puzzleId: 'nested-puzzle',
+        challengeToken: 'nested-token',
+        entry: 'daily',
+      })}`,
+    });
+
+    await expect(gateway.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'daily',
+      puzzleId: 'direct-puzzle',
+      referralToken: 'nested-token',
+    });
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toEqual({
+      puzzleId: 'direct-puzzle',
+      challengeToken: 'nested-token',
+    });
+  });
+
+  it('drops oversized puzzleId and challengeToken values from direct and nested params', async () => {
+    const maximum = 'p'.repeat(256);
+    const oversized = 't'.repeat(257);
+    const direct = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?puzzleId=${maximum}&challengeToken=${oversized}`,
+    });
+
+    await expect(direct.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'home',
+      puzzleId: maximum,
+    });
+    await expect(direct.sharing?.readInboundShare?.()).resolves.toEqual({
+      puzzleId: maximum,
+    });
+
+    const nested = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?${nestedQueryParams({
+        puzzleId: oversized,
+        challengeToken: maximum,
+      })}`,
+    });
+    await expect(nested.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'friend-challenge',
+      referralToken: maximum,
+    });
+    await expect(nested.sharing?.readInboundShare?.()).resolves.toEqual({
+      challengeToken: maximum,
+    });
+  });
+
+  it('ignores nested queryParams beyond 4096 characters and stops after 32 entries', async () => {
+    const token = 'cap-token';
+    const skeleton = JSON.stringify({ challengeToken: token, filler: '' });
+    const atCap = {
+      challengeToken: token,
+      filler: 'x'.repeat(4_096 - skeleton.length),
+    };
+    const overCap = {
+      challengeToken: 'over-cap-token',
+      filler: 'f'.repeat(4_096),
+    };
+    expect(JSON.stringify(atCap)).toHaveLength(4_096);
+    expect(JSON.stringify(overCap).length).toBeGreaterThan(4_096);
+
+    const capped = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?${nestedQueryParams(atCap)}`,
+    });
+    await expect(capped.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'friend-challenge',
+      referralToken: token,
+    });
+
+    const uncapped = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?${nestedQueryParams(overCap)}`,
+    });
+    await expect(uncapped.presentation?.getLaunchIntent()).resolves.toEqual({ entry: 'home' });
+    await expect(uncapped.sharing?.readInboundShare?.()).resolves.toBeNull();
+
+    const padding = Object.fromEntries(
+      Array.from({ length: 32 }, (_, index) => [`pad${index}`, 'x']),
+    );
+    const late = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?${nestedQueryParams({
+        ...padding,
+        challengeToken: 'late-token',
+      })}`,
+    });
+    await expect(late.presentation?.getLaunchIntent()).resolves.toEqual({ entry: 'home' });
+
+    const early = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?${nestedQueryParams({
+        challengeToken: 'early-token',
+        ...padding,
+      })}`,
+    });
+    await expect(early.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'friend-challenge',
+      referralToken: 'early-token',
+    });
+  });
+
+  it('rejects launch parameters that contain control characters', async () => {
+    const direct = createBrowserPlatformGateway({
+      locationHref: 'https://game.example/play?puzzleId=daily-1&challengeToken=bad%00token',
+    });
+    await expect(direct.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'home',
+      puzzleId: 'daily-1',
+    });
+    await expect(direct.sharing?.readInboundShare?.()).resolves.toEqual({
+      puzzleId: 'daily-1',
+    });
+
+    const nested = createBrowserPlatformGateway({
+      locationHref: `https://game.example/play?${nestedQueryParams({
+        puzzleId: 'a\u0001b',
+        challengeToken: 'visible-token',
+      })}`,
+    });
+    await expect(nested.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'friend-challenge',
+      referralToken: 'visible-token',
+    });
+    await expect(nested.sharing?.readInboundShare?.()).resolves.toEqual({
+      challengeToken: 'visible-token',
+    });
+
+    const both = createBrowserPlatformGateway({
+      locationHref: 'https://game.example/play'
+        + `?puzzleId=${encodeURIComponent('a\u007fb')}`
+        + `&challengeToken=${encodeURIComponent('tok\nen')}`,
+    });
+    await expect(both.sharing?.readInboundShare?.()).resolves.toBeNull();
+    await expect(both.presentation?.getLaunchIntent()).resolves.toEqual({ entry: 'home' });
+  });
+
   it('persists save data through localStorage when available', async () => {
     const storage = new Map<string, string>();
     Object.defineProperty(globalThis, 'localStorage', {
@@ -390,3 +538,7 @@ describe('adapter-browser', () => {
     ).rejects.toThrow('Browser storage is unavailable');
   });
 });
+
+function nestedQueryParams(value: unknown): string {
+  return `queryParams=${encodeURIComponent(JSON.stringify(value))}`;
+}
