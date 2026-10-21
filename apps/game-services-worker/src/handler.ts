@@ -329,7 +329,7 @@ function buildWorkerFetchHandler(
   env: GameServicesWorkerEnv,
 ): (request: Request) => Promise<Response> {
   assertGooglePlayUnboundPlayerRequiresIngressAuth(env);
-  // First, so no other misconfiguration hides this refusal.
+  // Before the ad and evidence resolvers, so their refusals do not hide this one.
   assertDevelopmentNotificationSessionsAllowed(env);
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env, admobConfig);
