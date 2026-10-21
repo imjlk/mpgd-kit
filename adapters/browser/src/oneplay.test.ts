@@ -97,7 +97,7 @@ function commerceFixture() {
   const server = {
     issueIntent: vi.fn(async () => ({ developerPayload: 'server-intent' })),
   };
-  return { sdk, purchase, products, server };
+  return { sdk, purchase, products, server, emit: f.emit };
 }
 function purchaseInput(idempotencyKey: string, overrides: Partial<RequestPurchaseInput> = {}): RequestPurchaseInput {
   return { logicalId: 'COINS', source: 'shop', idempotencyKey, ...overrides };
@@ -778,5 +778,145 @@ describe('ONE play H5 adapter', () => {
       reason: 'no-fill',
     });
     expect(await provider.getAvailability(show)).toEqual({ state: 'available' });
+  });
+  it('releases fullscreen ownership when an ad show rejects before the host pauses and does not grant', async () => {
+    const f = commerceFixture();
+    f.sdk.ads.showRewardedAsync = async () => {
+      throw new Error('bridge lost');
+    };
+    const provider = createOnePlayAdProvider({
+      sdk: f.sdk,
+      placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } },
+      rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) },
+      showTimeoutMs: 40,
+      recoveryTimeoutMs: 40,
+    });
+    const events: string[] = [];
+    provider.subscribe((event) => events.push(event.type));
+    const commerce = createOnePlayCommerceProvider(f);
+    const reward = await toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'claim' });
+    expect(reward.rewardGranted).toBe(false);
+    expect(reward.status).toBe('failed');
+    expect(reward.evidence).toBeUndefined();
+    expect(events).not.toContain('reward-earned');
+    expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toEqual({ state: 'available' });
+    await expect(commerce.requestPurchase(purchaseInput('after-reject'))).resolves.toMatchObject({ outcome: 'purchased' });
+  });
+  it('keeps occupancy after a rejection that paused, then releases it on the recovery bound without granting', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = commerceFixture();
+      f.sdk.ads.showInterstitialAsync = async () => {
+        f.emit('pause', { reason: 'ad' });
+        throw new Error('bridge lost');
+      };
+      const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds, showTimeoutMs: 40, recoveryTimeoutMs: 40 });
+      const commerce = createOnePlayCommerceProvider(f);
+      const pending = provider.show(show);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(pending).resolves.toMatchObject({ outcome: 'pending', presentation: 'unknown', reason: 'outcome-unknown' });
+      expect(await provider.getAvailability(show)).toMatchObject({ reason: 'busy' });
+      await expect(commerce.requestPurchase(purchaseInput('during'))).rejects.toMatchObject({ code: 'IN_PROGRESS' });
+      await vi.advanceTimersByTimeAsync(40);
+      expect(await provider.getAvailability(show)).toEqual({ state: 'available' });
+      await expect(commerce.requestPurchase(purchaseInput('after'))).resolves.toMatchObject({ outcome: 'purchased' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('resolves a show that never settles as pending without granting, and frees checkout after recovery or a later terminal result', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = commerceFixture();
+      let finish: ((result: { status: 'rewarded'; requestId: string }) => void) | undefined;
+      f.sdk.ads.showRewardedAsync = () => new Promise((resolve) => {
+        finish = resolve;
+      });
+      const provider = createOnePlayAdProvider({
+        sdk: f.sdk,
+        placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } },
+        rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) },
+        showTimeoutMs: 40,
+        recoveryTimeoutMs: 80,
+      });
+      const events: string[] = [];
+      provider.subscribe((event) => events.push(event.type));
+      const commerce = createOnePlayCommerceProvider(f);
+      const pending = toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'claim' });
+      await vi.advanceTimersByTimeAsync(40);
+      const reward = await pending;
+      expect(reward).toMatchObject({
+        status: 'pending',
+        rewardGranted: false,
+        evidence: { payload: { requestId: 'server-request', rewardGranted: false } },
+      });
+      expect(events).toEqual(['requested', 'unknown']);
+      await expect(commerce.requestPurchase(purchaseInput('during'))).rejects.toMatchObject({ code: 'IN_PROGRESS' });
+      finish?.({ status: 'rewarded', requestId: 'server-request' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).not.toContain('reward-earned');
+      expect(reward.rewardGranted).toBe(false);
+      expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toEqual({ state: 'available' });
+      await expect(commerce.requestPurchase(purchaseInput('after-terminal'))).resolves.toMatchObject({ outcome: 'purchased' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('frees an unsettled show on the recovery bound when the SDK never calls back', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = commerceFixture();
+      f.sdk.ads.showInterstitialAsync = () => new Promise(() => {});
+      const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds, showTimeoutMs: 20, recoveryTimeoutMs: 20 });
+      const commerce = createOnePlayCommerceProvider(f);
+      const pending = provider.show(show);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(pending).resolves.toMatchObject({ outcome: 'pending', presentation: 'unknown' });
+      await expect(commerce.requestPurchase(purchaseInput('during'))).rejects.toMatchObject({ code: 'IN_PROGRESS' });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await provider.getAvailability(show)).toEqual({ state: 'available' });
+      await expect(commerce.requestPurchase(purchaseInput('after-recovery'))).resolves.toMatchObject({ outcome: 'purchased' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('clears fullscreen owners on dispose so a hung ad cannot wedge the next checkout', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = commerceFixture();
+      f.sdk.ads.showInterstitialAsync = () => new Promise(() => {});
+      const gateway = await createOnePlayPlatformGateway({
+        sdk: f.sdk,
+        products: f.products,
+        commerceServer: f.server,
+        placementIds,
+      });
+      const hung = gateway.ads.showInterstitial?.({ placementId: 'STAGE_END_INTERSTITIAL' });
+      await gateway.lifecycle.dispose?.();
+      const commerce = createOnePlayCommerceProvider(f);
+      await expect(commerce.requestPurchase(purchaseInput('after-dispose'))).resolves.toMatchObject({ outcome: 'purchased' });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(commerce.requestPurchase(purchaseInput('after-dispose-timer'))).resolves.toMatchObject({ outcome: 'purchased' });
+      void hung;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('consumes the host back event when a handler returns a promise', async () => {
+    const f = fixture();
+    let host: (() => boolean) | undefined;
+    f.sdk.onBackPressed = (callback) => {
+      host = callback;
+    };
+    const gateway = await createOnePlayPlatformGateway({ sdk: f.sdk, storage: f.storage });
+    let older = 0;
+    gateway.lifecycle.onBackButton?.(() => {
+      older += 1;
+      return Promise.resolve(false);
+    });
+    gateway.lifecycle.onBackButton?.(() => false);
+    expect(host?.()).toBe(true);
+    expect(older).toBe(1);
+    await gateway.lifecycle.dispose?.();
   });
 });

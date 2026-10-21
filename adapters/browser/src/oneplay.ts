@@ -7,7 +7,11 @@ import {
 } from '@mpgd/platform';
 import { toAdAdapter } from '@mpgd/platform/ads';
 import { createBrowserPlatformGateway, type BrowserPlatformGatewayOptions } from './index.js';
-import { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
+import {
+  clearOnePlayFullscreenOwner,
+  createOnePlayAdProvider,
+  type OnePlayRewardRequestPort,
+} from './oneplay-ads.js';
 import {
   createOnePlayCommerceProvider,
   type OnePlayCommerceProduct,
@@ -135,11 +139,11 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
       for (const handler of [...back].reverse()) {
         try {
           const result = handler({ canGoBack: false });
-          if (result === true) {
+          if (result === true || result instanceof Promise) {
+            if (result instanceof Promise) {
+              void result.catch(report);
+            }
             return true;
-          }
-          if (result instanceof Promise) {
-            void result.catch(report);
           }
         } catch (error) {
           report(error);
@@ -194,6 +198,9 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
     async dispose() {
       if (!disposed) {
         disposed = true;
+        if (host !== undefined) {
+          clearOnePlayFullscreenOwner(host);
+        }
         detach();
         pauses.clear();
         resumes.clear();

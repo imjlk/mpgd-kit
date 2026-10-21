@@ -8,13 +8,22 @@ Use `createOnePlayPlatformGateway` from `@mpgd/adapter-browser/oneplay`. The ada
 
 `playerId` is a game-specific pseudonym: the gateway reports `platform-anonymous` / `platform-asserted`, never a verified login. Authenticate game-services requests with a game-owned server session. SDK identity alone cannot authorize access to another player's saves or ledger.
 
-The adapter supplies locale, ringer mute policy and initial safe-area insets. Host mute uses a separate execution block, so changing an in-game setting cannot override it. Pause/resume events are retained across initialization. Exit listeners are synchronous checkpoints: save through `storage.saveSync` in less than 500 ms. The starter checkpoints its local run state; server saves must happen at earlier checkpoints. Storage is partitioned by platform player ID and is local, not cloud storage. Back handlers must return exactly `true` synchronously; async handlers cannot consume the ONE play back event. Dispose the gateway lifecycle when the owning document is torn down.
+The adapter supplies locale, ringer mute policy and initial safe-area insets. Host mute uses a separate execution block, so changing an in-game setting cannot override it. Pause/resume events are retained across initialization. Exit listeners are synchronous checkpoints: save through `storage.saveSync` in less than 500 ms. The starter checkpoints its local run state; server saves must happen at earlier checkpoints. Storage is partitioned by platform player ID and is local, not cloud storage. Back handlers consume the host event by returning exactly `true` or a Promise. The ONE SDK callback is synchronous, so a Promise is treated as handled immediately and the host does not exit before the decision; a later `false` cannot undo that. A synchronous `false` or throw falls through to an older handler. Dispose the gateway lifecycle when the owning document is torn down. Dispose also clears shared fullscreen occupancy, so a torn-down document cannot wedge the next ad or checkout.
+
+<!--
+@link ../adapters/browser/src/oneplay.ts#createOnePlayPlatformGateway A Promise from onBackButton consumes the synchronous ONE SDK back callback, and dispose clears shared fullscreen occupancy.
+-->
 
 ## Ads
 
 The default target disables monetization until game-owned configuration is ready. Request a ONEconsole placement ID for each format, add the ID to the game's ad catalog under `platformPlacementIds.oneplay`, then enable the corresponding target feature and monetization policy. The SDK supports rewarded and interstitial formats; banners are unsupported.
 
-Interstitials map logical placements to issued IDs. Invocation replay cannot reopen SDK UI, and native fullscreen ownership is shared across gateway instances. `no_fill` never grants a reward. A timeout, transport failure or unknown result keeps the presentation uncertain and prevents another native request for the lifetime of that SDK instance. Do not clear ownership because of `resume`: v1.1.0 synthesizes that event in a `finally` block even on timeout, while the public guide allows late native display. Reload the document to recover an unresolved native UI; do not retry automatically.
+Interstitials map logical placements to issued IDs. Invocation replay cannot reopen SDK UI, and native fullscreen ownership is shared across gateway instances. `no_fill` never grants a reward. A settled SDK result with an unknown reason (`timeout`, `network_error`, `internal_error`, or a mismatched request id) keeps the presentation uncertain and blocks another native request for that SDK instance. Do not clear that occupancy because of `resume`: v1.1.0 synthesizes that event in a `finally` block even on timeout, while the public guide allows late native display. A rejection that arrives before any host `pause` did not open UI: the owner is released and the show is not started, with no reward. A show promise that never settles resolves `pending` after 60 seconds. `rewardGranted` stays false. Occupancy remains until the SDK later returns a terminal result, a 5-minute recovery bound, or `lifecycle.dispose()`. Do not retry automatically.
+
+<!--
+@link ../adapters/browser/src/oneplay-ads.ts#createOnePlayAdProvider Bounds showRewardedAsync and showInterstitialAsync. A rejection before pause releases occupancy. A hang resolves pending without a grant and keeps occupancy until a terminal result or the recovery bound.
+@link ../adapters/browser/src/oneplay-ads.ts#clearOnePlayFullscreenOwner lifecycle.dispose clears the shared fullscreen owner.
+-->
 
 Rewarded grants and purchases require independent server verification. `authoritativeGameServices: true` is a policy opt-in, not proof or authentication. Missing server integrations must remain unavailable. Reward request IDs are issued by the server and bound to its authenticated session. The backend ledger credits rewards only after independent signed SSV verification. Purchases use authenticated checkout intents and independent API V7 verification, with ledger grants preceding consume or acknowledge.
 
@@ -54,7 +63,12 @@ Use the server-only `@mpgd/game-services/oneplay-purchase-client`, `oneplay-purc
 
 PNS can be delayed or lost. Keep an authenticated purchase recovery route and a durable reconciliation queue with securely retained tokens/intent references; periodically re-query unresolved or refund-eligible purchases and use the same boundary and ledger paths. Do not rely only on notifications. Accept PNS with HTTP 2xx only after durable processing; pending results or transient ledger/revocation failures require a non-2xx retry response. Client monetization journals must encrypt and access-control token evidence. Use the Game Services reconciler (`createRecoverableMonetizationClient(...).reconcile()`) plus backend verification, and your authenticated purchase recovery route, to reconcile interrupted operations.
 
-The commerce provider reports trusted physical checkout closure through `gateway.commerce.presentation` (a `CommerceProvider.presentation` subscription with `open`, `closed`, `not-started`, and `unknown` facts and a per-attempt sequence). The common runtime subscribes automatically, separately from grant status. Unknown/transport/timeout results retain native ownership and the runtime presentation gate. SDK `resume` never proves closure. Reload to recover an unresolved native surface, then reconcile the server intent; do not automatically reopen checkout with a new key.
+The commerce provider reports trusted physical checkout closure through `gateway.commerce.presentation` (a `CommerceProvider.presentation` subscription with `open`, `closed`, `not-started`, and `unknown` facts and a per-attempt sequence). The common runtime subscribes automatically, separately from grant status. Unknown/transport/timeout purchase results retain native ownership and the runtime presentation gate. SDK `resume` never proves closure. `lifecycle.dispose()` clears that shared occupancy because the owning document is gone; otherwise reload to recover an unresolved native surface, then reconcile the server intent. Do not automatically reopen checkout with a new key.
+
+<!--
+@link ../adapters/browser/src/oneplay-commerce.ts#createOnePlayCommerceProvider An unknown purchase result keeps shared fullscreen occupancy.
+@link ../adapters/browser/src/oneplay-ads.ts#clearOnePlayFullscreenOwner Dispose releases that occupancy without granting.
+-->
 
 ### Migrating from the v1 adapter
 

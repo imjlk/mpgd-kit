@@ -11,7 +11,7 @@ import {
   type AdShowInput,
   type AdShowResult,
 } from '@mpgd/platform/ads';
-import type { OnePlaySdk } from './oneplay-sdk.js';
+import type { OnePlayAdResult, OnePlaySdk } from './oneplay-sdk.js';
 
 /** Authenticated server issuance. The client never chooses requestId or authorizes a grant. */
 export interface OnePlayRewardRequestPort {
@@ -21,14 +21,63 @@ export interface OnePlayRewardRequestPort {
     readonly idempotencyKey: string;
   }): Promise<{ readonly requestId: string }>;
 }
-/** Shared across gateways and checkout: a timeout cannot prove native fullscreen UI has closed. */
+/** Shared across gateways and checkout. Dispose and a bounded recovery can clear it; resume cannot. */
 export const onePlayFullscreenOwners = new WeakMap<OnePlaySdk, object>();
+const onePlayOccupancyCancels = new WeakMap<OnePlaySdk, Set<() => void>>();
+const defaultShowTimeoutMs = 60_000;
+const defaultRecoveryTimeoutMs = 5 * 60_000;
+
+/** Drop shared fullscreen occupancy and any show/recovery timers for this SDK. */
+export function clearOnePlayFullscreenOwner(sdk: OnePlaySdk): void {
+  onePlayFullscreenOwners.delete(sdk);
+  const cancels = onePlayOccupancyCancels.get(sdk);
+  if (cancels === undefined) {
+    return;
+  }
+  onePlayOccupancyCancels.delete(sdk);
+  for (const cancel of cancels) {
+    try {
+      cancel();
+    } catch { /* Teardown cannot keep a wedged owner. */ }
+  }
+}
+
+function bindOccupancyCancel(sdk: OnePlaySdk, cancel: () => void): () => void {
+  const set = onePlayOccupancyCancels.get(sdk) ?? new Set();
+  set.add(cancel);
+  onePlayOccupancyCancels.set(sdk, set);
+  return () => {
+    set.delete(cancel);
+  };
+}
+
+function requireTimeout(value: number | undefined, fallback: number, label: string): number {
+  const timeout = value ?? fallback;
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2_147_483_647) {
+    throw new RangeError(`${label} must be a positive timer duration.`);
+  }
+  return timeout;
+}
 export function createOnePlayAdProvider(input: {
   readonly sdk?: OnePlaySdk;
   readonly placementIds: Readonly<Record<string, { readonly format: 'rewarded' | 'interstitial'; readonly platformId: string }>>;
   readonly rewardRequests?: OnePlayRewardRequestPort;
+  /** Bounds the SDK show promise. A hang resolves pending and does not grant. */
+  readonly showTimeoutMs?: number;
+  /** After an unresolved or paused rejection, release occupancy if no terminal result arrives. */
+  readonly recoveryTimeoutMs?: number;
 }): AdProvider {
   const { sdk, rewardRequests } = input;
+  const showTimeoutMs = requireTimeout(
+    input.showTimeoutMs,
+    defaultShowTimeoutMs,
+    'ONE play ad show timeout',
+  );
+  const recoveryTimeoutMs = requireTimeout(
+    input.recoveryTimeoutMs,
+    defaultRecoveryTimeoutMs,
+    'ONE play ad recovery timeout',
+  );
   const placements = Object.fromEntries(
     Object.entries(input.placementIds).map(([key, value]) => [key, Object.freeze({ ...value })]),
   );
@@ -95,6 +144,14 @@ export function createOnePlayAdProvider(input: {
       onePlayFullscreenOwners.set(sdk, owner);
       const release = () => { if (onePlayFullscreenOwners.get(sdk) === owner) { onePlayFullscreenOwners.delete(sdk); } };
       const promise = Promise.resolve().then(async (): Promise<AdShowResult> => {
+        const abandoned = (): AdShowResult => ({
+          ...base,
+          eligibility: unavailableEligibility,
+          outcome: 'failed',
+          presentation: 'not-started',
+          reason: 'transient-failure',
+        });
+        if (onePlayFullscreenOwners.get(sdk) !== owner) { return abandoned(); }
         let requestId: string | undefined;
         let claimEvidence: PlatformEvidenceEnvelope | undefined;
         const evidence = (event: 'rewarded' | 'outcome-unknown'): PlatformEvidenceEnvelope => ({
@@ -112,37 +169,151 @@ export function createOnePlayAdProvider(input: {
             emit({ type: 'failed', reason: 'transient-failure' });
             return { ...base, eligibility: 'not-earned', outcome: 'failed', presentation: 'not-started', reason: 'transient-failure' };
           }
+          if (onePlayFullscreenOwners.get(sdk) !== owner) { return abandoned(); }
         }
         emit({ type: 'requested', ...(claimEvidence === undefined ? {} : { claimEvidence }) });
-        try {
-          const result = request.format === 'rewarded' && requestId !== undefined
-            ? await sdk.ads.showRewardedAsync({ placementId: placement.platformId, requestId })
-            : await sdk.ads.showInterstitialAsync({ placementId: placement.platformId });
-          const correlated = request.format === 'interstitial' || result.requestId === requestId;
-          if (correlated && request.format === 'rewarded' && result.status === 'rewarded') {
-            const earned = evidence('rewarded');
-            emit({ type: 'reward-earned', evidence: earned });
+        let opened = false;
+        let dropped = false;
+        const onPause = () => { opened = true; };
+        sdk.on('pause', onPause);
+        const pendingResult = (): AdShowResult => ({
+          ...base,
+          outcome: 'pending',
+          presentation: 'unknown',
+          eligibility: request.format === 'rewarded' ? 'unknown' : 'not-applicable',
+          reason: 'outcome-unknown',
+          ...(claimEvidence === undefined ? {} : { claimEvidence }),
+        });
+        let showTimer: ReturnType<typeof setTimeout> | undefined;
+        let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+        let resolveRace: ((value: { readonly kind: 'value'; readonly value: OnePlayAdResult } | { readonly kind: 'rejected' } | { readonly kind: 'timeout' } | { readonly kind: 'dropped' }) => void) | undefined;
+        const clearTimers = () => {
+          if (showTimer !== undefined) { clearTimeout(showTimer); showTimer = undefined; }
+          if (recoveryTimer !== undefined) { clearTimeout(recoveryTimer); recoveryTimer = undefined; }
+        };
+        const unlisten = () => { sdk.off('pause', onPause); };
+        const endWatch = () => { clearTimers(); unlisten(); unbind(); };
+        const drop = () => {
+          if (dropped) { return; }
+          dropped = true;
+          clearTimers();
+          unlisten();
+          release();
+          resolveRace?.({ kind: 'dropped' });
+        };
+        const unbind = bindOccupancyCancel(sdk, drop);
+        const armRecovery = () => {
+          if (dropped) { return; }
+          recoveryTimer = setTimeout(() => {
+            recoveryTimer = undefined;
+            if (!dropped && onePlayFullscreenOwners.get(sdk) === owner) { release(); }
+            endWatch();
+          }, recoveryTimeoutMs);
+        };
+        const sdkCall = request.format === 'rewarded' && requestId !== undefined
+          ? sdk.ads.showRewardedAsync({ placementId: placement.platformId, requestId })
+          : sdk.ads.showInterstitialAsync({ placementId: placement.platformId });
+        const raced = await new Promise<
+          | { readonly kind: 'value'; readonly value: OnePlayAdResult }
+          | { readonly kind: 'rejected' }
+          | { readonly kind: 'timeout' }
+          | { readonly kind: 'dropped' }
+        >((done) => {
+          resolveRace = done;
+          showTimer = setTimeout(() => done({ kind: 'timeout' }), showTimeoutMs);
+          sdkCall.then(
+            (value) => {
+              if (showTimer !== undefined) { clearTimeout(showTimer); showTimer = undefined; }
+              done({ kind: 'value', value });
+            },
+            () => {
+              if (showTimer !== undefined) { clearTimeout(showTimer); showTimer = undefined; }
+              done({ kind: 'rejected' });
+            },
+          );
+        });
+        if (dropped || raced.kind === 'dropped') { endWatch(); return pendingResult(); }
+        if (raced.kind === 'timeout') {
+          emit({ type: 'unknown' });
+          armRecovery();
+          void sdkCall.then(
+            (value) => {
+              if (dropped || !terminalAdResult(request.format, requestId, value)) { return; }
+              clearTimers();
+              release();
+              endWatch();
+            },
+            () => {
+              if (dropped || opened) { return; }
+              clearTimers();
+              release();
+              endWatch();
+            },
+          );
+          return pendingResult();
+        }
+        if (raced.kind === 'rejected') {
+          if (!opened) {
+            endWatch();
             release();
-            emit({ type: 'closed' });
-            return { ...base, outcome: 'shown', presentation: 'closed', eligibility: 'eligible', evidence: earned, claimEvidence: earned };
+            emit({ type: 'failed', reason: 'transient-failure' });
+            return { ...base, outcome: 'failed', presentation: 'not-started', eligibility: unavailableEligibility, reason: 'transient-failure' };
           }
-          if (correlated && (request.format === 'interstitial' && result.status === 'completed'
-            || request.format === 'rewarded' && result.status === 'dismissed')) {
-            release();
-            emit({ type: 'closed' });
-            return { ...base, outcome: 'shown', presentation: 'closed', eligibility: unavailableEligibility };
-          }
-          const reason = correlated && result.status === 'failed' ? noStartReason(result.reason) : undefined;
-          if (reason !== undefined) { release(); emit({ type: 'failed', reason }); return { ...base, outcome: 'unavailable', presentation: 'not-started', eligibility: unavailableEligibility, reason }; }
-        } catch { /* Transport exceptions leave the physical outcome uncertain. */ }
+          emit({ type: 'unknown' });
+          armRecovery();
+          return pendingResult();
+        }
+        const result = raced.value;
+        const correlated = request.format === 'interstitial' || result.requestId === requestId;
+        if (correlated && request.format === 'rewarded' && result.status === 'rewarded') {
+          const earned = evidence('rewarded');
+          emit({ type: 'reward-earned', evidence: earned });
+          release();
+          endWatch();
+          emit({ type: 'closed' });
+          return { ...base, outcome: 'shown', presentation: 'closed', eligibility: 'eligible', evidence: earned, claimEvidence: earned };
+        }
+        if (correlated && (request.format === 'interstitial' && result.status === 'completed'
+          || request.format === 'rewarded' && result.status === 'dismissed')) {
+          release();
+          endWatch();
+          emit({ type: 'closed' });
+          return { ...base, outcome: 'shown', presentation: 'closed', eligibility: unavailableEligibility };
+        }
+        const reason = correlated && result.status === 'failed' ? noStartReason(result.reason) : undefined;
+        if (reason !== undefined) {
+          release();
+          endWatch();
+          emit({ type: 'failed', reason });
+          return { ...base, outcome: 'unavailable', presentation: 'not-started', eligibility: unavailableEligibility, reason };
+        }
+        // A settled unknown reason may still have native UI. Resume does not prove closure.
+        endWatch();
         emit({ type: 'unknown' });
-        return { ...base, outcome: 'pending', presentation: 'unknown', eligibility: request.format === 'rewarded' ? 'unknown' : 'not-applicable', reason: 'outcome-unknown', ...(claimEvidence === undefined ? {} : { claimEvidence }) };
+        return pendingResult();
       });
       flights.set(request.invocationId, { input: request, promise });
       return promise;
     },
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
+}
+function terminalAdResult(
+  format: 'rewarded' | 'interstitial',
+  requestId: string | undefined,
+  result: OnePlayAdResult,
+): boolean {
+  const correlated = format === 'interstitial' || result.requestId === requestId;
+  if (!correlated) {
+    return false;
+  }
+  if (format === 'interstitial' && result.status === 'completed') {
+    return true;
+  }
+  if (format === 'rewarded' && (result.status === 'rewarded' || result.status === 'dismissed')) {
+    return true;
+  }
+  return result.status === 'failed' && noStartReason(result.reason) !== undefined;
 }
 function noStartReason(reason: string | undefined): AdReason | undefined {
   switch (reason) {
