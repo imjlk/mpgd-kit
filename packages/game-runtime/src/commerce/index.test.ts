@@ -271,4 +271,47 @@ describe('reconciler non-launch retries', () => {
       f.controlled.dispose();
     }
   });
+  it('permits a same-key retry when a trusted not-started fact arrives after a retryable failure settles', async () => {
+    let attempts = 0;
+    const f = fixture(true, async () => {
+      attempts += 1;
+      return attempts === 1
+        ? { outcome: 'failed', error: { code: 'NETWORK', retryable: true } }
+        : { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } };
+    });
+    const first = f.controlled.requestPurchase(request);
+    await expect(first).resolves.toMatchObject({ outcome: 'failed', error: { retryable: true } });
+    expect(f.controlled.requestPurchase(request)).toBe(first);
+    f.emit('not-started', 1);
+    await expect(f.controlled.requestPurchase(request)).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(attempts).toBe(2);
+    expect(f.provider.requestPurchase).toHaveBeenCalledTimes(2);
+    f.controlled.dispose();
+  });
+  it('does not reopen checkout when a late not-started fact follows an opened sheet, a launch, or a non-retryable failure', async () => {
+    const opened = fixture(true, async () => {
+      opened.emit('open', 1);
+      return { outcome: 'failed', error: { code: 'NETWORK', retryable: true } };
+    });
+    const openedFirst = opened.controlled.requestPurchase(request);
+    await openedFirst;
+    opened.emit('not-started', 2);
+    expect(opened.controlled.requestPurchase(request)).toBe(openedFirst);
+    expect(opened.provider.requestPurchase).toHaveBeenCalledOnce();
+    opened.controlled.dispose();
+
+    for (const outcome of ['launched', 'failed'] as const) {
+      const f = fixture(true, async () =>
+        outcome === 'launched'
+          ? { outcome: 'launched' }
+          : { outcome: 'failed', error: { code: 'STORE_UNAVAILABLE', retryable: false } },
+      );
+      const first = f.controlled.requestPurchase(request);
+      await first;
+      f.emit('not-started', 1);
+      expect(f.controlled.requestPurchase(request)).toBe(first);
+      expect(f.provider.requestPurchase).toHaveBeenCalledOnce();
+      f.controlled.dispose();
+    }
+  });
 });

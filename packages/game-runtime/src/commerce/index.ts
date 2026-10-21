@@ -22,6 +22,8 @@ interface PurchaseFlight {
   started: boolean;
   sequence: number;
   notStarted: boolean;
+  /** The settled result was a retryable failure, independent of presentation timing. */
+  failedRetryable: boolean;
   retryable: boolean;
 }
 
@@ -77,7 +79,8 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
   function close(flight: PurchaseFlight): void {
     flight.closed = true;
     flight.lease?.confirmClosed();
-    if (flight.settled) {
+    // A listener that retries on this fact may already own the key.
+    if (flight.settled && purchases.get(flight.key) === flight) {
       purchases.delete(flight.key);
     }
     maybeDetach();
@@ -102,6 +105,13 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       }
       if (event.state === 'closed' || event.state === 'not-started') {
         flight.notStarted = event.state === 'not-started';
+        // A trusted non-launch can arrive after the SDK result. It releases the
+        // key only for a retryable failure that never opened; it never grants.
+        if (flight.settled && flight.notStarted && flight.failedRetryable && !flight.started) {
+          flight.retryable = true;
+          const remembered = history.get(flight.key);
+          if (remembered !== undefined) { remembered.retryable = true; }
+        }
         publish(flight, event.state);
         close(flight);
       } else if (event.state === 'open') {
@@ -153,7 +163,7 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       const entry = prior ?? { fingerprint, sequence: 0, retryable: false };
       entry.retryable = false;
       const flight: PurchaseFlight = {
-        key, called: false, settled: false, closed: false, started: false, sequence: 0, notStarted: false, retryable: false,
+        key, called: false, settled: false, closed: false, started: false, sequence: 0, notStarted: false, failedRetryable: false, retryable: false,
         promise: Promise.resolve().then(async () => {
           try {
             if (disposed) { throw new PresentationExecutionError('disposed'); }
@@ -173,7 +183,8 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
               publish(flight, state);
               if (state === 'unknown') { flight.lease.markUnknown(); } else { close(flight); }
             }
-            flight.retryable = result.outcome === 'failed' && result.error.retryable && flight.notStarted && !flight.started;
+            flight.failedRetryable = result.outcome === 'failed' && result.error.retryable;
+            flight.retryable = flight.failedRetryable && flight.notStarted && !flight.started;
             return result;
           } catch (error) {
             if (flight.called && !flight.closed) { flight.lease?.markUnknown(); }

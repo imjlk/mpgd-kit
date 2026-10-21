@@ -193,10 +193,13 @@ The returned provider exposes the selected native facts and trusted classifier
 observations through `presentation.subscribe`, so a server-backed reconciler can
 retain a proven unopened, retryable attempt in its durable requested state.
 Only a retryable failure with a trusted `not-started` fact may start a new flight
-under the same unchanged identity. Concurrent calls still coalesce; changed
-arguments and uncertain/opened outcomes never reopen checkout. Published event
-sequences increase across retries even when a native provider restarts its own
-sequence for each call.
+under the same unchanged identity. That fact still releases the key when it
+arrives after the provider has already returned the retryable failure. A
+purchased, launched, opened, or non-retryable result does not reopen, and the
+fact never grants. Concurrent calls still coalesce; changed arguments and
+uncertain/opened outcomes never reopen checkout. Published event sequences
+increase across retries even when a native provider restarts its own sequence
+for each call.
 
 This extracts the existing gateway coordinator; gateway behavior remains
 compatible. It does not add Billing/StoreKit native close events, treat app
