@@ -1025,6 +1025,8 @@ function accountingDatabase(db: D1Database): D1Database {
  * Writes of POST /endpoints one session may make per rolling day, the same
  * cap as client consent records. Counted in this isolate: it stops a guest
  * session looping on one isolate, and a repeat still costs a D1 upsert.
+ * With development sessions the client names its session id, so this is
+ * no protection there (they are local-only).
  * Answers when to retry, in seconds, once the cap is full.
  */
 function endpointWriteRetryAfter(sessionId: string, now = Date.now()): number | undefined {

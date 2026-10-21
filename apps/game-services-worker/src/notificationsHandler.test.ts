@@ -1121,6 +1121,12 @@ try {
       );
       assert.throws(() => createWorkerService(refused), /refused when MPGD_STORE is d1/);
     }
+    // The refusal comes first, so another refused setting does not hide it.
+    assert.throws(
+      () =>
+        createWorkerFetchHandler({ ...durable, MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true' }),
+      /MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true is refused/,
+    );
     // A value other than "true" is off.
     const offEnv = {
       ...unauthenticated,

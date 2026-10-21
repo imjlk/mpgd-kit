@@ -85,8 +85,10 @@ export interface DevelopmentServerSession {
 /**
  * A server-backed session for local development against a Worker that has
  * `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"`. `mode`
- * is the build's mode (`import.meta.env.MODE`): a production mode throws, so
- * a production build cannot create one. `sessionId` defaults to
+ * must be the build's real mode (`import.meta.env.MODE`): `production`
+ * throws, so a production build cannot create one. A build in another mode
+ * named like production (`prod`, `release`) is not refused here; gate the
+ * call on `import.meta.env.DEV` as the starter does. `sessionId` defaults to
  * `dev-<installationId>`. Ids are 1 to 64 letters, digits, `_`, or `-`.
  */
 export function createDevelopmentServerSession(input: {
