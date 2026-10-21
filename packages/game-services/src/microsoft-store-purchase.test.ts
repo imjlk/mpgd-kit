@@ -753,7 +753,7 @@ echoedHarness.client.consumeProduct = async (input) => {
     itemId: rotatedCollectionItemId,
     productId: input.storeId,
     trackingId: input.trackingId,
-    newQuantity: 0,
+    newQuantity: 1,
   };
 };
 const echoedRetry = await echoedHarness.backend.purchases.verifyPurchase(
@@ -772,6 +772,79 @@ assert.equal(
   (await echoedHarness.store.listEntitlementTransactions())[0]?.evidenceVerificationId,
   `microsoft-store:${storeId}:${collectionItemId}:provider-order-id`,
 );
+
+// A repurchase whose tracking-id retry reports the current balance, not a second
+// consume, releases the stale claim and then admits the new generation.
+const repurchaseOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const repurchaseHarness = createHarness({
+  recoveryOwnershipStore: repurchaseOwnership,
+});
+assert.deepEqual(
+  await repurchaseHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'first-purchase'),
+  ),
+  { status: 'granted', idempotencyKey: 'first-purchase' },
+);
+repurchaseHarness.client.consumeProduct = async () => {
+  throw new Error('release still pending');
+};
+const firstPurchase = await repurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'first-purchase' }),
+);
+assert.equal(firstPurchase.verified, true);
+assert.equal((await repurchaseHarness.store.listEntitlementTransactions()).length, 1);
+repurchaseHarness.client.queryResponse = {
+  items: [{
+    id: rotatedCollectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+    transactionId: rotatedTransactionId,
+  }],
+};
+repurchaseHarness.client.consumeProduct = async (input) => ({
+  itemId: rotatedCollectionItemId,
+  productId: input.storeId,
+  trackingId: input.trackingId,
+  newQuantity: 1,
+});
+const fulfilledRetry = await repurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'first-purchase' }),
+);
+assert.equal(fulfilledRetry.verified, true);
+assert.equal(fulfilledRetry.alreadyProcessed, true);
+assert.equal(
+  fulfilledRetry.finalization?.status,
+  'completed',
+  JSON.stringify(fulfilledRetry.finalization),
+);
+assert.equal((await repurchaseHarness.store.listEntitlementTransactions()).length, 1);
+assert.deepEqual(
+  await repurchaseHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'repurchase'),
+  ),
+  { status: 'granted', idempotencyKey: 'repurchase' },
+);
+const repurchaseGrant = await repurchaseHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'repurchase' }),
+);
+assert.equal(repurchaseGrant.verified, true);
+assert.equal(repurchaseGrant.alreadyProcessed, false);
+const repurchaseRows = await repurchaseHarness.store.listEntitlementTransactions();
+assert.equal(
+  repurchaseRows.length,
+  2,
+  repurchaseRows.map((row) => `${row.idempotencyKey}:${row.evidenceVerificationId}`).join(' | '),
+);
+assert.equal(
+  repurchaseRows[0]?.evidenceVerificationId,
+  `microsoft-store:${storeId}:${collectionItemId}:provider-order-id`,
+);
+if (repurchaseRows[1]?.evidenceVerificationId === repurchaseRows[0]?.evidenceVerificationId) {
+  throw new Error('repurchase reused the fulfilled verification id');
+}
 
 const legacyVerificationId =
   `microsoft-store:${storeId}:${collectionItemId}:${modifiedDate}`;
@@ -1175,7 +1248,6 @@ assert.deepEqual(consumeRecovery.events, [
   `provider:query:${storeId}`,
   'ledger:consume-recovery-original',
   `provider:consume:${storeId}`,
-  `provider:query:${storeId}`,
   `provider:consume:${storeId}`,
 ]);
 assert.equal(consumeRecovery.client.consumeTrackingIds.length, 2);
@@ -1210,7 +1282,6 @@ assert.deepEqual(migratedStoreEvents, [
   `provider:query:${storeId}`,
   'ledger:store-id-migration',
   `provider:consume:${storeId}`,
-  `provider:query:${storeId}`,
   `provider:consume:${storeId}`,
 ]);
 
@@ -1295,7 +1366,6 @@ assert.deepEqual(offerTokenMigrationEvents, [
   `provider:query:${historicalStoreId}`,
   'ledger:offer-token-migration-original',
   `provider:consume:${historicalStoreId}`,
-  `provider:query:${historicalStoreId}`,
   `provider:query:${historicalStoreId}`,
   `provider:consume:${historicalStoreId}`,
 ]);
@@ -1582,7 +1652,6 @@ assert.deepEqual(receiptEvents, [
   `provider:query:${storeId}`,
   'ledger:receipt-recovery',
   'receipt:write',
-  `provider:query:${storeId}`,
   'receipt:recover',
   'ownership:release',
 ]);

@@ -100,9 +100,11 @@ different provider purchase can be claimed only after the previous claim is
 released. If that later query returns a different item or transaction id, the
 exact stored generation may still verify and finalize. Verification keeps the
 stored purchase id, so the ledger does not grant again, and consume may echo
-the item id Collections reported for that resume. A missing or different
-generation stays denied until release. It must not transfer the binding to
-another game player. Release only
+the item id Collections reported for that resume. A tracking-id retry that
+omits order ids and reports the current balance confirms the prior consume
+and releases the claim; it does not grant the repurchase under that id. A
+missing or different generation stays denied until that release. It must not
+transfer the binding to another game player. Release only
 the exact player, generation, and provider purchase after authoritative consume
 succeeds, so a delayed release cannot erase a claim that was released and then
 claimed again. If that release is unavailable, keep finalization pending so the

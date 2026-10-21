@@ -750,31 +750,6 @@ async function consumeMicrosoftStorePurchase(
     return finalizationPending('MICROSOFT_STORE_ACCOUNT_BINDING_CHANGED');
   }
 
-  let observedItemId = context.resumeCollectionItemId;
-  // An already-granted retry finalizes from the stored ledger row and does not
-  // re-verify. Observe the current Collections item so a rotated id can be
-  // consumed under that same verification id. A query failure leaves only the
-  // stored id acceptable.
-  if (observedItemId === undefined && finalizationInput.alreadyProcessed) {
-    try {
-      const queried = inspectPublisherQuery(
-        await input.client.queryProduct({
-          credentials,
-          storeId: context.storeId,
-          signal: finalizationInput.signal,
-        }),
-        context.storeId,
-      );
-      if (queried.status === 'verified' && queried.item.id !== context.collectionItemId) {
-        observedItemId = queried.item.id;
-      }
-    } catch (error) {
-      if (finalizationInput.signal.aborted) {
-        throw error;
-      }
-    }
-  }
-
   try {
     const trackingId = await deterministicTrackingId(finalizationInput.evidenceVerificationId);
     const raw = await input.client.consumeProduct({
@@ -784,22 +759,27 @@ async function consumeMicrosoftStorePurchase(
       signal: finalizationInput.signal,
     });
 
-    if (!isRecord(raw)) {
-      return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_INVALID');
+    if (!isRecord(raw) || raw.trackingId !== trackingId) {
+      return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
     }
+    const orderTransactions = readConsumeOrderTransactions(raw.orderTransactions);
+    const itemMatches = raw.itemId === context.collectionItemId
+      || raw.itemId === context.resumeCollectionItemId;
+    // A reused tracking id is a confirmation, not a second consume. After a
+    // repurchase Microsoft returns the current balance and omits order ids.
+    const priorFulfillmentConfirmed = raw.orderTransactions === undefined
+      && raw.newQuantity !== 0
+      && orderTransactions !== undefined;
     if (
-      (
-        raw.itemId !== context.collectionItemId
-        && raw.itemId !== observedItemId
+      !priorFulfillmentConfirmed
+      && (
+        !itemMatches
+        || raw.newQuantity !== 0
       )
-      || raw.trackingId !== trackingId
-      || raw.newQuantity !== 0
     ) {
       return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
     }
-
     if (input.persistConsumptionReceipt !== undefined) {
-      const orderTransactions = readConsumeOrderTransactions(raw.orderTransactions);
       // Some consume responses omit the product echo. Attribution comes from the
       // verified context and the item/tracking checks above; reject a conflicting echo.
       if ((raw.productId !== undefined && raw.productId !== context.storeId)
