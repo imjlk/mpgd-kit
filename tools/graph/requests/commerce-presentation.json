@@ -1,0 +1,24 @@
+{
+  "name": "commerce-presentation",
+  "description": "Standalone commerce presentation and shared gateway exclusion with strict missing-facts behavior.",
+  "tsconfig": "tsconfig.graph.json",
+  "question": "How do standalone checkout and the full gateway share surface ownership and preserve recovery when native UI facts are unavailable?",
+  "draft": {
+    "reason": "Pin the shared public implementation, gateway consumer, lease and regression fixture.",
+    "type": "details"
+  },
+  "review": "Native UI facts are external; these anchors prove the runtime composition, not SDK closure or financial authority.",
+  "request": {
+    "type": "details",
+    "handles": [
+      "packages/game-runtime/src/commerce/index.ts#createCoordinatedCommerceProvider:function",
+      "packages/game-runtime/src/ads/index.ts#createCoordinatedPlatformGateway:function",
+      "packages/game-runtime/src/presentation/index.ts#createFullScreenPresentationScope:function",
+      "packages/game-runtime/src/commerce/index.test.ts#fixture:function"
+    ],
+    "neighbors": true,
+    "neighborLimit": 2,
+    "memberLimit": 24,
+    "dependencyLimit": 24
+  }
+}

@@ -243,7 +243,16 @@ Rules every provider follows:
   payment surface opens or closes (ONE play) offers
   `presentation.subscribe(listener)`; the game runtime's presentation gate
   uses it, and without it a purchase result alone says nothing about the
-  surface. C4 added the field to the contract; it takes no part in granting.
+  surface. A provider that restarts its event sequence on each call echoes the
+  coordinator's attempt generation so a delayed event from the previous call
+  cannot close the next sheet. A trusted not-started fact does not grant, and
+  it does not reopen a journal already written `failed`: that state has no
+  outgoing transition, and a retryable failure without presentation proof stays
+  terminal.
+  C4 added the field to the contract; it takes no part in granting.
+
+<!-- @link ../../../packages/platform/src/index.ts#commercePresentationAttempt Restarting providers echo this request generation on presentation events. -->
+<!-- @link ../../../packages/platform/src/commerce.ts#commercePurchaseTransitions failed has no outgoing transition. -->
 
 ## Capabilities {#capabilities}
 

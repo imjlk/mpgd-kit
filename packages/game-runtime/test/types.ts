@@ -1,3 +1,5 @@
+import { createCoordinatedCommerceProvider } from '@mpgd/game-runtime/commerce';
+import type { PlatformGateway } from '@mpgd/platform';
 import {
   createGameExecutionController,
   type ExecutionChannel,
@@ -144,3 +146,9 @@ const audioProjection = bindGameAudio({
 audioProjection.dispose();
 void createGamePlatformRuntime;
 void ports;
+
+// The checkout-only entry must type-check without DOM, Phaser or typia declarations.
+declare const nativeCommerce: NonNullable<PlatformGateway['commerce']>;
+const checkout = createCoordinatedCommerceProvider({ provider: nativeCommerce, presentation });
+void checkout.getAvailablePurchases();
+checkout.dispose();
