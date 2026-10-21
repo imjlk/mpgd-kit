@@ -221,11 +221,13 @@ Methods:
   by re-reads at `verse8PurchaseFollowUpDelaysMs` (1 s to 5 min, about nine
   minutes in all) until one finds a new record. A signal that names a new
   purchase id does not schedule those re-reads, and does not cancel a window
-  already waiting on an earlier purchase. No follow-up read is started after
+  already waiting on an earlier purchase. A read that only sees an id the
+  bounded reported set has already emitted does not count as a new record,
+  so it does not end that window. No follow-up read is started after
   the last listener unsubscribes. After that window the
   reconciler's `restorePurchases` and the next signal are the readers. The
   provider emits no `purchaseError`.
-<!-- @link ../adapters/verse8/src/commerce-provider.ts#createVerse8CommerceProvider An empty or already-reported purchases list still schedules follow-up re-reads; a newly reported purchase id does not, and does not cancel an earlier window. Follow-ups are not started after the last listener unsubscribes. -->
+<!-- @link ../adapters/verse8/src/commerce-provider.ts#createVerse8CommerceProvider An empty or already-reported purchases list still schedules follow-up re-reads; a newly reported purchase id does not, and does not cancel an earlier window. An id the bounded set already emitted is not a new record. Follow-ups are not started after the last listener unsubscribes. -->
 <!-- @link ../adapters/verse8/src/commerce-provider.ts#verse8PurchaseFollowUpDelaysMs Follow-up delays after a signal that reported no new purchase id. -->
 
 The backend side of the lookup is the server-push verifier C2 added

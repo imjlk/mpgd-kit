@@ -123,7 +123,8 @@ export interface CreateVerse8CommerceProviderInput {
    * `verse8PurchaseFollowUpDelaysMs` until one finds a new record, since the
    * Agent8 event may land after the dialog closed. A signal that names a new
    * purchase id does not schedule those re-reads, and does not cancel a
-   * window already waiting on an earlier purchase. No follow-up is started
+   * window already waiting on an earlier purchase. An id the bounded set
+   * has already emitted is not a new record. No follow-up is started
    * after the last listener unsubscribes.
    */
   readonly onPurchasesChanged?: (listener: Verse8PurchasesChangeListener) => () => void;
@@ -180,6 +181,12 @@ export function createVerse8CommerceProvider(
   const listeners = new Set<(event: CommerceEvent) => void>();
   /** Purchases already reported as `purchaseUpdated`. */
   const reportedPurchases = new Set<string>();
+  /**
+   * Ids already emitted, then dropped to keep `reportedPurchases` bounded.
+   * A later read must not emit them again: that duplicate would look like a
+   * newly settled purchase and cancel a follow-up window for a different one.
+   */
+  const forgottenPurchases = new Set<string>();
   let initialized = false;
 
   const ensureInitialized = (): void => {
@@ -190,13 +197,22 @@ export function createVerse8CommerceProvider(
     initialized = true;
   };
 
-  const bound = (collection: Set<string>): void => {
+  const trimToBound = (collection: Set<string>): string[] => {
+    const removed: string[] = [];
     for (const oldest of collection) {
       if (collection.size <= maximumVerse8ReportedPurchases) {
         break;
       }
       collection.delete(oldest);
+      removed.push(oldest);
     }
+    return removed;
+  };
+  const rememberEvicted = (evicted: readonly string[]): void => {
+    for (const id of evicted) {
+      forgottenPurchases.add(id);
+    }
+    trimToBound(forgottenPurchases);
   };
 
   const emit = (event: CommerceEvent): void => {
@@ -243,7 +259,7 @@ export function createVerse8CommerceProvider(
    * set is bounded, so a size comparison cannot answer that.
    */
   const reportPurchase = (recorded: Verse8RecordedPurchase): boolean => {
-    if (reportedPurchases.has(recorded.purchaseId)) {
+    if (reportedPurchases.has(recorded.purchaseId) || forgottenPurchases.has(recorded.purchaseId)) {
       return false;
     }
     const product = productsByPlatformId.get(recorded.productId);
@@ -260,7 +276,7 @@ export function createVerse8CommerceProvider(
       return false;
     }
     reportedPurchases.add(recorded.purchaseId);
-    bound(reportedPurchases);
+    rememberEvicted(trimToBound(reportedPurchases));
     emit({ type: 'purchaseUpdated', purchase });
     return true;
   };
@@ -318,7 +334,8 @@ export function createVerse8CommerceProvider(
         return;
       }
       if (reported > 0) {
-        // A re-read found a record. Pending re-reads for it have nothing new to find.
+        // A re-read found a record that had not been emitted before. An id the
+        // bounded set already emitted and then dropped does not count.
         cancelFollowUps();
         return;
       }

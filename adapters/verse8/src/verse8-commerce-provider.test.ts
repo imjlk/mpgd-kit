@@ -547,6 +547,39 @@ describe('createVerse8CommerceProvider', () => {
     fixture.provider.dispose();
   });
 
+  it('keeps an earlier follow-up window when a full reported set re-reads an evicted id', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture({
+      signalled: true,
+      recorded: Array.from({ length: maximumVerse8ReportedPurchases }, (_, index) => ({
+        purchaseId: String(index + 1),
+        productId: 'coins-100',
+        quantity: 1,
+      })),
+    });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    fixture.listPurchases.mockClear();
+
+    fixture.signal({ purchases: [] });
+    await flush();
+
+    const nextId = String(maximumVerse8ReportedPurchases + 1);
+    fixture.signal({
+      purchases: [{ purchaseId: nextId, productId: 'coins-100', quantity: 1 }],
+    });
+    await flush();
+    expect(events.some((event) =>
+      event.type === 'purchaseUpdated' && event.purchase.transactionId === nextId)).toBe(true);
+
+    fixture.recorded.push({ purchaseId: 'a', productId: 'remove-ads', quantity: 1 });
+    await vi.advanceTimersByTimeAsync(verse8PurchaseFollowUpDelaysMs[0] ?? 0);
+    expect(events.some((event) =>
+      event.type === 'purchaseUpdated' && event.purchase.transactionId === 'a')).toBe(true);
+    fixture.provider.dispose();
+  });
+
   it('does not follow up after the last listener unsubscribes during the immediate re-read', async () => {
     vi.useFakeTimers();
     const fixture = createFixture({ signalled: true });
