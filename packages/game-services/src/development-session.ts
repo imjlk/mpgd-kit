@@ -57,7 +57,7 @@ export function formatDevelopmentNotificationSessionAuthorization(
  * by `.`, each 1 to 64 letters, digits, `_`, or `-`. It has no `expiresAt`.
  */
 export function parseDevelopmentNotificationSessionAuthorization(
-  authorization: string,
+  authorization: unknown,
 ): DevelopmentNotificationSession | undefined {
   if (typeof authorization !== 'string' || !authorization.startsWith(developmentNotificationSessionPrefix)) {
     return undefined;
@@ -89,7 +89,8 @@ export interface DevelopmentServerSession {
  * throws, so a production build cannot create one. A build in another mode
  * named like production (`prod`, `release`) is not refused here; gate the
  * call on `import.meta.env.DEV` as the starter does. `sessionId` defaults to
- * `dev-<installationId>`. Ids are 1 to 64 letters, digits, `_`, or `-`.
+ * `dev-<installationId>` (its first 64 characters). Ids are 1 to 64
+ * letters, digits, `_`, or `-`.
  */
 export function createDevelopmentServerSession(input: {
   readonly mode: string;
@@ -102,7 +103,8 @@ export function createDevelopmentServerSession(input: {
   }
   const session = {
     playerId: input.playerId,
-    sessionId: input.sessionId ?? `dev-${input.installationId}`,
+    // Cut to the id limit, so a 61- to 64-character installation id still has a default.
+    sessionId: input.sessionId ?? `dev-${input.installationId}`.slice(0, 64),
     installationId: input.installationId,
   };
   const authorization = formatDevelopmentNotificationSessionAuthorization(session);

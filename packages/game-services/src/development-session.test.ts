@@ -51,8 +51,9 @@ for (const malformed of [
     JSON.stringify(malformed),
   );
 }
+assert.equal(parseDevelopmentNotificationSessionAuthorization(undefined), undefined);
 assert.equal(
-  parseDevelopmentNotificationSessionAuthorization(undefined as unknown as string),
+  parseDevelopmentNotificationSessionAuthorization(['Bearer mpgd-dev.p.s.i']),
   undefined,
 );
 for (const bad of [
@@ -105,9 +106,15 @@ assert.throws(
     createDevelopmentServerSession({
       mode: 'development',
       playerId: 'p',
-      installationId: 'i'.repeat(61),
+      installationId: 'i'.repeat(65),
     }),
   /1 to 64 letters/,
+);
+// A long installation id still gets a default session id, cut to the limit.
+assert.deepEqual(
+  createDevelopmentServerSession({ mode: 'development', playerId: 'p', installationId: 'i'.repeat(64) })
+    .current(),
+  { playerId: 'p', sessionId: `dev-${'i'.repeat(60)}` },
 );
 
 console.info('Development notification sessions passed.');
