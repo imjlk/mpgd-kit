@@ -105,7 +105,28 @@ const minimumPromotionTossAppVersion = '5.232.0';
  * forged `completed` marker would otherwise short-circuit purchase verification.
  */
 const reservedStorageKeyPrefix = 'mpgd:ait:';
+/**
+ * Legacy markers stay at `mpgd:ait:promotion-grant:v1:<idempotencyKey>`.
+ * New records are stored at
+ * `mpgd:ait:promotion-grant:v2:<campaignId>:<idempotencyKey>`. An unbound v1
+ * marker is stamped with `campaignId` before any scoped copy is written.
+ * A new claim also writes a v1 dispatch fence at the legacy key before the
+ * scoped copy and before native payout, so a rolled-back 0.20.1 bridge still
+ * sees the claim as fenced. A stored record whose campaign id differs, or
+ * whose campaign id is present but not a non-blank string, stays pending and
+ * is not overwritten.
+ */
 const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
+const promotionGrantScopedStoragePrefix = 'mpgd:ait:promotion-grant:v2:';
+/**
+ * Status a released 0.20.1 bridge does not treat as pending or granted.
+ * That parser returns pending for an unknown status and does not remove the
+ * marker or dispatch. `pending` plus a valid `pendingSince` is not safe: a
+ * retry resolution on that bridge deletes the marker and can dispatch.
+ */
+const promotionDispatchFenceStatus = 'fenced';
+const promotionDispatchFenceKind = 'dispatch';
+const promotionReceiptCacheLimit = 256;
 const notificationTopics = new Set<NotificationTopic>([
   'daily-ready',
   'streak-at-risk',
@@ -403,20 +424,10 @@ export function createAitHostBridge(
       : { onPendingOrdersChanged: options.onPendingOrdersChanged },
   );
   const commerceV2 = createAitCommerceV2BridgeHandler(commerceProvider);
-  const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
-  // Keep terminal receipts available if native storage or the game frame temporarily fails.
-  // This cache is bridge-local, bounded, and never grants eligibility or authorizes payout.
-  const promotionReceipts = new Map<string, AitPromotionGrantObservation>();
+  const promotionClaims = createPromotionClaimMemory();
   const observePromotionGrant: AitPromotionGrantObserver = async (observation) => {
-    if (observation.status === 'granted') {
-      const key = JSON.stringify([observation.campaignId, observation.idempotencyKey]);
-      promotionReceipts.set(key, observation);
-      if (promotionReceipts.size > 256) {
-        const oldest = promotionReceipts.keys().next().value;
-        if (oldest !== undefined) {
-          promotionReceipts.delete(oldest);
-        }
-      }
+    if (observation.status === 'granted' && observation.receiptKey) {
+      rememberGrantedReceipt(promotionClaims, observation);
     }
     await options.observePromotionGrant?.(observation);
   };
@@ -622,50 +633,19 @@ export function createAitHostBridge(
         if (!promotionRewards.has(campaignId)) {
           return ok(request, { status: 'unavailable' });
         }
-        const remembered = promotionReceipts.get(JSON.stringify([campaignId, idempotencyKey]));
-        if (remembered?.status === 'granted' && remembered.receiptKey) {
-          await observePromotion(observePromotionGrant, remembered);
-          return ok(request, { status: 'granted', receiptKey: remembered.receiptKey });
-        }
-        try {
-          const persisted = await resolvePersistedPromotionGrant({
+        return ok(request, await withPromotionClaimLock(
+          dependencies.storage,
+          campaignId,
+          idempotencyKey,
+          () => recoverAitPromotionReward({
             campaignId,
             idempotencyKey,
-            storage: dependencies.storage,
+            dependencies,
             observer: observePromotionGrant,
+            memory: promotionClaims,
             ...(resolvePendingPromotionGrant ? { resolver: resolvePendingPromotionGrant } : {}),
-            recoveryOnly: true,
-          });
-          if (persisted.result) {
-            return ok(request, persisted.result);
-          }
-        } catch { /* Unreadable local storage still permits a non-dispatching authority lookup. */ }
-        // A new installation may have no local marker. A server resolver can still supply a receipt.
-        if (resolvePendingPromotionGrant) {
-          try {
-            const resolution = await resolvePendingPromotionGrant({
-              campaignId,
-              idempotencyKey,
-            });
-            if (resolution.status === 'granted' && typeof resolution.receiptKey === 'string'
-              && resolution.receiptKey.trim().length > 0) {
-              const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
-              try {
-                await dependencies.storage.setItem(
-                  promotionGrantStorageKey(idempotencyKey),
-                  JSON.stringify(result),
-                );
-              } catch { /* The observer and bridge-local cache can still retain this terminal receipt. */ }
-              await observePromotion(observePromotionGrant, {
-                campaignId,
-                idempotencyKey,
-                ...result,
-              });
-              return ok(request, result);
-            }
-          } catch { /* Unknown remains pending. Recovery never dispatches a payment. */ }
-        }
-        return ok(request, { status: 'pending' });
+          }),
+        ));
       }
 
       case 'promotions.grantReward': {
@@ -678,43 +658,25 @@ export function createAitHostBridge(
         ) {
           return ok(request, { status: 'unavailable' });
         }
-
-        const persisted = await resolvePersistedPromotionGrant({
+        return ok(request, await withPromotionClaimLock(
+          dependencies.storage,
           campaignId,
           idempotencyKey,
-          storage: dependencies.storage,
-          observer: observePromotionGrant,
-          ...(resolvePendingPromotionGrant === undefined
-            ? {}
-            : { resolver: resolvePendingPromotionGrant }),
-        });
-        if (persisted.result !== undefined) {
-          return ok(request, persisted.result);
-        }
-
-        const existing = promotionGrantsInFlight.get(idempotencyKey);
-        if (existing !== undefined) {
-          return ok(request, await existing);
-        }
-
-        const pending = authorizeAndGrantAitPromotionReward({
-          campaignId,
-          idempotencyKey,
-          reward,
-          dependencies,
-          observer: observePromotionGrant,
-          ...(authorizePromotionGrant === undefined
-            ? {}
-            : { authorizer: authorizePromotionGrant }),
-        });
-        promotionGrantsInFlight.set(idempotencyKey, pending);
-        try {
-          return ok(request, await pending);
-        } finally {
-          if (promotionGrantsInFlight.get(idempotencyKey) === pending) {
-            promotionGrantsInFlight.delete(idempotencyKey);
-          }
-        }
+          () => grantLockedAitPromotionReward({
+            campaignId,
+            idempotencyKey,
+            reward,
+            dependencies,
+            observer: observePromotionGrant,
+            memory: promotionClaims,
+            ...(authorizePromotionGrant === undefined
+              ? {}
+              : { authorizer: authorizePromotionGrant }),
+            ...(resolvePendingPromotionGrant === undefined
+              ? {}
+              : { resolver: resolvePendingPromotionGrant }),
+          }),
+        ));
       }
 
       // IAP is opt-in and server-authoritative; it never returns demo grants.
@@ -975,13 +937,407 @@ function getPromotionAvailability(
   return isPromotionSupported(dependencies) ? 'available' : 'unsupported';
 }
 
+interface PromotionClaimMemory {
+  readonly receipts: Map<string, AitPromotionGrantObservation>;
+  /** Receipts whose durable write failed. Eviction must not drop these. */
+  readonly undurableReceipts: Set<string>;
+  /** Explicit SDK failures remembered when the diagnostic write did not land. */
+  readonly explicitFailures: Map<string, string>;
+  readonly undurableFailures: Set<string>;
+}
+
+function createPromotionClaimMemory(): PromotionClaimMemory {
+  return {
+    receipts: new Map(),
+    undurableReceipts: new Set(),
+    explicitFailures: new Map(),
+    undurableFailures: new Set(),
+  };
+}
+
+function promotionClaimKey(campaignId: string, idempotencyKey: string): string {
+  return JSON.stringify([campaignId, idempotencyKey]);
+}
+
+/**
+ * Serialize grant and recover for one idempotency key, including across
+ * campaigns and across bridges that share storage. A legacy v1 marker is not
+ * campaign-scoped, so two callers must not both read it before the first
+ * binding lands. The lock is module-level and keyed by the storage object;
+ * a per-bridge map would let two hosts both stamp the same unbound marker.
+ * A queued caller runs after the holder finishes, so a recover that finds
+ * nothing does not swallow a later grant, and a grant cannot overwrite a
+ * receipt recover just wrote. Callbacks must not re-enter the same
+ * idempotency key: that waits on itself. The lock is not an in-process claim:
+ * a failed stamp must stay visible to every campaign.
+ */
+const promotionClaimLocks = new WeakMap<object, Map<string, Promise<void>>>();
+
+function promotionClaimLocksFor(storage: object): Map<string, Promise<void>> {
+  let locks = promotionClaimLocks.get(storage);
+  if (locks === undefined) {
+    locks = new Map();
+    promotionClaimLocks.set(storage, locks);
+  }
+  return locks;
+}
+
+function withPromotionClaimLock<T>(
+  storage: object,
+  campaignId: string,
+  idempotencyKey: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  // The campaign is part of the caller's claim, not of this lock. An unscoped
+  // v1 marker is one key per claim id, so splitting the lock by campaign would
+  // let two campaigns both bind it before either stamp lands.
+  void campaignId;
+  const locks = promotionClaimLocksFor(storage);
+  const key = idempotencyKey;
+  const previous = locks.get(key) ?? Promise.resolve();
+  const run = previous.then(work, work);
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  locks.set(key, settled);
+  void settled.then(() => {
+    if (locks.get(key) === settled) {
+      locks.delete(key);
+    }
+  });
+  return run;
+}
+
+function rememberGrantedReceipt(
+  memory: PromotionClaimMemory,
+  observation: AitPromotionGrantObservation,
+): void {
+  if (
+    observation.status !== 'granted'
+    || observation.receiptKey === undefined
+    || observation.receiptKey.trim().length === 0
+  ) {
+    return;
+  }
+  const key = promotionClaimKey(observation.campaignId, observation.idempotencyKey);
+  memory.explicitFailures.delete(key);
+  memory.undurableFailures.delete(key);
+  memory.receipts.delete(key);
+  // Copy the validated fields. The observer receives the caller's object and
+  // may mutate it; the cache must not share that reference.
+  memory.receipts.set(key, {
+    campaignId: observation.campaignId,
+    idempotencyKey: observation.idempotencyKey,
+    status: 'granted',
+    receiptKey: observation.receiptKey,
+  });
+  evictDurablePromotionReceipts(memory);
+}
+
+function retainUndurableReceipt(
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
+): void {
+  memory.undurableReceipts.add(promotionClaimKey(campaignId, idempotencyKey));
+}
+
+function releaseDurableReceipt(
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
+): void {
+  memory.undurableReceipts.delete(promotionClaimKey(campaignId, idempotencyKey));
+  evictDurablePromotionReceipts(memory);
+}
+
+function evictDurablePromotionReceipts(memory: PromotionClaimMemory): void {
+  if (memory.receipts.size <= promotionReceiptCacheLimit) {
+    return;
+  }
+  for (const oldest of memory.receipts.keys()) {
+    if (memory.receipts.size <= promotionReceiptCacheLimit) {
+      return;
+    }
+    if (memory.undurableReceipts.has(oldest)) {
+      continue;
+    }
+    memory.receipts.delete(oldest);
+  }
+}
+
+function cachedGrantedReceipt(
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
+): { readonly status: 'granted'; readonly receiptKey: string } | undefined {
+  const remembered = memory.receipts.get(promotionClaimKey(campaignId, idempotencyKey));
+  if (
+    remembered?.status === 'granted'
+    && remembered.receiptKey !== undefined
+    && remembered.receiptKey.trim().length > 0
+  ) {
+    return { status: 'granted', receiptKey: remembered.receiptKey };
+  }
+  return undefined;
+}
+
+function rememberExplicitFailure(
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
+  errorCode: string,
+  durable: boolean,
+): void {
+  const key = promotionClaimKey(campaignId, idempotencyKey);
+  memory.explicitFailures.delete(key);
+  memory.explicitFailures.set(key, errorCode);
+  if (durable) {
+    memory.undurableFailures.delete(key);
+    evictDurableExplicitFailures(memory);
+    return;
+  }
+  memory.undurableFailures.add(key);
+}
+
+function evictDurableExplicitFailures(memory: PromotionClaimMemory): void {
+  while (memory.explicitFailures.size > promotionReceiptCacheLimit) {
+    let evicted = false;
+    for (const oldest of memory.explicitFailures.keys()) {
+      if (memory.undurableFailures.has(oldest)) {
+        continue;
+      }
+      memory.explicitFailures.delete(oldest);
+      evicted = true;
+      break;
+    }
+    if (!evicted) {
+      return;
+    }
+  }
+}
+
+/** A stored failure is resolved from the marker. Only a lost diagnostic write stays process-local. */
+function undurableExplicitFailureCode(
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
+): string | undefined {
+  const key = promotionClaimKey(campaignId, idempotencyKey);
+  if (!memory.undurableFailures.has(key)) {
+    return undefined;
+  }
+  return memory.explicitFailures.get(key);
+}
+
+function forgetExplicitFailure(
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
+): void {
+  const key = promotionClaimKey(campaignId, idempotencyKey);
+  memory.explicitFailures.delete(key);
+  memory.undurableFailures.delete(key);
+}
+
+async function grantLockedAitPromotionReward(input: {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly reward: AitPromotionRewardConfig;
+  readonly dependencies: AitHostDependencies;
+  readonly authorizer?: AitPromotionGrantAuthorizer;
+  readonly resolver?: AitPendingPromotionGrantResolver;
+  readonly observer?: AitPromotionGrantObserver;
+  readonly memory: PromotionClaimMemory;
+}): Promise<PromotionRewardResult> {
+  const cached = await returnCachedPromotionReceipt(input);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const blocked = await returnExplicitFailure(input);
+  if (blocked !== undefined) {
+    return blocked;
+  }
+  let persisted: { readonly result?: PromotionRewardResult; readonly ownFenceReleased?: boolean };
+  try {
+    persisted = await resolvePersistedPromotionGrant(promotionResolveInput(input));
+  } catch (error) {
+    if (error instanceof LegacyPromotionFenceError) {
+      return { status: 'pending' };
+    }
+    throw error;
+  }
+  if (persisted.result !== undefined) {
+    return persisted.result;
+  }
+  return authorizeAndGrantAitPromotionReward({
+    ...input,
+    ...(persisted.ownFenceReleased === true ? { ownFenceReleased: true } : {}),
+  });
+}
+
+async function recoverAitPromotionReward(input: {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly dependencies: AitHostDependencies;
+  readonly resolver?: AitPendingPromotionGrantResolver;
+  readonly observer?: AitPromotionGrantObserver;
+  readonly memory: PromotionClaimMemory;
+}): Promise<PromotionRewardResult> {
+  const cached = await returnCachedPromotionReceipt(input);
+  if (cached !== undefined) {
+    return cached;
+  }
+  try {
+    const persisted = await resolvePersistedPromotionGrant({
+      ...promotionResolveInput(input),
+      recoveryOnly: true,
+    });
+    if (persisted.result !== undefined) {
+      return persisted.result;
+    }
+  } catch {
+    // A failed read must not be followed by a write while another claim operation
+    // could still own the marker. The shared lock makes that overlap impossible;
+    // still persist only a terminal authority receipt, never a pending overwrite.
+    return recoverPromotionFromAuthority(input);
+  }
+  return recoverPromotionFromAuthority(input);
+}
+
+async function returnCachedPromotionReceipt(input: {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly observer?: AitPromotionGrantObserver | undefined;
+  readonly memory: PromotionClaimMemory;
+}): Promise<PromotionRewardResult | undefined> {
+  const cached = cachedGrantedReceipt(input.memory, input.campaignId, input.idempotencyKey);
+  if (cached === undefined) {
+    return undefined;
+  }
+  await observePromotion(input.observer, {
+    campaignId: input.campaignId,
+    idempotencyKey: input.idempotencyKey,
+    ...cached,
+  });
+  return cached;
+}
+
+async function returnExplicitFailure(input: {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly observer?: AitPromotionGrantObserver;
+  readonly memory: PromotionClaimMemory;
+}): Promise<PromotionRewardResult | undefined> {
+  const errorCode = undurableExplicitFailureCode(
+    input.memory,
+    input.campaignId,
+    input.idempotencyKey,
+  );
+  if (errorCode === undefined) {
+    return undefined;
+  }
+  await observePromotion(input.observer, {
+    campaignId: input.campaignId,
+    idempotencyKey: input.idempotencyKey,
+    status: 'failed',
+    errorCode,
+  });
+  return { status: 'failed' };
+}
+
+function promotionResolveInput(input: {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly dependencies: AitHostDependencies;
+  readonly resolver?: AitPendingPromotionGrantResolver;
+  readonly observer?: AitPromotionGrantObserver;
+  readonly memory: PromotionClaimMemory;
+}): ResolvePersistedPromotionGrantInput {
+  return {
+    campaignId: input.campaignId,
+    idempotencyKey: input.idempotencyKey,
+    storage: input.dependencies.storage,
+    observer: input.observer,
+    memory: input.memory,
+    ...(input.resolver === undefined ? {} : { resolver: input.resolver }),
+  };
+}
+
+async function recoverPromotionFromAuthority(input: {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly dependencies: AitHostDependencies;
+  readonly resolver?: AitPendingPromotionGrantResolver;
+  readonly observer?: AitPromotionGrantObserver;
+  readonly memory: PromotionClaimMemory;
+}): Promise<PromotionRewardResult> {
+  if (input.resolver === undefined) {
+    return { status: 'pending' };
+  }
+  try {
+    const resolution = await input.resolver({
+      campaignId: input.campaignId,
+      idempotencyKey: input.idempotencyKey,
+    });
+    if (
+      resolution.status === 'granted'
+      && typeof resolution.receiptKey === 'string'
+      && resolution.receiptKey.trim().length > 0
+    ) {
+      const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
+      try {
+        await writePromotionGrantRecord(
+          input.dependencies.storage,
+          input.campaignId,
+          input.idempotencyKey,
+          result,
+        );
+        rememberGrantedReceipt(input.memory, {
+          campaignId: input.campaignId,
+          idempotencyKey: input.idempotencyKey,
+          ...result,
+        });
+        releaseDurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
+      } catch (error) {
+        // A fence or campaign conflict must not publish this receipt. The
+        // write stamps an unbound marker before any scoped copy, and throws
+        // without creating that copy when the stamp does not land.
+        if (
+          error instanceof PromotionCampaignConflictError
+          || error instanceof LegacyPromotionFenceError
+        ) {
+          return { status: 'pending' };
+        }
+        retainUndurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
+        rememberGrantedReceipt(input.memory, {
+          campaignId: input.campaignId,
+          idempotencyKey: input.idempotencyKey,
+          ...result,
+        });
+      }
+      await observePromotion(input.observer, {
+        campaignId: input.campaignId,
+        idempotencyKey: input.idempotencyKey,
+        ...result,
+      });
+      return result;
+    }
+  } catch { /* Unknown remains pending. Recovery never dispatches a payment. */ }
+  return { status: 'pending' };
+}
+
 async function authorizeAndGrantAitPromotionReward(input: {
   readonly campaignId: string;
   readonly idempotencyKey: string;
   readonly reward: AitPromotionRewardConfig;
   readonly dependencies: AitHostDependencies;
   readonly authorizer?: AitPromotionGrantAuthorizer;
-  readonly observer?: AitPromotionGrantObserver | undefined;
+  readonly resolver?: AitPendingPromotionGrantResolver;
+  readonly observer?: AitPromotionGrantObserver;
+  readonly memory: PromotionClaimMemory;
+  readonly ownFenceReleased?: boolean;
 }): Promise<PromotionRewardResult> {
   if (input.authorizer === undefined) {
     return { status: 'unavailable' };
@@ -1005,12 +1361,36 @@ async function authorizeAndGrantAitPromotionReward(input: {
       status: authorization.status === 'pending' ? 'pending' : 'unavailable',
     };
   }
+  const cached = await returnCachedPromotionReceipt(input);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const blocked = await returnExplicitFailure(input);
+  if (blocked !== undefined) {
+    return blocked;
+  }
+  try {
+    const persisted = await resolvePersistedPromotionGrant({
+      ...promotionResolveInput(input),
+      ...(input.ownFenceReleased === true ? { ownFenceReleased: true } : {}),
+    });
+    if (persisted.result !== undefined) {
+      return persisted.result;
+    }
+  } catch {
+    // Storage became unreadable after authorization. Do not write a pending
+    // marker over an unknown record and do not dispatch.
+    return { status: 'pending' };
+  }
   return grantAitPromotionReward(
     input.dependencies,
     input.reward,
     input.idempotencyKey,
     input.campaignId,
+    input.memory,
     input.observer,
+    input.resolver,
+    input.ownFenceReleased === true ? { ownFenceReleased: true } : undefined,
   );
 }
 
@@ -1028,18 +1408,43 @@ async function grantAitPromotionReward(
   reward: AitPromotionRewardConfig,
   idempotencyKey: string,
   campaignId: string,
+  memory: PromotionClaimMemory,
   observer?: AitPromotionGrantObserver,
+  resolver?: AitPendingPromotionGrantResolver,
+  options?: { readonly ownFenceReleased?: boolean },
 ): Promise<PromotionRewardResult> {
-  const storageKey = promotionGrantStorageKey(idempotencyKey);
+  const cached = await returnCachedPromotionReceipt({
+    campaignId,
+    idempotencyKey,
+    observer,
+    memory,
+  });
+  if (cached !== undefined) {
+    return cached;
+  }
+  try {
+    const persisted = await resolvePersistedPromotionGrant({
+      campaignId,
+      idempotencyKey,
+      storage: dependencies.storage,
+      observer,
+      memory,
+      recoveryOnly: true,
+      ...(resolver === undefined ? {} : { resolver }),
+      ...(options?.ownFenceReleased === true ? { ownFenceReleased: true } : {}),
+    });
+    if (persisted.result !== undefined) {
+      return persisted.result;
+    }
+  } catch {
+    return { status: 'pending' };
+  }
   const pendingSince = new Date().toISOString();
   try {
-    await dependencies.storage.setItem(
-      storageKey,
-      JSON.stringify({
-        status: 'pending',
-        pendingSince,
-      }),
-    );
+    await writePromotionGrantRecord(dependencies.storage, campaignId, idempotencyKey, {
+      status: 'pending',
+      pendingSince,
+    });
   } catch {
     await observePromotion(observer, {
       campaignId,
@@ -1048,6 +1453,16 @@ async function grantAitPromotionReward(
       errorCode: 'STORAGE_UNAVAILABLE',
     });
     return { status: 'pending' };
+  }
+
+  const cachedBeforeDispatch = await returnCachedPromotionReceipt({
+    campaignId,
+    idempotencyKey,
+    observer,
+    memory,
+  });
+  if (cachedBeforeDispatch !== undefined) {
+    return cachedBeforeDispatch;
   }
 
   try {
@@ -1059,13 +1474,16 @@ async function grantAitPromotionReward(
     });
     if (isExplicitPromotionFailure(response)) {
       const errorCode = promotionFailureCode(response);
-      // Preserve the fence and failure across host restarts; a reported failure never authorizes retry.
+      // Remember the failure before the write. A lost diagnostic must not look like an unknown dispatch.
+      rememberExplicitFailure(memory, campaignId, idempotencyKey, errorCode, false);
       try {
-        await dependencies.storage.setItem(
-          storageKey,
-          JSON.stringify({ status: 'pending', pendingSince, errorCode }),
-        );
-      } catch { /* The original pending marker still fences dispatch. */ }
+        await writePromotionGrantRecord(dependencies.storage, campaignId, idempotencyKey, {
+          status: 'pending',
+          pendingSince,
+          errorCode,
+        });
+        rememberExplicitFailure(memory, campaignId, idempotencyKey, errorCode, true);
+      } catch { /* The bridge-local failure map still blocks the retry removal path. */ }
       await observePromotion(observer, { campaignId, idempotencyKey, status: 'failed', errorCode });
       return { status: 'failed' };
     }
@@ -1083,35 +1501,71 @@ async function grantAitPromotionReward(
         status: 'pending',
         errorCode,
       });
-      await persistPromotionDiagnostic(dependencies.storage, storageKey, errorCode, pendingSince);
+      await persistPromotionDiagnostic(
+        dependencies.storage,
+        memory,
+        campaignId,
+        idempotencyKey,
+        errorCode,
+        pendingSince,
+      );
       await observed;
       return { status: 'pending' };
     }
 
     const result = { status: 'granted', receiptKey: response.key } as const;
-    // Start the observer before native storage: either path can preserve a late SDK success.
-    const observed = observePromotion(observer, { campaignId, idempotencyKey, ...result });
     try {
-      await dependencies.storage.setItem(storageKey, JSON.stringify(result));
+      await writePromotionGrantRecord(dependencies.storage, campaignId, idempotencyKey, result);
     } catch (error) {
+      if (isPromotionFenceError(error)) {
+        // The fence did not land, or the legacy marker could not be read.
+        // Do not cache or return the receipt: another campaign could still
+        // bind an unbound v1 marker for this claim.
+        await observePromotion(observer, {
+          campaignId,
+          idempotencyKey,
+          status: 'pending',
+          errorCode: 'STORAGE_UNAVAILABLE',
+        });
+        return { status: 'pending' };
+      }
+      retainUndurableReceipt(memory, campaignId, idempotencyKey);
+      rememberGrantedReceipt(memory, { campaignId, idempotencyKey, ...result });
+      const observed = observePromotion(observer, { campaignId, idempotencyKey, ...result });
       console.warn(
         'AIT native promotion receipt could not be cached; keeping it terminal.',
         reward.promotionCode,
         error,
       );
+      await observed;
+      return result;
     }
-    await observed;
+    rememberGrantedReceipt(memory, { campaignId, idempotencyKey, ...result });
+    releaseDurableReceipt(memory, campaignId, idempotencyKey);
+    await observePromotion(observer, { campaignId, idempotencyKey, ...result });
     return result;
   } catch (error) {
     const errorCode = isRecord(error) && typeof error.errorCode === 'string'
       && /^[A-Za-z0-9_-]{1,80}$/u.test(error.errorCode) ? error.errorCode : 'NATIVE_EXCEPTION';
+    const granted = cachedGrantedReceipt(memory, campaignId, idempotencyKey);
+    if (granted !== undefined) {
+      await observePromotion(observer, { campaignId, idempotencyKey, ...granted });
+      return granted;
+    }
     const observed = observePromotion(observer, {
       campaignId,
       idempotencyKey,
       status: 'pending',
       errorCode,
     });
-    await persistPromotionDiagnostic(dependencies.storage, storageKey, errorCode, pendingSince);
+    await persistPromotionDiagnostic(
+      dependencies.storage,
+      memory,
+      campaignId,
+      idempotencyKey,
+      errorCode,
+      pendingSince,
+    );
     await observed;
     // Keep the pending marker. A provider error after dispatch is ambiguous and
     // retrying the same promotion blindly can double-grant Toss points.
@@ -1119,24 +1573,46 @@ async function grantAitPromotionReward(
   }
 }
 
-/** Unknown native outcomes remain pending; preserve the diagnostic for a later recovery observer. */
+/** Unknown native outcomes remain pending; never overwrite a granted receipt or an unreadable marker. */
 async function persistPromotionDiagnostic(
-  storage: Pick<typeof Storage, 'setItem'>,
-  storageKey: string,
+  storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+  memory: PromotionClaimMemory,
+  campaignId: string,
+  idempotencyKey: string,
   errorCode: string,
   pendingSince: string,
 ): Promise<void> {
+  if (cachedGrantedReceipt(memory, campaignId, idempotencyKey) !== undefined) {
+    return;
+  }
   try {
-    await storage.setItem(
-      storageKey,
-      JSON.stringify({
-        status: 'pending',
-        outcome: 'pending',
-        pendingSince,
-        errorCode,
-      }),
-    );
+    const loaded = await loadPromotionGrantRecord(storage, campaignId, idempotencyKey);
+    if (loaded.campaignMismatch || (loaded.serialized !== null && isGrantedPromotionRecord(loaded.serialized))) {
+      return;
+    }
+  } catch {
+    return;
+  }
+  try {
+    await writePromotionGrantRecord(storage, campaignId, idempotencyKey, {
+      status: 'pending',
+      outcome: 'pending',
+      pendingSince,
+      errorCode,
+    });
   } catch { /* The pre-dispatch marker still fences a duplicate payment. */ }
+}
+
+function isGrantedPromotionRecord(serialized: string): boolean {
+  try {
+    const state: unknown = JSON.parse(serialized);
+    return isRecord(state)
+      && state.status === 'granted'
+      && typeof state.receiptKey === 'string'
+      && state.receiptKey.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function isExplicitPromotionFailure(value: unknown): boolean {
@@ -1161,35 +1637,87 @@ async function observePromotion(observer: AitPromotionGrantObserver | undefined,
     return;
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Attach the rejection handler before racing. A late observer failure must not
+  // become an unhandled rejection after the three-second bound wins the race.
+  const observed = Promise.resolve()
+    .then(() => observer(observation))
+    .then(() => undefined, () => undefined);
   try {
     await Promise.race([
-      Promise.resolve().then(() => observer(observation)),
+      observed,
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, 3_000);
       }),
     ]);
-  } catch { /* Diagnostic delivery is best effort; durable markers remain authoritative for deduplication. */ } finally {
+  } finally {
     clearTimeout(timer);
   }
 }
 
 interface ResolvePersistedPromotionGrantInput {
   readonly recoveryOnly?: boolean;
+  /**
+   * This locked call already accepted an authority retry. The surviving v1
+   * dispatch fence stays visible to every campaign; it is not an in-process
+   * claim. Skip a second resolver read of that fence so the continuation can
+   * refresh it and dispatch only after the authorizer approves.
+   */
+  readonly ownFenceReleased?: boolean;
   readonly campaignId: string;
   readonly idempotencyKey: string;
   readonly storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>;
   readonly resolver?: AitPendingPromotionGrantResolver;
   readonly observer?: AitPromotionGrantObserver | undefined;
+  readonly memory?: PromotionClaimMemory;
 }
 
 async function resolvePersistedPromotionGrant(
   input: ResolvePersistedPromotionGrantInput,
-): Promise<{ readonly result?: PromotionRewardResult }> {
-  const storageKey = promotionGrantStorageKey(input.idempotencyKey);
-  const serialized = await input.storage.getItem(storageKey);
-  if (serialized === null) {
+): Promise<{ readonly result?: PromotionRewardResult; readonly ownFenceReleased?: boolean }> {
+  const loaded = await loadPromotionGrantRecord(
+    input.storage,
+    input.campaignId,
+    input.idempotencyKey,
+  );
+  if (loaded.campaignMismatch) {
+    console.warn(
+      'AIT persisted promotion campaign does not match the requested campaign; keeping the claim pending.',
+      input.campaignId,
+    );
+    return { result: { status: 'pending' } };
+  }
+  if (
+    input.ownFenceReleased === true
+    && (loaded.serialized === null || isOwnDispatchFenceSerialized(loaded.serialized, input.campaignId))
+  ) {
+    return { ownFenceReleased: true };
+  }
+  if (loaded.serialized === null) {
     return {};
   }
+  // An unbound v1 marker is bound in place before it can be consumed. The
+  // stamp is the binding record; no scoped copy is written here. A failed
+  // stamp leaves the original unbound and does not publish a local receipt.
+  let durableBinding = !loaded.legacy;
+  if (loaded.legacy) {
+    const bound = await bindUnscopedLegacyMarker(
+      input.storage,
+      input.campaignId,
+      input.idempotencyKey,
+      loaded.serialized,
+    );
+    if (bound === 'bound') {
+      durableBinding = true;
+    } else if (isGrantedPromotionRecord(loaded.serialized)) {
+      console.warn(
+        'AIT legacy promotion marker could not be bound; keeping the claim pending.',
+        input.campaignId,
+      );
+      return { result: { status: 'pending' } };
+    }
+  }
+  const storageKey = loaded.storageKey;
+  const serialized = loaded.serialized;
 
   let state: unknown;
   try {
@@ -1216,6 +1744,14 @@ async function resolvePersistedPromotionGrant(
       && state.receiptKey.trim().length > 0
     ) {
       const result = { status: 'granted', receiptKey: state.receiptKey } as const;
+      if (input.memory !== undefined) {
+        rememberGrantedReceipt(input.memory, {
+          campaignId: input.campaignId,
+          idempotencyKey: input.idempotencyKey,
+          ...result,
+        });
+        releaseDurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
+      }
       await observePromotion(input.observer, {
         campaignId: input.campaignId,
         idempotencyKey: input.idempotencyKey,
@@ -1223,7 +1759,7 @@ async function resolvePersistedPromotionGrant(
       });
       return { result };
     }
-    if (state.status === 'pending') {
+    if (state.status === 'pending' || isOwnDispatchFenceRecord(state, input.campaignId)) {
       const errorCode = typeof state.errorCode === 'string'
         ? promotionFailureCode(state)
         : undefined;
@@ -1273,8 +1809,39 @@ async function resolvePersistedPromotionGrant(
         }
         const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
         try {
-          await input.storage.setItem(storageKey, JSON.stringify(result));
+          await writePromotionGrantRecord(
+            input.storage,
+            input.campaignId,
+            input.idempotencyKey,
+            result,
+          );
+          if (input.memory !== undefined) {
+            rememberGrantedReceipt(input.memory, {
+              campaignId: input.campaignId,
+              idempotencyKey: input.idempotencyKey,
+              ...result,
+            });
+            releaseDurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
+          }
         } catch (error) {
+          if (
+            error instanceof PromotionCampaignConflictError
+            || error instanceof LegacyPromotionFenceError
+          ) {
+            // A failed stamp leaves the marker unbound. Caching or returning
+            // the authority receipt would let another campaign claim it too.
+            return { result: { status: 'pending' } };
+          }
+          // A reconciled answer whose cache write failed stays terminal only
+          // after the marker is already bound. No scoped copy was written.
+          if (input.memory !== undefined) {
+            retainUndurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
+            rememberGrantedReceipt(input.memory, {
+              campaignId: input.campaignId,
+              idempotencyKey: input.idempotencyKey,
+              ...result,
+            });
+          }
           console.warn(
             'AIT reconciled promotion receipt could not be cached; keeping it terminal.',
             input.campaignId,
@@ -1292,7 +1859,52 @@ async function resolvePersistedPromotionGrant(
       if (input.recoveryOnly || resolution.status !== 'retry') {
         return { result: pendingResult };
       }
-      return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+      if (isOwnDispatchFenceRecord(state, input.campaignId)) {
+        // Keep the v1 fence. A rolled-back bridge only reads that key, and
+        // deleting it would let that bridge dispatch the same claim.
+        return { ownFenceReleased: true };
+      }
+      if (!durableBinding) {
+        // The unbound marker is the only fence. Removing it would let this
+        // campaign, and any other, dispatch the same claim.
+        return { result: pendingResult };
+      }
+      if (input.memory !== undefined) {
+        // A lost diagnostic write has no durable code for the resolver to clear.
+        // A stored failure must not block that decision.
+        const blocked = undurableExplicitFailureCode(
+          input.memory,
+          input.campaignId,
+          input.idempotencyKey,
+        );
+        if (blocked !== undefined) {
+          return { result: { status: 'failed' } };
+        }
+        const cached = cachedGrantedReceipt(input.memory, input.campaignId, input.idempotencyKey);
+        if (cached !== undefined) {
+          await observePromotion(input.observer, {
+            campaignId: input.campaignId,
+            idempotencyKey: input.idempotencyKey,
+            ...cached,
+          });
+          return { result: cached };
+        }
+      }
+      const scopedKey = promotionGrantScopedStorageKey(input.campaignId, input.idempotencyKey);
+      if (scopedKey !== storageKey) {
+        const scopedRemoved = await removeInvalidPersistedPromotionGrant(input.storage, scopedKey);
+        if (scopedRemoved.result !== undefined) {
+          return scopedRemoved;
+        }
+      }
+      const removed = await removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+      if (removed.result === undefined && input.memory !== undefined) {
+        forgetExplicitFailure(input.memory, input.campaignId, input.idempotencyKey);
+      }
+      if (removed.result !== undefined) {
+        return removed;
+      }
+      return { ownFenceReleased: true };
     }
     console.warn(
       'AIT persisted promotion state has an unknown status; keeping the claim pending.',
@@ -1323,6 +1935,310 @@ async function removeInvalidPersistedPromotionGrant(
 
 function promotionGrantStorageKey(idempotencyKey: string): string {
   return `${promotionGrantStoragePrefix}${encodeURIComponent(idempotencyKey)}`;
+}
+
+function promotionGrantScopedStorageKey(campaignId: string, idempotencyKey: string): string {
+  return `${promotionGrantScopedStoragePrefix}${encodeURIComponent(campaignId)}:${encodeURIComponent(idempotencyKey)}`;
+}
+
+/** The marker names another campaign, or its campaignId is present but not a non-blank string. */
+class PromotionCampaignConflictError extends Error {
+  constructor(message = 'AIT promotion marker belongs to another campaign.') {
+    super(message);
+    this.name = 'PromotionCampaignConflictError';
+  }
+}
+
+/**
+ * An unbound or malformed legacy marker was seen and could not be durably
+ * bound. No scoped copy was written.
+ */
+class LegacyPromotionFenceError extends Error {
+  constructor(message = 'AIT legacy promotion marker could not be bound.') {
+    super(message);
+    this.name = 'LegacyPromotionFenceError';
+  }
+}
+
+type StoredCampaignBinding =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'bound'; readonly campaignId: string };
+
+/** Only a missing `campaignId` property is legacy. A present invalid value is not. */
+function readStoredCampaignBinding(serialized: string): StoredCampaignBinding {
+  let state: unknown;
+  try {
+    state = JSON.parse(serialized);
+  } catch {
+    return { kind: 'unreadable' };
+  }
+  if (!isRecord(state) || !Object.hasOwn(state, 'campaignId')) {
+    return { kind: 'absent' };
+  }
+  if (typeof state.campaignId === 'string' && state.campaignId.trim().length > 0) {
+    return { kind: 'bound', campaignId: state.campaignId };
+  }
+  return { kind: 'invalid' };
+}
+
+function isCampaignConflict(binding: StoredCampaignBinding, campaignId: string): boolean {
+  return binding.kind === 'invalid'
+    || binding.kind === 'unreadable'
+    || (binding.kind === 'bound' && binding.campaignId !== campaignId);
+}
+
+/**
+ * Stamp `campaignId` onto an unbound v1 marker. This is the binding record.
+ * It does not write a scoped copy, and it does not record an in-process
+ * binding: a failed stamp must stay visible to every campaign.
+ */
+async function bindUnscopedLegacyMarker(
+  storage: Pick<typeof Storage, 'setItem'>,
+  campaignId: string,
+  idempotencyKey: string,
+  serialized: string,
+): Promise<'bound' | 'unbound' | 'malformed'> {
+  let state: unknown;
+  try {
+    state = JSON.parse(serialized);
+  } catch {
+    return 'malformed';
+  }
+  if (!isRecord(state) || Object.hasOwn(state, 'campaignId')) {
+    return 'malformed';
+  }
+  try {
+    await storage.setItem(
+      promotionGrantStorageKey(idempotencyKey),
+      JSON.stringify({ ...state, campaignId }),
+    );
+    return 'bound';
+  } catch {
+    return 'unbound';
+  }
+}
+
+async function loadPromotionGrantRecord(
+  storage: Pick<typeof Storage, 'getItem'>,
+  campaignId: string,
+  idempotencyKey: string,
+): Promise<{
+  readonly storageKey: string;
+  readonly legacy: boolean;
+  readonly serialized: string | null;
+  readonly campaignMismatch: boolean;
+}> {
+  const scopedKey = promotionGrantScopedStorageKey(campaignId, idempotencyKey);
+  const legacyKey = promotionGrantStorageKey(idempotencyKey);
+  const scoped = await storage.getItem(scopedKey);
+  if (scoped !== null) {
+    const binding = readStoredCampaignBinding(scoped);
+    if (isCampaignConflict(binding, campaignId)) {
+      return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: true };
+    }
+    if (!isGrantedPromotionRecord(scoped)) {
+      // A granted v1 receipt is written before the scoped copy. If that copy
+      // stays pending, accepting it would hide the receipt and let a retry
+      // dispatch again.
+      let legacy: string | null = null;
+      try {
+        legacy = await storage.getItem(legacyKey);
+      } catch {
+        throw new LegacyPromotionFenceError('AIT legacy promotion marker could not be read.');
+      }
+      if (legacy !== null && isGrantedPromotionRecord(legacy)) {
+        const legacyBinding = readStoredCampaignBinding(legacy);
+        if (isCampaignConflict(legacyBinding, campaignId)) {
+          return {
+            storageKey: legacyKey,
+            legacy: true,
+            serialized: legacy,
+            campaignMismatch: true,
+          };
+        }
+        return {
+          storageKey: legacyKey,
+          legacy: legacyBinding.kind === 'absent',
+          serialized: legacy,
+          campaignMismatch: false,
+        };
+      }
+    }
+    return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: false };
+  }
+  const legacy = await storage.getItem(legacyKey);
+  if (legacy === null) {
+    return { storageKey: scopedKey, legacy: false, serialized: null, campaignMismatch: false };
+  }
+  const binding = readStoredCampaignBinding(legacy);
+  if (isCampaignConflict(binding, campaignId)) {
+    return { storageKey: legacyKey, legacy: true, serialized: legacy, campaignMismatch: true };
+  }
+  return {
+    storageKey: legacyKey,
+    legacy: binding.kind === 'absent',
+    serialized: legacy,
+    campaignMismatch: false,
+  };
+}
+
+function isTerminalPromotionGrant(record: Readonly<Record<string, unknown>>): boolean {
+  return record.status === 'granted'
+    && typeof record.receiptKey === 'string'
+    && record.receiptKey.trim().length > 0;
+}
+
+function isOwnDispatchFenceRecord(
+  state: Readonly<Record<string, unknown>>,
+  campaignId: string,
+): boolean {
+  return state.status === promotionDispatchFenceStatus
+    && state.fence === promotionDispatchFenceKind
+    && state.campaignId === campaignId;
+}
+
+function isOwnDispatchFenceSerialized(serialized: string, campaignId: string): boolean {
+  try {
+    const state: unknown = JSON.parse(serialized);
+    return isRecord(state) && isOwnDispatchFenceRecord(state, campaignId);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shape a released 0.20.1 bridge treats as already fenced. A granted receipt
+ * is returned without dispatch. Any other record uses an unknown status so
+ * that bridge returns pending and does not remove the marker, including when
+ * its resolver would retry. `pending` plus `pendingSince` is not that shape.
+ */
+function v1DispatchFenceRecord(
+  record: Readonly<Record<string, unknown>>,
+  campaignId: string,
+): Readonly<Record<string, unknown>> {
+  if (isTerminalPromotionGrant(record)) {
+    return { ...record, campaignId };
+  }
+  return {
+    ...record,
+    status: promotionDispatchFenceStatus,
+    fence: promotionDispatchFenceKind,
+    campaignId,
+  };
+}
+
+function nextLegacyRecord(
+  parsed: Readonly<Record<string, unknown>>,
+  record: Readonly<Record<string, unknown>>,
+  campaignId: string,
+  bindingKind: StoredCampaignBinding['kind'],
+): Readonly<Record<string, unknown>> {
+  if (bindingKind === 'absent') {
+    return { ...parsed, ...record, campaignId };
+  }
+  const merged = { ...parsed, ...record, campaignId };
+  if (isTerminalPromotionGrant(merged)) {
+    return merged;
+  }
+  if (isOwnDispatchFenceRecord(parsed, campaignId)) {
+    return v1DispatchFenceRecord(merged, campaignId);
+  }
+  return merged;
+}
+
+function isPromotionFenceError(error: unknown): boolean {
+  return error instanceof LegacyPromotionFenceError
+    || error instanceof PromotionCampaignConflictError;
+}
+
+/**
+ * New records go to the campaign-scoped key after a v1 dispatch fence.
+ * A legacy v1 marker is updated in place: an unbound marker is stamped
+ * before any other durable write, and no scoped copy of it is created. A
+ * conflicting or invalid binding is left untouched. The v1 key is not removed:
+ * a rolled-back 0.20.1 bridge only probes that key.
+ */
+async function writePromotionGrantRecord(
+  storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+  campaignId: string,
+  idempotencyKey: string,
+  record: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  const scopedKey = promotionGrantScopedStorageKey(campaignId, idempotencyKey);
+  const legacyKey = promotionGrantStorageKey(idempotencyKey);
+  let scoped: string | null = null;
+  let scopedUnread = false;
+  try {
+    scoped = await storage.getItem(scopedKey);
+  } catch {
+    scopedUnread = true;
+  }
+  if (!scopedUnread && scoped !== null && isCampaignConflict(readStoredCampaignBinding(scoped), campaignId)) {
+    throw new PromotionCampaignConflictError();
+  }
+  let legacy: string | null = null;
+  let legacyUnread = false;
+  try {
+    legacy = await storage.getItem(legacyKey);
+  } catch {
+    legacyUnread = true;
+  }
+  if (legacyUnread) {
+    // A failed legacy read cannot prove the marker is absent. Do not write a
+    // scoped copy and do not publish the authority result until absence or a
+    // binding can be established. Approved fail-closed: a markerless receipt
+    // is not persisted while this read is failing.
+    throw new LegacyPromotionFenceError('AIT legacy promotion marker could not be read.');
+  }
+  if (legacy !== null) {
+    const binding = readStoredCampaignBinding(legacy);
+    if (binding.kind === 'unreadable') {
+      throw new LegacyPromotionFenceError('AIT legacy promotion marker is malformed.');
+    }
+    if (isCampaignConflict(binding, campaignId)) {
+      throw new PromotionCampaignConflictError();
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(legacy);
+    } catch {
+      throw new LegacyPromotionFenceError('AIT legacy promotion marker is malformed.');
+    }
+    if (!isRecord(parsed)) {
+      throw new LegacyPromotionFenceError('AIT legacy promotion marker is malformed.');
+    }
+    // Binding record first. A failed stamp must not be followed by a scoped copy.
+    try {
+      await storage.setItem(
+        legacyKey,
+        JSON.stringify(nextLegacyRecord(parsed, record, campaignId, binding.kind)),
+      );
+    } catch {
+      if (binding.kind === 'absent') {
+        throw new LegacyPromotionFenceError();
+      }
+      throw new Error('AIT promotion marker could not be cached.');
+    }
+    if (binding.kind === 'absent' || (scoped === null && !isOwnDispatchFenceRecord(parsed, campaignId))) {
+      return;
+    }
+    await storage.setItem(scopedKey, JSON.stringify({ ...record, campaignId }));
+    return;
+  }
+  try {
+    await storage.setItem(legacyKey, JSON.stringify(v1DispatchFenceRecord(record, campaignId)));
+  } catch {
+    throw new LegacyPromotionFenceError('AIT promotion v1 dispatch fence could not be stored.');
+  }
+  try {
+    await storage.setItem(scopedKey, JSON.stringify({ ...record, campaignId }));
+  } catch {
+    // The v1 fence already landed, so a rolled-back bridge will not dispatch.
+    // A missing scoped copy must not abort the caller: the pre-dispatch marker
+    // is the fence, and a later diagnostic write may also fail.
+  }
 }
 
 export async function shareIntent(

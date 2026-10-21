@@ -1,5 +1,35 @@
 # @mpgd/adapter-browser
 
+## 0.11.7 — 2026-10-21
+
+### Patch changes
+
+- [3f519a74](https://github.com/imjlk/mpgd-kit/commit/3f519a74a3eaf7aeec7a35d208ed951ff61ff8df) Echo a coordinator's purchase presentation attempt on ONE play checkout facts. Ordinary checkouts are unchanged, and the echoed fact does not grant. — Thanks @imjlk!
+- Updated dependencies: @mpgd/platform@0.27.2
+
+## 0.11.6 — 2026-10-21
+
+### Fixed
+
+- [7f75e0a1](https://github.com/imjlk/mpgd-kit/commit/7f75e0a189cb00072cb9d87f8c654f8c784b07af) Browser launch and inbound-share parameters now use the same caps as the Apps in Toss host: nested `queryParams` longer than 4096 characters are ignored, at most 32 nested entries are read, and each forwarded key and value is limited to 256 characters. `puzzleId` and `challengeToken` that contain an ASCII control character are dropped instead of being copied into launch or inbound-share state. Direct search parameters still win over nested ones.
+  
+  `leaderboard.submitScore()` returns `{ submitted: false }`. The browser gateway does not install a native leaderboard (`nativeLeaderboard` is false), matching WeChat, Verse8, ONE play, and CrazyGames. Callers that treated `submitted: true` as proof a score was sent, including a game-services record on a browser or Microsoft Store gateway that still uses this leaderboard, no longer record a score that was never submitted. — Thanks @imjlk!
+
+### Patch changes
+
+- [1bdf381a](https://github.com/imjlk/mpgd-kit/commit/1bdf381a8ffd165dd138f3d93af869ce385eeb84) Stop a failed or hung ONE play or CrazyGames ad from wedging fullscreen occupancy and checkout for the page lifetime.
+  
+  ONE play `showRewardedAsync` and `showInterstitialAsync` are bounded, including a synchronous throw from the show call. A rejection before an ad pause (`reason: "ad"`) releases the shared owner and does not grant; a background or payment pause is not evidence the ad opened. A show that never settles resolves pending with `rewardGranted: false`. If that call later settles, or the recovery bound expires with no terminal SDK result, the provider emits `closed` or `failed` so the runtime can release its fullscreen lease, still without `reward-earned` or a client grant. Dispose clears only the occupancy this gateway created, so another live gateway sharing the SDK keeps its ad or checkout lock. A checkout waiting on intent issuance does not open a payment sheet after that release. A settled unknown SDK reason still quarantines until a terminal result, the recovery bound, or dispose. A back handler that returns `true` or a thenable, including a Promise from another frame, consumes the synchronous ONE SDK back event so the host does not exit before the decision.
+  
+  CrazyGames `requestAd` is bounded the same way as the AIT and Verse8 ad providers. A missed `adFinished` / `adError` resolves pending and quarantines as action-required until a later terminal callback. A synchronous throw does not guess that the ad closed. A proven not-started `adError` still releases immediately. Timeouts never grant. — Thanks @imjlk!
+- Updated dependencies: @mpgd/platform@0.27.1
+
+## 0.11.5 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.27.0
+
 ## 0.11.4 — 2026-10-20
 
 ### Patch changes

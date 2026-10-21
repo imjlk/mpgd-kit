@@ -1,5 +1,30 @@
 # @mpgd/adapter-devvit
 
+## 0.13.5 — 2026-10-21
+
+### Changed
+
+- [b918119c](https://github.com/imjlk/mpgd-kit/commit/b918119c26437b13d6ca4a7e57a3104b81fe0687) `createDevvitNotificationsV2BridgeHandler` serves `notifications.v2.*` with `createNotificationsV2BridgeHandler` from `@mpgd/bridge/notifications`, the handler the Apps in Toss and Capacitor bridges share. For errors thrown by `@mpgd/platform` and this package, codes, retryable flags, `onError` reporting, and the server-side handling of plugin text are unchanged; the local-notification methods now answer `NOTIFICATIONS_UNSUPPORTED` with the shared wording ("The Devvit notifications provider does not implement ..."). The webview client reads a host code back with `readBridgeNotificationsHostCode`. Failures are now also read by shape, so an error from another copy of `@mpgd/platform`, or a thrown object with a platform `code` and a boolean `retryable`, keeps its retryable flag, and its code too when that is a notifications code (any other code crosses as `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`). — Thanks @imjlk!
+
+### Patch changes
+
+- [a2f31f14](https://github.com/imjlk/mpgd-kit/commit/a2f31f141434f432121c90a7c7511d6ef9cd1196) Check current stable Devvit SDK and CLI versions before target upload, publish, and playtest, including every directly declared `devvit` / `@devvit/*` package and the adapter-resolved SDK. Fail before upload on stale installs or unavailable registry checks; preserve exact pins and require rebuilding after upgrades. Update the adapter and starter to Devvit 0.15.0. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.15.0, @mpgd/game-services@0.27.2, @mpgd/platform@0.27.2
+
+## 0.13.4 — 2026-10-21
+
+### Patch changes
+
+- [0e87e83e](https://github.com/imjlk/mpgd-kit/commit/0e87e83e893dcbfa00a17f54b0d7a943a2e328b3) Page Devvit paid orders until the cursor ends, and fail the listing when the scan cap leaves pages unread, so a still-paid order behind newer canceled orders is not treated as delivered. A verified-leaderboard Redis transaction now ends with a commit marker and treats an empty or nil-only EXEC as an abort. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.14.3, @mpgd/game-services@0.27.1, @mpgd/platform@0.27.1
+
+## 0.13.3 — 2026-10-21
+
+### Patch changes
+
+- [22ec36ec](https://github.com/imjlk/mpgd-kit/commit/22ec36ecfdf97c0d57dea855c26b0987ec84730c) Harden Devvit notifications v2. History reads use `hGetAll` instead of allowlisted `hMGet`, so a send still plans when that command is disabled. A length or content `enqueue` refusal is `rejected` with reason `configuration` once, instead of an ambiguous replay, and only when the message also shows refusal evidence (too long, exceeds, invalid, not allowed, or not found); a field name alone stays ambiguous. A throw from WATCH or the planning read that is transient retries inside the store's attempt budget, as does an EXEC throw that proves the transaction aborted before commit (the 20-transaction cap, the 5-second timeout). A connection loss thrown by EXEC is not retried, because the reply may have been lost after commit. A refused opt-in or opt-out re-reads `isOptedIn` and returns the observed state, so a duplicate concurrent call is not a permanent configuration error. `devvitNotificationSessionFromContext` builds the session from the request context; `devvitNotificationSession` remains. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.14.2, @mpgd/game-services@0.27.0, @mpgd/platform@0.27.0
+
 ## 0.13.2 — 2026-10-20
 
 ### Patch changes

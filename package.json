@@ -45,7 +45,7 @@
     "test:cli-output": "node tools/smoke/lite-template-lifecycle.mjs && node tools/smoke/cli-output.mjs && pnpm smoke:lite-shell:package",
     "workspace:relink": "node tools/workspace/relink-kit-workspace.mjs",
     "workspace:check-links": "node tools/workspace/relink-kit-workspace.mjs --check",
-    "test:tooling": "node --test tools/toolchain.test.mjs tools/run-ttsx.test.mjs tools/ci/native-scope.test.mjs tools/ci/verify-coverage.test.mjs tools/ci/attest-pr-merge.test.mjs && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validate-share-link-conformance.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/policy/javascript-policy.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/graph-runtime.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/graph/run-graph-presets.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validation/json.test.ts && node tools/run-ttsx.mjs tools/workspace/kit-dependency-links.test.ts && node tools/run-ttsx.mjs tools/ci/prepared-suite.test.ts && node tools/run-ttsx.mjs tools/ci/windows-pipeline.test.ts",
+    "test:tooling": "node --test tools/toolchain.test.mjs tools/run-ttsx.test.mjs tools/ci/native-scope.test.mjs tools/ci/verify-coverage.test.mjs tools/ci/attest-pr-merge.test.mjs && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validate-share-link-conformance.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/policy/javascript-policy.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/graph-runtime.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/graph/run-graph-presets.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validation/json.test.ts && node tools/run-ttsx.mjs tools/workspace/kit-dependency-links.test.ts && node tools/run-ttsx.mjs tools/ci/prepared-suite.test.ts && node tools/run-ttsx.mjs tools/ci/windows-pipeline.test.ts && pnpm oneplay:skill:test",
     "validate:toolchain": "node tools/validate-toolchain.mjs",
     "validate:capacitor-alignment": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validate-capacitor-alignment.ts",
     "validate:capacitor-fail-closed": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validate-capacitor-fail-closed.ts",
@@ -111,7 +111,8 @@
     "smoke:platform-version-allocation": "node tools/run-ttsx.mjs tools/smoke/cli-platform-version-allocation.ts",
     "smoke:game-config": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/game-owned-catalog.ts",
     "smoke:cli-hosted-pwa-deployment": "node tools/run-ttsx.mjs tools/smoke/cli-hosted-pwa-deployment.ts",
-    "smoke:cli-kit-upgrade": "node tools/run-ttsx.mjs tools/smoke/cli-kit-upgrade.ts",
+    "smoke:cli-kit-upgrade": "node tools/run-ttsx.mjs tools/smoke/cli-kit-upgrade.ts && node tools/run-ttsx.mjs packages/cli/src/kit-upgrade-writes.test.ts",
+    "smoke:cli-legal-site": "node tools/run-ttsx.mjs packages/cli/src/legal-site-output.test.ts",
     "smoke:cli-asset-pack-build": "node tools/run-ttsx.mjs --project packages/cli/tsconfig.json packages/cli/src/asset-pack-paths.test.ts && node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-build.ts",
     "smoke:cli-asset-pack-target": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-target.ts",
     "smoke:cli-asset-pack-publish": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-publish.ts",
@@ -127,7 +128,7 @@
     "smoke:cli-microsoft-store-package-generation": "node tools/run-ttsx.mjs tools/smoke/cli-microsoft-store-package-generation.ts",
     "smoke:cli-microsoft-store-package-acceptance": "node tools/run-ttsx.mjs tools/smoke/cli-microsoft-store-package-acceptance.ts",
     "smoke:cli-microsoft-store-starter-onboarding": "node tools/run-ttsx.mjs tools/smoke/cli-microsoft-store-starter-onboarding.ts",
-    "smoke:cli-notifications-starter": "node tools/run-ttsx.mjs packages/cli/test/notifications-starter.test.ts && node tools/run-ttsx.mjs packages/cli/test/notifications-settings.test.ts",
+    "smoke:cli-notifications-starter": "node tools/run-ttsx.mjs packages/cli/test/notifications-starter.test.ts && node tools/run-ttsx.mjs packages/cli/test/notifications-settings.test.ts && node tools/run-ttsx.mjs packages/cli/test/notifications-backend.test.ts && node tools/run-ttsx.mjs packages/cli/test/game-title-placeholders.test.ts",
     "smoke:cli-notifications-game": "node tools/run-ttsx.mjs tools/smoke/cli-notifications-game.ts",
     "smoke:cli-capacitor-shell-starter": "node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-starter.test.ts && node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-providers.test.ts && node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-notifications.test.ts",
     "smoke:cli-deploy-planning": "node tools/run-ttsx.mjs packages/cli/src/deploy-planning.test.ts",
@@ -194,7 +195,8 @@
     "smoke:lite-shell:package": "node tools/run-ttsx.mjs tools/smoke/lite-shell-package.ts",
     "test:published-starter": "node tools/run-ttsx.mjs tools/smoke/published-starter-consumer.test.ts",
     "oneplay:skill:check": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json --no-plugins tools/oneplay/official-skill.ts",
-    "oneplay:skill:test": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json --no-plugins tools/oneplay/official-skill.test.ts"
+    "oneplay:skill:test": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json --no-plugins tools/oneplay/official-skill.test.ts",
+    "test:devvit-sdk": "node tools/run-ttsx.mjs --project packages/cli/tsconfig.json packages/cli/src/devvit-sdk-check.test.ts"
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",

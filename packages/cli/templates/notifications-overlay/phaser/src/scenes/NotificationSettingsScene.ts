@@ -16,8 +16,13 @@ export const notificationSettingsSceneKey = 'NotificationSettingsScene';
 
 const textStyle = { color: '#d6dee8', fontFamily: 'Arial, sans-serif', fontSize: '18px' } as const;
 const buttonStyle = { ...textStyle, color: '#5eead4' } as const;
-/** The list's viewport on the 960x540 game: below the title and the outcome strip, above Back. */
-const list = { top: 110, height: 370, width: 960 } as const;
+/** List rows and the outcome strip share this column (x=60..900) on the 960x540 game. */
+const listTextWidth = 840;
+/** Below the title. The outcome strip grows downward from here. */
+const outcomeTop = 68;
+/** The list ends above the Back button. */
+const listBottom = 480;
+const minListTop = 110;
 
 /**
  * Routes notification opens: one whose route is the settings screen (the
@@ -108,10 +113,17 @@ export class NotificationSettingsScene extends Phaser.Scene {
       this.scene.start('LobbyScene');
     }).setOrigin(0.5);
     this.outcome = this.add
-      .text(480, 88, '', { ...textStyle, color: '#f59e0b', fontSize: '16px' })
-      .setOrigin(0.5);
+      .text(480, outcomeTop, '', {
+        ...textStyle,
+        align: 'center',
+        color: '#f59e0b',
+        fontSize: '16px',
+        wordWrap: { width: listTextWidth },
+      })
+      .setOrigin(0.5, 0);
     this.content = this.add.container(0, 0);
-    this.listCamera = this.cameras.add(0, list.top, list.width, list.height);
+    this.listCamera = this.cameras.add(0, minListTop, 960, listBottom - minListTop);
+    this.placeListBelowOutcome();
     this.listCamera.ignore([title, back, this.outcome]);
     this.cameras.main.ignore(this.content);
     this.enableScroll();
@@ -136,9 +148,15 @@ export class NotificationSettingsScene extends Phaser.Scene {
     });
   }
 
+  private placeListBelowOutcome(): void {
+    const top = Math.max(minListTop, Math.ceil(this.outcome.y + this.outcome.height) + 8);
+    this.listCamera.setPosition(0, top);
+    this.listCamera.setSize(960, Math.max(0, listBottom - top));
+  }
+
   private scrollTo(scrollY: number): void {
     const height = this.content.getBounds().height;
-    this.listCamera.scrollY = Phaser.Math.Clamp(scrollY, 0, Math.max(0, height - list.height));
+    this.listCamera.scrollY = Phaser.Math.Clamp(scrollY, 0, Math.max(0, height - this.listCamera.height));
   }
 
   private async apply(visit: number, action: () => Promise<StarterNotificationSettingsView>): Promise<void> {
@@ -172,7 +190,7 @@ export class NotificationSettingsScene extends Phaser.Scene {
     const visit = this.visit;
     let y = 0;
     const line = (value: string, style: Phaser.Types.GameObjects.Text.TextStyle = textStyle) => {
-      const object = this.add.text(60, y, value, { ...style, wordWrap: { width: 840 } });
+      const object = this.add.text(60, y, value, { ...style, wordWrap: { width: listTextWidth } });
       this.content.add(object);
       y += object.height + 10;
     };
@@ -186,6 +204,7 @@ export class NotificationSettingsScene extends Phaser.Scene {
 
     // The outcome of the last tap stays in view above the list, wherever it is scrolled.
     this.outcome.setText(view.message ?? '');
+    this.placeListBelowOutcome();
     if (!view.available) {
       if (view.message === undefined) {
         line(text.unavailable);

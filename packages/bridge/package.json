@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/bridge",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "Typed native bridge protocol for mpgd platform adapters.",
   "license": "MIT",
   "repository": {
@@ -54,7 +54,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge/src/bridge-protocol.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc-node.test.ts && node tools/run-ttsx.mjs packages/bridge/src/cloudflare-pages.test.ts && node packages/bridge/test/orpc-node-dist-import.mjs && node packages/bridge/test/index-dist-import.mjs"
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge/src/bridge-protocol.test.ts && node tools/run-ttsx.mjs packages/bridge/src/notifications-handler.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc-node.test.ts && node tools/run-ttsx.mjs packages/bridge/src/cloudflare-pages.test.ts && node packages/bridge/test/orpc-node-dist-import.mjs && node packages/bridge/test/index-dist-import.mjs"
   },
   "dependencies": {
     "@mpgd/platform": "workspace:*",

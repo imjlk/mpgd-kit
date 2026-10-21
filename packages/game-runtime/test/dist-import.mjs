@@ -68,3 +68,6 @@ assert.equal(typeof createInlineBannerManager, 'function');
 
 const { createImpactContact } = await import('@mpgd/game-runtime/impact');
 assert.equal(createImpactContact({ atMs: 0, x: 0, y: 0, source: { kind: 'actor' }, target: { kind: 'wall' } }).normalY, -1);
+
+const { createCoordinatedCommerceProvider } = await import('@mpgd/game-runtime/commerce');
+assert.equal(typeof createCoordinatedCommerceProvider, 'function');

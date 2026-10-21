@@ -40,7 +40,12 @@ import type { AppsInTossMutualTlsFetcher } from '../apps-in-toss-partner-api.js'
  *   recipient who has not agreed to the template. `agreementErrorCodes` and
  *   `agreementFailReasons` let a deployment name the ones it observes, so
  *   such an answer is `rejected` with reason `agreement` and records the
- *   denial; without them it is reason `recipient`.
+ *   denial; without them it is reason `recipient`. A deployment list cannot
+ *   override 4095, 5004, 4034, or 4010: those documented codes are classified
+ *   first, so a rate limit is not stored as an agreement denial.
+ * - `baseUrl` must be the partner API host (`apps-in-toss-api.toss.im`).
+ *   The mTLS client certificate and the recipient key are not sent to any
+ *   other host unless the caller sets `allowUnlistedHost` (tests only).
  * - Limits: 15,000 calls per minute per app and 10 per minute per user, the
  *   reference registry entry's `rate` and `limits`, which the scheduler and
  *   the gate apply.
@@ -54,6 +59,13 @@ export const aitFunctionalMessagePath = 'api-partner/v1/apps-in-toss/messenger/s
 // `defaultAppsInTossPartnerApiTimeoutMs` (a test keeps them equal), kept here
 // so this module loads none of the partner client's code.
 export const defaultAitFunctionalMessageBaseUrl = 'https://apps-in-toss-api.toss.im';
+
+/**
+ * Hosts the partner certificate and the recipient key may be sent to.
+ * `docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md` names this production base and
+ * no sandbox API host.
+ */
+export const aitFunctionalMessageAllowedHosts = Object.freeze(['apps-in-toss-api.toss.im']);
 
 export const defaultAitFunctionalMessageTimeoutMs = 10_000;
 
@@ -130,11 +142,25 @@ export interface CreateAitFunctionalMessageDeliveryProviderOptions {
    */
   readonly recipientKey: 'toss-user' | 'anonymous';
   readonly baseUrl?: string;
+  /**
+   * Send to a `baseUrl` whose host is not
+   * {@link aitFunctionalMessageAllowedHosts}. Tests only: a deployment that
+   * sets this can leak the partner certificate and the recipient key.
+   */
+  readonly allowUnlistedHost?: boolean;
   /** 1 to 60,000 ms, as the partner API client accepts. */
   readonly timeoutMs?: number;
   /** `FAIL` error codes that mean the recipient has not agreed to the template. */
   readonly agreementErrorCodes?: readonly string[];
-  /** `reachedFailReason` texts (trimmed) that mean the recipient has not agreed to the template. */
+  /**
+   * `reachedFailReason` texts (trimmed) that mean the recipient has not
+   * agreed to the template. Each is 1 to 1,024 characters (UTF-16 code
+   * units) once trimmed: the provider reads at most the first 1,024
+   * characters of a `reachedFailReason` and then trims it, so a longer entry
+   * could never match, and an empty one would match a blank reason. The
+   * provider refuses either at creation. A received reason with leading
+   * whitespace loses as much of its end to that cut.
+   */
   readonly agreementFailReasons?: readonly string[];
   /** Further `FAIL` error codes that mean this recipient cannot receive the message. */
   readonly recipientErrorCodes?: readonly string[];
@@ -170,6 +196,8 @@ const channelFields: Readonly<Record<AitFunctionalMessageChannel, string>> = {
   friendtalk: 'sentFriendtalk',
 };
 const maximumResponseBodyBytes = 256 * 1_024;
+/** The longest `reachedFailReason` the provider keeps; a longer one is cut to this. */
+const maximumFailReasonLength = 1_024;
 const maximumIdentifierLength = 2_048;
 const maximumTimeoutMs = 60_000;
 
@@ -181,13 +209,13 @@ const maximumTimeoutMs = 60_000;
  *   With none sent, the per-channel `fail` lists decide: `rejected` with
  *   reason `agreement` when a failure's `reachedFailReason` is one of
  *   `agreementFailReasons`, otherwise `recipient`.
- * - `FAIL` with a code in `agreementErrorCodes` (first) or
- *   `recipientErrorCodes` is `rejected` with that reason, before any
- *   documented meaning of the code, on any status except HTTP 429, 5xx,
- *   408, and 425, which the status alone decides (see below);
- *   otherwise 4095 is `rate-limited` with `retryAfterSeconds` (at most a
- *   day), and 5004, 4034, and 4010 are `rejected` with reason
- *   `configuration`. Any other code is `rejected` with reason `recipient` on HTTP 200
+ * - `FAIL` with a documented code is classified before any deployment list:
+ *   4095 is `rate-limited` with `retryAfterSeconds` (at most a day), and
+ *   5004, 4034, and 4010 are `rejected` with reason `configuration`. A
+ *   deployment cannot store those as an agreement denial. Then a code in
+ *   `agreementErrorCodes` or `recipientErrorCodes` is `rejected` with that
+ *   reason, on any status except HTTP 429, 5xx, 408, and 425, which the
+ *   status alone decides (see below). Any other code is `rejected` with reason `recipient` on HTTP 200
  *   and `configuration` when the HTTP status refused the request (400, 401,
  *   403, 404, 405, 413, 415, 422): a `FAIL` envelope reports a failed
  *   request, and answering `ambiguous` would replay a send that fails the
@@ -217,28 +245,35 @@ export function createAitFunctionalMessageDeliveryProvider(
   const recipientHeader = options.recipientKey === 'anonymous' ? 'x-anon-key' : 'x-toss-user-key';
   const url = new URL(
     aitFunctionalMessagePath,
-    normalizeBaseUrl(options.baseUrl ?? defaultAitFunctionalMessageBaseUrl),
+    normalizeBaseUrl(options.baseUrl ?? defaultAitFunctionalMessageBaseUrl, {
+      allowUnlistedHost: options.allowUnlistedHost === true,
+    }),
   ).href;
   const timeoutMs = normalizeTimeout(options.timeoutMs);
   const agreementErrorCodes = new Set(options.agreementErrorCodes ?? []);
   const recipientErrorCodes = new Set(options.recipientErrorCodes ?? []);
   const agreementFailReasons = new Set(
-    (options.agreementFailReasons ?? []).map((reason) => reason.trim()),
+    (options.agreementFailReasons ?? []).map((reason, index) =>
+      readAgreementFailReason(reason, index),
+    ),
   );
 
-  // The deployment's codes come first, then the documented ones (RFC
-  // "Delivery providers -> Apps in Toss").
+  // Documented codes come first (RFC "Delivery providers -> Apps in Toss"),
+  // then the deployment's. A list must not turn 4095 into an agreement denial.
   const classifyFailCode = (code: string, status: number): AitFunctionalMessageAnswer => {
+    if (code === rateLimitedErrorCode) {
+      return { status: 'rate-limited', providerCode: code };
+    }
+    if (configurationErrorCodes.has(code)) {
+      return { status: 'rejected', reason: 'configuration', providerCode: code };
+    }
     if (agreementErrorCodes.has(code)) {
       return { status: 'rejected', reason: 'agreement', providerCode: code };
     }
     if (recipientErrorCodes.has(code)) {
       return { status: 'rejected', reason: 'recipient', providerCode: code };
     }
-    if (code === rateLimitedErrorCode) {
-      return { status: 'rate-limited', providerCode: code };
-    }
-    if (configurationErrorCodes.has(code) || refusedRequestStatuses.has(status)) {
+    if (refusedRequestStatuses.has(status)) {
       return { status: 'rejected', reason: 'configuration', providerCode: code };
     }
     // An undocumented code on another status proves nothing either way.
@@ -323,6 +358,17 @@ export function createAitFunctionalMessageDeliveryProvider(
   };
 }
 
+/** One `agreementFailReasons` entry, trimmed, or a `TypeError` for one that could never match. */
+function readAgreementFailReason(reason: unknown, index: number): string {
+  const trimmed = typeof reason === 'string' ? reason.trim() : '';
+  if (trimmed.length === 0 || trimmed.length > maximumFailReasonLength) {
+    throw new TypeError(
+      `agreementFailReasons[${index}]: entries must be 1 to ${maximumFailReasonLength} characters once trimmed: a reachedFailReason is read up to ${maximumFailReasonLength} characters, so a longer entry could never match and an empty one would match a blank reason.`,
+    );
+  }
+  return trimmed;
+}
+
 function readSuccess(
   success: unknown,
   agreementFailReasons: ReadonlySet<string>,
@@ -381,7 +427,9 @@ function readContents(
     const reason = item['reachedFailReason'];
     contents.push({
       contentId: item['contentId'].slice(0, 256),
-      ...(typeof reason === 'string' ? { reachedFailReason: reason.slice(0, 1_024) } : {}),
+      ...(typeof reason === 'string'
+        ? { reachedFailReason: reason.slice(0, maximumFailReasonLength) }
+        : {}),
     });
   }
   return contents;
@@ -572,8 +620,8 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** A credential-free HTTPS base URL ending in `/`, as the partner API client requires. */
-function normalizeBaseUrl(input: string): string {
+/** A credential-free HTTPS base URL ending in `/`, on an allowlisted partner host. */
+function normalizeBaseUrl(input: string, options: { readonly allowUnlistedHost: boolean }): string {
   const url = new URL(input);
   if (
     url.protocol !== 'https:'
@@ -584,6 +632,13 @@ function normalizeBaseUrl(input: string): string {
   ) {
     throw new TypeError(
       'The Apps in Toss partner API baseUrl must be a credential-free HTTPS URL.',
+    );
+  }
+  const allowedHost = aitFunctionalMessageAllowedHosts.includes(url.hostname)
+    && (url.port === '' || url.port === '443');
+  if (!allowedHost && !options.allowUnlistedHost) {
+    throw new TypeError(
+      `The Apps in Toss partner API baseUrl host must be ${aitFunctionalMessageAllowedHosts.join(' or ')}.`,
     );
   }
   url.pathname = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`;

@@ -1,5 +1,43 @@
 # @mpgd/adapter-ait
 
+## 0.20.3 — 2026-10-21
+
+### Patch changes
+
+- [c7e1e16d](https://github.com/imjlk/mpgd-kit/commit/c7e1e16dac23683c361db096e90a01694eb871d0) Store new Apps in Toss promotion markers under `mpgd:ait:promotion-grant:v2:<campaignId>:<idempotencyKey>`, and write a v1 dispatch fence at `mpgd:ait:promotion-grant:v1:<idempotencyKey>` before that copy and before payout. The fence includes `campaignId`. Until a granted receipt replaces it, its status is `fenced`, which a rolled-back @mpgd/adapter-ait 0.20.1 bridge treats as already fenced and does not dispatch or remove. If that v1 write fails, the claim stays pending and nothing is dispatched.
+  
+  A legacy v1 marker with no `campaignId` is still stamped in place before any scoped copy. If that stamp cannot be stored, or the legacy marker cannot be read, the claim stays pending, nothing is copied, and an authority receipt is not cached or returned. The read-failure behavior is an approved fail-closed decision: a markerless authority receipt is not persisted while the legacy read is failing. A v1 marker bound to this campaign is this campaign's record. One bound to another campaign stays pending and is not overwritten or paid again.
+  
+  When `authorizePromotionGrant` is configured, it remains the primary dispatch fence. The local markers do not authorize a payout the authorizer did not approve, and they do not add a dispatch path that skips it. A pending scoped copy does not hide a granted v1 receipt: a retry sees that receipt and does not dispatch again. Host bridges that share storage share the claim lock. Server-issued idempotency keys should stay unique across campaigns. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.15.0, @mpgd/catalog@0.10.7, @mpgd/game-runtime@0.8.0, @mpgd/platform@0.27.2
+
+### Changed
+
+- [b918119c](https://github.com/imjlk/mpgd-kit/commit/b918119c26437b13d6ca4a7e57a3104b81fe0687) The Apps in Toss host serves `notifications.v2.*` with `createNotificationsV2BridgeHandler` from `@mpgd/bridge/notifications`, the handler the Capacitor and Devvit bridges share. For errors thrown by `@mpgd/platform` and this package, codes, retryable flags, and events are unchanged (some error messages are reworded), except that a provider answering `register` or `openSettings` with `undefined` now answers `NOTIFICATIONS_CONFIGURATION_REQUIRED`, as any other answer that breaks the contract does, instead of `null` or `unavailable`. The Apps in Toss provider never answers that. The game-side provider reads a host code back with `readBridgeNotificationsHostCode`. Failures are now also read by shape, so an error from another copy of `@mpgd/platform`, or a thrown object with a platform `code` and a boolean `retryable`, keeps its retryable flag, and its code too when that is a notifications code (any other code crosses as `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`). — Thanks @imjlk!
+
+### Fixed
+
+- [b918119c](https://github.com/imjlk/mpgd-kit/commit/b918119c26437b13d6ca4a7e57a3104b81fe0687) The Apps in Toss game-side notifications provider fails closed when the host answers `notifications.v2.getCapabilities` with a notifications protocol version the game's `notificationsProtocolVersion` is not compatible with: while either is a pre-release (now `2.0.0-draft.1`), the host must share the major and the whole pre-release tag, so `2.0.0-draft.1` does not accept `2.0.0-draft.2` or `2.0.0`; between releases, the major decides; anything that is not a semantic version is refused. Such a host, or one serving another provider id, is judged from a capability read: `getCapabilities` reads every time, any other method reads once before the first verdict, and a failed read gives no verdict, so the next call reads again. Once the host is judged incompatible, every method throws `NOTIFICATIONS_CONFIGURATION_REQUIRED` without reaching it (the gateway reports notifications as `configuration-required`), live subscriptions are detached, and `subscribe` attaches nothing. — Thanks @imjlk!
+
+## 0.20.2 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.14.3, @mpgd/catalog@0.10.6, @mpgd/game-runtime@0.7.6, @mpgd/platform@0.27.1
+
+## 0.20.1 — 2026-10-21
+
+### Patch changes
+
+- [eccdcb2c](https://github.com/imjlk/mpgd-kit/commit/eccdcb2c2cbc0629aa449ec9cde11f4864f603d8) Stop a second Apps in Toss promotion payout when a granted receipt could not be stored, when grant and recover overlap, or when an explicit failure marker could not be written. Grant and recover for one idempotency key share a lock, re-read storage and the bridge-local receipt cache before payout, and do not evict a receipt whose durable write failed.
+  
+  Promotion markers stay keyed by the claim id, `mpgd:ait:promotion-grant:v1:<idempotencyKey>`. New records include `campaignId`. A stored record whose campaign id differs stays pending and is not overwritten or paid again. Records without `campaignId` are unchanged. Campaign-scoped keys are a follow-up.
+  
+  A stored explicit failure can be cleared by an authority `retry`. A failure whose diagnostic write did not land stays blocked in that process.
+  
+  An older host that does not implement `promotions.recoverReward` now answers `{ status: 'pending' }` instead of throwing. That includes a protocol validator rejection reported as `AIT_BRIDGE_REQUEST_FAILED`, not only `UNSUPPORTED_METHOD`. `grantReward` is unchanged. A late promotion observer rejection is ignored and cannot reject the payout result. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.14.2, @mpgd/catalog@0.10.5, @mpgd/game-runtime@0.7.5, @mpgd/platform@0.27.0
+
 ## 0.20.0 — 2026-10-20
 
 ### Added

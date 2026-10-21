@@ -195,7 +195,16 @@ export interface PlatformPurchasePresentationEvent {
   readonly idempotencyKey: string;
   readonly sequence: number;
   readonly state: 'open' | 'closed' | 'not-started' | 'unknown';
+  /**
+   * Generation of this checkout attempt. A provider that restarts `sequence`
+   * on each call echoes `commercePresentationAttempt` from the request. A
+   * missing attempt keeps sequence-only ordering. It never grants.
+   */
+  readonly attempt?: number;
 }
+
+/** Request property a coordinator sets so a restarting provider can echo the attempt. */
+export const commercePresentationAttempt = Symbol.for('mpgd.commerce.presentationAttempt');
 
 export interface AdAdapter {
   /** Optional versioned provider surface; v1 methods remain compatible. */

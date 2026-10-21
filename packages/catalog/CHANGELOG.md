@@ -1,5 +1,27 @@
 # @mpgd/catalog
 
+## 0.10.7 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.27.2
+
+## 0.10.6 — 2026-10-21
+
+### Patch changes
+
+- [78eb3235](https://github.com/imjlk/mpgd-kit/commit/78eb32359aa474cf38124da4c465ccac826750bf) `assertProductCatalog` and `assertAdPlacements` reject a repeated logical product or placement id. Platform-id collisions were already rejected; a second entry with the same id was kept by the first `find()` and could hide a different grant or SKU.
+  
+  Currency grant amounts and ad reward amounts must be finite, greater than zero, and a safe integer. A continue reward is a count of continues, not a fraction. Resource grant amounts are unchanged. — Thanks @imjlk!
+- Updated dependencies: @mpgd/platform@0.27.1
+
+## 0.10.5 — 2026-10-21
+
+### Patch changes
+
+- [c6438977](https://github.com/imjlk/mpgd-kit/commit/c6438977f3be174f4e351597366d935c37950b90) An advertising topic must not map to `android` until the shell renders the opt-out action. `validateNotificationTopicCatalog` reports that mapping, and a notifications service will not start on a catalog that has it. iOS advertising mappings are unchanged. The Android client still declares `advertising` so it pairs with the standard FCM registry. — Thanks @imjlk!
+- Updated dependencies: @mpgd/platform@0.27.0
+
 ## 0.10.4 — 2026-10-20
 
 ### Patch changes

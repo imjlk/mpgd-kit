@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/platform",
-  "version": "0.26.0",
+  "version": "0.27.2",
   "description": "Shared platform gateway, monetization, ads, leaderboard, identity, lifecycle, and storage contracts for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -72,6 +72,10 @@
     "./notifications-conformance": {
       "types": "./dist/notifications-conformance.d.ts",
       "default": "./dist/notifications-conformance.js"
+    },
+    "./notifications-runtime": {
+      "types": "./dist/notifications-runtime.d.ts",
+      "default": "./dist/notifications-runtime.js"
     },
     "./routes": {
       "types": "./dist/routes.d.ts",

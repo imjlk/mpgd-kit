@@ -5221,7 +5221,7 @@ function assembleOfflineHtml(
   ) {
     throw new Error('Offline playtest could not preserve the module entry position.');
   }
-  output = output.replace(offlineEntryPlaceholder, inlineScript);
+  output = output.replace(offlineEntryPlaceholder, () => inlineScript);
 
   if (findActiveHtmlStartTag(output, 'body') !== undefined) {
     return `${output.trim()}\n`;

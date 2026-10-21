@@ -1,27 +1,23 @@
 import {
   bridgeNotificationsEventProtocol,
-  createBridgeError,
-  createBridgeEventSource,
-  isBridgeNotificationsV2Method,
-  type BridgeEventStream,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
-  type BridgeRequest,
-  type BridgeResponse,
 } from '@mpgd/bridge';
 import {
-  assertBridgeNotificationsV2Payload,
   assertBridgeNotificationsV2Result,
+  createNotificationsV2BridgeHandler,
+  readBridgeNotificationsHostCode,
   type BridgeNotificationsV2Payload,
   type BridgeNotificationsV2Result,
+  type NotificationsV2BridgeHandler,
 } from '@mpgd/bridge/notifications';
-import { PlatformOperationError } from '@mpgd/platform';
 import {
   assertNotificationEventEnvelope,
   isNotificationErrorCode,
   NotificationError,
   notificationsProtocol,
   notificationsProtocolVersion,
+  type NotificationCapabilities,
   type NotificationEvent,
   type NotificationProvider,
   type NotificationProviderId,
@@ -37,163 +33,25 @@ import {
  * module imports no Apps in Toss SDK.
  */
 
-export interface AitNotificationsV2BridgeHandler
-  extends BridgeEventStream<BridgeNotificationsEvent> {
-  /** Answers one of the nine `notifications.v2.*` methods. */
-  request(input: BridgeRequest): Promise<BridgeResponse>;
-}
+export type AitNotificationsV2BridgeHandler = NotificationsV2BridgeHandler;
 
 /**
- * Host side. A payload the validator rejects answers
- * `NOTIFICATIONS_INVALID_INPUT`, a method the provider does not implement
- * `NOTIFICATIONS_UNSUPPORTED`, and an answer the contract rejects
- * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, because the provider broke it. A
- * thrown `NotificationError` crosses as `{ code, message, retryable }`, with
- * its `hostCode` named in the message. Events go out through
- * `createBridgeEventSource`, numbered per handler from 0; the provider is
- * attached for the first bridge listener, so its buffered cold open reaches
- * that listener.
+ * Host side: `createNotificationsV2BridgeHandler` from
+ * `@mpgd/bridge/notifications`, which checks every payload and answer, maps
+ * failures fail-closed with the host code named in the message, and numbers
+ * the provider's events per handler from 0, attaching the provider for the
+ * first bridge listener so its buffered cold open reaches that listener. A
+ * provider without `register` answers no address (`null`), as the Apps in
+ * Toss profile always offers registration.
  */
 export function createAitNotificationsV2BridgeHandler(
   provider: NotificationProvider,
 ): AitNotificationsV2BridgeHandler {
-  const events = createBridgeEventSource(bridgeNotificationsEventProtocol, provider);
-
-  const serve = async (method: BridgeNotificationsV2Method, payload: unknown): Promise<unknown> => {
-    switch (method) {
-      case 'notifications.v2.getCapabilities':
-        validPayload(method, payload);
-        return {
-          protocolVersion: notificationsProtocolVersion,
-          provider: provider.provider,
-          capabilities: await provider.getCapabilities(),
-        };
-      case 'notifications.v2.getPermission':
-        return provider.getPermission(validPayload(method, payload));
-      case 'notifications.v2.requestPermission':
-        return provider.requestPermission(validPayload(method, payload));
-      case 'notifications.v2.revokePermission': {
-        const request = validPayload(method, payload);
-        return implemented(provider.revokePermission, method).call(provider, request);
-      }
-      case 'notifications.v2.register':
-        validPayload(method, payload);
-        return { registration: (await provider.register?.()) ?? null };
-      case 'notifications.v2.scheduleLocal': {
-        const request = validPayload(method, payload);
-        return implemented(provider.scheduleLocal, method).call(provider, request);
-      }
-      case 'notifications.v2.cancelLocal': {
-        const request = validPayload(method, payload);
-        await implemented(provider.cancelLocal, method).call(provider, request);
-        return { cancelled: true };
-      }
-      case 'notifications.v2.listLocal':
-        validPayload(method, payload);
-        return { pending: await implemented(provider.listLocal, method).call(provider) };
-      case 'notifications.v2.openSettings':
-        validPayload(method, payload);
-        return { status: (await provider.openSettings?.()) ?? 'unavailable' };
-    }
-  };
-
-  return {
-    async request(request) {
-      if (!isBridgeNotificationsV2Method(request.method)) {
-        return createBridgeError(
-          request.id,
-          'UNSUPPORTED_METHOD',
-          `${request.method} is not a notifications v2 method.`,
-        );
-      }
-      const method = request.method;
-      try {
-        const data = await serve(method, request.payload);
-        return { id: request.id, ok: true, data: validResult(method, data) };
-      } catch (error) {
-        return toBridgeError(request, error);
-      }
-    },
-    // The source carries this protocol only, so every envelope is a notifications one.
-    subscribe: (listener) =>
-      events.subscribe((envelope) => listener(envelope as BridgeNotificationsEvent)),
-  };
-}
-
-class InvalidPayloadError extends Error {
-  override readonly name = 'InvalidPayloadError';
-}
-
-function validPayload<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  payload: unknown,
-): BridgeNotificationsV2Payload<TMethod> {
-  try {
-    return assertBridgeNotificationsV2Payload(method, payload);
-  } catch (error) {
-    throw new InvalidPayloadError(
-      `${method} payload is invalid: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-function validResult<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  data: unknown,
-): BridgeNotificationsV2Result<TMethod> {
-  try {
-    return assertBridgeNotificationsV2Result(method, data);
-  } catch (error) {
-    throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `The notifications provider answered ${method} with invalid data: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      cause: error,
-    });
-  }
-}
-
-function implemented<TMethod>(method: TMethod | undefined, name: string): TMethod {
-  if (method === undefined) {
-    throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
-      message: `The Apps in Toss notifications provider does not implement ${name}.`,
-    });
-  }
-  return method;
-}
-
-function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
-  if (error instanceof InvalidPayloadError) {
-    return createBridgeError(request.id, 'NOTIFICATIONS_INVALID_INPUT', error.message);
-  }
-  if (error instanceof NotificationError) {
-    return createBridgeError(
-      request.id,
-      error.code,
-      error.hostCode === undefined || !hostCodeValue.test(error.hostCode)
-        ? error.message
-        : `${error.message} (host code ${error.hostCode})`,
-      error.retryable,
-    );
-  }
-  if (error instanceof PlatformOperationError) {
-    return isNotificationErrorCode(error.code)
-      ? createBridgeError(request.id, error.code, error.message, error.retryable)
-      : createBridgeError(
-          request.id,
-          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-          `${request.method} failed: ${error.message}`,
-          error.retryable,
-        );
-  }
-  // A failure the provider did not normalize is a host failure the game may retry.
-  return createBridgeError(
-    request.id,
-    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-    `${request.method} failed: ${error instanceof Error ? error.message : String(error)}`,
-    true,
-  );
+  return createNotificationsV2BridgeHandler({
+    provider,
+    label: 'Apps in Toss',
+    registerOptional: true,
+  });
 }
 
 // Game side.
@@ -219,6 +77,27 @@ export interface CreateAitBridgeNotificationProviderInput {
  * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, retryable unless the failure says
  * otherwise. An event envelope of another
  * protocol is ignored, and an invalid one is dropped with a warning.
+ *
+ * The host must be one this game can use: it serves `input.provider` and a
+ * notifications protocol version this game's (`notificationsProtocolVersion`)
+ * is compatible with (`isCompatibleNotificationsProtocolVersion`). The host
+ * wrapper and the game are built separately, and an incompatible host may
+ * read the same payloads differently, so the provider fails closed:
+ *
+ * - The verdict comes from a capability read. `getCapabilities` reads and
+ *   judges every time; any other method, before the first verdict, reads
+ *   once first (concurrent calls share that read). A read that fails, or an
+ *   answer that breaks the contract, gives no verdict: the method rejects
+ *   with that failure, and the next call reads again.
+ * - Once a host is judged incompatible, every method rejects with
+ *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`, `getCapabilities` included, so
+ *   the gateway reports notifications as `configuration-required`.
+ * - `subscribe` is synchronous and cannot wait for a read. With no verdict
+ *   yet it attaches at once and starts a read, because the host hands its
+ *   buffered cold open to its first listener when that listener attaches;
+ *   if the read then finds the host incompatible, every subscription is
+ *   detached and receives nothing more. With an incompatible verdict,
+ *   `subscribe` does not attach at all.
  */
 export function createAitBridgeNotificationProvider(
   input: CreateAitBridgeNotificationProviderInput,
@@ -242,34 +121,115 @@ export function createAitBridgeNotificationProvider(
       });
     }
   };
+
+  /** `undefined` until a read judges the host; then compatible, or the reason it is not. */
+  let verdict: { readonly compatible: true } | { readonly compatible: false; readonly message: string } | undefined;
+  let reading: Promise<NotificationCapabilities> | undefined;
+  /** Detaches every live subscription; called when the host is judged incompatible. */
+  const subscriptions = new Set<() => void>();
+  const incompatible = (message: string): NotificationError =>
+    new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', { message });
+  const judge = (answer: BridgeNotificationsV2Result<'notifications.v2.getCapabilities'>): void => {
+    let message: string | undefined;
+    if (answer.provider !== input.provider) {
+      message = `The bridge serves notifications provider ${answer.provider}, not ${input.provider}.`;
+    } else if (!isCompatibleNotificationsProtocolVersion(
+      answer.protocolVersion,
+      notificationsProtocolVersion,
+    )) {
+      message = `The bridge speaks notifications protocol ${
+        answer.protocolVersion.slice(0, 64)
+      }; this game speaks ${notificationsProtocolVersion}.`;
+    }
+    if (message === undefined) {
+      verdict = { compatible: true };
+      return;
+    }
+    verdict = { compatible: false, message };
+    const detaches = [...subscriptions];
+    subscriptions.clear();
+    for (const detach of detaches) {
+      try {
+        detach();
+      } catch (error) {
+        console.warn('AIT notifications subscription could not detach.', error);
+      }
+    }
+  };
+  /** One capability read, shared by concurrent callers; a failure is not a verdict. */
+  const read = (): Promise<NotificationCapabilities> => {
+    reading ??= (async () => {
+      try {
+        const answer = await send('notifications.v2.getCapabilities', { protocol: notificationsProtocol });
+        judge(answer);
+        if (verdict?.compatible === false) {
+          throw incompatible(verdict.message);
+        }
+        return answer.capabilities;
+      } finally {
+        reading = undefined;
+      }
+    })();
+    return reading;
+  };
+  /** Resolves when the host is known to be compatible; rejects otherwise. */
+  const ready = async (): Promise<void> => {
+    if (verdict === undefined) {
+      await read();
+    } else if (!verdict.compatible) {
+      throw incompatible(verdict.message);
+    }
+  };
+  const call = async <TResult>(run: () => Promise<TResult>): Promise<TResult> => {
+    await ready();
+    return run();
+  };
+
   return {
     provider: input.provider,
     async getCapabilities() {
-      const answer = await send('notifications.v2.getCapabilities', { protocol: notificationsProtocol });
-      if (answer.provider !== input.provider) {
-        throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-          message: `The bridge serves notifications provider ${answer.provider}, not ${input.provider}.`,
-        });
+      if (verdict?.compatible === false) {
+        throw incompatible(verdict.message);
       }
-      return answer.capabilities;
+      return read();
     },
-    getPermission: (request) => send('notifications.v2.getPermission', request),
-    requestPermission: (request) => send('notifications.v2.requestPermission', request),
-    async register() {
-      return (await send('notifications.v2.register', { protocol: notificationsProtocol }))
-        .registration;
-    },
-    async openSettings() {
-      return (await send('notifications.v2.openSettings', { protocol: notificationsProtocol }))
-        .status;
-    },
+    getPermission: (request) => call(() => send('notifications.v2.getPermission', request)),
+    requestPermission: (request) => call(() => send('notifications.v2.requestPermission', request)),
+    register: () =>
+      call(async () =>
+        (await send('notifications.v2.register', { protocol: notificationsProtocol })).registration),
+    openSettings: () =>
+      call(async () => (await send('notifications.v2.openSettings', { protocol: notificationsProtocol })).status),
     subscribe(listener) {
-      return input.subscribe((envelope) => {
+      if (verdict?.compatible === false) {
+        console.warn(`AIT notifications events are not attached: ${verdict.message}`);
+        return () => {};
+      }
+      let closed = false;
+      const unsubscribe = input.subscribe((envelope) => {
+        if (closed) {
+          return;
+        }
         const event = readAitBridgeNotificationEvent(envelope);
         if (event !== undefined) {
           listener(event);
         }
       });
+      const detach = (): void => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        subscriptions.delete(detach);
+        unsubscribe();
+      };
+      subscriptions.add(detach);
+      if (verdict === undefined) {
+        // A failed read leaves the subscription attached and is read again
+        // by the next call; only an incompatible verdict detaches it.
+        void read().catch(() => {});
+      }
+      return detach;
     },
   };
 }
@@ -280,7 +240,7 @@ export function createAitBridgeNotificationProvider(
  * warning). An envelope without a protocol is malformed and reaches the
  * validator.
  */
-export function readAitBridgeNotificationEvent(envelope: unknown): NotificationEvent | undefined {
+function readAitBridgeNotificationEvent(envelope: unknown): NotificationEvent | undefined {
   const protocol: unknown = typeof envelope === 'object' && envelope !== null
     ? (envelope as { readonly protocol?: unknown }).protocol
     : undefined;
@@ -295,10 +255,44 @@ export function readAitBridgeNotificationEvent(envelope: unknown): NotificationE
   }
 }
 
-/** The host codes the bridge carries; the host handler names only these in a message. */
-const hostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
-const hostCodeValue = new RegExp(`^${hostCodeCharacters}$`, 'u');
-const hostCodePattern = new RegExp(`\\(host code (${hostCodeCharacters})\\)$`, 'u');
+/**
+ * Whether a host speaking notifications protocol `host` can serve a game
+ * speaking `game`, both semantic versions such as `2.0.0-draft.1`. While
+ * either is a pre-release, the draft contract can change between drafts, so
+ * the versions must be equal, or share the major and the whole pre-release
+ * tag (`draft.1`): `2.0.0-draft.1` does not serve `2.0.0-draft.2` or `2.0.0`.
+ * Between two releases, the major decides, as the commerce evidence registry
+ * compares commerce protocol versions. A version that is not a semantic
+ * version is never compatible.
+ */
+export function isCompatibleNotificationsProtocolVersion(host: string, game: string): boolean {
+  const hostVersion = parseProtocolVersion(host);
+  const gameVersion = parseProtocolVersion(game);
+  if (hostVersion === undefined || gameVersion === undefined) {
+    return false;
+  }
+  // Two releases have no pre-release tag, so this compares their majors;
+  // with a pre-release on either side, the tags must match too (an exact
+  // match has both).
+  return hostVersion.major === gameVersion.major && hostVersion.prerelease === gameVersion.prerelease;
+}
+
+/** A SemVer 2.0.0 pre-release identifier: a number without leading zeros, or alphanumerics. */
+const prereleaseIdentifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
+const protocolVersionPattern = new RegExp(
+  `^(0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)`
+    + `(?:-(${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*))?`
+    + '(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$',
+  'u',
+);
+
+function parseProtocolVersion(
+  version: string,
+): { readonly major: string; readonly prerelease: string | undefined } | undefined {
+  const match = protocolVersionPattern.exec(version);
+  const major = match?.[1];
+  return major === undefined ? undefined : { major, prerelease: match?.[2] };
+}
 
 function toNotificationError(error: unknown): NotificationError {
   if (error instanceof NotificationError) {
@@ -314,7 +308,7 @@ function toNotificationError(error: unknown): NotificationError {
   if (isNotificationErrorCode(failure.code)) {
     // The host handler names the host's own code in the message; it is the
     // only place a bridge error can carry it.
-    const hostCode = message === undefined ? undefined : hostCodePattern.exec(message)?.[1];
+    const hostCode = message === undefined ? undefined : readBridgeNotificationsHostCode(message);
     return new NotificationError(failure.code, {
       ...(message === undefined ? {} : { message }),
       ...explicit,

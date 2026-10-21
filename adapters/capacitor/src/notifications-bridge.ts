@@ -1,8 +1,5 @@
 import {
   bridgeNotificationsEventProtocol,
-  createBridgeError,
-  createBridgeEventSource,
-  isBridgeNotificationsV2Method,
   type BridgeEvent,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
@@ -12,6 +9,7 @@ import {
 import {
   assertBridgeNotificationsV2Payload,
   assertBridgeNotificationsV2Result,
+  createNotificationsV2BridgeHandler,
   type BridgeNotificationsV2Payload,
   type BridgeNotificationsV2Result,
 } from '@mpgd/bridge/notifications';
@@ -53,109 +51,24 @@ export interface CreateNotificationProviderBridgeInput {
 }
 
 /**
- * In-process `NativeBridge` over a notifications v2 provider. Each
- * `notifications.v2.*` request validates its payload (a payload the contract
- * rejects answers `NOTIFICATIONS_INVALID_INPUT`) and its answer (one the
- * contract rejects answers `NOTIFICATIONS_CONFIGURATION_REQUIRED`, because the
- * provider broke it). A method the
- * provider does not implement answers `NOTIFICATIONS_UNSUPPORTED`, except
- * `openSettings`, which answers `unavailable`. Events go out through
- * `createBridgeEventSource`, which attaches to the provider only for the
- * first listener, so events the provider buffered reach it. Any other method
- * answers `UNSUPPORTED_METHOD`.
+ * In-process `NativeBridge` over a notifications v2 provider:
+ * `createNotificationsV2BridgeHandler` from `@mpgd/bridge/notifications`.
+ * Each `notifications.v2.*` request validates its payload (a payload the
+ * contract rejects answers `NOTIFICATIONS_INVALID_INPUT`) and its answer (one
+ * the contract rejects answers `NOTIFICATIONS_CONFIGURATION_REQUIRED`, because
+ * the provider broke it). A method the provider does not implement answers
+ * `NOTIFICATIONS_UNSUPPORTED`, except `openSettings`, which answers
+ * `unavailable`. Events go out through `createBridgeEventSource`, which
+ * attaches to the provider only for the first listener, so events the
+ * provider buffered reach it. Any other method answers `UNSUPPORTED_METHOD`.
  */
 export function createNotificationProviderBridge(
   input: CreateNotificationProviderBridgeInput,
 ): NotificationProviderBridge {
-  const { provider } = input;
-  const events = createBridgeEventSource(bridgeNotificationsEventProtocol, provider);
-
-  const serve = async (method: BridgeNotificationsV2Method, payload: unknown): Promise<unknown> => {
-    const checked = checkedPayload(method, payload);
-    switch (method) {
-      case 'notifications.v2.getCapabilities':
-        return {
-          protocolVersion: notificationsProtocolVersion,
-          provider: provider.provider,
-          capabilities: await provider.getCapabilities(),
-        };
-      case 'notifications.v2.getPermission':
-        return provider.getPermission(
-          checked as BridgeNotificationsV2Payload<'notifications.v2.getPermission'>,
-        );
-      case 'notifications.v2.requestPermission':
-        return provider.requestPermission(
-          checked as BridgeNotificationsV2Payload<'notifications.v2.requestPermission'>,
-        );
-      case 'notifications.v2.revokePermission':
-        return implemented(provider.revokePermission, method).call(
-          provider,
-          checked as BridgeNotificationsV2Payload<'notifications.v2.revokePermission'>,
-        );
-      case 'notifications.v2.register':
-        return { registration: await implemented(provider.register, method).call(provider) };
-      case 'notifications.v2.scheduleLocal':
-        return implemented(provider.scheduleLocal, method).call(
-          provider,
-          checked as BridgeNotificationsV2Payload<'notifications.v2.scheduleLocal'>,
-        );
-      case 'notifications.v2.cancelLocal':
-        await implemented(provider.cancelLocal, method).call(
-          provider,
-          checked as BridgeNotificationsV2Payload<'notifications.v2.cancelLocal'>,
-        );
-        return { cancelled: true };
-      case 'notifications.v2.listLocal':
-        return { pending: await implemented(provider.listLocal, method).call(provider) };
-      case 'notifications.v2.openSettings':
-        return {
-          status: provider.openSettings === undefined
-            ? 'unavailable'
-            : await provider.openSettings(),
-        };
-      default: {
-        // A method added to the list without a case here fails to compile.
-        const unhandled: never = method;
-        throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
-          message: `The notifications bridge does not serve ${String(unhandled)}.`,
-        });
-      }
-    }
-  };
-
-  return {
-    async request(request) {
-      if (!isBridgeNotificationsV2Method(request.method)) {
-        return createBridgeError(
-          request.id,
-          'UNSUPPORTED_METHOD',
-          `${request.method} is not a notifications v2 method.`,
-        );
-      }
-      const method = request.method;
-      let data: unknown;
-      try {
-        data = await serve(method, request.payload);
-      } catch (error) {
-        return toBridgeError(request, error);
-      }
-      try {
-        return { id: request.id, ok: true, data: assertBridgeNotificationsV2Result(method, data) };
-      } catch (error) {
-        return createBridgeError(
-          request.id,
-          'NOTIFICATIONS_CONFIGURATION_REQUIRED',
-          `Notifications provider returned invalid data for ${method}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    },
-    subscribe: (listener) => events.subscribe(listener),
-  };
+  return createNotificationsV2BridgeHandler({ provider: input.provider });
 }
 
-/** The payload as the contract reads it, or `NOTIFICATIONS_INVALID_INPUT`; both sides of the bridge use it. */
+/** The payload as the contract reads it, or `NOTIFICATIONS_INVALID_INPUT`, before the game side sends it. */
 function checkedPayload(method: BridgeNotificationsV2Method, payload: unknown): unknown {
   try {
     return assertBridgeNotificationsV2Payload(method, payload);
@@ -165,38 +78,6 @@ function checkedPayload(method: BridgeNotificationsV2Method, payload: unknown): 
       cause: error,
     });
   }
-}
-
-function implemented<TMethod extends (...args: never[]) => unknown>(
-  method: TMethod | undefined,
-  name: BridgeNotificationsV2Method,
-): TMethod {
-  if (method === undefined) {
-    throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
-      message: `The notifications provider does not implement ${name}.`,
-    });
-  }
-  return method;
-}
-
-function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
-  if (error instanceof PlatformOperationError) {
-    // A host code kept with `NOTIFICATIONS_CONFIGURATION_REQUIRED` crosses in
-    // the message: the bridge error has no field for it.
-    const hostCode = error instanceof NotificationError ? error.hostCode : undefined;
-    return createBridgeError(
-      request.id,
-      error.code,
-      hostCode === undefined ? error.message : `${error.message} (host code ${hostCode})`,
-      error.retryable,
-    );
-  }
-  return createBridgeError(
-    request.id,
-    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-    `${request.method} failed: ${error instanceof Error ? error.message : String(error)}`,
-    true,
-  );
 }
 
 export interface CreateNotificationServiceProviderInput {

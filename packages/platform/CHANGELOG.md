@@ -1,5 +1,27 @@
 # @mpgd/platform
 
+## 0.27.2 — 2026-10-21
+
+### Patch changes
+
+- [3f519a74](https://github.com/imjlk/mpgd-kit/commit/3f519a74a3eaf7aeec7a35d208ed951ff61ff8df) Add an optional attempt generation to purchase presentation events. A coordinator can set it on the request; a provider that restarts its sequence echoes it. The field does not grant. — Thanks @imjlk!
+
+## 0.27.1 — 2026-10-21
+
+### Fixed
+
+- [510804d5](https://github.com/imjlk/mpgd-kit/commit/510804d5f0245d6d3c770d234c85c8e901df3f18) Reject a credit spend whose debits do not cover the price. An absolute comparison of `1e-9` treated `sameCreditAmount(0, 1e-9)` as equal, so `planCreditDebits` and `createCreditCommerceProvider` accepted an empty wallet (and an empty debit list) as payment for a price of `1e-9`. A later relative `1e-9` of the price turned that same constant into one credit at a price of `1e9`, so a balance of `999,999,999` was accepted for `1,000,000,000`.
+  
+  Coverage no longer forgives a shortfall that grows with the price. Float residue may sit a few units in the last place under the price, capped at an absolute `1e-9` and at one unit in the last place of the magnitude, so a one-credit gap is never a payment and half of a subnormal price is not either. Sums of many fractional lots are compensated, and a balance check stops once a lot meets the unpaid gap so two `Number.MAX_VALUE` lots do not overflow into a false shortfall. `creditPriceMultiple` uses the same comparison. Ordinary fractional amounts, including `0.1 + 0.2` and `0.7 + 0.1`, still spend. — Thanks @imjlk!
+
+## 0.27.0 — 2026-10-21
+
+### Added
+
+- [f772a896](https://github.com/imjlk/mpgd-kit/commit/f772a8964437d512349736e609668792b480fbc1) `@mpgd/platform/notifications-runtime` is the production notifications runtime (RFC "Runtime"): `createNotificationRuntime({ provider, backend, catalog, defaultLocale })` composes a target's provider with the game backend for the authenticated player and returns the `NotificationRuntime` with `start`, `stop`, and `runUntilIdle`. The backend is the `NotificationRuntimeBackend` port, which `@mpgd/game-services/notifications/client` implements over the game-services Worker. What survives a restart (the last acknowledged registration and the unbound state after `unregister()`) goes through the `NotificationRuntimeStorage` port: `createNotificationRuntimeStorage({ storage: gateway.storage })` keeps it under one platform storage key, and without a port it lives in memory. A storage read or write that fails surfaces as a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, and `onError` observes background failures as they happen. `loadRegistryEntry` fetches the backend's registry entry at `start()` (for example the Worker's `GET /providers`); a load that fails is reported and the runtime starts without the comparison. A sign-in the runtime did not observe (before `start()`, or while stopped) still registers at the next start or read: when the last acknowledged registration names another player or session, when nothing was acknowledged yet, and after `unregister()` when the session differs from the one it left.
+  
+  `createNotificationConformanceRuntime` now returns this runtime, so every conformance vector exercises production code; its inputs and the vector results are unchanged. Its runtime now also behaves as above where no vector looks: it registers for a sign-in it did not observe, keeps `unboundSession` in the storage object, and reads that object through `notificationRuntimeStateOf`, so a hand-built object that is not a runtime state reads as empty. `NotificationConformanceBackendClient`, `NotificationConformanceSession`, and `NotificationConformanceReminderSetStatus` extend or alias the new runtime types. — Thanks @imjlk!
+
 ## 0.26.0 — 2026-10-20
 
 ### Changed

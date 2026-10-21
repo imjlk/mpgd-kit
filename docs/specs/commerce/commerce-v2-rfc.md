@@ -226,7 +226,13 @@ Rules every provider follows:
   unfinished StoreKit transactions, Microsoft Store purchases not yet
   consumed, Apps in Toss pending orders, and wallet entitlements not yet
   redeemed. A finished durable purchase is not available; entitlements come
-  from the ledger, not from this list.
+  from the ledger, not from this list. StoreKit is the exception: a
+  non-consumable that StoreKit has already finished stays in `currentEntitlements`
+  with `unfinished: false`, and the StoreKit SDK still lists it so a finish
+  that raced the ledger grant can still be verified. The server ledger
+  dedupes that verify. A finished consumable is not listed.
+
+<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction. -->
 - **No grants on the client.** A provider never credits a wallet or unlocks an
   entitlement. `settlement` on an adapter-settled purchase is a pointer for
   the reconciler, not a grant.
@@ -237,7 +243,16 @@ Rules every provider follows:
   payment surface opens or closes (ONE play) offers
   `presentation.subscribe(listener)`; the game runtime's presentation gate
   uses it, and without it a purchase result alone says nothing about the
-  surface. C4 added the field to the contract; it takes no part in granting.
+  surface. A provider that restarts its event sequence on each call echoes the
+  coordinator's attempt generation so a delayed event from the previous call
+  cannot close the next sheet. A trusted not-started fact does not grant, and
+  it does not reopen a journal already written `failed`: that state has no
+  outgoing transition, and a retryable failure without presentation proof stays
+  terminal.
+  C4 added the field to the contract; it takes no part in granting.
+
+<!-- @link ../../../packages/platform/src/index.ts#commercePresentationAttempt Restarting providers echo this request generation on presentation events. -->
+<!-- @link ../../../packages/platform/src/commerce.ts#commercePurchaseTransitions failed has no outgoing transition. -->
 
 ## Capabilities {#capabilities}
 

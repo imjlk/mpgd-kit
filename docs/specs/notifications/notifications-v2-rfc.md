@@ -2,9 +2,10 @@
 
 Status: **draft**. N2 through C1 implemented this contract: the types, the
 conformance runner and vectors, the providers, the Worker and Devvit
-backends, and the CLI starter. The game-services client runtime and the
-identity-side session binding are follow-ups (see
-[What C1 landed](#pr-plan)). It is still outside the enforced
+backends, and the CLI starter. R1 added the production runtime and the
+game-services client. The identity-side session binding belongs to each
+game's identity service (see [What R1 landed](#pr-plan)). It is still
+outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope, and a
 conformance vector is not device or release verification. Baseline:
 `main@2f70328e`, 2026-10-12, revised the same day after review. Draft
@@ -250,7 +251,9 @@ follows v2 even where an adapter's v1 disagrees.
 The client declaration describes what the provider can do on the device. The
 backend never trusts it for a send decision: the gate reads the server's own
 [provider registry](#provider-registry) entry, and the runtime compares the
-two at start.
+two at start. While they disagree the runtime fails closed: every call
+throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing reaches the
+backend in the background either (no registration, no record).
 
 ## Client contract {#client-contract}
 
@@ -420,9 +423,11 @@ The gateway gains `notificationsV2?: NotificationProvider` next to the v1
 
 ### Runtime {#runtime}
 
-Games do not call the provider directly. The game-services client composes
-the provider with the backend in one notifications runtime, which the
-conformance runner drives as the `game` actor:
+Games do not call the provider directly. The notifications runtime
+(`createNotificationRuntime` in `@mpgd/platform/notifications-runtime`)
+composes the provider with the backend, such as the game-services client
+over the Worker's routes; the conformance runner drives it as the `game`
+actor:
 
 ```ts
 export interface NotificationConsentRecord {
@@ -586,8 +591,13 @@ Runtime rules:
     device's decided permission; when a player authenticates (an account
     switch moves the installation to the new player); at start and on each
     read, once the registration the backend last acknowledged is older than
-    7 days, so the endpoint of a device in use never goes stale; and on
-    `register()`.
+    7 days, so the endpoint of a device in use never goes stale, or was
+    acknowledged for another player or session, so a sign-in the runtime did
+    not observe (one before its start, or while it was stopped) still moves
+    the installation; at start, for a player already signed in, when no
+    registration was acknowledged yet, and on reads while the provider's
+    address was never acknowledged (a first registration that failed); and
+    on `register()`.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the
@@ -609,7 +619,10 @@ Runtime rules:
       fails, such as on an offline logout, and then throws the unbind's
       error.
     - The installation stays unbound, across restarts, until `register()` or
-      the next authentication.
+      the next authentication. A session other than the one signed in when
+      `unregister()` ran (any session, when none was) counts as that
+      authentication even when the runtime did not observe it, so the runtime
+      keeps that session with the unbound state.
 - **Local reminders.** On start, on authentication, and after each backend
   read, the runtime compares `listLocal()` with the latest backend preference
   and permission and cancels the reminders that no longer pass, because a
@@ -832,8 +845,19 @@ Inputs follow the v1 bounds:
 `set` rejects `templateData` while any provider that would deliver the
 topic is host-template, whether or not the player is reached through it
 now, because template context stays on the server as in v1 and the
-reminder may reach the player there when it fires. Invalid input throws
+reminder may reach the player there when it fires. `set` also fills every
+locale copy a free-form provider would send, and a target mapping's own
+title and body, with that `templateData` before it writes. A host-template
+provider skips catalog copy, which the host renders, but not a mapping
+that supplies its own title and body: that text is rendered ahead of the
+host template. A placeholder without a value throws
+`NOTIFICATIONS_INVALID_INPUT`, so the reminder is not stored only to be
+dropped when it fires. Mapped placeholders on a host-template provider
+cannot be satisfied while `templateData` is rejected, and `set` throws
+rather than storing that reminder. Invalid input throws
 `NOTIFICATIONS_INVALID_INPUT`.
+
+<!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 
 Before scheduling locally, the runtime applies, in this order, the parts of
 the [policy gate](#policy-gate) it can evaluate on the client:
@@ -872,7 +896,10 @@ past is due at once, behind the reminders already due, and keeps its
   When the player can be reached on none, it checks each such provider
   without a recipient: a device provider answers `permission-required`, and
   a platform-user provider answers from its records or its host read, so
-  the reminder may be stored and find no recipient when it fires.
+  the reminder may be stored and find no recipient when it fires. A host
+  read that fails is skipped. The set throws
+  `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` only when no provider could be
+  checked and none passed.
 - **Which answer.** One provider that passes stores the reminder, which goes
   to every provider the player has a recipient on when it fires. Otherwise
   the refusal of the furthest gate step answers: `advertising-consent-missing`,
@@ -893,7 +920,11 @@ past is due at once, behind the reminders already due, and keeps its
   link the provider cannot take throw `NOTIFICATIONS_INVALID_INPUT`: the
   gate's link step runs at set time, so a provider whose sends need a link
   (Devvit) needs the reminder's or the topic mapping's, and a given link
-  must match the provider's mapping rule for `link`. A provider with a link
+  must match the provider's mapping rule for `link`. A link rule that does
+  not compile is the deployment's configuration: `set` checks every provider
+  that would deliver the topic, not only until the first candidate passes,
+  and throws even when another provider would pass or the player is not
+  reached on the broken provider yet. A provider with any other link
   problem is not checked further, so another provider's refusal answers
   first.
 
@@ -924,7 +955,12 @@ the pending reminder, and cancelling removes it.
 - Replacing or cancelling also stops a send of the reminder that waits
   (`deferred`) or whose provider answer was `ambiguous` (`in-flight`); the
   scheduler replays neither, and `cancel` answers `remote`.
-- A send the provider may already have accepted cannot be recalled.
+- A send the provider may already have accepted cannot be recalled. A row
+  whose claim lease is still live is not deleted: its holder records the
+  acceptance, and does not call the provider if the reminder was cancelled
+  or replaced before the call. Deleting that row would drop the idempotency
+  key and let the same key and time send again.
+  <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 - **Races with the scheduler.** The scheduler stores a reminder's send first
   and marks the reminder fired after, so a run that stops in between leaves
   the reminder pending and the next run finds its send. A set stops the
@@ -941,8 +977,12 @@ the pending reminder, and cancelling removes it.
   reminder makes its own send, unless one row of the previous send (for any
   provider or endpoint) was already delivered: then the key keeps that send
   for every provider, the new reminder makes none, and the backend reports
-  it. A scheduler run that read a reminder a set has replaced since leaves
-  the newer reminder's send alone.
+  it. A row that is only claimed, and not yet delivered, does not count.
+  The replacement stays pending until that claim is dropped or a row is
+  delivered. Marking it fired while the claim is merely live would spend
+  the reminder with no send: the holder then sees the replacement and does
+  not call the provider. A scheduler run that read a reminder a set has
+  replaced since leaves the newer reminder's send alone.
 - **A set that fails.** A set stops the previous reminder's waiting send
   before its write; if the write then fails, the previous reminder stays as
   it was without that send, and the set is retried.
@@ -1531,8 +1571,13 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     - **Access tokens.** A key that cannot sign or a refused grant is
       `rejected` with reason `configuration`; a token endpoint that is down
       sent nothing and is `rate-limited`.
-  - **Expiry and actions.** The expiry is `android.ttl` and the
-    `apns-expiration` header. A message that would expire within a second
+  - **Expiry, collapse, and actions.** The expiry is `android.ttl` and the
+    `apns-expiration` header. A replay of the same send key sets
+    `android.collapse_key` and `apns-collapse-id` to the SHA-256 of that key
+    (64 hex characters, the APNs limit), so a crash after HTTP 200 and
+    before the ledger write replaces the first notification instead of
+    showing a second. Collapse is per token, so two devices of one send do
+    not hide each other. A message that would expire within a second
     is not sent (`rejected`, provider code `MESSAGE_EXPIRED`), because FCM
     reads a time to live of 0 as "deliver now if the device is reachable".
   - **Payload.** The gate's title and body are the FCM `notification`, and
@@ -1564,9 +1609,12 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
       it), and 4010 (credentials not found) are `rejected` with reason
       `configuration`;
     - the partner API documents no recipient-level code, including none for
-      a missing agreement (checked 2026-10-19). A deployment names the codes
-      it observes (`agreementErrorCodes`, then `recipientErrorCodes`,
-      checked before every built-in code, 4095 included, on any status
+      a missing agreement (checked 2026-10-19). Documented codes are
+      classified first, and a deployment list cannot override them: 4095
+      stays `rate-limited` and 5004, 4034, and 4010 stay `configuration`,
+      so a rate limit is not stored as an agreement denial. A deployment
+      then names the codes it observes (`agreementErrorCodes`, then
+      `recipientErrorCodes`) on any status
       except HTTP 429, which is `rate-limited`, and 5xx, 408, and 425, which
       are `ambiguous`, whatever the body says); any other code is `rejected` with reason
       `recipient` on HTTP 200 (not `ambiguous`: an `ambiguous` row is
@@ -1588,8 +1636,11 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `accepted` when `msgCount` is above 0 or any channel sent it. Otherwise
     it is `rejected`: reason `agreement` when a `fail` entry's
     `reachedFailReason` is one the deployment names
-    (`agreementFailReasons`), otherwise `recipient`, also when the `fail`
-    lists are empty.
+    (`agreementFailReasons`, each 1 to 1,024 UTF-16 code units once
+    trimmed: the provider takes the first 1,024 UTF-16 code units of a
+    `reachedFailReason` and trims that slice before matching, so it refuses
+    an empty or longer entry at creation), otherwise `recipient`, also when
+    the `fail` lists are empty.
   - **Limits.** 15,000 per minute per app (the registry's `rate`), and 10 per
     minute per user (a provider limit).
 - **Devvit.** It runs inside the Devvit server, not the game-services Worker,
@@ -1624,9 +1675,18 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   - **Answers.** `failureCount` and `errors` map per recipient.
     - `successCount` above 0 is `accepted`.
     - An error for the recipient is a failure Devvit counted. A message that
-      reads as a rate limit is `rate-limited`; one that names this recipient
-      and reads as the user's refusal (opted out, no such user) is `rejected`
-      with reason `recipient`.
+      reads as a rate limit is `rate-limited`; one that reads as a length or
+      content refusal (a title, character, length, link, or other size or
+      text word, together with refusal evidence such as too long, exceeds,
+      invalid, not allowed, or not found) is `rejected` with reason
+      `configuration` once, not replayed. A field name alone, such as
+      "payload service temporarily unavailable", stays `ambiguous`. One that
+      names this recipient and reads as the user's refusal (opted out, no
+      such user) is `rejected` with reason `recipient`.
+
+<!--
+@link ../../../adapters/devvit/src/server/notifications-delivery.ts#createDevvitNotificationDeliveryProvider Classifies a length or content enqueue refusal as configuration only when the message also shows refusal evidence.
+-->
     - Any other error is `ambiguous` (provider code
       `DEVVIT_ENQUEUE_UNCLASSIFIED`). The ambiguity is in the classification:
       an unknown message proves neither a setup error nor a refusal, nor
@@ -1752,7 +1812,7 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 
 | Profile | `permission` | `remote` | `local` | `open` |
 | --- | --- | --- | --- | --- |
-| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form, all three purposes | supported, iOS `maxPending` 64 | payload |
+| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form; all three purposes on both, matching the standard FCM registry. Map no advertising topic to Android until the shell renders the opt-out action | supported, iOS `maxPending` 64 | payload |
 | Apps in Toss | topic, host, not readable, persistent, gesture required, no settings link; per-topic `agreement` | platform-user, host-template, `service` and `requested` | unsupported | landing-url |
 | Devvit | app, game, readable through the server bridge and server-readable, persistent, gesture required, revocable in the game | platform-user, free-form (approved copy), `service` and `requested` | unsupported | host-link |
 | Web, Microsoft Store PWA, CrazyGames, OnePlay, Verse8 | `availability: 'unsupported'` | unsupported | unsupported | none |
@@ -1806,7 +1866,14 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   posts to `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose,
   and creating the provider throws when a channel would mix advertising with
   other topics. It creates the channels at start, because a push needs its
-  channel before it arrives, and tries again after a failure.
+  channel before it arrives, and tries again after a failure. A push-only
+  Android shell whose messaging plugin has no `createChannel` is
+  `configuration-required` when the catalog names a channel, so `register()`
+  does not hand the backend a token for a channel that cannot be created.
+  `listLocal` omits an Android row only when it is visible in the shade. A
+  past `fireAt` that is not delivered stays listed: Doze can defer an inexact
+  alarm past its time while the plugin still has it pending, and cancellation
+  reads `listLocal`.
 - **Opt-out action.** The provider registers the advertising opt-out action
   natively as the action type `mpgd-advertising` with the action
   `advertising-opt-out`, through `@capacitor/local-notifications`.
@@ -1818,8 +1885,17 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     which is a follow-up after C1. Until then, under the Korean rules, map
     no advertising topic to Android: the push would arrive without the
     opt-out action the rules require, and a settings path described in the
-    body does not replace it ([Advertising rules](#advertising-rules)). The
-    starter maps its sample advertising topic to iOS only. The game's
+    body does not replace it ([Advertising rules](#advertising-rules)).
+    `validateNotificationTopicCatalog` refuses that mapping, and the
+    notifications service will not start on a catalog that has it, so the
+    send is not left to the client. The Android and iOS providers still
+    declare `service`, `requested`, and `advertising`, the same list as
+    `referenceNotificationProviders.fcm` (the entry
+    `createFcmProviderRegistration` publishes for both targets).
+    `notificationRegistryMismatch` requires that list exactly; omitting
+    `advertising` on Android would make every standard pairing
+    `configuration-required`. The starter maps its sample
+    advertising topic to iOS only. The game's
     settings screen stays the in-game opt-out on every target.
   - Tapping the action opens the declared `optOutRoute` of the advertising
     topic the push names in its `topic` data key, never a route from the
@@ -1853,13 +1929,18 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     each payload and answer, and the gateway's client validates again. The
     gateway serves its v1 `notifications` adapter from the same provider and
     refuses a v1 push provider next to it.
-- **Cold starts.** Verify cold-start opens on a device: Capacitor 8.5 moved the
-  iOS template to the UIScene lifecycle, which sets the notification delegate
-  later than Apple recommends. The provider registers its native listeners
-  when it is created and marks an open `cold` when it arrives before the first
+- **Cold starts.** A killed-app notification tap is delivered only in
+  `connectionOptions.notificationResponse` of
+  `scene(_:willConnectTo:options:)`. Capacitor 8.5's scene proxy replays URL
+  contexts on `capacitorViewDidAppear` and does not read that response, and
+  `@capacitor/ios` 8.5.2 does not either. The reference shell's
+  `SceneDelegate` forwards it to the notification-center delegate (or the
+  bridge's notification router) on the first `capacitorViewDidAppear`, once
+  plugins have registered. The provider registers its native listeners when
+  it is created and marks an open `cold` when it arrives before the first
   subscriber. It also keeps events that arrive while no listener is attached
   later for the next subscriber (all but receipts), because the gateway's
-  bridge detaches when its last listener leaves.
+  bridge detaches when its last listener leaves. Verify the tap on a device.
 - **Unmapped topics.** A topic the catalog does not declare, or declares
   without a mapping for the target, reads `unsupported` and schedules
   nothing; an open naming it carries no topic.
@@ -1994,8 +2075,12 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `openSettings` answering `unavailable`, and `NOTIFICATIONS_UNSUPPORTED`
     for the local methods. A refused opt-in (`success: false`) is
     `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
-    `DEVVIT_OPT_IN_REFUSED`; a plugin call that throws is
-    `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic outside the catalog's
+    `DEVVIT_OPT_IN_REFUSED` only when a re-read of `isOptedIn` still shows
+    the user out; if a concurrent request already opted the user in, the
+    handler returns that observed `granted` state instead of a permanent
+    configuration error. A refused opt-out is re-read the same way. A plugin
+    call that throws is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A topic
+    outside the catalog's
     `reddit` mappings reads `unsupported` and answers `unavailable` to a
     request or revocation, which opts nothing in or out for it. A revocation
     for a user who is already out calls no opt-out, and the provider's
@@ -2155,6 +2240,43 @@ Other rules the profiles encode:
     [`docs/specs/notifications/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/notifications/schemas).
   - `validate:notifications-alignment`, run in `pnpm check`, keeps the
     constant, the vectors, and the schemas aligned.
+- **Host handler.** Every host that serves v2 from a `NotificationProvider`
+  (the Apps in Toss host, the Capacitor in-process bridge, the Devvit server)
+  does it through `createNotificationsV2BridgeHandler` in
+  `@mpgd/bridge/notifications`.
+  - It checks each payload (`NOTIFICATIONS_INVALID_INPUT`) and each answer
+    (`NOTIFICATIONS_CONFIGURATION_REQUIRED`).
+  - A method the provider lacks answers `NOTIFICATIONS_UNSUPPORTED`, with
+    two exceptions: `openSettings` answers `unavailable`, and a host created
+    with `registerOptional` (Apps in Toss) answers `register` with no
+    address.
+  - A host code of `[A-Za-z0-9_.:-]{1,128}` is named at the end of the
+    message as `(host code <code>)`, which `readBridgeNotificationsHostCode`
+    reads back (the Apps in Toss and Devvit clients do).
+  - Events are numbered per handler from 0, one handler per session; the
+    Devvit server bridge exposes none.
+- **Protocol version.** `getCapabilities` answers `protocolVersion`, the
+  host's `notificationsProtocolVersion`. The Apps in Toss client, whose host
+  wrapper is built separately from the game, refuses an incompatible host
+  with `NOTIFICATIONS_CONFIGURATION_REQUIRED`, as it refuses a host that
+  serves another provider id; the gateway then reports
+  `configuration-required`. While either version is a pre-release (the
+  draft is `2.0.0-draft.1`), a compatible host shares the major and the whole
+  pre-release tag, because a draft can change between drafts: `draft.1` does
+  not serve `draft.2` or the release. Between releases, the major decides. A
+  version that is not a semantic version is incompatible. The in-process
+  Capacitor bridge and the Devvit client, built with their hosts, do not
+  check the version (the Devvit client checks the provider id).
+  - The verdict comes from a capability read. `getCapabilities` reads and
+    judges every time; any other method, before the first verdict, reads
+    once first. A read that fails or breaks the contract gives no verdict,
+    so the next call reads again.
+  - Once the host is judged incompatible, every method answers
+    `NOTIFICATIONS_CONFIGURATION_REQUIRED` without reaching it.
+  - `subscribe` is synchronous and the host hands its buffered cold open to
+    its first listener, so a subscription made before any verdict attaches
+    at once and starts a read; an incompatible verdict detaches every
+    subscription, and after it `subscribe` attaches nothing.
 - **What N3 landed.** When N3 landed no transport served v2; P1–P3 add the
   providers.
   P1 serves it on the Apps in Toss host bridge, and the Apps in Toss gateway
@@ -2203,7 +2325,8 @@ written for one fixture profile and declares in `appliesTo` the capability
 fields its scenario depends on. A provider in P1–P3 runs, through a
 `createProvider` hook as commerce providers do, every vector whose
 `appliesTo` its own capabilities satisfy; the reference runtime runs all of
-them with fixture providers.
+them with fixture providers. Since R1 the reference runtime is the
+production runtime from `@mpgd/platform/notifications-runtime`.
 
 How a real provider is judged:
 
@@ -2402,6 +2525,7 @@ publishable package carries a Sampo changeset.
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path landed with P3 | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
+| R1 | `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
 
 **What S1 landed.**
 
@@ -2447,9 +2571,9 @@ publishable package carries a Sampo changeset.
   the session routes `POST /reminders` and `POST /reminders/cancel`, and a
   cron that runs the scheduler after the purges.
 - Left for later: a game-services client that implements the runtime's
-  backend calls over the Worker routes, and seeding notice checks for
-  players whose records predate the scheduler. The Devvit scheduler path
-  landed with P3.
+  backend calls over the Worker routes (landed in R1, below), and seeding
+  notice checks for players whose records predate the scheduler. The
+  Devvit scheduler path landed with P3.
 
 **What P3 landed.** The Devvit provider, server bridge handler, delivery
 provider, and Redis-backed store; see [Devvit](#profile-devvit),
@@ -2459,9 +2583,10 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   reminders fire on Devvit, and the Redis store implements S2's store
   steps.
 - Left to follow-ups: a shared host-side `notifications.v2` bridge
-  handler for the Apps in Toss and Devvit adapters, and the runtime's
-  backend client for a service the Devvit server hosts (the game-services
-  client). The wiring in the generated Devvit app landed in C1.
+  handler for the Apps in Toss and Devvit adapters (landed in B1, below),
+  and the runtime's backend client for a service the Devvit server hosts
+  (the game-services client landed in R1 for the Worker). The wiring in
+  the generated Devvit app landed in C1.
 
 **What C1 landed.**
 
@@ -2492,19 +2617,92 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   [Firebase setup guide](../../FIREBASE_NOTIFICATIONS.md).
 - Left to follow-ups:
   - The runtime's backend client (a game-services client over the Worker's
-    notification routes). The routes need the identity side's session
-    binding, which is its own follow-up, and the only runtime is the
-    conformance reference. Until both land, the starter's
-    `createStarterNotificationBackend` returns `undefined`: the settings
-    screen asks for the permission but shows no reminder, advertising, or
-    night switch, and says so. With a backend, the switches show the
-    player's latest consent records (the Worker's `GET /consent`), read on
-    every view, never a device-side copy.
+    notification routes) and a production runtime: landed in R1, below.
   - Native rendering of Android advertising pushes with the opt-out action
     in the Capacitor shell; until then the starter maps no advertising topic
     to Android.
-  - The shared host-side `notifications.v2` bridge handler, and bulk sends
-    (open question 5).
+  - The shared host-side `notifications.v2` bridge handler (landed in B1,
+    below), and bulk sends (open question 5).
+
+**What R1 landed.**
+
+- `@mpgd/platform/notifications-runtime`: the production runtime,
+  `createNotificationRuntime`, over a backend port
+  (`NotificationRuntimeBackend`) and a storage port for what survives a
+  restart (`NotificationRuntimeStorage`; `createNotificationRuntimeStorage`
+  keeps it in the platform storage). The conformance runner's reference
+  runtime is now this one, so every vector exercises production code. A
+  sign-in the runtime did not observe still moves the installation (see
+  [Runtime](#runtime), Registration and Unbinding).
+- `@mpgd/game-services/notifications/client`:
+  `createGameServicesNotificationsClient`, the backend port over the
+  Worker's session routes, with the commerce client's `baseUrl`, `fetch`,
+  and header resolver. The game's identity supplies the session
+  (`{ playerId, sessionId }` and a sign-in subscription); requests name no
+  player or installation. Worker answers map to the runtime's codes: 401 is
+  a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, a 404 on a session
+  route `NOTIFICATIONS_CONFIGURATION_REQUIRED`, a 400 or 413
+  `NOTIFICATIONS_INVALID_INPUT`, and an answer outside the route's contract
+  `NOTIFICATIONS_CONFIGURATION_REQUIRED`. The vectors the service passes
+  also pass with the runtime calling it through this client, and a Worker
+  test runs the runtime through it against the real handler.
+- The starter: `createStarterNotificationBackend` returns the runtime over
+  this client when the game has `VITE_MPGD_GAME_SERVICES_URL` and sets a
+  server-backed session with `setStarterServerSession`, whose header the
+  commerce client then sends too; otherwise `undefined`, as before. The
+  runtime loads the Worker's registry entry for its target
+  (`GET /providers`, `loadRegistryEntry`) in the background and compares
+  the provider with it; a Worker it cannot reach is logged and the runtime
+  runs without the comparison. A Reddit game gets no Worker backend: its
+  notifications backend is the Devvit server.
+- Left to follow-ups:
+  - The identity side's `NotificationSessions` binding stays with each
+    game's identity service; the contract is in the
+    [Worker guide](../../CLOUDFLARE_WORKER_DEPLOY.md) ("Sessions").
+  - Expose a stable session-family id from `GuestSessionCoordinator`. Its
+    view's `sessionId` may rotate on refresh, while the runtime and the
+    Worker need the id `authenticateNotificationSession` answers, which
+    stays the same across refreshes; until then a game passes that id
+    itself.
+  - Android advertising rendering and bulk sends, as listed under C1; the
+    shared host-side `notifications.v2` bridge handler landed in B1, below.
+
+**What B1 landed.** B1 is a follow-up to the first release wave: the shared
+host-side handler that the P3 and C1 notes left open, and three small Apps
+in Toss fixes.
+
+- `createNotificationsV2BridgeHandler` and `readBridgeNotificationsHostCode`
+  in `@mpgd/bridge/notifications` (see [Bridge and versioning](#bridge)).
+  The Apps in Toss host, the Capacitor in-process bridge, and the Devvit
+  server bridge serve the nine methods through it; their own code keeps
+  only what differs: the label in messages, no address for an Apps in Toss
+  provider without `register`, and on Devvit a fixed message for an
+  unexpected failure plus the server-side `onError` log. The Devvit webview
+  client is the game side and stays separate. For providers that throw this
+  repository's errors, codes, retryable flags, and events are unchanged,
+  apart from answers that tightened:
+  - On the Apps in Toss host, a provider that answers `register` or
+    `openSettings` with `undefined` now answers
+    `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+  - The Capacitor bridge maps a non-notifications `PlatformOperationError`
+    code to `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` itself (its game-side
+    client already did), and names a host code only when it matches the
+    pattern above.
+  - Failures are read by shape as well as by class, so a provider built
+    against another copy of `@mpgd/platform` keeps its notifications code
+    and retryable flag, and an unexpected failure shaped like a platform
+    failure (a platform `code` and a boolean `retryable`) keeps its flag, so
+    its `retryable: false` is no longer made retryable.
+- The Apps in Toss game-side client fails closed on a host whose
+  notifications protocol version is incompatible (above), and its lazy
+  chunk reads events through the bridge provider instead of a second copy
+  of the envelope filter.
+- The Apps in Toss functional-message provider refuses an
+  `agreementFailReasons` entry that is empty or longer than 1,024 UTF-16
+  code units once trimmed, since it takes the first 1,024 UTF-16 code units
+  of a `reachedFailReason` and trims that slice before matching.
+- Left to follow-ups: bulk sends (open question 5) and native rendering of
+  Android advertising pushes (above).
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
@@ -2562,7 +2760,19 @@ that also removes commerce v1.
      empty array and drops replies it cannot map (a protobuf zero may arrive
      unset), so every transaction ends with a SET of a commit marker whose
      reply always maps; only a `null`, empty, or all-nil result is an
-     abort.
+     abort. A throw from WATCH or the planning read that is transient is
+     retried inside that step's attempt budget, as is an EXEC throw that
+     proves the transaction aborted before commit (the 20-transaction cap,
+     the 5-second timeout). A connection loss thrown by EXEC is not retried:
+     the reply may have been lost after commit, and re-planning would report
+     the landed write as contention. History reads use `hGetAll`, not
+     allowlisted `hMGet`, so a disabled `hMGet` does not fail the gate's
+     history read.
+
+<!--
+@link ../../../adapters/devvit/src/server/redis-notification-store.ts#createDevvitRedisNotificationStore Retries a transient error that proves EXEC did not commit, and reads history with hGetAll.
+@link ../../../adapters/devvit/src/server/notifications-bridge.ts#createDevvitServerNotificationProvider Re-reads isOptedIn after a refused opt-in or opt-out.
+-->
    - **Clocks.** Leases compare against the service's clock, not Redis TTLs.
      Clock skew between Devvit server instances can only start a replay
      early, which the `ambiguous` rule already allows (Devvit's `enqueue`

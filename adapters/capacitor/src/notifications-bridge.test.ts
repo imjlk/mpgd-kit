@@ -102,6 +102,7 @@ function setup(options: {
     app: sdks.app,
     timeZone: () => 'Asia/Seoul',
     locale: () => undefined,
+    now: () => Date.parse('2026-10-12T03:00:00Z'),
     ...(options.openSettings === undefined ? {} : { openSettings: options.openSettings }),
   });
   const requests: BridgeRequest[] = [];
@@ -457,6 +458,53 @@ describe('Capacitor gateway with a notifications v2 service', () => {
     });
     // A v2 failure never falls back to the base plugin.
     expect(requests).toEqual([]);
+  });
+
+  it('maps a PlatformOperationError with another code to temporarily unavailable, keeping its flag', async () => {
+    for (const retryable of [true, false]) {
+      const native = createCapacitorNotificationProvider({ platform: 'android', topics, app: null });
+      const { gateway } = setup({
+        native: {
+          ...native,
+          getPermission: async () => Promise.reject(new PlatformOperationError({
+            code: 'HOST_SOMETHING',
+            message: 'gone',
+            retryable,
+          })),
+        },
+      });
+      await expect(gateway.notificationsV2?.getPermission({ topics: [] })).rejects.toMatchObject({
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        retryable,
+      });
+    }
+  });
+
+  it('names only a host code that reads as one', async () => {
+    const failing = (hostCode: string) => {
+      const native = createCapacitorNotificationProvider({ platform: 'android', topics, app: null });
+      return setup({
+        native: {
+          ...native,
+          getPermission: async () => Promise.reject(new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+            message: 'plugin missing',
+            hostCode,
+          })),
+        },
+      }).gateway;
+    };
+    const readable = await failing('UNIMPLEMENTED').notificationsV2?.getPermission({ topics: [] })
+      .catch((error: unknown) => error);
+    expect(readable).toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      message: 'plugin missing (host code UNIMPLEMENTED)',
+    });
+    const unreadable = await failing('not a code').notificationsV2?.getPermission({ topics: [] })
+      .catch((error: unknown) => error);
+    expect(unreadable).toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      message: 'plugin missing',
+    });
   });
 
   it('treats unresolved catalog entries as outside the v1 catalog', async () => {

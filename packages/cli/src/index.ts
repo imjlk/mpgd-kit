@@ -23,6 +23,7 @@ import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import { buildAssetPackTarget } from './asset-pack-target.js';
 import { publishAssetPacks } from './asset-pack-publish.js';
+import { assertLegalProjectPath, publishLegalSiteFiles } from './legal-site-output.js';
 import { assertAssetPackTargetPolicy } from '@mpgd/target-config/asset-packs';
 import {
   materializeCapacitorShellStarter,
@@ -83,6 +84,7 @@ import {
   readGameCreateProviders,
 } from './notifications-starter.js';
 import { applyKitUpgrade, planKitUpgrade } from './kit-upgrade.js';
+import { checkDevvitSdk } from './devvit-sdk-check.js';
 import { applyToolingMigration, planToolingMigration } from './tooling-migration.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 import {
@@ -2281,7 +2283,10 @@ const targetCommand = defineI18n({
           action: 'build',
           target,
           profile,
-          env: createTargetCommandEnv(ctx.values, { nativeBuildTarget: target }),
+          env: createTargetCommandEnv(ctx.values, {
+            nativeBuildTarget: target,
+            requireSourceRevision: true,
+          }),
           ...(variant === undefined ? {} : { variant }),
         });
       },
@@ -3038,7 +3043,7 @@ const targetCommand = defineI18n({
       run: (ctx) => {
         const aitVariant = readOptionalString(ctx.values['ait-variant']);
         const iosVariant = readOptionalString(ctx.values['ios-variant']);
-        const env = createTargetCommandEnv(ctx.values);
+        const env = createTargetCommandEnv(ctx.values, { requireSourceRevision: true });
 
         runTargetMatrix({
           action: 'build',
@@ -3123,6 +3128,16 @@ const kitCommand = defineI18n({
     ko: '현재 mpgd-kit 체크아웃을 점검합니다.',
   }),
   subCommands: {
+    'devvit-check': defineI18n({
+      name: 'devvit-check',
+      description: 'Require exact installed latest stable Devvit SDK and CLI before upload.',
+      resource: commandResource({ en: 'Check latest stable Devvit SDK before upload.', ko: '업로드 전 Devvit 최신 안정 SDK를 확인합니다.' }),
+      args: { project: { type: 'string', default: '.', description: 'Devvit target directory.' } },
+      run: async (ctx) => {
+        const entries = await checkDevvitSdk(readOptionalString(ctx.values.project) ?? '.');
+        for (const entry of entries) { console.info(entry.name + '@' + entry.installed + ' (latest stable)'); }
+      },
+    }),
     upgrade: defineI18n({
       name: 'upgrade',
       description: 'Plan or apply the latest published Kit package versions for a game.',
@@ -3396,10 +3411,14 @@ function buildLegalSite(input: {
 }): BuildLegalSiteResult {
   const legalDir = path.resolve(process.cwd(), input.legalDir);
   const outDir = path.resolve(process.cwd(), input.outDir);
+  assertLegalProjectPath('legal-dir', legalDir);
+  assertLegalProjectPath('out-dir', outDir);
   const outputs = createLegalSiteOutputs(legalDir, outDir);
 
   if (input.check) {
+    assertLegalProjectPath('out-dir', outDir);
     const stale = outputs.filter((output) => {
+      assertLegalProjectPath('out-dir', output.file);
       if (!existsSync(output.file)) {
         return true;
       }
@@ -3421,10 +3440,7 @@ function buildLegalSite(input: {
     };
   }
 
-  for (const output of outputs) {
-    mkdirSync(path.dirname(output.file), { recursive: true });
-    writeFileSync(output.file, output.content);
-  }
+  publishLegalSiteFiles(outDir, outputs);
 
   return {
     outDir,
@@ -3435,24 +3451,19 @@ function createLegalSiteOutputs(
   legalDir: string,
   outDir: string,
 ): readonly { readonly file: string; readonly content: string }[] {
-  const relativeLegalDir = path.relative(process.cwd(), legalDir);
-  const relativeOutDir = path.relative(process.cwd(), outDir);
+  assertLegalProjectPath('legal-dir', legalDir);
+  assertLegalProjectPath('out-dir', outDir);
 
-  if (relativeLegalDir.startsWith('..') || path.isAbsolute(relativeLegalDir)) {
-    throw new Error(`legal-dir must be inside the project root: ${legalDir}`);
-  }
-
-  if (relativeOutDir.startsWith('..') || path.isAbsolute(relativeOutDir)) {
-    throw new Error(`out-dir must be inside the project root: ${outDir}`);
-  }
-
-  const sourceRoot = toTemplatePath(relativeLegalDir || '.');
+  const sourceRoot = toTemplatePath(path.relative(process.cwd(), legalDir) || '.');
   const outputs = legalPageSlugs.map((slug) => {
     const sourceFile = path.join(legalDir, `${slug}.html`);
-
+    // existsSync and readFileSync follow a page symlink. Check the file
+    // itself, not only the legal directory, immediately before reading it.
+    assertLegalProjectPath('legal-dir', sourceFile);
     if (!existsSync(sourceFile)) {
       throw new Error(`Missing legal page source: ${sourceFile}`);
     }
+    assertLegalProjectPath('legal-dir', sourceFile);
 
     return {
       file: path.join(outDir, slug, 'index.html'),
@@ -3659,7 +3670,14 @@ function createGameApp(input: {
       content: file.content,
     });
 
-    return prepared === undefined ? [] : [{ ...file, content: renderTemplate(prepared, context) }];
+    return prepared === undefined
+      ? []
+      : [
+          {
+            ...file,
+            content: renderTemplate(prepared, context, file.relativePath),
+          },
+        ];
   });
 
   if (input.dryRun) {
@@ -3953,10 +3971,10 @@ function assertValidGameTitle(title: string): void {
     throw new Error('Game title cannot be empty.');
   }
 
-  if (/[\u0000-\u001f<>"'\\]/u.test(title)) {
-    throw new Error(
-      'Game title cannot contain control characters, quotes, backslashes, or angle brackets.',
-    );
+  // Quotes, backslashes, and `$` are allowed: JSON files and JS string literals
+  // escape them. `<` would break the generated HTML title.
+  if (/[\u0000-\u001f<>]/u.test(title)) {
+    throw new Error('Game title cannot contain control characters or angle brackets.');
   }
 }
 
@@ -3993,32 +4011,92 @@ interface TemplateFile {
   readonly content: string;
 }
 
+/**
+ * String replacements treat `$&`, `$'`, `` $` ``, and `$$` as patterns.
+ * A function replacer inserts `value` literally.
+ */
+function replaceLiteral(content: string, placeholder: string, value: string): string {
+  return content.replaceAll(placeholder, () => value);
+}
+
+/** Interior of a JSON string, without the surrounding quotes. */
+function jsonStringContents(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
+/**
+ * Placeholders substituted inside an existing JSON string. Structural
+ * fragments (`__TSCONFIG_EXTENDS_LINE__` and the workspace include/exclude
+ * lists) stay raw so their quotes remain JSON syntax.
+ */
+function jsonEscapedPlaceholder(placeholder: string): boolean {
+  return placeholder === '__GAME_TITLE__'
+    || placeholder === '__GAME_NAME__'
+    || placeholder === '__PACKAGE_NAME__'
+    || placeholder === '__DEVVIT_APP_NAME__'
+    || placeholder === '__DEFAULT_KIT_PATH__'
+    || placeholder === '__WORKSPACE_I18N_BUILD_PREFIX__'
+    || placeholder === '__TSCONFIG_ROOT_DIR__'
+    || placeholder === '__LEGAL_LAST_UPDATED__'
+    || placeholder === '__MPGD_DEPENDENCY_VERSION__'
+    || placeholder.startsWith('__MPGD_DEPENDENCY_VERSION_');
+}
+
+/** Interior of a single-quoted JS string. Backslash first, then quote. */
+function singleQuotedContents(value: string): string {
+  return value.replaceAll('\\', () => '\\\\').replaceAll("'", () => "\\'");
+}
+
 function renderTemplate(
   content: string,
   context: ReturnType<typeof createTemplateContext>,
+  relativePath: string,
 ): string {
-  let rendered = content
-    .replaceAll("from '@mpgd/cli/devvit'", `from ${context.devvitOutputPluginImport}`)
-    .replaceAll('__GAME_NAME__', context.gameName)
-    .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
-    .replaceAll('__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral)
-    .replaceAll('__GAME_TITLE__', context.gameTitle)
-    .replaceAll('__LEGAL_LAST_UPDATED__', context.legalLastUpdated)
-    .replaceAll('__PACKAGE_NAME__', context.packageName)
-    .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.defaultDependencyVersion)
-    .replaceAll('__TSCONFIG_EXTENDS_LINE__', context.tsconfigExtendsLine)
-    .replaceAll('__TSCONFIG_ROOT_DIR__', context.tsconfigRootDir)
-    .replaceAll('__TSCONFIG_WORKSPACE_INCLUDES__', context.tsconfigWorkspaceIncludes)
-    .replaceAll('__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes)
-    .replaceAll('__WORKSPACE_I18N_BUILD_PREFIX__', context.workspaceI18nBuildPrefix)
-    .replaceAll('__DEFAULT_KIT_PATH__', context.defaultKitPath)
-    .replaceAll('__RECOMMENDED_MATRIX_TARGETS__', context.recommendedMatrixTargets)
-    .replaceAll('__PNPM_WORKSPACE_KIT_PACKAGES__', context.pnpmWorkspaceKitPackages)
-    .replaceAll('__PASCAL_NAME__', context.pascalName)
-    .replaceAll('__CAMEL_NAME__', context.camelName);
+  // `.webmanifest` is JSON. Hosted PWA deploy and Microsoft Store submission parse it.
+  const jsonFile = relativePath.endsWith('.json') || relativePath.endsWith('.webmanifest');
+  const typescriptFile = relativePath.endsWith('.ts');
+  const insert = (placeholder: string, value: string): string => {
+    if (jsonFile && jsonEscapedPlaceholder(placeholder)) {
+      return jsonStringContents(value);
+    }
+    // Template titles sit in single quotes (`title: '__GAME_TITLE__'`).
+    if (typescriptFile && placeholder === '__GAME_TITLE__') {
+      return singleQuotedContents(value);
+    }
+    return value;
+  };
+  const pairs: ReadonlyArray<readonly [string, string]> = [
+    [`from '@mpgd/cli/devvit'`, `from ${context.devvitOutputPluginImport}`],
+    ['__GAME_NAME__', context.gameName],
+    ['__DEVVIT_APP_NAME__', context.devvitAppName],
+    // Longer than `__GAME_TITLE__`, so a title is not written into the literal name.
+    ['__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral],
+    ['__GAME_TITLE__', context.gameTitle],
+    ['__LEGAL_LAST_UPDATED__', context.legalLastUpdated],
+    ['__PACKAGE_NAME__', context.packageName],
+    ['__MPGD_DEPENDENCY_VERSION__', context.defaultDependencyVersion],
+    ['__TSCONFIG_EXTENDS_LINE__', context.tsconfigExtendsLine],
+    ['__TSCONFIG_ROOT_DIR__', context.tsconfigRootDir],
+    ['__TSCONFIG_WORKSPACE_INCLUDES__', context.tsconfigWorkspaceIncludes],
+    ['__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes],
+    ['__WORKSPACE_I18N_BUILD_PREFIX__', context.workspaceI18nBuildPrefix],
+    ['__DEFAULT_KIT_PATH__', context.defaultKitPath],
+    ['__RECOMMENDED_MATRIX_TARGETS__', context.recommendedMatrixTargets],
+    ['__PNPM_WORKSPACE_KIT_PACKAGES__', context.pnpmWorkspaceKitPackages],
+    ['__PASCAL_NAME__', context.pascalName],
+    ['__CAMEL_NAME__', context.camelName],
+  ];
+  let rendered = content;
+  for (const [placeholder, value] of pairs) {
+    rendered = replaceLiteral(rendered, placeholder, insert(placeholder, value));
+  }
 
   for (const replacement of context.mpgdDependencyVersionReplacements) {
-    rendered = rendered.replaceAll(replacement.placeholder, replacement.version);
+    rendered = replaceLiteral(
+      rendered,
+      replacement.placeholder,
+      insert(replacement.placeholder, replacement.version),
+    );
   }
 
   return rendered;
@@ -4086,7 +4164,10 @@ interface PackageJson {
 
 function createTargetCommandEnv(
   values: TargetCommandEnvInput,
-  options: { readonly nativeBuildTarget?: string } = {},
+  options: {
+    readonly nativeBuildTarget?: string;
+    readonly requireSourceRevision?: boolean;
+  } = {},
 ): NodeJS.ProcessEnv {
   const targetsFile = path.resolve(
     readOptionalString(values['targets-file']) ?? 'mpgd.targets.json',
@@ -4113,7 +4194,11 @@ function createTargetCommandEnv(
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ...createGameOwnedReleaseEnv(gameRoot, process.env),
+    // Release provenance is recorded only by build commands. Smoke, doctor,
+    // icons, and submission preflight must still run on an exported game tree.
+    ...createGameOwnedReleaseEnv(gameRoot, process.env, {
+      requireSourceRevision: options.requireSourceRevision === true,
+    }),
     MPGD_PLATFORM_TARGETS_FILE: preparedTargetsFile,
     ...(targetConfigExtensionsFile === undefined
       ? {}
@@ -4170,8 +4255,8 @@ function resolveStandaloneNativeBuild(
     const candidate = path.resolve(
       gameRoot,
       configuredPath
-        .replaceAll('${MPGD_GAME_ROOT}', gameRoot)
-        .replaceAll('${MPGD_GAME_APP_ROOT}', gameRoot),
+        .replaceAll('${MPGD_GAME_ROOT}', () => gameRoot)
+        .replaceAll('${MPGD_GAME_APP_ROOT}', () => gameRoot),
     );
     let existingAncestor = candidate;
     while (!existsSync(existingAncestor)) {
@@ -4245,10 +4330,10 @@ function resolveTargetConfigExtensionsFile(
 function createGameOwnedReleaseEnv(
   gameRoot: string,
   baseEnv: NodeJS.ProcessEnv,
+  options: { readonly requireSourceRevision: boolean },
 ): NodeJS.ProcessEnv {
   const monetizationFiles = resolveGameOwnedMonetizationFiles(gameRoot, baseEnv);
-  const sourceGitSha = readOptionalString(baseEnv.MPGD_SOURCE_GIT_SHA)
-    ?? readSourceGitSha(gameRoot);
+  const sourceGitSha = resolveCommandSourceGitSha(gameRoot, baseEnv, options.requireSourceRevision);
   const appVersion = readOptionalString(baseEnv.APP_VERSION)
     ?? readGamePackageVersion(gameRoot);
 
@@ -4261,7 +4346,7 @@ function createGameOwnedReleaseEnv(
     ...(notificationTopicsFile === undefined
       ? {}
       : { MPGD_NOTIFICATION_TOPICS_FILE: path.resolve(gameRoot, notificationTopicsFile) }),
-    MPGD_SOURCE_GIT_SHA: sourceGitSha,
+    ...(sourceGitSha === undefined ? {} : { MPGD_SOURCE_GIT_SHA: sourceGitSha }),
     ...(appVersion === undefined ? {} : { APP_VERSION: appVersion }),
   };
 }
@@ -4312,17 +4397,68 @@ function readConfiguredPath(value: string | undefined): string | undefined {
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
+function resolveCommandSourceGitSha(
+  gameRoot: string,
+  baseEnv: NodeJS.ProcessEnv,
+  requireSourceRevision: boolean,
+): string | undefined {
+  const configuredSourceGitSha = readOptionalString(baseEnv.MPGD_SOURCE_GIT_SHA);
+
+  if (requireSourceRevision) {
+    return configuredSourceGitSha === undefined
+      ? readSourceGitSha(gameRoot)
+      : requireSourceGitSha(configuredSourceGitSha);
+  }
+
+  if (configuredSourceGitSha !== undefined) {
+    return isSourceGitSha(configuredSourceGitSha) ? configuredSourceGitSha : undefined;
+  }
+
+  const detectedSourceGitSha = readGitHead(gameRoot);
+
+  return detectedSourceGitSha !== undefined && isSourceGitSha(detectedSourceGitSha)
+    ? detectedSourceGitSha
+    : undefined;
+}
+
 function readSourceGitSha(gameRoot: string): string {
+  const head = readGitHead(gameRoot);
+
+  if (head === undefined) {
+    throw new Error(
+      `Failed to resolve the game source Git revision for ${gameRoot}. `
+      + 'Set MPGD_SOURCE_GIT_SHA to its lowercase 40-character commit SHA.',
+    );
+  }
+
+  return requireSourceGitSha(head);
+}
+
+function readGitHead(gameRoot: string): string | undefined {
   const result = spawnSync('git', ['-C', gameRoot, 'rev-parse', 'HEAD'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
 
   if (result.error !== undefined || result.status !== 0) {
-    return 'uncommitted';
+    return undefined;
   }
 
-  return result.stdout.trim() || 'uncommitted';
+  const head = result.stdout.trim();
+
+  return head.length === 0 ? undefined : head;
+}
+
+function requireSourceGitSha(value: string): string {
+  if (!isSourceGitSha(value)) {
+    throw new Error('MPGD_SOURCE_GIT_SHA must be a lowercase 40-character game source SHA.');
+  }
+
+  return value;
+}
+
+function isSourceGitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/u.test(value);
 }
 
 function readGamePackageVersion(gameRoot: string): string | undefined {
@@ -4396,10 +4532,15 @@ function replaceTargetTokens(
   },
 ): unknown {
   if (typeof value === 'string') {
-    return value
-      .replaceAll('${MPGD_KIT_PATH}', context.kitPath)
-      .replaceAll('${MPGD_GAME_ROOT}', context.gameRoot)
-      .replaceAll('${MPGD_GAME_APP_ROOT}', context.gameRoot);
+    return replaceLiteral(
+      replaceLiteral(
+        replaceLiteral(value, '${MPGD_KIT_PATH}', context.kitPath),
+        '${MPGD_GAME_ROOT}',
+        context.gameRoot,
+      ),
+      '${MPGD_GAME_APP_ROOT}',
+      context.gameRoot,
+    );
   }
 
   if (Array.isArray(value)) {

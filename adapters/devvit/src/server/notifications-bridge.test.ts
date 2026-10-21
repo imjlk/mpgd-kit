@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BridgeRequest } from '@mpgd/bridge';
+import { readBridgeNotificationsHostCode } from '@mpgd/bridge/notifications';
 import { PlatformOperationError } from '@mpgd/platform';
 import { NotificationError } from '@mpgd/platform/notifications';
 
@@ -10,6 +11,7 @@ import {
   createDevvitServerNotificationProvider,
   devvitNotificationHostCodes,
 } from './notifications-bridge.js';
+import { devvitHostCodeCharacters } from '../notifications-contract.js';
 
 const user = 't2_alice';
 const topics = ['friend-challenge', 'daily-puzzle'];
@@ -266,6 +268,57 @@ describe('createDevvitServerNotificationProvider', () => {
       hostCode: devvitNotificationHostCodes.optOutRefused,
     });
   });
+
+  it('returns the observed opt-in when a concurrent request already opted the user in', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    let entered = 0;
+    let releaseBoth: () => void = () => {};
+    const bothEntered = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    plugin.optInCurrentUser = async () => {
+      entered += 1;
+      if (entered === 2) {
+        releaseBoth();
+      }
+      await bothEntered;
+      if (plugin.optedIn.has(user)) {
+        return { success: false, message: 'duplicate opt-in' };
+      }
+      plugin.optedIn.add(user);
+      return { success: true };
+    };
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    const [first, second] = await Promise.all([
+      provider.requestPermission({ topics: ['friend-challenge'] }),
+      provider.requestPermission({ topics: ['friend-challenge'] }),
+    ]);
+    expect(first.snapshot.app).toBe('granted');
+    expect(second.snapshot.app).toBe('granted');
+    expect(plugin.optedIn.has(user)).toBe(true);
+  });
+
+  it('returns the observed opt-out when a concurrent request already opted the user out', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    plugin.optedIn.add(user);
+    plugin.optOutCurrentUser = async () => {
+      plugin.optedIn.delete(user);
+      return { success: false, message: 'duplicate opt-out' };
+    };
+    const provider = createDevvitServerNotificationProvider({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    await expect(provider.revokePermission?.({ topics: ['friend-challenge'] })).resolves.toMatchObject({
+      snapshot: { app: 'prompt' },
+      outcomes: { 'friend-challenge': 'denied' },
+    });
+  });
 });
 
 describe('createDevvitNotificationsV2BridgeHandler', () => {
@@ -327,6 +380,36 @@ describe('createDevvitNotificationsV2BridgeHandler', () => {
         ok: false,
         error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: false },
       });
+  });
+
+  it('logs failures by default, but not an unsupported local method or an invalid payload', async () => {
+    const plugin = createFakeDevvitNotifications({ currentUserId: user });
+    const bridge = createDevvitNotificationsV2BridgeHandler({
+      notifications: plugin,
+      currentUserId: () => plugin.currentUserId,
+      topics,
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await bridge.request(request('notifications.v2.listLocal', { protocol: 'mpgd.notifications.v2' }));
+      await bridge.request(request('notifications.v2.requestPermission', { topics: [] }));
+      expect(warn).not.toHaveBeenCalled();
+      plugin.isOptedIn = () => Promise.reject(new Error('plugin down'));
+      await bridge.request(request('notifications.v2.getPermission', { topics: ['friend-challenge'] }));
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toBe('devvit notifications notifications.v2.getPermission failed');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('reads host codes with the pattern devvitHostCodeCharacters names', () => {
+    const devvit = new RegExp(`^${devvitHostCodeCharacters}$`, 'u');
+    for (const code of ['DEVVIT_OPT_IN_REFUSED', 'a.b:c-d_9', 'x'.repeat(128), 'x'.repeat(129), 'bad code', '']) {
+      expect(readBridgeNotificationsHostCode(`refused (host code ${code})`)).toBe(
+        devvit.test(code) ? code : undefined,
+      );
+    }
   });
 
   it('reports a logged-out viewer through the validated snapshot', async () => {

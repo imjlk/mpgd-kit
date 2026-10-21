@@ -49,7 +49,11 @@ export interface CrazyGamesGatewayOptions {
 }
 const sdkLoads = new WeakMap<Document, Promise<CrazyGamesSdk>>();
 const sdkInitialization = new WeakMap<CrazyGamesSdk, Promise<void>>();
-const nativeOwners = new WeakMap<CrazyGamesSdk['ad'], object>();
+interface NativeOwner {
+  state: 'requested' | 'open' | 'unknown';
+}
+const nativeOwners = new WeakMap<CrazyGamesSdk['ad'], NativeOwner>();
+const defaultRequestTimeoutMs = 60_000;
 
 /** Load only the platform-owned SDK. Game code and assets remain bundled and relative. */
 export function loadCrazyGamesSdk(document: Document = globalThis.document): Promise<CrazyGamesSdk> {
@@ -252,8 +256,14 @@ export function createCrazyGamesAdProvider(options: {
   readonly launch: CrazyGamesLaunch;
   readonly placementIds?: readonly string[] | undefined;
   readonly onError?: (error: unknown) => void;
+  /** Bounds requestAd when adFinished and adError never arrive. */
+  readonly requestTimeoutMs?: number;
 }): AdProvider {
   const sdk = options.sdk;
+  const requestTimeoutMs = options.requestTimeoutMs ?? defaultRequestTimeoutMs;
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 2_147_483_647) {
+    throw new RangeError('CrazyGames ad request timeout must be a positive timer duration.');
+  }
   const id = 'crazygames-ads';
   const listeners = new Set<(event: AdPresentationEvent) => void>();
   const flights = new Map<string, { input: AdShowInput; promise: Promise<AdShowResult> }>();
@@ -280,7 +290,11 @@ export function createCrazyGamesAdProvider(options: {
         reason: 'configuration-required',
       };
     }
-    if (nativeOwners.has(sdk.ad)) {
+    const owner = nativeOwners.get(sdk.ad);
+    if (owner?.state === 'unknown') {
+      return { state: 'action-required', reason: 'action-required' };
+    }
+    if (owner !== undefined) {
       return {
         state: 'temporarily-unavailable',
         reason: 'busy',
@@ -311,12 +325,14 @@ export function createCrazyGamesAdProvider(options: {
       let resolve!: (result: AdShowResult) => void;
       const promise = new Promise<AdShowResult>((done) => { resolve = done; });
       flights.set(input.invocationId, { input, promise });
-      const owner = {};
+      const owner: NativeOwner = { state: 'requested' };
       nativeOwners.set(sdk.ad, owner);
       let started = false;
       let uncertainPresentation = false;
       let terminal = false;
+      let delivered = false;
       let sequence = 0;
+      const deadline = { id: undefined as ReturnType<typeof setTimeout> | undefined };
       const emit = (event: { type: 'requested' | 'started' | 'closed' | 'unknown' } | { type: 'failed'; reason: AdReason }) => {
         const observation = Object.freeze({ providerId: id, invocationId: input.invocationId, sequence: ++sequence, ...event });
         for (const listener of listeners) {
@@ -324,7 +340,10 @@ export function createCrazyGamesAdProvider(options: {
         }
       };
       const uncertain = () => {
-        if (terminal) { return; }
+        if (terminal || delivered) { return; }
+        delivered = true;
+        if (deadline.id !== undefined) { clearTimeout(deadline.id); }
+        owner.state = 'unknown';
         uncertainPresentation = true;
         emit({ type: 'unknown' });
         resolve({ ...base, outcome: 'pending', presentation: 'unknown', reason: 'outcome-unknown' });
@@ -332,6 +351,7 @@ export function createCrazyGamesAdProvider(options: {
       const close = (reason?: AdReason) => {
         if (terminal) { return; }
         terminal = true;
+        if (deadline.id !== undefined) { clearTimeout(deadline.id); }
         if (nativeOwners.get(sdk.ad) === owner) { nativeOwners.delete(sdk.ad); }
         if (reason === undefined) {
           emit({ type: 'closed' });
@@ -344,9 +364,10 @@ export function createCrazyGamesAdProvider(options: {
         }
       };
       emit({ type: 'requested' });
+      deadline.id = setTimeout(uncertain, requestTimeoutMs);
       try {
         const result = sdk.ad.requestAd('midgame', {
-          adStarted() { if (!terminal && !started) { started = true; emit({ type: 'started' }); } },
+          adStarted() { if (!terminal && !started) { started = true; owner.state = 'open'; emit({ type: 'started' }); } },
           adFinished() { close(); },
           adError(error) {
             const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;

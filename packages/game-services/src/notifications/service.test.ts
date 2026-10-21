@@ -1697,4 +1697,106 @@ for (const claimLeaseSeconds of [1, 86_400]) {
   assert.equal(fcm.calls.length, 4);
 }
 
+// A host read that fails is skipped; the send still goes through a provider that can be checked.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const fcm = fakeProvider('fcm');
+  const hostCalls: string[] = [];
+  const host: NotificationRemoteDeliveryProvider = {
+    id: 'host',
+    async send(request) {
+      hostCalls.push(request.player);
+      return { status: 'accepted' };
+    },
+    async readPermission() {
+      throw new Error('host down');
+    },
+  };
+  const hostEntry: NotificationDeliveryProviderEntry = {
+    ...platformEntry,
+    provider: 'host',
+    permission: { scope: 'app', serverReadable: true, allowance: 'persistent' },
+  };
+  const service = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: hostEntry, delivery: host, targets: ['host'] },
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: time.now,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'host-down', player: 'p-1', topic: 'friend-challenge' }),
+    { status: 'delivered', alreadyProcessed: false },
+  );
+  assert.equal(fcm.calls.length, 1);
+  assert.deepEqual(hostCalls, [], 'the unread host is not sent to');
+  const onlyHost = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: hostEntry, delivery: host, targets: ['host'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: time.now,
+  });
+  await expectCode(
+    onlyHost.deliver({ idempotencyKey: 'host-only', player: 'p-1', topic: 'friend-challenge' }),
+    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+  );
+}
+
+// An ambiguous provider code is kept and reported when the replay window ends.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const reports: string[] = [];
+  const fcm: NotificationRemoteDeliveryProvider & { calls: number } = {
+    id: 'fcm',
+    calls: 0,
+    async send() {
+      this.calls += 1;
+      return { status: 'ambiguous', providerCode: 'INTERNAL' };
+    },
+  };
+  const service = createNotificationService({
+    onError: (error, context) => {
+      if (context.operation === 'dispatch.abandoned') {
+        reports.push(error instanceof Error ? error.message : String(error));
+      }
+    },
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['vector'] },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    now: time.now,
+  });
+  await service.registerEndpoint(session('p-1'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
+    },
+  });
+  await service.deliver({ idempotencyKey: 'code-1', player: 'p-1', topic: 'friend-challenge' });
+  for (let step = 0; step < 40 && reports.length === 0; step += 1) {
+    time.advance(3_600);
+    await service.dispatchDue();
+  }
+  assert.equal(reports.length, 1);
+  assert.match(
+    reports[0] ?? '',
+    /INTERNAL/u,
+    'the ambiguous provider code reaches the abandonment report',
+  );
+  assert.ok(fcm.calls > 1);
+}
+
 console.info('Notifications service unit tests passed.');

@@ -1,13 +1,13 @@
 import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } from '@mpgd/catalog';
-import type { PlatformGateway } from '@mpgd/platform';
+import type { NotificationTopicDeclaration } from '@mpgd/platform/notifications';
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
-import type {
-  NotificationConsentRecord,
-  NotificationRuntime,
-  NotificationTopicDeclaration,
-} from '@mpgd/platform/notifications';
 
 import notificationTopicsJson from '../../notifications/topics.json';
+import {
+  createStarterWorkerNotificationBackend,
+  type StarterNotificationBackend,
+} from './notificationBackend';
+import { resolveStarterServerSession } from './serverSession';
 import { routeNotificationOpens, type NotificationOpenRoutes } from './notificationOpens';
 import {
   createStarterNotificationSettings,
@@ -43,45 +43,77 @@ export function starterNotificationTopics(configTarget: string): readonly Notifi
   }
 }
 
-/**
- * The game backend's notifications surface the starter uses: the runtime
- * (notifications RFC "Runtime"), which composes the target's provider with
- * the backend that keeps consent records, endpoint registrations, server
- * reminders, and notices; and the signed-in player's consent records (the
- * game-services Worker's `GET /consent`), which the settings screen shows.
- */
-export interface StarterNotificationBackend {
-  readonly runtime: NotificationRuntime;
-  listConsent(): Promise<readonly NotificationConsentRecord[]>;
-}
+export type { StarterNotificationBackend } from './notificationBackend';
 
 /**
- * The game's notifications backend.
+ * The game's notifications backend: the notifications runtime over the
+ * game-services Worker's notification routes (see `notificationBackend.ts`),
+ * when the game has both a game-services URL (`VITE_MPGD_GAME_SERVICES_URL`,
+ * as the commerce client uses) and a server-backed session
+ * (`setStarterServerSession` in `serverSession.ts`), and the target exposes
+ * a notifications provider. Otherwise `undefined`: the notification settings
+ * screen then asks only for the OS or host permission and shows no
+ * reminder, advertising, or night switch, because nothing could record them.
  *
- * The kit does not ship that runtime's backend client yet: the game-services
- * Worker's notification routes need a session from the identity side, which
- * comes in a later kit release. Until then this returns `undefined`, and the
- * notification settings screen asks only for the OS or host permission and
- * shows no reminder, advertising, or night switch, because nothing could
- * record them. Return your own runtime and consent reader here when your
- * backend implements those routes.
+ * Reddit gets no Worker backend: its notifications backend is the Devvit
+ * server, which keeps the opt-in, the records, and the sends. The Worker
+ * serves the Android, iOS, and Apps in Toss providers and binds a device to
+ * the session its `Authorization` header names, through its
+ * `GAME_SERVICES_NOTIFICATIONS_AUTH` binding to your identity service
+ * (docs/CLOUDFLARE_WORKER_DEPLOY.md, "Sessions"). Call this through the
+ * settings model or `subscribeStarterNotificationOpens`, which keep one
+ * runtime per gateway: a second call starts a second runtime on the same
+ * provider.
  */
 export function createStarterNotificationBackend(
-  _platform: PlatformGateway,
+  platform: TargetConfiguredGateway,
 ): StarterNotificationBackend | undefined {
-  return undefined;
+  return createStarterWorkerNotificationBackend(platform, {
+    baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL,
+    mode: import.meta.env.MODE,
+    session: resolveStarterServerSession(),
+    topics: starterNotificationTopics(platform.configTarget),
+    defaultLocale: starterNotificationCatalog.defaultLocale,
+    log: (message, error) => warnOnce(platform, message, error),
+  });
 }
 
-const backends = new WeakMap<PlatformGateway, StarterNotificationBackend | undefined>();
-/** Per gateway, for the process: agreements given on a host that gives no read. */
-const agreements = new WeakMap<PlatformGateway, Set<string>>();
-
-/** One backend per gateway: a runtime subscribes to its provider once, for the process. */
-function starterNotificationBackend(platform: PlatformGateway): StarterNotificationBackend | undefined {
-  if (!backends.has(platform)) {
-    backends.set(platform, createStarterNotificationBackend(platform));
+/** Messages already logged per gateway: a screen opened again does not log them again. */
+const warned = new WeakMap<TargetConfiguredGateway, Set<string>>();
+function warnOnce(platform: TargetConfiguredGateway, message: string, error?: unknown): void {
+  let messages = warned.get(platform);
+  if (messages === undefined) {
+    messages = new Set();
+    warned.set(platform, messages);
   }
-  return backends.get(platform);
+  if (!messages.has(message)) {
+    messages.add(message);
+    if (error === undefined) {
+      console.warn(message);
+    } else {
+      console.error(message, error);
+    }
+  }
+}
+
+const backends = new WeakMap<TargetConfiguredGateway, StarterNotificationBackend>();
+/** Per gateway, for the process: agreements given on a host that gives no read. */
+const agreements = new WeakMap<TargetConfiguredGateway, Set<string>>();
+
+/**
+ * One backend per gateway: a runtime subscribes to its provider once, for the
+ * process. A gateway without one yet (no session set) is asked again on the
+ * next use.
+ */
+function starterNotificationBackend(platform: TargetConfiguredGateway): StarterNotificationBackend | undefined {
+  let backend = backends.get(platform);
+  if (backend === undefined) {
+    backend = createStarterNotificationBackend(platform);
+    if (backend !== undefined) {
+      backends.set(platform, backend);
+    }
+  }
+  return backend;
 }
 
 /** The settings screen's model for this gateway and locale. */
@@ -121,7 +153,7 @@ export function createStarterNotificationSettingsModel(
  * the game has one, else the provider. Returns the unsubscribe.
  */
 export function subscribeStarterNotificationOpens(
-  platform: PlatformGateway,
+  platform: TargetConfiguredGateway,
   routes: NotificationOpenRoutes,
 ): () => void {
   const source = starterNotificationBackend(platform)?.runtime ?? platform.notificationsV2;

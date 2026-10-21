@@ -1,21 +1,7 @@
+import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { createNotificationsV2BridgeHandler } from '@mpgd/bridge/notifications';
 import {
-  createBridgeError,
-  isBridgeNotificationsV2Method,
-  type BridgeNotificationsV2Method,
-  type BridgeRequest,
-  type BridgeResponse,
-} from '@mpgd/bridge';
-import {
-  assertBridgeNotificationsV2Payload,
-  assertBridgeNotificationsV2Result,
-  type BridgeNotificationsV2Payload,
-  type BridgeNotificationsV2Result,
-} from '@mpgd/bridge/notifications';
-import { PlatformOperationError } from '@mpgd/platform';
-import {
-  isNotificationErrorCode,
   NotificationError,
-  notificationsProtocolVersion,
   type NotificationPermissionOutcome,
   type NotificationPermissionResult,
   type NotificationPermissionSnapshot,
@@ -25,7 +11,6 @@ import {
 
 import {
   createDevvitNotificationCapabilities,
-  devvitHostCodeCharacters,
   devvitNotificationProviderId,
   devvitUserIdPattern,
 } from '../notifications-contract.js';
@@ -95,7 +80,10 @@ export const devvitNotificationHostCodes = Object.freeze({
  *   turns `prompt` into `denied` once a decision is recorded).
  * - **Requests.** Already opted in is `already-granted` without a second
  *   opt-in; otherwise `optInCurrentUser` answers `granted`. A refused opt-in
- *   (`success: false`, such as an app not yet approved) throws
+ *   (`success: false`) is re-read with `isOptedIn`. If that read is
+ *   `granted`, a concurrent request already opted the user in and the
+ *   observed state is returned (`already-granted`), not a permanent
+ *   configuration error. If the user is still out, it throws
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED` with host code
  *   `DEVVIT_OPT_IN_REFUSED`, which is not retryable: Devvit documents no
  *   transient refusal, and a refusal the game retried would loop. A plugin
@@ -103,8 +91,10 @@ export const devvitNotificationHostCodes = Object.freeze({
  * - **Revocation.** `optOutCurrentUser` for a user who is opted in (one who
  *   is already out needs none, which Devvit might refuse), the `denied`
  *   outcome for every mapped topic (`unavailable` for the others, and no
- *   opt-out when none is mapped), and the state the opt-out produced:
- *   `prompt`, not opted in.
+ *   opt-out when none is mapped). A refused opt-out is re-read the same
+ *   way: still opted in throws `DEVVIT_OPT_OUT_REFUSED`; already out returns
+ *   the observed `prompt` state. A successful opt-out answers the state it
+ *   produced (`prompt`), not a second read that could be stale.
  * - **Unmapped topics.** A topic the catalog does not map for `reddit`
  *   reads `unsupported` in every snapshot.
  * - **Registration.** A logged-in user registers `{ kind: 'platform-user' }`;
@@ -199,9 +189,16 @@ export function createDevvitServerNotificationProvider(
         const response = await plugin(() => input.notifications.optInCurrentUser(), 'optInCurrentUser');
         const failure = refused(response, devvitNotificationHostCodes.optInRefused, 'the opt-in');
         if (failure !== undefined) {
-          throw failure;
+          // Both of two concurrent requests can see not-granted and call
+          // opt-in. The duplicate answers success:false. That is a permanent
+          // configuration error only when a re-read still shows the user out.
+          if ((await read(userId)) !== 'granted') {
+            throw failure;
+          }
+          outcome = 'already-granted';
+        } else {
+          outcome = 'granted';
         }
-        outcome = 'granted';
       }
       return { snapshot: snapshotOf(topics, 'granted'), outcomes: outcomesWith(topics, outcome) };
     },
@@ -219,7 +216,9 @@ export function createDevvitServerNotificationProvider(
       if ((await read(userId)) === 'granted') {
         const response = await plugin(() => input.notifications.optOutCurrentUser(), 'optOutCurrentUser');
         const failure = refused(response, devvitNotificationHostCodes.optOutRefused, 'the opt-out');
-        if (failure !== undefined) {
+        if (failure !== undefined && (await read(userId)) === 'granted') {
+          // Still opted in: the refusal stands. Already out: a concurrent
+          // opt-out won, and the observed state is the one returned below.
           throw failure;
         }
       }
@@ -246,154 +245,33 @@ export interface DevvitNotificationsV2BridgeHandler {
 
 /**
  * The server bridge side of notifications v2 on Devvit (RFC "Bridge and
- * versioning"): each method's payload and answer are checked with the
- * `@mpgd/bridge/notifications` validators. A payload the validator rejects
- * answers `NOTIFICATIONS_INVALID_INPUT`; a method the profile lacks (the
+ * versioning"): `createNotificationsV2BridgeHandler` from
+ * `@mpgd/bridge/notifications` over the Devvit server provider. Each method's
+ * payload and answer are checked with the `@mpgd/bridge/notifications`
+ * validators. A payload the validator rejects answers
+ * `NOTIFICATIONS_INVALID_INPUT`; a method the profile lacks (the
  * local-notification methods) `NOTIFICATIONS_UNSUPPORTED`; `openSettings`
  * answers `unavailable`, because Devvit has no settings link; an answer the
  * contract rejects `NOTIFICATIONS_CONFIGURATION_REQUIRED`. A thrown
  * `NotificationError` crosses as `{ code, message, retryable }` with its host
- * code named in the message. Devvit has no server-to-webview event channel,
- * so the bridge carries no notifications events.
+ * code named in the message, and an unexpected failure's text stays on the
+ * server. Devvit has no server-to-webview event channel, so the bridge
+ * carries no notifications events.
  */
 export function createDevvitNotificationsV2BridgeHandler(
   input: CreateDevvitNotificationsV2BridgeHandlerInput,
 ): DevvitNotificationsV2BridgeHandler {
-  const provider = createDevvitServerNotificationProvider(input);
-  const onError = input.onError ?? ((error: unknown, context: { readonly method: string }) => {
-    if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_UNSUPPORTED') {
-      return;
-    }
-    console.warn(`devvit notifications ${context.method} failed`, error);
+  const handler = createNotificationsV2BridgeHandler({
+    provider: createDevvitServerNotificationProvider(input),
+    label: 'Devvit',
+    // An unexpected failure's text stays on the server.
+    unexpectedFailureMessage: (method) => `${method} failed on the Devvit server.`,
+    onError: input.onError ?? ((error, context) => {
+      if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_UNSUPPORTED') {
+        return;
+      }
+      console.warn(`devvit notifications ${context.method} failed`, error);
+    }),
   });
-
-  const serve = async (method: BridgeNotificationsV2Method, payload: unknown): Promise<unknown> => {
-    switch (method) {
-      case 'notifications.v2.getCapabilities':
-        validPayload(method, payload);
-        return {
-          protocolVersion: notificationsProtocolVersion,
-          provider: provider.provider,
-          capabilities: await provider.getCapabilities(),
-        };
-      case 'notifications.v2.getPermission':
-        return provider.getPermission(validPayload(method, payload));
-      case 'notifications.v2.requestPermission':
-        return provider.requestPermission(validPayload(method, payload));
-      case 'notifications.v2.revokePermission':
-        return (provider.revokePermission as NonNullable<NotificationProvider['revokePermission']>)
-          .call(provider, validPayload(method, payload));
-      case 'notifications.v2.register':
-        validPayload(method, payload);
-        return { registration: (await provider.register?.()) ?? null };
-      case 'notifications.v2.openSettings':
-        validPayload(method, payload);
-        return { status: 'unavailable' };
-      case 'notifications.v2.scheduleLocal':
-      case 'notifications.v2.cancelLocal':
-      case 'notifications.v2.listLocal':
-        validPayload(method, payload);
-        throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
-          message: `Devvit has no local notifications (${method}).`,
-        });
-    }
-  };
-
-  return {
-    async request(request) {
-      if (!isBridgeNotificationsV2Method(request.method)) {
-        return createBridgeError(
-          request.id,
-          'UNSUPPORTED_METHOD',
-          `${request.method} is not a notifications v2 method.`,
-        );
-      }
-      const method = request.method;
-      try {
-        const data = await serve(method, request.payload);
-        return { id: request.id, ok: true, data: validResult(method, data) };
-      } catch (error) {
-        if (!(error instanceof InvalidPayloadError)) {
-          try {
-            const logged: unknown = onError(error, { method });
-            if (logged instanceof Promise) {
-              logged.catch(() => {});
-            }
-          } catch {
-            // A failing log never changes the answer.
-          }
-        }
-        return toBridgeError(request, error);
-      }
-    },
-  };
-}
-
-class InvalidPayloadError extends Error {
-  override readonly name = 'InvalidPayloadError';
-}
-
-function validPayload<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  payload: unknown,
-): BridgeNotificationsV2Payload<TMethod> {
-  try {
-    return assertBridgeNotificationsV2Payload(method, payload);
-  } catch (error) {
-    throw new InvalidPayloadError(
-      `${method} payload is invalid: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-function validResult<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  data: unknown,
-): BridgeNotificationsV2Result<TMethod> {
-  try {
-    return assertBridgeNotificationsV2Result(method, data);
-  } catch (error) {
-    throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `The Devvit notifications provider answered ${method} with invalid data: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      cause: error,
-    });
-  }
-}
-
-const hostCodeValue = new RegExp(`^${devvitHostCodeCharacters}$`, 'u');
-
-function toBridgeError(request: BridgeRequest, error: unknown): BridgeResponse {
-  if (error instanceof InvalidPayloadError) {
-    return createBridgeError(request.id, 'NOTIFICATIONS_INVALID_INPUT', error.message);
-  }
-  if (error instanceof NotificationError) {
-    return createBridgeError(
-      request.id,
-      error.code,
-      error.hostCode === undefined || !hostCodeValue.test(error.hostCode)
-        ? error.message
-        : `${error.message} (host code ${error.hostCode})`,
-      error.retryable,
-    );
-  }
-  if (error instanceof PlatformOperationError) {
-    return isNotificationErrorCode(error.code)
-      ? createBridgeError(request.id, error.code, error.message, error.retryable)
-      : createBridgeError(
-          request.id,
-          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-          `${request.method} failed: ${error.message}`,
-          error.retryable,
-        );
-  }
-  // An unexpected failure's text stays on the server.
-  return createBridgeError(
-    request.id,
-    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-    `${request.method} failed on the Devvit server.`,
-    true,
-  );
+  return { request: (request) => handler.request(request) };
 }

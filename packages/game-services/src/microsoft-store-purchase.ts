@@ -141,7 +141,12 @@ export interface MicrosoftStoreRecoveryOwnershipRecord {
   readonly storeId: string;
   readonly playerId: string;
   readonly generation: string;
-  /** Stable identity derived from the exact Collections item being granted. */
+  /**
+   * Identity of one Collections purchase. `transactionId` is preferred. When it
+   * is absent, the id is the collection item id plus `modifiedDate`, so a later
+   * purchase of the same item is distinct after the previous claim is released.
+   * An unreleased claim keeps the id it was claimed with.
+   */
   readonly providerPurchaseId: string;
 }
 
@@ -160,10 +165,9 @@ export type MicrosoftStoreRecoveryOwnershipResult =
 export interface MicrosoftStoreRecoveryOwnershipStore {
   /**
    * Atomically claims an unconsumed Store product for one authenticated game player. An
-   * existing claim for the same provider purchase remains unchanged so a retry cannot replace
-   * its generation. A different provider purchase may atomically replace the same player's
-   * consumed purchase claim. Return the effective record, or undefined when another player owns
-   * the Store product binding.
+   * existing unreleased claim remains unchanged: a retry cannot replace its generation, and a
+   * different provider purchase cannot replace it until `release` runs after consume. Return
+   * the effective record, or undefined when another player owns the Store product binding.
    */
   claim(input: MicrosoftStoreRecoveryOwnershipRecord):
     Promise<MicrosoftStoreRecoveryOwnershipRecord | undefined>;
@@ -198,11 +202,13 @@ export class InMemoryMicrosoftStoreRecoveryOwnershipStore
     if (owner !== undefined && owner.playerId !== input.playerId) {
       return undefined;
     }
-    if (owner === undefined || owner.providerPurchaseId !== input.providerPurchaseId) {
-      this.owners.set(key, Object.freeze({ ...input }));
-      return Object.freeze({ ...input });
+    // A later Collections query can change modifiedDate or item id while quantity is still 1.
+    // Replacing that unreleased claim would mint a second ledger identity for the same unit.
+    if (owner !== undefined) {
+      return Object.freeze({ ...owner });
     }
-    return Object.freeze({ ...owner });
+    this.owners.set(key, Object.freeze({ ...input }));
+    return Object.freeze({ ...input });
   }
 
   async get(
@@ -351,6 +357,7 @@ export function createMicrosoftStorePurchaseBoundary(
           'generation' | 'providerPurchaseId'
         >;
         readonly providerPurchaseId?: string;
+        readonly item?: MicrosoftStoreCollectionItem;
         readonly requestedGeneration?: string;
       }
     | { readonly status: 'denied' }
@@ -434,7 +441,10 @@ export function createMicrosoftStorePurchaseBoundary(
         playerId,
       },
       ...(item.status === 'verified'
-        ? { providerPurchaseId: createVerificationId(item.item) }
+        ? {
+          providerPurchaseId: createVerificationId(item.item),
+          item: item.item,
+        }
         : {}),
       ...(generation === undefined ? {} : { requestedGeneration: generation }),
     };
@@ -449,10 +459,23 @@ export function createMicrosoftStorePurchaseBoundary(
       if (ownership.requestedGeneration === undefined) {
         return { status: 'denied' };
       }
-      if (ownership.providerPurchaseId === undefined) {
+      if (ownership.providerPurchaseId === undefined || ownership.item === undefined) {
         return { status: 'unavailable' };
       }
       try {
+        const existing = await input.recoveryOwnershipStore.get(ownership.record);
+        if (existing !== undefined) {
+          if (
+            existing.playerId !== ownership.record.playerId
+            || !sameUnconsumedPurchase(existing.providerPurchaseId, ownership.item)
+            || existing.generation !== ownership.requestedGeneration
+          ) {
+            return { status: 'denied' };
+          }
+          // Keep the stored purchase id. Replacing it with a stable id would
+          // make a later verify miss the ledger row already keyed by it.
+          return { status: 'granted', idempotencyKey: existing.generation };
+        }
         const effective = await input.recoveryOwnershipStore.claim({
           ...ownership.record,
           generation: ownership.requestedGeneration,
@@ -481,7 +504,7 @@ export function createMicrosoftStorePurchaseBoundary(
         if (existing.playerId !== ownership.record.playerId) {
           return { status: 'denied' };
         }
-        if (ownership.providerPurchaseId === undefined) {
+        if (ownership.providerPurchaseId === undefined || ownership.item === undefined) {
           // Collections stops listing an item after consume. Preserve only an exact durable
           // generation so its already-granted finalizer can retry a failed conditional release;
           // a generationless listing still cannot establish player ownership.
@@ -492,25 +515,19 @@ export function createMicrosoftStorePurchaseBoundary(
             ? { status: 'granted', idempotencyKey: existing.generation }
             : { status: 'denied' };
         }
-        if (existing.providerPurchaseId === ownership.providerPurchaseId) {
-          return (
-              ownership.requestedGeneration === undefined
-              || existing.generation === ownership.requestedGeneration
-            )
+        if (!sameUnconsumedPurchase(existing.providerPurchaseId, ownership.item)) {
+          // A changed item or transaction id is not a new unit while this claim is
+          // unreleased. Do not mint a generation. The exact generation may resume so
+          // its finalizer can consume and release; every other query stays denied.
+          return ownership.requestedGeneration === existing.generation
             ? { status: 'granted', idempotencyKey: existing.generation }
             : { status: 'denied' };
         }
-        if (ownership.requestedGeneration !== undefined) {
-          return { status: 'denied' };
-        }
-        const effective = await input.recoveryOwnershipStore.claim({
-          ...ownership.record,
-          generation: await createRecoveryGeneration(ownership.providerPurchaseId),
-          providerPurchaseId: ownership.providerPurchaseId,
-        });
-        return effective?.playerId === ownership.record.playerId
-          && effective.providerPurchaseId === ownership.providerPurchaseId
-          ? { status: 'granted', idempotencyKey: effective.generation }
+        return (
+            ownership.requestedGeneration === undefined
+            || existing.generation === ownership.requestedGeneration
+          )
+          ? { status: 'granted', idempotencyKey: existing.generation }
           : { status: 'denied' };
       } catch {
         return { status: 'unavailable' };
@@ -625,28 +642,50 @@ export function createMicrosoftStorePurchaseBoundary(
       if (!validIsoDate(verifiedAt)) {
         return pending('MICROSOFT_STORE_VERIFIER_CLOCK_INVALID');
       }
-      const verificationId = createVerificationId(item.item);
-      if (recoveryOwnership.providerPurchaseId !== verificationId) {
+      const verificationId = recoveryOwnership.providerPurchaseId;
+      const currentItemMatches = sameUnconsumedPurchase(verificationId, item.item);
+      const storedIdentity = currentItemMatches
+        ? undefined
+        : readStoredCollectionIdentity(verificationId, item.item.productId);
+      if (!currentItemMatches && storedIdentity === undefined) {
         return rejected('MICROSOFT_STORE_RECOVERY_OWNERSHIP_REQUIRED');
       }
+      // Keep the stored purchase id when Collections rotates the item. The ledger
+      // dedupes on that id, and finalization resumes the existing grant instead of
+      // writing a second one. The resume item id is only the consume echo.
+      const collectionItemId = storedIdentity?.itemId ?? item.item.id;
+      const transactionId = storedIdentity === undefined
+        ? item.item.transactionId
+        : storedIdentity.transactionId;
+      const modifiedDate = storedIdentity?.modifiedDate ?? item.item.modifiedDate;
+      const resumeCollectionItemId = storedIdentity !== undefined
+        && item.item.id !== collectionItemId
+        ? item.item.id
+        : undefined;
 
       return {
         status: 'verified',
         verificationId,
         verifiedAt,
-        platformEvidenceId: null,
+        // The client purchase token is the add-on product, not a transaction.
+        // Publish the stored purchase id so the ledger's platform-transaction
+        // index applies, including a re-verify that must keep the legacy key.
+        platformEvidenceId: verificationId,
         payload: {
-          microsoftStoreCollectionItemId: item.item.id,
-          microsoftStoreModifiedDate: item.item.modifiedDate,
+          microsoftStoreCollectionItemId: collectionItemId,
+          microsoftStoreModifiedDate: modifiedDate,
           microsoftStoreProductId: item.item.productId,
           microsoftStoreProductKind: item.item.productKind,
           microsoftStoreQuantity: item.item.quantity,
           microsoftStoreStatus: item.item.status,
           microsoftStoreAccountBindingHash: accountBindingHash,
           microsoftStoreRecoveryOwnershipGeneration: recoveryOwnership.generation,
-          ...(item.item.transactionId === undefined
+          ...(transactionId === undefined
             ? {}
-            : { microsoftStoreTransactionId: item.item.transactionId }),
+            : { microsoftStoreTransactionId: transactionId }),
+          ...(resumeCollectionItemId === undefined
+            ? {}
+            : { microsoftStoreResumeCollectionItemId: resumeCollectionItemId }),
           digitalGoodsItemId: clientEvidence.itemId,
         },
       };
@@ -721,19 +760,48 @@ async function consumeMicrosoftStorePurchase(
       signal: finalizationInput.signal,
     });
 
-    if (!isRecord(raw)) {
-      return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_INVALID');
+    if (!isRecord(raw) || raw.trackingId !== trackingId) {
+      return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
     }
+    const orderTransactions = readConsumeOrderTransactions(raw.orderTransactions);
+    const echoedItemId = optionalIdentifier(raw.itemId);
+    const itemMatches = echoedItemId !== undefined
+      && (
+        echoedItemId === context.collectionItemId
+        || echoedItemId === context.resumeCollectionItemId
+      );
+    // A reused tracking id is a confirmation, not a second consume. Microsoft
+    // documents that retry as the current remaining balance with order ids
+    // omitted. The echoed item must be the granted item or the item Collections
+    // currently lists for this product. A missing balance, a malformed balance,
+    // or an unrelated item keeps the claim.
+    const currentBalance = readDocumentedCurrentBalance(raw.newQuantity);
+    const echoedItemIsCurrent = !itemMatches
+      && echoedItemId !== undefined
+      && raw.orderTransactions === undefined
+      && currentBalance !== undefined
+      && currentBalance > 0
+      && await echoedItemIsCurrentCollection(
+        input,
+        credentials,
+        context.storeId,
+        echoedItemId,
+        finalizationInput.signal,
+      );
+    const priorFulfillmentConfirmed = raw.orderTransactions === undefined
+      && currentBalance !== undefined
+      && currentBalance > 0
+      && (itemMatches || echoedItemIsCurrent);
     if (
-      raw.itemId !== context.collectionItemId
-      || raw.trackingId !== trackingId
-      || raw.newQuantity !== 0
+      !priorFulfillmentConfirmed
+      && (
+        !itemMatches
+        || currentBalance !== 0
+      )
     ) {
       return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
     }
-
     if (input.persistConsumptionReceipt !== undefined) {
-      const orderTransactions = readConsumeOrderTransactions(raw.orderTransactions);
       // Some consume responses omit the product echo. Attribution comes from the
       // verified context and the item/tracking checks above; reject a conflicting echo.
       if ((raw.productId !== undefined && raw.productId !== context.storeId)
@@ -788,6 +856,35 @@ async function consumeMicrosoftStorePurchase(
   }
 }
 
+async function echoedItemIsCurrentCollection(
+  input: CreateMicrosoftStorePurchaseBoundaryInput,
+  credentials: MicrosoftStoreCollectionsCredentials,
+  storeId: string,
+  itemId: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  let response: unknown;
+  try {
+    response = await input.client.queryProduct({ credentials, storeId, signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+    return false;
+  }
+  const item = inspectPublisherQuery(response, storeId);
+  return item.status === 'verified' && item.item.id === itemId;
+}
+
+function readDocumentedCurrentBalance(value: unknown): number | undefined {
+  // Consume documents newQuantity as an int: the remaining balance. A missing,
+  // fractional, or negative value is not that balance.
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
 function readConsumeOrderTransactions(
   value: unknown,
 ): readonly MicrosoftStoreConsumeOrderTransaction[] | undefined {
@@ -836,6 +933,8 @@ type MicrosoftStoreItemInspection =
 
 interface MicrosoftStoreFinalizationContext {
   readonly collectionItemId: string;
+  /** Collections item id observed while resuming an exact generation. Not a ledger identity. */
+  readonly resumeCollectionItemId?: string;
   readonly storeId: string;
   readonly accountBindingHash: string;
   readonly recoveryOwnershipGeneration: string;
@@ -968,6 +1067,7 @@ function readFinalizationContext(
   | {
       readonly status: 'verified';
       readonly collectionItemId: string;
+      readonly resumeCollectionItemId?: string;
       readonly storeId: string;
       readonly accountBindingHash: string;
       readonly recoveryOwnershipGeneration: string;
@@ -987,9 +1087,14 @@ function readFinalizationContext(
   const recoveryOwnershipGeneration = optionalIdentifier(
     input.evidencePayload?.microsoftStoreRecoveryOwnershipGeneration,
   );
+  const transactionId = optionalIdentifier(input.evidencePayload?.microsoftStoreTransactionId);
+  const resumeCollectionItemId = optionalIdentifier(
+    input.evidencePayload?.microsoftStoreResumeCollectionItemId,
+  );
   // The binding and this verifier ship together in the first Store release. Missing bindings are
   // therefore malformed evidence, not legacy evidence, and must fail closed to prevent an account
-  // switch between verification and consumption.
+  // switch between verification and consumption. A grant already keyed by the modifiedDate id is
+  // not malformed: finalization must still accept that stored key.
   if (
     payloadStoreId === undefined
     || collectionItemId === undefined
@@ -997,10 +1102,11 @@ function readFinalizationContext(
     || accountBindingHash === undefined
     || recoveryOwnershipGeneration === undefined
     || recoveryOwnershipGeneration !== input.request.idempotencyKey
-    || input.evidenceVerificationId !== createVerificationId({
+    || !sameUnconsumedPurchase(input.evidenceVerificationId, {
       id: collectionItemId,
       modifiedDate,
       productId: payloadStoreId,
+      ...(transactionId === undefined ? {} : { transactionId }),
     })
   ) {
     return {
@@ -1013,6 +1119,7 @@ function readFinalizationContext(
   return {
     status: 'verified',
     collectionItemId,
+    ...(resumeCollectionItemId === undefined ? {} : { resumeCollectionItemId }),
     storeId: payloadStoreId,
     accountBindingHash,
     recoveryOwnershipGeneration,
@@ -1020,22 +1127,91 @@ function readFinalizationContext(
 }
 
 function createVerificationId(
+  item: Pick<
+    MicrosoftStoreCollectionItem,
+    'id' | 'modifiedDate' | 'productId' | 'transactionId'
+  >,
+): string {
+  // transactionId names the purchase. When Collections omits it, modifiedDate
+  // is the documented per-purchase discriminator. An unreleased claim is not
+  // replaced with that new id; see sameUnconsumedPurchase.
+  return item.transactionId === undefined
+    ? `microsoft-store:${item.productId}:${item.id}:${item.modifiedDate}`
+    : `microsoft-store:${item.productId}:${item.id}:${item.transactionId}`;
+}
+
+/**
+ * Parses a verification id this boundary wrote. Item ids are not expected to
+ * contain `:`; a date suffix may, so only the first separator is split.
+ */
+function readStoredCollectionIdentity(
+  verificationId: string,
+  storeId: string,
+): {
+  readonly itemId: string;
+  readonly modifiedDate?: string;
+  readonly transactionId?: string;
+} | undefined {
+  const prefix = `microsoft-store:${storeId}:`;
+  if (!verificationId.startsWith(prefix) || verificationId.length <= prefix.length) {
+    return undefined;
+  }
+  const rest = verificationId.slice(prefix.length);
+  const separator = rest.indexOf(':');
+  if (separator === -1) {
+    return optionalIdentifier(rest) === undefined ? undefined : { itemId: rest };
+  }
+  const itemId = rest.slice(0, separator);
+  const suffix = rest.slice(separator + 1);
+  if (optionalIdentifier(itemId) === undefined || optionalIdentifier(suffix) === undefined) {
+    return undefined;
+  }
+  return validIsoDate(suffix)
+    ? { itemId, modifiedDate: suffix }
+    : { itemId, transactionId: suffix };
+}
+
+/** Ledger key written when a purchase omits transactionId, including older rows. */
+function createLegacyVerificationId(
   item: Pick<MicrosoftStoreCollectionItem, 'id' | 'modifiedDate' | 'productId'>,
 ): string {
   return `microsoft-store:${item.productId}:${item.id}:${item.modifiedDate}`;
 }
 
-/** Keep existing short generations stable while bounding new provider-derived request keys. */
-async function createRecoveryGeneration(providerPurchaseId: string): Promise<string> {
-  if (providerPurchaseId.length <= gameServicesRequestLimits.maxStringLength) {
-    return providerPurchaseId;
+/**
+ * True when a stored purchase id still names this unconsumed Collections item.
+ * A changed `modifiedDate` still matches, so that query resumes the stored
+ * claim instead of minting another id. A stored `transactionId` still matches
+ * if the collection item id changed. After release, a new modifiedDate is a
+ * new id because no stored claim remains to match.
+ */
+function sameUnconsumedPurchase(
+  storedId: string,
+  item: Pick<MicrosoftStoreCollectionItem, 'id' | 'modifiedDate' | 'productId' | 'transactionId'>,
+): boolean {
+  if (
+    storedId === createVerificationId(item)
+    || storedId === createLegacyVerificationId(item)
+    || storedId === `microsoft-store:${item.productId}:${item.id}`
+  ) {
+    return true;
   }
-  const encoded = new TextEncoder().encode(providerPurchaseId);
-  const digest = new Uint8Array(await readGlobalSubtleCrypto().digest('SHA-256', encoded));
-  return `microsoft-store-recovery:${Array.from(
-    digest,
-    (byte) => byte.toString(16).padStart(2, '0'),
-  ).join('')}`;
+  const itemPrefix = `microsoft-store:${item.productId}:${item.id}:`;
+  if (storedId.startsWith(itemPrefix)) {
+    const suffix = storedId.slice(itemPrefix.length);
+    if (validIsoDate(suffix)) {
+      return true;
+    }
+    return item.transactionId === undefined || item.transactionId === suffix;
+  }
+  if (item.transactionId !== undefined && !validIsoDate(item.transactionId)) {
+    const productPrefix = `microsoft-store:${item.productId}:`;
+    const transactionSuffix = `:${item.transactionId}`;
+    return storedId.startsWith(productPrefix)
+      && storedId.endsWith(transactionSuffix)
+      && storedId.length > productPrefix.length + transactionSuffix.length;
+  }
+  return false;
 }
 
 async function deterministicTrackingId(value: string): Promise<string> {

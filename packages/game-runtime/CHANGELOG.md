@@ -1,5 +1,27 @@
 # @mpgd/game-runtime
 
+## 0.8.0 — 2026-10-21
+
+### Minor changes
+
+- [3f519a74](https://github.com/imjlk/mpgd-kit/commit/3f519a74a3eaf7aeec7a35d208ed951ff61ff8df) Add a headless checkout-only coordinator that shares native presentation exclusion without requiring an ad provider. Missing native UI facts block new purchases while recovery and finalization remain available. A trusted not-started fact, including one that arrives after a retryable failure or an explicitly retryable rejection settles, may retry that same unchanged key. A restarting provider echoes the attempt generation so a delayed event from the previous attempt cannot close the next sheet. Purchased, launched, opened, and non-retryable results stay closed, and no client fact grants. Reuse the coordinator in the existing gateway without changing its legacy pass-through behavior. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-services@0.27.2, @mpgd/platform@0.27.2
+
+## 0.7.6 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-services@0.27.1, @mpgd/platform@0.27.1
+
+## 0.7.5 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-services@0.27.0, @mpgd/platform@0.27.0
+
 ## 0.7.4 — 2026-10-20
 
 ### Patch changes

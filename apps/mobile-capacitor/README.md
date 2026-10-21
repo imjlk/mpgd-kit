@@ -31,6 +31,11 @@ To try `@mpgd/adapter-capacitor/notifications` here (see the
   `mpgd target init capacitor --providers notifications` adds the same line to
   a game-owned shell's newly generated Android project, and warns about an
   existing one that lacks it.
+- This shell's `SceneDelegate` forwards a killed-app notification tap
+  (`connectionOptions.notificationResponse`) to the notification-center
+  delegate on the first `capacitorViewDidAppear`. Capacitor's stock scene
+  delegate does not. A shell created with `cap add ios` needs the same
+  forwarder; there is no CLI template copy of `SceneDelegate.swift`.
 
 A game created with `mpgd game create --providers notifications` is wired
 already, and `mpgd target init capacitor --providers notifications` installs
