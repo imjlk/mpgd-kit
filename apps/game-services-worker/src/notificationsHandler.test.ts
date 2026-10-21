@@ -4,7 +4,11 @@ import { readFile } from 'node:fs/promises';
 import type { NotificationDispatchJob } from '@mpgd/game-services/notifications';
 import { Miniflare } from 'miniflare';
 
-import { createWorkerFetchHandler, type GameServicesWorkerEnv } from './handler.js';
+import {
+  createWorkerFetchHandler,
+  createWorkerService,
+  type GameServicesWorkerEnv,
+} from './handler.js';
 import {
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
@@ -1033,6 +1037,108 @@ try {
         + 'A send-only Worker can ignore this.',
     ],
   );
+  // Local development sessions: the flag stands in for the session binding, on the memory store only.
+  {
+    const devEnv = {
+      ...unauthenticated,
+      MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true',
+    } satisfies GameServicesWorkerEnv;
+    const devFetch = createWorkerFetchHandler(devEnv);
+    const devWarnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...parts: unknown[]) => {
+      devWarnings.push(parts.map(String).join(' '));
+    };
+    try {
+      const devCall = async (authorization: string) =>
+        (await devFetch(new Request(`${base}/consent`, { headers: { authorization } }))).status;
+      // A well-formed header is a session: its consent records read back empty.
+      const accepted = await devFetch(
+        new Request(`${base}/consent`, {
+          headers: { authorization: 'Bearer mpgd-dev.p-dev.s-dev.i-dev' },
+        }),
+      );
+      assert.equal(accepted.status, 200);
+      assert.deepEqual(await accepted.json(), { records: [] });
+      // Anything else is no session: 401, never another player's.
+      for (const malformed of [
+        'Bearer mpgd-dev.p-dev.s-dev',
+        'Bearer mpgd-dev.p-dev.s-dev.i-dev.x',
+        'Bearer mpgd-dev..s-dev.i-dev',
+        'Bearer mpgd-dev.p dev.s-dev.i-dev',
+        `Bearer mpgd-dev.${'p'.repeat(65)}.s-dev.i-dev`,
+        'bearer mpgd-dev.p-dev.s-dev.i-dev',
+        'Bearer player-1',
+      ]) {
+        assert.equal(await devCall(malformed), 401, malformed);
+      }
+      assert.equal((await devFetch(new Request(`${base}/consent`))).status, 401);
+      // One warning that sessions are not authenticated, however many requests.
+      assert.deepEqual(
+        devWarnings.filter((line) => line.includes('MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS')),
+        [
+          'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is on, so the session routes '
+            + 'accept mpgd-dev bearer headers that anyone can write: sessions are not authenticated. '
+            + 'Local development only.',
+        ],
+      );
+      // With the real binding bound the flag is ignored: a development header is not a session.
+      devWarnings.length = 0;
+      const boundEnv = {
+        ...env,
+        MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true',
+      } satisfies GameServicesWorkerEnv;
+      const bound = createWorkerFetchHandler(boundEnv);
+      assert.equal(
+        (await bound(new Request(`${base}/consent`, { headers: { authorization: 'Bearer mpgd-dev.p-dev.s-dev.i-dev' } })))
+          .status,
+        401,
+      );
+      assert.equal(
+        (await bound(new Request(`${base}/consent`, { headers: { authorization: 'Bearer player-1' } }))).status,
+        200,
+      );
+      assert.deepEqual(
+        devWarnings.filter((line) => line.includes('MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS')),
+        [
+          'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is ignored because '
+            + 'GAME_SERVICES_NOTIFICATIONS_AUTH is bound.',
+        ],
+      );
+    } finally {
+      console.warn = warn;
+    }
+    // Never with the durable store: the Worker refuses to start, with or without the binding.
+    const durable = {
+      MPGD_STORE: 'd1',
+      DB: {} as D1Database,
+      MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true',
+    } satisfies GameServicesWorkerEnv;
+    for (const refused of [durable, { ...durable, GAME_SERVICES_NOTIFICATIONS_AUTH: auth }]) {
+      assert.throws(
+        () => createWorkerFetchHandler(refused),
+        /MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true is refused when MPGD_STORE is d1/,
+      );
+      assert.throws(() => createWorkerService(refused), /refused when MPGD_STORE is d1/);
+    }
+    // A value other than "true" is off.
+    const offEnv = {
+      ...unauthenticated,
+      MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'yes' as 'true',
+    };
+    const realWarn2 = console.warn;
+    console.warn = () => undefined;
+    try {
+      assert.equal(
+        (await createWorkerFetchHandler(offEnv)(
+          new Request(`${base}/consent`, { headers: { authorization: 'Bearer mpgd-dev.p-dev.s-dev.i-dev' } }),
+        )).status,
+        404,
+      );
+    } finally {
+      console.warn = realWarn2;
+    }
+  }
   // The Apps in Toss provider serves `ait` behind its mTLS binding and the identity resolver.
   const partnerCalls: { readonly url: string; readonly headers: Headers; readonly body: string }[] = [];
   const aitEnv = {

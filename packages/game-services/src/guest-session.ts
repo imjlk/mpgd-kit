@@ -542,8 +542,9 @@ export const guestServerSessionRefreshAheadIntervalMs = 10_000;
  * Reads a `GuestSessionCoordinator` as a server-backed session, with the
  * session-family id as the session id, which the notifications client and
  * the Worker need (it must not change on refresh). The game still starts
- * the coordinator, binds accounts, and logs out through it. Pass it the
- * coordinator's `now`, if that has one, so both read expiry on one clock.
+ * the coordinator, binds accounts, and logs out through it. If you gave
+ * `createGuestSessionCoordinator` a `now`, pass the same function here, so
+ * both read expiry on one clock.
  */
 export function createGuestServerSession(
   coordinator: GuestSessionCoordinator,

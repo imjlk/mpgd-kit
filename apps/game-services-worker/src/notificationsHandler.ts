@@ -16,6 +16,7 @@ import {
   type NotificationSession,
   type NotificationStore,
 } from '@mpgd/game-services/notifications';
+import { parseDevelopmentNotificationSessionAuthorization } from '@mpgd/game-services';
 import {
   createAitFunctionalMessageDeliveryProvider,
   type CreateAitFunctionalMessageDeliveryProviderOptions,
@@ -88,6 +89,15 @@ export interface GameServicesNotificationsEnv {
    */
   readonly MPGD_AIT_NOTIFICATIONS?: unknown;
   readonly GAME_SERVICES_NOTIFICATIONS_AUTH?: GameServicesNotificationsAuthBinding;
+  /**
+   * Local development only. With `"true"` and no `GAME_SERVICES_NOTIFICATIONS_AUTH`
+   * binding, the session routes accept
+   * `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`
+   * (`createDevelopmentServerSession` in `@mpgd/game-services`), which anyone
+   * can write: it authenticates nothing. The Worker refuses to start with it
+   * when `MPGD_STORE` is `d1`, and ignores it when the binding is bound.
+   */
+  readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS?: 'true';
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
@@ -151,6 +161,47 @@ const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
 const reportedMisconfiguration = new WeakSet<object>();
 const reportedUnreadyConsumer = new WeakSet<object>();
 const reportedMissingSessionBinding = new WeakSet<object>();
+const reportedDevelopmentSessions = new WeakSet<object>();
+
+/**
+ * Refuses `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` next to the
+ * D1 store, so a durable deployment never takes an unauthenticated session,
+ * even with the flag left in its config. The fetch handler and the service
+ * call it when they are built.
+ */
+export function assertDevelopmentNotificationSessionsAllowed(env: GameServicesNotificationsEnv): void {
+  if (env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true' && env.MPGD_STORE === 'd1') {
+    // Anyone can write a development session header: with a durable store, a leaked flag
+    // would let any client bind devices and write consent records for any player.
+    throw new Error(
+      'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true is refused when MPGD_STORE is d1. '
+        + 'Development notification sessions are local-only; remove the flag and bind '
+        + 'GAME_SERVICES_NOTIFICATIONS_AUTH to your identity service.',
+    );
+  }
+}
+
+/** Reads a development session header; anything else is no session (401). */
+const developmentNotificationSessionAuth: GameServicesNotificationsAuthBinding = {
+  async authenticateNotificationSession({ authorization }) {
+    return parseDevelopmentNotificationSessionAuthorization(authorization) ?? null;
+  },
+};
+
+/**
+ * The session binding the routes use: `GAME_SERVICES_NOTIFICATIONS_AUTH`, or
+ * the development sessions when only the flag is set, or none.
+ */
+function notificationSessionAuthOf(
+  env: GameServicesNotificationsEnv,
+): { readonly auth: GameServicesNotificationsAuthBinding; readonly development: boolean } | undefined {
+  if (env.GAME_SERVICES_NOTIFICATIONS_AUTH !== undefined) {
+    return { auth: env.GAME_SERVICES_NOTIFICATIONS_AUTH, development: false };
+  }
+  return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true'
+    ? { auth: developmentNotificationSessionAuth, development: true }
+    : undefined;
+}
 
 /**
  * The notifications service for this environment, built once per env
@@ -385,6 +436,10 @@ function parseJsonVar(value: unknown, name: string): unknown {
  *   mounted (404): binding a device to a player needs an authenticated
  *   session. A Worker with a catalog but no binding logs that once, when a
  *   session route is first asked for.
+ * - In local development, `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`
+ *   stands in for the binding (see its doc); the first session route asked
+ *   for logs that sessions are not authenticated. Throws when built with it
+ *   and the D1 store.
  *
  * Sends are never a client route; a game server sends through the
  * `deliverNotification` RPC on the service binding.
@@ -393,6 +448,8 @@ export function createNotificationsFetchHandler(
   env: GameServicesNotificationsEnv,
   corsHeaders: Readonly<Record<string, string>>,
 ): (request: Request) => Promise<Response | undefined> {
+  assertDevelopmentNotificationSessionsAllowed(env);
+  const sessions = notificationSessionAuthOf(env);
   return async (request) => {
     const { pathname } = new URL(request.url);
     if (pathname !== notificationsRoutePrefix && !pathname.startsWith(`${notificationsRoutePrefix}/`)) {
@@ -431,7 +488,27 @@ export function createNotificationsFetchHandler(
       '/reminders/cancel': ['POST'],
     };
     const methods = allowed[route];
-    const auth = env.GAME_SERVICES_NOTIFICATIONS_AUTH;
+    const auth = sessions?.auth;
+    if (methods !== undefined && sessions?.development === true && !reportedDevelopmentSessions.has(env)) {
+      reportedDevelopmentSessions.add(env);
+      console.warn(
+        'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is on, so the session routes '
+          + 'accept mpgd-dev bearer headers that anyone can write: sessions are not authenticated. '
+          + 'Local development only.',
+      );
+    }
+    if (
+      methods !== undefined
+      && sessions?.development === false
+      && env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true'
+      && !reportedDevelopmentSessions.has(env)
+    ) {
+      reportedDevelopmentSessions.add(env);
+      console.warn(
+        'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is ignored because '
+          + 'GAME_SERVICES_NOTIFICATIONS_AUTH is bound.',
+      );
+    }
     if (methods !== undefined && auth === undefined && !reportedMissingSessionBinding.has(env)) {
       // Said when a session route is first asked for, never from the cron or
       // the queue: a send-only Worker (deliverNotification alone) needs no

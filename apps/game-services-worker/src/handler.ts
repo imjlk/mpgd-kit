@@ -66,6 +66,7 @@ import {
   type AdMobSsvWorkerConfig,
 } from './admobSsvHandler.js';
 import {
+  assertDevelopmentNotificationSessionsAllowed,
   createNotificationsFetchHandler,
   type GameServicesNotificationsEnv,
 } from './notificationsHandler.js';
@@ -649,6 +650,7 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
 
 function buildWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
   assertGooglePlayUnboundPlayerRequiresIngressAuth(env);
+  assertDevelopmentNotificationSessionsAllowed(env);
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const backend = createWorkerBackend(env, resolveWorkerEvidenceVerifier(env, admobConfig));
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
