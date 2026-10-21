@@ -356,6 +356,28 @@ export function createCapacitorStoreKitStoreSdk(
     { readonly ledgerEntryId: string; readonly promise: Promise<StoreSdkFinishTransactionResult> }
   >();
 
+  /**
+   * Mirrors the native finish gate: the transaction must be listed, not
+   * revoked, and bound to the session app account token. A missing list is
+   * an invalid response, not a quiet "not finished".
+   */
+  const finishPermitted = async (
+    transactionId: string,
+    appAccountToken: string,
+  ): Promise<boolean> => {
+    const response: unknown = await sdk.getTransactions();
+    if (!isRecord(response) || !Array.isArray(response.transactions)) {
+      throw evidenceInvalid('StoreKit returned an invalid transaction list.');
+    }
+    const transaction = response.transactions.find(
+      (candidate): candidate is StoreKitTransaction =>
+        isValidStoreKitTransaction(candidate) && candidate.transactionId === transactionId,
+    );
+    return transaction !== undefined
+      && transaction.revokedAt === undefined
+      && transaction.appAccountToken?.toLowerCase() === appAccountToken;
+  };
+
   return {
     store: appStoreStoreId,
     capabilities: storeKitStoreSdkCapabilities,
@@ -429,10 +451,16 @@ export function createCapacitorStoreKitStoreSdk(
           malformed(transaction);
           continue;
         }
-        // Available means unfinished: a current entitlement the native side
-        // marks finished is not listed. A build without the flag lists every
-        // transaction, which the backend answers idempotently.
-        if (transaction.unfinished === false || seen.has(transaction.transactionId)) {
+        // A finished durable stays in currentEntitlements with
+        // `unfinished: false`. Listing it lets the reconciler verify a finish
+        // that raced the ledger grant; the server ledger dedupes. A finished
+        // consumable is not an entitlement and is not listed. A build that
+        // omits the flag lists every transaction, which the backend answers
+        // idempotently.
+        if (seen.has(transaction.transactionId)) {
+          continue;
+        }
+        if (transaction.unfinished === false && transaction.type !== 'non_consumable') {
           continue;
         }
         seen.add(transaction.transactionId);
@@ -446,6 +474,9 @@ export function createCapacitorStoreKitStoreSdk(
       request: StoreSdkFinishTransactionInput,
     ): Promise<StoreSdkFinishTransactionResult> {
       requireIos();
+      // The session token is the binding. A bridge or plugin caller cannot
+      // substitute another account's token on this path.
+      const appAccountToken = await Promise.resolve(resolveAppAccountToken());
       const { transactionId, ledgerEntryId } = request;
       if (
         typeof transactionId !== 'string' || !transactionPattern.test(transactionId)
@@ -462,7 +493,16 @@ export function createCapacitorStoreKitStoreSdk(
         return active.promise;
       }
       const promise = (async (): Promise<StoreSdkFinishTransactionResult> => {
-        const reported: unknown = await sdk.finishTransaction({ transactionId, ledgerEntryId });
+        // Same match the native plugin applies: missing, revoked, unbound, or
+        // another account never reaches `transaction.finish()`.
+        if (!(await finishPermitted(transactionId, appAccountToken))) {
+          return { finished: false };
+        }
+        const reported: unknown = await sdk.finishTransaction({
+          transactionId,
+          ledgerEntryId,
+          appAccountToken,
+        });
         if (!isRecord(reported) || typeof reported.finished !== 'boolean') {
           throw evidenceInvalid('StoreKit returned an invalid finish result.');
         }
