@@ -43,6 +43,8 @@ try {
     private: true,
     scripts: {
       'build:target': 'node capture-env.mjs',
+      'smoke:target': 'node capture-env.mjs',
+      'game:icons:inspect': 'node capture-env.mjs',
     },
   });
   writeFileSync(
@@ -89,6 +91,7 @@ writeFileSync(process.env.MPGD_CAPTURE_FILE, JSON.stringify({
   );
   assertMissingGameRevisionFailsClosed();
   assertInvalidSourceGitShaFailsClosed();
+  assertNonBuildCommandsDoNotRequireSourceRevision();
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
 }
@@ -186,6 +189,110 @@ function assertMissingGameRevisionFailsClosed(): void {
   } finally {
     rmSync(outsideRoot, { force: true, recursive: true });
   }
+}
+
+function assertNonBuildCommandsDoNotRequireSourceRevision(): void {
+  const outsideRoot = mkdtempSync(join(tmpdir(), 'mpgd-cli-game-sha-smoke-'));
+
+  try {
+    const outsideGame = join(outsideRoot, 'game');
+    const outsideTargets = join(outsideGame, 'mpgd.targets.json');
+    mkdirSync(outsideGame, { recursive: true });
+    writeJson(join(outsideGame, 'package.json'), {
+      name: '@fixture/game',
+      version: '1.2.3',
+    });
+    writeJson(outsideTargets, {
+      targets: {
+        reddit: {
+          kind: 'devvit-web',
+          gameApp: '.',
+          wrapperApp: 'apps/target-devvit',
+          adapter: 'devvit',
+          webDir: 'apps/target-devvit/dist/client',
+          artifact: 'devvit',
+        },
+      },
+    });
+
+    const smokeCaptureFile = join(outsideRoot, 'captured-smoke.json');
+    const smoke = runCliCommand(
+      ['target', 'smoke', 'reddit', '--targets-file', outsideTargets, '--kit-path', kitRoot],
+      smokeCaptureFile,
+    );
+    assert.equal(
+      smoke.status,
+      0,
+      `target smoke should not require a game revision:\\n${smoke.output}`,
+    );
+    assert.equal(existsSync(smokeCaptureFile), true);
+    const capturedSmoke = JSON.parse(readFileSync(smokeCaptureFile, 'utf8')) as Record<
+      string,
+      string | undefined
+    >;
+    assert.equal(capturedSmoke.sourceGitSha, undefined);
+
+    const invalidSmokeCaptureFile = join(outsideRoot, 'captured-smoke-invalid.json');
+    const invalidSmoke = runCliCommand(
+      ['target', 'smoke', 'reddit', '--targets-file', outsideTargets, '--kit-path', kitRoot],
+      invalidSmokeCaptureFile,
+      { MPGD_SOURCE_GIT_SHA: 'uncommitted' },
+    );
+    assert.equal(
+      invalidSmoke.status,
+      0,
+      `target smoke should not reject an explicit non-commit revision:\\n${invalidSmoke.output}`,
+    );
+    assert.equal(existsSync(invalidSmokeCaptureFile), true);
+
+    const iconsCaptureFile = join(outsideRoot, 'captured-icons.json');
+    const icons = runCliCommand(
+      ['game', 'icons', 'inspect', outsideGame, '--kit-path', kitRoot],
+      iconsCaptureFile,
+    );
+    assert.equal(
+      icons.status,
+      0,
+      `game icons should not require a game revision:\\n${icons.output}`,
+    );
+    assert.equal(existsSync(iconsCaptureFile), true);
+  } finally {
+    rmSync(outsideRoot, { force: true, recursive: true });
+  }
+}
+
+function runCliCommand(
+  args: readonly string[],
+  captureFile: string,
+  overrides: NodeJS.ProcessEnv = {},
+): { readonly output: string; readonly status: number | null } {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  delete env.APP_VERSION;
+  delete env.MPGD_SOURCE_GIT_SHA;
+  delete env.MPGD_PRODUCT_CATALOG_FILE;
+  delete env.MPGD_AD_PLACEMENTS_FILE;
+  Object.assign(env, overrides, { MPGD_CAPTURE_FILE: captureFile });
+
+  const result = spawnSync(
+    process.execPath,
+    ['tools/run-ttsx.mjs', '--mpgd-cli', 'packages/cli/src/bin.ts', ...args],
+    {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env,
+      timeout: 30_000,
+    },
+  );
+
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  return {
+    output: result.stderr || result.stdout || '(no output)',
+    status: result.status,
+  };
 }
 
 function assertInvalidSourceGitShaFailsClosed(): void {

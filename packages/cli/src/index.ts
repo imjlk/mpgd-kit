@@ -2281,7 +2281,10 @@ const targetCommand = defineI18n({
           action: 'build',
           target,
           profile,
-          env: createTargetCommandEnv(ctx.values, { nativeBuildTarget: target }),
+          env: createTargetCommandEnv(ctx.values, {
+            nativeBuildTarget: target,
+            requireSourceRevision: true,
+          }),
           ...(variant === undefined ? {} : { variant }),
         });
       },
@@ -3038,7 +3041,7 @@ const targetCommand = defineI18n({
       run: (ctx) => {
         const aitVariant = readOptionalString(ctx.values['ait-variant']);
         const iosVariant = readOptionalString(ctx.values['ios-variant']);
-        const env = createTargetCommandEnv(ctx.values);
+        const env = createTargetCommandEnv(ctx.values, { requireSourceRevision: true });
 
         runTargetMatrix({
           action: 'build',
@@ -4153,7 +4156,10 @@ interface PackageJson {
 
 function createTargetCommandEnv(
   values: TargetCommandEnvInput,
-  options: { readonly nativeBuildTarget?: string } = {},
+  options: {
+    readonly nativeBuildTarget?: string;
+    readonly requireSourceRevision?: boolean;
+  } = {},
 ): NodeJS.ProcessEnv {
   const targetsFile = path.resolve(
     readOptionalString(values['targets-file']) ?? 'mpgd.targets.json',
@@ -4180,7 +4186,11 @@ function createTargetCommandEnv(
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ...createGameOwnedReleaseEnv(gameRoot, process.env),
+    // Release provenance is recorded only by build commands. Smoke, doctor,
+    // icons, and submission preflight must still run on an exported game tree.
+    ...createGameOwnedReleaseEnv(gameRoot, process.env, {
+      requireSourceRevision: options.requireSourceRevision === true,
+    }),
     MPGD_PLATFORM_TARGETS_FILE: preparedTargetsFile,
     ...(targetConfigExtensionsFile === undefined
       ? {}
@@ -4312,12 +4322,10 @@ function resolveTargetConfigExtensionsFile(
 function createGameOwnedReleaseEnv(
   gameRoot: string,
   baseEnv: NodeJS.ProcessEnv,
+  options: { readonly requireSourceRevision: boolean },
 ): NodeJS.ProcessEnv {
   const monetizationFiles = resolveGameOwnedMonetizationFiles(gameRoot, baseEnv);
-  const configuredSourceGitSha = readOptionalString(baseEnv.MPGD_SOURCE_GIT_SHA);
-  const sourceGitSha = configuredSourceGitSha === undefined
-    ? readSourceGitSha(gameRoot)
-    : requireSourceGitSha(configuredSourceGitSha);
+  const sourceGitSha = resolveCommandSourceGitSha(gameRoot, baseEnv, options.requireSourceRevision);
   const appVersion = readOptionalString(baseEnv.APP_VERSION)
     ?? readGamePackageVersion(gameRoot);
 
@@ -4330,7 +4338,7 @@ function createGameOwnedReleaseEnv(
     ...(notificationTopicsFile === undefined
       ? {}
       : { MPGD_NOTIFICATION_TOPICS_FILE: path.resolve(gameRoot, notificationTopicsFile) }),
-    MPGD_SOURCE_GIT_SHA: sourceGitSha,
+    ...(sourceGitSha === undefined ? {} : { MPGD_SOURCE_GIT_SHA: sourceGitSha }),
     ...(appVersion === undefined ? {} : { APP_VERSION: appVersion }),
   };
 }
@@ -4381,28 +4389,68 @@ function readConfiguredPath(value: string | undefined): string | undefined {
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
-function readSourceGitSha(gameRoot: string): string {
-  const result = spawnSync('git', ['-C', gameRoot, 'rev-parse', 'HEAD'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
+function resolveCommandSourceGitSha(
+  gameRoot: string,
+  baseEnv: NodeJS.ProcessEnv,
+  requireSourceRevision: boolean,
+): string | undefined {
+  const configuredSourceGitSha = readOptionalString(baseEnv.MPGD_SOURCE_GIT_SHA);
 
-  if (result.error !== undefined || result.status !== 0) {
+  if (requireSourceRevision) {
+    return configuredSourceGitSha === undefined
+      ? readSourceGitSha(gameRoot)
+      : requireSourceGitSha(configuredSourceGitSha);
+  }
+
+  if (configuredSourceGitSha !== undefined) {
+    return isSourceGitSha(configuredSourceGitSha) ? configuredSourceGitSha : undefined;
+  }
+
+  const detectedSourceGitSha = readGitHead(gameRoot);
+
+  return detectedSourceGitSha !== undefined && isSourceGitSha(detectedSourceGitSha)
+    ? detectedSourceGitSha
+    : undefined;
+}
+
+function readSourceGitSha(gameRoot: string): string {
+  const head = readGitHead(gameRoot);
+
+  if (head === undefined) {
     throw new Error(
       `Failed to resolve the game source Git revision for ${gameRoot}. `
       + 'Set MPGD_SOURCE_GIT_SHA to its lowercase 40-character commit SHA.',
     );
   }
 
-  return requireSourceGitSha(result.stdout.trim());
+  return requireSourceGitSha(head);
+}
+
+function readGitHead(gameRoot: string): string | undefined {
+  const result = spawnSync('git', ['-C', gameRoot, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+
+  if (result.error !== undefined || result.status !== 0) {
+    return undefined;
+  }
+
+  const head = result.stdout.trim();
+
+  return head.length === 0 ? undefined : head;
 }
 
 function requireSourceGitSha(value: string): string {
-  if (!/^[0-9a-f]{40}$/u.test(value)) {
+  if (!isSourceGitSha(value)) {
     throw new Error('MPGD_SOURCE_GIT_SHA must be a lowercase 40-character game source SHA.');
   }
 
   return value;
+}
+
+function isSourceGitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/u.test(value);
 }
 
 function readGamePackageVersion(gameRoot: string): string | undefined {
