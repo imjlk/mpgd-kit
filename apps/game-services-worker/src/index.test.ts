@@ -369,6 +369,62 @@ await assertRejects(
   /ACCOUNT_BINDING or the explicit/u,
   'the in-Worker Play boundary needs account binding or the unbound opt-in',
 );
+// The unbound opt-in grants a token with no Google account id to the body playerId.
+// That is safe only when ingress auth already binds playerId, so the Worker must
+// refuse to start — not merely close the purchase route — when the flag is set alone.
+const unboundPlayWithoutIngress = /refused unless GAME_SERVICES_INGRESS_AUTH is bound/;
+const unboundPlayFlagOnly = {
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER: 'true',
+} satisfies GameServicesWorkerEnv;
+assertThrows(
+  () => createWorkerFetchHandler(unboundPlayFlagOnly),
+  unboundPlayWithoutIngress,
+  'fetch handler must refuse unbound Play purchases without ingress auth',
+);
+assertThrows(
+  () => createWorkerService(unboundPlayFlagOnly),
+  unboundPlayWithoutIngress,
+  'service must refuse unbound Play purchases without ingress auth',
+);
+const unboundPlayBoundaryEnv = {
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME: 'com.example.game',
+  GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH: {
+    async getAccessToken() {
+      return 'token';
+    },
+  },
+  GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER: 'true',
+} satisfies GameServicesWorkerEnv;
+assertThrows(
+  () => createWorkerFetchHandler(unboundPlayBoundaryEnv),
+  unboundPlayWithoutIngress,
+  'a configured Play boundary must not start unbound purchases without ingress auth',
+);
+assertThrows(
+  () => createWorkerService(unboundPlayBoundaryEnv),
+  unboundPlayWithoutIngress,
+  'service must not start a configured Play boundary without ingress auth',
+);
+const boundIngressForUnboundPlay = {
+  ...unboundPlayBoundaryEnv,
+  GAME_SERVICES_INGRESS_AUTH: {
+    async authenticateGameServicesRequest() {
+      return { playerId: 'ingress-player' };
+    },
+  },
+} satisfies GameServicesWorkerEnv;
+createWorkerFetchHandler(boundIngressForUnboundPlay);
+const boundUnboundPlayCapabilities = await createWorkerService(boundIngressForUnboundPlay)
+  .getCommerceCapabilities() as {
+    readonly stores: readonly { readonly store: string; readonly finish: string }[];
+  };
+assertEqual(
+  boundUnboundPlayCapabilities.stores.find((entry) => entry.store === 'google-play')?.finish,
+  'server',
+  'unbound Play purchases stay available when ingress auth binds playerId',
+);
 await assertRejects(
   () =>
     createWorkerService({
