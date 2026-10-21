@@ -413,10 +413,15 @@ export function createVerse8CommerceProvider(
       pendingUnsettledReads += 1;
     }
     void refreshInBackground().then((reported) => {
+      // A stale read from a previous observation must not touch the new
+      // epoch's pending count. endObservation already zeroed the old one.
+      if (disposed || epoch !== observationEpoch) {
+        return;
+      }
       if (openedSlot) {
         pendingUnsettledReads = Math.max(0, pendingUnsettledReads - 1);
       }
-      if (disposed || listeners.size === 0 || epoch !== observationEpoch) {
+      if (listeners.size === 0) {
         return;
       }
       settleOutstanding(reported);

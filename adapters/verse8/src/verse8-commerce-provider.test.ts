@@ -578,6 +578,60 @@ describe('createVerse8CommerceProvider', () => {
     fixture.provider.dispose();
   });
 
+  it('does not drop an in-flight unsettled signal when a stale read resolves after resubscribe', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture();
+    const events: CommerceEvent[] = [];
+    const unsubscribe = fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    fixture.listPurchases.mockClear();
+
+    let hangNext = 0;
+    const hung: Array<() => void> = [];
+    fixture.listPurchases.mockImplementation(() => {
+      if (hangNext > 0) {
+        hangNext -= 1;
+        return new Promise((resolve) => {
+          hung.push(() => {
+            resolve([]);
+          });
+        });
+      }
+      return Promise.resolve([...fixture.recorded]);
+    });
+
+    // The immediate read is still pending when the last listener leaves.
+    hangNext = 1;
+    fixture.closeDialog(true);
+    await flush();
+    expect(hung).toHaveLength(1);
+    unsubscribe();
+
+    const late = fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    // A fresh window is open, then another id-less close starts a read that stays pending.
+    fixture.closeDialog(true);
+    await flush();
+    hangNext = 1;
+    fixture.closeDialog(true);
+    await flush();
+    expect(hung).toHaveLength(2);
+
+    // The stale read resolves into the new observation. It must not clear the pending count.
+    hung[0]?.();
+    await flush();
+    await vi.advanceTimersByTimeAsync(600_000);
+    hung[1]?.();
+    await flush();
+
+    fixture.recorded.push({ purchaseId: 'late', productId: 'coins-100', quantity: 1 });
+    await vi.advanceTimersByTimeAsync(verse8PurchaseFollowUpDelaysMs[0] ?? 0);
+    expect(events.some((event) =>
+      event.type === 'purchaseUpdated' && event.purchase.transactionId === 'late')).toBe(true);
+    late();
+    fixture.provider.dispose();
+  });
+
   it('keeps an earlier follow-up window when a full reported set re-reads an evicted id', async () => {
     vi.useFakeTimers();
     const fixture = createFixture({
