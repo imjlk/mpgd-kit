@@ -130,7 +130,7 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
   );
   assertEqual(
     outcome.finishCalls,
-    ['finish:2000000123456789:ledger-1'],
+    ['finish:2000000123456789:ledger-1:' + fakeAccountToken],
     'finished once with the ledger entry the backend returned',
   );
 }
@@ -170,7 +170,7 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
   assertEqual(outcome.history.at(-1), 'finishing', 'finishing is retried on the next pass');
   assertEqual(
     outcome.finishCalls,
-    ['finish:2000000123456789:ledger-1'],
+    ['finish:2000000123456789:ledger-1:' + fakeAccountToken],
     'the finish was attempted once',
   );
 }

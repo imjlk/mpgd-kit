@@ -22,8 +22,9 @@ export interface StoreKitTransaction {
   /**
    * Present on `getTransactions` results: true for `Transaction.unfinished`
    * entries, false for current non-consumable entitlements that are already
-   * finished. Omitted by native builds predating the field and by
-   * `purchase` and `transactionUpdated` payloads.
+   * finished. The SDK lists `unfinished: false` durables so a finish that
+   * raced the ledger grant can still be verified. Omitted by native builds
+   * predating the field and by `purchase` and `transactionUpdated` payloads.
    */
   readonly unfinished?: boolean;
 }
@@ -46,17 +47,19 @@ export interface CapacitorStoreKitPlugin {
   sync(): Promise<{ readonly synced: boolean }>;
   /**
    * Call only after the authenticated backend confirms the ledger grant.
-   * Native validation is intentionally shallow and finishing never grants
-   * anything. The commerce provider's `finishTransaction` is the only caller:
-   * the reconciler in `@mpgd/game-services` reaches it through
-   * `assertCommerceFinishAllowed` after the ledger grant, so games must not
-   * call this plugin method directly. That gate is not a trust boundary
-   * against code that controls the backend object given to the reconciler:
-   * the authenticated server-side verification is the real control.
+   * Finishing never grants. Native finishes only a verified, non-revoked,
+   * one-time transaction whose app account token matches `appAccountToken`.
+   * The StoreKit SDK injects the session token and applies the same match
+   * before this call, including for `commerce.v2.finishTransaction`. Games
+   * must not call this plugin method directly. The token match is not a
+   * signed server capability: a caller who can read `getTransactions` can
+   * still supply that token with a forged ledger entry id.
    */
   finishTransaction(input: {
     readonly transactionId: string;
     readonly ledgerEntryId: string;
+    /** Session app account token; must match the verified transaction. */
+    readonly appAccountToken: string;
   }): Promise<{ readonly finished: boolean }>;
   addListener(
     eventName: 'transactionUpdated',

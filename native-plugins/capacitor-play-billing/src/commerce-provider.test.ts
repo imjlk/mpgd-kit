@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { BridgeEvent, BridgeMethod, BridgeRequest } from '@mpgd/bridge';
 import { createCapacitorPlatformGateway, type NativeBridge } from '@mpgd/adapter-capacitor';
+import {
+  createCommerceReconciler,
+  createInMemoryMonetizationOperationStore,
+  type CommerceReconcilerEvent,
+} from '@mpgd/game-services';
+import type { VerifyPurchaseRequest } from '@mpgd/game-services/types';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import {
   commerceProtocol,
@@ -368,20 +374,67 @@ describe('createCapacitorPlayBillingCommerceProvider with the reference reconcil
     plugin.upsert(fakePlayPurchase({ products: ['retired.sku'], purchaseToken: 'token-r', orderId: 'GPA.r' }));
     plugin.upsert(fakePlayPurchase({ products: ['gems.small'], purchaseToken: 'token-v', orderId: 'GPA.v' }));
     const unmapped: unknown[] = [];
-    const { backend, journal, runtime } = createRuntime(plugin, unmapped);
-    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1', finalization: 'completed' });
-
-    await runtime.start();
-    await runtime.runUntilIdle();
-    expect(journal.snapshot()).toEqual({
-      [await createGooglePlayTokenPurchaseKey('token-v')]: [
-        'purchased', 'verifying', 'granted', 'finishing', 'finished',
-      ],
+    const { provider } = createProvider(plugin, {
+      onUnmappedPurchase: (purchase) => {
+        unmapped.push(purchase);
+      },
     });
-    expect(backend.verifyRequests).toMatchObject([{ transactionId: 'GPA.v', token: 'token-v' }]);
-    expect(unmapped).toMatchObject([{ purchaseToken: 'token-r' }]);
-    // The retired purchase stays with the plugin for the backend finalizer.
-    expect(plugin.purchases.map((purchase) => purchase.purchaseToken)).toContain('token-r');
+    const listed = await provider.getAvailablePurchases();
+    expect(listed.map((purchase) => [purchase.transactionId, purchase.storeSku, purchase.token])).toEqual([
+      ['GPA.r', 'retired.sku', 'token-r'],
+      ['GPA.v', 'gems.small', 'token-v'],
+    ]);
+    expect(listed[0]?.logicalId).toBeUndefined();
+    expect(listed[1]?.logicalId).toBe('gems_small');
+    expect(listed[0]?.evidence).toEqual({
+      schema: 'google-play.product-purchase.v2',
+      payload: { purchaseToken: 'token-r' },
+    });
+
+    const requests: VerifyPurchaseRequest[] = [];
+    const failures: CommerceReconcilerEvent[] = [];
+    const reconciler = createCommerceReconciler({
+      provider,
+      backend: {
+        async verifyPurchase(request) {
+          requests.push(request);
+          return {
+            verified: true,
+            alreadyProcessed: false,
+            ledgerEntryId: 'le-1',
+            finalization: { status: 'completed', action: 'consume', alreadyCompleted: false },
+          };
+        },
+      },
+      store: createInMemoryMonetizationOperationStore(),
+      playerId: 'player-1',
+      target: 'android',
+      products: catalog.map((entry) => ({ ...entry })),
+      onEvent(event) {
+        if (event.type === 'failure') {
+          failures.push(event);
+        }
+      },
+    });
+    await reconciler.start();
+    const valid = await reconciler.read(await createGooglePlayTokenPurchaseKey('token-v'));
+    await reconciler.stop();
+
+    expect(valid?.state).toBe('finished');
+    expect(requests.map((request) => request.platformTransactionId)).toEqual(['GPA.v']);
+    expect(requests[0]?.evidence).toMatchObject({ payload: { purchaseToken: 'token-v' } });
+    expect(failures.map((event) => event.type === 'failure' ? event.stage : event.type)).toEqual(['catalog']);
+    const catalogFailure = failures[0];
+    expect(catalogFailure?.type === 'failure' ? catalogFailure.error : undefined).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('retired.sku'),
+      }),
+    );
+    expect(unmapped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ purchaseToken: 'token-r' }),
+    ]));
+    // The client never acknowledges. The server was not asked to grant the retired token.
+    expect(plugin.purchases.map((purchase) => purchase.purchaseToken)).toEqual(['token-r', 'token-v']);
   });
 
   it('closes a launched attempt when the plugin reports a late cancel after its timeout', async () => {

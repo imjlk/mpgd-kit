@@ -1,5 +1,20 @@
 # @mpgd/game-services
 
+## 0.27.0 — 2026-10-21
+
+### Patch changes
+
+- [395f194f](https://github.com/imjlk/mpgd-kit/commit/395f194f04205a0bf58bdf505297cefb9698d31c) Fix notifications v2 so a notice the game has recorded is not pushed, a cancel or replace does not drop a live delivery claim (which could send the same reminder twice), one provider's host-read failure does not fail every provider, and a reminder whose template data cannot fill its copy or a host-template mapping's own title and body is refused when it is set. An uncompilable link rule fails the set for every provider that would deliver the topic. Replacing a due reminder while its send is only claimed keeps the replacement pending until that claim settles, instead of marking it fired with no delivery. — Thanks @imjlk!
+- [61e9c8d4](https://github.com/imjlk/mpgd-kit/commit/61e9c8d4b747de10521aa5c54068eadde0b40d09) Harden notifications delivery. FCM sets `android.collapse_key` and `apns-collapse-id` to the SHA-256 of the send key (64 bytes) so a replay after HTTP 200 collapses instead of showing a duplicate. Apps in Toss functional-message `baseUrl` must be `apps-in-toss-api.toss.im` unless `allowUnlistedHost` is set. Documented partner error codes (4095, 5004, 4034, 4010) are classified before a deployment's `agreementErrorCodes` or `recipientErrorCodes`, so a rate limit is not stored as an agreement denial. — Thanks @imjlk!
+- [c6438977](https://github.com/imjlk/mpgd-kit/commit/c6438977f3be174f4e351597366d935c37950b90) An advertising topic must not map to `android` until the shell renders the opt-out action. `validateNotificationTopicCatalog` reports that mapping, and a notifications service will not start on a catalog that has it. iOS advertising mappings are unchanged. The Android client still declares `advertising` so it pairs with the standard FCM registry. — Thanks @imjlk!
+- Updated dependencies: @mpgd/analytics@0.4.14, @mpgd/catalog@0.10.5, @mpgd/platform@0.27.0
+
+### Added
+
+- [f772a896](https://github.com/imjlk/mpgd-kit/commit/f772a8964437d512349736e609668792b480fbc1) `@mpgd/game-services/notifications/client` adds `createGameServicesNotificationsClient`, the notifications runtime's backend over the game-services Worker's session routes (`/game-services/notifications`: consent, endpoints, reminders, notices) and its public `GET /providers`. It takes the commerce client's `baseUrl`, `fetch`, `headers`, and `getHeaders`, so a game gives both clients one header resolver, and the deployment `target` the Worker needs for a device registration. The game's identity supplies the current `{ playerId, sessionId }` and an authenticated subscription; no request carries a player or an installation, which the Worker reads from the session. Worker answers map to the codes the runtime acts on (`GameServicesNotificationsRequestError`, with the status and the Worker's error): a 401 is a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, a 404 or 405 on a session route `NOTIFICATIONS_CONFIGURATION_REQUIRED`, a 400 or 413 `NOTIFICATIONS_INVALID_INPUT`, and an answer outside the route's contract `NOTIFICATIONS_CONFIGURATION_REQUIRED`. A request still unanswered after `timeoutMs` (15 seconds by default) is aborted and answers a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, so no runtime queue waits on it. Every conformance vector the service passes also passes with the runtime calling it through this client.
+  
+  `resolveGameServicesRequestHeaders`, `GameServicesHeaderResolver`, and `GameServicesHeaderResolutionError` move to an internal module and are still exported from the package root and `./client`. `isPublicGameServicesUrl` exports the production URL rule the authoritative commerce backend already follows, so other clients that send a session's credentials can share it. — Thanks @imjlk!
+
 ## 0.26.0 — 2026-10-20
 
 ### Changed
