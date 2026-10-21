@@ -93,17 +93,23 @@ generation: a retry with the same generation is idempotent, while a fresh
 generation cannot replace the same unconsumed provider purchase even for the
 same player. Persist the record's `providerPurchaseId`, which the boundary
 derives from the Store product ID, the Collections item ID, and `transactionId`
-when Collections returns one. `modifiedDate` stays in the verification payload
-and is not part of the id. Do not replace an unreleased claim when a later
-query changes `modifiedDate` or the item id while quantity is still 1; a
-different provider purchase can be claimed only after the previous claim is
-released. If that later query returns a different item or transaction id, the
+when Collections returns one. When `transactionId` is absent, the id also
+includes `modifiedDate`, which Microsoft changes on another consumable
+purchase. Do not replace an unreleased claim when a later
+query changes `modifiedDate` or the item id while quantity is still 1; that
+query resumes the stored generation and must not write a second ledger row.
+A different provider purchase can be claimed only after the previous claim is
+released. After consume and release, a repeat purchase of the same item id
+with a new `modifiedDate` and no `transactionId` gets a new id and grants
+once. If that later query returns a different item or transaction id, the
 exact stored generation may still verify and finalize. Verification keeps the
 stored purchase id, so the ledger does not grant again, and consume may echo
 the item id Collections reported for that resume. A tracking-id retry that
-omits order ids and reports the current balance confirms the prior consume
-and releases the claim; it does not grant the repurchase under that id. A
-missing or different generation stays denied until that release. It must not
+omits order ids confirms the prior consume only when it reports a numeric
+current balance and an item id that is the granted item or the item Collections
+currently lists for that product. A missing, malformed, or unrelated
+response keeps the claim pending and does not grant the repurchase under that
+id. A missing or different generation stays denied until that release. It must not
 transfer the binding to another game player. Release only
 the exact player, generation, and provider purchase after authoritative consume
 succeeds, so a delayed release cannot erase a claim that was released and then
@@ -113,9 +119,8 @@ listing the consumed item, only the exact durable generation may resume that
 finalizer; a generationless recovery remains unavailable and must not mint a
 new generation. A purchase already recorded under
 `microsoft-store:<storeId>:<itemId>:<modifiedDate>` keeps that ledger key when
-the same claim is verified again, so a re-verify does not grant a second time
-under the stable id.
-<!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#createMicrosoftStorePurchaseBoundary Unreleased claims are not replaced; an exact generation still finalizes after item rotation under the stored verification id. -->
+the same claim is verified again, so a re-verify does not grant a second time.
+<!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#createMicrosoftStorePurchaseBoundary Unreleased claims are not replaced; a changed modifiedDate resumes the stored generation, and a retry confirmation requires a numeric balance and matching item. -->
 <!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#InMemoryMicrosoftStoreRecoveryOwnershipStore Reference store returns the existing unreleased claim instead of replacing it. -->
 Pass the current, server-trusted product catalog tokens as
 `inAppOfferTokens`; the boundary rejects a claim whose browser-supplied current

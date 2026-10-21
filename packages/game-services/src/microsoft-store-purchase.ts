@@ -142,9 +142,10 @@ export interface MicrosoftStoreRecoveryOwnershipRecord {
   readonly playerId: string;
   readonly generation: string;
   /**
-   * Stable identity of the unconsumed Collections item. Derived from the Store
-   * product ID, the collection item ID, and `transactionId` when present.
-   * `modifiedDate` is not part of this id.
+   * Identity of one Collections purchase. `transactionId` is preferred. When it
+   * is absent, the id is the collection item id plus `modifiedDate`, so a later
+   * purchase of the same item is distinct after the previous claim is released.
+   * An unreleased claim keeps the id it was claimed with.
    */
   readonly providerPurchaseId: string;
 }
@@ -763,18 +764,39 @@ async function consumeMicrosoftStorePurchase(
       return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
     }
     const orderTransactions = readConsumeOrderTransactions(raw.orderTransactions);
-    const itemMatches = raw.itemId === context.collectionItemId
-      || raw.itemId === context.resumeCollectionItemId;
-    // A reused tracking id is a confirmation, not a second consume. After a
-    // repurchase Microsoft returns the current balance and omits order ids.
+    const echoedItemId = optionalIdentifier(raw.itemId);
+    const itemMatches = echoedItemId !== undefined
+      && (
+        echoedItemId === context.collectionItemId
+        || echoedItemId === context.resumeCollectionItemId
+      );
+    // A reused tracking id is a confirmation, not a second consume. Microsoft
+    // documents that retry as the current remaining balance with order ids
+    // omitted. The echoed item must be the granted item or the item Collections
+    // currently lists for this product. A missing balance, a malformed balance,
+    // or an unrelated item keeps the claim.
+    const currentBalance = readDocumentedCurrentBalance(raw.newQuantity);
+    const echoedItemIsCurrent = !itemMatches
+      && echoedItemId !== undefined
+      && raw.orderTransactions === undefined
+      && currentBalance !== undefined
+      && currentBalance > 0
+      && await echoedItemIsCurrentCollection(
+        input,
+        credentials,
+        context.storeId,
+        echoedItemId,
+        finalizationInput.signal,
+      );
     const priorFulfillmentConfirmed = raw.orderTransactions === undefined
-      && raw.newQuantity !== 0
-      && orderTransactions !== undefined;
+      && currentBalance !== undefined
+      && currentBalance > 0
+      && (itemMatches || echoedItemIsCurrent);
     if (
       !priorFulfillmentConfirmed
       && (
         !itemMatches
-        || raw.newQuantity !== 0
+        || currentBalance !== 0
       )
     ) {
       return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
@@ -832,6 +854,35 @@ async function consumeMicrosoftStorePurchase(
     }
     return finalizationPending('MICROSOFT_STORE_CONSUME_UNAVAILABLE');
   }
+}
+
+async function echoedItemIsCurrentCollection(
+  input: CreateMicrosoftStorePurchaseBoundaryInput,
+  credentials: MicrosoftStoreCollectionsCredentials,
+  storeId: string,
+  itemId: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  let response: unknown;
+  try {
+    response = await input.client.queryProduct({ credentials, storeId, signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+    return false;
+  }
+  const item = inspectPublisherQuery(response, storeId);
+  return item.status === 'verified' && item.item.id === itemId;
+}
+
+function readDocumentedCurrentBalance(value: unknown): number | undefined {
+  // Consume documents newQuantity as an int: the remaining balance. A missing,
+  // fractional, or negative value is not that balance.
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    return undefined;
+  }
+  return value;
 }
 
 function readConsumeOrderTransactions(
@@ -1076,10 +1127,16 @@ function readFinalizationContext(
 }
 
 function createVerificationId(
-  item: Pick<MicrosoftStoreCollectionItem, 'id' | 'productId' | 'transactionId'>,
+  item: Pick<
+    MicrosoftStoreCollectionItem,
+    'id' | 'modifiedDate' | 'productId' | 'transactionId'
+  >,
 ): string {
+  // transactionId names the purchase. When Collections omits it, modifiedDate
+  // is the documented per-purchase discriminator. An unreleased claim is not
+  // replaced with that new id; see sameUnconsumedPurchase.
   return item.transactionId === undefined
-    ? `microsoft-store:${item.productId}:${item.id}`
+    ? `microsoft-store:${item.productId}:${item.id}:${item.modifiedDate}`
     : `microsoft-store:${item.productId}:${item.id}:${item.transactionId}`;
 }
 
@@ -1114,7 +1171,7 @@ function readStoredCollectionIdentity(
     : { itemId, transactionId: suffix };
 }
 
-/** Ledger key written before verification ids stopped including modifiedDate. */
+/** Ledger key written when a purchase omits transactionId, including older rows. */
 function createLegacyVerificationId(
   item: Pick<MicrosoftStoreCollectionItem, 'id' | 'modifiedDate' | 'productId'>,
 ): string {
@@ -1123,8 +1180,10 @@ function createLegacyVerificationId(
 
 /**
  * True when a stored purchase id still names this unconsumed Collections item.
- * `modifiedDate` is ignored. A stored `transactionId` still matches if the
- * collection item id changed, so that query cannot mint a second grant.
+ * A changed `modifiedDate` still matches, so that query resumes the stored
+ * claim instead of minting another id. A stored `transactionId` still matches
+ * if the collection item id changed. After release, a new modifiedDate is a
+ * new id because no stored claim remains to match.
  */
 function sameUnconsumedPurchase(
   storedId: string,
