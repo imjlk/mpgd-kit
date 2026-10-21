@@ -811,13 +811,18 @@ describe('ONE play H5 adapter', () => {
         throw new Error('bridge lost');
       };
       const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds, showTimeoutMs: 40, recoveryTimeoutMs: 40 });
+      const events: string[] = [];
+      provider.subscribe((event) => events.push(event.type));
       const commerce = createOnePlayCommerceProvider(f);
       const pending = provider.show(show);
       await vi.advanceTimersByTimeAsync(0);
       await expect(pending).resolves.toMatchObject({ outcome: 'pending', presentation: 'unknown', reason: 'outcome-unknown' });
+      expect(events).toEqual(['requested', 'unknown']);
       expect(await provider.getAvailability(show)).toMatchObject({ reason: 'busy' });
       await expect(commerce.requestPurchase(purchaseInput('during'))).rejects.toMatchObject({ code: 'IN_PROGRESS' });
       await vi.advanceTimersByTimeAsync(40);
+      expect(events).toEqual(['requested', 'unknown', 'closed']);
+      expect(events).not.toContain('reward-earned');
       expect(await provider.getAvailability(show)).toEqual({ state: 'available' });
       await expect(commerce.requestPurchase(purchaseInput('after'))).resolves.toMatchObject({ outcome: 'purchased' });
     } finally {
@@ -870,17 +875,59 @@ describe('ONE play H5 adapter', () => {
       const f = commerceFixture();
       f.sdk.ads.showInterstitialAsync = () => new Promise(() => {});
       const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds, showTimeoutMs: 20, recoveryTimeoutMs: 20 });
+      const events: string[] = [];
+      provider.subscribe((event) => events.push(event.type));
       const commerce = createOnePlayCommerceProvider(f);
       const pending = provider.show(show);
       await vi.advanceTimersByTimeAsync(20);
       await expect(pending).resolves.toMatchObject({ outcome: 'pending', presentation: 'unknown' });
+      expect(events).toEqual(['requested', 'unknown']);
       await expect(commerce.requestPurchase(purchaseInput('during'))).rejects.toMatchObject({ code: 'IN_PROGRESS' });
       await vi.advanceTimersByTimeAsync(20);
+      expect(events).toEqual(['requested', 'unknown', 'failed']);
+      expect(events).not.toContain('reward-earned');
       expect(await provider.getAvailability(show)).toEqual({ state: 'available' });
       await expect(commerce.requestPurchase(purchaseInput('after-recovery'))).resolves.toMatchObject({ outcome: 'purchased' });
     } finally {
       vi.useRealTimers();
     }
+  });
+  it('does not open a purchase sheet after dispose releases the owner during intent issuance', async () => {
+    const f = commerceFixture();
+    let calls = 0;
+    let finishIntent: ((value: { developerPayload: string }) => void) | undefined;
+    f.server.issueIntent.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((resolve) => {
+          finishIntent = resolve;
+        });
+      }
+      return Promise.resolve({ developerPayload: 'server-intent' });
+    });
+    const disposed = await createOnePlayPlatformGateway({
+      sdk: f.sdk,
+      products: f.products,
+      commerceServer: f.server,
+    });
+    const other = await createOnePlayPlatformGateway({
+      sdk: f.sdk,
+      products: f.products,
+      commerceServer: f.server,
+    });
+    const pending = disposed.commerce?.requestPurchase(purchaseInput('disposed-checkout'));
+    await Promise.resolve();
+    await disposed.lifecycle.dispose?.();
+    const otherPurchase = other.commerce?.requestPurchase(purchaseInput('other-checkout'));
+    finishIntent?.({ developerPayload: 'server-intent' });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    await expect(pending).resolves.toMatchObject({ outcome: 'failed' });
+    expect(f.purchase).toHaveBeenCalledOnce();
+    await expect(otherPurchase).resolves.toMatchObject({ outcome: 'purchased' });
+    const settled = await pending;
+    expect(settled?.outcome === 'purchased').toBe(false);
   });
   it('clears fullscreen owners on dispose so a hung ad cannot wedge the next checkout', async () => {
     vi.useFakeTimers();

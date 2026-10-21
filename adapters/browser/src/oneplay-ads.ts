@@ -223,8 +223,11 @@ export function createOnePlayAdProvider(input: {
           if (dropped) { return; }
           recoveryTimer = setTimeout(() => {
             recoveryTimer = undefined;
-            if (!dropped && onePlayFullscreenOwners.get(sdk) === owner) { release(); }
-            endWatch();
+            if (dropped) { return; }
+            const sawAd = opened;
+            drop();
+            // The deadline ends the runtime lease. It is not a reward.
+            emit(sawAd ? { type: 'closed' } : { type: 'failed', reason: 'outcome-unknown' });
           }, recoveryTimeoutMs);
         };
         let sdkCall: Promise<OnePlayAdResult> | undefined;
