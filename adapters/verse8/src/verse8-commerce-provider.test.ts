@@ -547,6 +547,37 @@ describe('createVerse8CommerceProvider', () => {
     fixture.provider.dispose();
   });
 
+  it('keeps an earlier follow-up window when a later id-less close finds another purchase', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture();
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    fixture.listPurchases.mockClear();
+
+    // Purchase A closed with no id and no record yet, so a follow-up window opens.
+    fixture.closeDialog(true);
+    await flush();
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+
+    // Purchase B's default onClose also carries no id. Its immediate re-read finds B.
+    fixture.recorded.push({ purchaseId: 'b', productId: 'coins-100', quantity: 1 });
+    fixture.closeDialog(true);
+    await flush();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ purchase: { transactionId: 'b' } });
+
+    // A's record lands afterward and must still be emitted by a follow-up read.
+    const callsAfterB = fixture.listPurchases.mock.calls.length;
+    fixture.recorded.push({ purchaseId: 'a', productId: 'remove-ads', quantity: 1 });
+    await vi.advanceTimersByTimeAsync(verse8PurchaseFollowUpDelaysMs[0] ?? 0);
+    expect(events.some((event) =>
+      event.type === 'purchaseUpdated' && event.purchase.transactionId === 'a')).toBe(true);
+    expect(fixture.listPurchases.mock.calls.length).toBeGreaterThan(callsAfterB);
+    fixture.provider.dispose();
+  });
+
   it('keeps an earlier follow-up window when a full reported set re-reads an evicted id', async () => {
     vi.useFakeTimers();
     const fixture = createFixture({

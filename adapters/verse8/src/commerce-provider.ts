@@ -119,13 +119,16 @@ export interface CreateVerse8CommerceProviderInput {
    * exists; the first listener triggers a re-read of the purchase source, so
    * purchases recorded while nobody listened (or before a restart) are found
    * then. A signal that reports no new purchase id — no list, an empty list,
-   * or only ids already reported — is followed by re-reads at
-   * `verse8PurchaseFollowUpDelaysMs` until one finds a new record, since the
-   * Agent8 event may land after the dialog closed. A signal that names a new
-   * purchase id does not schedule those re-reads, and does not cancel a
-   * window already waiting on an earlier purchase. An id the bounded set
-   * has already emitted is not a new record. No follow-up is started
-   * after the last listener unsubscribes.
+   * or only ids already reported, including that id-less default — increments
+   * a count of outstanding unsettled signals and opens or extends re-reads at
+   * `verse8PurchaseFollowUpDelaysMs`. Each purchase id newly reported by the
+   * immediate re-read or a follow-up read settles one outstanding signal. A
+   * signal that names a new purchase id settles that signal: it does not join
+   * the count, so it does not consume an earlier slot or schedule re-reads.
+   * Timers cancel only when the count reaches 0, the window's attempts
+   * elapse, or the last listener unsubscribes. An id the bounded set has
+   * already emitted is not a new record. The provider does not grant; it only
+   * re-reads the purchase source.
    */
   readonly onPurchasesChanged?: (listener: Verse8PurchasesChangeListener) => () => void;
 }
@@ -184,7 +187,7 @@ export function createVerse8CommerceProvider(
   /**
    * Ids already emitted, then dropped to keep `reportedPurchases` bounded.
    * A later read must not emit them again: that duplicate would look like a
-   * newly settled purchase and cancel a follow-up window for a different one.
+   * newly settled purchase and settle an outstanding signal for a different one.
    */
   const forgottenPurchases = new Set<string>();
   let initialized = false;
@@ -318,51 +321,115 @@ export function createVerse8CommerceProvider(
     }
   };
   /**
-   * The Agent8 event may land after the dialog closed. Follow up only when
-   * the signal and the immediate re-read reported no new purchase id.
+   * Signals that reported no new purchase id and have not been settled by a
+   * later read. A purchase id the signal itself names settles that signal and
+   * is not added here, so it cannot cancel a window opened for a different
+   * purchase. Timers cancel only when this reaches 0, the window's attempts
+   * elapse, or the last listener unsubscribes.
+   */
+  let outstandingUnsettledSignals = 0;
+  /**
+   * Id-less signals whose immediate re-read has not finished. A window that
+   * elapses meanwhile gives up on the signals it was covering, not on these.
+   */
+  let pendingUnsettledReads = 0;
+  let observationEpoch = 0;
+  /**
+   * The Agent8 event may land after the dialog closed. One window of
+   * follow-ups at a time; a new unsettled signal restarts it so that signal
+   * gets a full delay schedule. The schedule is the existing
+   * `verse8PurchaseFollowUpDelaysMs` bound (about nine minutes).
    */
   const followUpTimers = new Set<ReturnType<typeof setTimeout>>();
-  const cancelFollowUps = (): void => {
+  let followUpGeneration = 0;
+  const clearFollowUpTimers = (): void => {
     for (const timer of followUpTimers) {
       clearTimeout(timer);
     }
     followUpTimers.clear();
   };
+  const cancelFollowUps = (): void => {
+    followUpGeneration += 1;
+    clearFollowUpTimers();
+  };
+  const endObservation = (): void => {
+    observationEpoch += 1;
+    cancelFollowUps();
+    outstandingUnsettledSignals = 0;
+    pendingUnsettledReads = 0;
+  };
+  const settleOutstanding = (newlyReported: number): void => {
+    if (newlyReported <= 0) {
+      return;
+    }
+    outstandingUnsettledSignals = Math.max(0, outstandingUnsettledSignals - newlyReported);
+  };
+  const scheduleFollowUps = (): void => {
+    cancelFollowUps();
+    const generation = followUpGeneration;
+    const epoch = observationEpoch;
+    for (const delay of verse8PurchaseFollowUpDelaysMs) {
+      const timer = setTimeout(() => {
+        followUpTimers.delete(timer);
+        if (disposed || generation !== followUpGeneration) {
+          return;
+        }
+        void refreshInBackground().then((late) => {
+          if (disposed || listeners.size === 0 || epoch !== observationEpoch) {
+            return;
+          }
+          // A read started by an older window can still report a purchase.
+          // That id settles one outstanding signal even if a newer window
+          // has since been scheduled.
+          settleOutstanding(late);
+          if (outstandingUnsettledSignals === 0) {
+            cancelFollowUps();
+            return;
+          }
+          if (generation !== followUpGeneration || followUpTimers.size > 0) {
+            return;
+          }
+          // This window's attempts elapsed. Keep only signals whose immediate
+          // re-read is still in flight; restorePurchases and the next signal
+          // read the rest.
+          outstandingUnsettledSignals = pendingUnsettledReads;
+          if (outstandingUnsettledSignals === 0) {
+            cancelFollowUps();
+          }
+        });
+      }, delay);
+      // A Node host (tests, tooling) must not stay alive for a follow-up read.
+      unrefTimer(timer);
+      followUpTimers.add(timer);
+    }
+  };
   const refreshWithFollowUps = (signalReportedNew: boolean): void => {
+    const epoch = observationEpoch;
+    // A signal that names a new purchase id settles itself. It does not open
+    // a slot, and that id is not charged against an earlier outstanding signal.
+    const openedSlot = !signalReportedNew;
+    if (openedSlot) {
+      outstandingUnsettledSignals += 1;
+      pendingUnsettledReads += 1;
+    }
     void refreshInBackground().then((reported) => {
-      if (disposed || listeners.size === 0) {
+      if (openedSlot) {
+        pendingUnsettledReads = Math.max(0, pendingUnsettledReads - 1);
+      }
+      if (disposed || listeners.size === 0 || epoch !== observationEpoch) {
         return;
       }
-      if (reported > 0) {
-        // A re-read found a record that had not been emitted before. An id the
-        // bounded set already emitted and then dropped does not count.
+      settleOutstanding(reported);
+      if (outstandingUnsettledSignals === 0) {
         cancelFollowUps();
         return;
       }
-      if (signalReportedNew) {
-        // This signal's purchase is already visible. Suppress a window for it
-        // without cancelling one that may belong to an earlier unsettled purchase.
+      if (!openedSlot) {
+        // This signal's purchase is already visible. Leave a window that may
+        // belong to an earlier unsettled purchase running.
         return;
       }
-      // One window of follow-ups at a time; a new empty signal restarts it.
-      cancelFollowUps();
-      for (const delay of verse8PurchaseFollowUpDelaysMs) {
-        const timer = setTimeout(() => {
-          followUpTimers.delete(timer);
-          if (disposed) {
-            return;
-          }
-          void refreshInBackground().then((late) => {
-            if (late > 0) {
-              // The record arrived: the remaining follow-ups have nothing to find.
-              cancelFollowUps();
-            }
-          });
-        }, delay);
-        // A Node host (tests, tooling) must not stay alive for a follow-up read.
-        unrefTimer(timer);
-        followUpTimers.add(timer);
-      }
+      scheduleFollowUps();
     });
   };
   let disposed = false;
@@ -391,7 +458,7 @@ export function createVerse8CommerceProvider(
     const detach = detachPurchaseSignal;
     detachPurchaseSignal = undefined;
     detach();
-    cancelFollowUps();
+    endObservation();
   };
 
   const failed = (
@@ -555,21 +622,24 @@ export function createVerse8CommerceProvider(
       listeners.clear();
       detachPurchaseSignal?.();
       detachPurchaseSignal = undefined;
-      cancelFollowUps();
+      endObservation();
     },
   };
   return provider;
 }
 
 /**
- * Delays of the re-reads that follow a purchase signal that reported no new
- * purchase id (no list, an empty list, or only ids already reported): the
- * Agent8 event may land seconds after the dialog closed. A later signal that
- * already reported a new id leaves an open window running. The window is not
- * started once the last listener has left. The window ends at the first read
- * that finds a new record, so a settled purchase costs no further reads;
- * after the window, `restorePurchases` (the reconciler's manual restore) and
- * the next signal are the readers.
+ * Delays of the one follow-up window for purchase signals that reported no
+ * new purchase id. Each such signal, including the id-less default dialog
+ * close, increments the outstanding unsettled count and opens or restarts
+ * this window: the Agent8 event may land seconds after the dialog closed.
+ * A purchase id the signal itself names settles that signal and leaves an
+ * earlier window running. A purchase id newly reported by a re-read or a
+ * follow-up settles one outstanding signal. The window ends when that count
+ * reaches 0, when these attempts elapse, or when the last listener leaves.
+ * An id the bounded set has already emitted is not a new record. After the
+ * window, `restorePurchases` and the next signal are the readers. The
+ * provider does not grant; these reads only re-read the purchase source.
  */
 export const verse8PurchaseFollowUpDelaysMs: readonly number[] = Object.freeze([
   1_000, 3_000, 7_000, 15_000, 30_000, 60_000, 120_000, 300_000,

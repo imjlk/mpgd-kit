@@ -217,18 +217,22 @@ Methods:
   evidence. The signal is observed while a listener exists; the first
   listener triggers a re-read, so purchases recorded before it (or before a
   restart) are found then. A signal that reports no new purchase id — no
-  `purchases` list, an empty list, or only ids already reported — is followed
-  by re-reads at `verse8PurchaseFollowUpDelaysMs` (1 s to 5 min, about nine
-  minutes in all) until one finds a new record. A signal that names a new
-  purchase id does not schedule those re-reads, and does not cancel a window
-  already waiting on an earlier purchase. A read that only sees an id the
-  bounded reported set has already emitted does not count as a new record,
-  so it does not end that window. No follow-up read is started after
-  the last listener unsubscribes. After that window the
+  `purchases` list, an empty list, or only ids already reported, including the
+  id-less default dialog close — increments a count of outstanding unsettled
+  signals and opens or extends one follow-up window at
+  `verse8PurchaseFollowUpDelaysMs` (1 s to 5 min, about nine minutes in all).
+  Each purchase id newly reported by the immediate re-read or a follow-up read
+  settles one outstanding signal. A signal that names a new purchase id
+  settles that signal: it does not join the count, so it does not consume an
+  earlier slot or schedule re-reads. The window's timers are cancelled only
+  when that count reaches 0, when the window's attempts elapse, or when the
+  last listener unsubscribes. A read that only sees an id the bounded reported
+  set has already emitted does not count as a new record. The provider does
+  not grant; it only re-reads the purchase source. After that window the
   reconciler's `restorePurchases` and the next signal are the readers. The
   provider emits no `purchaseError`.
-<!-- @link ../adapters/verse8/src/commerce-provider.ts#createVerse8CommerceProvider An empty or already-reported purchases list still schedules follow-up re-reads; a newly reported purchase id does not, and does not cancel an earlier window. An id the bounded set already emitted is not a new record. Follow-ups are not started after the last listener unsubscribes. -->
-<!-- @link ../adapters/verse8/src/commerce-provider.ts#verse8PurchaseFollowUpDelaysMs Follow-up delays after a signal that reported no new purchase id. -->
+<!-- @link ../adapters/verse8/src/commerce-provider.ts#createVerse8CommerceProvider An id-less or already-reported signal increments the outstanding unsettled count and opens or extends the follow-up window. A re-read or follow-up that reports a new purchase id settles one outstanding signal. A signal that names a new id settles itself and does not consume an earlier slot. Timers cancel only when the count reaches 0, the window elapses, or the last listener unsubscribes. An id the bounded set already emitted is not a new record. The provider only re-reads. -->
+<!-- @link ../adapters/verse8/src/commerce-provider.ts#verse8PurchaseFollowUpDelaysMs Follow-up delays for signals that reported no new purchase id. One window, cancelled when the outstanding count reaches 0 or the attempts elapse. -->
 
 The backend side of the lookup is the server-push verifier C2 added
 (`createVerse8Agent8EventLookupCommerceEvidenceEntry` in
