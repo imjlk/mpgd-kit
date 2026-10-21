@@ -1106,8 +1106,13 @@ function validateAppIconPipeline(): void {
   const devCommand = devvitPackageJson?.scripts?.dev;
   assertString(devCommand, `${devvitPackagePath}: scripts.dev`);
 
-  if (typeof devCommand === 'string' && !devCommand.startsWith('pnpm run prepare:icon && ')) {
-    failures.push(`${devvitPackagePath}: scripts.dev must prepare a development icon.`);
+  if (
+    typeof devCommand === 'string'
+    && !devCommand.startsWith('pnpm run check:sdk && pnpm run prepare:icon && ')
+  ) {
+    failures.push(
+      `${devvitPackagePath}: scripts.dev must check the latest SDK and prepare a development icon before playtest.`,
+    );
   }
 }
 

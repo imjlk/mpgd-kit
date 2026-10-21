@@ -8,7 +8,7 @@
     "prepare:icon:production": "pnpm --dir ../.. icons:generate:devvit:production",
     "init": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit upload --config devvit.json",
     "init:copy-paste": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit upload --copy-paste --config devvit.json",
-    "dev": "pnpm run prepare:icon && devvit playtest --config devvit.json",
+    "dev": "pnpm run check:sdk && pnpm run prepare:icon && devvit playtest --config devvit.json",
     "build": "pnpm --dir ../.. build:devvit",
     "whoami": "devvit whoami",
     "upload": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit upload --config devvit.json",

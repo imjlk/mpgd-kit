@@ -6,7 +6,7 @@
   "scripts": {
     "prepare:icon": "pnpm --dir ../.. game:icons:generate -- reddit development",
     "prepare:icon:production": "pnpm --dir ../.. game:icons:generate -- reddit production",
-    "dev": "pnpm run prepare:icon && devvit playtest",
+    "dev": "pnpm run check:sdk && pnpm run prepare:icon && devvit playtest",
     "build": "pnpm --dir ../.. build:target reddit production",
     "whoami": "devvit whoami",
     "upload": "pnpm run check:sdk && pnpm run prepare:icon:production && devvit upload",
