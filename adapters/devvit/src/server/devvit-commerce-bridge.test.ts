@@ -14,7 +14,9 @@ import {
   devvitCommerceCheckoutClientOnlyBridgeErrorCode,
   devvitCommerceV2InvalidPayloadBridgeErrorCode,
   devvitCommerceV2MethodUnsupportedBridgeErrorCode,
+  devvitOrderScanIncompleteBridgeErrorCode,
   devvitPaymentsUnavailableBridgeErrorCode,
+  maximumDevvitOrderScanPages,
   type DevvitPaymentsOrderLike,
   type DevvitPaymentsProductLike,
   type DevvitServerPaymentsLike,
@@ -251,7 +253,7 @@ describe('createDevvitCommerceV2BridgeHandler', () => {
     expect(getOrders).toHaveBeenNthCalledWith(2, { limit: maximumDevvitAvailableOrders, cursor: '1' });
   });
 
-  it('stops paging after two consecutive pages without a paid or delivered order and warns', async () => {
+  it('pages through canceled orders until the cursor ends, including a paid order behind them', async () => {
     const warnings: string[] = [];
     const { handler, getOrders } = createFixture({
       pages: [
@@ -265,14 +267,15 @@ describe('createDevvitCommerceV2BridgeHandler', () => {
     const response = data(await handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
       readonly purchases: readonly { readonly transactionId: string }[];
     };
-    expect(response.purchases.map((purchase) => purchase.transactionId)).toEqual(['order-paid']);
-    // Pages two and three hold nothing to list, so page four (older still) is never read.
-    expect(getOrders).toHaveBeenCalledTimes(3);
-    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders });
-    expect(getOrders).toHaveBeenNthCalledWith(2, { limit: maximumDevvitAvailableOrders, cursor: '1' });
-    expect(warnings).toEqual([expect.stringContaining('older pages were not read')]);
+    // Two pages of canceled or new orders used to stop the scan. The paid order behind them is listed.
+    expect(response.purchases.map((purchase) => purchase.transactionId)).toEqual([
+      'order-paid',
+      'order-ancient-paid',
+    ]);
+    expect(getOrders).toHaveBeenCalledTimes(4);
+    expect(warnings).toEqual([]);
 
-    // One page without a listable order is not enough: the next page is still read.
+    // One page of non-paid orders is not a reason to stop: the next page is still read.
     const single = createFixture({
       pages: [
         [order({ id: 'order-canceled', status: 5 })],
@@ -285,32 +288,39 @@ describe('createDevvitCommerceV2BridgeHandler', () => {
     expect(ours.purchases.map((purchase) => purchase.transactionId)).toEqual(['order-ours']);
     expect(single.getOrders).toHaveBeenCalledTimes(2);
 
-    // A first page without a listable order and more pages: the stop fires after the second such page.
-    const settled = createFixture({
+    // A paid order behind more than two full pages of canceled orders is still listed.
+    const buried = createFixture({
       pages: [
-        [order({ id: 'order-a', status: 5 })],
-        [order({ id: 'order-b', status: 6 })],
-        [order({ id: 'order-c' })],
+        Array.from({ length: maximumDevvitAvailableOrders }, (_, index) =>
+          order({ id: `canceled-a-${String(index)}`, status: 5 })),
+        Array.from({ length: maximumDevvitAvailableOrders }, (_, index) =>
+          order({ id: `canceled-b-${String(index)}`, status: 1 })),
+        [order({ id: 'order-still-paid' })],
       ],
     });
-    const none = data(await settled.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
-      readonly purchases: readonly unknown[];
+    const stillPaid = data(await buried.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
+      readonly purchases: readonly { readonly transactionId: string }[];
     };
-    expect(none.purchases).toEqual([]);
-    expect(settled.getOrders).toHaveBeenCalledTimes(2);
+    expect(stillPaid.purchases.map((purchase) => purchase.transactionId)).toEqual(['order-still-paid']);
+    expect(buried.getOrders).toHaveBeenCalledTimes(3);
+  });
 
-    // A delivered order for another SKU keeps the scan going: older pages may hold ours.
-    const foreign = createFixture({
-      pages: Array.from({ length: 10 }, (_, index) => [
-        order({ id: `order-foreign-${String(index)}`, status: 4, products: [{ sku: 'foreign_sku' }] }),
-      ]),
-      warn: () => {},
+  it('fails a scan that hits the page cap with pages left instead of treating the tail as delivered', async () => {
+    const pages = Array.from({ length: maximumDevvitOrderScanPages + 1 }, (_, index) => [
+      order({ id: `order-canceled-${String(index)}`, status: 5 }),
+    ]);
+    pages[pages.length - 1] = [order({ id: 'order-beyond-cap' })];
+    const { handler, getOrders } = createFixture({ pages });
+    expect(error(await handler.request(request('commerce.v2.getAvailablePurchases', {})))).toEqual({
+      code: devvitOrderScanIncompleteBridgeErrorCode,
+      retryable: true,
     });
-    const capped = data(await foreign.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
-      readonly purchases: readonly unknown[];
-    };
-    expect(capped.purchases).toEqual([]);
-    expect(foreign.getOrders).toHaveBeenCalledTimes(8);
+    expect(getOrders).toHaveBeenCalledTimes(maximumDevvitOrderScanPages);
+    // The unread paid order is not returned as an empty success.
+    expect(getOrders).toHaveBeenNthCalledWith(
+      maximumDevvitOrderScanPages,
+      { limit: maximumDevvitAvailableOrders, cursor: String(maximumDevvitOrderScanPages - 1) },
+    );
   });
 
   it('bounds the listed orders and stops paging at the bound', async () => {
