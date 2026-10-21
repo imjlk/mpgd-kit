@@ -106,11 +106,15 @@ const minimumPromotionTossAppVersion = '5.232.0';
  */
 const reservedStorageKeyPrefix = 'mpgd:ait:';
 /**
- * Promotion markers stay keyed by the claim id, as on main. New records also
- * carry `campaignId`. A stored record whose campaign id differs stays pending
- * and is not overwritten. Campaign-scoped keys are a follow-up.
+ * Legacy markers stay at `mpgd:ait:promotion-grant:v1:<idempotencyKey>`.
+ * New records are stored at
+ * `mpgd:ait:promotion-grant:v2:<campaignId>:<idempotencyKey>`. An unbound v1
+ * marker is stamped with `campaignId` before any scoped copy is written.
+ * A stored record whose campaign id differs, or whose campaign id is present
+ * but not a non-blank string, stays pending and is not overwritten.
  */
 const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
+const promotionGrantScopedStoragePrefix = 'mpgd:ait:promotion-grant:v2:';
 const promotionReceiptCacheLimit = 256;
 const notificationTopics = new Set<NotificationTopic>([
   'daily-ready',
@@ -948,10 +952,10 @@ function promotionClaimKey(campaignId: string, idempotencyKey: string): string {
 
 /**
  * Serialize grant and recover for one idempotency key, including across
- * campaigns. The durable marker is keyed by that claim id, so two callers
- * must not both pass the pre-dispatch read. A queued caller runs after the
- * holder finishes, so a recover that finds nothing does not swallow a later
- * grant, and a grant cannot overwrite a receipt recover just wrote.
+ * campaigns. A legacy v1 marker is not campaign-scoped, so two callers must
+ * not both read it before the first binding lands. A queued caller runs after
+ * the holder finishes, so a recover that finds nothing does not swallow a
+ * later grant, and a grant cannot overwrite a receipt recover just wrote.
  * Callbacks must not re-enter the same idempotency key: that waits on itself.
  */
 function withPromotionClaimLock<T>(
@@ -960,9 +964,9 @@ function withPromotionClaimLock<T>(
   idempotencyKey: string,
   work: () => Promise<T>,
 ): Promise<T> {
-  // The campaign is part of the caller's claim, not of this lock. Storage is
-  // still one key per claim id, so splitting the lock by campaign would let
-  // two campaigns both dispatch before either write lands.
+  // The campaign is part of the caller's claim, not of this lock. An unscoped
+  // v1 marker is one key per claim id, so splitting the lock by campaign would
+  // let two campaigns both bind it before either stamp lands.
   void campaignId;
   const key = idempotencyKey;
   const previous = memory.inFlight.get(key) ?? Promise.resolve();
@@ -1247,12 +1251,6 @@ async function recoverPromotionFromAuthority(input: {
       && resolution.receiptKey.trim().length > 0
     ) {
       const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
-      retainUndurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
-      rememberGrantedReceipt(input.memory, {
-        campaignId: input.campaignId,
-        idempotencyKey: input.idempotencyKey,
-        ...result,
-      });
       try {
         await writePromotionGrantRecord(
           input.dependencies.storage,
@@ -1260,8 +1258,29 @@ async function recoverPromotionFromAuthority(input: {
           input.idempotencyKey,
           result,
         );
+        rememberGrantedReceipt(input.memory, {
+          campaignId: input.campaignId,
+          idempotencyKey: input.idempotencyKey,
+          ...result,
+        });
         releaseDurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
-      } catch { /* The observer and bridge-local cache can still retain this terminal receipt. */ }
+      } catch (error) {
+        // A fence or campaign conflict must not publish this receipt. The
+        // write stamps an unbound marker before any scoped copy, and throws
+        // without creating that copy when the stamp does not land.
+        if (
+          error instanceof PromotionCampaignConflictError
+          || error instanceof LegacyPromotionFenceError
+        ) {
+          return { status: 'pending' };
+        }
+        retainUndurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
+        rememberGrantedReceipt(input.memory, {
+          campaignId: input.campaignId,
+          idempotencyKey: input.idempotencyKey,
+          ...result,
+        });
+      }
       await observePromotion(input.observer, {
         campaignId: input.campaignId,
         idempotencyKey: input.idempotencyKey,
@@ -1606,6 +1625,27 @@ async function resolvePersistedPromotionGrant(
   if (loaded.serialized === null) {
     return {};
   }
+  // An unbound v1 marker is bound in place before it can be consumed. The
+  // stamp is the binding record; no scoped copy is written here. A failed
+  // stamp leaves the original unbound and does not publish a local receipt.
+  let durableBinding = !loaded.legacy;
+  if (loaded.legacy) {
+    const bound = await bindUnscopedLegacyMarker(
+      input.storage,
+      input.campaignId,
+      input.idempotencyKey,
+      loaded.serialized,
+    );
+    if (bound === 'bound') {
+      durableBinding = true;
+    } else if (isGrantedPromotionRecord(loaded.serialized)) {
+      console.warn(
+        'AIT legacy promotion marker could not be bound; keeping the claim pending.',
+        input.campaignId,
+      );
+      return { result: { status: 'pending' } };
+    }
+  }
   const storageKey = loaded.storageKey;
   const serialized = loaded.serialized;
 
@@ -1698,14 +1738,6 @@ async function resolvePersistedPromotionGrant(
           return { result: pendingResult };
         }
         const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
-        if (input.memory !== undefined) {
-          retainUndurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
-          rememberGrantedReceipt(input.memory, {
-            campaignId: input.campaignId,
-            idempotencyKey: input.idempotencyKey,
-            ...result,
-          });
-        }
         try {
           await writePromotionGrantRecord(
             input.storage,
@@ -1714,14 +1746,35 @@ async function resolvePersistedPromotionGrant(
             result,
           );
           if (input.memory !== undefined) {
+            rememberGrantedReceipt(input.memory, {
+              campaignId: input.campaignId,
+              idempotencyKey: input.idempotencyKey,
+              ...result,
+            });
             releaseDurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
           }
         } catch (error) {
-          console.warn(
-            'AIT reconciled promotion receipt could not be cached; keeping it terminal.',
-            input.campaignId,
-            error,
-          );
+          if (error instanceof PromotionCampaignConflictError) {
+            return { result: { status: 'pending' } };
+          }
+          // A reconciled answer whose cache write failed stays terminal. That
+          // includes a stamp that did not land: no scoped copy was written.
+          // The failed-read authority fallback does not publish on that error.
+          if (input.memory !== undefined) {
+            retainUndurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
+            rememberGrantedReceipt(input.memory, {
+              campaignId: input.campaignId,
+              idempotencyKey: input.idempotencyKey,
+              ...result,
+            });
+          }
+          if (!(error instanceof LegacyPromotionFenceError)) {
+            console.warn(
+              'AIT reconciled promotion receipt could not be cached; keeping it terminal.',
+              input.campaignId,
+              error,
+            );
+          }
         }
         await observePromotion(input.observer, {
           campaignId: input.campaignId,
@@ -1732,6 +1785,11 @@ async function resolvePersistedPromotionGrant(
       }
 
       if (input.recoveryOnly || resolution.status !== 'retry') {
+        return { result: pendingResult };
+      }
+      if (!durableBinding) {
+        // The unbound marker is the only fence. Removing it would let this
+        // campaign, and any other, dispatch the same claim.
         return { result: pendingResult };
       }
       if (input.memory !== undefined) {
@@ -1753,6 +1811,13 @@ async function resolvePersistedPromotionGrant(
             ...cached,
           });
           return { result: cached };
+        }
+      }
+      const scopedKey = promotionGrantScopedStorageKey(input.campaignId, input.idempotencyKey);
+      if (scopedKey !== storageKey) {
+        const scopedRemoved = await removeInvalidPersistedPromotionGrant(input.storage, scopedKey);
+        if (scopedRemoved.result !== undefined) {
+          return scopedRemoved;
         }
       }
       const removed = await removeInvalidPersistedPromotionGrant(input.storage, storageKey);
@@ -1792,14 +1857,87 @@ function promotionGrantStorageKey(idempotencyKey: string): string {
   return `${promotionGrantStoragePrefix}${encodeURIComponent(idempotencyKey)}`;
 }
 
-function readStoredCampaignId(serialized: string): string | undefined {
+function promotionGrantScopedStorageKey(campaignId: string, idempotencyKey: string): string {
+  return `${promotionGrantScopedStoragePrefix}${encodeURIComponent(campaignId)}:${encodeURIComponent(idempotencyKey)}`;
+}
+
+/** The marker names another campaign, or its campaignId is present but not a non-blank string. */
+class PromotionCampaignConflictError extends Error {
+  constructor(message = 'AIT promotion marker belongs to another campaign.') {
+    super(message);
+    this.name = 'PromotionCampaignConflictError';
+  }
+}
+
+/**
+ * An unbound or malformed legacy marker was seen and could not be durably
+ * bound. No scoped copy was written.
+ */
+class LegacyPromotionFenceError extends Error {
+  constructor(message = 'AIT legacy promotion marker could not be bound.') {
+    super(message);
+    this.name = 'LegacyPromotionFenceError';
+  }
+}
+
+type StoredCampaignBinding =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'bound'; readonly campaignId: string };
+
+/** Only a missing `campaignId` property is legacy. A present invalid value is not. */
+function readStoredCampaignBinding(serialized: string): StoredCampaignBinding {
+  let state: unknown;
   try {
-    const state: unknown = JSON.parse(serialized);
-    if (isRecord(state) && typeof state.campaignId === 'string' && state.campaignId.trim().length > 0) {
-      return state.campaignId;
-    }
-  } catch { /* An unreadable marker has no campaign id and follows the main path. */ }
-  return undefined;
+    state = JSON.parse(serialized);
+  } catch {
+    return { kind: 'unreadable' };
+  }
+  if (!isRecord(state) || !Object.hasOwn(state, 'campaignId')) {
+    return { kind: 'absent' };
+  }
+  if (typeof state.campaignId === 'string' && state.campaignId.trim().length > 0) {
+    return { kind: 'bound', campaignId: state.campaignId };
+  }
+  return { kind: 'invalid' };
+}
+
+function isCampaignConflict(binding: StoredCampaignBinding, campaignId: string): boolean {
+  return binding.kind === 'invalid'
+    || binding.kind === 'unreadable'
+    || (binding.kind === 'bound' && binding.campaignId !== campaignId);
+}
+
+/**
+ * Stamp `campaignId` onto an unbound v1 marker. This is the binding record.
+ * It does not write a scoped copy, and it does not record an in-process
+ * binding: a failed stamp must stay visible to every campaign.
+ */
+async function bindUnscopedLegacyMarker(
+  storage: Pick<typeof Storage, 'setItem'>,
+  campaignId: string,
+  idempotencyKey: string,
+  serialized: string,
+): Promise<'bound' | 'unbound' | 'malformed'> {
+  let state: unknown;
+  try {
+    state = JSON.parse(serialized);
+  } catch {
+    return 'malformed';
+  }
+  if (!isRecord(state) || Object.hasOwn(state, 'campaignId')) {
+    return 'malformed';
+  }
+  try {
+    await storage.setItem(
+      promotionGrantStorageKey(idempotencyKey),
+      JSON.stringify({ ...state, campaignId }),
+    );
+    return 'bound';
+  } catch {
+    return 'unbound';
+  }
 }
 
 async function loadPromotionGrantRecord(
@@ -1808,49 +1946,110 @@ async function loadPromotionGrantRecord(
   idempotencyKey: string,
 ): Promise<{
   readonly storageKey: string;
+  readonly legacy: boolean;
   readonly serialized: string | null;
   readonly campaignMismatch: boolean;
 }> {
-  const storageKey = promotionGrantStorageKey(idempotencyKey);
-  const serialized = await storage.getItem(storageKey);
-  if (serialized === null) {
-    return { storageKey, serialized: null, campaignMismatch: false };
+  const scopedKey = promotionGrantScopedStorageKey(campaignId, idempotencyKey);
+  const scoped = await storage.getItem(scopedKey);
+  if (scoped !== null) {
+    const binding = readStoredCampaignBinding(scoped);
+    if (isCampaignConflict(binding, campaignId)) {
+      return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: true };
+    }
+    return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: false };
   }
-  const bound = readStoredCampaignId(serialized);
-  if (bound !== undefined && bound !== campaignId) {
-    return { storageKey, serialized, campaignMismatch: true };
+  const legacyKey = promotionGrantStorageKey(idempotencyKey);
+  const legacy = await storage.getItem(legacyKey);
+  if (legacy === null) {
+    return { storageKey: scopedKey, legacy: false, serialized: null, campaignMismatch: false };
   }
-  return { storageKey, serialized, campaignMismatch: false };
+  const binding = readStoredCampaignBinding(legacy);
+  if (isCampaignConflict(binding, campaignId)) {
+    return { storageKey: legacyKey, legacy: true, serialized: legacy, campaignMismatch: true };
+  }
+  return {
+    storageKey: legacyKey,
+    legacy: binding.kind === 'absent',
+    serialized: legacy,
+    campaignMismatch: false,
+  };
 }
 
 /**
- * New records include `campaignId`. A stored record that already names a
- * different campaign is left untouched; callers treat that write failure as
- * pending and do not dispatch.
+ * New records go to the campaign-scoped key. A legacy v1 marker is updated in
+ * place: an unbound marker is stamped before any other durable write, and no
+ * scoped copy of it is created. A conflicting or invalid binding is left
+ * untouched.
  */
 async function writePromotionGrantRecord(
-  storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
+  storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
   campaignId: string,
   idempotencyKey: string,
   record: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const storageKey = promotionGrantStorageKey(idempotencyKey);
-  let conflict = false;
+  const scopedKey = promotionGrantScopedStorageKey(campaignId, idempotencyKey);
+  const legacyKey = promotionGrantStorageKey(idempotencyKey);
+  let scoped: string | null = null;
+  let scopedUnread = false;
   try {
-    const existing = await storage.getItem(storageKey);
-    if (existing !== null) {
-      const bound = readStoredCampaignId(existing);
-      conflict = bound !== undefined && bound !== campaignId;
-    }
+    scoped = await storage.getItem(scopedKey);
   } catch {
-    // A failed read cannot prove a campaign conflict. Still attempt the write
-    // so a markerless authority receipt can land. An in-flight grant is not
-    // overwritten here: recover does not reach this write until that grant finishes.
+    scopedUnread = true;
   }
-  if (conflict) {
-    throw new Error('AIT promotion marker belongs to another campaign.');
+  if (!scopedUnread && scoped !== null && isCampaignConflict(readStoredCampaignBinding(scoped), campaignId)) {
+    throw new PromotionCampaignConflictError();
   }
-  await storage.setItem(storageKey, JSON.stringify({ ...record, campaignId }));
+  let legacy: string | null = null;
+  let legacyUnread = false;
+  try {
+    legacy = await storage.getItem(legacyKey);
+  } catch {
+    legacyUnread = true;
+  }
+  if (legacyUnread) {
+    // A failed legacy read cannot prove an unbound marker. Markerless authority
+    // receipts still have to land. A marker that was read and could not be
+    // bound is handled below and does not take this path.
+    await storage.setItem(scopedKey, JSON.stringify({ ...record, campaignId }));
+    return;
+  }
+  if (legacy !== null) {
+    const binding = readStoredCampaignBinding(legacy);
+    if (binding.kind === 'unreadable') {
+      throw new LegacyPromotionFenceError('AIT legacy promotion marker is malformed.');
+    }
+    if (isCampaignConflict(binding, campaignId)) {
+      throw new PromotionCampaignConflictError();
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(legacy);
+    } catch {
+      throw new LegacyPromotionFenceError('AIT legacy promotion marker is malformed.');
+    }
+    if (!isRecord(parsed)) {
+      throw new LegacyPromotionFenceError('AIT legacy promotion marker is malformed.');
+    }
+    // Binding record first. A failed stamp must not be followed by a scoped copy.
+    try {
+      await storage.setItem(legacyKey, JSON.stringify({ ...parsed, ...record, campaignId }));
+    } catch {
+      if (binding.kind === 'absent') {
+        throw new LegacyPromotionFenceError();
+      }
+      throw new Error('AIT promotion marker could not be cached.');
+    }
+    if (scoped === null) {
+      return;
+    }
+    await storage.setItem(scopedKey, JSON.stringify({ ...record, campaignId }));
+    try {
+      await storage.removeItem(legacyKey);
+    } catch { /* The stamp still fences a restarted bridge. */ }
+    return;
+  }
+  await storage.setItem(scopedKey, JSON.stringify({ ...record, campaignId }));
 }
 
 export async function shareIntent(
