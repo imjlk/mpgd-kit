@@ -266,8 +266,9 @@ id its identity service answers to the notifications Worker). A backend that
 omits it gets a derived id that changes only where the backend's family might
 have: at a new guest, at a bound account whose `sessionId` changed, and at a
 restore whose saved family (`<credentialKey>.family` in the same secure
-storage, removed at logout) cannot be read. `current()` reads the active view
-and `onSession(listener)` hears each new one.
+storage, written before the token and removed at logout) cannot be read. Such
+a backend must give a binding that starts a new family a new `sessionId`.
+`current()` reads the active view and `onSession(listener)` hears each new one.
 
 Binding an external account never switches to a different server user on a
 client callback. It does not merge purchases, currency, or progress. Use the

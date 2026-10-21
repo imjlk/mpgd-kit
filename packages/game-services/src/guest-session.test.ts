@@ -657,12 +657,12 @@ function familyBackend() {
   });
   await coordinator.start();
   assert.equal(native.values.get('mpgd.guest.refresh.family'), 'issued-session');
-  // An unchanged family is not written again.
+  // The family is written before its token, and an unchanged family is not written again.
   server.answers.refresh.push({ sessionId: 'rotated-1' });
   await coordinator.refresh();
   assert.deepEqual(saves, [
-    'mpgd.guest.refresh',
     'mpgd.guest.refresh.family',
+    'mpgd.guest.refresh',
     'mpgd.guest.refresh',
   ]);
   failFamilySave = true;
@@ -703,6 +703,51 @@ function familyBackend() {
     throw new Error('listener failed');
   });
   assert.equal((await listening.start()).sessionFamilyId, 'issued-session');
+}
+
+// A backend that names the family at issue and at binding: its ids are used as sent.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  server.answers.issue = { sessionId: 'issued-session', sessionFamilyId: 'family-a' };
+  server.answers.bind = { sessionId: 'issued-session', sessionFamilyId: 'family-b' };
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  assert.equal((await coordinator.start()).sessionFamilyId, 'family-a');
+  // A binding that keeps the session id still takes the family the backend names.
+  await coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' });
+  assert.equal(coordinator.current()?.sessionFamilyId, 'family-b');
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'family-b');
+  // `null` reads as an omitted family id.
+  server.answers.refresh.push({
+    sessionId: 'rotated-1',
+    sessionFamilyId: null as unknown as string,
+  });
+  assert.equal((await coordinator.refresh()).sessionFamilyId, 'family-b');
+}
+
+// A failed token save: no active session, and nothing announced.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  const seen: string[] = [];
+  coordinator.onSession((view) => seen.push(view.sessionId));
+  await coordinator.start();
+  native.failNextSave();
+  server.answers.refresh.push({ sessionId: 'rotated-1' });
+  await assert.rejects(coordinator.refresh(), { code: 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED' });
+  assert.equal(coordinator.current(), undefined);
+  assert.deepEqual(seen, ['issued-session']);
 }
 
 console.info('Guest session coordinator conformance passed.');
