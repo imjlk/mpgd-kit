@@ -195,7 +195,8 @@
     "smoke:lite-shell:package": "node tools/run-ttsx.mjs tools/smoke/lite-shell-package.ts",
     "test:published-starter": "node tools/run-ttsx.mjs tools/smoke/published-starter-consumer.test.ts",
     "oneplay:skill:check": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json --no-plugins tools/oneplay/official-skill.ts",
-    "oneplay:skill:test": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json --no-plugins tools/oneplay/official-skill.test.ts"
+    "oneplay:skill:test": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json --no-plugins tools/oneplay/official-skill.test.ts",
+    "test:devvit-sdk": "node tools/run-ttsx.mjs --project packages/cli/tsconfig.json packages/cli/src/devvit-sdk-check.test.ts"
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",

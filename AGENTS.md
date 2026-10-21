@@ -54,6 +54,10 @@ Platform SDK imports belong only in:
 - `native-plugins/*`
 - `apps/target-*`
 
+## Devvit uploads
+
+Before each Devvit upload/publish, run `mpgd kit devvit-check --project <target-directory>`. Use exact current stable SDK/CLI pins and a reviewed lockfile; if outdated, update and rebuild/test first. Do not silently install latest during upload or treat a failed registry lookup as success. The installed SDK resolved by the adapter must agree too.
+
 ## Release And Changesets
 
 - For PR-based work that will merge to `main`, add a Sampo changeset under `.sampo/changesets/` whenever the PR changes a publishable package's public API, runtime behavior, package metadata, generated release artifacts, or user-facing integration contract.

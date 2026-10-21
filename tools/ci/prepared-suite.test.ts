@@ -27,12 +27,13 @@ await test('typed suite entry lists groups and rejects unknown groups through th
   assert.match(rejected.stderr, /Unknown prepared test group/);
 });
 
-await test('prepared groups retain all 62 commands exactly once', () => {
+await test('prepared groups retain all 63 commands exactly once', () => {
   const scripts = Object.values(preparedGroups).flat();
-  assert.equal(scripts.length, 62);
+  assert.equal(scripts.length, 63);
   assert.ok(preparedGroups.cli.includes('smoke:cli-asset-pack-publish'));
   assert.ok(preparedGroups.cli.includes('smoke:cli-asset-pack-target'));
   assert.ok(preparedGroups.cli.includes('test:template-tools'));
+  assert.ok(preparedGroups.cli.includes('test:devvit-sdk'));
   assert.ok(preparedGroups.cli.includes('smoke:cli-notifications-starter'));
   assert.ok(preparedGroups.cli.includes('smoke:cli-notifications-game'));
   assert.equal(new Set(scripts).size, scripts.length);
