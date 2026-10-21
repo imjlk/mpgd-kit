@@ -112,7 +112,7 @@ nor a timeout should reset the server's monetary dispatch fence. A legacy failur
 already removed cannot recover its old error code.
 
 <!--
-@link src/host.ts#createAitHostBridge Grant and recover share one idempotency-key lock, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, stamp an unbound legacy marker before any scoped copy, and leave a conflicting or invalid campaignId pending.
+@link src/host.ts#createAitHostBridge Grant and recover share one storage-keyed idempotency lock across bridges, re-read storage before payout, keep undurable receipts and undurable explicit failures fenced, stamp an unbound legacy marker before any scoped copy, and leave a failed stamp or a conflicting campaignId pending.
 @link src/index.ts#createAitPlatformGateway An older host's unsupported recoverReward method, including a protocol validator rejection, is pending, not an exception.
 -->
 
@@ -122,8 +122,9 @@ a new installation without local state. It never calls the authorizer or native 
 a resolver's `retry` result leaves pending storage untouched. An explicit `grantReward` request
 is still required for a newly authorized payment. An unknown provider outcome remains pending;
 this API cannot reconstruct a lost provider key or prove non-payment. Grant and recover for the
-same idempotency key run one at a time, including when the campaigns differ, because a legacy
-v1 marker is not campaign-scoped. After authorization, and again immediately
+same idempotency key run one at a time, including when the campaigns differ and when two host
+bridges share one storage object. A per-bridge lock is not enough: a legacy v1 marker is not
+campaign-scoped. After authorization, and again immediately
 before the native payout, grant re-reads storage and the bridge-local receipt cache and returns
 a granted receipt instead of paying again.
 
@@ -138,13 +139,13 @@ under `mpgd:ait:promotion-grant:v2:<campaignId>:<idempotencyKey>` and include `c
 legacy `mpgd:ait:promotion-grant:v1:<idempotencyKey>` marker is still readable. One with no
 `campaignId` is unbound: the first campaign stamps that id onto the marker itself before any
 scoped copy, and another campaign does not receive the receipt. If the stamp cannot be stored,
-nothing is copied, the local receipt is not returned, and a second campaign in the same process
-still sees the unbound marker. A present `campaignId` that is blank or not a string is not treated
-as unbound; every campaign stays pending and the marker is left unchanged. A v1 marker that
-already names a campaign, including one written before scoped keys, stays pending for every other
-campaign. Server-issued idempotency keys should stay unique across campaigns. An authority `retry`
-removes the bound marker and any scoped copy of that claim before another payout, and does not
-remove a marker that could not be bound.
+nothing is copied, a reconciled granted answer is not cached or returned, and a second campaign
+in the same process still sees the unbound marker. A present `campaignId` that is blank or not a
+string is not treated as unbound; every campaign stays pending and the marker is left unchanged. A
+v1 marker that already names a campaign, including one written before scoped keys, stays pending
+for every other campaign. Server-issued idempotency keys should stay unique across campaigns. An
+authority `retry` removes the bound marker and any scoped copy of that claim before another payout,
+and does not remove a marker that could not be bound.
 
 An older host that does not implement `promotions.recoverReward` answers `{ status: 'pending' }`
 instead of throwing. That includes a host whose protocol validator rejects the method and whose

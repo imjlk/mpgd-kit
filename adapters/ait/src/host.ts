@@ -623,7 +623,7 @@ export function createAitHostBridge(
           return ok(request, { status: 'unavailable' });
         }
         return ok(request, await withPromotionClaimLock(
-          promotionClaims,
+          dependencies.storage,
           campaignId,
           idempotencyKey,
           () => recoverAitPromotionReward({
@@ -648,7 +648,7 @@ export function createAitHostBridge(
           return ok(request, { status: 'unavailable' });
         }
         return ok(request, await withPromotionClaimLock(
-          promotionClaims,
+          dependencies.storage,
           campaignId,
           idempotencyKey,
           () => grantLockedAitPromotionReward({
@@ -927,7 +927,6 @@ function getPromotionAvailability(
 }
 
 interface PromotionClaimMemory {
-  readonly inFlight: Map<string, Promise<void>>;
   readonly receipts: Map<string, AitPromotionGrantObservation>;
   /** Receipts whose durable write failed. Eviction must not drop these. */
   readonly undurableReceipts: Set<string>;
@@ -938,7 +937,6 @@ interface PromotionClaimMemory {
 
 function createPromotionClaimMemory(): PromotionClaimMemory {
   return {
-    inFlight: new Map(),
     receipts: new Map(),
     undurableReceipts: new Set(),
     explicitFailures: new Map(),
@@ -952,14 +950,29 @@ function promotionClaimKey(campaignId: string, idempotencyKey: string): string {
 
 /**
  * Serialize grant and recover for one idempotency key, including across
- * campaigns. A legacy v1 marker is not campaign-scoped, so two callers must
- * not both read it before the first binding lands. A queued caller runs after
- * the holder finishes, so a recover that finds nothing does not swallow a
- * later grant, and a grant cannot overwrite a receipt recover just wrote.
- * Callbacks must not re-enter the same idempotency key: that waits on itself.
+ * campaigns and across bridges that share storage. A legacy v1 marker is not
+ * campaign-scoped, so two callers must not both read it before the first
+ * binding lands. The lock is module-level and keyed by the storage object;
+ * a per-bridge map would let two hosts both stamp the same unbound marker.
+ * A queued caller runs after the holder finishes, so a recover that finds
+ * nothing does not swallow a later grant, and a grant cannot overwrite a
+ * receipt recover just wrote. Callbacks must not re-enter the same
+ * idempotency key: that waits on itself. The lock is not an in-process claim:
+ * a failed stamp must stay visible to every campaign.
  */
+const promotionClaimLocks = new WeakMap<object, Map<string, Promise<void>>>();
+
+function promotionClaimLocksFor(storage: object): Map<string, Promise<void>> {
+  let locks = promotionClaimLocks.get(storage);
+  if (locks === undefined) {
+    locks = new Map();
+    promotionClaimLocks.set(storage, locks);
+  }
+  return locks;
+}
+
 function withPromotionClaimLock<T>(
-  memory: PromotionClaimMemory,
+  storage: object,
   campaignId: string,
   idempotencyKey: string,
   work: () => Promise<T>,
@@ -968,17 +981,18 @@ function withPromotionClaimLock<T>(
   // v1 marker is one key per claim id, so splitting the lock by campaign would
   // let two campaigns both bind it before either stamp lands.
   void campaignId;
+  const locks = promotionClaimLocksFor(storage);
   const key = idempotencyKey;
-  const previous = memory.inFlight.get(key) ?? Promise.resolve();
+  const previous = locks.get(key) ?? Promise.resolve();
   const run = previous.then(work, work);
   const settled = run.then(
     () => undefined,
     () => undefined,
   );
-  memory.inFlight.set(key, settled);
+  locks.set(key, settled);
   void settled.then(() => {
-    if (memory.inFlight.get(key) === settled) {
-      memory.inFlight.delete(key);
+    if (locks.get(key) === settled) {
+      locks.delete(key);
     }
   });
   return run;
@@ -1754,12 +1768,16 @@ async function resolvePersistedPromotionGrant(
             releaseDurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
           }
         } catch (error) {
-          if (error instanceof PromotionCampaignConflictError) {
+          if (
+            error instanceof PromotionCampaignConflictError
+            || error instanceof LegacyPromotionFenceError
+          ) {
+            // A failed stamp leaves the marker unbound. Caching or returning
+            // the authority receipt would let another campaign claim it too.
             return { result: { status: 'pending' } };
           }
-          // A reconciled answer whose cache write failed stays terminal. That
-          // includes a stamp that did not land: no scoped copy was written.
-          // The failed-read authority fallback does not publish on that error.
+          // A reconciled answer whose cache write failed stays terminal only
+          // after the marker is already bound. No scoped copy was written.
           if (input.memory !== undefined) {
             retainUndurableReceipt(input.memory, input.campaignId, input.idempotencyKey);
             rememberGrantedReceipt(input.memory, {
@@ -1768,13 +1786,11 @@ async function resolvePersistedPromotionGrant(
               ...result,
             });
           }
-          if (!(error instanceof LegacyPromotionFenceError)) {
-            console.warn(
-              'AIT reconciled promotion receipt could not be cached; keeping it terminal.',
-              input.campaignId,
-              error,
-            );
-          }
+          console.warn(
+            'AIT reconciled promotion receipt could not be cached; keeping it terminal.',
+            input.campaignId,
+            error,
+          );
         }
         await observePromotion(input.observer, {
           campaignId: input.campaignId,
