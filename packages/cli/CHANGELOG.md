@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.55.0 — 2026-10-21
+
+### Minor changes
+
+- [a2f31f14](https://github.com/imjlk/mpgd-kit/commit/a2f31f141434f432121c90a7c7511d6ef9cd1196) Check current stable Devvit SDK and CLI versions before target upload, publish, and playtest, including every directly declared `devvit` / `@devvit/*` package and the adapter-resolved SDK. Fail before upload on stale installs or unavailable registry checks; preserve exact pins and require rebuilding after upgrades. Update the adapter and starter to Devvit 0.15.0. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.20.3, @mpgd/adapter-browser@0.11.7, @mpgd/adapter-capacitor@0.12.3, @mpgd/adapter-devvit@0.13.5, @mpgd/adapter-verse8@0.7.7, @mpgd/analytics@0.4.16, @mpgd/bridge@0.15.0, @mpgd/capacitor-play-billing@0.3.7, @mpgd/capacitor-storekit@0.3.7, @mpgd/catalog@0.10.7, @mpgd/game-runtime@0.8.0, @mpgd/game-services@0.27.2, @mpgd/i18n@0.6.21, @mpgd/platform@0.27.2, @mpgd/target-config@0.23.7
+
 ## 0.54.1 — 2026-10-21
 
 ### Patch changes

@@ -1,5 +1,0 @@
----
-npm/@mpgd/adapter-ait: patch (Fixed)
----
-
-The Apps in Toss game-side notifications provider fails closed when the host answers `notifications.v2.getCapabilities` with a notifications protocol version the game's `notificationsProtocolVersion` is not compatible with: while either is a pre-release (now `2.0.0-draft.1`), the host must share the major and the whole pre-release tag, so `2.0.0-draft.1` does not accept `2.0.0-draft.2` or `2.0.0`; between releases, the major decides; anything that is not a semantic version is refused. Such a host, or one serving another provider id, is judged from a capability read: `getCapabilities` reads every time, any other method reads once before the first verdict, and a failed read gives no verdict, so the next call reads again. Once the host is judged incompatible, every method throws `NOTIFICATIONS_CONFIGURATION_REQUIRED` without reaching it (the gateway reports notifications as `configuration-required`), live subscriptions are detached, and `subscribe` attaches nothing.

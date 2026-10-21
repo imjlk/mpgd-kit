@@ -1,5 +1,15 @@
 # @mpgd/adapter-capacitor
 
+## 0.12.3 — 2026-10-21
+
+### Changed
+
+- [b918119c](https://github.com/imjlk/mpgd-kit/commit/b918119c26437b13d6ca4a7e57a3104b81fe0687) `createNotificationProviderBridge` serves `notifications.v2.*` with `createNotificationsV2BridgeHandler` from `@mpgd/bridge/notifications`, the handler the Apps in Toss and Devvit bridges share. For errors thrown by `@mpgd/platform` and this package, codes, retryable flags, and events reaching the game are unchanged; some error messages are reworded. On the bridge itself, a `PlatformOperationError` whose code is not a notifications code now crosses as `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with its retryable flag (the game-side provider already mapped it so), and a host code is named in the message only when it reads as one (`[A-Za-z0-9_.:-]{1,128}`). Failures are now also read by shape, so an error from another copy of `@mpgd/platform`, or a thrown object with a platform `code` and a boolean `retryable`, keeps its retryable flag, and its code too when that is a notifications code (any other code crosses as `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`). — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.15.0, @mpgd/capacitor-game-services@0.8.3, @mpgd/game-runtime@0.8.0, @mpgd/game-services@0.27.2, @mpgd/platform@0.27.2, @mpgd/target-config@0.23.7
+
 ## 0.12.2 — 2026-10-21
 
 ### Patch changes

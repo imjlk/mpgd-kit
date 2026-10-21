@@ -1,5 +1,11 @@
 # @mpgd/platform
 
+## 0.27.2 — 2026-10-21
+
+### Patch changes
+
+- [3f519a74](https://github.com/imjlk/mpgd-kit/commit/3f519a74a3eaf7aeec7a35d208ed951ff61ff8df) Add an optional attempt generation to purchase presentation events. A coordinator can set it on the request; a provider that restarts its sequence echoes it. The field does not grant. — Thanks @imjlk!
+
 ## 0.27.1 — 2026-10-21
 
 ### Fixed
