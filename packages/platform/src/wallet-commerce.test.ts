@@ -253,6 +253,19 @@ describe('credit lot rules', () => {
     expect(creditPriceMultiple(0.3, 0.1)).toBe(3);
   });
 
+  it('does not treat a one-credit shortfall of a large price as covered', () => {
+    // A relative 1e-9 of 1_000_000_000 is one credit, so the old check accepted it.
+    for (const price of [1_000_000_000, 1_000_000_000_000]) {
+      const balance = price - 1;
+      expect(sameCreditAmount(balance, price), String(price)).toBe(false);
+      expect(planCreditDebits([lot({ lotId: 'short', remaining: balance, amount: balance })], price), String(price))
+        .toMatchObject({ status: 'rejected', error: { code: 'INSUFFICIENT_BALANCE', retryable: false } });
+      expect(creditPriceMultiple(balance, price), String(price)).toBeUndefined();
+      expect(planCreditDebits([lot({ lotId: 'exact', remaining: price, amount: price })], price), String(price))
+        .toEqual({ status: 'debited', debits: [{ lotId: 'exact', amount: price }] });
+    }
+  });
+
   it('builds membership renewal keys and stable subscription event ids', () => {
     expect(createMembershipRenewalKey('op-1', 2)).toBe('membership:op-1:2');
     expect(createCreditSubscriptionEventId('op-1', 0, 'subscriptionStarted')).toBe('op-1:0:subscriptionStarted');
@@ -927,6 +940,31 @@ describe('createCreditCommerceProvider', () => {
     expect(await shortChanged.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop' }))
       .toMatchObject({ outcome: 'failed', error: { code: 'INVALID_RESPONSE' } });
     expect(await shortChanged.getAvailablePurchases()).toEqual([]);
+  });
+
+  it('does not purchase a large offer the wallet underpaid by one credit', async () => {
+    const price = 1_000_000_000;
+    const offer: CreditOffer = {
+      ...packOffer,
+      logicalId: 'vault',
+      storeSku: 'vault.1',
+      price: { currency, amount: price },
+    };
+    const { client } = createClientFixture({ offers: [offer] });
+    const underpaid = createCreditCommerceProvider({
+      ...client,
+      async spend() {
+        return {
+          status: 'debited',
+          entitlementId: 'op-short',
+          debits: [{ lotId: 'le-short', amount: price - 1 }],
+          createdAt: '2026-10-01T00:00:00Z',
+        };
+      },
+    }, { titleId: 'title-a', billingAuthority: 'host' });
+    expect(await underpaid.requestPurchase({ logicalId: 'vault', idempotencyKey: 'op-short', source: 'shop' }))
+      .toMatchObject({ outcome: 'failed', error: { code: 'INVALID_RESPONSE' } });
+    expect(await underpaid.getAvailablePurchases()).toEqual([]);
   });
 
   it('redeems only with the ledger entry id of the grant', async () => {

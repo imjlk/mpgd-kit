@@ -399,33 +399,66 @@ export function sumCreditDebits(debits: readonly CreditDebit[]): number {
 }
 
 /**
- * Relative scale for credit-amount comparisons. Amounts may be fractional, so
- * equality allows float noise, but the noise is a fraction of the amount. An
- * absolute 1e-9 would treat a price of 1e-9 as already paid (`sameCreditAmount(0, 1e-9)`).
+ * Representational noise around a credit amount, in units in the last place.
+ * A sum of binary fractions can land one ULP off (`0.7 + 0.1` vs `0.8`).
+ * A few ULPs cover that. The count does not scale with the price.
  */
-const creditAmountEpsilon = 1e-9;
+const creditAmountUlpSlop = 4;
 
 /**
- * True when two credit amounts differ only by relative float noise.
- * The gap cannot be the whole amount, so a zero and a positive price are not equal.
+ * Absolute ceiling on that noise. It does not grow with the price, so a
+ * one-credit shortfall is never float residue. Below this magnitude the ULP
+ * bound is tighter, and a zero never matches a positive amount
+ * (`sameCreditAmount(0, 1e-9)`).
+ */
+const creditAmountAbsoluteCap = 1e-9;
+
+/** Spacing to the next representable value at `value`'s magnitude. */
+function creditAmountUlp(value: number): number {
+  const magnitude = Math.abs(value);
+  if (!Number.isFinite(magnitude) || magnitude === 0) {
+    return Number.MIN_VALUE;
+  }
+  // Math.log2 can round a value just under 2^n up to n. Step back when the
+  // reconstructed boundary is above the magnitude.
+  const exponent = Math.floor(Math.log2(magnitude));
+  const boundary = 2 ** exponent;
+  const binade = magnitude < boundary ? exponent - 1 : exponent;
+  const ulp = 2 ** (binade - 52);
+  return Number.isFinite(ulp) && ulp > 0 ? ulp : Number.MIN_VALUE;
+}
+
+/** Noise two amounts may differ by. Capped so it cannot grow into a credit. */
+function creditAmountNoise(left: number, right: number): number {
+  const scale = Math.max(Math.abs(left), Math.abs(right));
+  return Math.min(creditAmountUlpSlop * creditAmountUlp(scale), creditAmountAbsoluteCap);
+}
+
+/**
+ * True when two credit amounts differ only by representational float noise.
+ * The allowance does not grow with the amount, so a one-credit gap is never
+ * equal, and a zero and a positive price are not equal.
  */
 export function sameCreditAmount(left: number, right: number): boolean {
   if (!Number.isFinite(left) || !Number.isFinite(right)) {
     return false;
   }
   const difference = Math.abs(left - right);
-  const scale = Math.max(Math.abs(left), Math.abs(right));
-  if (scale === 0) {
+  if (difference === 0) {
     return true;
   }
-  return difference <= creditAmountEpsilon * scale;
+  if (left === 0 || right === 0) {
+    return false;
+  }
+  return difference <= creditAmountNoise(left, right);
 }
 
 /**
- * True when `paid` meets `price`. A shortfall of the whole price is never met.
- * Float noise may leave `paid` above `price`, or a relative sliver under it
- * that cannot be the price itself. Zero does not meet a positive price, so an
- * empty debit list is not a spend.
+ * True when `paid` meets `price`. A shortfall is not a payment: zero does not
+ * meet a positive price, and a gap that is not float residue does not either.
+ * Residue may leave `paid` a few ULPs under `price`; that allowance is capped
+ * and does not grow with the price, so a large price cannot be underpaid by a
+ * whole credit.
  */
 function creditAmountCovers(paid: number, price: number): boolean {
   if (!Number.isFinite(paid) || !Number.isFinite(price) || !(paid > 0) || !(price > 0)) {
@@ -435,7 +468,7 @@ function creditAmountCovers(paid: number, price: number): boolean {
     return true;
   }
   const shortfall = price - paid;
-  return shortfall < price && shortfall <= creditAmountEpsilon * price;
+  return shortfall < price && shortfall <= creditAmountNoise(paid, price);
 }
 
 /** The whole number of `unit` prices in `amount`, or `undefined` when `amount` does not cover a positive multiple. */
@@ -448,8 +481,8 @@ export function creditPriceMultiple(amount: number, unit: number): number | unde
     return undefined;
   }
   const product = multiple * unit;
-  // `amount` must cover the units. Relative noise may put `product` slightly
-  // above `amount`; an absolute gap is not a whole number of units.
+  // `amount` must cover the units. Float residue may put `product` a few ULPs
+  // above `amount`; a one-credit gap is not a whole number of units.
   if (!creditAmountCovers(amount, product) || !sameCreditAmount(product, amount)) {
     return undefined;
   }
@@ -464,7 +497,7 @@ export type CreditDebitPlan =
  * Plans the debits of `amount` across eligible lots in spend order without
  * mutating them. A spend the lots cannot cover is rejected with
  * `INSUFFICIENT_BALANCE` and plans nothing. A shortfall is never a debit,
- * including one within an absolute 1e-9, and an empty debit list is not a
+ * including one credit of a large price, and an empty debit list is not a
  * debit of a positive amount.
  */
 export function planCreditDebits(eligible: readonly CreditLot[], amount: number): CreditDebitPlan {
@@ -1146,8 +1179,8 @@ export function createCreditCommerceProvider(
         return failed(spend.error);
       }
       // A debited answer that does not cover the price is not a purchase.
-      // An empty debit list never covers a positive price, and a shortfall
-      // within an absolute epsilon is still a shortfall.
+      // An empty debit list never covers a positive price, and a one-credit
+      // shortfall is still a shortfall. The allowance does not grow with price.
       const paid = sumCreditDebits(spend.debits);
       if (
         spend.debits.length === 0

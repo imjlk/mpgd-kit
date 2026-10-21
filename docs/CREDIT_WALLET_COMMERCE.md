@@ -32,10 +32,10 @@ client** against its own wallet service, under its own open `StoreId`:
   where the billing authority is `store` or the client cannot report active
   subscriptions), `requestPurchase` spends the offer price times the quantity
   and answers `purchased` only when the wallet's debits cover that price. A
-  shortfall does not cover it, including a gap within an absolute `1e-9`: float
-  noise may sit above the price, or a relative sliver under it that cannot be
-  the whole price, and an empty debit list is never a purchase of a positive
-  price.
+  shortfall does not cover it. Float residue may sit a few units in the last
+  place under the price, or above it; that allowance is capped at an absolute
+  `1e-9` and does not grow with the price, so one credit short of a large price
+  is not a payment. An empty debit list is never a purchase of a positive price.
   <!-- @link ../packages/platform/src/commerce-wallet.ts#createCreditCommerceProvider Rejects a debited answer whose sum does not cover the price, including an empty debit list. -->
   The answer carries `adapter-settled` evidence (`credit-wallet.spend.v1`, carrying the
   debits and the wallet's entitlement id) and no `settlement` pointer (see the
@@ -75,7 +75,7 @@ client** against its own wallet service, under its own open `StoreId`:
   `cross-title`, then oldest `createdAt`, then `lotId`), `planCreditDebits`
   (debits nothing on `INSUFFICIENT_BALANCE`, including when the unpaid gap is
   the whole price or an empty list would otherwise be reported as debited),
-  <!-- @link ../packages/platform/src/commerce-wallet.ts#planCreditDebits A shortfall, including one within an absolute 1e-9, plans nothing. -->
+  <!-- @link ../packages/platform/src/commerce-wallet.ts#planCreditDebits A shortfall, including one credit of a large price, plans nothing. -->
   `createMembershipRenewalKey`
   (`membership:<subscriptionId>:<periodIndex>`), and
   `createCreditSubscriptionEventId` (`<subscriptionId>:<periodIndex>:<type>`),
