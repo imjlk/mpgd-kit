@@ -118,9 +118,11 @@ export interface CreateVerse8CommerceProviderInput {
    * (`client.onClose`, which carries no purchase). Observed while a listener
    * exists; the first listener triggers a re-read of the purchase source, so
    * purchases recorded while nobody listened (or before a restart) are found
-   * then. A signal that reports nothing new is followed by re-reads at
+   * then. A signal that reports no new purchase id — no list, an empty list,
+   * or only ids already reported — is followed by re-reads at
    * `verse8PurchaseFollowUpDelaysMs` until one finds a new record, since the
-   * Agent8 event may land after the dialog closed.
+   * Agent8 event may land after the dialog closed. A signal that names a new
+   * purchase id does not schedule those re-reads.
    */
   readonly onPurchasesChanged?: (listener: Verse8PurchasesChangeListener) => () => void;
 }
@@ -290,8 +292,8 @@ export function createVerse8CommerceProvider(
     return reportedPurchases.size - before;
   };
   /**
-   * The Agent8 event may land after the dialog closed: a signal that reported
-   * nothing new is followed by a few spaced re-reads until a record appears.
+   * The Agent8 event may land after the dialog closed. Follow up only when
+   * the signal and the immediate re-read reported no new purchase id.
    */
   const followUpTimers = new Set<ReturnType<typeof setTimeout>>();
   const cancelFollowUps = (): void => {
@@ -300,9 +302,14 @@ export function createVerse8CommerceProvider(
     }
     followUpTimers.clear();
   };
-  const refreshWithFollowUps = (change: Verse8PurchasesChange | undefined): void => {
+  const refreshWithFollowUps = (signalReportedNew: boolean): void => {
     void refreshInBackground().then((reported) => {
-      if (reported > 0 || change?.purchases !== undefined || disposed) {
+      if (disposed) {
+        return;
+      }
+      if (signalReportedNew || reported > 0) {
+        // The purchase is already visible. Pending re-reads have nothing new to find.
+        cancelFollowUps();
         return;
       }
       // One window of follow-ups at a time; a new signal restarts it.
@@ -339,10 +346,15 @@ export function createVerse8CommerceProvider(
       return;
     }
     detachPurchaseSignal = subscribeToPurchaseChanges((change) => {
+      const before = reportedPurchases.size;
       if (change?.purchases !== undefined && Array.isArray(change.purchases)) {
         reportSignalledPurchases(change.purchases);
       }
-      refreshWithFollowUps(change);
+      const signalReportedNew = reportedPurchases.size > before;
+      if (signalReportedNew) {
+        cancelFollowUps();
+      }
+      refreshWithFollowUps(signalReportedNew);
     });
   };
   const detachPurchaseSignalIfIdle = (): void => {
@@ -523,8 +535,9 @@ export function createVerse8CommerceProvider(
 }
 
 /**
- * Delays of the re-reads that follow a purchase signal nothing was recorded
- * for yet: the Agent8 event may land seconds after the dialog closed. The
+ * Delays of the re-reads that follow a purchase signal that reported no new
+ * purchase id (no list, an empty list, or only ids already reported): the
+ * Agent8 event may land seconds after the dialog closed. The
  * window ends at the first read that finds a new record, so a settled
  * purchase costs no further reads; after the window, `restorePurchases`
  * (the reconciler's manual restore) and the next signal are the readers.

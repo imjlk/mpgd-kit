@@ -19,6 +19,8 @@ import {
   type Verse8CommerceDialogClosedPayload,
   type Verse8CommerceShopClient,
   type Verse8CommerceShopItem,
+  type Verse8PurchasesChange,
+  type Verse8PurchasesChangeListener,
   type Verse8PurchaseSource,
 } from './commerce-provider.js';
 import { createVerse8PlatformGateway } from './index.js';
@@ -48,6 +50,8 @@ function createFixture(input: {
   readonly canOpenShop?: boolean;
   readonly listError?: unknown;
   readonly products?: readonly { id: string; type: 'consumable' | 'non_consumable' | 'subscription'; platformProductId: string }[];
+  /** When set, the provider observes this game-owned signal instead of the dialog. */
+  readonly signalled?: boolean;
 } = {}) {
   const items = [
     ...(input.items ?? [item({ productId: 'coins-100' }), item({ productId: 'remove-ads' })]),
@@ -81,11 +85,22 @@ function createFixture(input: {
     }
     return [...recorded];
   });
+  const purchaseListeners = new Set<Verse8PurchasesChangeListener>();
   const provider = createVerse8CommerceProvider({
     products: input.products ?? products,
     client,
     purchases: { listPurchases },
     canOpenShop: () => input.canOpenShop ?? true,
+    ...(input.signalled !== true
+      ? {}
+      : {
+          onPurchasesChanged: (listener: Verse8PurchasesChangeListener) => {
+            purchaseListeners.add(listener);
+            return () => {
+              purchaseListeners.delete(listener);
+            };
+          },
+        }),
   });
   return {
     provider,
@@ -96,6 +111,11 @@ function createFixture(input: {
     closeDialog: (purchased: boolean) => {
       for (const listener of closeListeners) {
         listener({ purchased });
+      }
+    },
+    signal: (change?: Verse8PurchasesChange) => {
+      for (const listener of purchaseListeners) {
+        listener(change);
       }
     },
   };
@@ -385,6 +405,65 @@ describe('createVerse8CommerceProvider', () => {
     const calls = fixture.listPurchases.mock.calls.length;
     await vi.advanceTimersByTimeAsync(600_000);
     expect(fixture.listPurchases).toHaveBeenCalledTimes(calls);
+  });
+
+  it('follows up when a purchase signal carries no new purchase id', async () => {
+    vi.useFakeTimers();
+    const fixture = createFixture({ signalled: true });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    fixture.listPurchases.mockClear();
+
+    // An empty list is not a recorded purchase. The Agent8 grant lands later.
+    fixture.signal({ purchases: [] });
+    await flush();
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+    fixture.recorded.push({ purchaseId: '11', productId: 'coins-100', quantity: 1 });
+    await vi.advanceTimersByTimeAsync(verse8PurchaseFollowUpDelaysMs[0] ?? 0);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ purchase: { transactionId: '11' } });
+    const callsAfterGrant = fixture.listPurchases.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(callsAfterGrant);
+
+    // A list of ids already reported is also nothing new.
+    fixture.listPurchases.mockClear();
+    fixture.signal({
+      purchases: [{ purchaseId: '11', productId: 'coins-100', quantity: 1 }],
+    });
+    await flush();
+    expect(events).toHaveLength(1);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(1);
+    fixture.recorded.push({ purchaseId: '12', productId: 'coins-100', quantity: 1 });
+    await vi.advanceTimersByTimeAsync(verse8PurchaseFollowUpDelaysMs[0] ?? 0);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ purchase: { transactionId: '12' } });
+
+    // A signal that names a new purchase id reports it at once and schedules nothing.
+    fixture.listPurchases.mockClear();
+    fixture.signal({
+      purchases: [{ purchaseId: '13', productId: 'coins-100', quantity: 1 }],
+    });
+    await flush();
+    expect(events).toHaveLength(3);
+    expect(events[2]).toMatchObject({ purchase: { transactionId: '13' } });
+    const callsAfterNamed = fixture.listPurchases.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(callsAfterNamed);
+
+    // An empty signal whose immediate re-read already sees the grant schedules nothing.
+    fixture.recorded.push({ purchaseId: '14', productId: 'remove-ads', quantity: 1 });
+    fixture.listPurchases.mockClear();
+    fixture.signal({ purchases: [] });
+    await flush();
+    expect(events).toHaveLength(4);
+    expect(events[3]).toMatchObject({ purchase: { transactionId: '14', logicalId: 'REMOVE_ADS' } });
+    const callsAfterImmediate = fixture.listPurchases.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(callsAfterImmediate);
+    fixture.provider.dispose();
   });
 
   it('validates verse8.agent8-event.v1 evidence the way a server registry entry must', () => {

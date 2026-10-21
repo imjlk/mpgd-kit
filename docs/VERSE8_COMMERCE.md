@@ -216,11 +216,15 @@ Methods:
   `purchased: true`), which is a signal to re-read the server and never
   evidence. The signal is observed while a listener exists; the first
   listener triggers a re-read, so purchases recorded before it (or before a
-  restart) are found then. A signal nothing was recorded for yet is followed
+  restart) are found then. A signal that reports no new purchase id — no
+  `purchases` list, an empty list, or only ids already reported — is followed
   by re-reads at `verse8PurchaseFollowUpDelaysMs` (1 s to 5 min, about nine
-  minutes in all) until one finds a new record; after that window the
+  minutes in all) until one finds a new record. A signal that names a new
+  purchase id does not schedule those re-reads. After that window the
   reconciler's `restorePurchases` and the next signal are the readers. The
   provider emits no `purchaseError`.
+<!-- @link ../adapters/verse8/src/commerce-provider.ts#createVerse8CommerceProvider An empty or already-reported purchases list still schedules follow-up re-reads; a newly reported purchase id does not. -->
+<!-- @link ../adapters/verse8/src/commerce-provider.ts#verse8PurchaseFollowUpDelaysMs Follow-up delays after a signal that reported no new purchase id. -->
 
 The backend side of the lookup is the server-push verifier C2 added
 (`createVerse8Agent8EventLookupCommerceEvidenceEntry` in
