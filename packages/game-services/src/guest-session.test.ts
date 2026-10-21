@@ -750,4 +750,78 @@ function familyBackend() {
   assert.deepEqual(seen, ['issued-session']);
 }
 
+// A new family is written before its token: when only the token save fails,
+// the newer family sits next to the older token, which a restore reads as a new family.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  let failTokenSave = false;
+  const credentials: SecureCredentialStore = {
+    ...native.credentials,
+    async save(input) {
+      if (input.key === 'mpgd.guest.refresh' && failTokenSave) {
+        throw new Error('native save failed');
+      }
+      return native.credentials.save(input);
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await coordinator.start();
+  failTokenSave = true;
+  await assert.rejects(
+    coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' }),
+    { code: 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED' },
+  );
+  assert.equal(native.values.get('mpgd.guest.refresh.family'), 'bound-session');
+  assert.equal(native.values.get('mpgd.guest.refresh'), 'refresh-1');
+  await coordinator.logout();
+  assert.equal(native.values.size, 0);
+}
+
+// A family removal that throws, even synchronously, fails neither a save nor logout.
+{
+  const native = credentialFixture();
+  const server = familyBackend();
+  server.answers.issue = { sessionId: 'issued-session', sessionFamilyId: null as unknown as string };
+  let failFamily = false;
+  const credentials: SecureCredentialStore = {
+    ...native.credentials,
+    async save(input) {
+      if (input.key === 'mpgd.guest.refresh.family' && failFamily) {
+        throw new Error('native save failed');
+      }
+      return native.credentials.save(input);
+    },
+    remove(input) {
+      if (input.key === 'mpgd.guest.refresh.family' && failFamily) {
+        throw new Error('native remove failed');
+      }
+      return native.credentials.remove(input);
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  // `null` at issue reads as omitted: the family starts at the session id.
+  assert.equal((await coordinator.start()).sessionFamilyId, 'issued-session');
+  failFamily = true;
+  assert.deepEqual(
+    await coordinator.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' }),
+    {
+      status: 'bound',
+    },
+  );
+  assert.equal(coordinator.current()?.sessionFamilyId, 'bound-session');
+  await coordinator.logout();
+  assert.equal(native.values.has('mpgd.guest.refresh'), false);
+}
+
 console.info('Guest session coordinator conformance passed.');

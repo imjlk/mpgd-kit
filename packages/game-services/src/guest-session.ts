@@ -145,10 +145,13 @@ type ActiveGuestSession = ServerGuestSessionCredentials & { readonly sessionFami
  * - logout removes the saved family with the token.
  * The derived id is not the identity service's id, and does not need to be: the
  * notifications runtime only compares it with the id it registered under,
- * and registers again when it changes. Saving the family is best effort: a
- * failed save leaves no saved family, so the next restore starts one, and
- * the family is written before the token, so an interrupted save never pairs
- * an older family with a newer token.
+ * and registers again when it changes. Saving the family is best effort:
+ * it is written before the token, so an interrupted save never pairs an
+ * older family with a newer token, and a family that cannot be saved is
+ * removed, so the next restore starts one. Only a store that fails both that
+ * save and that removal, and then saves the token, can leave an older family
+ * next to it; the token is saved regardless, since losing it would lose the
+ * guest.
  */
 export function createGuestSessionCoordinator(input: {
   readonly backend: GuestSessionBackend;
@@ -228,7 +231,11 @@ export function createGuestSessionCoordinator(input: {
     }
   }
 
-  /** Removes the saved family; a failure leaves it, which only a failed save before could make stale. */
+  /**
+   * Removes the saved family. A failed removal leaves the key: harmless at
+   * logout (no token is left to pair it with), and in `persist` the one case
+   * where an older family can stay next to a newer token.
+   */
   async function removeSavedFamily(): Promise<void> {
     savedFamily = undefined;
     try {
@@ -297,7 +304,8 @@ export function createGuestSessionCoordinator(input: {
         const stored = await loadStoredRefreshToken();
         let next: ActiveGuestSession;
         if (stored === null) {
-          // A new guest is a new family; a family saved for an older token is not read.
+          // A new guest is a new family; a family saved for an older token is
+          // not read. (Defensive: nothing has set savedFamily before a first start.)
           savedFamily = undefined;
           next = withFamily(validateSession(await fromBackend(
             () => input.backend.issueGuest({ installationId: input.installationId }),
