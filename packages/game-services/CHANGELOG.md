@@ -1,5 +1,12 @@
 # @mpgd/game-services
 
+## 0.27.1 — 2026-10-21
+
+### Patch changes
+
+- [26d789ea](https://github.com/imjlk/mpgd-kit/commit/26d789ea20c24feb00dd1749cf742d11404acf3b) An unconsumed Microsoft Store claim is no longer replaced when Collections returns a new modified date or item id, so one quantity-1 unit cannot be granted twice before consume. The verification id uses the Collections `transactionId` when present, and otherwise the collection item id plus `modifiedDate`. A later query that changes `modifiedDate` while that claim is unreleased resumes the stored generation and does not write a second ledger row. After consume and release, a repeat purchase with the same item id, no `transactionId`, and a new `modifiedDate` gets a new id and grants once. A purchase already recorded under `microsoft-store:<storeId>:<itemId>:<modifiedDate>` keeps that ledger key on re-verify. An exact generation that was already granted can still be finalized after Collections returns a different item or transaction id; that resume keeps the stored verification id and does not grant a second time. A tracking-id retry releases that claim only when it omits order ids, reports a numeric current balance, and echoes the granted item or the item Collections currently lists for that product. A missing, malformed, or unrelated consume response keeps the claim pending. A different provider purchase can be claimed only after the previous claim is released. — Thanks @imjlk!
+- Updated dependencies: @mpgd/analytics@0.4.15, @mpgd/catalog@0.10.6, @mpgd/platform@0.27.1
+
 ## 0.27.0 — 2026-10-21
 
 ### Patch changes

@@ -1,5 +1,13 @@
 # @mpgd/platform
 
+## 0.27.1 — 2026-10-21
+
+### Fixed
+
+- [510804d5](https://github.com/imjlk/mpgd-kit/commit/510804d5f0245d6d3c770d234c85c8e901df3f18) Reject a credit spend whose debits do not cover the price. An absolute comparison of `1e-9` treated `sameCreditAmount(0, 1e-9)` as equal, so `planCreditDebits` and `createCreditCommerceProvider` accepted an empty wallet (and an empty debit list) as payment for a price of `1e-9`. A later relative `1e-9` of the price turned that same constant into one credit at a price of `1e9`, so a balance of `999,999,999` was accepted for `1,000,000,000`.
+  
+  Coverage no longer forgives a shortfall that grows with the price. Float residue may sit a few units in the last place under the price, capped at an absolute `1e-9` and at one unit in the last place of the magnitude, so a one-credit gap is never a payment and half of a subnormal price is not either. Sums of many fractional lots are compensated, and a balance check stops once a lot meets the unpaid gap so two `Number.MAX_VALUE` lots do not overflow into a false shortfall. `creditPriceMultiple` uses the same comparison. Ordinary fractional amounts, including `0.1 + 0.2` and `0.7 + 0.1`, still spend. — Thanks @imjlk!
+
 ## 0.27.0 — 2026-10-21
 
 ### Added
