@@ -122,13 +122,22 @@ methods over the plugin:
 - `fetchProducts` lists the configured SKUs from `payments.getProducts`,
   priced in Reddit Gold (`{ formatted: '<amount> Gold', currencyCode: 'GOLD'
   }`); time-limited goods (`VALID_FOR_*`) are not listed.
-- `getAvailablePurchases` pages `payments.getOrders` (64 per page, eight pages
-  at most, stopping after two consecutive pages without a paid or delivered
-  order) and lists the `PAID` and `DELIVERED` orders of configured SKUs with
-  exactly one product, each as `purchased` with order evidence whose `status`
-  says which; a `NEW`, `CANCELED`, or `REVERTED` order is not listed. The
-  webview provider keeps only the `PAID` ones as available and reports both
-  as events. The plugin runs in the
+- `getAvailablePurchases` pages `payments.getOrders` (64 per page) until the
+  cursor ends, or until `maximumDevvitOrderScanPages` (32). `@devvit/payments`
+  0.14 ignores the `buyer` and `status` filters (`GetOrdersRequest` marks both
+  "currently does nothing"), so the handler filters status itself and cannot
+  stop after pages that hold only canceled or new orders. A scan that still
+  has a next page at the cap fails with the retryable
+  `DEVVIT_ORDER_SCAN_INCOMPLETE` instead of returning a partial list: an order
+  that was not read is not delivered. The handler lists the `PAID` and
+  `DELIVERED` orders of configured SKUs with exactly one product, each as
+  `purchased` with order evidence whose `status` says which; a `NEW`,
+  `CANCELED`, or `REVERTED` order is not listed. The webview provider keeps
+  only the `PAID` ones as available and reports both as events.
+<!-- @link ../adapters/devvit/src/server/commerce-bridge.ts#createDevvitCommerceV2BridgeHandler Pages until the cursor ends, or fails the request at the scan cap. -->
+<!-- @link ../adapters/devvit/src/server/commerce-bridge.ts#maximumDevvitOrderScanPages Bounded page cap for a time-limited Devvit request. -->
+<!-- @link ../adapters/devvit/src/server/commerce-bridge.ts#devvitOrderScanIncompleteBridgeErrorCode Visible incomplete scan; unseen orders are not delivered. -->
+  The plugin runs in the
   request context of the authenticated Reddit user, and Reddit documents
   server-side `payments.getOrders()` as that user's orders in reverse
   chronological order (Devvit docs, "Manage Payments", "Check orders", whose

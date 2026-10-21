@@ -355,6 +355,10 @@ async function settled(): Promise<void> {
     productId: removeAdsSku,
     unfinished: false,
   });
+  const finishedConsumable = fakeTransaction({
+    transactionId: '19',
+    unfinished: false,
+  });
   const revoked = fakeTransaction({
     transactionId: '13',
     unfinished: true,
@@ -398,6 +402,7 @@ async function settled(): Promise<void> {
       previousPlayer,
       unbound,
       wrongKind,
+      finishedConsumable,
     ],
   });
   const { sdk, diagnostics } = createSdk({ plugin });
@@ -411,14 +416,20 @@ async function settled(): Promise<void> {
     [
       ['10', 'purchased', unfinished.signedTransaction],
       ['11', 'purchased', legacy.signedTransaction],
+      ['12', 'purchased', finishedEntitlement.signedTransaction],
       ['13', 'revoked', revoked.signedTransaction],
     ],
-    'unfinished transactions of the active account and catalog are listed once with the JWS; '
-      + "a finished entitlement, a retired SKU, another player's or an unbound transaction, "
+    'unfinished transactions and a finished durable of the active account and catalog are listed once with the JWS; '
+      + "a finished consumable, a retired SKU, another player's or an unbound transaction, "
       + 'and a kind mismatch are not; revokedAt maps to state revoked',
   );
   assertEqual(
-    purchases[2]?.raw,
+    purchases.find((purchase) => purchase.transactionId === '12')?.raw,
+    { type: 'non_consumable', unfinished: false },
+    'a finished durable keeps unfinished:false so the reconciler can still verify it',
+  );
+  assertEqual(
+    purchases.find((purchase) => purchase.transactionId === '13')?.raw,
     { type: 'consumable', revokedAt: '2026-07-17T12:00:00Z', unfinished: true },
     'raw keeps the native type, revocation, and flag for diagnostics',
   );
@@ -506,15 +517,63 @@ async function settled(): Promise<void> {
   );
   assertEqual(
     plugin.calls,
-    ['finish:20:le-1', 'finish:20:le-1'],
-    'the failed finish and the shared retry each reach native once',
+    [
+      'getTransactions',
+      `finish:20:le-1:${fakeAccountToken}`,
+      'getTransactions',
+      `finish:20:le-1:${fakeAccountToken}`,
+    ],
+    'the failed finish and the shared retry each reach native once, with the session token',
   );
   assertEqual(plugin.transactions, [], 'a finished transaction leaves the unfinished list');
+  const callsBeforeUnknown = plugin.calls.length;
   plugin.queueFinish({ finished: false });
   assertEqual(
     await finish.call(sdk, { transactionId: '21', isConsumable: false, ledgerEntryId: 'le-2' }),
     { finished: false },
     'an unknown transaction reports unfinished',
+  );
+  assertEqual(
+    plugin.calls.slice(callsBeforeUnknown),
+    ['getTransactions'],
+    'an unknown transaction never reaches the native finish',
+  );
+
+  const otherAccount = crypto.randomUUID();
+  const mismatched = createFakeStoreKitPlugin({
+    transactions: [
+      fakeTransaction({ transactionId: '22', appAccountToken: otherAccount }),
+      fakeTransaction({ transactionId: '23', revokedAt: '2026-07-17T12:00:00Z' }),
+      {
+        transactionId: '24',
+        originalTransactionId: '24',
+        productId: sku,
+        type: 'consumable',
+        purchasedAt: '2026-07-16T12:00:00Z',
+        signedTransaction: 'header.payload.signature-24',
+      },
+    ],
+  });
+  const mismatchedSdk = createSdk({ plugin: mismatched }).sdk;
+  const mismatchedFinish = mismatchedSdk.finishTransaction;
+  if (mismatchedFinish === undefined) {
+    throw new Error('finishTransaction is required for finish: client.');
+  }
+  for (const transactionId of ['22', '23', '24']) {
+    assertEqual(
+      await mismatchedFinish.call(mismatchedSdk, {
+        transactionId,
+        isConsumable: true,
+        ledgerEntryId: 'forged-ledger',
+      }),
+      { finished: false },
+      `transaction ${transactionId} is not finished`,
+    );
+  }
+  assertEqual(
+    mismatched.calls.filter((call) => call.startsWith('finish:')),
+    [],
+    'another account, a revoked transaction, and an unbound transaction never reach native finish',
   );
 }
 

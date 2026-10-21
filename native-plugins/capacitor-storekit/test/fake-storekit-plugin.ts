@@ -139,7 +139,9 @@ export function createFakeStoreKitPlugin(input: {
       return plugin.syncResult;
     },
     async finishTransaction(request) {
-      calls.push(`finish:${request.transactionId}:${request.ledgerEntryId}`);
+      calls.push(
+        `finish:${request.transactionId}:${request.ledgerEntryId}:${request.appAccountToken}`,
+      );
       const script = finishQueue.shift() ?? { finished: true };
       if ('throws' in script) {
         throw script.throws;

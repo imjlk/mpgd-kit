@@ -243,6 +243,125 @@ assertAdPlacements({
   ],
 });
 
+assertThrows(
+  () =>
+    assertProductCatalog({
+      version: 'duplicate-product',
+      products: [
+        customTargetProduct,
+        {
+          ...customTargetProduct,
+          grant: { type: 'currency', currency: 'coin', amount: 1 },
+          platformProductIds: { 'storefront-web': 'other_sku' },
+        },
+      ],
+    }),
+  'catalog validation should reject duplicate product ids',
+);
+assertThrows(
+  () =>
+    assertAdPlacements({
+      version: 'duplicate-placement',
+      placements: [
+        customTargetPlacement,
+        {
+          ...customTargetPlacement,
+          reward: { type: 'continue', amount: 2 },
+          platformPlacementIds: { 'verse8-staging': 'other_placement' },
+        },
+      ],
+    }),
+  'ad placement validation should reject duplicate placement ids',
+);
+
+const invalidLedgerAmounts = [
+  0,
+  -1,
+  -0,
+  1.5,
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  1e308,
+  Number.MAX_SAFE_INTEGER + 1,
+] as const;
+for (const amount of invalidLedgerAmounts) {
+  assertThrows(
+    () => assertProductGrant({ type: 'currency', currency: 'coin', amount }),
+    `currency grant amount ${String(amount)} should be a positive safe integer`,
+  );
+  assertThrows(
+    () =>
+      assertProductCatalog({
+        version: 'bad-currency-amount',
+        products: [
+          {
+            id: 'BAD_CURRENCY',
+            type: 'consumable',
+            grant: { type: 'currency', currency: 'coin', amount },
+            platformProductIds: { android: 'bad_currency' },
+          },
+        ],
+      }),
+    `catalog currency amount ${String(amount)} should be a positive safe integer`,
+  );
+  assertThrows(
+    () =>
+      assertAdPlacements({
+        version: 'bad-continue-amount',
+        placements: [
+          {
+            ...customTargetPlacement,
+            reward: { type: 'continue', amount },
+          },
+        ],
+      }),
+    `continue reward amount ${String(amount)} should be a positive safe integer`,
+  );
+  assertThrows(
+    () =>
+      assertAdPlacements({
+        version: 'bad-currency-reward',
+        placements: [
+          {
+            ...customTargetPlacement,
+            reward: { type: 'currency', currency: 'coin', amount },
+          },
+        ],
+      }),
+    `currency reward amount ${String(amount)} should be a positive safe integer`,
+  );
+}
+assertProductGrant({ type: 'currency', currency: 'coin', amount: 1 });
+assertProductGrant({ type: 'currency', currency: 'coin', amount: Number.MAX_SAFE_INTEGER });
+assertProductCatalog({
+  version: 'max-currency',
+  products: [
+    {
+      id: 'MAX_COINS',
+      type: 'consumable',
+      grant: { type: 'currency', currency: 'coin', amount: Number.MAX_SAFE_INTEGER },
+      platformProductIds: { android: 'max_coins' },
+    },
+  ],
+});
+assertAdPlacements({
+  version: 'max-rewards',
+  placements: [
+    {
+      ...customTargetPlacement,
+      id: 'MAX_CONTINUE',
+      reward: { type: 'continue', amount: Number.MAX_SAFE_INTEGER },
+      platformPlacementIds: { 'verse8-staging': 'max_continue' },
+    },
+    {
+      ...customTargetPlacement,
+      id: 'MAX_CURRENCY',
+      reward: { type: 'currency', currency: 'coin', amount: 1 },
+      platformPlacementIds: { 'verse8-staging': 'max_currency' },
+    },
+  ],
+});
+
 console.log('Catalog product grant validation test passed.');
 
 function assertThrows(callback: () => unknown, message: string): void {

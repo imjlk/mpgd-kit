@@ -1,5 +1,12 @@
 # @mpgd/adapter-devvit
 
+## 0.13.3 — 2026-10-21
+
+### Patch changes
+
+- [22ec36ec](https://github.com/imjlk/mpgd-kit/commit/22ec36ecfdf97c0d57dea855c26b0987ec84730c) Harden Devvit notifications v2. History reads use `hGetAll` instead of allowlisted `hMGet`, so a send still plans when that command is disabled. A length or content `enqueue` refusal is `rejected` with reason `configuration` once, instead of an ambiguous replay, and only when the message also shows refusal evidence (too long, exceeds, invalid, not allowed, or not found); a field name alone stays ambiguous. A throw from WATCH or the planning read that is transient retries inside the store's attempt budget, as does an EXEC throw that proves the transaction aborted before commit (the 20-transaction cap, the 5-second timeout). A connection loss thrown by EXEC is not retried, because the reply may have been lost after commit. A refused opt-in or opt-out re-reads `isOptedIn` and returns the observed state, so a duplicate concurrent call is not a permanent configuration error. `devvitNotificationSessionFromContext` builds the session from the request context; `devvitNotificationSession` remains. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.14.2, @mpgd/game-services@0.27.0, @mpgd/platform@0.27.0
+
 ## 0.13.2 — 2026-10-20
 
 ### Patch changes
