@@ -66,11 +66,13 @@ export interface CreateCapacitorPlayBillingStoreSdkInput {
   /** Defaults to `Capacitor.getPlatform() === 'android'`. */
   readonly isAndroid?: () => boolean;
   /**
-   * Diagnostics hook for a plugin purchase the SDK leaves out of
-   * `getAvailablePurchases` and events: a SKU not in `products` (for example
-   * a retired product) or a multi-line purchase. Such a purchase has no
-   * logical id for the reconciler; the backend finalizer still sees it
-   * through the Play Developer API.
+   * Diagnostics for a plugin purchase the current catalog does not sell, or
+   * that names more than one product id. The purchase is still returned and
+   * emitted (token and product ids) so the reconciler can submit it when a
+   * logical id is known, or fail that purchase visibly when it is not. This
+   * hook is not a substitute for that delivery: the backend finalizer only
+   * acknowledges a token the client submits, and it has no path that can
+   * acknowledge one without a logical product id.
    */
   readonly onUnmappedPurchase?: (purchase: PlayPurchase) => void;
 }
@@ -136,8 +138,11 @@ export class PlayBillingStoreSdkError extends Error implements StoreSdkError {
  * provider normalizes (`PLAY_BILLING_TIMEOUT`, `PLAY_BILLING_INTERRUPTED`, and
  * `PLAY_BILLING_EMPTY_PURCHASE` become `OUTCOME_UNKNOWN` and stay recoverable).
  * `transactionId` is the order id or, until Play assigns one, the token key
- * `play-token-sha256:<hex>` existing ledgers already use. Nothing here grants, and
- * nothing here acknowledges or consumes: the backend finalizer owns both.
+ * `play-token-sha256:<hex>` existing ledgers already use. An unfinished
+ * purchase whose SKU is not in `products`, and a multi-line purchase, are
+ * still listed and emitted so the reconciler can see the token. Nothing here
+ * grants, and nothing here acknowledges or consumes: the backend finalizer
+ * owns both.
  */
 export function createCapacitorPlayBillingStoreSdk(
   input: CreateCapacitorPlayBillingStoreSdkInput,
@@ -190,7 +195,10 @@ export function createCapacitorPlayBillingStoreSdk(
       // Diagnostics never break delivery.
     }
   };
-  /** Whether a plugin purchase maps to one configured SKU; anything else is diagnostics only. */
+  /**
+   * Whether a plugin purchase maps to one configured SKU. Anything else is
+   * still surfaced; this only feeds the diagnostics hook.
+   */
   const isMapped = (purchase: Readonly<Record<string, unknown>>): boolean => {
     const sku = skuOf(purchase);
     if (sku !== undefined && products.has(sku)) {
@@ -260,7 +268,14 @@ export function createCapacitorPlayBillingStoreSdk(
       emitLateTerminalResult(outcome);
       return;
     }
-    if (!isRecord(purchase) || !isMapped(purchase)) {
+    if (!isRecord(purchase)) {
+      return;
+    }
+    // A retired SKU and a multi-line purchase stay in the event. The
+    // reconciler submits a token only when it can resolve a logical id, and
+    // otherwise fails the catalog lookup instead of dropping the token.
+    isMapped(purchase);
+    if (surfaceSku(purchase) === undefined) {
       return;
     }
     enqueue(() => emitConverted(purchase));
@@ -442,9 +457,10 @@ export function createCapacitorPlayBillingStoreSdk(
         if (!isUnfinished(purchase, includePending)) {
           continue;
         }
-        if (!isMapped(purchase)) {
-          // A retired SKU or a multi-line purchase has no logical id for the
-          // reconciler; onUnmappedPurchase sees it.
+        isMapped(purchase);
+        if (surfaceSku(purchase) === undefined) {
+          // Not a purchase the reconciler can name: no product id, or an id
+          // the evidence rules reject. The diagnostics hook already saw it.
           continue;
         }
         available.push(await toSdkPurchase(purchase));
@@ -530,7 +546,7 @@ function convertPurchase(purchase: unknown): StoreSdkPurchase | Promise<StoreSdk
   if (state !== 'pending' && state !== 'purchased') {
     throw evidenceInvalid('Play purchase state is invalid.');
   }
-  const sku = skuOf(purchase);
+  const sku = surfaceSku(purchase);
   if (sku === undefined) {
     throw evidenceInvalid('Play purchase must name exactly one product.');
   }
@@ -585,13 +601,42 @@ function buildSdkPurchase(
   };
 }
 
-function skuOf(purchase: unknown): string | undefined {
+function productIdsOf(purchase: unknown): readonly string[] | undefined {
   if (!isRecord(purchase)) {
     return undefined;
   }
   const products = purchase.products ?? purchase.productIds;
-  const sku = Array.isArray(products) && products.length === 1 ? products[0] : undefined;
-  return typeof sku === 'string' && productIdPattern.test(sku) ? sku : undefined;
+  if (!Array.isArray(products) || products.length === 0) {
+    return undefined;
+  }
+  const ids: string[] = [];
+  for (const id of products) {
+    if (typeof id !== 'string' || !productIdPattern.test(id) || ids.includes(id)) {
+      return undefined;
+    }
+    ids.push(id);
+  }
+  return ids;
+}
+
+function skuOf(purchase: unknown): string | undefined {
+  const ids = productIdsOf(purchase);
+  return ids?.length === 1 ? ids[0] : undefined;
+}
+
+/**
+ * The SKU a surfaced purchase carries. One product id is that id, including
+ * a retired SKU that is no longer in `products`. Several ids are joined with
+ * a comma, which is not a product-id character, so the joined value cannot
+ * equal one catalog SKU and the reconciler fails the lookup instead of
+ * granting one line of a multi-line purchase.
+ */
+function surfaceSku(purchase: unknown): string | undefined {
+  const ids = productIdsOf(purchase);
+  if (ids === undefined) {
+    return undefined;
+  }
+  return ids.length === 1 ? ids[0] : ids.join(',');
 }
 
 /**

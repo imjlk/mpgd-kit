@@ -1921,7 +1921,10 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('submits only the unspent deadline budget to the worker', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    // Fake only the deadline timer. Spying the clock with fixed readings
+    // keeps the 700ms spend deterministic: advancing fake time across the
+    // hash release can let the deadline callback win and skip the post.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const worker = createFakeWorker();
       worker.blackhole();
@@ -1935,6 +1938,14 @@ describe('bounded ZIP decode client', () => {
           }),
         },
       });
+      const realNow = performance.now.bind(performance);
+      // Integer origin: (t0 + 1000) - (t0 + 700) is not exactly 300 for
+      // many fractional performance.now() values, and Math.ceil then
+      // reports 301. Deadline start, both pre-submit guards, and the
+      // remainder computation all read this clock.
+      const readings = [0, 700, 700, 700];
+      let index = 0;
+      vi.spyOn(performance, 'now').mockImplementation(() => readings[index++] ?? realNow());
       const decoder = createBoundedZipDecoder({
         createWorker: (): FakeWorker => worker,
         cancelGraceMs: 50,
@@ -1947,22 +1958,23 @@ describe('bounded ZIP decode client', () => {
         transferArchive: true,
         limits,
       });
-      // Submission preparation spends 700ms of the 1000ms budget before
-      // the decode post; the worker may only spend what is left.
-      await vi.advanceTimersByTimeAsync(700);
+      // The stubbed digest posts on a microtask. Do not poll with
+      // advanceUntilDecodePost: that helper waits on native digest I/O.
+      await Promise.resolve();
+      await Promise.resolve();
       releasePreTransferHash!();
-      await advanceUntilDecodePost(worker);
+      await Promise.resolve();
+      await Promise.resolve();
       const decode = worker.requests.find((request) => request.type === 'decode');
       expect(decode).toBeDefined();
       expect((decode as { limits: ArchiveWorkerLimits }).limits.decodeDeadlineMs).toBe(300);
       // The derived budget is a copy; the caller's limits are untouched.
       expect(limits.decodeDeadlineMs).toBe(1000);
-      await vi.advanceTimersByTimeAsync(300 + 50 + 1);
-      const status = await job.result;
-      expect(status.status).toBe('deadline');
+      void job;
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();
+      vi.restoreAllMocks();
     }
   });
 

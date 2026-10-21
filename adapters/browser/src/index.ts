@@ -15,7 +15,7 @@ import type {
   RequestPurchaseResult,
   StoreProduct,
 } from '@mpgd/platform/commerce';
-import { withShareIntentCheck } from '@mpgd/platform/routes';
+import { hasRouteControlCharacter, withShareIntentCheck } from '@mpgd/platform/routes';
 
 import { createUnavailableAdAdapter } from './unavailable-ads.js';
 
@@ -144,9 +144,11 @@ export function createBrowserPlatformGateway(
     ...(commerce === undefined ? {} : { commerce }),
     ads: mockCommerce ? createMockAds() : createUnavailableAdAdapter(),
     leaderboard: {
+      // nativeLeaderboard stays false: nothing is sent, so callers must not
+      // treat this as a recorded score.
       async submitScore() {
         return {
-          submitted: true,
+          submitted: false,
         };
       },
       async open() {},
@@ -329,6 +331,15 @@ function serializeBrowserStorageValue(value: unknown): string {
   return serialized;
 }
 
+/**
+ * Same caps as the AIT host launch reader. No shared helper exists in a pure
+ * package, so the numbers are mirrored here. Length is UTF-16 code units, as
+ * in that reader (`nested.length`), not encoded bytes.
+ */
+const maximumLaunchParamLength = 256;
+const maximumNestedQueryParamsJsonLength = 4_096;
+const maximumNestedQueryParamCount = 32;
+
 const launchEntries = new Set<LaunchEntry>([
   'home',
   'daily',
@@ -384,7 +395,7 @@ function mergedSearchParams(url: URL | undefined): URLSearchParams {
   const params = new URLSearchParams(url?.search ?? '');
   const nestedParams = params.get('queryParams');
 
-  if (nestedParams === null) {
+  if (nestedParams === null || nestedParams.length > maximumNestedQueryParamsJsonLength) {
     return params;
   }
 
@@ -392,8 +403,23 @@ function mergedSearchParams(url: URL | undefined): URLSearchParams {
     const parsed = JSON.parse(nestedParams) as unknown;
 
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      let merged = 0;
       for (const [key, value] of Object.entries(parsed)) {
-        if (typeof value === 'string' && !params.has(key)) {
+        if (merged >= maximumNestedQueryParamCount) {
+          break;
+        }
+        // Count every entry, including ones that do not merge, so padding
+        // cannot push a late token past the cap.
+        merged += 1;
+        if (
+          typeof value === 'string'
+          && key.length > 0
+          && key.length <= maximumLaunchParamLength
+          && value.length <= maximumLaunchParamLength
+          && !hasRouteControlCharacter(key)
+          && !hasRouteControlCharacter(value)
+          && !params.has(key)
+        ) {
           params.set(key, value);
         }
       }
@@ -511,8 +537,18 @@ function resolveBrowserUrl(locationHref: string | undefined): URL | undefined {
   }
 }
 
+/** Forwarded launch values: non-empty, at most 256 characters, and no ASCII controls. */
 function nonEmptyParam(value: string | null): string | undefined {
-  return value === null || value.length === 0 ? undefined : value;
+  if (
+    value === null
+    || value.length === 0
+    || value.length > maximumLaunchParamLength
+    || hasRouteControlCharacter(value)
+  ) {
+    return undefined;
+  }
+
+  return value;
 }
 
 function isAbortError(error: unknown): boolean {
