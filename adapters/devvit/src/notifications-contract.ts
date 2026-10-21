@@ -57,7 +57,9 @@ export function devvitNotificationTextLength(text: string): number {
 
 /**
  * The characters of a Devvit host code. The server bridge names a host code
- * in an error message as `(host code <code>)`, and the webview reads it back.
+ * in an error message as `(host code <code>)`, and the webview reads it back,
+ * both through `@mpgd/bridge/notifications` (`createNotificationsV2BridgeHandler`
+ * and `readBridgeNotificationsHostCode`), whose pattern this equals.
  */
 export const devvitHostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
 

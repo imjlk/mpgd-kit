@@ -1,13 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { BridgeNotificationsEvent } from '@mpgd/bridge';
-import type { NotificationEvent } from '@mpgd/platform/notifications';
+import type { NotificationEvent, NotificationProvider } from '@mpgd/platform/notifications';
 
 import * as bridgeClient from './notifications-bridge.js';
+import { createAitNotificationCapabilities } from './notifications-provider.js';
 import {
   createLazyAitBridgeNotificationProvider,
   type AitBridgeNotificationClientModule,
 } from './notifications-lazy.js';
+
+/**
+ * A host that answers the capability read as a compatible Apps in Toss host
+ * (the bridge provider reads it before its first other method) and every
+ * other method with `data`.
+ */
+function answering(data: unknown) {
+  return async (method: string): Promise<unknown> => method === 'notifications.v2.getCapabilities'
+    ? {
+        protocolVersion: '2.0.0-draft.1',
+        provider: 'apps-in-toss',
+        capabilities: createAitNotificationCapabilities(),
+      }
+    : data;
+}
 
 // Every test injects the loader, so nothing here waits on a real dynamic
 // import or on wall-clock time: each load is a promise the test settles.
@@ -98,7 +114,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: { a: 'unknown' } }),
+        request: answering({ topics: { a: 'unknown' } }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -123,6 +139,98 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     expect(loader.calls).toBe(1);
   });
 
+  it('subscribes through the one bridge provider its methods use', async () => {
+    const events = channel();
+    const created: NotificationProvider[] = [];
+    const subscribes: number[] = [];
+    const module: AitBridgeNotificationClientModule = {
+      createAitBridgeNotificationProvider(input) {
+        const bridged = bridgeClient.createAitBridgeNotificationProvider(input);
+        created.push(bridged);
+        return {
+          ...bridged,
+          subscribe(listener) {
+            subscribes.push(created.length);
+            return bridged.subscribe(listener);
+          },
+        };
+      },
+    };
+    const provider = createLazyAitBridgeNotificationProvider(
+      {
+        provider: 'apps-in-toss',
+        request: answering({ topics: { a: 'unknown' } }),
+        subscribe: (listener) => events.subscribe(listener),
+      },
+      { load: async () => module },
+    );
+    const seen: NotificationEvent[] = [];
+    provider.subscribe((event) => seen.push(event));
+    await expect(provider.getPermission({ topics: ['a'] })).resolves.toEqual({ topics: { a: 'unknown' } });
+    events.emit(opened('/d'));
+    expect(routes(seen)).toEqual(['/d']);
+    // One bridge provider serves both the methods and the subscription.
+    expect(created).toHaveLength(1);
+    expect(subscribes).toEqual([1]);
+  });
+
+  it('leaves no listener attached once the host is judged incompatible', async () => {
+    const events = channel();
+    const provider = createLazyAitBridgeNotificationProvider(
+      {
+        provider: 'apps-in-toss',
+        request: async (method) => method === 'notifications.v2.getCapabilities'
+          ? {
+              protocolVersion: '3.0.0',
+              provider: 'apps-in-toss',
+              capabilities: createAitNotificationCapabilities(),
+            }
+          : { topics: {} },
+        subscribe: (listener) => events.subscribe(listener),
+      },
+      { load: async () => bridgeClient },
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const seen: NotificationEvent[] = [];
+    provider.subscribe((event) => seen.push(event));
+    await expect(provider.getCapabilities()).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    });
+    expect(events.attached).toBe(0);
+    events.emit(opened('/late'));
+    expect(seen).toEqual([]);
+    // A later subscriber does not attach either.
+    provider.subscribe((event) => seen.push(event));
+    expect(events.attached).toBe(0);
+    await expect(provider.getPermission({ topics: ['a'] })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    });
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('reads envelopes through the bridge provider: other protocols skipped, invalid ones dropped', async () => {
+    const loader = controlledLoader();
+    const events = channel();
+    const provider = createLazyAitBridgeNotificationProvider(
+      {
+        provider: 'apps-in-toss',
+        request: async () => undefined,
+        subscribe: (listener) => events.subscribe(listener),
+      },
+      { load: loader.load },
+    );
+    const seen: NotificationEvent[] = [];
+    provider.subscribe((event) => seen.push(event));
+    await loader.call(0).resolve();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    events.emit({ protocol: 'mpgd.commerce.v2', sequence: 0, event: {} } as never);
+    events.emit({ protocol: 'mpgd.notifications.v2', sequence: 0, event: { type: 'opened' } } as never);
+    events.emit(opened('/c', 1));
+    expect(routes(seen)).toEqual(['/c']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('AIT bridge delivered an invalid notifications event.', expect.anything());
+  });
+
   it('detaches a listener that leaves during the host replay and isolates a throwing attach', async () => {
     const loader = controlledLoader();
     const listeners = new Set<(event: BridgeNotificationsEvent) => void>();
@@ -130,7 +238,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: (listener) => {
           subscribeCalls += 1;
           if (subscribeCalls === 2) {
@@ -178,7 +286,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -198,7 +306,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: { a: 'unknown' } }),
+        request: answering({ topics: { a: 'unknown' } }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -230,7 +338,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const provider = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: (listener) => events.subscribe(listener),
       },
       { load: loader.load },
@@ -254,7 +362,7 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     const quiet = createLazyAitBridgeNotificationProvider(
       {
         provider: 'apps-in-toss',
-        request: async () => ({ topics: {} }),
+        request: answering({ topics: {} }),
         subscribe: () => () => {},
       },
       { load: loader.load },

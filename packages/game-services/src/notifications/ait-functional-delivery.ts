@@ -152,7 +152,15 @@ export interface CreateAitFunctionalMessageDeliveryProviderOptions {
   readonly timeoutMs?: number;
   /** `FAIL` error codes that mean the recipient has not agreed to the template. */
   readonly agreementErrorCodes?: readonly string[];
-  /** `reachedFailReason` texts (trimmed) that mean the recipient has not agreed to the template. */
+  /**
+   * `reachedFailReason` texts (trimmed) that mean the recipient has not
+   * agreed to the template. Each is 1 to 1,024 characters (UTF-16 code
+   * units) once trimmed: the provider reads at most the first 1,024
+   * characters of a `reachedFailReason` and then trims it, so a longer entry
+   * could never match, and an empty one would match a blank reason. The
+   * provider refuses either at creation. A received reason with leading
+   * whitespace loses as much of its end to that cut.
+   */
   readonly agreementFailReasons?: readonly string[];
   /** Further `FAIL` error codes that mean this recipient cannot receive the message. */
   readonly recipientErrorCodes?: readonly string[];
@@ -188,6 +196,8 @@ const channelFields: Readonly<Record<AitFunctionalMessageChannel, string>> = {
   friendtalk: 'sentFriendtalk',
 };
 const maximumResponseBodyBytes = 256 * 1_024;
+/** The longest `reachedFailReason` the provider keeps; a longer one is cut to this. */
+const maximumFailReasonLength = 1_024;
 const maximumIdentifierLength = 2_048;
 const maximumTimeoutMs = 60_000;
 
@@ -243,7 +253,9 @@ export function createAitFunctionalMessageDeliveryProvider(
   const agreementErrorCodes = new Set(options.agreementErrorCodes ?? []);
   const recipientErrorCodes = new Set(options.recipientErrorCodes ?? []);
   const agreementFailReasons = new Set(
-    (options.agreementFailReasons ?? []).map((reason) => reason.trim()),
+    (options.agreementFailReasons ?? []).map((reason, index) =>
+      readAgreementFailReason(reason, index),
+    ),
   );
 
   // Documented codes come first (RFC "Delivery providers -> Apps in Toss"),
@@ -346,6 +358,17 @@ export function createAitFunctionalMessageDeliveryProvider(
   };
 }
 
+/** One `agreementFailReasons` entry, trimmed, or a `TypeError` for one that could never match. */
+function readAgreementFailReason(reason: unknown, index: number): string {
+  const trimmed = typeof reason === 'string' ? reason.trim() : '';
+  if (trimmed.length === 0 || trimmed.length > maximumFailReasonLength) {
+    throw new TypeError(
+      `agreementFailReasons[${index}]: entries must be 1 to ${maximumFailReasonLength} characters once trimmed: a reachedFailReason is read up to ${maximumFailReasonLength} characters, so a longer entry could never match and an empty one would match a blank reason.`,
+    );
+  }
+  return trimmed;
+}
+
 function readSuccess(
   success: unknown,
   agreementFailReasons: ReadonlySet<string>,
@@ -404,7 +427,9 @@ function readContents(
     const reason = item['reachedFailReason'];
     contents.push({
       contentId: item['contentId'].slice(0, 256),
-      ...(typeof reason === 'string' ? { reachedFailReason: reason.slice(0, 1_024) } : {}),
+      ...(typeof reason === 'string'
+        ? { reachedFailReason: reason.slice(0, maximumFailReasonLength) }
+        : {}),
     });
   }
   return contents;
