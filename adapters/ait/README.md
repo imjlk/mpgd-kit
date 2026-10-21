@@ -154,7 +154,8 @@ scoped keys. A v1 marker that names a different campaign stays pending and is no
 paid again. `authorizePromotionGrant`, when configured, remains the primary dispatch fence: these
 local markers do not authorize a payout it did not approve and do not skip it. Server-issued idempotency keys should stay unique across campaigns. An
 authority `retry` may remove a scoped pending copy. It does not remove a v1 dispatch fence, and it
-does not remove a marker that could not be bound.
+does not remove a marker that could not be bound. A pending scoped copy does not hide a granted
+v1 receipt; a later grant or recover replays that receipt and does not dispatch again.
 
 An older host that does not implement `promotions.recoverReward` answers `{ status: 'pending' }`
 instead of throwing. That includes a host whose protocol validator rejects the method and whose

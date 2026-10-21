@@ -1159,7 +1159,15 @@ async function grantLockedAitPromotionReward(input: {
   if (blocked !== undefined) {
     return blocked;
   }
-  const persisted = await resolvePersistedPromotionGrant(promotionResolveInput(input));
+  let persisted: { readonly result?: PromotionRewardResult; readonly ownFenceReleased?: boolean };
+  try {
+    persisted = await resolvePersistedPromotionGrant(promotionResolveInput(input));
+  } catch (error) {
+    if (error instanceof LegacyPromotionFenceError) {
+      return { status: 'pending' };
+    }
+    throw error;
+  }
   if (persisted.result !== undefined) {
     return persisted.result;
   }
@@ -2023,15 +2031,43 @@ async function loadPromotionGrantRecord(
   readonly campaignMismatch: boolean;
 }> {
   const scopedKey = promotionGrantScopedStorageKey(campaignId, idempotencyKey);
+  const legacyKey = promotionGrantStorageKey(idempotencyKey);
   const scoped = await storage.getItem(scopedKey);
   if (scoped !== null) {
     const binding = readStoredCampaignBinding(scoped);
     if (isCampaignConflict(binding, campaignId)) {
       return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: true };
     }
+    if (!isGrantedPromotionRecord(scoped)) {
+      // A granted v1 receipt is written before the scoped copy. If that copy
+      // stays pending, accepting it would hide the receipt and let a retry
+      // dispatch again.
+      let legacy: string | null = null;
+      try {
+        legacy = await storage.getItem(legacyKey);
+      } catch {
+        throw new LegacyPromotionFenceError('AIT legacy promotion marker could not be read.');
+      }
+      if (legacy !== null && isGrantedPromotionRecord(legacy)) {
+        const legacyBinding = readStoredCampaignBinding(legacy);
+        if (isCampaignConflict(legacyBinding, campaignId)) {
+          return {
+            storageKey: legacyKey,
+            legacy: true,
+            serialized: legacy,
+            campaignMismatch: true,
+          };
+        }
+        return {
+          storageKey: legacyKey,
+          legacy: legacyBinding.kind === 'absent',
+          serialized: legacy,
+          campaignMismatch: false,
+        };
+      }
+    }
     return { storageKey: scopedKey, legacy: false, serialized: scoped, campaignMismatch: false };
   }
-  const legacyKey = promotionGrantStorageKey(idempotencyKey);
   const legacy = await storage.getItem(legacyKey);
   if (legacy === null) {
     return { storageKey: scopedKey, legacy: false, serialized: null, campaignMismatch: false };

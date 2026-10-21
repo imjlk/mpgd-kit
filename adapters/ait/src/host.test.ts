@@ -1994,6 +1994,51 @@ describe('AIT production host bridge', () => {
     expect(values.get(v1Key)).toContain('"campaignId":"DAILY"');
   });
 
+  it('replays a granted v1 receipt when the scoped copy stays pending', async () => {
+    const values = new Map<string, string>();
+    const claim = { campaignId: 'DAILY', idempotencyKey: 'scoped-copy-lost' };
+    const receiptKey = 'durable-v1-receipt';
+    const grantPromotionReward = vi.fn(async () => ({ key: receiptKey }));
+    const issued = new Set(['scoped-copy-lost']);
+    const storage = {
+      getItem: async (key: string) => values.get(key) ?? null,
+      removeItem: async (key: string) => { values.delete(key); },
+      setItem: async (key: string, value: string) => {
+        if (value.includes(receiptKey) && key.includes(':v2:')) {
+          throw new Error('scoped granted write failed');
+        }
+        values.set(key, value);
+      },
+    };
+    const create = () => createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: async () => {
+        if (!issued.delete('scoped-copy-lost')) {
+          return { status: 'pending' as const };
+        }
+        return { status: 'authorized' as const };
+      },
+      resolvePendingPromotionGrant: async () => ({ status: 'retry' as const }),
+      dependencies: createDependencies({ grantPromotionReward, storage }),
+    });
+    await expect(request(create(), 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey,
+    });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+    const v1 = JSON.parse(values.get('mpgd:ait:promotion-grant:v1:scoped-copy-lost') ?? '{}') as { status?: string };
+    const v2Key = `mpgd:ait:promotion-grant:v2:${encodeURIComponent('DAILY')}:${encodeURIComponent('scoped-copy-lost')}`;
+    const v2 = JSON.parse(values.get(v2Key) ?? '{}') as { status?: string };
+    expect(v1.status).toBe('granted');
+    expect(v2.status).toBe('pending');
+    await expect(request(create(), 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey,
+    });
+    expect(grantPromotionReward).toHaveBeenCalledTimes(1);
+    expect(values.get(v2Key)).not.toContain('"status":"granted"');
+  });
+
   it('keeps a Tower attendance claim from being paid twice across upgrade, rollback, and a legacy read failure', async () => {
     const campaignId = 'TOWER_DAILY_ATTENDANCE_1';
     const values = new Map<string, string>();
