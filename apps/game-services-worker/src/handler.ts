@@ -116,8 +116,9 @@ export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv {
   readonly GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH?: GooglePlayPublisherAuthBinding;
   /**
    * Binds the Google response to the authenticated player. Without it, set
-   * `GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"` only when the
-   * ingress already binds `playerId` to an authenticated application account.
+   * `GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"` only together with
+   * `GAME_SERVICES_INGRESS_AUTH`. The Worker refuses to start otherwise: an
+   * unbound Play token would be granted to whatever `playerId` the body names.
    */
   readonly GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING?: GooglePlayAccountBinding;
   readonly GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER?: 'true';
@@ -326,6 +327,7 @@ export function createWorkerFetchHandler(
 function buildWorkerFetchHandler(
   env: GameServicesWorkerEnv,
 ): (request: Request) => Promise<Response> {
+  assertGooglePlayUnboundPlayerRequiresIngressAuth(env);
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env, admobConfig);
   const backend = createWorkerBackend(env, evidenceVerifier);
@@ -421,7 +423,10 @@ function buildWorkerFetchHandler(
 
       // The capabilities read carries no player data and stays public; the
       // ledger status read is gated like a grant route when auth is bound,
-      // and its body names the player whose grants it reads.
+      // and its body names the player whose grants it reads. Public verify
+      // stays open when this binding is absent. The unbound Play opt-in is
+      // refused at startup without it, so that open route cannot grant an
+      // unbound token to a body-supplied playerId.
       if (ingressAuth !== undefined && grantRoute.operation !== 'getCommerceCapabilities') {
         const rejection = await authenticateIngressRequest(
           request,
@@ -643,6 +648,7 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
 }
 
 function buildWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
+  assertGooglePlayUnboundPlayerRequiresIngressAuth(env);
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const backend = createWorkerBackend(env, resolveWorkerEvidenceVerifier(env, admobConfig));
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
@@ -1052,6 +1058,27 @@ function resolveWorkerLookupStores(
 }
 
 /**
+ * The unbound Play opt-in grants a token with no obfuscated account to the
+ * request `playerId`. That is safe only when ingress auth already binds that
+ * player. Refuse to start otherwise, the same way the insecure development
+ * verifier is refused for a durable store: a swallowed registry error would
+ * still leave the Worker running.
+ */
+function assertGooglePlayUnboundPlayerRequiresIngressAuth(env: GameServicesWorkerEnv): void {
+  if (
+    env.GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER === 'true'
+    && env.GAME_SERVICES_INGRESS_AUTH === undefined
+  ) {
+    throw new Error(
+      'GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER=true is refused unless '
+      + 'GAME_SERVICES_INGRESS_AUTH is bound. An unbound Play token is granted to the '
+      + 'request playerId, which is safe only when ingress auth already binds that player. '
+      + 'Remove the flag or bind GAME_SERVICES_INGRESS_AUTH.',
+    );
+  }
+}
+
+/**
  * The in-Worker Google Play boundary: the Android Publisher client over the
  * token service, with the account binding service or the explicit unbound
  * opt-in. Both the package name and the auth service are required together.
@@ -1072,6 +1099,9 @@ function resolveWorkerGooglePlayBoundary(
   }
   const accountBinding = env.GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING;
   const allowUnbound = env.GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER === 'true';
+  // Also enforced at Worker construction. Repeated here so this boundary cannot
+  // be built with the opt-in while public verify still trusts the body playerId.
+  assertGooglePlayUnboundPlayerRequiresIngressAuth(env);
   if (accountBinding === undefined && !allowUnbound) {
     throw new Error(
       'Google Play purchases require GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING or the explicit '

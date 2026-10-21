@@ -60,6 +60,12 @@ export const devvitCommerceCheckoutClientOnlyBridgeErrorCode =
   'DEVVIT_COMMERCE_CHECKOUT_CLIENT_ONLY' as const;
 /** Bridge error when the payments plugin fails; retryable. */
 export const devvitPaymentsUnavailableBridgeErrorCode = 'DEVVIT_PAYMENTS_UNAVAILABLE' as const;
+/**
+ * Bridge error when the paid-order scan hit its page cap with pages left.
+ * Retryable. A caller must not treat orders absent from this scan as delivered:
+ * the list was not finished.
+ */
+export const devvitOrderScanIncompleteBridgeErrorCode = 'DEVVIT_ORDER_SCAN_INCOMPLETE' as const;
 
 /** `Order.status` as `@devvit/protos` encodes it (`OrderStatus` enum) or as the handler types spell it. */
 export type DevvitPaymentsOrderStatusLike = number | string;
@@ -157,17 +163,16 @@ const durableAccountingTypes: ReadonlySet<number | string> = new Set([
 ]);
 const orderPageSize = maximumDevvitAvailableOrders;
 /**
- * Hard cap on the pages scanned per listing. The plugin's `status` filter
- * does nothing in `@devvit/payments` 0.14 (its proto marks it so, and the
- * `PaymentsClient` forwards it unchanged), so every status is scanned. The
- * Devvit docs describe the list as newest first ("Manage Payments", "Check
- * orders"); that is documentation, not a plugin guarantee, so the scan stops
- * early only after two consecutive pages without a paid or delivered order,
- * and warns when it stops with pages left.
+ * Hard cap on the pages scanned per listing. `@devvit/payments` 0.14 ignores
+ * `status` and `buyer` (`GetOrdersRequest` marks both "currently does nothing";
+ * an empty filter means every order), and `PaymentsClient` forwards the
+ * request unchanged, so every status is scanned. Devvit serves this handler
+ * inside a time-bounded HTTP request. Thirty-two serial plugin calls stay
+ * inside that budget (the kit treats about 20 seconds as the practical limit
+ * for a Devvit task). Hitting the cap with a next page fails the request
+ * instead of returning a partial list: unseen orders are not delivered.
  */
-const maximumOrderPages = 8;
-/** Consecutive pages without a paid or delivered order after which the scan stops early. */
-const settledPagesBeforeStop = 2;
+export const maximumDevvitOrderScanPages = 32;
 
 /**
  * Serves `commerce.v2.*` from the payments plugin:
@@ -181,13 +186,10 @@ const settledPagesBeforeStop = 2;
  *   `purchased` (the order id as `transactionId` and `token`,
  *   `devvit.order.v1` evidence whose `status` says which), bounded by
  *   `maximumDevvitAvailableOrders`. Reddit marks an order `DELIVERED` as soon
- *   as the fulfillment handler answered, so the delivered orders are the ones
- *   whose ledger entry exists; the webview provider lists only the `PAID`
- *   ones as available and reports both as events, so a session that lost its
- *   checkout result still finds the order. The scan reads pages of 64
- *   (newest first, as the Devvit docs describe) and stops after two
- *   consecutive pages without a paid or delivered order or after
- *   `maximumOrderPages`, warning when pages are left.
+ *   as the fulfillment handler answered. The scan reads pages of 64 until the
+ *   cursor ends, or until `maximumDevvitOrderScanPages`. A scan that still has
+ *   a next page at that cap fails with `DEVVIT_ORDER_SCAN_INCOMPLETE` rather
+ *   than returning a partial list: an order that was not read is not delivered.
  * - `requestPurchase` is refused with `DEVVIT_COMMERCE_CHECKOUT_CLIENT_ONLY`,
  *   `finishTransaction` with `COMMERCE_V2_METHOD_UNSUPPORTED`, and
  *   `restorePurchases` answers `{ restored: false }`: the webview provider
@@ -213,19 +215,14 @@ export function createDevvitCommerceV2BridgeHandler(
   const listPaidOrders = async (): Promise<readonly DevvitPaidOrder[]> => {
     const orders: DevvitPaidOrder[] = [];
     let cursor: string | undefined;
-    let settledPages = 0;
-    for (let page = 0; page < maximumOrderPages; page += 1) {
+    for (let page = 0; page < maximumDevvitOrderScanPages; page += 1) {
       const response = await input.payments.getOrders({
         limit: orderPageSize,
         ...(cursor === undefined ? {} : { cursor }),
       });
       const next = response.pageInfo;
       const hasNextPage = next !== undefined && next.hasNextPage && next.endCursor.length > 0;
-      let listableOnPage = 0;
       for (const [index, order] of response.orders.entries()) {
-        if (paidOrderStatuses.has(order.status) || deliveredOrderStatuses.has(order.status)) {
-          listableOnPage += 1;
-        }
         const paid = readListedOrder(order, productsBySku);
         if (paid !== undefined) {
           orders.push(paid);
@@ -238,23 +235,15 @@ export function createDevvitCommerceV2BridgeHandler(
         }
       }
       if (!hasNextPage || next === undefined) {
-        break;
+        return orders;
       }
-      settledPages = listableOnPage === 0 ? settledPages + 1 : 0;
-      if (settledPages >= settledPagesBeforeStop) {
-        // Newest first, as documented: the older pages left hold nothing to list.
-        warn(
-          `Devvit order scan stopped after ${String(settledPagesBeforeStop)} pages without a `
-            + 'paid or delivered order; older pages were not read.',
-        );
-        break;
-      }
-      if (page + 1 === maximumOrderPages) {
-        warn('Devvit order scan reached its page cap; older pages were not read.');
+      if (page + 1 === maximumDevvitOrderScanPages) {
+        // A partial list would look complete. Unseen orders are not delivered.
+        throw incompleteOrderScan();
       }
       cursor = next.endCursor;
     }
-    return orders;
+    throw incompleteOrderScan();
   };
 
   const serve = async (request: BridgeRequest): Promise<unknown> => {
@@ -460,6 +449,15 @@ function normalizeBridgeProducts(
     productIds.add(product.productId);
     skus.add(product.sku);
     return { productId: product.productId, sku: product.sku };
+  });
+}
+
+function incompleteOrderScan(): PlatformOperationError {
+  return new PlatformOperationError({
+    code: devvitOrderScanIncompleteBridgeErrorCode,
+    message: `Devvit order scan is incomplete: it reached ${String(maximumDevvitOrderScanPages)} `
+      + 'pages with pages left. Unseen orders were not read and are not delivered.',
+    retryable: true,
   });
 }
 

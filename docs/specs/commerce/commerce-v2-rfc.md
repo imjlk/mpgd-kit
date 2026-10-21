@@ -226,7 +226,13 @@ Rules every provider follows:
   unfinished StoreKit transactions, Microsoft Store purchases not yet
   consumed, Apps in Toss pending orders, and wallet entitlements not yet
   redeemed. A finished durable purchase is not available; entitlements come
-  from the ledger, not from this list.
+  from the ledger, not from this list. StoreKit is the exception: a
+  non-consumable that StoreKit has already finished stays in `currentEntitlements`
+  with `unfinished: false`, and the StoreKit SDK still lists it so a finish
+  that raced the ledger grant can still be verified. The server ledger
+  dedupes that verify. A finished consumable is not listed.
+
+<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction. -->
 - **No grants on the client.** A provider never credits a wallet or unlocks an
   entitlement. `settlement` on an adapter-settled purchase is a pointer for
   the reconciler, not a grant.

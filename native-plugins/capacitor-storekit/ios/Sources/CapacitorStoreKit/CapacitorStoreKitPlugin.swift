@@ -120,8 +120,10 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
                     byId[id] = payload
                 }
             }
-            // Current non-consumable entitlements are listed too;
-            // `unfinished: false` lets the commerce SDK exclude them.
+            // Current non-consumable entitlements are listed too.
+            // `unfinished: false` means StoreKit already finished them; the SDK
+            // still lists those durables so a finish that raced the ledger
+            // grant can be verified. The server ledger dedupes.
             for await result in Transaction.currentEntitlements {
                 if var payload = Self.verifiedPayload(result),
                    payload["type"] as? String == "non_consumable",
@@ -147,19 +149,34 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func finishTransaction(_ call: CAPPluginCall) {
+        // The ledger id is still a client string. The token match is the local
+        // gate: finish only a verified, non-revoked, one-time transaction whose
+        // app account token equals the one the caller supplies. The StoreKit
+        // SDK supplies the session token and applies the same match before
+        // calling. A signed server finish capability is still required to stop
+        // a webview caller who read the token from `getTransactions`.
         guard let rawId = call.getString("transactionId"), let id = UInt64(rawId),
               let ledgerEntryId = call.getString("ledgerEntryId"),
-              !ledgerEntryId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            call.reject("A transaction ID and confirmed ledger entry are required.",
-                        "STOREKIT_FINISH_REQUIRES_GRANT")
+              !ledgerEntryId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let rawAccountToken = call.getString("appAccountToken"),
+              let accountToken = UUID(uuidString: rawAccountToken),
+              accountToken.uuidString.lowercased()
+                != "00000000-0000-0000-0000-000000000000" else {
+            call.reject(
+                "A transaction ID, confirmed ledger entry, and app account token are required.",
+                "STOREKIT_FINISH_REQUIRES_GRANT"
+            )
             return
         }
+        let expectedToken = accountToken.uuidString.lowercased()
         Task {
             for await result in Transaction.all {
                 guard case .verified(let transaction) = result,
                       transaction.id == id,
                       transaction.revocationDate == nil,
-                      Self.oneTimeType(transaction.productType) != nil else { continue }
+                      Self.oneTimeType(transaction.productType) != nil,
+                      transaction.appAccountToken?.uuidString.lowercased() == expectedToken
+                else { continue }
                 await transaction.finish()
                 call.resolve(["finished": true])
                 return
