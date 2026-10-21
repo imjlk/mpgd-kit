@@ -515,9 +515,12 @@ export function createMicrosoftStorePurchaseBoundary(
             : { status: 'denied' };
         }
         if (!sameUnconsumedPurchase(existing.providerPurchaseId, ownership.item)) {
-          // A changed item id or modified date is not a new unit while this claim is unreleased.
-          // Do not mint a generation or ask the store to replace the claim.
-          return { status: 'denied' };
+          // A changed item or transaction id is not a new unit while this claim is
+          // unreleased. Do not mint a generation. The exact generation may resume so
+          // its finalizer can consume and release; every other query stays denied.
+          return ownership.requestedGeneration === existing.generation
+            ? { status: 'granted', idempotencyKey: existing.generation }
+            : { status: 'denied' };
         }
         return (
             ownership.requestedGeneration === undefined
@@ -639,9 +642,25 @@ export function createMicrosoftStorePurchaseBoundary(
         return pending('MICROSOFT_STORE_VERIFIER_CLOCK_INVALID');
       }
       const verificationId = recoveryOwnership.providerPurchaseId;
-      if (!sameUnconsumedPurchase(verificationId, item.item)) {
+      const currentItemMatches = sameUnconsumedPurchase(verificationId, item.item);
+      const storedIdentity = currentItemMatches
+        ? undefined
+        : readStoredCollectionIdentity(verificationId, item.item.productId);
+      if (!currentItemMatches && storedIdentity === undefined) {
         return rejected('MICROSOFT_STORE_RECOVERY_OWNERSHIP_REQUIRED');
       }
+      // Keep the stored purchase id when Collections rotates the item. The ledger
+      // dedupes on that id, and finalization resumes the existing grant instead of
+      // writing a second one. The resume item id is only the consume echo.
+      const collectionItemId = storedIdentity?.itemId ?? item.item.id;
+      const transactionId = storedIdentity === undefined
+        ? item.item.transactionId
+        : storedIdentity.transactionId;
+      const modifiedDate = storedIdentity?.modifiedDate ?? item.item.modifiedDate;
+      const resumeCollectionItemId = storedIdentity !== undefined
+        && item.item.id !== collectionItemId
+        ? item.item.id
+        : undefined;
 
       return {
         status: 'verified',
@@ -652,17 +671,20 @@ export function createMicrosoftStorePurchaseBoundary(
         // index applies, including a re-verify that must keep the legacy key.
         platformEvidenceId: verificationId,
         payload: {
-          microsoftStoreCollectionItemId: item.item.id,
-          microsoftStoreModifiedDate: item.item.modifiedDate,
+          microsoftStoreCollectionItemId: collectionItemId,
+          microsoftStoreModifiedDate: modifiedDate,
           microsoftStoreProductId: item.item.productId,
           microsoftStoreProductKind: item.item.productKind,
           microsoftStoreQuantity: item.item.quantity,
           microsoftStoreStatus: item.item.status,
           microsoftStoreAccountBindingHash: accountBindingHash,
           microsoftStoreRecoveryOwnershipGeneration: recoveryOwnership.generation,
-          ...(item.item.transactionId === undefined
+          ...(transactionId === undefined
             ? {}
-            : { microsoftStoreTransactionId: item.item.transactionId }),
+            : { microsoftStoreTransactionId: transactionId }),
+          ...(resumeCollectionItemId === undefined
+            ? {}
+            : { microsoftStoreResumeCollectionItemId: resumeCollectionItemId }),
           digitalGoodsItemId: clientEvidence.itemId,
         },
       };
@@ -728,6 +750,31 @@ async function consumeMicrosoftStorePurchase(
     return finalizationPending('MICROSOFT_STORE_ACCOUNT_BINDING_CHANGED');
   }
 
+  let observedItemId = context.resumeCollectionItemId;
+  // An already-granted retry finalizes from the stored ledger row and does not
+  // re-verify. Observe the current Collections item so a rotated id can be
+  // consumed under that same verification id. A query failure leaves only the
+  // stored id acceptable.
+  if (observedItemId === undefined && finalizationInput.alreadyProcessed) {
+    try {
+      const queried = inspectPublisherQuery(
+        await input.client.queryProduct({
+          credentials,
+          storeId: context.storeId,
+          signal: finalizationInput.signal,
+        }),
+        context.storeId,
+      );
+      if (queried.status === 'verified' && queried.item.id !== context.collectionItemId) {
+        observedItemId = queried.item.id;
+      }
+    } catch (error) {
+      if (finalizationInput.signal.aborted) {
+        throw error;
+      }
+    }
+  }
+
   try {
     const trackingId = await deterministicTrackingId(finalizationInput.evidenceVerificationId);
     const raw = await input.client.consumeProduct({
@@ -741,7 +788,10 @@ async function consumeMicrosoftStorePurchase(
       return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_INVALID');
     }
     if (
-      raw.itemId !== context.collectionItemId
+      (
+        raw.itemId !== context.collectionItemId
+        && raw.itemId !== observedItemId
+      )
       || raw.trackingId !== trackingId
       || raw.newQuantity !== 0
     ) {
@@ -852,6 +902,8 @@ type MicrosoftStoreItemInspection =
 
 interface MicrosoftStoreFinalizationContext {
   readonly collectionItemId: string;
+  /** Collections item id observed while resuming an exact generation. Not a ledger identity. */
+  readonly resumeCollectionItemId?: string;
   readonly storeId: string;
   readonly accountBindingHash: string;
   readonly recoveryOwnershipGeneration: string;
@@ -984,6 +1036,7 @@ function readFinalizationContext(
   | {
       readonly status: 'verified';
       readonly collectionItemId: string;
+      readonly resumeCollectionItemId?: string;
       readonly storeId: string;
       readonly accountBindingHash: string;
       readonly recoveryOwnershipGeneration: string;
@@ -1004,6 +1057,9 @@ function readFinalizationContext(
     input.evidencePayload?.microsoftStoreRecoveryOwnershipGeneration,
   );
   const transactionId = optionalIdentifier(input.evidencePayload?.microsoftStoreTransactionId);
+  const resumeCollectionItemId = optionalIdentifier(
+    input.evidencePayload?.microsoftStoreResumeCollectionItemId,
+  );
   // The binding and this verifier ship together in the first Store release. Missing bindings are
   // therefore malformed evidence, not legacy evidence, and must fail closed to prevent an account
   // switch between verification and consumption. A grant already keyed by the modifiedDate id is
@@ -1032,6 +1088,7 @@ function readFinalizationContext(
   return {
     status: 'verified',
     collectionItemId,
+    ...(resumeCollectionItemId === undefined ? {} : { resumeCollectionItemId }),
     storeId: payloadStoreId,
     accountBindingHash,
     recoveryOwnershipGeneration,
@@ -1044,6 +1101,37 @@ function createVerificationId(
   return item.transactionId === undefined
     ? `microsoft-store:${item.productId}:${item.id}`
     : `microsoft-store:${item.productId}:${item.id}:${item.transactionId}`;
+}
+
+/**
+ * Parses a verification id this boundary wrote. Item ids are not expected to
+ * contain `:`; a date suffix may, so only the first separator is split.
+ */
+function readStoredCollectionIdentity(
+  verificationId: string,
+  storeId: string,
+): {
+  readonly itemId: string;
+  readonly modifiedDate?: string;
+  readonly transactionId?: string;
+} | undefined {
+  const prefix = `microsoft-store:${storeId}:`;
+  if (!verificationId.startsWith(prefix) || verificationId.length <= prefix.length) {
+    return undefined;
+  }
+  const rest = verificationId.slice(prefix.length);
+  const separator = rest.indexOf(':');
+  if (separator === -1) {
+    return optionalIdentifier(rest) === undefined ? undefined : { itemId: rest };
+  }
+  const itemId = rest.slice(0, separator);
+  const suffix = rest.slice(separator + 1);
+  if (optionalIdentifier(itemId) === undefined || optionalIdentifier(suffix) === undefined) {
+    return undefined;
+  }
+  return validIsoDate(suffix)
+    ? { itemId, modifiedDate: suffix }
+    : { itemId, transactionId: suffix };
 }
 
 /** Ledger key written before verification ids stopped including modifiedDate. */

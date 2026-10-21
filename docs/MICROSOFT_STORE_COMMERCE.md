@@ -97,7 +97,12 @@ when Collections returns one. `modifiedDate` stays in the verification payload
 and is not part of the id. Do not replace an unreleased claim when a later
 query changes `modifiedDate` or the item id while quantity is still 1; a
 different provider purchase can be claimed only after the previous claim is
-released. It must not transfer the binding to another game player. Release only
+released. If that later query returns a different item or transaction id, the
+exact stored generation may still verify and finalize. Verification keeps the
+stored purchase id, so the ledger does not grant again, and consume may echo
+the item id Collections reported for that resume. A missing or different
+generation stays denied until release. It must not transfer the binding to
+another game player. Release only
 the exact player, generation, and provider purchase after authoritative consume
 succeeds, so a delayed release cannot erase a claim that was released and then
 claimed again. If that release is unavailable, keep finalization pending so the
@@ -108,7 +113,7 @@ new generation. A purchase already recorded under
 `microsoft-store:<storeId>:<itemId>:<modifiedDate>` keeps that ledger key when
 the same claim is verified again, so a re-verify does not grant a second time
 under the stable id.
-<!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#createMicrosoftStorePurchaseBoundary Unreleased claims are not replaced; verification ids use transactionId when present, not modifiedDate, and keep a stored modifiedDate key. -->
+<!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#createMicrosoftStorePurchaseBoundary Unreleased claims are not replaced; an exact generation still finalizes after item rotation under the stored verification id. -->
 <!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#InMemoryMicrosoftStoreRecoveryOwnershipStore Reference store returns the existing unreleased claim instead of replacing it. -->
 Pass the current, server-trusted product catalog tokens as
 `inAppOfferTokens`; the boundary rejects a claim whose browser-supplied current
