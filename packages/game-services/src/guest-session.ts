@@ -557,17 +557,20 @@ export function createGuestServerSession(
   /** The token (by its expiry) a background refresh last ran for, and when. */
   let refreshedAheadFor: string | undefined;
   let lastRefreshAheadAt: number | undefined;
+  /** The one mapping: the server user is the player, and the family id is the session id. */
+  const toSession = (active: ServerGuestSessionView) => ({
+    playerId: active.serverUserId,
+    sessionId: active.sessionFamilyId,
+  });
   const sessionOf = (active: ServerGuestSessionView | undefined) =>
-    active === undefined
-      ? undefined
-      : { playerId: active.serverUserId, sessionId: active.sessionFamilyId };
+    active === undefined ? undefined : toSession(active);
   return {
     current: () => sessionOf(coordinator.current()),
     onAuthenticated(listener) {
       // The session current at subscription is not a new one; its refreshes are not either.
       let announced = sessionOf(coordinator.current());
       return coordinator.onSession((active) => {
-        const next = { playerId: active.serverUserId, sessionId: active.sessionFamilyId };
+        const next = toSession(active);
         if (announced?.playerId === next.playerId && announced.sessionId === next.sessionId) {
           return;
         }

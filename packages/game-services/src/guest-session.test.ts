@@ -932,7 +932,7 @@ function familyBackend() {
     { authorization: 'Bearer access-6' },
   ]);
   assert.equal(server.refreshCalls, 6);
-  // A clock that went back does not hold the background refresh off.
+  // Arm the interval at latest-30s (no refresh is scripted, so this one fails).
   clock = Date.parse(latest) - 30_000;
   assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-6' });
   await settle();
@@ -940,6 +940,7 @@ function familyBackend() {
   const earlier = iso(Date.parse(latest) - 40 * 60 * 1000);
   server.answers.refresh.push({ sessionId: 'rotated-6', accessExpiresAt: earlier });
   await coordinator.refresh();
+  // A clock that went back (before the armed interval) does not hold the background refresh off.
   clock = Date.parse(earlier) - 30_000;
   server.answers.refresh.push({ sessionId: 'rotated-7', accessExpiresAt: latest });
   assert.deepEqual(await serverSession.getHeaders(), { authorization: 'Bearer access-7' });
