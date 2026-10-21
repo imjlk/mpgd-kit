@@ -92,16 +92,25 @@ to a different player. Store the original idempotency key as an opaque ownership
 generation: a retry with the same generation is idempotent, while a fresh
 generation cannot replace the same unconsumed provider purchase even for the
 same player. Persist the record's `providerPurchaseId`, which the boundary
-derives from the Collections item ID, Store product ID, and modified date. A
-different provider purchase may atomically replace the same player's stale
-claim left behind after the prior item was consumed; it must not transfer the
-binding to another game player. Release only the exact player, generation, and
-provider purchase after authoritative consume succeeds, so a delayed release
-cannot erase the replacement. If that release is unavailable, keep finalization
-pending so the same deterministic consume and release can be retried. Once
-Collections stops listing the consumed item, only the exact durable generation
-may resume that finalizer; a generationless recovery remains unavailable. Pass
-the current, server-trusted product catalog tokens as
+derives from the Store product ID, the Collections item ID, and `transactionId`
+when Collections returns one. `modifiedDate` stays in the verification payload
+and is not part of the id. Do not replace an unreleased claim when a later
+query changes `modifiedDate` or the item id while quantity is still 1; a
+different provider purchase can be claimed only after the previous claim is
+released. It must not transfer the binding to another game player. Release only
+the exact player, generation, and provider purchase after authoritative consume
+succeeds, so a delayed release cannot erase a claim that was released and then
+claimed again. If that release is unavailable, keep finalization pending so the
+same deterministic consume and release can be retried. Once Collections stops
+listing the consumed item, only the exact durable generation may resume that
+finalizer; a generationless recovery remains unavailable and must not mint a
+new generation. A purchase already recorded under
+`microsoft-store:<storeId>:<itemId>:<modifiedDate>` keeps that ledger key when
+the same claim is verified again, so a re-verify does not grant a second time
+under the stable id.
+<!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#createMicrosoftStorePurchaseBoundary Unreleased claims are not replaced; verification ids use transactionId when present, not modifiedDate, and keep a stored modifiedDate key. -->
+<!-- @link ../packages/game-services/src/microsoft-store-purchase.ts#InMemoryMicrosoftStoreRecoveryOwnershipStore Reference store returns the existing unreleased claim instead of replacing it. -->
+Pass the current, server-trusted product catalog tokens as
 `inAppOfferTokens`; the boundary rejects a claim whose browser-supplied current
 token does not match that mapping. Never construct this mapping from the claim
 request. Pass a durable, atomically implemented
