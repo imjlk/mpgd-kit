@@ -227,7 +227,7 @@ function expectThrows(operation: () => unknown, message: string): void {
   );
   assertEqual(
     plugin.calls.at(-1),
-    'finish:2000000123456789:le-1',
+    'finish:2000000123456789:le-1:' + fakeAccountToken,
     'the native finish receives the transaction and ledger entry',
   );
   await provider.restorePurchases?.();
@@ -508,6 +508,55 @@ function expectThrows(operation: () => unknown, message: string): void {
   );
   provider.dispose();
   switched.dispose();
+}
+
+// commerce.v2.finishTransaction is the webview bridge over the same finish gate.
+{
+  const otherAccount = crypto.randomUUID();
+  const plugin = createFakeStoreKitPlugin({
+    products: [fakeProduct()],
+    transactions: [
+      fakeTransaction({ transactionId: '300', appAccountToken: otherAccount }),
+      fakeTransaction({ transactionId: '301' }),
+    ],
+  });
+  const service = createCapacitorStoreKitServiceProvider({
+    products: [products[0]],
+    getAppAccountToken: () => fakeAccountToken,
+    sdk: plugin,
+    isIos: () => true,
+  });
+  const request = (transactionId: string): BridgeRequest => ({
+    id: `finish-${transactionId}`,
+    method: 'commerce.v2.finishTransaction',
+    payload: { transactionId, ledgerEntryId: 'le-bridge', isConsumable: true },
+    meta: {
+      target: 'ios',
+      appVersion: '1.0.0',
+      buildId: 'storekit-finish-gate',
+      sentAt: '2026-07-16T12:00:00.000Z',
+    },
+  });
+  assertEqual(
+    await service.bridge.request(request('300')),
+    { id: 'finish-300', ok: true, data: { finished: false } },
+    'commerce.v2.finishTransaction does not finish another account',
+  );
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('finish:')),
+    [],
+    'a mismatched bridge finish never reaches native',
+  );
+  assertEqual(
+    await service.bridge.request(request('301')),
+    { id: 'finish-301', ok: true, data: { finished: true } },
+    'commerce.v2.finishTransaction finishes the session binding',
+  );
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('finish:')),
+    [`finish:301:le-bridge:${fakeAccountToken}`],
+    'the bridge finish carries the session app account token, not a caller-supplied one',
+  );
 }
 
 console.info('StoreKit commerce v2 provider passed.');
