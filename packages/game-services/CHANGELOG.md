@@ -1,5 +1,15 @@
 # @mpgd/game-services
 
+## 0.27.2 — 2026-10-21
+
+### Fixed
+
+- [b918119c](https://github.com/imjlk/mpgd-kit/commit/b918119c26437b13d6ca4a7e57a3104b81fe0687) `createAitFunctionalMessageDeliveryProvider` refuses an `agreementFailReasons` entry that is empty or longer than 1,024 characters once trimmed, with a `TypeError` at creation. The provider reads at most 1,024 characters of a `reachedFailReason`, so a longer entry could never match, and an empty one would have matched a blank reason as an agreement denial. A game-services Worker with such an `MPGD_AIT_NOTIFICATIONS` setting reports its notifications as misconfigured, as for any other invalid setting. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.4.16, @mpgd/catalog@0.10.7, @mpgd/platform@0.27.2
+
 ## 0.27.1 — 2026-10-21
 
 ### Patch changes

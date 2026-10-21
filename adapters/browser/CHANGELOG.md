@@ -1,5 +1,12 @@
 # @mpgd/adapter-browser
 
+## 0.11.7 — 2026-10-21
+
+### Patch changes
+
+- [3f519a74](https://github.com/imjlk/mpgd-kit/commit/3f519a74a3eaf7aeec7a35d208ed951ff61ff8df) Echo a coordinator's purchase presentation attempt on ONE play checkout facts. Ordinary checkouts are unchanged, and the echoed fact does not grant. — Thanks @imjlk!
+- Updated dependencies: @mpgd/platform@0.27.2
+
 ## 0.11.6 — 2026-10-21
 
 ### Fixed
