@@ -182,10 +182,30 @@ describe('CrazyGames interstitial adapter', () => {
     let callback: CrazyGamesAdCallbacks | undefined;
     vi.mocked(f.sdk.ad.requestAd).mockImplementation((_type, supplied) => { callback = supplied; throw new Error('bridge lost'); });
     const provider = createCrazyGamesAdProvider({ sdk: f.sdk, launch: 'full' });
-    await expect(provider.show(input)).resolves.toMatchObject({ presentation: 'unknown' });
-    await expect(provider.getAvailability(input)).resolves.toMatchObject({ reason: 'busy' });
+    await expect(provider.show(input)).resolves.toMatchObject({ presentation: 'unknown', outcome: 'pending' });
+    await expect(provider.getAvailability(input)).resolves.toEqual({ state: 'action-required', reason: 'action-required' });
     callback?.adError({ code: 'other' });
     await expect(provider.getAvailability(input)).resolves.toEqual({ state: 'available' });
+  });
+  it('resolves a midgame request that never calls back and releases only on a later terminal callback', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      const provider = createCrazyGamesAdProvider({ sdk: f.sdk, launch: 'full', requestTimeoutMs: 30 });
+      const pending = provider.show(input);
+      const stalled = expect(pending).resolves.toMatchObject({
+        outcome: 'pending',
+        presentation: 'unknown',
+        reason: 'outcome-unknown',
+      });
+      await vi.advanceTimersByTimeAsync(30);
+      await stalled;
+      await expect(provider.getAvailability(input)).resolves.toEqual({ state: 'action-required', reason: 'action-required' });
+      f.callbacks().adFinished();
+      await expect(provider.getAvailability(input)).resolves.toEqual({ state: 'available' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps blocked and disabled SDKs playable with monetization unavailable', async () => {

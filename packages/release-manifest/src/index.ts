@@ -63,11 +63,38 @@ export interface ReleaseManifest {
 
 const assertReleaseManifestStructure = typia.createAssert<ReleaseManifest>();
 const fullGitShaPattern = /^[0-9a-f]{40}$/u;
+const sha256DigestPattern = /^[0-9a-f]{64}$/u;
 
 export function assertReleaseManifest(input: unknown): ReleaseManifest {
   const manifest = assertReleaseManifestStructure(input);
 
+  if (!fullGitShaPattern.test(manifest.gitSha)) {
+    throw new TypeError('Release manifest gitSha must be a lowercase 40-character SHA.');
+  }
+
+  if (!fullGitShaPattern.test(manifest.kitGitSha)) {
+    throw new TypeError('Release manifest kitGitSha must be a lowercase 40-character SHA.');
+  }
+
   for (const [target, entry] of Object.entries(manifest.targets)) {
+    assertSha256Digest(
+      entry.effectiveConfig.digest,
+      `Release manifest ${target} effectiveConfig.digest`,
+    );
+    assertSha256Digest(entry.iconManifest.digest, `Release manifest ${target} iconManifest.digest`);
+    assertSha256Digest(
+      entry.iconManifest.sourceSha256,
+      `Release manifest ${target} iconManifest.sourceSha256`,
+    );
+    assertSha256Digest(
+      entry.iconManifest.sharedConfigSha256,
+      `Release manifest ${target} iconManifest.sharedConfigSha256`,
+    );
+    assertSha256Digest(
+      entry.iconManifest.renderConfigSha256,
+      `Release manifest ${target} iconManifest.renderConfigSha256`,
+    );
+
     const delivery = entry.nativeDelivery;
     if (delivery === undefined) {
       continue;
@@ -88,10 +115,6 @@ export function assertReleaseManifest(input: unknown): ReleaseManifest {
     if (entry.profile === 'production' && !delivery.signed) {
       throw new TypeError(`Release manifest production native delivery is unsigned: ${target}.`);
     }
-  }
-
-  if (!fullGitShaPattern.test(manifest.kitGitSha)) {
-    throw new TypeError('Release manifest kitGitSha must be a lowercase 40-character SHA.');
   }
 
   if (manifest.releaseIdentity !== undefined) {
@@ -125,4 +148,10 @@ export function assertReleaseManifest(input: unknown): ReleaseManifest {
   }
 
   return manifest;
+}
+
+function assertSha256Digest(value: string, label: string): void {
+  if (!sha256DigestPattern.test(value)) {
+    throw new TypeError(`${label} must be a lowercase 64-character SHA-256 digest.`);
+  }
 }

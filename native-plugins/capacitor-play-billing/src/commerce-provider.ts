@@ -72,7 +72,7 @@ export interface CreateCapacitorPlayBillingCommerceProviderInput {
   readonly store?: StoreId;
   /** Extra plugin codes merged over `playBillingStoreSdkErrorCodeMap`. */
   readonly mapError?: StoreSdkErrorCodeMap;
-  /** Diagnostics for plugin purchases left out of recovery (retired SKU, multi-line); see the SDK input. */
+  /** Diagnostics for a retired SKU or a multi-line purchase. The purchase is still surfaced; see the SDK input. */
   readonly onUnmappedPurchase?: (purchase: PlayPurchase) => void;
 }
 

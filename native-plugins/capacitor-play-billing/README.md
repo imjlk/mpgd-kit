@@ -69,11 +69,17 @@ when `includePending` is set; each carries `token = purchaseToken` and
 `transactionId = orderId`, or the `play-token-sha256:<hex>` token key until
 Play assigns an order id, so the same purchase deduplicates in the ledger. A
 purchased entry whose `isAcknowledged` flag is absent counts as unfinished so a
-paid purchase is never dropped. A purchase for a SKU that is not in `products` (a retired product)
-or a multi-line purchase has no logical id for the reconciler, so it is left
-out of the list and of events and handed to the optional `onUnmappedPurchase`
-diagnostics hook instead; the backend finalizer still sees it through the
-Play Developer API. The plugin's `purchaseUpdated` listener backs
+paid purchase is never dropped. A purchase for a SKU that is not in `products`
+(a retired product) is still listed and emitted, with that product id as
+`sku` and the purchase token intact, so the reconciler can submit it when a
+logical id is still known. A multi-line purchase is listed the same way,
+with every product id joined by a comma (not a product-id character, so it
+cannot match one catalog SKU). The reconciler then fails that purchase's
+catalog lookup visibly instead of granting one line of it.
+`onUnmappedPurchase` still receives both, as diagnostics only: the backend
+finalizer acknowledges or consumes a token only after the client submits it
+and the ledger grants, and it has no path that can acknowledge a token
+without a logical product id. The plugin's `purchaseUpdated` listener backs
 `addListener`: deliveries leave in the order the plugin reported them (a
 purchase without an order id waits for the token digest, and later updates
 queue behind it), and a `cancelled` or `failed` update without a purchase is

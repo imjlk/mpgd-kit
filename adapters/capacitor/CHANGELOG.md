@@ -1,5 +1,15 @@
 # @mpgd/adapter-capacitor
 
+## 0.12.1 — 2026-10-21
+
+### Fixed
+
+- [c6438977](https://github.com/imjlk/mpgd-kit/commit/c6438977f3be174f4e351597366d935c37950b90) The Capacitor notifications provider no longer treats a swipe-dismiss as an open, waits for Android notification channels before `register()` returns a token, and refuses that token when a push-only Android shell cannot create the catalog channels. Android declares the same remote purposes as the standard FCM registry, including `advertising`, so a standard pairing is not `configuration-required`. A token that arrives while Android channel creation is failing is published once that setup recovers. An iOS local reminder is confirmed by its key, topic, time, route, and topic id, not only its id, and an add still missing after that wait does not fail the schedule or restore an evicted reminder. Android `listLocal` omits a stored row only when it is in the shade, so a Doze-deferred alarm stays cancellable, including when the shade read fails. A newer token wins when overlapping permission corrections would otherwise publish an older one. A settings change that the last permission read missed is corrected on the next token. iOS provisional or ephemeral authorization, when a shell reports it, stays promptable, and Android notifications turned off in settings read as blocked. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.14.2, @mpgd/capacitor-game-services@0.8.1, @mpgd/game-runtime@0.7.5, @mpgd/game-services@0.27.0, @mpgd/platform@0.27.0, @mpgd/target-config@0.23.5
+
 ## 0.12.0 — 2026-10-20
 
 ### Added

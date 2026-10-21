@@ -331,15 +331,22 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
 
     unmapped.length = 0;
     const unfinished = await sdk.getAvailablePurchases({});
-    // A retired SKU and a multi-line purchase have no logical id for the
-    // reconciler; they reach the diagnostics hook instead of the list.
-    expect(unfinished.map((purchase) => purchase.token)).toEqual(['open']);
+    // A retired SKU keeps its product id. A multi-line purchase keeps every
+    // product id, joined so the sku cannot match one catalog entry. Neither
+    // is dropped; the diagnostics hook still sees both.
+    expect(unfinished.map((purchase) => [purchase.token, purchase.sku])).toEqual([
+      ['open', 'gems.small'],
+      ['multi', 'gems.small,remove.ads'],
+      ['other', 'not.sold'],
+    ]);
     expect(unmapped.map((purchase) => (purchase as { purchaseToken: string }).purchaseToken))
       .toEqual(['multi', 'other']);
     const withPending = await sdk.getAvailablePurchases({ includePending: true });
     expect(withPending.map((purchase) => [purchase.token, purchase.state])).toEqual([
       ['open', 'purchased'],
       ['wait', 'pending'],
+      ['multi', 'purchased'],
+      ['other', 'purchased'],
     ]);
     expect(withPending[1]).toEqual({
       sku: 'gems.small',
@@ -424,6 +431,35 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
         quantity: 1,
       },
     ]);
+  });
+
+  it('emits a retired SKU purchase instead of dropping it', async () => {
+    const { sdk, plugin } = createSdk();
+    const events: StoreSdkEvent[] = [];
+    sdk.addListener('purchaseUpdated', (event) => {
+      events.push(event);
+    });
+    await flush();
+    plugin.emit({
+      status: 'purchased',
+      purchase: fakePlayPurchase({
+        products: ['retired.sku'],
+        purchaseToken: 'token-r',
+        orderId: 'GPA.r',
+      }),
+    });
+    await until(() => events.length === 1);
+    expect(events).toEqual([{
+      type: 'purchaseUpdated',
+      purchase: {
+        sku: 'retired.sku',
+        transactionId: 'GPA.r',
+        state: 'purchased',
+        purchasedAt: new Date(1_790_000_000_000).toISOString(),
+        token: 'token-r',
+        quantity: 1,
+      },
+    }]);
   });
 
   it('emits purchase updates in the order the plugin delivered them', async () => {

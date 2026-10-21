@@ -19,7 +19,7 @@ import {
   type StoreProduct,
   type StorePurchase,
 } from '@mpgd/platform/commerce';
-import { onePlayFullscreenOwners } from './oneplay-ads.js';
+import { claimOnePlayFullscreenOwner, onePlayFullscreenOwners } from './oneplay-ads.js';
 import type { OnePlayProductDetails, OnePlaySdk } from './oneplay-sdk.js';
 
 /** Store id of the ONE play provider and of the `oneplay.managed-purchase.v1` evidence. */
@@ -131,8 +131,11 @@ export function createOnePlayCommerceProvider(input: {
   readonly sdk?: OnePlaySdk;
   readonly products?: readonly OnePlayCommerceProduct[];
   readonly server?: OnePlayCommerceServerPort;
+  /** Gateway identity for dispose. Omitted providers keep a private scope another gateway cannot clear. */
+  readonly fullscreenScope?: object;
 }): OnePlayCommerceProvider {
   const { sdk, server } = input;
+  const fullscreenScope = input.fullscreenScope ?? {};
   const iap = sdk?.iap;
   const listeners = new Set<(event: PlatformPurchasePresentationEvent) => void>();
   const products = (input.products ?? []).map((product) => Object.freeze({ ...product }));
@@ -245,9 +248,21 @@ export function createOnePlayCommerceProvider(input: {
         return Promise.reject(new CommerceError('IN_PROGRESS', { message: 'ONE play native UI is already open.', storeCode: 'ONEPLAY_BUSY', retryable: false }));
       }
       const owner = {};
-      onePlayFullscreenOwners.set(sdk, owner);
+      claimOnePlayFullscreenOwner(sdk, owner, fullscreenScope);
       const release = () => { if (onePlayFullscreenOwners.get(sdk) === owner) { onePlayFullscreenOwners.delete(sdk); } };
       const result = Promise.resolve().then(async (): Promise<RequestPurchaseResult> => {
+        const releasedBeforeSheet = (): RequestPurchaseResult => {
+          emit('not-started');
+          return {
+            outcome: 'failed',
+            error: new CommerceError('IN_PROGRESS', {
+              message: 'ONE play checkout was released before the payment sheet opened.',
+              storeCode: 'ONEPLAY_BUSY',
+              retryable: false,
+            }).toCommerceErrorInfo(),
+          };
+        };
+        if (onePlayFullscreenOwners.get(sdk) !== owner) { return releasedBeforeSheet(); }
         const intentFailed = (error: CommerceErrorInfo): RequestPurchaseResult => {
           if (error.retryable) {
             const flight = flights.get(request.idempotencyKey);
@@ -275,6 +290,7 @@ export function createOnePlayCommerceProvider(input: {
         if (!identifier(developerPayload) || new TextEncoder().encode(developerPayload).length > 200) {
           return intentFailed(new CommerceError('INVALID_RESPONSE', { message: 'ONE play checkout intent is invalid.' }).toCommerceErrorInfo());
         }
+        if (onePlayFullscreenOwners.get(sdk) !== owner) { return releasedBeforeSheet(); }
         try {
           // No local timeout: the host may keep payment UI open. Unknown outcomes retain ownership.
           const purchase = await iap.purchase({ productId: product.platformId, developerPayload });

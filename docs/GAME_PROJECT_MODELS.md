@@ -60,7 +60,13 @@ pnpm exec mpgd target smoke-all \
 
 The game root is the authority for target paths and generated evidence. Use a
 clean released kit checkout for production artifacts, and record both the game
-revision and kit revision in release provenance.
+revision and kit revision in release provenance. A downstream build refuses a
+missing or non-commit game revision instead of copying the kit revision or
+writing `uncommitted`. An in-repo kit build, where this repository is the game,
+records the kit revision under that name.
+
+<!-- @link ../packages/release-manifest/src/index.ts#assertReleaseManifest Requires gitSha to be a lowercase 40-character SHA and digest fields to be lowercase 64-character SHA-256. -->
+<!-- @link ../tools/target/generate-release-manifest.ts#resolveReleaseProvenance Downstream builds fail closed when the game SHA is missing; only an in-repo kit build records the kit revision. -->
 
 ## Multi-Game Workspace
 

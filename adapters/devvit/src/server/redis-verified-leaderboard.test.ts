@@ -76,6 +76,38 @@ describe('createDevvitRedisVerifiedLeaderboardService', () => {
     expect(redis.observedKeys.some((key) => key.includes(leaderboardId))).toBe(false);
   });
 
+  it('does not treat a nil-only EXEC as a committed score', async () => {
+    const redis = new FakeDevvitRedis();
+    redis.abortReply = 'nils';
+    const service = createDevvitRedisVerifiedLeaderboardService(redis, {
+      transactionAttempts: 2,
+    });
+
+    await expect(service.recordVerifiedAttempt(createRequest('nil-exec'))).rejects
+      .toThrow('contention exceeded 2 attempts');
+    expect(redis.aborted).toBe(2);
+    expect(redis.values.size).toBe(0);
+    expect(redis.hashes.size).toBe(0);
+    await expect(service.getSnapshot({ leaderboardId: 'board:nil-exec' })).resolves.toBeUndefined();
+  });
+
+  it('keeps a committed score when Devvit drops zero EXEC replies', async () => {
+    const redis = new FakeDevvitRedis();
+    redis.dropZeroReplies = true;
+    const service = createDevvitRedisVerifiedLeaderboardService(redis);
+    const recorded = await service.recordVerifiedAttempt(createRequest('dropped-zeros'));
+
+    expect(recorded).toMatchObject({ recorded: true, alreadyProcessed: false, retained: true });
+    expect(redis.aborted).toBe(0);
+    expect(redis.execCalls).toBe(1);
+    expect([...redis.values.keys()].some((key) => key.endsWith(':commit'))).toBe(true);
+    await expect(service.getSnapshot({
+      leaderboardId: 'board:dropped-zeros',
+    })).resolves.toMatchObject({
+      entries: [{ attemptId: 'attempt:dropped-zeros' }],
+    });
+  });
+
   it('retries bounded WATCH contention and fails when the budget is exhausted', async () => {
     const retryingRedis = new FakeDevvitRedis();
     retryingRedis.remainingContentions = 1;
@@ -202,7 +234,12 @@ class FakeDevvitRedis implements DevvitVerifiedLeaderboardRedisLike {
   beforeNextRetainedHGet: (() => Promise<void>) | undefined;
   remainingContentions = 0;
   execCalls = 0;
+  aborted = 0;
   retainedHGetCalls = 0;
+  /** `@devvit/redis` can answer an abort with nils instead of `[]`. */
+  abortReply: 'empty' | 'nils' = 'empty';
+  /** Drop numeric zero replies from a committed EXEC, as `@devvit/redis` does. */
+  dropZeroReplies = false;
 
   async get(key: string): Promise<string | undefined> {
     this.observe(key);
@@ -350,18 +387,36 @@ class FakeDevvitRedisTransaction implements DevvitVerifiedLeaderboardRedisTransa
   async exec(): Promise<readonly unknown[]> {
     this.redis.execCalls += 1;
 
+    if (this.redis.abortReply === 'nils') {
+      this.redis.aborted += 1;
+      // Non-empty, so a length-only check treats the abort as a commit.
+      return [null];
+    }
+
     if (this.redis.remainingContentions > 0) {
       this.redis.remainingContentions -= 1;
+      this.redis.aborted += 1;
       return [];
     }
 
     for (const [key, version] of this.watchedVersions) {
       if (this.redis.version(key) !== version) {
+        this.redis.aborted += 1;
         return [];
       }
     }
 
-    return this.redis.commit(this.mutations);
+    const committed = this.redis.commit(this.mutations);
+    if (!this.redis.dropZeroReplies) {
+      return committed;
+    }
+    // A zero reply is omitted. The commit marker's OK stays, so the array is short.
+    return committed.flatMap((reply, index) => {
+      if (index === committed.length - 1) {
+        return [reply];
+      }
+      return reply === 0 || reply === null || reply === undefined ? [] : ['OK'];
+    }).slice(-1);
   }
 
   async unwatch(): Promise<void> {}
