@@ -7,11 +7,24 @@ import { assertMiniGameRuntimeAssetOrigins } from './minigame-artifact';
 import {
   assertDevvitInternalEndpoint,
   assertDevvitPaymentsReadiness,
+  assertDevvitRealtimePermission,
   assertMicrosoftStorePwaManifestSourceContract,
   assertWebArtifactInstallability,
 } from './verify-target-artifacts';
 
 const webArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-target-smoke-installability-'));
+
+for (const permission of [undefined, false, true]) {
+  assert.doesNotThrow(() =>
+    assertDevvitRealtimePermission(permission, 'reddit permissions.realtime'),
+  );
+}
+for (const permission of [null, 'true', 'false', 0, 1, {}, []]) {
+  assert.throws(
+    () => assertDevvitRealtimePermission(permission, 'reddit permissions.realtime'),
+    /reddit permissions\.realtime must be a boolean or omitted/u,
+  );
+}
 
 const expectedMiniGameOrigins = ['https://assets.example.test'];
 const exactMiniGameOriginDeclaration = createMiniGameOriginDeclaration(expectedMiniGameOrigins);

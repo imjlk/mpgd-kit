@@ -869,7 +869,7 @@ function verifyDevvitWebManifest(
   } else {
     assertDisabledDevvitPermission(permissions.payments, `${label} permissions.payments`);
   }
-  assertDisabledDevvitPermission(permissions.realtime, `${label} permissions.realtime`);
+  assertDevvitRealtimePermission(permissions.realtime, `${label} permissions.realtime`);
   assertEnabledRedditPermission(permissions.reddit, `${label} permissions.reddit`);
 
   const menu = manifest.menu;
@@ -878,6 +878,13 @@ function verifyDevvitWebManifest(
 
   if (!menu.items.some(isCreatePostMenuItem)) {
     throw new Error(`${label} must expose a subreddit create-post menu item.`);
+  }
+}
+
+/** Realtime is an optional boolean capability, including for custom multiplayer wrappers. */
+export function assertDevvitRealtimePermission(input: unknown, label: string): void {
+  if (input !== undefined && typeof input !== 'boolean') {
+    throw new Error(`${label} must be a boolean or omitted.`);
   }
 }
 
