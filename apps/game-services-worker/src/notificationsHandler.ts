@@ -161,13 +161,90 @@ export function notificationFailureCause(
     : describeFailure(error);
 }
 
-const servicesByEnv = new WeakMap<object, WorkerNotifications>();
-const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
-const reportedMisconfiguration = new WeakSet<object>();
-const reportedUnreadyConsumer = new WeakSet<object>();
-const reportedMissingSessionBinding = new WeakSet<object>();
-const reportedDevelopmentSessions = new WeakSet<object>();
-const reportedNonLocalDevelopmentHost = new WeakSet<object>();
+/** What the notifications keep for one configuration: the service (with its store) and what was logged. */
+interface NotificationsConfigurationState {
+  notifications?: WorkerNotifications;
+  memoryStore?: NotificationStore;
+  readonly reported: Set<string>;
+}
+
+const statesByEnv = new WeakMap<object, NotificationsConfigurationState>();
+const statesByConfiguration = new Map<string, NotificationsConfigurationState>();
+/** Configurations kept per isolate; a deployment has one, a test run a few dozen. */
+const maxNotificationConfigurations = 64;
+const configurationBindingIds = new WeakMap<object, number>();
+let nextConfigurationBindingId = 0;
+
+/**
+ * A key that is the same for every `env` object with the same
+ * configuration. A runtime may hand the Worker a new `env` object per
+ * request (the Cloudflare Vite plugin's dev server does), and the memory
+ * store, the cached service, and the once-only logs must outlive the
+ * request. Vars count by value: strings, and the JSON vars, which are all
+ * named `MPGD_*` or `FCM_*`. Every other object is a binding (`DB`, a
+ * queue, a service, an mTLS certificate) and counts by identity, since two
+ * bindings can look alike as plain objects.
+ */
+function notificationsConfigurationKey(env: GameServicesNotificationsEnv): string {
+  const record = env as Readonly<Record<string, unknown>>;
+  const identityOf = (value: object): number => {
+    let id = configurationBindingIds.get(value);
+    if (id === undefined) {
+      nextConfigurationBindingId += 1;
+      id = nextConfigurationBindingId;
+      configurationBindingIds.set(value, id);
+    }
+    return id;
+  };
+  const byValue = (value: unknown): unknown => {
+    if (value === null || typeof value !== 'object') {
+      return typeof value === 'function' ? { binding: identityOf(value) } : value;
+    }
+    if (Array.isArray(value)) {
+      return value.map(byValue);
+    }
+    const object = value as Readonly<Record<string, unknown>>;
+    return Object.keys(object).sort().map((name) => [name, byValue(object[name])]);
+  };
+  return JSON.stringify(Object.keys(record).sort().map((name) => {
+    const value = record[name];
+    const isVar = value === null || (typeof value !== 'object' && typeof value !== 'function')
+      || name.startsWith('MPGD_') || name.startsWith('FCM_');
+    return [name, isVar ? byValue(value) : { binding: identityOf(value as object) }];
+  }));
+}
+
+/** The state for this configuration, shared by every `env` object that carries it. */
+function notificationsStateOf(env: GameServicesNotificationsEnv): NotificationsConfigurationState {
+  const known = statesByEnv.get(env);
+  if (known !== undefined) {
+    return known;
+  }
+  const key = notificationsConfigurationKey(env);
+  let state = statesByConfiguration.get(key);
+  if (state === undefined) {
+    state = { reported: new Set() };
+    statesByConfiguration.set(key, state);
+    if (statesByConfiguration.size > maxNotificationConfigurations) {
+      const oldest = statesByConfiguration.keys().next().value;
+      if (oldest !== undefined) {
+        statesByConfiguration.delete(oldest);
+      }
+    }
+  }
+  statesByEnv.set(env, state);
+  return state;
+}
+
+/** Whether `message` is reported for this configuration for the first time (and marks it). */
+function firstReport(env: GameServicesNotificationsEnv, message: string): boolean {
+  const { reported } = notificationsStateOf(env);
+  if (reported.has(message)) {
+    return false;
+  }
+  reported.add(message);
+  return true;
+}
 
 /**
  * Hosts a development session is accepted on: loopback (`localhost`,
@@ -229,14 +306,16 @@ function notificationSessionAuthOf(
 }
 
 /**
- * The notifications service for this environment, built once per env
- * object (one per isolate): `disabled` without a catalog, `misconfigured`
+ * The notifications service for this environment, built once per
+ * configuration in an isolate (`env` objects with the same vars and
+ * bindings share it, and its memory store): `disabled` without a catalog, `misconfigured`
  * (logged once) when the catalog, the deployment, or a provider's
  * credentials do not validate. The FCM token cache lives in the cached
  * provider, so an isolate mints one token per hour, not one per request.
  */
 export function resolveWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNotifications {
-  const cached = servicesByEnv.get(env);
+  const state = notificationsStateOf(env);
+  const cached = state.notifications;
   if (cached !== undefined) {
     return cached;
   }
@@ -245,13 +324,12 @@ export function resolveWorkerNotifications(env: GameServicesNotificationsEnv): W
     built = buildWorkerNotifications(env);
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    if (!reportedMisconfiguration.has(env)) {
-      reportedMisconfiguration.add(env);
+    if (firstReport(env, 'misconfigured')) {
       console.error('GameServices Worker notifications are misconfigured:', failure.message);
     }
     built = { status: 'misconfigured', error: failure };
   }
-  servicesByEnv.set(env, built);
+  state.notifications = built;
   return built;
 }
 
@@ -430,13 +508,14 @@ function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationSto
     }
     return createD1NotificationStore(accountingDatabase(env.DB));
   }
-  let store = memoryStoresByEnv.get(env);
+  const state = notificationsStateOf(env);
+  let store = state.memoryStore;
   if (store === undefined) {
     console.warn(
       'Notifications use the memory store: consent records and endpoints live only in this isolate. Use D1 outside local development.',
     );
     store = accountingStore(createInMemoryNotificationStore());
-    memoryStoresByEnv.set(env, store);
+    state.memoryStore = store;
   }
   return store;
 }
@@ -519,8 +598,7 @@ export function createNotificationsFetchHandler(
     };
     const methods = allowed[route];
     const auth = sessions?.auth;
-    if (methods !== undefined && sessions?.development === true && !reportedDevelopmentSessions.has(env)) {
-      reportedDevelopmentSessions.add(env);
+    if (methods !== undefined && sessions?.development === true && firstReport(env, 'development-sessions')) {
       console.warn(
         'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is on, so the session routes '
           + 'accept mpgd-dev bearer headers that anyone can write: sessions are not authenticated. '
@@ -531,19 +609,17 @@ export function createNotificationsFetchHandler(
       methods !== undefined
       && sessions?.development === false
       && env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true'
-      && !reportedDevelopmentSessions.has(env)
+      && firstReport(env, 'development-sessions')
     ) {
-      reportedDevelopmentSessions.add(env);
       console.warn(
         'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is ignored because '
           + 'GAME_SERVICES_NOTIFICATIONS_AUTH is bound.',
       );
     }
-    if (methods !== undefined && auth === undefined && !reportedMissingSessionBinding.has(env)) {
+    if (methods !== undefined && auth === undefined && firstReport(env, 'missing-session-binding')) {
       // Said when a session route is first asked for, never from the cron or
       // the queue: a send-only Worker (deliverNotification alone) needs no
       // session binding.
-      reportedMissingSessionBinding.add(env);
       console.warn(
         'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
           + 'the client session routes (consent, endpoints, notices, reminders) are off and answer 404. '
@@ -566,8 +642,7 @@ export function createNotificationsFetchHandler(
       const { hostname } = new URL(request.url);
       if (!isLocalDevelopmentHost(hostname)) {
         // A deployed Worker (any store) never takes a header anyone can write.
-        if (!reportedNonLocalDevelopmentHost.has(env)) {
-          reportedNonLocalDevelopmentHost.add(env);
+        if (firstReport(env, 'non-local-development-host')) {
           console.warn(
             `Notifications: a development session request to ${hostname} was refused; `
               + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS only applies on localhost, 127.0.0.1, '
@@ -719,8 +794,7 @@ export async function consumeNotificationDispatchBatch(
   const backoff = (attempts: number) => ({
     delaySeconds: Math.min(2 ** Math.max(attempts, 1) * 5, 300),
   });
-  if (notifications.status !== 'ready' && !reportedUnreadyConsumer.has(env)) {
-    reportedUnreadyConsumer.add(env);
+  if (notifications.status !== 'ready' && firstReport(env, 'unready-consumer')) {
     console.error(
       notifications.status === 'disabled'
         ? 'Notifications dispatch jobs arrived but this Worker has no MPGD_NOTIFICATIONS_CATALOG; they are acknowledged.'

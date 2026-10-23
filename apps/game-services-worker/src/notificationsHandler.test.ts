@@ -620,15 +620,18 @@ try {
       await post('/endpoints', { registration: registration(token), target: 'android' });
       await post('/reminders', { reminder: { ...reminder(past), key } });
     };
+    // Two deployments: the same configuration would share one service and memory store.
     const warm = {
       ...env,
       MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET: '1000',
       MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+      MPGD_TEST_DEPLOYMENT: 'warm',
     };
     const cold = {
       ...env,
       MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET: '1000',
       MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+      MPGD_TEST_DEPLOYMENT: 'cold',
     };
     await postOn(warm, 'warm-fcm', 'tok-warm');
     await postOn(cold, 'cold-fcm', 'tok-cold');
@@ -1162,6 +1165,73 @@ try {
       );
     } finally {
       console.warn = warn;
+    }
+    // A runtime that hands the Worker a new env object per request (the Cloudflare Vite
+    // plugin's dev server) keeps one memory store and one set of logs per configuration:
+    // the consent the first request records, the second reads.
+    {
+      const perRequestEnv = () => ({
+        ...unauthenticated,
+        // Equal by value, not the same objects, as a runtime parses JSON vars again.
+        MPGD_NOTIFICATIONS_CATALOG: structuredClone(catalog),
+        MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true',
+        MPGD_DEV_REQUEST_TEST: 'per-request',
+      }) as GameServicesWorkerEnv;
+      const logged: string[] = [];
+      const realWarn = console.warn;
+      console.warn = (...parts: unknown[]) => {
+        logged.push(parts.map(String).join(' '));
+      };
+      try {
+        const header = { authorization: 'Bearer mpgd-dev.p-req.s-req.i-req' };
+        const first = perRequestEnv();
+        const recorded = await createWorkerFetchHandler(first)(
+          new Request('http://localhost:8787/game-services/notifications/consent', {
+            method: 'POST',
+            headers: { ...header, 'content-type': 'application/json' },
+            body: JSON.stringify({
+              record: {
+                kind: 'topic-preference',
+                topic: 'friend-challenge',
+                state: 'granted',
+                source: 'player',
+              },
+            }),
+          }),
+        );
+        assert.equal(recorded.status, 200);
+        const second = perRequestEnv();
+        assert.notEqual(second, first);
+        const read = await createWorkerFetchHandler(second)(
+          new Request('http://localhost:8787/game-services/notifications/consent', {
+            headers: header,
+          }),
+        );
+        assert.equal(read.status, 200);
+        const { records } = await read.json() as { readonly records: readonly { readonly topic?: string }[] };
+        assert.deepEqual(
+          records.map((record) => record.topic),
+          ['friend-challenge'],
+        );
+        // One memory-store warning and one development-session warning, not one per request.
+        assert.equal(
+          logged.filter((line) => line.includes('Notifications use the memory store')).length,
+          1,
+        );
+        assert.equal(
+          logged.filter((line) => line.includes('sessions are not authenticated')).length,
+          1,
+        );
+        // Another configuration keeps its own store.
+        const other = await createWorkerFetchHandler({ ...perRequestEnv(), MPGD_DEV_REQUEST_TEST: 'other' } as GameServicesWorkerEnv)(
+          new Request('http://localhost:8787/game-services/notifications/consent', {
+            headers: header,
+          }),
+        );
+        assert.deepEqual(await other.json(), { records: [] });
+      } finally {
+        console.warn = realWarn;
+      }
     }
     // Only the fetch routes read a session, development or not: the service binding
     // (deliverNotification, endNotificationSession), the queue consumer, and the cron take no
