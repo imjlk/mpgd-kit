@@ -177,6 +177,7 @@ const guest = createGuestSessionCoordinator({
 const session = await guest.start();
 assert.equal(secureValues.get('mpgd.guest.refresh'), 'packed-refresh');
 assert.equal(session.serverUserId, 'packed-server-user');
+assert.equal(session.sessionFamilyId, 'packed-session');
 assert.equal(Object.hasOwn(session, 'accessToken'), false);
 assert.deepEqual(guest.getHeaders(), { authorization: 'Bearer packed-access' });
 assert.deepEqual(await guest.bindAccount({

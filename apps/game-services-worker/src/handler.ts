@@ -66,6 +66,7 @@ import {
   type AdMobSsvWorkerConfig,
 } from './admobSsvHandler.js';
 import {
+  assertDevelopmentNotificationSessionsAllowed,
   createNotificationsFetchHandler,
   type GameServicesNotificationsEnv,
 } from './notificationsHandler.js';
@@ -328,6 +329,8 @@ function buildWorkerFetchHandler(
   env: GameServicesWorkerEnv,
 ): (request: Request) => Promise<Response> {
   assertGooglePlayUnboundPlayerRequiresIngressAuth(env);
+  // Before the ad and evidence resolvers, so their refusals do not hide this one.
+  assertDevelopmentNotificationSessionsAllowed(env);
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env, admobConfig);
   const backend = createWorkerBackend(env, evidenceVerifier);
@@ -649,6 +652,7 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
 
 function buildWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
   assertGooglePlayUnboundPlayerRequiresIngressAuth(env);
+  assertDevelopmentNotificationSessionsAllowed(env);
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const backend = createWorkerBackend(env, resolveWorkerEvidenceVerifier(env, admobConfig));
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);

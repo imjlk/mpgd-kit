@@ -44,7 +44,9 @@ certify adapter behavior.
 
 The [notifications guide](NOTIFICATIONS.md) explains what each target supports,
 the consent flow, the Korean advertising rules, and how to add a topic; the
-[Firebase setup guide](FIREBASE_NOTIFICATIONS.md) covers Android and iOS push.
+[Firebase setup guide](FIREBASE_NOTIFICATIONS.md) covers Android and iOS push,
+and the [live test runbook](NOTIFICATIONS_LIVE_TEST.md) the first run against
+real FCM on an emulator.
 The [notifications v2 RFC](specs/notifications/notifications-v2-rfc.md)
 proposes capability-declared notification providers, server-side consent
 records, one delivery policy gate, reminders, and conformance vectors. Its

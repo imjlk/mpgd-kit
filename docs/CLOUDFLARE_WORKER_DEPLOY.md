@@ -261,7 +261,8 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   days ahead or a link the provider cannot take is a 400), and
   `POST /reminders/cancel` (`{ key }`, answers `{ cancelled }`). The
   session routes need the
-  `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
+  `GAME_SERVICES_NOTIFICATIONS_AUTH` binding (or, locally, the development
+  sessions flag below): without it they answer 404,
   only `GET /providers` is served, and the Worker logs one warning naming
   the missing binding the first time a session route is asked for (a
   send-only Worker, which serves only `deliverNotification`, can ignore
@@ -270,6 +271,42 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   the game's identity service and is not in this repository: implement
   `authenticateNotificationSession` and call `endNotificationSession` as
   **Sessions** above describes.
+- **Local development sessions.** Without an identity service, a local
+  Worker can take `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS =
+  "true"` (a var, for example in `apps/game-services-worker/.dev.vars`,
+  which is not committed). With it and no `GAME_SERVICES_NOTIFICATIONS_AUTH`
+  binding, the session routes accept
+  `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`
+  (each id 1 to 64 letters, digits, `_`, or `-`; no `expiresAt`), and the
+  Worker logs once that sessions are not authenticated. Anyone can write
+  that header, so it is local-only by construction: the Worker refuses to
+  build its fetch handler and its service (the first request or RPC fails)
+  when the flag is set with `MPGD_STORE = "d1"`; its notifications are then
+  misconfigured on every entry point (`deliverNotification` and
+  `endNotificationSession` answer `NOTIFICATIONS_CONFIGURATION_REQUIRED`,
+  the queue retries, the cron skips, and the reason is logged once). It
+  ignores the flag, saying so once, when the
+  binding is bound. On the memory store it still applies only to requests
+  whose host is a local development host: `localhost`, `127.0.0.1`, `[::1]`,
+  a `*.localhost` name, or `10.0.2.2` (the host machine as the Android
+  emulator reaches it). A request to any other host, such as a deployed
+  `workers.dev` name or a LAN address, answers 401 like any header the
+  Worker does not recognize, and the Worker logs once why. The check reads
+  the request's host, so it guards against a deployed Worker, not against
+  your network: keep the local Worker listening on loopback (the dev
+  server's default), since a client that reaches an exposed dev server can
+  send `Host: localhost`. The service
+  binding (`deliverNotification`, `endNotificationSession`), the queue, and
+  the cron take no session, so a development session never reaches them.
+  The game side is `createDevelopmentServerSession` in
+  `@mpgd/game-services`, which refuses a production mode, and the starter
+  uses it on the Vite dev server only (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).
+  The [live test runbook](NOTIFICATIONS_LIVE_TEST.md) runs this local
+  Worker (`pnpm --dir apps/game-services-worker dev` with a linked
+  `.dev.vars`) to send real pushes to an emulator.
+  A client picks its own installation and session ids here, which the
+  [Endpoint registry](specs/notifications/notifications-v2-rfc.md#endpoint-registry)
+  forbids for any real deployment.
 - **The client.** `createGameServicesNotificationsClient` in
   `@mpgd/game-services/notifications/client` calls these routes for the
   notifications runtime (`@mpgd/platform/notifications-runtime`). It takes

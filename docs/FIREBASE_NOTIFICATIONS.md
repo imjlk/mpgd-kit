@@ -169,6 +169,10 @@ for the full configuration):
 
 ## 6. Check it
 
+The [live test runbook](NOTIFICATIONS_LIVE_TEST.md) runs these checks on
+an Android emulator against a local Worker, with a driver for the server
+half (`pnpm notifications:live`).
+
 - `pnpm validate:notifications` in the game passes (it refuses the starter's
   sender contact placeholder).
 - On an Android 13+ device and an iPhone: the settings screen's *Turn on

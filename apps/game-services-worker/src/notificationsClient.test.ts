@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { resolveNotificationTopicsForTarget, type NotificationTopicCatalog } from '@mpgd/catalog';
+import { createDevelopmentServerSession } from '@mpgd/game-services';
 import {
   createGameServicesNotificationsClient,
   GameServicesNotificationsRequestError,
@@ -392,6 +393,96 @@ try {
       && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'
       && error.retryable,
   );
+  // Local development sessions: the same routes end to end with no identity service, through
+  // the starter's development session helper and the Worker's development flag.
+  {
+    const { GAME_SERVICES_NOTIFICATIONS_AUTH: _bound, ...withoutBinding } = env;
+    const devEnv = {
+      ...withoutBinding,
+      MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true',
+    } satisfies GameServicesWorkerEnv;
+    const devWorker = createWorkerFetchHandler(devEnv);
+    const devSession = createDevelopmentServerSession({
+      mode: 'development',
+      playerId: 'p-dev',
+      installationId: 'install-dev',
+    });
+    const devClient = createGameServicesNotificationsClient({
+      // A local development host: the Worker takes development sessions nowhere else.
+      baseUrl: 'http://localhost:8787',
+      fetch: async (url, init) => devWorker(new Request(url, init)),
+      identity: devSession,
+      getHeaders: devSession.getHeaders,
+      target: 'android',
+    });
+    const devHost = createNotificationConformanceHost({
+      profile: { provider: 'fcm', capabilities },
+      catalog: topics,
+      timeZone: 'Asia/Seoul',
+    });
+    devHost.issueEndpoint({ kind: 'fcm-token', value: 'tok-dev' });
+    const devRuntime = createNotificationRuntime({
+      provider: devHost.provider,
+      backend: devClient,
+      catalog: topics,
+      defaultLocale: 'ko',
+      registryEntry,
+      storage: createMemoryNotificationRuntimeStorage(),
+    });
+    const realWarn = console.warn;
+    console.warn = () => undefined;
+    try {
+      // Signed in from the start: the runtime registers this installation at start().
+      await devRuntime.start();
+      await devRuntime.runUntilIdle();
+      devHost.queuePrompt('granted');
+      const devGranted = await devRuntime.requestPermission({
+        topics: ['daily-ready'],
+        gesture: true,
+      });
+      assert.equal(devGranted.outcomes['daily-ready'], 'granted');
+      await devRuntime.runUntilIdle();
+      await devRuntime.setTopicPreference({ topic: 'daily-ready', enabled: true });
+      assert.deepEqual(
+        (await devClient.listConsent()).map((record) => [record.kind, record.topic, record.state]),
+        [['topic-preference', 'daily-ready', 'granted']],
+      );
+      assert.deepEqual(
+        await devRuntime.reminders.set({ key: 'daily', topic: 'daily-ready', fireAt }),
+        {
+          route: 'remote',
+          status: 'scheduled',
+        },
+      );
+      assert.deepEqual(await devRuntime.reminders.cancel({ key: 'daily' }), {
+        route: 'remote',
+        status: 'cancelled',
+      });
+      // A server send reaches the development player's device, and only it.
+      fcmTokens.length = 0;
+      assert.deepEqual(
+        await deliverWorkerNotification(devEnv, {
+          idempotencyKey: 'dev-send-1',
+          player: 'p-dev',
+          topic: 'friend-challenge',
+        }),
+        delivered,
+      );
+      assert.deepEqual(fcmTokens, ['tok-dev']);
+      // unregister() unbinds it.
+      await devRuntime.unregister();
+      fcmTokens.length = 0;
+      await deliverWorkerNotification(devEnv, {
+        idempotencyKey: 'dev-send-2',
+        player: 'p-dev',
+        topic: 'friend-challenge',
+      });
+      assert.deepEqual(fcmTokens, []);
+    } finally {
+      console.warn = realWarn;
+      devRuntime.stop();
+    }
+  }
   console.info('notifications client end to end against the Worker handler passed');
 } finally {
   runtime?.stop();

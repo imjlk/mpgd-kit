@@ -49,6 +49,18 @@ the game-owned action coordinator and authoritative services, with an
 application-owned durable encrypted operation store. Keep recovery above scenes
 and reconcile existing operations on startup and resume without opening SDK UI.
 
+## Server session
+
+Set the game's server-backed session with `setStarterServerSession`
+(`src/platform/serverSession.ts`) before `bootstrap()`; with a guest backend use
+`createGuestServerSession(coordinator)`, whose `sessionId` is the stable
+session-family id. For local notifications work only (a game created with
+`--providers notifications`), `VITE_MPGD_DEV_NOTIFICATION_SESSION` on the Vite
+dev server in the `development` mode signs in with an unauthenticated
+development session (`src/platform/developmentServerSession.ts`)
+against a local Worker run with `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`;
+it never reaches a build, the commerce client, or a deployed Worker.
+
 ## ONE play server-owned monetization
 
 Specify issued placement/product IDs, the authenticated reward and checkout intent routes, durable SSV/intent/ledger stores, an encrypted client operation journal, and reconciliation plus atomic cancellation fencing. Keep monetization disabled until these ports are wired. Purchase/ad callbacks are evidence; backend grants precede consume/acknowledge. Separate confirmed checkout closure from financial completion. Plan real-app acceptance with ONEconsole credentials and hosting headers.

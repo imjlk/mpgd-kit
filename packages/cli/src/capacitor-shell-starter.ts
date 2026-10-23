@@ -24,11 +24,13 @@ import {
   notificationsCapacitorGateways,
   notificationsCapacitorSupportFiles,
   notificationsCapacitorTemplateSupportFiles,
+  notificationsCapacitorTemplateSupportImporters,
   notificationsGameDependencies,
   notificationsMessagingFirebaseRange,
   notificationsMessagingPlugin,
   notificationsProviderId,
   notificationsShellPlugins,
+  sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from './notifications-starter.js';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
@@ -3340,9 +3342,31 @@ function planNotificationsProvider(input: {
     // Base-template modules they import, missing from a game an earlier release created.
     if (input.templateRoot !== undefined) {
       for (const file of notificationsCapacitorTemplateSupportFiles) {
-        if (readExisting(safeDestination(gameRoot, file)) === undefined) {
-          files.push({ path: file, content: starterFile(input.templateRoot, file) });
+        if (readExisting(safeDestination(gameRoot, file)) !== undefined) {
+          continue;
         }
+        const imported = notificationsCapacitorTemplateSupportImporters[file];
+        const importerSource = imported === undefined
+          ? undefined
+          : readExisting(safeDestination(gameRoot, imported.importer));
+        // A game whose own importer does not import the module would never use it.
+        if (imported !== undefined && importerSource !== undefined
+          && !sourceReferencesRelativeModule(importerSource, path.posix.basename(file, '.ts'))) {
+          warnings.push(imported.warning);
+          continue;
+        }
+        // The file imports a kit export an older installed package lacks.
+        const required = imported?.requires;
+        if (required !== undefined
+          && installedPackageLacksExport(gameRoot, required.packageName, required.exportName)) {
+          const version = installedPackageVersion(gameRoot, required.packageName);
+          throw new Error(
+            `--providers notifications writes ${file}, which imports ${required.exportName} from `
+              + `${required.packageName}; the game's ${required.packageName} ${version} does not export it. `
+              + "Upgrade the game's kit packages (mpgd kit upgrade) first.",
+          );
+        }
+        files.push({ path: file, content: starterFile(input.templateRoot, file) });
       }
     }
     warnings.push(
@@ -3480,4 +3504,114 @@ function requireString(value: unknown, label: string): string {
 
 function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/** Declaration files the export check reads at most: a guard against a pathological graph. */
+const maxDeclarationFilesChecked = 500;
+
+/** The declaration file names TypeScript pairs with a module specifier. */
+function declarationCandidates(base: string): readonly string[] {
+  // A specifier that already names a declaration file is that file.
+  if (/\.d\.[cm]?ts$/u.test(base)) {
+    return [base];
+  }
+  const extension = path.extname(base);
+  const stem = base.slice(0, base.length - extension.length);
+  switch (extension) {
+    case '.js':
+    case '.ts':
+      return [`${stem}.d.ts`];
+    case '.mjs':
+    case '.mts':
+      return [`${stem}.d.mts`];
+    case '.cjs':
+    case '.cts':
+      return [`${stem}.d.cts`];
+    default:
+      return [`${base}.d.ts`, path.join(base, 'index.d.ts')];
+  }
+}
+
+/**
+ * Whether the game's installed `packageName` provably lacks `exportName`:
+ * its root type declarations, and every declaration file they re-export
+ * from through relative specifiers, at any depth, never name it. Anything
+ * the check cannot follow passes, and the game's build then decides, as for
+ * the adapter's settings opener: an uninstalled or unreadable package, a
+ * module it cannot read, or an `export *` from another package.
+ */
+function installedPackageLacksExport(gameRoot: string, packageName: string, exportName: string): boolean {
+  // Only a plain identifier is searched for; anything else is not proof of absence.
+  if (!/^[A-Za-z_$][\w$]*$/u.test(exportName)) {
+    return false;
+  }
+  const packageRoot = path.join(gameRoot, 'node_modules', packageName);
+  const manifest = readInstalledManifest(gameRoot, packageName);
+  if (manifest === undefined) {
+    return false;
+  }
+  const rootExport = typeof manifest.exports === 'object' && manifest.exports !== null
+    ? (manifest.exports as Readonly<Record<string, unknown>>)['.']
+    : undefined;
+  const rootTypes = typeof rootExport === 'object' && rootExport !== null
+    ? (rootExport as { readonly types?: unknown }).types
+    : undefined;
+  const typesPath = typeof rootTypes === 'string' ? rootTypes : manifest.types;
+  if (typeof typesPath !== 'string') {
+    return false;
+  }
+  // Every declaration file the root re-exports from, followed through relative
+  // `export … from` specifiers at any depth; the name is searched as text, so a
+  // named re-export of it counts as well.
+  const relativeFrom = /\bexport\b[^;]*?\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]/gu;
+  const packageStar = /\bexport\s*(?:type\s*)?\*\s*(?:as\s+[\w$]+\s*)?from\s*['"](?!\.{1,2}\/)[^'"]+['"]/u;
+  const nameUsed = new RegExp(`(?<![\\w$])${exportName.replace(/\$/gu, '\\$')}(?![\\w$])`, 'u');
+  const pending = [path.join(packageRoot, typesPath)];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const file = pending.pop() ?? '';
+    if (visited.has(file)) {
+      continue;
+    }
+    visited.add(file);
+    if (visited.size > maxDeclarationFilesChecked) {
+      return false;
+    }
+    let source: string | undefined;
+    try {
+      source = readExisting(file);
+    } catch {
+      source = undefined;
+    }
+    if (source === undefined || packageStar.test(source)) {
+      // A module the check cannot read, or names from another package: do not refuse on a guess.
+      return false;
+    }
+    if (nameUsed.test(source)) {
+      return false;
+    }
+    for (const match of source.matchAll(relativeFrom)) {
+      const candidates = declarationCandidates(path.join(path.dirname(file), match[1] ?? ''));
+      pending.push(candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? file);
+    }
+  }
+  return true;
+}
+
+/** The game's installed `packageName` manifest, or `undefined` when it is missing or unreadable. */
+function readInstalledManifest(gameRoot: string, packageName: string): Record<string, unknown> | undefined {
+  try {
+    const source = readExisting(path.join(gameRoot, 'node_modules', packageName, 'package.json'));
+    return source === undefined
+      ? undefined
+      : parseJsonObject(source, `${packageName}/package.json`);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The installed package's version, for a message. */
+function installedPackageVersion(gameRoot: string, packageName: string): string {
+  const version = readInstalledManifest(gameRoot, packageName)?.version;
+  return typeof version === 'string' ? version : 'unknown';
 }
