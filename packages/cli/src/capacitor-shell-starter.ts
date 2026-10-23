@@ -3508,11 +3508,11 @@ function json(value: unknown): string {
 
 /**
  * Whether the game's installed `packageName` provably lacks `exportName`:
- * its root type declarations, with the relative `export *` modules they
- * re-export one level deep, never name it. Anything the check cannot follow
- * passes, and the game's build then decides, as for the adapter's settings
- * opener: an uninstalled or unreadable package, a re-export from another
- * package, or a re-export inside a re-exported module.
+ * its root type declarations, and every declaration file they re-export
+ * from through relative specifiers, at any depth, never name it. Anything
+ * the check cannot follow passes, and the game's build then decides, as for
+ * the adapter's settings opener: an uninstalled or unreadable package, a
+ * module it cannot read, or an `export *` from another package.
  */
 function installedPackageLacksExport(gameRoot: string, packageName: string, exportName: string): boolean {
   const packageRoot = path.join(gameRoot, 'node_modules', packageName);
@@ -3538,34 +3538,44 @@ function installedPackageLacksExport(gameRoot: string, packageName: string, expo
   if (typesPath === undefined) {
     return false;
   }
-  const typesFile = path.join(packageRoot, typesPath);
-  const root = readExisting(typesFile);
-  if (root === undefined) {
-    return false;
-  }
-  const anyReexport = /\bexport\s+(?:type\s+)?(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"]/u;
-  const relativeStar = /export\s*\*\s*from\s*['"](\.{1,2}\/[^'"]+)['"]\s*;?/gu;
-  // A re-export other than a relative `export *` (another package, a named or namespace re-export) is not followed.
-  if (anyReexport.test(root.replace(relativeStar, ''))) {
-    return false;
-  }
-  const sources = [root];
-  for (const match of root.matchAll(relativeStar)) {
-    const specifier = match[1] ?? '';
-    const declarations = specifier.replace(/\.(?:js|mjs)$/u, '.d.ts');
-    const reexported = readExisting(
-      path.join(
-        path.dirname(typesFile),
-        declarations.endsWith('.d.ts') ? declarations : `${declarations}.d.ts`,
-      ),
-    );
-    if (reexported === undefined || anyReexport.test(reexported)) {
-      // A module the check cannot read, or one that re-exports further: do not refuse on a guess.
+  // Every declaration file the root re-exports from, followed through relative
+  // `export … from` specifiers at any depth; the name is searched as text, so a
+  // named re-export of it counts as well.
+  const relativeFrom = /\bexport\s[^;]*?\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]/gu;
+  const packageStar = /\bexport\s*\*\s*from\s*['"](?!\.{1,2}\/)[^'"]+['"]/u;
+  const nameUsed = new RegExp(`\\b${exportName}\\b`, 'u');
+  const pending = [path.join(packageRoot, typesPath)];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const file = pending.pop() ?? '';
+    if (visited.has(file)) {
+      continue;
+    }
+    visited.add(file);
+    if (visited.size > 500) {
       return false;
     }
-    sources.push(reexported);
+    let source: string | undefined;
+    try {
+      source = readExisting(file);
+    } catch {
+      source = undefined;
+    }
+    if (source === undefined || packageStar.test(source)) {
+      // A module the check cannot read, or names from another package: do not refuse on a guess.
+      return false;
+    }
+    if (nameUsed.test(source)) {
+      return false;
+    }
+    for (const match of source.matchAll(relativeFrom)) {
+      const specifier = (match[1] ?? '').replace(/\.(?:js|mjs)$/u, '');
+      const base = path.join(path.dirname(file), specifier.replace(/\.d\.ts$/u, ''));
+      const candidates = [`${base}.d.ts`, path.join(base, 'index.d.ts')];
+      pending.push(candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? base);
+    }
   }
-  return !sources.some((source) => new RegExp(`\\b${exportName}\\b`, 'u').test(source));
+  return true;
 }
 
 /** The installed package's version, for a message. */

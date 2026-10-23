@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -340,9 +348,44 @@ try {
     writeFileSync(path.join(ownSession, 'src/platform/serverSession.ts'), 'export {};\n');
     const kept = planCapacitorShellStarter(input(ownSession, ['notifications']));
     assert.equal(kept.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+    // The real package's layout: modules re-export further (client.d.ts from ./operations.js),
+    // which the check follows. The built dist with and without development-session.d.ts.
+    const realDist = path.join(kitRoot, 'packages/game-services/dist');
+    assert.ok(
+      existsSync(path.join(realDist, 'index.d.ts')),
+      'build @mpgd/game-services first (pnpm build:packages)',
+    );
+    for (const withDevelopmentSession of [true, false]) {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, withDevelopmentSession);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      for (const file of readdirSync(realDist)) {
+        if (file.endsWith('.d.ts') && (withDevelopmentSession || file !== 'development-session.d.ts')) {
+          const content = readFileSync(path.join(realDist, file), 'utf8');
+          writeFileSync(
+            path.join(dist, file),
+            file === 'index.d.ts' && !withDevelopmentSession
+              ? content.replace(/^export \* from '\.\/development-session\.js';\n/mu, '')
+              : content,
+          );
+        }
+      }
+      if (withDevelopmentSession) {
+        assert.ok(
+          planCapacitorShellStarter(input(root, ['notifications'])).changedFiles
+            .includes('src/platform/developmentServerSession.ts'),
+        );
+      } else {
+        assert.throws(
+          () => planCapacitorShellStarter(input(root, ['notifications'])),
+          /does not export it/u,
+        );
+      }
+    }
     // Declarations the check cannot follow are not proof of absence: the build decides.
     for (const [index, files] of [
-      // A nested barrel: the re-exported module re-exports further.
+      // A nested barrel that leads to a module the check cannot read.
       { 'index.d.ts': "export * from './services/index.js';\n", 'services/index.d.ts': "export * from './development-session.js';\n" },
       // A re-export from another package.
       { 'index.d.ts': "export * from './runtime.js';\nexport * from '@mpgd/game-services-core';\n", 'runtime.d.ts': 'export {};\n' },
