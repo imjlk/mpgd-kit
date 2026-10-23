@@ -3,11 +3,18 @@
  * it calls a game-services Worker's notification session routes as one test
  * player, prints each answer, and checks the status the contract expects.
  *
- * No Node, DOM, or SDK import: the CLI (`cli.ts`) supplies `fetch`, the
+ * No Node, DOM, network, or SDK import: the CLI (`cli.ts`) supplies `fetch`, the
  * clock, and the log, and the dry run (apps/game-services-worker/src/
  * notificationsLiveDriver.test.ts) supplies the in-process Worker instead
- * of a network, so both run the same steps.
+ * of a network, so both run the same steps. Its one import is the pure
+ * development-session token helper from `@mpgd/game-services`.
  */
+
+import {
+  formatDevelopmentNotificationSessionAuthorization,
+  isDevelopmentNotificationSessionId,
+  type DevelopmentNotificationSession,
+} from '@mpgd/game-services';
 
 /** The Worker's notifications route prefix. */
 export const liveNotificationsRoutePrefix = '/game-services/notifications';
@@ -127,46 +134,23 @@ export function assertLiveWorkerOrigin(raw: string, staging?: string): LiveWorke
   return { origin: url.origin, local: false };
 }
 
-const developmentSessionPart = /^[A-Za-z0-9_-]{1,64}$/u;
-
 /**
  * The `Authorization` value of a local development session
  * (`MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` in the Worker):
- * `Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`. It
- * authenticates nothing: a Worker accepts it only in local development.
+ * `Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`, built by the
+ * same `@mpgd/game-services` helper whose parser the Worker uses, so the two
+ * cannot drift. It authenticates nothing: a Worker accepts it only in
+ * local development, on a local request host.
  */
-export function developmentSessionAuthorization(input: {
-  readonly playerId: string;
-  readonly sessionId: string;
-  readonly installationId: string;
-}): string {
-  for (const [name, value] of Object.entries(input)) {
-    if (!developmentSessionPart.test(value)) {
+export function developmentSessionAuthorization(session: DevelopmentNotificationSession): string {
+  for (const [name, value] of Object.entries(session)) {
+    if (!isDevelopmentNotificationSessionId(value)) {
       throw new LiveDriverUsageError(
         `${name} ${JSON.stringify(value)} must be 1 to 64 letters, digits, '_' or '-'.`,
       );
     }
   }
-  return `Bearer mpgd-dev.${input.playerId}.${input.sessionId}.${input.installationId}`;
-}
-
-/**
- * The session a development `Authorization` value names, or `undefined`
- * when it is not one: the inverse of `developmentSessionAuthorization`, for
- * a stand-in session binding (the dry run) that must accept exactly what
- * the driver sends.
- */
-export function parseDevelopmentSessionAuthorization(
-  authorization: string,
-): { readonly playerId: string; readonly sessionId: string; readonly installationId: string } | undefined {
-  const match = /^Bearer mpgd-dev\.([^.]+)\.([^.]+)\.([^.]+)$/u.exec(authorization);
-  if (match === null) {
-    return undefined;
-  }
-  const [, playerId = '', sessionId = '', installationId = ''] = match;
-  return [playerId, sessionId, installationId].every((part) => developmentSessionPart.test(part))
-    ? { playerId, sessionId, installationId }
-    : undefined;
+  return formatDevelopmentNotificationSessionAuthorization(session);
 }
 
 /** The part of the Fetch API the driver uses. */
@@ -506,7 +490,7 @@ export async function runNotificationsLiveDriver(
       401,
       anonymous.status === 404
         ? 'the session routes are off: start the Worker with '
-          + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true" (local; needs D1 #431) or bind '
+          + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true" (local only) or bind '
           + 'GAME_SERVICES_NOTIFICATIONS_AUTH.'
         : undefined,
     );
@@ -518,7 +502,10 @@ export async function runNotificationsLiveDriver(
       'session',
       consent,
       200,
-      consent.status === 401 ? 'the Worker did not accept this session.' : undefined,
+      consent.status === 401
+        ? 'the Worker did not accept this session (a development session is accepted only on a local host: '
+          + 'localhost, 127.0.0.1, [::1], *.localhost, or 10.0.2.2).'
+        : undefined,
     );
     const records = listField(consent, 'records');
     if (records === undefined) {

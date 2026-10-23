@@ -45,7 +45,7 @@ export interface LiveWorkerEnvInput {
   /** Overrides the key's `project_id` (`FCM_PROJECT_ID`). */
   readonly projectId?: string;
   readonly overwrite?: boolean;
-  /** `env-file` (the default) for `wrangler dev --env-file`, `dev-vars` for `.dev.vars`. */
+  /** `dev-vars` (the default) for `.dev.vars`, `env-file` for `wrangler dev --env-file`. */
   readonly format?: LiveEnvFileFormat;
 }
 
@@ -70,8 +70,8 @@ export type LiveEnvFileFormat = 'dev-vars' | 'env-file';
 
 /**
  * The dotenv value wrangler reads back as `value`: single-quoted, so dotenv
- * leaves `\n` escapes alone, with `$` escaped for an `env-file` (the
- * default) and kept for `dev-vars`. A `'` cannot be escaped inside single
+ * leaves `\n` escapes alone, with `$` kept for `dev-vars` (the default)
+ * and escaped for an `env-file`. A `'` cannot be escaped inside single
  * quotes: JSON text (`json: true`) carries it as `\u0027`, which JSON reads
  * back as `'`; any other value with one is refused.
  */
@@ -248,7 +248,7 @@ export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnv
         : '--project-id is not a Firebase project id.',
     );
   }
-  const format = input.format ?? 'env-file';
+  const format = input.format ?? 'dev-vars';
   /** Name, value, and whether the value is JSON text (which may carry a quote as \u0027). */
   const variables: readonly (readonly [string, string, boolean])[] = [
     ['MPGD_STORE', 'memory', false],

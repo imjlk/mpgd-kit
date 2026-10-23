@@ -6,7 +6,6 @@ import { dirname, join } from 'node:path';
 import {
   assertLiveWorkerOrigin,
   developmentSessionAuthorization,
-  parseDevelopmentSessionAuthorization,
   runNotificationsLiveDriver,
   wranglerDevScheduledRoute,
   type LiveDriverDependencies,
@@ -29,11 +28,11 @@ import {
  * and FCM answers through a stubbed `fetch`. Nothing leaves the process and
  * no real credential is used.
  *
- * Local development sessions (`MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`)
- * are D1's: until that lands, a stand-in `GAME_SERVICES_NOTIFICATIONS_AUTH`
- * binding accepts the same `Bearer mpgd-dev.<player>.<session>.<installation>`
- * token. The Worker uses a bound session binding before the flag, so this run
- * stays the same after D1.
+ * Sessions take the Worker's own development path: the env file's
+ * `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"`, no
+ * `GAME_SERVICES_NOTIFICATIONS_AUTH` binding, requests to a local host
+ * (`http://127.0.0.1:8787`), and the driver's token from the same
+ * `@mpgd/game-services` helper whose parser the Worker uses.
  */
 
 /** The checkout: the worker's test script runs from the repository root. */
@@ -192,8 +191,9 @@ try {
     }),
   );
 
-  // The env file: outside the repository, mode 0600, never inside the checkout.
-  const envFile = join(scratch, 'live.env');
+  // The .dev.vars file the runbook links into the Worker (`pnpm --dir
+  // apps/game-services-worker dev`): outside the repository, mode 0600.
+  const envFile = join(scratch, 'live.dev.vars');
   const written = writeLiveWorkerEnvFile({
     catalogPath: catalogFile,
     deploymentPath: deploymentFile,
@@ -235,18 +235,19 @@ try {
       }),
     /inside the git checkout/u,
   );
-  const vars = readEnvFileAsWrangler(readFileSync(envFile, 'utf8'));
-  // The .dev.vars form (for `pnpm --dir apps/game-services-worker dev`) reads back to the same values.
-  const devVarsFile = join(scratch, 'live.dev.vars');
+  // Read as wrangler reads a .dev.vars file: dotenv alone, no expansion.
+  const vars = readEnvFileAsWrangler(readFileSync(envFile, 'utf8'), false);
+  // The --env-file form (for the built Worker) reads back, expanded, to the same values.
+  const envFileForm = join(scratch, 'live.env');
   writeLiveWorkerEnvFile({
     catalogPath: catalogFile,
     deploymentPath: deploymentFile,
     serviceAccountPath: keyFile,
-    outPath: devVarsFile,
+    outPath: envFileForm,
     repositoryRoot: root,
-    format: 'dev-vars',
+    format: 'env-file',
   });
-  assert.deepEqual(readEnvFileAsWrangler(readFileSync(devVarsFile, 'utf8'), false), vars);
+  assert.deepEqual(readEnvFileAsWrangler(readFileSync(envFileForm, 'utf8')), vars);
   assert.deepEqual(
     JSON.parse(vars.FCM_SERVICE_ACCOUNT ?? ''),
     JSON.parse(readFileSync(keyFile, 'utf8')),
@@ -270,12 +271,6 @@ try {
     throw new Error(`Unexpected fetch: ${url}`);
   }) as typeof fetch;
 
-  /** D1's development session, until it lands: `Bearer mpgd-dev.<player>.<session>.<installation>`. */
-  const developmentSessions = {
-    async authenticateNotificationSession({ authorization }: { readonly authorization: string }) {
-      return parseDevelopmentSessionAuthorization(authorization) ?? null;
-    },
-  };
   assert.equal(vars.MPGD_STORE, 'memory');
   assert.equal(vars.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS, 'true');
   const env: GameServicesWorkerEnv = {
@@ -283,7 +278,7 @@ try {
     MPGD_NOTIFICATIONS_CATALOG: vars.MPGD_NOTIFICATIONS_CATALOG,
     MPGD_NOTIFICATIONS_DEPLOYMENT: vars.MPGD_NOTIFICATIONS_DEPLOYMENT,
     FCM_SERVICE_ACCOUNT: vars.FCM_SERVICE_ACCOUNT,
-    GAME_SERVICES_NOTIFICATIONS_AUTH: developmentSessions,
+    MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true',
   };
 
   /** The local Worker as `wrangler dev` serves it, including its scheduled route. */
@@ -399,9 +394,17 @@ try {
   ]);
   assert.match(lines.join('\n'), /permission-required/u);
 
+  // The Worker takes a development session only on a local request host.
+  const remote = await createWorkerFetchHandler(env)(
+    new Request('http://192.168.0.10:8787/game-services/notifications/consent', {
+      headers: { authorization },
+    }),
+  );
+  assert.equal(remote.status, 401);
+
   // A Worker without session routes: the run stops at the second step and says how to turn them on.
   lines.length = 0;
-  const { GAME_SERVICES_NOTIFICATIONS_AUTH: _auth, ...withoutSessions } = env;
+  const { MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: _flag, ...withoutSessions } = env;
   const closed = await runNotificationsLiveDriver(
     { ...options, runId: 'closed' },
     dependencies(withoutSessions),

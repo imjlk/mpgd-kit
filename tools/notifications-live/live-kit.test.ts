@@ -19,7 +19,6 @@ import {
   developmentSessionAuthorization,
   hasTestEnvironmentLabel,
   LiveDriverUsageError,
-  parseDevelopmentSessionAuthorization,
   redactLiveSecrets,
   runNotificationsLiveDriver,
   type LiveDriverDependencies,
@@ -27,6 +26,8 @@ import {
   type LiveDriverOptions,
 } from './driver';
 import { parseRunArguments } from './cli';
+import { parseDevelopmentNotificationSessionAuthorization } from '@mpgd/game-services';
+
 import { checkLiveEmulator, onlineAdbSerials, type AdbResult } from './emulator';
 import { assertLiveReadablePath, formatLiveEnvValue, writeLiveWorkerEnvFile } from './worker-env';
 
@@ -84,14 +85,12 @@ await test('a development session token is built only from short, plain ids', ()
     }),
     'Bearer mpgd-dev.p-1.s_1.device-1',
   );
-  assert.deepEqual(parseDevelopmentSessionAuthorization('Bearer mpgd-dev.p-1.s_1.device-1'), {
+  // The Worker reads it back with the same package's parser.
+  assert.deepEqual(parseDevelopmentNotificationSessionAuthorization('Bearer mpgd-dev.p-1.s_1.device-1'), {
     playerId: 'p-1',
     sessionId: 's_1',
     installationId: 'device-1',
   });
-  for (const bad of ['Bearer mpgd-dev.p.s', 'Bearer mpgd-dev.p.s.i.x', 'mpgd-dev.p.s.i', `Bearer mpgd-dev.${'x'.repeat(65)}.s.i`]) {
-    assert.equal(parseDevelopmentSessionAuthorization(bad), undefined, bad);
-  }
   for (const bad of ['', 'a.b', 'a b', 'x'.repeat(65), 'p/1']) {
     assert.throws(
       () => developmentSessionAuthorization({ playerId: bad, sessionId: 's', installationId: 'i' }),

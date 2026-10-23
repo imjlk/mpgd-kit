@@ -35,7 +35,7 @@ const usage = `Usage: pnpm notifications:live <command> [options]
 
   env       --service-account <key.json> --out <file outside the repo>
             (--game <dir> | --catalog <topics.json> --deployment <deployment.json>)
-            [--project-id <id>] [--format env-file|dev-vars] [--force]
+            [--project-id <id>] [--format dev-vars|env-file] [--force]
   emulator  --app-id <android.package> [--serial <serial>] [--port 8787] [--reverse]
   run       [--worker http://127.0.0.1:8787] [--staging <host>]
             (--player <id> [--session live-driver] [--installation live-driver] | --auth-env <VAR>)
@@ -47,8 +47,8 @@ const usage = `Usage: pnpm notifications:live <command> [options]
 /**
  * The Worker as `vite build` emits it, relative to apps/game-services-worker,
  * for `--format env-file`. `wrangler dev` on the sources does not run the
- * typia transform the kit's packages need; `pnpm dev` (Vite) or the built
- * Worker does.
+ * typia transform the kit's packages need; `pnpm dev` (Vite, the default
+ * flow) or the built Worker does.
  */
 const liveWorkerBuildConfig = 'dist/mpgd_game_services/wrangler.json';
 
@@ -137,7 +137,7 @@ function commandEnv(args: readonly string[]): void {
     catalog: { type: 'string' },
     deployment: { type: 'string' },
     'project-id': { type: 'string' },
-    format: { type: 'string', default: 'env-file' },
+    format: { type: 'string', default: 'dev-vars' },
     force: { type: 'boolean', default: false },
   });
   const format = values.format;
@@ -162,16 +162,14 @@ function commandEnv(args: readonly string[]): void {
     `Firebase project ${result.projectId}; ${result.topics} topics; advertising rules ${result.advertisingRules}.`,
   );
   console.info(
-    format === 'env-file'
-      ? 'Build the Worker and start it with:\n'
-        + '  pnpm build:packages && pnpm --dir apps/game-services-worker build\n'
+    format === 'dev-vars'
+      ? "Link it as the Worker's .dev.vars (git-ignored) and start the Worker with:\n"
+        + `  ln -sf "${result.outPath}" apps/game-services-worker/.dev.vars\n`
+        + '  pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787'
+      : 'Build the Worker and start it with:\n'
+        + '  pnpm --dir apps/game-services-worker build\n'
         + `  pnpm --dir apps/game-services-worker exec wrangler dev -c ${liveWorkerBuildConfig} --env-file "${result.outPath}" `
-        + '--ip 127.0.0.1 --port 8787'
-      // `vite dev` builds the Worker's notifications service again for each
-      // request, so its memory store keeps nothing between requests.
-      : 'A .dev.vars file for `pnpm --dir apps/game-services-worker dev`: link it as apps/game-services-worker/.dev.vars '
-        + '(git-ignored once D1 #431 lands). The Vite dev server keeps no memory-store state between requests; '
-        + 'use --format env-file for a live run.',
+        + '--ip 127.0.0.1 --port 8787',
   );
   console.info('Delete the file after the test; it holds the service-account key.');
 }
