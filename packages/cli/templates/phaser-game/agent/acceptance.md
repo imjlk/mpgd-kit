@@ -64,6 +64,15 @@ Verify safe-area geometry is reserved exactly once: CSS-padded containers must
 not also subtract `safeArea.contentBounds`, while full-bleed game surfaces use
 the snapshot bounds for persistent controls.
 
+## Server session
+
+Verify the game sets its real server-backed session with `setStarterServerSession`
+before `bootstrap()` (a guest backend through `createGuestServerSession`), not the
+development session. `VITE_MPGD_DEV_NOTIFICATION_SESSION` is local-only evidence:
+a `pnpm build` never signs in with it (its `mpgd-dev` header needs the Vite dev
+server), and acceptance against a deployed Worker uses the identity service's
+sessions.
+
 ## Shared native presentation
 
 - Purchase, rewarded, and interstitial requests use the same game-owned scope.
