@@ -3345,8 +3345,12 @@ function planNotificationsProvider(input: {
           continue;
         }
         const imported = notificationsCapacitorTemplateSupportImporters[file];
-        if (imported !== undefined && readExisting(safeDestination(gameRoot, imported.importer)) !== undefined) {
-          // The game's own importer would never import it.
+        const importer = imported === undefined
+          ? undefined
+          : readExisting(safeDestination(gameRoot, imported.importer));
+        // A game whose own importer never names the module would never import it.
+        if (imported !== undefined && importer !== undefined
+          && !importer.includes(path.posix.basename(file, '.ts'))) {
           warnings.push(imported.warning);
           continue;
         }

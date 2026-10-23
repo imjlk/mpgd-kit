@@ -269,6 +269,23 @@ try {
     assert.equal(existsSync(path.join(root, 'src/platform/developmentServerSession.ts')), false);
   }
 
+  // A current serverSession.ts names the module, so a missing one is written back.
+  {
+    const root = createGame();
+    roots.push(root);
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(
+      path.join(root, 'src/platform/serverSession.ts'),
+      readTemplate('src/platform/serverSession.ts'),
+    );
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(plan.changedFiles.includes('src/platform/developmentServerSession.ts'), true);
+    assert.equal(
+      plan.warnings.some((warning) => /predates development notification sessions/u.test(warning)),
+      false,
+    );
+  }
+
   // With the store plugins on an unwired legacy gateway, the gateway gets the
   // store wiring and the notifications wiring on top of it.
   {

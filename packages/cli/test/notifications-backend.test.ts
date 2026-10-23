@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import type { StorageAdapter } from '@mpgd/platform';
 import { NotificationError, type NotificationCapabilities } from '@mpgd/platform/notifications';
@@ -304,6 +306,19 @@ try {
       assert.equal(reads(), 0);
       assert.match(warnings[0] ?? '', /after the commerce client was created/u);
     }
+  }
+
+  // serverSession.ts reads the development session only on the dev server, with the build's mode.
+  {
+    const source = readFileSync(
+      fileURLToPath(
+        new URL('../templates/phaser-game/src/platform/serverSession.ts', import.meta.url),
+      ),
+      'utf8',
+    );
+    assert.match(source, /import\.meta\.env\.DEV\s*\?\s*resolveStarterDevelopmentServerSession\(/u);
+    assert.match(source, /mode: import\.meta\.env\.MODE,/u);
+    assert.match(source, /value: import\.meta\.env\.VITE_MPGD_DEV_NOTIFICATION_SESSION,/u);
   }
 
   // The guest-session adapter is the starter's server session as it stands.

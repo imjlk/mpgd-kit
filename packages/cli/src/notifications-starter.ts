@@ -544,10 +544,10 @@ export const notificationsCapacitorTemplateSupportFiles: readonly string[] = Obj
 
 /**
  * Template support files only one other support file imports: the importer,
- * and the warning for a game that keeps its own importer (an earlier
- * `serverSession.ts`). Such a game would never import the file, and its
- * `@mpgd/game-services` may predate what the file imports, so the file is
- * not written for it.
+ * and the warning for a game that keeps its own importer without naming the
+ * file (an earlier `serverSession.ts`). Such a game would never import the
+ * file, and its `@mpgd/game-services` may predate what the file imports, so
+ * the file is not written for it. An importer that names it gets it back.
  */
 export const notificationsCapacitorTemplateSupportImporters: Readonly<
   Record<string, { readonly importer: string; readonly warning: string }>
