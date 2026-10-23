@@ -130,8 +130,20 @@ Rules the starter's settings screen follows, and your own screen must too:
 > client then sends too. `sessionId` must be the stable session-family id:
 > the `sessionId` the identity service answers to
 > `authenticateNotificationSession` for that header, the same across token
-> refreshes. A `GuestSessionCoordinator` view's `sessionId` may rotate on
-> refresh, so do not pass it as that id. Without a URL or a session (or
+> refreshes. With a guest-session backend, pass
+> `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it
+> answers the coordinator's `sessionFamilyId` (the backend's, or one the
+> coordinator derives and keeps across refreshes and restarts), not a view's
+> `sessionId`, which may rotate on refresh, and refreshes the access token
+> as needed (an expired one before the request, one about to expire in the
+> background). To try the switches before you have an identity
+> service, run the Worker locally with
+> `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"` (memory
+> store only, and only on a local host) and start the game's dev server with
+> `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>`: the starter then signs in
+> with an unauthenticated development session (the generated game's
+> `docs/NOTIFICATIONS.md`, "Try it locally", and the
+> [Worker guide](./CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2)). Without a URL or a session (or
 > with a production URL the commerce rule refuses, or no notifications
 > provider) it returns `undefined`, and the settings screen asks for the OS or host
 > permission (and withdraws a Devvit opt-in the game rendered), shows no
