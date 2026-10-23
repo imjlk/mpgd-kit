@@ -31,9 +31,9 @@ the kit does not rot between live runs.
   key and the env file are yours: keep them out of every repository, and
   never paste them into an issue, a PR, or an agent session.
   `google-services.json` is less sensitive but project-specific: keep the
-  test game's repository local, or ignore the file there. The kit reads the key only to write the env file (mode 0600), and
-  refuses to write that file inside any git checkout or through a symbolic
-  link. It never reads mise's configuration (`~/.config/mise`,
+  test game's repository local, or ignore the file there. The kit reads
+  the key only to write the env file (mode 0600), and refuses to write
+  that file inside any git checkout or through a symbolic link. It never reads mise's configuration (`~/.config/mise`,
   `$XDG_CONFIG_HOME/mise`, `$MISE_CONFIG_DIR`).
 - **Use a Firebase project for testing**, not the one your released game
   sends from, and test players only.
@@ -86,10 +86,13 @@ pnpm exec mpgd target init capacitor --game . \
 git init && git add -A && git commit -m "live push test game"
 ```
 
+(`git commit` needs `user.name` and `user.email`; set them for the
+repository with `git config` if your global configuration has none.)
+
 The game installs the `@mpgd/*` packages from npm at the versions of this
 checkout. If the checkout has unreleased notifications changes, the game
 and the Worker you build here can differ; test a released kit, or create
-the game with `--workspace` so it links this checkout.
+the game with `--workspace --kit-path .` so it links this checkout.
 
 Then, in the game:
 
@@ -120,7 +123,7 @@ Then, in the game:
 From the kit's checkout:
 
 ```sh
-mkdir -p -m 700 ~/.mpgd
+mkdir -p ~/.mpgd && chmod 700 ~/.mpgd
 pnpm notifications:live env \
   --game ~/mpgd-live/live-push \
   --service-account ~/.mpgd/firebase-live-test.json \
@@ -135,8 +138,9 @@ project id is one the Worker's FCM sender accepts, and writes
 mode 0600. It refuses an `--out` inside a git checkout (a dotfiles
 repository in your home counts), a symbolic link, and an existing file
 unless you pass `--force`. `--project-id` writes `FCM_PROJECT_ID` when the
-key's project differs from the Firebase project. Run it again after every
-catalog change.
+key's project differs from the Firebase project. After every catalog
+change, write the file again (`--force`) and restart `wrangler dev`, which
+reads it at start.
 
 ## 3. The Worker
 
@@ -152,8 +156,8 @@ pnpm --dir apps/game-services-worker exec wrangler dev \
   --ip 127.0.0.1 --port 8787
 ```
 
-wrangler lists the variables (five, six with `--project-id`) as `(hidden)`. The Worker logs once that
-it uses the memory store: consent records, endpoints, and reminders live in
+wrangler lists the variables (five, six with `--project-id`) as
+`(hidden)`. The Worker logs once that it uses the memory store: consent records, endpoints, and reminders live in
 this process and are gone when you stop it. There is no store dump route;
 the driver's reads (`GET /consent`, `GET /notices`) and the Worker log are
 how you see the state. `wrangler dev` does not run crons on its own; the
@@ -206,8 +210,9 @@ cd apps/mobile-capacitor
 pnpm exec cap run android --live-reload --host 127.0.0.1 --port 5173
 ```
 
-Then run the check again: every line should pass except, before the first
-tap, `notification-permission`. Follow the app with
+Then run the check again: no line should fail. Before the first tap
+`notification-permission` warns, and on a "Google APIs" image
+`google-play-store` warns too. Follow the app with
 `adb logcat -v time Capacitor:V Capacitor/Console:V FirebaseMessaging:V '*:S'`
 (the `emulator` command prints it for your serial).
 
@@ -228,9 +233,9 @@ what to do, what to observe, and where.
 | Notices (optional) | `pnpm notifications:live run --player live-1 --advertising 1` | `advertising-notice PASS`: the consent result notice is listed, recorded as shown, and gone. This records advertising consent for the test player. |
 
 Each `run` uses new reminder keys, and a run that fails cancels the
-reminders it left pending. If you kept the topic's quiet hours or daily cap
-([section 1](#1-the-game)), they hold a push back without a failing step: `scheduler` passes
-because the scheduler took the reminder, and a deferred push arrives later
+reminders it left pending. If you kept the topic's quiet hours or daily
+cap ([section 1](#1-the-game)), they hold a push back without a failing
+step: `scheduler` passes because the scheduler took the reminder, and a deferred push arrives later
 while `wrangler dev` still runs. Stop the Worker when you are done.
 
 `deliverNotification` is a service-binding RPC, not an HTTP route, so the
@@ -247,7 +252,7 @@ The scheduler path above uses the same delivery and provider code.
 | `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`). |
 | `reminder-cancel` or `reminder` answers `permission-required` | No endpoint with a granted permission for this player: the device has not registered, or registered as another player. |
 | `scheduler` fails: still pending | The reminder was not due when the scheduler ran (clock skew), or the Worker restarted and lost its memory store. |
-| No push, Worker log shows `Notifications: provider.rejected ... (configuration, <code>)` | FCM or Google refused the send's setup: a token-minting code (such as `TOKEN_KEY_UNUSABLE`) means the service account cannot mint a token (check its role and that the key is not revoked); another code names FCM's own refusal. |
+| No push, Worker log shows `Notifications: provider.rejected ... (configuration, <code>)` | FCM or Google refused the send's setup. A `TOKEN_*` code (such as `TOKEN_KEY_UNUSABLE` or `TOKEN_INVALID_GRANT`): the key is malformed, revoked, or deleted. `PERMISSION_DENIED`: the service account lacks the role that may send through FCM. Another code names FCM's own refusal. |
 | No push, nothing logged | Quiet hours or the daily cap ([section 1](#1-the-game)); a token or network failure that is retried later (check that this machine reaches `oauth2.googleapis.com` and `fcm.googleapis.com`); or an emulator image without Play services (`emulator` reports it). |
 | The app cannot reach the Worker | `adb reverse tcp:8787 tcp:8787` is missing, or the game's URL is not `http://127.0.0.1:8787`. |
 
@@ -277,6 +282,9 @@ pnpm notifications:live run \
   --staging game-services-staging.example.workers.dev \
   --auth-env MPGD_LIVE_AUTHORIZATION
 ```
+
+(A terminal line holds about 1,024 characters; for a longer token, set
+the variable from a file you delete afterwards.)
 
 The driver redacts the value from its output and skips the scheduler step:
 the deployed cron sends the reminder within a minute of its time.
