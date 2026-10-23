@@ -383,6 +383,20 @@ try {
         );
       }
     }
+    // A specifier that names the declaration file itself is followed to it: refused when that
+    // file lacks the export (an unfollowed link would pass instead).
+    {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, false);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      writeFileSync(path.join(dist, 'index.d.ts'), "export * from './session.d.ts';\n");
+      writeFileSync(path.join(dist, 'session.d.ts'), 'export declare function other(): void;\n');
+      assert.throws(
+        () => planCapacitorShellStarter(input(root, ['notifications'])),
+        /does not export it/u,
+      );
+    }
     // Declarations the check cannot follow are not proof of absence: the build decides.
     for (const [index, files] of [
       // A nested barrel that leads to a module the check cannot read.
@@ -393,8 +407,6 @@ try {
       { 'index.d.ts': "export * from './gone.js';\n" },
       // Compact re-exports, followed to the module that names it.
       { 'index.d.ts': "export*from'./runtime.js';export{x}from'./session.mjs';\n", 'session.d.mts': 'export declare function createDevelopmentServerSession(): void;\n' },
-      // A specifier that names the declaration file itself.
-      { 'index.d.ts': "export * from './session.d.ts';\n", 'session.d.ts': 'export declare function createDevelopmentServerSession(): void;\n' },
       // A type-only star re-export from another package.
       { 'index.d.ts': "export * from './runtime.js';\nexport type * from '@mpgd/game-services-core';\n" },
     ].entries()) {
