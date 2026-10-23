@@ -10,8 +10,8 @@ that opens the game.
 
 The kit gives you three things for it:
 
-- `pnpm notifications:live env`: writes the Worker's env file from your
-  game's catalog and your Firebase key, outside every git checkout.
+- `pnpm notifications:live env`: writes the Worker's `.dev.vars` file from
+  your game's catalog and your Firebase key, outside every git checkout.
 - `pnpm notifications:live emulator`: checks the emulator and forwards the
   Worker's port to it.
 - `pnpm notifications:live run`: the server half. It calls the Worker's
@@ -50,16 +50,14 @@ the kit does not rot between live runs.
   reach it as `localhost`/`127.0.0.1` (from the emulator: through
   `adb reverse`, or as `10.0.2.2`, the emulator's name for this machine).
 
-> **Needs D1 (#431).** The local session flag
-> (`MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"`, refused
-> with `MPGD_STORE = "d1"`), the `mpgd-dev` token, the starter's
-> development session (`VITE_MPGD_DEV_NOTIFICATION_SESSION`), and the
-> `.gitignore` entries for `.dev.vars` land in D1. D1 also accepts the
-> flag only for a local request host (`localhost`, `127.0.0.1`, `[::1]`,
-> `*.localhost`, or the emulator's `10.0.2.2`); any other host answers 401.
-> Until it is merged, the Worker answers 404
-> on the session routes and `run` stops at `session-required` with that
-> hint. Everything else on this page works today.
+The local Worker is the same one the generated game's notifications guide
+("Try it locally") and the
+[Worker guide](CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2) describe:
+`pnpm --dir apps/game-services-worker dev` with a `.dev.vars` file. Their
+flow records consent without a key; this one adds the key and drives a
+real push. The development sessions it relies on (the flag, refused with
+`MPGD_STORE = "d1"`; local request hosts only: `localhost`, `127.0.0.1`,
+`[::1]`, `*.localhost`, or the emulator's `10.0.2.2`) came with D1 (#431).
 
 ## What you need
 
@@ -119,7 +117,7 @@ Then, in the game:
 4. Run `pnpm validate:notifications`.
 5. In the game's `.env.local` (Vite reads it when the dev server starts),
    point the game at the local Worker and turn on the development session
-   with a test player id (**needs D1 (#431)**):
+   with a test player id:
 
    ```sh
    VITE_MPGD_GAME_SERVICES_URL=http://127.0.0.1:8787
@@ -131,7 +129,7 @@ Then, in the game:
    the Vite dev server in development mode, so the emulator runs the game
    through live reload ([section 4](#4-the-emulator)).
 
-## 2. The Worker's env file
+## 2. The Worker's variables
 
 From the kit's checkout:
 
@@ -140,7 +138,8 @@ mkdir -p ~/.mpgd && chmod 700 ~/.mpgd
 pnpm notifications:live env \
   --game ~/mpgd-live/live-push \
   --service-account ~/.mpgd/firebase-live-test.json \
-  --out ~/.mpgd/notifications-live.env
+  --out ~/.mpgd/notifications-live.dev.vars
+ln -sf ~/.mpgd/notifications-live.dev.vars apps/game-services-worker/.dev.vars
 ```
 
 It validates the catalog against the deployment, checks that the key is a
@@ -148,49 +147,42 @@ service-account key (naming a missing field, never a value) and that its
 project id is one the Worker's FCM sender accepts, and writes
 `MPGD_STORE`, the local session flag, `MPGD_NOTIFICATIONS_CATALOG`,
 `MPGD_NOTIFICATIONS_DEPLOYMENT`, and `FCM_SERVICE_ACCOUNT` to `--out` with
-mode 0600. It refuses an `--out` inside a git checkout (a dotfiles
-repository in your home counts), a symbolic link, and an existing file
-unless you pass `--force`. `--project-id` writes `FCM_PROJECT_ID` when the
-key's project differs from the Firebase project. After every catalog
-change, write the file again (`--force`) and restart `wrangler dev`, which
-reads it at start.
+mode 0600, in the `.dev.vars` form. It refuses an `--out` inside a git
+checkout (a dotfiles repository in your home counts), a symbolic link, and
+an existing file unless you pass `--force`. `--project-id` writes
+`FCM_PROJECT_ID` when the key's project differs from the Firebase project.
+
+The key stays in `~/.mpgd`: the Worker reads it through the link, and
+`.dev.vars` is git-ignored. After every catalog change, write the file
+again (`--force`) and restart the Worker, which reads it at start. Remove
+the link before you run `pnpm --dir apps/game-services-worker build`,
+which copies the variables it reads into `dist/mpgd_game_services/`.
 
 ## 3. The Worker
 
-`wrangler dev` on the Worker's sources does not run the typia transform the
-kit's packages need, so serve the built Worker:
-
 ```sh
-pnpm build:packages
-pnpm --dir apps/game-services-worker build
-pnpm --dir apps/game-services-worker exec wrangler dev \
-  -c dist/mpgd_game_services/wrangler.json \
-  --env-file ~/.mpgd/notifications-live.env \
-  --ip 127.0.0.1 --port 8787
+pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787
 ```
 
-wrangler lists the variables (five, six with `--project-id`) as
-`(hidden)`. The Worker logs once that it uses the memory store: consent
-records, endpoints, and reminders live in this process and are gone when
-you stop it.
+This is the flow the generated game's guide and the Worker guide use, and
+it is the simpler one for the live run: no build step, it reloads on a
+Worker source change, and it serves wrangler dev's scheduled route.
+(`wrangler dev` straight on the sources does not run the typia transform
+the kit's packages need; the Vite dev server does.) The Worker keeps its
+notifications state per configuration, so the memory store holds the
+device's registration until you stop it; a runtime that re-created its
+binding objects on every request would not, and this flow binds none. To
+serve the built Worker instead, write `env --format env-file` and run
+`wrangler dev -c dist/mpgd_game_services/wrangler.json --env-file <file>`.
 
-D1 documents `pnpm --dir apps/game-services-worker dev --port 8787` with
-`apps/game-services-worker/.dev.vars` (git-ignored by D1) for trying the
-settings screen. Do not use it for this run: the Cloudflare Vite plugin
-hands the Worker a new `env` object on every request, and the Worker keys
-its notifications service and memory store by that object, so on the Vite
-dev server the memory store keeps nothing from one request to the next
-(the device's registration is gone before the driver's reminder). That is
-a limitation of D1's local flow (raised for D1), not of this kit. The built
-Worker above keeps one store for the life of the process. (`env --format
-dev-vars` writes the `.dev.vars` form for that flow; `vite build` copies a
-linked `.dev.vars` or `.env` to `dist/mpgd_game_services/`, so remove the
-link before building. The `wrangler dev --env-file` run above ignores a
-copy there.)
-There is no store dump route;
-the driver's reads (`GET /consent`, `GET /notices`) and the Worker log are
-how you see the state. `wrangler dev` does not run crons on its own; the
-driver runs the scheduler through `GET /cdn-cgi/handler/scheduled`.
+`--host 127.0.0.1` keeps the Worker on loopback, where the emulator reaches
+it through `adb reverse` (or as `10.0.2.2`). It logs once that it uses the
+memory store and that sessions are not authenticated: consent records,
+endpoints, and reminders live in this process and are gone when you stop
+it. There is no store dump route; the driver's reads (`GET /consent`,
+`GET /notices`) and the Worker log are how you see the state. The local
+Worker does not run crons on its own; the driver runs the scheduler
+through `GET /cdn-cgi/handler/scheduled`.
 
 Check the Worker before the device:
 
@@ -201,8 +193,9 @@ pnpm notifications:live run --player live-1 --no-scheduler
 `providers` (with `android -> fcm`), `session-required`, and `session`
 must pass. Until the device has registered, the run then warns at
 `device-permission` and stops at `reminder-cancel` with
-`permission-required`: that is expected here. Without D1 it stops earlier,
-at `session-required` (404). (`--fcm-token-file <file>` registers a device
+`permission-required`: that is expected here. If it stops earlier, at
+`session-required` (404), the Worker did not read the flag: check the
+`.dev.vars` link. (`--fcm-token-file <file>` registers a device
 token for the driver's own session instead of relying on the app's
 registration; use it only when you already have the app's FCM token, since
 the starter does not print it.)
@@ -226,7 +219,7 @@ first time.
 
 Install and run the game on the emulator with Capacitor's live reload, so
 the game runs on the Vite dev server in development mode, the only place
-the starter uses the development session (**needs D1 (#431)**). A build
+the starter uses the development session. A build
 without live reload gets one only when it is built in development mode
 (`NODE_ENV=development vite build --mode development`). The Android target must be selected for the dev server,
 or it serves the browser gateway, which has no notifications provider. The
@@ -281,9 +274,9 @@ The scheduler path above uses the same delivery and provider code.
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `providers` fails with 404 | No `MPGD_NOTIFICATIONS_CATALOG`: start wrangler with `--env-file`. |
+| `providers` fails with 404 | No `MPGD_NOTIFICATIONS_CATALOG`: the Worker did not read the variables; check the `.dev.vars` link and restart it. |
 | `providers` fails with 500, or `android` has no provider | The catalog, deployment, or key does not validate (the Worker logs which once); a placeholder sender contact is the usual one. |
-| `session-required` gets 404 | The session routes are off: the D1 flag is missing (or D1 is not merged yet). |
+| `session-required` gets 404 | The session routes are off: the `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` flag is missing, or `GAME_SERVICES_NOTIFICATIONS_AUTH` is bound and takes precedence. |
 | `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`), and that `--worker` is a local host (D1 refuses development sessions on any other host, such as a LAN address). |
 | `reminder-cancel` or `reminder` answers `permission-required` | No endpoint with a granted permission for this player: the device has not registered, or registered as another player. |
 | `scheduler` fails: did not send | The reminder was not due when the scheduler ran (clock skew), quiet hours or the daily cap held the send, or the send waits to retry a provider failure (the Worker log names it). The check cancelled it. |
@@ -306,7 +299,7 @@ explains why).
 
 A deployed test Worker uses the D1 store, its real
 `GAME_SERVICES_NOTIFICATIONS_AUTH` binding, and its own cron; the local
-session flag is refused there (**needs D1 (#431)**). The session binding is the
+session flag is refused there. The session binding is the
 game's own identity Worker (the kit does not ship one), so a staging run
 needs a test player's real session from it: the same `Authorization`
 value the game sends. Give it to the driver through an environment
@@ -351,10 +344,10 @@ supply:
 
 ## Afterwards
 
-- Stop `wrangler dev` (the memory store goes with it) and delete the env
-  file: `rm ~/.mpgd/notifications-live.env`. If you linked a `.dev.vars`,
-  remove the link and `apps/game-services-worker/dist/`, which may hold a
-  copy.
+- Stop the Worker (the memory store goes with it), remove the link, and
+  delete the file: `rm apps/game-services-worker/.dev.vars
+  ~/.mpgd/notifications-live.dev.vars`. If you built the Worker while the
+  link was in place, delete `apps/game-services-worker/dist/` too.
 - Keep the service-account key only as long as you test; delete the key in
   the Google Cloud console when the test project is done.
 - `adb reverse --remove-all` clears the port forwards.
@@ -363,10 +356,13 @@ supply:
 
 `pnpm notifications:live dry-run` (and the Worker's tests in CI):
 
-- the env file `env` writes, read back the way `wrangler dev --env-file`
-  reads it (quotes, `$` signs, the key's line breaks), becomes the Worker's
-  env;
-- every driver step against the real Worker handler, with the
+- the `.dev.vars` file `env` writes, read back the way wrangler reads a
+  `.dev.vars` file (quotes, `$` signs, the key's line breaks), becomes the
+  Worker's env, with the development session flag; the `--env-file` form
+  reads back to the same values;
+- every driver step against the real Worker handler on a local request
+  host, through the Worker's own development sessions (a non-local host
+  answers 401), with the
   `wrangler dev` scheduled route mapped to the Worker's scheduler
   (`runScheduledNotifications`, which the Worker's `scheduled` handler
   calls), one `deliverNotification` send through the service binding's

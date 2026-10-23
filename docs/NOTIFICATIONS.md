@@ -143,7 +143,9 @@ Rules the starter's settings screen follows, and your own screen must too:
 > `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>`: the starter then signs in
 > with an unauthenticated development session (the generated game's
 > `docs/NOTIFICATIONS.md`, "Try it locally", and the
-> [Worker guide](./CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2)). Without a URL or a session (or
+> [Worker guide](./CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2); the
+> [live test runbook](./NOTIFICATIONS_LIVE_TEST.md) runs the same local
+> Worker to send real pushes). Without a URL or a session (or
 > with a production URL the commerce rule refuses, or no notifications
 > provider) it returns `undefined`, and the settings screen asks for the OS or host
 > permission (and withdraws a Devvit opt-in the game rendered), shows no

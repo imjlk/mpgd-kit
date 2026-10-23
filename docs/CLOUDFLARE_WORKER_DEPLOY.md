@@ -301,6 +301,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   The game side is `createDevelopmentServerSession` in
   `@mpgd/game-services`, which refuses a production mode, and the starter
   uses it on the Vite dev server only (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).
+  The [live test runbook](NOTIFICATIONS_LIVE_TEST.md) runs this local
+  Worker (`pnpm --dir apps/game-services-worker dev` with a linked
+  `.dev.vars`) to send real pushes to an emulator.
   A client picks its own installation and session ids here, which the
   [Endpoint registry](specs/notifications/notifications-v2-rfc.md#endpoint-registry)
   forbids for any real deployment.
