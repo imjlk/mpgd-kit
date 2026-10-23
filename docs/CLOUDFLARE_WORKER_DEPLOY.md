@@ -270,6 +270,23 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   the game's identity service and is not in this repository: implement
   `authenticateNotificationSession` and call `endNotificationSession` as
   **Sessions** above describes.
+- **Local development sessions.** Without an identity service, a local
+  Worker can take `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS =
+  "true"` (a var, for example in `apps/game-services-worker/.dev.vars`,
+  which is not committed). With it and no `GAME_SERVICES_NOTIFICATIONS_AUTH`
+  binding, the session routes accept
+  `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`
+  (each id 1 to 64 letters, digits, `_`, or `-`; no `expiresAt`), and the
+  Worker logs once that sessions are not authenticated. Anyone can write
+  that header, so it is local-only by construction: the Worker refuses to
+  start (fetch and the service binding) when the flag is set with
+  `MPGD_STORE = "d1"`, and ignores the flag, saying so once, when the
+  binding is bound. The game side is `createDevelopmentServerSession` in
+  `@mpgd/game-services`, which refuses a production mode, and the starter
+  uses it on the Vite dev server only (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).
+  A client picks its own installation and session ids here, which the
+  [Endpoint registry](specs/notifications/notifications-v2-rfc.md#endpoint-registry)
+  forbids for any real deployment.
 - **The client.** `createGameServicesNotificationsClient` in
   `@mpgd/game-services/notifications/client` calls these routes for the
   notifications runtime (`@mpgd/platform/notifications-runtime`). It takes
