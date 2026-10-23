@@ -143,7 +143,9 @@ Rules the starter's settings screen follows, and your own screen must too:
 > `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>`: the starter then signs in
 > with an unauthenticated development session (the generated game's
 > `docs/NOTIFICATIONS.md`, "Try it locally", and the
-> [Worker guide](./CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2)). Without a URL or a session (or
+> [Worker guide](./CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2); the
+> [live test runbook](./NOTIFICATIONS_LIVE_TEST.md) runs the same local
+> Worker to send real pushes). Without a URL or a session (or
 > with a production URL the commerce rule refuses, or no notifications
 > provider) it returns `undefined`, and the settings screen asks for the OS or host
 > permission (and withdraws a Devvit opt-in the game rendered), shows no
@@ -307,4 +309,7 @@ invitation to buy.
 The starter's settings model, the CLI wiring, and the catalog are covered by
 the kit's tests, and every provider passes the RFC's conformance vectors with
 fakes. Delivery on a device, Firebase configuration, Apps in Toss templates,
-and Devvit approval are verified by you, per target, before release.
+and Devvit approval are verified by you, per target, before release. The
+[live test runbook](NOTIFICATIONS_LIVE_TEST.md) walks through the first
+Android run: a local Worker sending through FCM to a game on an emulator,
+from the permission dialog to the tap that opens the game.

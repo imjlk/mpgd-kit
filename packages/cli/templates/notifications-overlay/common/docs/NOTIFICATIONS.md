@@ -139,18 +139,21 @@ identity service, against the kit's game-services Worker on your machine:
    console.log(`MPGD_NOTIFICATIONS_CATALOG=${value(process.argv[2])}`);
    console.log(`MPGD_NOTIFICATIONS_DEPLOYMENT=${value(process.argv[3])}`);
    EOF
-   pnpm --dir apps/game-services-worker dev --port 8787
+   pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787
    ```
 
-   The Worker logs once that sessions are not authenticated. Add an FCM
-   service-account key (`FCM_SERVICE_ACCOUNT`) to `.dev.vars` only to send
-   real pushes.
+   The Worker logs once that sessions are not authenticated. To send real
+   pushes to a phone or an emulator, follow mpgd-kit's live test runbook
+   (`docs/NOTIFICATIONS_LIVE_TEST.md`) instead of adding the key here: it
+   runs this same Worker, with `pnpm notifications:live env` writing the
+   variables and the Firebase service-account key to a file outside the
+   checkout that you link as `.dev.vars`.
 2. Start this game's dev server with the Worker URL and a development
    session, `<playerId>` or `<playerId>.<installationId>` (letters, digits,
    `_`, `-`):
 
    ```sh
-   VITE_MPGD_GAME_SERVICES_URL=http://localhost:8787 \
+   VITE_MPGD_GAME_SERVICES_URL=http://127.0.0.1:8787 \
    VITE_MPGD_DEV_NOTIFICATION_SESSION=player-1 \
    pnpm dev
    ```
