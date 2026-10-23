@@ -54,8 +54,10 @@ the kit does not rot between live runs.
 > (`MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"`, refused
 > with `MPGD_STORE = "d1"`), the `mpgd-dev` token, the starter's
 > development session (`VITE_MPGD_DEV_NOTIFICATION_SESSION`), and the
-> `.gitignore` entries for `.dev.vars` land in D1. D1 may also limit the
-> flag to local request hosts. Until it is merged, the Worker answers 404
+> `.gitignore` entries for `.dev.vars` land in D1. D1 also accepts the
+> flag only for a local request host (`localhost`, `127.0.0.1`, `[::1]`,
+> `*.localhost`, or the emulator's `10.0.2.2`); any other host answers 401.
+> Until it is merged, the Worker answers 404
 > on the session routes and `run` stops at `session-required` with that
 > hint. Everything else on this page works today.
 
@@ -174,12 +176,16 @@ you stop it.
 
 D1 documents `pnpm --dir apps/game-services-worker dev --port 8787` with
 `apps/game-services-worker/.dev.vars` (git-ignored by D1) for trying the
-settings screen. Do not use it for this run: on the Vite dev server the
-Worker builds its notifications service again for every request, so the
-memory store keeps nothing from one request to the next (the device's
-registration is gone before the driver's reminder). The built Worker
-above keeps it for the life of the process. (`env --format dev-vars`
-writes the `.dev.vars` form, for that flow.) There is no store dump route;
+settings screen. Do not use it for this run: the Cloudflare Vite plugin
+hands the Worker a new `env` object on every request, and the Worker keys
+its notifications service and memory store by that object, so on the Vite
+dev server the memory store keeps nothing from one request to the next
+(the device's registration is gone before the driver's reminder). That is
+a defect of the local flow, reported to D1, not of this kit. The built
+Worker above keeps one store for the life of the process. (`env --format
+dev-vars` writes the `.dev.vars` form for that flow; `vite build` copies a
+linked `.dev.vars` into `dist/`, so remove the link before building.)
+There is no store dump route;
 the driver's reads (`GET /consent`, `GET /notices`) and the Worker log are
 how you see the state. `wrangler dev` does not run crons on its own; the
 driver runs the scheduler through `GET /cdn-cgi/handler/scheduled`.
@@ -276,7 +282,7 @@ The scheduler path above uses the same delivery and provider code.
 | `providers` fails with 404 | No `MPGD_NOTIFICATIONS_CATALOG`: start wrangler with `--env-file`. |
 | `providers` fails with 500, or `android` has no provider | The catalog, deployment, or key does not validate (the Worker logs which once); a placeholder sender contact is the usual one. |
 | `session-required` gets 404 | The session routes are off: the D1 flag is missing (or D1 is not merged yet). |
-| `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`). |
+| `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`), and that `--worker` is a local host (D1 refuses development sessions on any other host, such as a LAN address). |
 | `reminder-cancel` or `reminder` answers `permission-required` | No endpoint with a granted permission for this player: the device has not registered, or registered as another player. |
 | `scheduler` fails: did not send | The reminder was not due when the scheduler ran (clock skew), quiet hours or the daily cap held the send, or the send waits to retry a provider failure (the Worker log names it). The check cancelled it. |
 | No push, Worker log shows `Notifications: provider.rejected ... (configuration, <code>)` | FCM or Google refused the send's setup. A `TOKEN_*` code (such as `TOKEN_KEY_UNUSABLE` or `TOKEN_INVALID_GRANT`): the key is malformed, revoked, or deleted. `PERMISSION_DENIED`: the service account lacks the role that may send through FCM. Another code names FCM's own refusal. |
@@ -344,7 +350,8 @@ supply:
 ## Afterwards
 
 - Stop `wrangler dev` (the memory store goes with it) and delete the env
-  file: `rm ~/.mpgd/notifications-live.env`.
+  file: `rm ~/.mpgd/notifications-live.env`. If you linked a `.dev.vars`,
+  remove the link and `apps/game-services-worker/dist/`.
 - Keep the service-account key only as long as you test; delete the key in
   the Google Cloud console when the test project is done.
 - `adb reverse --remove-all` clears the port forwards.
