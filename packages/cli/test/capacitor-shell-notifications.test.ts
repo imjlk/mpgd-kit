@@ -16,6 +16,7 @@ import {
   notificationsCapacitorSupportFiles,
   notificationsCapacitorTemplateSupportFiles,
   notificationsGameDependencies,
+  sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from '../src/notifications-starter.js';
 
@@ -286,6 +287,30 @@ try {
       plan.warnings.some((warning) => /predates development notification sessions/u.test(warning)),
       false,
     );
+  }
+
+  // What counts as importing a module: its specifier in a string outside comments.
+  {
+    const name = 'developmentServerSession';
+    for (const source of [
+      "import { a } from './developmentServerSession';",
+      'import {\n  a,\n  b,\n} from "./developmentServerSession.js";',
+      "import './developmentServerSession';",
+      "const m = await import('./developmentServerSession');",
+      "export * from './developmentServerSession.ts';",
+      "import { a } /* ; */ from './developmentServerSession';",
+    ]) {
+      assert.equal(sourceReferencesRelativeModule(source, name), true, source);
+    }
+    for (const source of [
+      '// see developmentServerSession.ts',
+      "// import { a } from './developmentServerSession';",
+      "/*\nimport { a } from './developmentServerSession';\n*/",
+      "import { a } from './developmentServerSession2';",
+      "import { a } from '../developmentServerSession';",
+    ]) {
+      assert.equal(sourceReferencesRelativeModule(source, name), false, source);
+    }
   }
 
   // With the store plugins on an unwired legacy gateway, the gateway gets the

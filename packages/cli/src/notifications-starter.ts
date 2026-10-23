@@ -544,8 +544,8 @@ export const notificationsCapacitorTemplateSupportFiles = Object.freeze([
 
 /**
  * Template support files only one other support file imports: the importer,
- * and the warning for a game that keeps its own importer without naming the
- * file (an earlier `serverSession.ts`). Such a game would never import the
+ * and the warning for a game that keeps its own importer without importing
+ * the file (an earlier `serverSession.ts`). Such a game would never import the
  * file, and its `@mpgd/game-services` may predate what the file imports, so
  * the file is not written for it. An importer that imports it gets it back.
  */
@@ -565,6 +565,27 @@ export const notificationsCapacitorTemplateSupportImporters: Readonly<
       + 'developmentServerSession.ts from the starter template.',
   },
 });
+
+/**
+ * Whether `source` names the module `./<name>` (with or without `.js` or
+ * `.ts`) as a string outside comments: any static, side-effect, or dynamic
+ * import or re-export of it. A commented-out import does not count.
+ */
+export function sourceReferencesRelativeModule(source: string, name: string): boolean {
+  const specifiers = new Set([`./${name}`, `./${name}.js`, `./${name}.ts`]);
+  let found = false;
+  // One pass over strings and comments, as in capacitorGatewayRegistersNotifications.
+  source.replace(
+    /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
+    (token) => {
+      if (!token.startsWith('/') && specifiers.has(token.slice(1, -1))) {
+        found = true;
+      }
+      return token;
+    },
+  );
+  return found;
+}
 
 /** Whether a Capacitor gateway already registers a notifications provider. */
 export function capacitorGatewayRegistersNotifications(source: string): boolean {
