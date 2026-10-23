@@ -35,7 +35,7 @@
   ],
   "scripts": {
     "check": "ttsc --noEmit",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/analytics/src/index.test.ts",
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/analytics/src/index.test.ts && node tools/run-ttsx.mjs packages/analytics/src/monetization-observation.test.ts && node packages/analytics/test/dist-import.mjs",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix"

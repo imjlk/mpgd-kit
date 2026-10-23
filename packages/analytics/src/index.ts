@@ -2,6 +2,13 @@ import typia from 'typia';
 
 import type { PlatformTarget } from '@mpgd/platform';
 
+export {
+  createMonetizationAttempt,
+  type MonetizationAttempt,
+  type MonetizationObservation,
+  type MonetizationObserver,
+} from './monetization-observation.js';
+
 export type AnalyticsEventName =
   | 'game_started'
   | 'stage_finished'
