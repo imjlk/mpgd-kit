@@ -278,10 +278,8 @@ try {
     MPGD_NOTIFICATIONS_CATALOG: vars.MPGD_NOTIFICATIONS_CATALOG,
     MPGD_NOTIFICATIONS_DEPLOYMENT: vars.MPGD_NOTIFICATIONS_DEPLOYMENT,
     FCM_SERVICE_ACCOUNT: vars.FCM_SERVICE_ACCOUNT,
-    // The written file's flag (asserted above to be 'true').
-    ...(vars.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true'
-      ? { MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true' as const }
-      : {}),
+    // The written file's flag, asserted above to be 'true'.
+    MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS: 'true',
   };
 
   /** The local Worker as `wrangler dev` serves it, including its scheduled route. */

@@ -250,8 +250,9 @@ function sessionRefusedHint(status: number, authorization: string): string | und
     return undefined;
   }
   return authorization.startsWith(developmentNotificationSessionPrefix)
-    ? 'the Worker did not accept this development session: it needs the flag, and it is accepted only on a '
-      + 'local host (localhost, 127.0.0.1, [::1], *.localhost, or 10.0.2.2).'
+    ? 'the Worker did not accept this development session: it needs '
+      + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true", a local host (localhost, 127.0.0.1, [::1], '
+      + '*.localhost, or 10.0.2.2), and ids of letters, digits, _ or -.'
     : 'the Worker did not accept this session: has it expired, or is it for another identity service?';
 }
 
