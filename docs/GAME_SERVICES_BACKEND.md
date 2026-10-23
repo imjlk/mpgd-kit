@@ -300,7 +300,8 @@ local environment, and it refuses to construct the handler when that flag is
 combined with `MPGD_STORE = "d1"`, so a leaked flag cannot back a persistent
 deployment. `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"`
 is its notifications counterpart: unauthenticated `mpgd-dev` sessions for
-the notification routes, refused with `MPGD_STORE = "d1"` the same way (see
+the notification routes, refused with `MPGD_STORE = "d1"` the same way and
+accepted only on a request to a local host (see
 [Notifications v2](./CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2)).
 Checked-in deploy configuration remains fail-closed in both
 memory and D1 modes. Production deployments can provide the legacy aggregate

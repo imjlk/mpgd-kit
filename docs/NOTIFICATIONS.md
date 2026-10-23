@@ -139,7 +139,7 @@ Rules the starter's settings screen follows, and your own screen must too:
 > background). To try the switches before you have an identity
 > service, run the Worker locally with
 > `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"` (memory
-> store only) and start the game's dev server with
+> store only, and only on a local host) and start the game's dev server with
 > `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>`: the starter then signs in
 > with an unauthenticated development session (the generated game's
 > `docs/NOTIFICATIONS.md`, "Try it locally", and the

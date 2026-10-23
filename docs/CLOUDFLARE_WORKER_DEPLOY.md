@@ -287,7 +287,11 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   a `*.localhost` name, or `10.0.2.2` (the host machine as the Android
   emulator reaches it). A request to any other host, such as a deployed
   `workers.dev` name or a LAN address, answers 401 like any header the
-  Worker does not recognize, and the Worker logs once why. The service
+  Worker does not recognize, and the Worker logs once why. The check reads
+  the request's host, so it guards against a deployed Worker, not against
+  your network: keep the local Worker listening on loopback (the dev
+  server's default), since a client that reaches an exposed dev server can
+  send `Host: localhost`. The service
   binding (`deliverNotification`, `endNotificationSession`), the queue, and
   the cron take no session, so a development session never reaches them.
   The game side is `createDevelopmentServerSession` in

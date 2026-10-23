@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
 import type { NotificationDispatchJob } from '@mpgd/game-services/notifications';
 import { Miniflare } from 'miniflare';
@@ -1191,6 +1191,19 @@ try {
       }
       const entrypoint = await readFile(new URL('./index.ts', import.meta.url), 'utf8');
       assert.doesNotMatch(entrypoint, /authorization|mpgd-dev|notificationSessionAuthOf/iu);
+      // No other Worker module reads a development header.
+      const modules = (await readdir(new URL('./', import.meta.url))).filter(
+        (file) => file.endsWith('.ts') && !file.endsWith('.test.ts') && file !== 'notificationsHandler.ts',
+      );
+      assert.ok(modules.includes('index.ts') && modules.includes('handler.ts'));
+      for (const file of modules) {
+        const other = await readFile(new URL(`./${file}`, import.meta.url), 'utf8');
+        assert.doesNotMatch(
+          other,
+          /parseDevelopmentNotificationSessionAuthorization|mpgd-dev/u,
+          file,
+        );
+      }
     }
     // Never with the durable store: the Worker refuses to start, with or without the binding.
     const durable = {

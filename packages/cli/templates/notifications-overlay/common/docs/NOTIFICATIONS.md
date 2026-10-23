@@ -163,7 +163,9 @@ so it authenticates nothing: the session exists only on the Vite dev server
 the flag with its D1 store, ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
 is bound, and takes development sessions only on a local host (`localhost`,
 `127.0.0.1`, `[::1]`, `*.localhost`, or `10.0.2.2`, which the Android
-emulator uses for your machine); a device on your LAN cannot use them. Calling `setStarterServerSession`, even with `undefined`, turns it
+emulator uses for your machine). That check reads the request's host, so
+it protects a deployed Worker, not your network: keep the local Worker on
+loopback, its default. Calling `setStarterServerSession`, even with `undefined`, turns it
 off; the first call after the game used it warns, since the commerce client
 and the notifications backend keep the session they first read.
 The commerce client sends the same header; a local Worker with

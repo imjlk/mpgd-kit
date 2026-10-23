@@ -7,8 +7,9 @@ import { resolveGameServicesAuthorityMode } from './runtime.js';
  *
  * The Worker accepts `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`
  * only with `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"`,
- * without a `GAME_SERVICES_NOTIFICATIONS_AUTH` binding, and never with the
- * D1 store. Anyone can write such a header, so it is no authentication:
+ * without a `GAME_SERVICES_NOTIFICATIONS_AUTH` binding, never with the D1
+ * store, and only on a request to a local host (loopback, `*.localhost`, or
+ * the Android emulator's `10.0.2.2`). Anyone can write such a header, so it is no authentication:
  * never use it outside local development.
  */
 
