@@ -135,7 +135,8 @@ Rules the starter's settings screen follows, and your own screen must too:
 > answers the coordinator's `sessionFamilyId` (the backend's, or one the
 > coordinator derives and keeps across refreshes and restarts), not a view's
 > `sessionId`, which may rotate on refresh, and refreshes the access token
-> for each request's header. To try the switches before you have an identity
+> as needed (an expired one before the request, one about to expire in the
+> background). To try the switches before you have an identity
 > service, run the Worker locally with
 > `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"` (memory
 > store only) and start the game's dev server with

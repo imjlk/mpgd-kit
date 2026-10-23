@@ -261,7 +261,8 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   days ahead or a link the provider cannot take is a 400), and
   `POST /reminders/cancel` (`{ key }`, answers `{ cancelled }`). The
   session routes need the
-  `GAME_SERVICES_NOTIFICATIONS_AUTH` binding: without it they answer 404,
+  `GAME_SERVICES_NOTIFICATIONS_AUTH` binding (or, locally, the development
+  sessions flag below): without it they answer 404,
   only `GET /providers` is served, and the Worker logs one warning naming
   the missing binding the first time a session route is asked for (a
   send-only Worker, which serves only `deliverNotification`, can ignore
@@ -279,8 +280,8 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   (each id 1 to 64 letters, digits, `_`, or `-`; no `expiresAt`), and the
   Worker logs once that sessions are not authenticated. Anyone can write
   that header, so it is local-only by construction: the Worker refuses to
-  start (fetch and the service binding) when the flag is set with
-  `MPGD_STORE = "d1"`, and ignores the flag, saying so once, when the
+  build its fetch handler and its service (the first request or RPC fails)
+  when the flag is set with `MPGD_STORE = "d1"`, and ignores the flag, saying so once, when the
   binding is bound. The game side is `createDevelopmentServerSession` in
   `@mpgd/game-services`, which refuses a production mode, and the starter
   uses it on the Vite dev server only (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).

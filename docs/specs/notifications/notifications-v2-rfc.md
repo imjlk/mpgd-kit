@@ -2720,7 +2720,8 @@ use from a guest session, and sessions for local development.
 - The Worker's `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`
   accepts `Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>` on the
   session routes when no `GAME_SERVICES_NOTIFICATIONS_AUTH` is bound,
-  refuses to start with the D1 store, and logs that sessions are not
+  refuses to build its fetch handler and service with the D1 store (the
+  first request or RPC fails), and logs that sessions are not
   authenticated. `createDevelopmentServerSession` is the game side, which
   the starter uses only on the Vite dev server in the development mode
   (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).

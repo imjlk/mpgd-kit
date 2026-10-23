@@ -77,8 +77,9 @@ game has both:
   or rotating id. With a guest-session backend, pass
   `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it
   answers the coordinator's `sessionFamilyId` (not a view's `sessionId`,
-  which may rotate on refresh), and refreshes the access token for each
-  request's header.
+  which may rotate on refresh), and refreshes the access token as needed
+  (an expired one before the request, one about to expire in the
+  background).
 
   ```ts
   // src/main.ts, before bootstrap()

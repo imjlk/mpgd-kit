@@ -94,8 +94,9 @@ export interface GameServicesNotificationsEnv {
    * binding, the session routes accept
    * `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`
    * (`createDevelopmentServerSession` in `@mpgd/game-services`), which anyone
-   * can write: it authenticates nothing. The Worker refuses to start with it
-   * when `MPGD_STORE` is `d1`, and ignores it when the binding is bound.
+   * can write: it authenticates nothing. The Worker refuses to build its
+   * fetch handler and service with it when `MPGD_STORE` is `d1` (the first
+   * request or RPC fails), and ignores it when the binding is bound.
    */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS?: 'true';
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
