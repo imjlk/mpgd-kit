@@ -3506,19 +3506,15 @@ function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-/**
- * Whether the game's installed `packageName` provably lacks `exportName`:
- * its root type declarations, and every declaration file they re-export
- * from through relative specifiers, at any depth, never name it. Anything
- * the check cannot follow passes, and the game's build then decides, as for
- * the adapter's settings opener: an uninstalled or unreadable package, a
- * module it cannot read, or an `export *` from another package.
- */
 /** Declaration files the export check reads at most: a guard against a pathological graph. */
 const maxDeclarationFilesChecked = 500;
 
 /** The declaration file names TypeScript pairs with a module specifier. */
 function declarationCandidates(base: string): readonly string[] {
+  // A specifier that already names a declaration file is that file.
+  if (/\.d\.[cm]?ts$/u.test(base)) {
+    return [base];
+  }
   const extension = path.extname(base);
   const stem = base.slice(0, base.length - extension.length);
   switch (extension) {
@@ -3536,6 +3532,14 @@ function declarationCandidates(base: string): readonly string[] {
   }
 }
 
+/**
+ * Whether the game's installed `packageName` provably lacks `exportName`:
+ * its root type declarations, and every declaration file they re-export
+ * from through relative specifiers, at any depth, never name it. Anything
+ * the check cannot follow passes, and the game's build then decides, as for
+ * the adapter's settings opener: an uninstalled or unreadable package, a
+ * module it cannot read, or an `export *` from another package.
+ */
 function installedPackageLacksExport(gameRoot: string, packageName: string, exportName: string): boolean {
   // Only a plain identifier is searched for; anything else is not proof of absence.
   if (!/^[A-Za-z_$][\w$]*$/u.test(exportName)) {

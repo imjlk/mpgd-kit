@@ -393,6 +393,8 @@ try {
       { 'index.d.ts': "export * from './gone.js';\n" },
       // Compact re-exports, followed to the module that names it.
       { 'index.d.ts': "export*from'./runtime.js';export{x}from'./session.mjs';\n", 'session.d.mts': 'export declare function createDevelopmentServerSession(): void;\n' },
+      // A specifier that names the declaration file itself.
+      { 'index.d.ts': "export * from './session.d.ts';\n", 'session.d.ts': 'export declare function createDevelopmentServerSession(): void;\n' },
       // A type-only star re-export from another package.
       { 'index.d.ts': "export * from './runtime.js';\nexport type * from '@mpgd/game-services-core';\n" },
     ].entries()) {
