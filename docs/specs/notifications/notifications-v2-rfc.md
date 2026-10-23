@@ -2722,7 +2722,8 @@ use from a guest session, and sessions for local development.
   accepts `Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>` on the
   session routes when no `GAME_SERVICES_NOTIFICATIONS_AUTH` is bound,
   refuses to build its fetch handler and service with the D1 store (the
-  first request or RPC fails), answers 401 on a request whose host is not
+  first request or RPC fails, and the notification RPCs, queue, and cron
+  see a misconfigured service), answers 401 on a request whose host is not
   a local development host (loopback, `*.localhost`, or the Android
   emulator's `10.0.2.2`), and logs that sessions are not authenticated.
   The service binding, the queue, and the cron take no session. `createDevelopmentServerSession` is the game side, which

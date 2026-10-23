@@ -10,6 +10,7 @@ import {
   type GameServicesWorkerEnv,
 } from './handler.js';
 import {
+  asWorkerNotificationRpcResult,
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
   endWorkerNotificationSession,
@@ -1217,6 +1218,63 @@ try {
         /MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true is refused when MPGD_STORE is d1/,
       );
       assert.throws(() => createWorkerService(refused), /refused when MPGD_STORE is d1/);
+    }
+    // The notification entry points that do not go through fetch refuse it too: the
+    // service-binding RPCs answer a configuration error, the queue retries, the cron skips,
+    // and the reason is logged once.
+    {
+      const durableNotifications = {
+        ...durable,
+        MPGD_NOTIFICATIONS_CATALOG: catalog,
+        FCM_SERVICE_ACCOUNT: serviceAccount,
+      } satisfies GameServicesWorkerEnv;
+      const logged: string[] = [];
+      const realError = console.error;
+      console.error = (...parts: unknown[]) => {
+        logged.push(parts.map(String).join(' '));
+      };
+      try {
+        await assert.rejects(
+          deliverWorkerNotification(durableNotifications, {
+            idempotencyKey: 'durable-dev-1',
+            player: 'p-1',
+            topic: 'friend-challenge',
+          }),
+          { code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' },
+        );
+        const rpc = await asWorkerNotificationRpcResult(() =>
+          deliverWorkerNotification(durableNotifications, {
+            idempotencyKey: 'durable-dev-2',
+            player: 'p-1',
+            topic: 'friend-challenge',
+          }),
+        );
+        assert.equal(rpc.ok, false);
+        await assert.rejects(
+          endWorkerNotificationSession(durableNotifications, { sessionId: 's-1' }),
+          { code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' },
+        );
+        const settled: unknown[] = [];
+        await consumeNotificationDispatchBatch(durableNotifications, {
+          messages: [{
+            body: {},
+            attempts: 1,
+            ack: () => settled.push('ack'),
+            retry: (options: unknown) => settled.push(['retry', options]),
+          }],
+        } as unknown as MessageBatch<unknown>);
+        assert.deepEqual(settled, [['retry', { delaySeconds: 10 }]]);
+        // The cron does nothing: the DB stub would throw on any call.
+        await runScheduledNotifications(durableNotifications);
+      } finally {
+        console.error = realError;
+      }
+      assert.equal(
+        logged.filter((line) =>
+          line.includes('MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true is refused when MPGD_STORE is d1'),
+        ).length,
+        1,
+      );
     }
     // The refusal comes first, so another refused setting does not hide it.
     assert.throws(

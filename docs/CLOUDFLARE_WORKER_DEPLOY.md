@@ -281,7 +281,11 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   Worker logs once that sessions are not authenticated. Anyone can write
   that header, so it is local-only by construction: the Worker refuses to
   build its fetch handler and its service (the first request or RPC fails)
-  when the flag is set with `MPGD_STORE = "d1"`, and ignores the flag, saying so once, when the
+  when the flag is set with `MPGD_STORE = "d1"`; its notifications are then
+  misconfigured on every entry point (`deliverNotification` and
+  `endNotificationSession` answer `NOTIFICATIONS_CONFIGURATION_REQUIRED`,
+  the queue retries, the cron skips, and the reason is logged once). It
+  ignores the flag, saying so once, when the
   binding is bound. On the memory store it still applies only to requests
   whose host is a local development host: `localhost`, `127.0.0.1`, `[::1]`,
   a `*.localhost` name, or `10.0.2.2` (the host machine as the Android

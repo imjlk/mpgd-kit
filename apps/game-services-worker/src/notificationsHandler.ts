@@ -188,7 +188,11 @@ export function isLocalDevelopmentHost(hostname: string): boolean {
  * Refuses `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` next to the
  * D1 store, so a durable deployment never takes an unauthenticated session,
  * even with the flag left in its config. The fetch handler and the service
- * call it when they are built.
+ * call it when they are built, and so does the notifications service's
+ * resolution, which the service-binding RPCs (`deliverNotification`,
+ * `endNotificationSession`), the queue consumer, and the cron go through:
+ * they answer `NOTIFICATIONS_CONFIGURATION_REQUIRED`, retry, or skip, as for
+ * any misconfiguration.
  */
 export function assertDevelopmentNotificationSessionsAllowed(env: GameServicesNotificationsEnv): void {
   if (env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true' && env.MPGD_STORE === 'd1') {
@@ -356,6 +360,10 @@ function aitProviderSettings(value: unknown): Omit<CreateAitFunctionalMessageDel
 }
 
 function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNotifications {
+  // Every notifications entry point (the service binding, the queue, the
+  // cron, the routes) resolves the service here, so the development-session
+  // refusal reaches them all: the service is misconfigured, and says why.
+  assertDevelopmentNotificationSessionsAllowed(env);
   if (env.MPGD_NOTIFICATIONS_CATALOG === undefined) {
     return { status: 'disabled' };
   }
