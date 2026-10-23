@@ -45,6 +45,8 @@ export interface LiveWorkerEnvInput {
   /** Overrides the key's `project_id` (`FCM_PROJECT_ID`). */
   readonly projectId?: string;
   readonly overwrite?: boolean;
+  /** `env-file` (the default) for `wrangler dev --env-file`, `dev-vars` for `.dev.vars`. */
+  readonly format?: LiveEnvFileFormat;
 }
 
 export interface LiveWorkerEnvResult {
@@ -58,22 +60,32 @@ export interface LiveWorkerEnvResult {
 }
 
 /**
- * The dotenv value wrangler 4 reads back as `value` (wrangler 4.107 bundles
- * dotenv 16 and dotenv-expand 12): single-quoted, so dotenv leaves `\n`
- * escapes alone, with `$` escaped, since dotenv-expand expands `$NAME` and
- * `${NAME}` in every value and turns `\$` back into `$`. A `'` cannot be
- * escaped inside single quotes: JSON text (`json: true`) carries it as
- * `\u0027`, which JSON reads back as `'`; any other value with one is
- * refused.
+ * Which file wrangler 4 (4.107 bundles dotenv 16 and dotenv-expand 12)
+ * reads: a `.dev.vars` file, which `pnpm --dir apps/game-services-worker
+ * dev` (the Cloudflare Vite plugin) and `wrangler dev` read with dotenv
+ * alone, or an `--env-file` file, which `wrangler dev --env-file` also
+ * expands (`$NAME`, `${NAME}`; `\$` turns back into `$`).
  */
-export function formatLiveEnvValue(value: string, options: { readonly json?: boolean } = {}): string {
+export type LiveEnvFileFormat = 'dev-vars' | 'env-file';
+
+/**
+ * The dotenv value wrangler reads back as `value`: single-quoted, so dotenv
+ * leaves `\n` escapes alone, with `$` escaped for an `env-file` (the
+ * default) and kept for `dev-vars`. A `'` cannot be escaped inside single
+ * quotes: JSON text (`json: true`) carries it as `\u0027`, which JSON reads
+ * back as `'`; any other value with one is refused.
+ */
+export function formatLiveEnvValue(
+  value: string,
+  options: { readonly json?: boolean; readonly format?: LiveEnvFileFormat } = {},
+): string {
   if (/[\r\n]/u.test(value)) {
     throw new LiveDriverUsageError('An env file value must be one line.');
   }
   if (value.endsWith('\\')) {
     throw new LiveDriverUsageError('An env file value must not end with a backslash.');
   }
-  let escaped = value.replaceAll('$', '\\$');
+  let escaped = options.format === 'dev-vars' ? value : value.replaceAll('$', '\\$');
   if (escaped.includes("'")) {
     if (options.json !== true) {
       throw new LiveDriverUsageError("An env file value must not hold a '.");
@@ -236,6 +248,7 @@ export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnv
         : '--project-id is not a Firebase project id.',
     );
   }
+  const format = input.format ?? 'env-file';
   /** Name, value, and whether the value is JSON text (which may carry a quote as \u0027). */
   const variables: readonly (readonly [string, string, boolean])[] = [
     ['MPGD_STORE', 'memory', false],
@@ -247,9 +260,9 @@ export function writeLiveWorkerEnvFile(input: LiveWorkerEnvInput): LiveWorkerEnv
     ...(input.projectId === undefined ? [] : [['FCM_PROJECT_ID', input.projectId, false] as const]),
   ];
   const text = [
-    '# Written by `pnpm notifications:live env` for one local `wrangler dev --env-file` run.',
+    `# Written by \`pnpm notifications:live env\` (${format}) for one local game-services Worker run.`,
     '# It holds a Firebase service-account key: keep it out of every repository and delete it after the test.',
-    ...variables.map(([name, value, json]) => `${name}=${formatLiveEnvValue(value, { json })}`),
+    ...variables.map(([name, value, json]) => `${name}=${formatLiveEnvValue(value, { json, format })}`),
     '',
   ].join('\n');
   // Written to a new 0600 file beside it, then renamed over it: the key is

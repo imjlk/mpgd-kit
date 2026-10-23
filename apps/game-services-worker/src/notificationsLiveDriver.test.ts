@@ -62,8 +62,9 @@ function kitRoot(): string {
  * expanded, `\$` turned into `$`). `wrangler dev --env-file` does not let
  * the process environment override the file's values. The kit's own
  * `wrangler dev` run of a written file served the same catalog and key.
+ * A `.dev.vars` file is read with dotenv alone (`expand: false`).
  */
-function readEnvFileAsWrangler(text: string): Record<string, string> {
+function readEnvFileAsWrangler(text: string, expand = true): Record<string, string> {
   const line = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/gmu;
   const parsed: Record<string, string> = {};
   for (const match of text.matchAll(line)) {
@@ -75,6 +76,9 @@ function readEnvFileAsWrangler(text: string): Record<string, string> {
       value = value.replaceAll('\\n', '\n').replaceAll('\\r', '\r');
     }
     parsed[key] = value;
+  }
+  if (!expand) {
+    return parsed;
   }
   const expanded: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -100,7 +104,12 @@ function insideGitCheckout(directory: string): boolean {
 }
 
 if (insideGitCheckout(tmpdir())) {
-  // CI's temporary directory never is; a developer's TMPDIR under a dotfiles repository can be.
+  // A developer's TMPDIR under a dotfiles repository can be; in CI the dry run must not vanish silently.
+  if (process.env.CI !== undefined && process.env.CI !== '') {
+    throw new Error(
+      'The temporary directory is inside a git checkout; point TMPDIR outside it for the dry run.',
+    );
+  }
   console.warn(
     'notifications live driver dry run skipped: the temporary directory is inside a git checkout',
   );
@@ -227,6 +236,17 @@ try {
     /inside the git checkout/u,
   );
   const vars = readEnvFileAsWrangler(readFileSync(envFile, 'utf8'));
+  // The .dev.vars form (for `pnpm --dir apps/game-services-worker dev`) reads back to the same values.
+  const devVarsFile = join(scratch, 'live.dev.vars');
+  writeLiveWorkerEnvFile({
+    catalogPath: catalogFile,
+    deploymentPath: deploymentFile,
+    serviceAccountPath: keyFile,
+    outPath: devVarsFile,
+    repositoryRoot: root,
+    format: 'dev-vars',
+  });
+  assert.deepEqual(readEnvFileAsWrangler(readFileSync(devVarsFile, 'utf8'), false), vars);
   assert.deepEqual(
     JSON.parse(vars.FCM_SERVICE_ACCOUNT ?? ''),
     JSON.parse(readFileSync(keyFile, 'utf8')),

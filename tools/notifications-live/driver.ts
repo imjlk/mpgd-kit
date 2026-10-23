@@ -506,7 +506,7 @@ export async function runNotificationsLiveDriver(
       401,
       anonymous.status === 404
         ? 'the session routes are off: start the Worker with '
-          + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true" (local) or bind '
+          + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true" (local; needs D1 #431) or bind '
           + 'GAME_SERVICES_NOTIFICATIONS_AUTH.'
         : undefined,
     );
@@ -539,6 +539,8 @@ export async function runNotificationsLiveDriver(
           : `latest delivery-permission record: ${String(permission['state'])}`,
       );
     } else {
+      // Tracked before the request, as reminders are: a lost answer may still have registered it.
+      registered = provider;
       const registration = await call('POST', '/endpoints', {
         registration: {
           provider,
@@ -547,7 +549,6 @@ export async function runNotificationsLiveDriver(
         target: options.target,
       });
       expectStatus('register-endpoint', registration, 200);
-      registered = provider;
       record(
         'register-endpoint',
         'pass',
@@ -616,7 +617,7 @@ export async function runNotificationsLiveDriver(
         'scheduler',
         'skip',
         options.worker.local
-          ? 'not run (--no-scheduler); trigger it with GET /cdn-cgi/handler/scheduled.'
+          ? 'not run (--no-scheduler); the run cancels its reminder when it ends, so nothing is left to send.'
           : 'a deployed Worker runs its own cron; the push should arrive within a minute of fireAt.',
       );
     } else {
@@ -644,7 +645,9 @@ export async function runNotificationsLiveDriver(
       const taken = await call('POST', '/reminders/cancel', { key: reminderKey });
       expectStatus('scheduler', taken, 200);
       if (taken.body?.['cancelled'] !== false) {
-        pending.delete(reminderKey);
+        if (taken.body?.['cancelled'] === true) {
+          pending.delete(reminderKey);
+        }
         fail(
           'scheduler',
           'the scheduler did not send the reminder: it was not yet due, held by quiet hours or the daily cap, '
@@ -656,7 +659,7 @@ export async function runNotificationsLiveDriver(
       record(
         'scheduler',
         'pass',
-        'the scheduler fired the reminder and nothing held its send; confirm it in the Worker log and on the device.',
+        'the reminder fired and no held send was left; whether FCM took it is in the Worker log and on the device.',
       );
     }
 

@@ -118,6 +118,8 @@ await test('env file values survive wrangler dotenv parsing and expansion', () =
   assert.equal(quoted, String.raw`'{"copy":"Today\u0027s run, ` + '`quoted`' + `"}'`);
   assert.deepEqual(JSON.parse(quoted.slice(1, -1)), { copy: "Today's run, `quoted`" });
   assert.equal(formatLiveEnvValue('cost $5 and ${HOME}'), String.raw`'cost \$5 and \${HOME}'`);
+  // A .dev.vars file is not expanded, so `$` stays as it is.
+  assert.equal(formatLiveEnvValue('cost $5 and ${HOME}', { format: 'dev-vars' }), `'cost $5 and \${HOME}'`);
   assert.throws(() => formatLiveEnvValue("it's"), LiveDriverUsageError);
   assert.throws(() => formatLiveEnvValue('ends with \\'), LiveDriverUsageError);
   assert.throws(() => formatLiveEnvValue('two\nlines'), LiveDriverUsageError);

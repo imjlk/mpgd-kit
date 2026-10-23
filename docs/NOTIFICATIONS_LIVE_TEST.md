@@ -46,14 +46,18 @@ the kit does not rot between live runs.
 - **Local development sessions are not authentication.** The Worker's
   `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` flag accepts
   `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`
-  from anyone who can reach it. Bind the Worker to `127.0.0.1` only.
+  from anyone who can reach it. Bind the Worker to `127.0.0.1` only, and
+  reach it as `localhost`/`127.0.0.1` (from the emulator: through
+  `adb reverse`, or as `10.0.2.2`, the emulator's name for this machine).
 
-> **Needs D1.** The local session flag and the starter's development
-> session helper land in D1 (stable session-family id and local
-> development notification sessions). Until it is merged, the Worker
-> answers 404 on the session routes and `run` stops at
-> `session-required` with that hint. Everything else on this page works
-> today.
+> **Needs D1 (#431).** The local session flag
+> (`MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"`, refused
+> with `MPGD_STORE = "d1"`), the `mpgd-dev` token, the starter's
+> development session (`VITE_MPGD_DEV_NOTIFICATION_SESSION`), and the
+> `.gitignore` entries for `.dev.vars` land in D1. D1 may also limit the
+> flag to local request hosts. Until it is merged, the Worker answers 404
+> on the session routes and `run` stops at `session-required` with that
+> hint. Everything else on this page works today.
 
 ## What you need
 
@@ -112,12 +116,18 @@ Then, in the game:
    still passes. This is a throwaway game; keep them in a real one.
 4. Run `pnpm validate:notifications`.
 5. In the game's `.env.local` (Vite reads it when the dev server starts),
-   point the game at the local Worker with
-   `VITE_MPGD_GAME_SERVICES_URL=http://127.0.0.1:8787`, and turn on D1's
-   development session helper with a test player id, such as `live-1`
-   (**needs D1**; its variable names are in D1's starter docs). Use the
-   same player id with `run` below: the device and the driver must be the
-   same player.
+   point the game at the local Worker and turn on the development session
+   with a test player id (**needs D1 (#431)**):
+
+   ```sh
+   VITE_MPGD_GAME_SERVICES_URL=http://127.0.0.1:8787
+   VITE_MPGD_DEV_NOTIFICATION_SESSION=live-1
+   ```
+
+   Use the same player id with `run` below: the device and the driver must
+   be the same player. The starter uses the development session only on
+   the Vite dev server in development mode, so the emulator runs the game
+   through live reload ([section 4](#4-the-emulator)).
 
 ## 2. The Worker's env file
 
@@ -158,8 +168,18 @@ pnpm --dir apps/game-services-worker exec wrangler dev \
 ```
 
 wrangler lists the variables (five, six with `--project-id`) as
-`(hidden)`. The Worker logs once that it uses the memory store: consent records, endpoints, and reminders live in
-this process and are gone when you stop it. There is no store dump route;
+`(hidden)`. The Worker logs once that it uses the memory store: consent
+records, endpoints, and reminders live in this process and are gone when
+you stop it.
+
+D1 documents `pnpm --dir apps/game-services-worker dev --port 8787` with
+`apps/game-services-worker/.dev.vars` (git-ignored by D1) for trying the
+settings screen. Do not use it for this run: on the Vite dev server the
+Worker builds its notifications service again for every request, so the
+memory store keeps nothing from one request to the next (the device's
+registration is gone before the driver's reminder). The built Worker
+above keeps it for the life of the process. (`env --format dev-vars`
+writes the `.dev.vars` form, for that flow.) There is no store dump route;
 the driver's reads (`GET /consent`, `GET /notices`) and the Worker log are
 how you see the state. `wrangler dev` does not run crons on its own; the
 driver runs the scheduler through `GET /cdn-cgi/handler/scheduled`.
@@ -197,8 +217,10 @@ Before the game is installed, its `app` line fails; that is expected the
 first time.
 
 Install and run the game on the emulator with Capacitor's live reload, so
-the game runs as a Vite development build (D1's development session helper
-works only there). The Android target must be selected for the dev server,
+the game runs on the Vite dev server in development mode, the only place
+the starter uses the development session (**needs D1 (#431)**). A build
+without live reload gets one only when it is built in development mode
+(`NODE_ENV=development vite build --mode development`). The Android target must be selected for the dev server,
 or it serves the browser gateway, which has no notifications provider. The
 live-reload page is served over http, so its calls to the http Worker are
 not mixed content (a built bundle on `https://localhost` would be):
@@ -276,7 +298,7 @@ explains why).
 
 A deployed test Worker uses the D1 store, its real
 `GAME_SERVICES_NOTIFICATIONS_AUTH` binding, and its own cron; the local
-session flag is refused there (**needs D1**). The session binding is the
+session flag is refused there (**needs D1 (#431)**). The session binding is the
 game's own identity Worker (the kit does not ship one), so a staging run
 needs a test player's real session from it: the same `Authorization`
 value the game sends. Give it to the driver through an environment
