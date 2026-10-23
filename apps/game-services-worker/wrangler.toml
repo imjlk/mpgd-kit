@@ -15,7 +15,8 @@ MPGD_STORE = "memory"
 # notifications session routes accept
 # "Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>",
 # which anyone can write (no authentication). Never set this for a deployment;
-# the Worker refuses to start when it is combined with MPGD_STORE = "d1".
+# with MPGD_STORE = "d1" the Worker refuses to build its fetch handler and
+# service, so the first request or RPC fails.
 # MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"
 # The unverified leaderboard record route (/game-services/leaderboard/record and
 # /rpc/leaderboard/recordScore) is not mounted on the public ingress by default;
