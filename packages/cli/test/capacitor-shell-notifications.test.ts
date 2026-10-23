@@ -289,6 +289,59 @@ try {
     );
   }
 
+  // developmentServerSession.ts imports createDevelopmentServerSession: a game whose
+  // installed @mpgd/game-services provably lacks it is told to upgrade, not given a module
+  // that would not build. A game that keeps its own serverSession.ts gets no module to check.
+  {
+    const installGameServices = (root: string, exportsDevelopmentSession: boolean): void => {
+      const packageRoot = path.join(root, 'node_modules/@mpgd/game-services');
+      mkdirSync(path.join(packageRoot, 'dist'), { recursive: true });
+      writeFileSync(
+        path.join(packageRoot, 'package.json'),
+        JSON.stringify({
+          name: '@mpgd/game-services',
+          version: exportsDevelopmentSession ? '0.28.0' : '0.27.2',
+          exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
+        }),
+      );
+      writeFileSync(
+        path.join(packageRoot, 'dist/index.d.ts'),
+        exportsDevelopmentSession
+          ? "export * from './runtime.js';\nexport * from './development-session.js';\n"
+          : "export * from './runtime.js';\n",
+      );
+      writeFileSync(
+        path.join(packageRoot, 'dist/runtime.d.ts'),
+        'export declare function resolveGameServicesAuthorityMode(profile: string): string;\n',
+      );
+      if (exportsDevelopmentSession) {
+        writeFileSync(
+          path.join(packageRoot, 'dist/development-session.d.ts'),
+          'export declare function createDevelopmentServerSession(input: object): object;\n',
+        );
+      }
+    };
+    const older = createGame();
+    roots.push(older);
+    installGameServices(older, false);
+    assert.throws(
+      () => planCapacitorShellStarter(input(older, ['notifications'])),
+      /imports createDevelopmentServerSession from @mpgd\/game-services; the game's @mpgd\/game-services 0\.27\.2 does not export it\. Upgrade the game's kit packages \(mpgd kit upgrade\) first\./u,
+    );
+    const current = createGame();
+    roots.push(current);
+    installGameServices(current, true);
+    const plan = planCapacitorShellStarter(input(current, ['notifications']));
+    assert.ok(plan.changedFiles.includes('src/platform/developmentServerSession.ts'));
+    const ownSession = createGame();
+    roots.push(ownSession);
+    installGameServices(ownSession, false);
+    mkdirSync(path.join(ownSession, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(ownSession, 'src/platform/serverSession.ts'), 'export {};\n');
+    const kept = planCapacitorShellStarter(input(ownSession, ['notifications']));
+    assert.equal(kept.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+  }
+
   // What counts as importing a module: its specifier in a string outside comments.
   {
     const name = 'developmentServerSession';

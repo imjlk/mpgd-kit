@@ -555,11 +555,17 @@ export const notificationsCapacitorTemplateSupportImporters: Readonly<
     {
       readonly importer: (typeof notificationsCapacitorTemplateSupportFiles)[number];
       readonly warning: string;
+      /**
+       * A kit export the file imports, which the game's installed package
+       * must have before the file is written (an older package lacks it).
+       */
+      readonly requires?: { readonly packageName: string; readonly exportName: string };
     }
   >>
 > = Object.freeze({
   'src/platform/developmentServerSession.ts': {
     importer: 'src/platform/serverSession.ts',
+    requires: { packageName: '@mpgd/game-services', exportName: 'createDevelopmentServerSession' },
     warning: 'src/platform/serverSession.ts predates development notification sessions '
       + '(VITE_MPGD_DEV_NOTIFICATION_SESSION); to try notifications locally, copy serverSession.ts and '
       + 'developmentServerSession.ts from the starter template.',

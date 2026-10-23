@@ -3355,6 +3355,22 @@ function planNotificationsProvider(input: {
           warnings.push(imported.warning);
           continue;
         }
+        // The file imports a kit export an older installed package lacks.
+        const required = imported?.requires;
+        if (required !== undefined
+          && installedPackageLacksExport(gameRoot, required.packageName, required.exportName)) {
+          const installed = readExisting(
+            path.join(gameRoot, 'node_modules', required.packageName, 'package.json'),
+          );
+          const version = installed === undefined
+            ? 'unknown'
+            : String(parseJsonObject(installed, required.packageName).version);
+          throw new Error(
+            `--providers notifications writes ${file}, which imports ${required.exportName} from `
+              + `${required.packageName}; the game's ${required.packageName} ${version} does not export it. `
+              + "Upgrade the game's kit packages (mpgd kit upgrade) first.",
+          );
+        }
         files.push({ path: file, content: starterFile(input.templateRoot, file) });
       }
     }
@@ -3493,4 +3509,54 @@ function requireString(value: unknown, label: string): string {
 
 function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/**
+ * Whether the game's installed `packageName` provably lacks `exportName`:
+ * its root type declarations, with the relative `export *` modules they
+ * re-export one level deep, never name it. An uninstalled package, or
+ * declarations the check cannot read, pass: the game's build then decides,
+ * as for the adapter's settings opener.
+ */
+function installedPackageLacksExport(gameRoot: string, packageName: string, exportName: string): boolean {
+  const packageRoot = path.join(gameRoot, 'node_modules', packageName);
+  const manifestSource = readExisting(path.join(packageRoot, 'package.json'));
+  if (manifestSource === undefined) {
+    return false;
+  }
+  const manifest = parseJsonObject(manifestSource, `${packageName}/package.json`);
+  const rootExport = typeof manifest.exports === 'object' && manifest.exports !== null
+    ? (manifest.exports as Readonly<Record<string, unknown>>)['.']
+    : undefined;
+  const typesPath = typeof rootExport === 'object' && rootExport !== null
+    && typeof (rootExport as { readonly types?: unknown }).types === 'string'
+    ? (rootExport as { readonly types: string }).types
+    : typeof manifest.types === 'string'
+      ? manifest.types
+      : undefined;
+  if (typesPath === undefined) {
+    return false;
+  }
+  const typesFile = path.join(packageRoot, typesPath);
+  const root = readExisting(typesFile);
+  if (root === undefined) {
+    return false;
+  }
+  const sources = [root];
+  for (const match of root.matchAll(/export\s*\*\s*from\s*['"](\.{1,2}\/[^'"]+)['"]/gu)) {
+    const specifier = match[1] ?? '';
+    const declarations = specifier.replace(/\.(?:js|mjs)$/u, '.d.ts');
+    const reexported = readExisting(
+      path.join(
+        path.dirname(typesFile),
+        declarations.endsWith('.d.ts') ? declarations : `${declarations}.d.ts`,
+      ),
+    );
+    if (reexported === undefined) {
+      // A re-export the check cannot follow: do not refuse on a guess.
+      return false;
+    }
+    sources.push(reexported);
+  }
+  return !sources.some((source) => new RegExp(`\\b${exportName}\\b`, 'u').test(source));
 }
