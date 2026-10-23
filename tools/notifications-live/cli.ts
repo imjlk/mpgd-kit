@@ -165,8 +165,8 @@ function commandEnv(args: readonly string[]): void {
   );
   console.info(
     format === 'dev-vars'
-      ? "Link it as the Worker's .dev.vars (git-ignored) and start the Worker with:\n"
-        + `  ln -sf "${result.outPath}" apps/game-services-worker/.dev.vars\n`
+      ? "Link it as the Worker's .dev.vars (git-ignored; move an existing one aside first) and start the Worker with:\n"
+        + `  ln -s "${result.outPath}" apps/game-services-worker/.dev.vars\n`
         + '  pnpm build:packages && pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787'
       : 'Build the Worker and start it with:\n'
         + '  pnpm build:packages && pnpm --dir apps/game-services-worker build\n'

@@ -134,13 +134,21 @@ Then, in the game:
 
 From the kit's checkout:
 
+If the Worker already has an `apps/game-services-worker/.dev.vars` (from
+the generated game's "Try it locally", for example), move it aside first;
+[Afterwards](#afterwards) puts it back. The link below refuses to replace
+an existing file.
+
 ```sh
 mkdir -p ~/.mpgd && chmod 700 ~/.mpgd
+# moves only a real file, never over an earlier backup (safe to run again)
+[ -f apps/game-services-worker/.dev.vars ] && [ ! -L apps/game-services-worker/.dev.vars ] \
+  && mv -n apps/game-services-worker/.dev.vars apps/game-services-worker/.dev.vars.before-live-test
 pnpm notifications:live env \
   --game ~/mpgd-live/live-push \
   --service-account ~/.mpgd/firebase-live-test.json \
   --out ~/.mpgd/notifications-live.dev.vars
-ln -sf ~/.mpgd/notifications-live.dev.vars apps/game-services-worker/.dev.vars
+ln -s ~/.mpgd/notifications-live.dev.vars apps/game-services-worker/.dev.vars
 ```
 
 It validates the catalog against the deployment, checks that the key is a
@@ -346,10 +354,19 @@ supply:
 
 ## Afterwards
 
-- Stop the Worker (the memory store goes with it), remove the link, and
-  delete the file: `rm apps/game-services-worker/.dev.vars
-  ~/.mpgd/notifications-live.dev.vars`. If you built the Worker while the
-  link was in place, delete `apps/game-services-worker/dist/` too.
+- Stop the Worker (the memory store goes with it), remove the link (only
+  if it is the link), put back a `.dev.vars` you moved aside, and delete
+  the file:
+
+  ```sh
+  [ -L apps/game-services-worker/.dev.vars ] && rm apps/game-services-worker/.dev.vars
+  { [ -e apps/game-services-worker/.dev.vars.before-live-test ] || [ -L apps/game-services-worker/.dev.vars.before-live-test ]; } \
+    && mv -n apps/game-services-worker/.dev.vars.before-live-test apps/game-services-worker/.dev.vars
+  rm ~/.mpgd/notifications-live.dev.vars
+  ```
+
+  If you built the Worker while the link was in place, delete
+  `apps/game-services-worker/dist/` too.
 - Keep the service-account key only as long as you test; delete the key in
   the Google Cloud console when the test project is done.
 - `adb reverse --remove-all` clears the port forwards.
