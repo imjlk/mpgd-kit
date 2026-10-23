@@ -181,10 +181,12 @@ hands the Worker a new `env` object on every request, and the Worker keys
 its notifications service and memory store by that object, so on the Vite
 dev server the memory store keeps nothing from one request to the next
 (the device's registration is gone before the driver's reminder). That is
-a defect of the local flow, reported to D1, not of this kit. The built
+a limitation of D1's local flow (raised for D1), not of this kit. The built
 Worker above keeps one store for the life of the process. (`env --format
 dev-vars` writes the `.dev.vars` form for that flow; `vite build` copies a
-linked `.dev.vars` into `dist/`, so remove the link before building.)
+linked `.dev.vars` or `.env` to `dist/mpgd_game_services/`, so remove the
+link before building. The `wrangler dev --env-file` run above ignores a
+copy there.)
 There is no store dump route;
 the driver's reads (`GET /consent`, `GET /notices`) and the Worker log are
 how you see the state. `wrangler dev` does not run crons on its own; the
@@ -351,7 +353,8 @@ supply:
 
 - Stop `wrangler dev` (the memory store goes with it) and delete the env
   file: `rm ~/.mpgd/notifications-live.env`. If you linked a `.dev.vars`,
-  remove the link and `apps/game-services-worker/dist/`.
+  remove the link and `apps/game-services-worker/dist/`, which may hold a
+  copy.
 - Keep the service-account key only as long as you test; delete the key in
   the Google Cloud console when the test project is done.
 - `adb reverse --remove-all` clears the port forwards.
