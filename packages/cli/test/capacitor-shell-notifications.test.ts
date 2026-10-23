@@ -350,12 +350,20 @@ try {
     assert.equal(kept.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
     // The real package's layout: modules re-export further (client.d.ts from ./operations.js),
     // which the check follows. The built dist with and without development-session.d.ts.
+    // Like the other CLI smokes that read package dists, it needs `pnpm build:packages` first;
+    // CI's prepared jobs extract the built dists before they run, so there it is required.
     const realDist = path.join(kitRoot, 'packages/game-services/dist');
-    assert.ok(
-      existsSync(path.join(realDist, 'index.d.ts')),
-      'build @mpgd/game-services first (pnpm build:packages)',
-    );
-    for (const withDevelopmentSession of [true, false]) {
+    const realDistBuilt = existsSync(path.join(realDist, 'index.d.ts'));
+    if (!realDistBuilt) {
+      assert.ok(
+        process.env.CI !== 'true',
+        'packages/game-services/dist is missing in CI: the prepared job must extract the built dists.',
+      );
+      console.info(
+        'Skipping the built @mpgd/game-services layout check: run `pnpm build:packages` first to include it.',
+      );
+    }
+    for (const withDevelopmentSession of realDistBuilt ? [true, false] : []) {
       const root = createGame();
       roots.push(root);
       installGameServices(root, withDevelopmentSession);
