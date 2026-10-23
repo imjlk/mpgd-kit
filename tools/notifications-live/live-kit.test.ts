@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -38,7 +38,6 @@ await test('the driver calls this machine, or a --staging host with a test label
     'http://127.0.0.1:8787',
     'http://localhost:8787/',
     'http://[::1]:8787',
-    'https://game.localhost',
   ]) {
     assert.equal(assertLiveWorkerOrigin(local).local, true, local);
   }
@@ -55,6 +54,8 @@ await test('the driver calls this machine, or a --staging host with a test label
     ['https://staging.example.com', 'other-staging.example.com', /does not name/u],
     ['http://staging.example.com', 'staging.example.com', /https only/u],
     ['https://10.0.0.5', '10.0.0.5', /no label/u],
+    // *.localhost is loopback only where the resolver says so.
+    ['http://game.localhost:8787', undefined, /--staging/u],
     ['http://127.0.0.1:8787/game-services', undefined, /origin only/u],
     ['http://user:secret@127.0.0.1:8787', undefined, /credentials/u],
     ['ftp://127.0.0.1', undefined, /http or https/u],
@@ -131,7 +132,7 @@ await test('the kit never reads the mise secrets directory', () => {
   assert.throws(() => assertLiveReadablePath(join(home, '.config', 'mise'), home), /does not read/u);
   assert.equal(
     assertLiveReadablePath(join(home, 'keys', 'firebase.json'), home),
-    join(home, 'keys', 'firebase.json'),
+    resolve(home, 'keys', 'firebase.json'),
   );
 });
 
@@ -335,6 +336,7 @@ await test('run arguments: the session, the guard, and numbers are checked, and 
     [['--auth-env', 'LIVE_AUTH', '--session', 's'], /development one/u],
     [['--staging', 'svc-staging.example.com', '--player', 'p'], /pass --worker/u],
     [['--worker', 'http://127.0.0.1:8787', '--staging', 'x-staging.example.com', '--player', 'p'], /needs no --staging/u],
+    [['--worker', 'https://svc-staging.example.com', '--staging', 'svc-staging.example.com', '--player', 'p'], /needs a real session/u],
     [['--player', 'p', '--fire-in', ''], /--fire-in "" is not a whole number/u],
     [['--player', 'p', '--fire-in', '1e3'], /not a whole number/u],
     [['--player', 'p', '--fire-in', '9999'], /at most 3600/u],
@@ -396,9 +398,11 @@ await test('the env file never lands in a repository, through a link, or under a
     mkdirSync(join(other, '.git'), { recursive: true });
     mkdirSync(join(other, 'sub'));
     assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(other, 'sub', 'live.env') }), /inside the git checkout/u);
-    // A link would write the key where it points.
-    symlinkSync(join(repository, 'target.env'), join(outside, 'link.env'));
-    assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(outside, 'link.env') }), /symbolic link/u);
+    // A link would write the key where it points (Windows needs a privilege to make one).
+    if (process.platform !== 'win32') {
+      symlinkSync(join(repository, 'target.env'), join(outside, 'link.env'));
+      assert.throws(() => writeLiveWorkerEnvFile({ ...input, outPath: join(outside, 'link.env') }), /symbolic link/u);
+    }
     // A key file that cannot be read is named by its code, not called "not JSON".
     assert.throws(
       () => writeLiveWorkerEnvFile({ ...input, serviceAccountPath: join(scratch, 'missing.json'), outPath: join(outside, 'a.env') }),
@@ -437,11 +441,10 @@ await test('the mise directory is refused through links and case', () => {
     const home = join(scratch, 'home');
     mkdirSync(join(home, '.config', 'mise'), { recursive: true });
     writeFileSync(join(home, '.config', 'mise', 'config.local.toml'), 'secret = "x"');
-    symlinkSync(join(home, '.config', 'mise', 'config.local.toml'), join(scratch, 'innocent.json'));
-    assert.throws(
-      () => assertLiveReadablePath(join(scratch, 'innocent.json'), home),
-      /does not read/u,
-    );
+    if (process.platform !== 'win32') {
+      symlinkSync(join(home, '.config', 'mise', 'config.local.toml'), join(scratch, 'innocent.json'));
+      assert.throws(() => assertLiveReadablePath(join(scratch, 'innocent.json'), home), /does not read/u);
+    }
     if (process.platform === 'darwin' || process.platform === 'win32') {
       assert.throws(
         () => assertLiveReadablePath(join(home, '.config', 'MISE', 'config.local.toml'), home),
@@ -505,6 +508,9 @@ function scriptedWorker(script: {
             : answer(401, { error: 'UNAUTHORIZED' });
         case 'POST /consent':
           return answer(200, { record: body['record'] });
+        case 'POST /endpoints':
+        case 'POST /endpoints/unregister':
+          return answer(200, {});
         case 'POST /reminders':
           return answer(200, { status: 'scheduled' });
         case 'POST /reminders/cancel':
@@ -620,4 +626,76 @@ await test('an answer that echoes a secret is redacted before it is cut', async 
     assert.ok(!log.includes(secret), `the log shows ${secret}`);
   }
   assert.ok(report.steps.every((step) => !step.detail.includes(token)));
+});
+
+await test('clean-up: a stopped run cancels what it set, a local run without the scheduler too, a staging run keeps both', async () => {
+  const run = async (
+    options: Partial<LiveDriverOptions>,
+    deliver?: LiveDriverDependencies['deliver'],
+    script: Parameters<typeof scriptedWorker>[0] = {},
+  ) => {
+    const worker = scriptedWorker(script);
+    const lines: string[] = [];
+    const report = runNotificationsLiveDriver(
+      { ...scriptedOptions, fireInSeconds: 0, fcmToken: 'fcm-token-for-cleanup-0123', ...options },
+      {
+        fetch: worker.fetch,
+        log: (line) => lines.push(line),
+        now: () => 0,
+        sleep: async () => undefined,
+        ...(deliver === undefined ? {} : { deliver }),
+      },
+    );
+    return { report, calls: worker.calls, lines };
+  };
+  // An unexpected error (here the RPC) still cancels the pending reminder, then propagates.
+  const thrown = await run({ triggerScheduler: false, deliver: { topic: 'friend-challenge' } }, async () => {
+    throw new Error('rpc down');
+  });
+  await assert.rejects(thrown.report, /rpc down/u);
+  assert.ok(thrown.calls.filter((call) => call === 'POST /reminders/cancel').length >= 2, thrown.calls.join(', '));
+  assert.ok(thrown.calls.includes('POST /endpoints/unregister'));
+
+  // A local run without the scheduler leaves nothing behind.
+  const local = await run({ triggerScheduler: false });
+  const localReport = await local.report;
+  assert.ok(localReport.ok, local.lines.join('\n'));
+  assert.deepEqual(localReport.steps.slice(-2).map((step) => `${step.result} ${step.name}`), [
+    'pass cancel-leftover-reminder',
+    'pass unregister-endpoint',
+  ]);
+
+  // A passing staging run keeps the reminder and the endpoint for the deployed cron.
+  const staged = await run({
+    worker: { origin: 'https://svc-staging.example.com', local: false },
+    triggerScheduler: false,
+    authorization: 'Bearer staging-session-token',
+  });
+  const stagedReport = await staged.report;
+  assert.ok(stagedReport.ok);
+  assert.equal(stagedReport.steps.at(-1)?.name, 'keep-endpoint');
+  assert.ok(!staged.calls.includes('POST /endpoints/unregister'));
+  assert.equal(staged.calls.filter((call) => call === 'POST /reminders/cancel').length, 1);
+  assert.ok(!staged.lines.join('\n').includes('staging-session-token'));
+});
+
+await test('a reminder the scheduler did not send fails the step and says why', async () => {
+  const lines: string[] = [];
+  const report = await runNotificationsLiveDriver(
+    { ...scriptedOptions, fireInSeconds: 0 },
+    {
+      // The cancel after the scheduler run still stops something: the send was held.
+      fetch: async (url, init) =>
+        url.endsWith('/reminders/cancel')
+          ? { status: 200, text: async () => JSON.stringify({ cancelled: true }) }
+          : await scriptedWorker().fetch(url, init),
+      log: (line) => lines.push(line),
+      now: () => 0,
+      sleep: async () => undefined,
+    },
+  );
+  assert.equal(report.ok, false);
+  const failed = report.steps.find((step) => step.result === 'fail');
+  assert.equal(failed?.name, 'scheduler');
+  assert.match(failed?.detail ?? '', /held by quiet hours or the daily cap/u);
 });

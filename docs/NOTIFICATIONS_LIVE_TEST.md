@@ -32,7 +32,8 @@ the kit does not rot between live runs.
   never paste them into an issue, a PR, or an agent session.
   `google-services.json` is less sensitive but project-specific: keep the
   test game's repository local, or ignore the file there. The kit reads
-  the key only to write the env file (mode 0600), and refuses to write
+  the key only to write the env file (mode 0600 on macOS and Linux; on
+  Windows the file keeps your profile's permissions), and refuses to write
   that file inside any git checkout or through a symbolic link. It never reads mise's configuration (`~/.config/mise`,
   `$XDG_CONFIG_HOME/mise`, `$MISE_CONFIG_DIR`).
 - **Use a Firebase project for testing**, not the one your released game
@@ -174,7 +175,9 @@ must pass. Until the device has registered, the run then warns at
 `device-permission` and stops at `reminder-cancel` with
 `permission-required`: that is expected here. Without D1 it stops earlier,
 at `session-required` (404). (`--fcm-token-file <file>` registers a device
-token the driver is given instead of the app's own registration.)
+token for the driver's own session instead of relying on the app's
+registration; use it only when you already have the app's FCM token, since
+the starter does not print it.)
 
 ## 4. The emulator
 
@@ -227,16 +230,18 @@ what to do, what to observe, and where.
 | Register | Nothing: the runtime registers after the grant. | Worker log: `POST /game-services/notifications/endpoints 200`. logcat: no `FirebaseMessaging` error. |
 | Consent | Turn the *Today's run reminder* (오늘의 플레이 알림, topic `daily-ready`) on in the settings screen. | Worker log: `POST .../consent 200`. The switch shows the backend record after it reloads. |
 | Driver | `pnpm notifications:live run --player live-1` | `device-permission PASS` (the device's grant), then `topic-preference`, `reminder-cancel`, and `reminder` pass. |
-| Scheduler send | Send the app to the background before the driver's wait ends (5 s; `--fire-in` sets it). | `scheduler PASS`: the scheduler took the reminder. Worker log: no `Notifications: provider.rejected` or `provider.send` line. The push shows in the shade. |
+| Scheduler send | Send the app to the background before the driver's wait ends (5 s; `--fire-in` sets it). | `scheduler PASS`: the reminder fired and nothing held its send. Worker log: no `Notifications: provider.rejected` or `provider.send` line. The push shows in the shade. |
 | Open | Tap the push. | The game opens at the topic's route (`/?entry=continue` for `daily-ready`). Repeat with the app killed (cold start) and in the background (warm start). |
 | Foreground | Run the driver again with the app in front. | The push is shown while the game is open (it needs `presentationOptions`, see the [Firebase setup](FIREBASE_NOTIFICATIONS.md#1-the-plugins)). |
 | Notices (optional) | `pnpm notifications:live run --player live-1 --advertising 1` | `advertising-notice PASS`: the consent result notice is listed, recorded as shown, and gone. This records advertising consent for the test player. |
 
-Each `run` uses new reminder keys, and a run that fails cancels the
-reminders it left pending. If you kept the topic's quiet hours or daily
-cap ([section 1](#1-the-game)), they hold a push back without a failing
-step: `scheduler` passes because the scheduler took the reminder, and a deferred push arrives later
-while `wrangler dev` still runs. Stop the Worker when you are done.
+Each `run` uses new reminder keys. A run that stops, or a local run with
+`--no-scheduler`, cancels the reminders it set and unregisters an endpoint
+it registered, so no push arrives later. If you kept the topic's quiet
+hours or daily cap ([section 1](#1-the-game)), `scheduler` fails when they
+hold the send, and its check cancels the held send. `scheduler PASS` means
+the reminder fired and nothing held its send; whether FCM delivered it is
+in the Worker log and on the device.
 
 `deliverNotification` is a service-binding RPC, not an HTTP route, so the
 driver cannot call it on `wrangler dev`; the dry run covers it in process.
@@ -251,7 +256,7 @@ The scheduler path above uses the same delivery and provider code.
 | `session-required` gets 404 | The session routes are off: the D1 flag is missing (or D1 is not merged yet). |
 | `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`). |
 | `reminder-cancel` or `reminder` answers `permission-required` | No endpoint with a granted permission for this player: the device has not registered, or registered as another player. |
-| `scheduler` fails: still pending | The reminder was not due when the scheduler ran (clock skew), or the Worker restarted and lost its memory store. |
+| `scheduler` fails: did not send | The reminder was not due when the scheduler ran (clock skew), quiet hours or the daily cap held the send, or the send waits to retry a provider failure (the Worker log names it). The check cancelled it. |
 | No push, Worker log shows `Notifications: provider.rejected ... (configuration, <code>)` | FCM or Google refused the send's setup. A `TOKEN_*` code (such as `TOKEN_KEY_UNUSABLE` or `TOKEN_INVALID_GRANT`): the key is malformed, revoked, or deleted. `PERMISSION_DENIED`: the service account lacks the role that may send through FCM. Another code names FCM's own refusal. |
 | No push, nothing logged | Quiet hours or the daily cap ([section 1](#1-the-game)); a token or network failure that is retried later (check that this machine reaches `oauth2.googleapis.com` and `fcm.googleapis.com`); or an emulator image without Play services (`emulator` reports it). |
 | The app cannot reach the Worker | `adb reverse tcp:8787 tcp:8787` is missing, or the game's URL is not `http://127.0.0.1:8787`. |
@@ -271,9 +276,13 @@ explains why).
 
 A deployed test Worker uses the D1 store, its real
 `GAME_SERVICES_NOTIFICATIONS_AUTH` binding, and its own cron; the local
-session flag is refused there (**needs D1**). Give the driver a real
-session's `Authorization` value through an environment variable, read so
-it stays out of your shell history, never on the command line:
+session flag is refused there (**needs D1**). The session binding is the
+game's own identity Worker (the kit does not ship one), so a staging run
+needs a test player's real session from it: the same `Authorization`
+value the game sends. Give it to the driver through an environment
+variable, read so it stays out of your shell history, never on the
+command line (the driver refuses a development session for a deployed
+Worker):
 
 ```sh
 read -rs MPGD_LIVE_AUTHORIZATION && export MPGD_LIVE_AUTHORIZATION   # paste: Bearer ...
@@ -287,7 +296,10 @@ pnpm notifications:live run \
 the variable from a file you delete afterwards.)
 
 The driver redacts the value from its output and skips the scheduler step:
-the deployed cron sends the reminder within a minute of its time.
+the deployed cron sends the reminder within a minute of its time. A
+passing staging run keeps the reminder, and an endpoint it registered with
+`--fcm-token-file`, for that cron; ending the session removes the
+endpoint.
 
 ## Later: Apps in Toss and Devvit
 
@@ -322,9 +334,11 @@ supply:
 - the env file `env` writes, read back the way `wrangler dev --env-file`
   reads it (quotes, `$` signs, the key's line breaks), becomes the Worker's
   env;
-- every driver step against the real Worker handler, with the scheduler run
-  through the same route as on `wrangler dev`, one `deliverNotification`
-  send through the service binding's answer, and the advertising notice;
+- every driver step against the real Worker handler, with the
+  `wrangler dev` scheduled route mapped to the Worker's scheduler
+  (`runScheduledNotifications`, which the Worker's `scheduled` handler
+  calls), one `deliverNotification` send through the service binding's
+  answer, and the advertising notice;
 - the FCM requests carry the device token and the catalog copy intact;
 - the driver's output carries neither the session token, the device token,
   nor the key;

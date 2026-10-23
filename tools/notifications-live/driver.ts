@@ -39,7 +39,7 @@ export const liveTestEnvironmentLabels: readonly string[] = Object.freeze([
 export interface LiveWorkerOrigin {
   /** The origin, without a trailing slash. */
   readonly origin: string;
-  /** Whether it is this machine (`localhost`, `127.0.0.1`, `[::1]`, `*.localhost`). */
+  /** Whether it is this machine (`localhost`, `127.0.0.1`, `[::1]`). */
   readonly local: boolean;
 }
 
@@ -52,8 +52,7 @@ function isLocalHostname(hostname: string): boolean {
   const host = hostname.toLowerCase();
   return host === 'localhost'
     || host === '127.0.0.1'
-    || host === '[::1]'
-    || host.endsWith('.localhost');
+    || host === '[::1]';
 }
 
 /**
@@ -350,15 +349,16 @@ export function redactLiveSecrets(text: string, secrets: readonly string[]): str
  * 9. With `deliver` and `dependencies.deliver`: one `deliverNotification` send.
  * 10. `GET /notices`; with `advertisingTextVersion`, advertising consent is
  *     recorded, its result notice listed, recorded as shown, and gone.
- * 11. Clean-up, which only warns: after a failure, the reminders still
- *     pending are cancelled; an endpoint the driver registered is
- *     unregistered.
+ * 11. Clean-up, which only warns: unless a passing run leaves a reminder
+ *     for a deployed Worker's cron, the reminders still pending are
+ *     cancelled and an endpoint the driver registered is unregistered.
  */
 export async function runNotificationsLiveDriver(
   options: LiveDriverOptions,
   dependencies: LiveDriverDependencies,
 ): Promise<LiveDriverReport> {
-  const secrets = [options.authorization, options.authorization.replace(/^Bearer\s+/iu, '')];
+  // The header value, and its credential without the scheme (`Bearer`, or any other).
+  const secrets = [options.authorization, options.authorization.replace(/^\S+\s+/u, '')];
   if (options.fcmToken !== undefined) {
     secrets.push(options.fcmToken);
   }
@@ -474,8 +474,10 @@ export async function runNotificationsLiveDriver(
   print(`Worker ${options.worker.origin} (${options.worker.local ? 'local' : 'staging'}), ${options.sessionLabel}, `
     + `target ${options.target}, topic ${options.topic}, run ${options.runId}`);
   let registered: string | undefined;
-  /** Reminders this run set that are still pending; cancelled if the run fails. */
+  /** Reminders this run may have set and not seen sent or cancelled. */
   const pending = new Set<string>();
+  /** Set as the last step of a run that was not stopped. */
+  let completed = false;
   try {
     // 1. The registry.
     const providers = await call('GET', '/providers', undefined, false);
@@ -571,14 +573,14 @@ export async function runNotificationsLiveDriver(
 
     // 6. Set and cancel by key.
     const spareKey = `${reminderKey}-cancel`;
+    // Tracked before the request: an answer lost in transit may still have set it.
+    pending.add(spareKey);
     const spare = await call('POST', '/reminders', {
       reminder: { key: spareKey, topic: options.topic, fireAt: fireAt(spareReminderSeconds) },
     });
     expectStatus('reminder-cancel', spare, 200);
     const spareStatus = spare.body?.['status'];
-    if (spareStatus === 'scheduled' || spareStatus === 'replaced') {
-      pending.add(spareKey);
-    } else {
+    if (spareStatus !== 'scheduled' && spareStatus !== 'replaced') {
       fail(
         'reminder-cancel',
         `a reminder answered ${JSON.stringify(spareStatus)}: ${reminderSetHints[String(spareStatus)] ?? 'see the RFC "Reminders".'}`,
@@ -594,14 +596,13 @@ export async function runNotificationsLiveDriver(
 
     // 7. The test reminder.
     const due = fireAt(options.fireInSeconds);
+    pending.add(reminderKey);
     const reminder = await call('POST', '/reminders', {
       reminder: { key: reminderKey, topic: options.topic, fireAt: due },
     });
     expectStatus('reminder', reminder, 200);
     const reminderStatus = reminder.body?.['status'];
-    if (reminderStatus === 'scheduled' || reminderStatus === 'replaced') {
-      pending.add(reminderKey);
-    } else {
+    if (reminderStatus !== 'scheduled' && reminderStatus !== 'replaced') {
       fail(
         'reminder',
         `answered ${JSON.stringify(reminderStatus)}: ${reminderSetHints[String(reminderStatus)] ?? 'see the RFC "Reminders".'}`,
@@ -636,20 +637,26 @@ export async function runNotificationsLiveDriver(
           `the scheduled route answered ${scheduled.status}: is this wrangler dev 4.x?`,
         );
       }
+      // A cancel after the scheduler run answers false once the reminder
+      // fired and its send was not held back; true means it stopped what was
+      // left: a reminder not yet due, or a send held (quiet hours, the daily
+      // cap) or waiting to retry a provider failure.
       const taken = await call('POST', '/reminders/cancel', { key: reminderKey });
       expectStatus('scheduler', taken, 200);
       if (taken.body?.['cancelled'] !== false) {
+        pending.delete(reminderKey);
         fail(
           'scheduler',
-          'the reminder is still pending after the scheduler ran: was it due? Read the Worker log.',
+          'the scheduler did not send the reminder: it was not yet due, held by quiet hours or the daily cap, '
+            + 'or waiting to retry a provider failure (read the Worker log). This check cancelled it.',
         );
       }
       pending.delete(reminderKey);
-      // Taken is not delivered: a provider refusal shows only in the Worker log.
+      // Sent is not delivered: a provider refusal shows only in the Worker log.
       record(
         'scheduler',
         'pass',
-        'the scheduler took the reminder; confirm the send in the Worker log and on the device.',
+        'the scheduler fired the reminder and nothing held its send; confirm it in the Worker log and on the device.',
       );
     }
 
@@ -740,16 +747,24 @@ export async function runNotificationsLiveDriver(
         );
       }
     }
+    completed = true;
   } catch (error) {
     if (!(error instanceof StepFailed)) {
       throw error;
     }
   } finally {
-    // 11. Clean-up never fails a run: each step warns at worst. A failed run
-    // cancels the reminders it left pending, so no push arrives later; a
-    // passing run leaves only a reminder the deployed cron is meant to send.
-    const failed = steps.some((step) => step.result === 'fail');
-    const cleanUp = async (name: string, route: string, body: unknown, done: (answer: Answer) => boolean) => {
+    // 11. Clean-up never fails a run: each step warns at worst. A run that
+    // stopped (a failed step or an unexpected error) or a local run without
+    // the scheduler cancels the reminders it may have left and unregisters
+    // its endpoint, so no push arrives later. A passing run on a deployed
+    // Worker keeps both: its cron is meant to send the reminder.
+    const keepForCron = completed && !options.worker.local;
+    const cleanUp = async (
+      name: string,
+      route: string,
+      body: unknown,
+      done: (answer: Answer) => boolean,
+    ) => {
       try {
         const answer = await transport('POST', route, body);
         record(name, done(answer) ? 'pass' : 'warn', `answered ${answer.status}`);
@@ -760,19 +775,27 @@ export async function runNotificationsLiveDriver(
         record(name, 'warn', error.message);
       }
     };
-    if (failed) {
+    if (keepForCron) {
+      if (registered !== undefined) {
+        record(
+          'keep-endpoint',
+          'warn',
+          'the endpoint this run registered stays, so the deployed cron can send; end the session to remove it.',
+        );
+      }
+    } else {
       for (const key of pending) {
+        await cleanUp('cancel-leftover-reminder', '/reminders/cancel', { key }, (answer) =>
+          answer.status === 200);
+      }
+      if (registered !== undefined) {
         await cleanUp(
-          'cancel-leftover-reminder',
-          '/reminders/cancel',
-          { key },
+          'unregister-endpoint',
+          '/endpoints/unregister',
+          { provider: registered },
           (answer) => answer.status === 200,
         );
       }
-    }
-    if (registered !== undefined) {
-      await cleanUp('unregister-endpoint', '/endpoints/unregister', { provider: registered }, (answer) =>
-        answer.status === 200);
     }
   }
   const ok = steps.every((step) => step.result !== 'fail');

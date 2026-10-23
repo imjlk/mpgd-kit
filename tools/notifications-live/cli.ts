@@ -66,10 +66,22 @@ function resolveKitRoot(): string {
   throw new Error(`Cannot locate the kit checkout from ${candidates.join(', ')}.`);
 }
 
+/** adb from ANDROID_HOME, ANDROID_SDK_ROOT, or Android Studio's default SDK place, else from PATH. */
 function androidAdb(): string {
-  const home = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT ?? join(homedir(), 'Library/Android/sdk');
-  const bundled = join(home, 'platform-tools', process.platform === 'win32' ? 'adb.exe' : 'adb');
-  return existsSync(bundled) ? bundled : 'adb';
+  const executable = process.platform === 'win32' ? 'adb.exe' : 'adb';
+  const homes = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    join(homedir(), 'Library', 'Android', 'sdk'),
+    join(homedir(), 'Android', 'Sdk'),
+    ...(process.env.LOCALAPPDATA === undefined ? [] : [join(process.env.LOCALAPPDATA, 'Android', 'Sdk')]),
+  ];
+  for (const home of homes) {
+    if (home !== undefined && home !== '' && existsSync(join(home, 'platform-tools', executable))) {
+      return join(home, 'platform-tools', executable);
+    }
+  }
+  return 'adb';
 }
 
 function missing(flag: string): never {
@@ -145,7 +157,7 @@ function commandEnv(args: readonly string[]): void {
   console.info(
     'Build the Worker and start it with:\n'
       + '  pnpm build:packages && pnpm --dir apps/game-services-worker build\n'
-      + `  pnpm --dir apps/game-services-worker exec wrangler dev -c ${liveWorkerBuildConfig} --env-file ${result.outPath} `
+      + `  pnpm --dir apps/game-services-worker exec wrangler dev -c ${liveWorkerBuildConfig} --env-file "${result.outPath}" `
       + '--ip 127.0.0.1 --port 8787',
   );
   console.info('Delete the file after the test; it holds the service-account key.');
@@ -167,7 +179,8 @@ function commandEmulator(args: readonly string[]): number {
       reverse: values.reverse,
     },
     (adbArgs) => {
-      const result = spawnSync(adb, [...adbArgs], { encoding: 'utf8', timeout: 30_000 });
+      // dumpsys package can pass the 1 MiB default buffer.
+      const result = spawnSync(adb, [...adbArgs], { encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
       return {
         status: result.error === undefined ? (result.status ?? 1) : 1,
         stdout: result.stdout ?? '',
@@ -225,6 +238,11 @@ export function parseRunArguments(
   if (values.staging !== undefined && worker.local) {
     throw new LiveDriverUsageError(
       '--staging is for a deployed Worker; a local --worker needs no --staging.',
+    );
+  }
+  if (!worker.local && values['auth-env'] === undefined) {
+    throw new LiveDriverUsageError(
+      'A deployed Worker needs a real session: pass --auth-env; development sessions are local only.',
     );
   }
   let authorization: string;
@@ -295,7 +313,10 @@ async function commandRun(args: readonly string[]): Promise<number> {
   const report = await runNotificationsLiveDriver(options, {
     // A redirect is refused: the URL guard checked this origin, not another.
     fetch: async (url, init) => {
-      const response = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+      // The scheduled route answers when the cron run ends, which may mint
+      // an OAuth token and send; its wall budget is 20 s by default.
+      const timeoutMs = new URL(url).pathname.startsWith('/cdn-cgi/') ? 60_000 : 15_000;
+      const response = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
       if (response.status >= 300 && response.status < 400) {
         throw new Error(`the Worker answered a redirect (${response.status}); the driver does not follow it`);
       }

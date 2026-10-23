@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   assertLiveWorkerOrigin,
@@ -85,6 +85,26 @@ function readEnvFileAsWrangler(text: string): Record<string, string> {
     expanded[key] = result.replace(/\\\$/gu, '$');
   }
   return expanded;
+}
+
+/** Whether a directory is inside a git checkout, where the env file refuses to go. */
+function insideGitCheckout(directory: string): boolean {
+  for (let current = directory; ; current = dirname(current)) {
+    if (existsSync(join(current, '.git'))) {
+      return true;
+    }
+    if (dirname(current) === current) {
+      return false;
+    }
+  }
+}
+
+if (insideGitCheckout(tmpdir())) {
+  // CI's temporary directory never is; a developer's TMPDIR under a dotfiles repository can be.
+  console.warn(
+    'notifications live driver dry run skipped: the temporary directory is inside a git checkout',
+  );
+  process.exit(0);
 }
 
 const root = kitRoot();
@@ -354,6 +374,8 @@ try {
     'warn device-permission',
     'pass topic-preference',
     'fail reminder-cancel',
+    // Its set may have landed; the stopped run cancels it.
+    'pass cancel-leftover-reminder',
   ]);
   assert.match(lines.join('\n'), /permission-required/u);
 
