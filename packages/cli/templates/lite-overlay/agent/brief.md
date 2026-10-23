@@ -11,7 +11,7 @@ Read `AGENTS.md`, the agent manifest, and the `use-mpgd-kit` router before editi
 - Keep recovery above renderer lifetimes; reconcile existing operations on startup and resume without opening SDK UI.
 - Rewarded v2 needs an application-owned durable encrypted journal. An in-memory store is not recovery evidence.
 - Reserve safe-area geometry once and preserve feed scrolling and browser touch gestures.
-- Set the server session with `setStarterServerSession` (a guest backend through `createGuestServerSession`). `VITE_MPGD_DEV_NOTIFICATION_SESSION` is a local-only development session for notifications (`src/platform/developmentServerSession.ts`); it never reaches a build, commerce, or a deployed Worker.
+- Set the server session with `setStarterServerSession` in `src/main.ts` before `bootstrap()` (a guest backend through `createGuestServerSession`). In a game created with `--providers notifications`, `VITE_MPGD_DEV_NOTIFICATION_SESSION` on the Vite dev server in the `development` mode is a local-only development session for notifications (`src/platform/developmentServerSession.ts`); it never reaches a build, commerce, or a deployed Worker.
 
 Run `pnpm dev`, `pnpm check`, `pnpm build`, and `pnpm accept`.
 Devvit inline and expanded entries both use the lite renderer. Keep optional engines behind explicit dynamic import boundaries and verify the inline budget.

@@ -54,9 +54,10 @@ and reconcile existing operations on startup and resume without opening SDK UI.
 Set the game's server-backed session with `setStarterServerSession`
 (`src/platform/serverSession.ts`) before `bootstrap()`; with a guest backend use
 `createGuestServerSession(coordinator)`, whose `sessionId` is the stable
-session-family id. For local notifications work only,
-`VITE_MPGD_DEV_NOTIFICATION_SESSION` on the Vite dev server signs in with an
-unauthenticated development session (`src/platform/developmentServerSession.ts`)
+session-family id. For local notifications work only (a game created with
+`--providers notifications`), `VITE_MPGD_DEV_NOTIFICATION_SESSION` on the Vite
+dev server in the `development` mode signs in with an unauthenticated
+development session (`src/platform/developmentServerSession.ts`)
 against a local Worker run with `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`;
 it never reaches a build, the commerce client, or a deployed Worker.
 
