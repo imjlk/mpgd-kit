@@ -21,8 +21,9 @@ import { assertLiveReadablePath, writeLiveWorkerEnvFile } from './worker-env';
  * `pnpm notifications:live <command>`: the notifications v2 live-test kit
  * (docs/NOTIFICATIONS_LIVE_TEST.md).
  *
- * - `env`: writes the env file for `wrangler dev --env-file`, outside the
- *   repository, from the game's catalog and the Firebase key file.
+ * - `env`: writes the Worker's variables file (`.dev.vars` form by default,
+ *   or `wrangler dev --env-file` form), outside the repository, from the
+ *   game's catalog and the Firebase key file.
  * - `emulator`: checks the Android emulator, and with `--reverse` forwards
  *   the Worker port to it.
  * - `run`: the server half against a local Worker (or a `--staging` one).
@@ -165,9 +166,9 @@ function commandEnv(args: readonly string[]): void {
     format === 'dev-vars'
       ? "Link it as the Worker's .dev.vars (git-ignored) and start the Worker with:\n"
         + `  ln -sf "${result.outPath}" apps/game-services-worker/.dev.vars\n`
-        + '  pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787'
+        + '  pnpm build:packages && pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787'
       : 'Build the Worker and start it with:\n'
-        + '  pnpm --dir apps/game-services-worker build\n'
+        + '  pnpm build:packages && pnpm --dir apps/game-services-worker build\n'
         + `  pnpm --dir apps/game-services-worker exec wrangler dev -c ${liveWorkerBuildConfig} --env-file "${result.outPath}" `
         + '--ip 127.0.0.1 --port 8787',
   );

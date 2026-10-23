@@ -11,6 +11,7 @@
  */
 
 import {
+  developmentNotificationSessionPrefix,
   formatDevelopmentNotificationSessionAuthorization,
   isDevelopmentNotificationSessionId,
   type DevelopmentNotificationSession,
@@ -242,6 +243,17 @@ class StepFailed extends Error {}
 
 /** A request that got no readable answer. */
 class TransportFailed extends Error {}
+
+/** What a 401 on the session step most likely means, by the kind of session sent. */
+function sessionRefusedHint(status: number, authorization: string): string | undefined {
+  if (status !== 401) {
+    return undefined;
+  }
+  return authorization.startsWith(developmentNotificationSessionPrefix)
+    ? 'the Worker did not accept this development session: it needs the flag, and it is accepted only on a '
+      + 'local host (localhost, 127.0.0.1, [::1], *.localhost, or 10.0.2.2).'
+    : 'the Worker did not accept this session: has it expired, or is it for another identity service?';
+}
 
 /** What a `providers` failure most likely means. */
 function providersHint(status: number): string | undefined {
@@ -502,10 +514,7 @@ export async function runNotificationsLiveDriver(
       'session',
       consent,
       200,
-      consent.status === 401
-        ? 'the Worker did not accept this session (a development session is accepted only on a local host: '
-          + 'localhost, 127.0.0.1, [::1], *.localhost, or 10.0.2.2).'
-        : undefined,
+      sessionRefusedHint(consent.status, options.authorization),
     );
     const records = listField(consent, 'records');
     if (records === undefined) {

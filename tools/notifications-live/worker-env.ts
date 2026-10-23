@@ -23,8 +23,9 @@ import {
 import { LiveDriverUsageError } from './driver';
 
 /**
- * Writes the env file a local `wrangler dev --env-file <file>` run of the
- * game-services Worker reads for the live test: the memory store, the local
+ * Writes the variables file a local game-services Worker reads for the live
+ * test (a `.dev.vars` file for `pnpm --dir apps/game-services-worker dev` by
+ * default, or a `wrangler dev --env-file` file): the memory store, the local
  * development session flag, the game's topic catalog and deployment
  * settings, and the Firebase service-account key. The key is read from the
  * maintainer's own file and written only to a file outside the repository,
@@ -85,7 +86,9 @@ export function formatLiveEnvValue(
   if (value.endsWith('\\')) {
     throw new LiveDriverUsageError('An env file value must not end with a backslash.');
   }
-  let escaped = options.format === 'dev-vars' ? value : value.replaceAll('$', '\\$');
+  let escaped = (options.format ?? 'dev-vars') === 'dev-vars'
+    ? value
+    : value.replaceAll('$', '\\$');
   if (escaped.includes("'")) {
     if (options.json !== true) {
       throw new LiveDriverUsageError("An env file value must not hold a '.");

@@ -116,8 +116,12 @@ await test('env file values survive wrangler dotenv parsing and expansion', () =
   const quoted = formatLiveEnvValue(copy, { json: true });
   assert.equal(quoted, String.raw`'{"copy":"Today\u0027s run, ` + '`quoted`' + `"}'`);
   assert.deepEqual(JSON.parse(quoted.slice(1, -1)), { copy: "Today's run, `quoted`" });
-  assert.equal(formatLiveEnvValue('cost $5 and ${HOME}'), String.raw`'cost \$5 and \${HOME}'`);
-  // A .dev.vars file is not expanded, so `$` stays as it is.
+  assert.equal(
+    formatLiveEnvValue('cost $5 and ${HOME}', { format: 'env-file' }),
+    String.raw`'cost \$5 and \${HOME}'`,
+  );
+  // A .dev.vars file (the default) is not expanded, so `$` stays as it is.
+  assert.equal(formatLiveEnvValue('cost $5 and ${HOME}'), `'cost $5 and \${HOME}'`);
   assert.equal(formatLiveEnvValue('cost $5 and ${HOME}', { format: 'dev-vars' }), `'cost $5 and \${HOME}'`);
   assert.throws(() => formatLiveEnvValue("it's"), LiveDriverUsageError);
   assert.throws(() => formatLiveEnvValue('ends with \\'), LiveDriverUsageError);
@@ -431,6 +435,14 @@ await test('the env file never lands in a repository, through a link, or under a
     for (const line of readFileSync(out, 'utf8').split('\n').filter((entry) => entry.length > 0 && !entry.startsWith('#'))) {
       assert.match(line, /^[A-Z_]+='[^'\n]*'$/u);
     }
+    // Without --format it is the .dev.vars form, which keeps `$` as it is.
+    assert.match(readFileSync(out, 'utf8').split('\n')[0] ?? '', /\(dev-vars\)/u);
+    const withDollar = join(scratch, 'dollar-topics.json');
+    writeFileSync(withDollar, readFileSync(catalog, 'utf8').replace('"body": "', '"body": "$5 $HOME '));
+    const dollar = join(outside, 'dollar.env');
+    writeLiveWorkerEnvFile({ ...input, catalogPath: withDollar, outPath: dollar });
+    assert.match(readFileSync(dollar, 'utf8'), /\$5 \$HOME/u);
+    assert.doesNotMatch(readFileSync(dollar, 'utf8'), /\\\$/u);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
