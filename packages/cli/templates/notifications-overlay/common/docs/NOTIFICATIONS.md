@@ -166,7 +166,8 @@ is bound, and takes development sessions only on a local host (`localhost`,
 emulator uses for your machine). That check reads the request's host, so
 it protects a deployed Worker, not your network: keep the local Worker on
 loopback, its default. Calling `setStarterServerSession`, even with `undefined`, turns it
-off; the first call after the game used it warns, since the commerce client
-and the notifications backend keep the session they first read.
-The commerce client sends the same header; a local Worker with
-`GAME_SERVICES_INGRESS_AUTH` bound refuses it.
+off; the first call after the game used it warns, since the notifications
+backend keeps the session it first read.
+The development session is for the notifications backend only: the
+commerce client keeps the session the game set with `setStarterServerSession`
+(or none), so its requests never carry a development header.

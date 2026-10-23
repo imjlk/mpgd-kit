@@ -43,11 +43,13 @@ export function resolveStarterDevelopmentServerSession(env: {
 /**
  * What `serverSession.ts` hands out, kept apart from `import.meta.env` so it
  * can be tested: the game's own session once it called `set` (even with
- * `undefined`), else the development session, read once. `once` marks a
- * reader that keeps what it reads (the commerce client). A `set` that
- * changes the session after a reader kept the old one warns: after the
- * commerce client read it, or after the development session was handed out
- * (the commerce client and a notifications backend keep it).
+ * `undefined`), else the development session, read once. `once` marks the
+ * reader that keeps what it reads, the commerce client, which only ever
+ * gets the game's own session: the development session is for the
+ * notifications Worker, and a commerce backend with ingress authentication
+ * would refuse its header. A `set` that changes the session after a reader
+ * kept the old one warns: after the commerce client read it, or after the
+ * development session was handed out (a notifications backend keeps it).
  */
 export function createStarterServerSessionSlot<Session extends object>(input: {
   /** The development session; called at most once. */
@@ -67,7 +69,8 @@ export function createStarterServerSessionSlot<Session extends object>(input: {
       if (options.once === true) {
         readOnce = true;
       }
-      if (setByGame) {
+      // The commerce client never gets the development session.
+      if (setByGame || options.once === true) {
         return session;
       }
       if (development === undefined) {
@@ -81,14 +84,14 @@ export function createStarterServerSessionSlot<Session extends object>(input: {
     },
     set(next) {
       if (developmentHandedOut && !setByGame) {
-        // Even `undefined`: the readers that kept the development session keep sending its header.
+        // Even `undefined`: a notifications backend that kept the development session keeps sending its header.
         input.warn(
           '[game-services] setStarterServerSession ran after the development session '
-            + '(VITE_MPGD_DEV_NOTIFICATION_SESSION) was in use; the commerce client and a '
-            + 'notifications backend created already keep it. Unset the variable, or call '
-            + 'setStarterServerSession before bootstrap().',
+            + '(VITE_MPGD_DEV_NOTIFICATION_SESSION) was in use; a notifications backend created '
+            + 'already keeps it. Unset the variable, or call setStarterServerSession before bootstrap().',
         );
-      } else if (readOnce && next !== undefined && next !== session) {
+      }
+      if (readOnce && next !== undefined && next !== session) {
         input.warn(
           '[game-services] setStarterServerSession ran after the commerce client was created; '
             + "it does not send this session's header. Call it before bootstrap().",

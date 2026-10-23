@@ -64,8 +64,9 @@ const slot = createStarterServerSessionSlot<StarterServerSession>({
 /**
  * The game's server-backed session; `undefined` until the game sets one with
  * `setStarterServerSession`, unless a development session is on (see
- * `developmentServerSession.ts`). `once` marks a reader that keeps what it
- * reads (the commerce client), so a later change warns.
+ * `developmentServerSession.ts`). `once` marks the reader that keeps what
+ * it reads, the commerce client, so a later change warns; it gets only the
+ * game's own session, never the development one.
  */
 export function resolveStarterServerSession(
   options: { readonly once?: boolean } = {},

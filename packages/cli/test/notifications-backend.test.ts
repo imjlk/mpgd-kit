@@ -301,11 +301,26 @@ try {
     // Clearing the session after the development one was handed out warns too: its readers keep it.
     {
       const { slot, warnings } = slotWith(dev);
-      assert.equal(slot.resolve({ once: true }), dev);
+      assert.equal(slot.resolve(), dev);
       slot.set(undefined);
       assert.equal(slot.resolve(), undefined);
       assert.equal(warnings.length, 1);
       assert.match(warnings[0] ?? '', /after the development session/u);
+    }
+    // The commerce client (the `once` reader) never gets the development session: it keeps the
+    // game's own session, or none, while notifications get the development one.
+    {
+      const { slot, warnings } = slotWith(dev);
+      assert.equal(slot.resolve({ once: true }), undefined);
+      assert.equal(slot.resolve(), dev);
+      assert.equal(slot.resolve({ once: true }), undefined);
+      // The game's session, once set, is everyone's; both readers kept something else, so both warn.
+      slot.set(own);
+      assert.equal(slot.resolve({ once: true }), own);
+      assert.equal(slot.resolve(), own);
+      assert.equal(warnings.length, 2);
+      assert.match(warnings[0] ?? '', /after the development session/u);
+      assert.match(warnings[1] ?? '', /after the commerce client was created/u);
     }
     // A game that sets its session first never sees the development one, or a warning.
     {
@@ -329,6 +344,14 @@ try {
     assert.match(source, /import\.meta\.env\.DEV\s*\?\s*resolveStarterDevelopmentServerSession\(/u);
     assert.match(source, /mode: import\.meta\.env\.MODE,/u);
     assert.match(source, /value: import\.meta\.env\.VITE_MPGD_DEV_NOTIFICATION_SESSION,/u);
+    // The commerce client reads as the `once` reader, which never gets the development session.
+    const commerce = readFileSync(
+      fileURLToPath(
+        new URL('../templates/phaser-game/src/platform/gameServices.ts', import.meta.url),
+      ),
+      'utf8',
+    );
+    assert.match(commerce, /resolveStarterServerSession\(\{ once: true \}\)/u);
   }
 
   // The guest-session adapter is the starter's server session as it stands.
