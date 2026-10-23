@@ -537,20 +537,26 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
  * `notificationsCapacitorTemplateSupportImporters` is written only together
  * with its importer.
  */
-export const notificationsCapacitorTemplateSupportFiles: readonly string[] = Object.freeze([
+export const notificationsCapacitorTemplateSupportFiles = Object.freeze([
   'src/platform/serverSession.ts',
   'src/platform/developmentServerSession.ts',
-]);
+] as const);
 
 /**
  * Template support files only one other support file imports: the importer,
  * and the warning for a game that keeps its own importer without naming the
  * file (an earlier `serverSession.ts`). Such a game would never import the
  * file, and its `@mpgd/game-services` may predate what the file imports, so
- * the file is not written for it. An importer that names it gets it back.
+ * the file is not written for it. An importer that imports it gets it back.
  */
 export const notificationsCapacitorTemplateSupportImporters: Readonly<
-  Record<string, { readonly importer: string; readonly warning: string }>
+  Partial<Record<
+    (typeof notificationsCapacitorTemplateSupportFiles)[number],
+    {
+      readonly importer: (typeof notificationsCapacitorTemplateSupportFiles)[number];
+      readonly warning: string;
+    }
+  >>
 > = Object.freeze({
   'src/platform/developmentServerSession.ts': {
     importer: 'src/platform/serverSession.ts',

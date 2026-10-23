@@ -162,7 +162,7 @@ so it authenticates nothing: the session exists only on the Vite dev server
 (`import.meta.env.DEV`) in the `development` mode, and the Worker refuses
 the flag with its D1 store and ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
 is bound. Calling `setStarterServerSession`, even with `undefined`, turns it
-off; a call after the game used it warns, since the commerce client and the
-notifications backend keep the session they first read.
+off; the first call after the game used it warns, since the commerce client
+and the notifications backend keep the session they first read.
 The commerce client sends the same header; a local Worker with
 `GAME_SERVICES_INGRESS_AUTH` bound refuses it.

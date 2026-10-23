@@ -252,7 +252,9 @@ try {
   {
     const root = createGame();
     roots.push(root);
-    const ownSession = "// the game's own session module\nexport {};\n";
+    // It names the module in a comment only, which is not an import.
+    const ownSession =
+      "// the game's own session module; see developmentServerSession.ts\nexport {};\n";
     mkdirSync(path.join(root, 'src/platform'), { recursive: true });
     writeFileSync(path.join(root, 'src/platform/serverSession.ts'), ownSession);
     const plan = planCapacitorShellStarter(input(root, ['notifications']));

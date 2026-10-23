@@ -296,6 +296,16 @@ try {
         undefined,
         'a cleared session never falls back to the development one',
       );
+      assert.equal(warnings.length, 1, 'only the first call after the hand-out warns');
+    }
+    // Clearing the session after the development one was handed out warns too: its readers keep it.
+    {
+      const { slot, warnings } = slotWith(dev);
+      assert.equal(slot.resolve({ once: true }), dev);
+      slot.set(undefined);
+      assert.equal(slot.resolve(), undefined);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0] ?? '', /after the development session/u);
     }
     // A game that sets its session first never sees the development one, or a warning.
     {

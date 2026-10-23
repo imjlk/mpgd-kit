@@ -3345,12 +3345,12 @@ function planNotificationsProvider(input: {
           continue;
         }
         const imported = notificationsCapacitorTemplateSupportImporters[file];
-        const importer = imported === undefined
+        const importerSource = imported === undefined
           ? undefined
           : readExisting(safeDestination(gameRoot, imported.importer));
-        // A game whose own importer never names the module would never import it.
-        if (imported !== undefined && importer !== undefined
-          && !importer.includes(path.posix.basename(file, '.ts'))) {
+        // A game whose own importer does not import the module would never use it.
+        if (imported !== undefined && importerSource !== undefined
+          && !importsRelativeModule(importerSource, path.posix.basename(file, '.ts'))) {
           warnings.push(imported.warning);
           continue;
         }
@@ -3492,4 +3492,13 @@ function requireString(value: unknown, label: string): string {
 
 function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/** Whether `source` has an import or export from `./<name>` (with or without `.js`/`.ts`). */
+function importsRelativeModule(source: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(
+    `^\\s*(?:import|export)\\b[^;]*?\\bfrom\\s*['"]\\./${escaped}(?:\\.(?:js|ts))?['"]`,
+    'mu',
+  ).test(source);
 }

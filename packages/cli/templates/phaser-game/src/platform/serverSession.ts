@@ -80,8 +80,8 @@ export function resolveStarterServerSession(
  * `current()` may answer `undefined` until the player signs in. A session
  * set after the commerce client was created does not reach that client,
  * which this warns about. Any call, `undefined` included, turns the
- * development session off; one that sets another session after the
- * development session was handed out warns (`undefined` does not).
+ * development session off; the first call after the development session
+ * was handed out warns, `undefined` included.
  */
 export function setStarterServerSession(session: StarterServerSession | undefined): void {
   slot.set(session);

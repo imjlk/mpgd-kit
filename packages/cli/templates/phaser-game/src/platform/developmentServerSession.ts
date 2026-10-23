@@ -80,20 +80,19 @@ export function createStarterServerSessionSlot<Session extends object>(input: {
       return development;
     },
     set(next) {
-      if (next !== undefined && next !== session) {
-        if (developmentHandedOut) {
-          input.warn(
-            '[game-services] setStarterServerSession ran after the development session '
-              + '(VITE_MPGD_DEV_NOTIFICATION_SESSION) was in use; the commerce client and a '
-              + 'notifications backend created already keep it. Unset the variable, or call '
-              + 'setStarterServerSession before bootstrap().',
-          );
-        } else if (readOnce) {
-          input.warn(
-            '[game-services] setStarterServerSession ran after the commerce client was created; '
-              + "it does not send this session's header. Call it before bootstrap().",
-          );
-        }
+      if (developmentHandedOut && !setByGame) {
+        // Even `undefined`: the readers that kept the development session keep sending its header.
+        input.warn(
+          '[game-services] setStarterServerSession ran after the development session '
+            + '(VITE_MPGD_DEV_NOTIFICATION_SESSION) was in use; the commerce client and a '
+            + 'notifications backend created already keep it. Unset the variable, or call '
+            + 'setStarterServerSession before bootstrap().',
+        );
+      } else if (readOnce && next !== undefined && next !== session) {
+        input.warn(
+          '[game-services] setStarterServerSession ran after the commerce client was created; '
+            + "it does not send this session's header. Call it before bootstrap().",
+        );
       }
       session = next;
       setByGame = true;
