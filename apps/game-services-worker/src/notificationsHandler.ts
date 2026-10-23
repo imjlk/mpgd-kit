@@ -172,6 +172,8 @@ const statesByEnv = new WeakMap<object, NotificationsConfigurationState>();
 const statesByConfiguration = new Map<string, NotificationsConfigurationState>();
 /** Configurations kept per isolate; a deployment has one, a test run a few dozen. */
 const maxNotificationConfigurations = 64;
+/** How deep a JSON var is keyed by value; deeper (or a cycle) keeps the state per env object. */
+const maxConfigurationKeyDepth = 32;
 const configurationBindingIds = new WeakMap<object, number>();
 let nextConfigurationBindingId = 0;
 
@@ -186,8 +188,9 @@ let nextConfigurationBindingId = 0;
  * (`DB`, a queue, a service, an mTLS certificate), and any value inside a
  * JSON var that is not plain data. A runtime that also re-creates its
  * binding objects per request therefore still gets one state per request.
- * `undefined` when the env cannot be read as data (a throwing getter, a
- * cycle, a bigint); the caller then keeps the state per env object.
+ * `undefined` when the env cannot be read as data (a throwing getter, or a
+ * JSON var nested past `maxConfigurationKeyDepth`, which a cycle is); the
+ * caller then keeps the state per env object.
  */
 function notificationsConfigurationKey(env: GameServicesNotificationsEnv): string | undefined {
   const record = env as Readonly<Record<string, unknown>>;
@@ -201,7 +204,7 @@ function notificationsConfigurationKey(env: GameServicesNotificationsEnv): strin
     return { binding: id };
   };
   const byValue = (value: unknown, depth: number): unknown => {
-    if (depth > 32) {
+    if (depth > maxConfigurationKeyDepth) {
       throw new Error('Too deep to key by value.');
     }
     if (value === undefined) {

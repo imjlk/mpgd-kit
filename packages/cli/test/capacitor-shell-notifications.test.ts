@@ -391,6 +391,10 @@ try {
       { 'index.d.ts': "export * from './runtime.js';\nexport * from '@mpgd/game-services-core';\n", 'runtime.d.ts': 'export {};\n' },
       // A re-exported module that is not there.
       { 'index.d.ts': "export * from './gone.js';\n" },
+      // Compact re-exports, followed to the module that names it.
+      { 'index.d.ts': "export*from'./runtime.js';export{x}from'./session.mjs';\n", 'session.d.mts': 'export declare function createDevelopmentServerSession(): void;\n' },
+      // A type-only star re-export from another package.
+      { 'index.d.ts': "export * from './runtime.js';\nexport type * from '@mpgd/game-services-core';\n" },
     ].entries()) {
       const root = createGame();
       roots.push(root);

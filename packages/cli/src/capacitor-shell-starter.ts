@@ -3514,36 +3514,54 @@ function json(value: unknown): string {
  * the adapter's settings opener: an uninstalled or unreadable package, a
  * module it cannot read, or an `export *` from another package.
  */
+/** Declaration files the export check reads at most: a guard against a pathological graph. */
+const maxDeclarationFilesChecked = 500;
+
+/** The declaration file names TypeScript pairs with a module specifier. */
+function declarationCandidates(base: string): readonly string[] {
+  const extension = path.extname(base);
+  const stem = base.slice(0, base.length - extension.length);
+  switch (extension) {
+    case '.js':
+    case '.ts':
+      return [`${stem}.d.ts`];
+    case '.mjs':
+    case '.mts':
+      return [`${stem}.d.mts`];
+    case '.cjs':
+    case '.cts':
+      return [`${stem}.d.cts`];
+    default:
+      return [`${base}.d.ts`, path.join(base, 'index.d.ts')];
+  }
+}
+
 function installedPackageLacksExport(gameRoot: string, packageName: string, exportName: string): boolean {
+  // Only a plain identifier is searched for; anything else is not proof of absence.
+  if (!/^[A-Za-z_$][\w$]*$/u.test(exportName)) {
+    return false;
+  }
   const packageRoot = path.join(gameRoot, 'node_modules', packageName);
-  let manifest: Record<string, unknown>;
-  try {
-    const manifestSource = readExisting(path.join(packageRoot, 'package.json'));
-    if (manifestSource === undefined) {
-      return false;
-    }
-    manifest = parseJsonObject(manifestSource, `${packageName}/package.json`);
-  } catch {
+  const manifest = readInstalledManifest(gameRoot, packageName);
+  if (manifest === undefined) {
     return false;
   }
   const rootExport = typeof manifest.exports === 'object' && manifest.exports !== null
     ? (manifest.exports as Readonly<Record<string, unknown>>)['.']
     : undefined;
-  const typesPath = typeof rootExport === 'object' && rootExport !== null
-    && typeof (rootExport as { readonly types?: unknown }).types === 'string'
-    ? (rootExport as { readonly types: string }).types
-    : typeof manifest.types === 'string'
-      ? manifest.types
-      : undefined;
-  if (typesPath === undefined) {
+  const rootTypes = typeof rootExport === 'object' && rootExport !== null
+    ? (rootExport as { readonly types?: unknown }).types
+    : undefined;
+  const typesPath = typeof rootTypes === 'string' ? rootTypes : manifest.types;
+  if (typeof typesPath !== 'string') {
     return false;
   }
   // Every declaration file the root re-exports from, followed through relative
   // `export … from` specifiers at any depth; the name is searched as text, so a
   // named re-export of it counts as well.
-  const relativeFrom = /\bexport\s[^;]*?\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]/gu;
-  const packageStar = /\bexport\s*\*\s*from\s*['"](?!\.{1,2}\/)[^'"]+['"]/u;
-  const nameUsed = new RegExp(`\\b${exportName}\\b`, 'u');
+  const relativeFrom = /\bexport\b[^;]*?\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]/gu;
+  const packageStar = /\bexport\s*(?:type\s*)?\*\s*(?:as\s+[\w$]+\s*)?from\s*['"](?!\.{1,2}\/)[^'"]+['"]/u;
+  const nameUsed = new RegExp(`(?<![\\w$])${exportName.replace(/\$/gu, '\\$')}(?![\\w$])`, 'u');
   const pending = [path.join(packageRoot, typesPath)];
   const visited = new Set<string>();
   while (pending.length > 0) {
@@ -3552,7 +3570,7 @@ function installedPackageLacksExport(gameRoot: string, packageName: string, expo
       continue;
     }
     visited.add(file);
-    if (visited.size > 500) {
+    if (visited.size > maxDeclarationFilesChecked) {
       return false;
     }
     let source: string | undefined;
@@ -3569,22 +3587,27 @@ function installedPackageLacksExport(gameRoot: string, packageName: string, expo
       return false;
     }
     for (const match of source.matchAll(relativeFrom)) {
-      const specifier = (match[1] ?? '').replace(/\.(?:js|mjs)$/u, '');
-      const base = path.join(path.dirname(file), specifier.replace(/\.d\.ts$/u, ''));
-      const candidates = [`${base}.d.ts`, path.join(base, 'index.d.ts')];
-      pending.push(candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? base);
+      const candidates = declarationCandidates(path.join(path.dirname(file), match[1] ?? ''));
+      pending.push(candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? file);
     }
   }
   return true;
 }
 
-/** The installed package's version, for a message. */
-function installedPackageVersion(gameRoot: string, packageName: string): string {
+/** The game's installed `packageName` manifest, or `undefined` when it is missing or unreadable. */
+function readInstalledManifest(gameRoot: string, packageName: string): Record<string, unknown> | undefined {
   try {
     const source = readExisting(path.join(gameRoot, 'node_modules', packageName, 'package.json'));
-    const version = source === undefined ? undefined : parseJsonObject(source, packageName).version;
-    return typeof version === 'string' ? version : 'unknown';
+    return source === undefined
+      ? undefined
+      : parseJsonObject(source, `${packageName}/package.json`);
   } catch {
-    return 'unknown';
+    return undefined;
   }
+}
+
+/** The installed package's version, for a message. */
+function installedPackageVersion(gameRoot: string, packageName: string): string {
+  const version = readInstalledManifest(gameRoot, packageName)?.version;
+  return typeof version === 'string' ? version : 'unknown';
 }
