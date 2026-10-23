@@ -28,9 +28,10 @@ the kit does not rot between live runs.
 ## Ground rules
 
 - **Your credentials stay on your machine.** The Firebase service-account
-  key, `google-services.json`, and the env file are yours: keep them out of
-  every repository, and never paste them into an issue, a PR, or an agent
-  session. The kit reads the key only to write the env file (mode 0600), and
+  key and the env file are yours: keep them out of every repository, and
+  never paste them into an issue, a PR, or an agent session.
+  `google-services.json` is less sensitive but project-specific: keep the
+  test game's repository local, or ignore the file there. The kit reads the key only to write the env file (mode 0600), and
   refuses to write that file inside any git checkout or through a symbolic
   link. It never reads mise's configuration (`~/.config/mise`,
   `$XDG_CONFIG_HOME/mise`, `$MISE_CONFIG_DIR`).
@@ -81,28 +82,45 @@ pnpm install
 pnpm exec mpgd target init capacitor --game . \
   --app-id dev.example.livepush --display-name "Live Push" \
   --providers notifications
+# target builds record the game's source revision
+git init && git add -A && git commit -m "live push test game"
 ```
+
+The game installs the `@mpgd/*` packages from npm at the versions of this
+checkout. If the checkout has unreleased notifications changes, the game
+and the Worker you build here can differ; test a released kit, or create
+the game with `--workspace` so it links this checkout.
 
 Then, in the game:
 
 1. Put `google-services.json` at
-   `apps/mobile-capacitor/android/app/google-services.json`.
+   `apps/mobile-capacitor/android/app/google-services.json`, and add that
+   path to the game's `.gitignore`.
 2. Replace `REPLACE-WITH-SENDER-PHONE-OR-ADDRESS` in
    `notifications/deployment.json` (a test value is fine for a local run).
    The Worker refuses the placeholder and answers 500
    `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
-3. Run `pnpm validate:notifications`.
-4. Set the game's development session (D1's starter helper) to a test
-   player id, such as `live-1`, and point the game at the local Worker with
-   `VITE_MPGD_GAME_SERVICES_URL=http://127.0.0.1:8787`. Use the same player
-   id with `run` below: the device and the driver must be the same player.
+3. For repeatable runs, remove `frequency` and `quietHours` from the
+   `daily-ready` topic in `notifications/topics.json`. The starter sends it
+   at most once a day and holds it from 21:00 to 08:00 in the player's zone
+   (Asia/Seoul by default): with them, only the first push of the day
+   arrives, and a run at night is deferred to the morning while every step
+   still passes. This is a throwaway game; keep them in a real one.
+4. Run `pnpm validate:notifications`.
+5. In the game's `.env.local` (Vite reads it when the dev server starts),
+   point the game at the local Worker with
+   `VITE_MPGD_GAME_SERVICES_URL=http://127.0.0.1:8787`, and turn on D1's
+   development session helper with a test player id, such as `live-1`
+   (**needs D1**; its variable names are in D1's starter docs). Use the
+   same player id with `run` below: the device and the driver must be the
+   same player.
 
 ## 2. The Worker's env file
 
 From the kit's checkout:
 
 ```sh
-mkdir -p ~/.mpgd
+mkdir -p -m 700 ~/.mpgd
 pnpm notifications:live env \
   --game ~/mpgd-live/live-push \
   --service-account ~/.mpgd/firebase-live-test.json \
@@ -117,7 +135,8 @@ project id is one the Worker's FCM sender accepts, and writes
 mode 0600. It refuses an `--out` inside a git checkout (a dotfiles
 repository in your home counts), a symbolic link, and an existing file
 unless you pass `--force`. `--project-id` writes `FCM_PROJECT_ID` when the
-key's project differs from the Firebase project.
+key's project differs from the Firebase project. Run it again after every
+catalog change.
 
 ## 3. The Worker
 
@@ -133,7 +152,7 @@ pnpm --dir apps/game-services-worker exec wrangler dev \
   --ip 127.0.0.1 --port 8787
 ```
 
-wrangler lists the five variables as `(hidden)`. The Worker logs once that
+wrangler lists the variables (five, six with `--project-id`) as `(hidden)`. The Worker logs once that
 it uses the memory store: consent records, endpoints, and reminders live in
 this process and are gone when you stop it. There is no store dump route;
 the driver's reads (`GET /consent`, `GET /notices`) and the Worker log are
@@ -146,13 +165,17 @@ Check the Worker before the device:
 pnpm notifications:live run --player live-1 --no-scheduler
 ```
 
-`providers` must pass with `android -> fcm`. Without D1 the run stops at
-`session-required` (404).
+`providers` (with `android -> fcm`), `session-required`, and `session`
+must pass. Until the device has registered, the run then warns at
+`device-permission` and stops at `reminder-cancel` with
+`permission-required`: that is expected here. Without D1 it stops earlier,
+at `session-required` (404). (`--fcm-token-file <file>` registers a device
+token the driver is given instead of the app's own registration.)
 
 ## 4. The emulator
 
-Start the emulator, then check it and forward the Worker's port, so the
-app reaches `http://127.0.0.1:8787` on the device:
+Start the emulator, then forward the Worker's port to it, so the app
+reaches `http://127.0.0.1:8787` on the device, and check it:
 
 ```sh
 pnpm notifications:live emulator --app-id dev.example.livepush --reverse
@@ -163,21 +186,28 @@ It checks one device online and booted, Google Play services
 installed, the `POST_NOTIFICATIONS` permission (API 33+), and
 `adb reverse`. It reads through `adb`, sets only that one port forward, and
 never grants a permission: the dialog must come from a tap in the game.
+Before the game is installed, its `app` line fails; that is expected the
+first time.
 
 Install and run the game on the emulator with Capacitor's live reload, so
 the game runs as a Vite development build (D1's development session helper
-works only there) and can reach the Worker:
+works only there). The Android target must be selected for the dev server,
+or it serves the browser gateway, which has no notifications provider. The
+live-reload page is served over http, so its calls to the http Worker are
+not mixed content (a built bundle on `https://localhost` would be):
 
 ```sh
 # in the game
 pnpm exec mpgd target build android staging --targets-file ./mpgd.targets.json
-pnpm dev                              # serves the game on port 5173
+APP_TARGET=android MPGD_CONFIG_TARGET=android \
+  MPGD_PLATFORM_TARGETS_FILE=./mpgd.targets.json pnpm dev   # port 5173
 adb reverse tcp:5173 tcp:5173
 cd apps/mobile-capacitor
 pnpm exec cap run android --live-reload --host 127.0.0.1 --port 5173
 ```
 
-Follow the app with
+Then run the check again: every line should pass except, before the first
+tap, `notification-permission`. Follow the app with
 `adb logcat -v time Capacitor:V Capacitor/Console:V FirebaseMessaging:V '*:S'`
 (the `emulator` command prints it for your serial).
 
@@ -190,20 +220,18 @@ what to do, what to observe, and where.
 | --- | --- | --- |
 | Permission | Open the game's notification settings and tap *Turn on notifications* (알림 켜기). Allow the dialog. | The Android dialog appears only after the tap. Worker log: `POST /game-services/notifications/consent 200` (the granted report). |
 | Register | Nothing: the runtime registers after the grant. | Worker log: `POST /game-services/notifications/endpoints 200`. logcat: no `FirebaseMessaging` error. |
-| Consent | Turn the *daily-ready* reminder on in the settings screen. | Worker log: `POST .../consent 200`. The switch shows the backend record after it reloads. |
+| Consent | Turn the *Today's run reminder* (오늘의 플레이 알림, topic `daily-ready`) on in the settings screen. | Worker log: `POST .../consent 200`. The switch shows the backend record after it reloads. |
 | Driver | `pnpm notifications:live run --player live-1` | `device-permission PASS` (the device's grant), then `topic-preference`, `reminder-cancel`, and `reminder` pass. |
-| Scheduler send | Send the app to the background before the driver's wait ends (5 s; `--fire-in` sets it). | `scheduler PASS`: the scheduler took the reminder. Worker log: no `Notifications: provider.send` error. The push shows in the shade. |
+| Scheduler send | Send the app to the background before the driver's wait ends (5 s; `--fire-in` sets it). | `scheduler PASS`: the scheduler took the reminder. Worker log: no `Notifications: provider.rejected` or `provider.send` line. The push shows in the shade. |
 | Open | Tap the push. | The game opens at the topic's route (`/?entry=continue` for `daily-ready`). Repeat with the app killed (cold start) and in the background (warm start). |
 | Foreground | Run the driver again with the app in front. | The push is shown while the game is open (it needs `presentationOptions`, see the [Firebase setup](FIREBASE_NOTIFICATIONS.md#1-the-plugins)). |
 | Notices (optional) | `pnpm notifications:live run --player live-1 --advertising 1` | `advertising-notice PASS`: the consent result notice is listed, recorded as shown, and gone. This records advertising consent for the test player. |
 
 Each `run` uses new reminder keys, and a run that fails cancels the
-reminders it left pending. Two things can hold a push back without a
-failure: the starter's `daily-ready` has quiet hours from 21:00 to 08:00 in
-the player's zone (Asia/Seoul by default), when the send is deferred, and a
-cap of one a day (`frequency.maxPerDay`), so a second run the same day
-sends nothing. For repeated runs, use a new `--player` (and the same id in
-the game), or a test copy of the catalog without them.
+reminders it left pending. If you kept the topic's quiet hours or daily cap
+([section 1](#1-the-game)), they hold a push back without a failing step: `scheduler` passes
+because the scheduler took the reminder, and a deferred push arrives later
+while `wrangler dev` still runs. Stop the Worker when you are done.
 
 `deliverNotification` is a service-binding RPC, not an HTTP route, so the
 driver cannot call it on `wrangler dev`; the dry run covers it in process.
@@ -219,8 +247,8 @@ The scheduler path above uses the same delivery and provider code.
 | `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`). |
 | `reminder-cancel` or `reminder` answers `permission-required` | No endpoint with a granted permission for this player: the device has not registered, or registered as another player. |
 | `scheduler` fails: still pending | The reminder was not due when the scheduler ran (clock skew), or the Worker restarted and lost its memory store. |
-| No push, Worker log shows `provider.send` with an `FcmAccessTokenError` | The service account cannot mint a token for FCM: check its role and that the key is not revoked. |
-| No push, no error | Quiet hours or the daily cap above; or the emulator image has no Play services (`emulator` reports it). |
+| No push, Worker log shows `Notifications: provider.rejected ... (configuration, <code>)` | FCM or Google refused the send's setup: a token-minting code (such as `TOKEN_KEY_UNUSABLE`) means the service account cannot mint a token (check its role and that the key is not revoked); another code names FCM's own refusal. |
+| No push, nothing logged | Quiet hours or the daily cap ([section 1](#1-the-game)); a token or network failure that is retried later (check that this machine reaches `oauth2.googleapis.com` and `fcm.googleapis.com`); or an emulator image without Play services (`emulator` reports it). |
 | The app cannot reach the Worker | `adb reverse tcp:8787 tcp:8787` is missing, or the game's URL is not `http://127.0.0.1:8787`. |
 
 ## iOS
@@ -238,12 +266,12 @@ explains why).
 
 A deployed test Worker uses the D1 store, its real
 `GAME_SERVICES_NOTIFICATIONS_AUTH` binding, and its own cron; the local
-session flag is refused there. Give the driver a real session's
-`Authorization` value through an environment variable, never on the
-command line:
+session flag is refused there (**needs D1**). Give the driver a real
+session's `Authorization` value through an environment variable, read so
+it stays out of your shell history, never on the command line:
 
 ```sh
-export MPGD_LIVE_AUTHORIZATION='Bearer ...'   # a test player's session
+read -rs MPGD_LIVE_AUTHORIZATION && export MPGD_LIVE_AUTHORIZATION   # paste: Bearer ...
 pnpm notifications:live run \
   --worker https://game-services-staging.example.workers.dev \
   --staging game-services-staging.example.workers.dev \
