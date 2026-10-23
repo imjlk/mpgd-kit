@@ -196,7 +196,7 @@ starter manifests, and Apps in Toss MCP guidance.
 - `@mpgd/target-config`: target runtime, capability, release profile, and platform policy availability.
 - `@mpgd/catalog`: product catalog and ad placement config schemas plus sample JSON.
 - `@mpgd/i18n`: Paraglide-backed localized messages.
-- `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations.
+- `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations; optional [monetization observation](docs/MONETIZATION_OBSERVABILITY.md) across IAP, attendance and promotions.
 - `@mpgd/tutorial`: headless tutorial director,
   platform-backed progress, optional Driver.js presentation, and debug helpers.
 - `@mpgd/game-runtime`: execution controls, scoped UI, lifecycle and action
