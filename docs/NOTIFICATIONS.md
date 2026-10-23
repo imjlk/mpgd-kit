@@ -295,4 +295,7 @@ invitation to buy.
 The starter's settings model, the CLI wiring, and the catalog are covered by
 the kit's tests, and every provider passes the RFC's conformance vectors with
 fakes. Delivery on a device, Firebase configuration, Apps in Toss templates,
-and Devvit approval are verified by you, per target, before release.
+and Devvit approval are verified by you, per target, before release. The
+[live test runbook](NOTIFICATIONS_LIVE_TEST.md) walks through the first
+Android run: a local Worker sending through FCM to a game on an emulator,
+from the permission dialog to the tap that opens the game.
