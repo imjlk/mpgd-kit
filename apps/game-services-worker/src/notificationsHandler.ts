@@ -96,7 +96,11 @@ export interface GameServicesNotificationsEnv {
    * (`createDevelopmentServerSession` in `@mpgd/game-services`), which anyone
    * can write: it authenticates nothing. The Worker refuses to build its
    * fetch handler and service with it when `MPGD_STORE` is `d1` (the first
-   * request or RPC fails), and ignores it when the binding is bound.
+   * request or RPC fails), and ignores it when the binding is bound. On
+   * any other store it still applies only to requests whose host is a local
+   * development host (`isLocalDevelopmentHost`); elsewhere they answer 401.
+   * It never applies to the service binding, the queue, or the cron, which
+   * take no session.
    */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS?: 'true';
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
@@ -163,6 +167,22 @@ const reportedMisconfiguration = new WeakSet<object>();
 const reportedUnreadyConsumer = new WeakSet<object>();
 const reportedMissingSessionBinding = new WeakSet<object>();
 const reportedDevelopmentSessions = new WeakSet<object>();
+const reportedNonLocalDevelopmentHost = new WeakSet<object>();
+
+/**
+ * Hosts a development session is accepted on: loopback (`localhost`,
+ * `127.0.0.1`, `[::1]`), any `*.localhost` name, and `10.0.2.2`, the host
+ * machine as the Android emulator reaches it. A Worker on any other host
+ * (a deployment on the memory store with the flag left on) takes none.
+ */
+export function isLocalDevelopmentHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === 'localhost'
+    || host.endsWith('.localhost')
+    || host === '127.0.0.1'
+    || host === '[::1]'
+    || host === '10.0.2.2';
+}
 
 /**
  * Refuses `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` next to the
@@ -440,7 +460,8 @@ function parseJsonVar(value: unknown, name: string): unknown {
  * - In local development, `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`
  *   stands in for the binding (see its doc); the first session route asked
  *   for logs that sessions are not authenticated. Throws when built with it
- *   and the D1 store.
+ *   and the D1 store, and answers 401 (logged once) on a request whose host
+ *   is not a local development host (`isLocalDevelopmentHost`).
  *
  * Sends are never a client route; a game server sends through the
  * `deliverNotification` RPC on the service binding.
@@ -533,6 +554,21 @@ export function createNotificationsFetchHandler(
       'Cache-Control': 'no-store',
       'Access-Control-Expose-Headers': 'Retry-After',
     };
+    if (sessions?.development === true) {
+      const { hostname } = new URL(request.url);
+      if (!isLocalDevelopmentHost(hostname)) {
+        // A deployed Worker (any store) never takes a header anyone can write.
+        if (!reportedNonLocalDevelopmentHost.has(env)) {
+          reportedNonLocalDevelopmentHost.add(env);
+          console.warn(
+            `Notifications: a development session request to ${hostname} was refused; `
+              + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS only applies on localhost, 127.0.0.1, '
+              + '[::1], *.localhost, or 10.0.2.2 (the Android emulator).',
+          );
+        }
+        return json({ error: 'UNAUTHORIZED' }, 401, privateHeaders);
+      }
+    }
     const session = await authenticate(request, auth);
     if (session instanceof Response) {
       return withHeaders(session, privateHeaders);

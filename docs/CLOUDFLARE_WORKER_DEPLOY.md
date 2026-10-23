@@ -282,7 +282,15 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   that header, so it is local-only by construction: the Worker refuses to
   build its fetch handler and its service (the first request or RPC fails)
   when the flag is set with `MPGD_STORE = "d1"`, and ignores the flag, saying so once, when the
-  binding is bound. The game side is `createDevelopmentServerSession` in
+  binding is bound. On the memory store it still applies only to requests
+  whose host is a local development host: `localhost`, `127.0.0.1`, `[::1]`,
+  a `*.localhost` name, or `10.0.2.2` (the host machine as the Android
+  emulator reaches it). A request to any other host, such as a deployed
+  `workers.dev` name or a LAN address, answers 401 like any header the
+  Worker does not recognize, and the Worker logs once why. The service
+  binding (`deliverNotification`, `endNotificationSession`), the queue, and
+  the cron take no session, so a development session never reaches them.
+  The game side is `createDevelopmentServerSession` in
   `@mpgd/game-services`, which refuses a production mode, and the starter
   uses it on the Vite dev server only (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).
   A client picks its own installation and session ids here, which the

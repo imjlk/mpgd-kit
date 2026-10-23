@@ -160,8 +160,10 @@ player with `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installation
 which the Worker accepts only with the flag. Anyone can write that header,
 so it authenticates nothing: the session exists only on the Vite dev server
 (`import.meta.env.DEV`) in the `development` mode, and the Worker refuses
-the flag with its D1 store and ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
-is bound. Calling `setStarterServerSession`, even with `undefined`, turns it
+the flag with its D1 store, ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
+is bound, and takes development sessions only on a local host (`localhost`,
+`127.0.0.1`, `[::1]`, `*.localhost`, or `10.0.2.2`, which the Android
+emulator uses for your machine); a device on your LAN cannot use them. Calling `setStarterServerSession`, even with `undefined`, turns it
 off; the first call after the game used it warns, since the commerce client
 and the notifications backend keep the session they first read.
 The commerce client sends the same header; a local Worker with

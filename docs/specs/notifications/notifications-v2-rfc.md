@@ -1093,7 +1093,8 @@ player's account would deliver that player's notifications to the device.
   it issued): a client that could pick another installation's id could
   move that installation's endpoint to itself. The one exception is the
   Worker's local development sessions (see What D1 landed), which name
-  their own ids and are refused with a durable store. An endpoint
+  their own ids, are refused with a durable store, and are accepted only on
+  a local development host. An endpoint
   holds the current address, the device's permission, and `lastRegisteredAt`.
   - A new address for the same installation replaces the old one.
   - An address is unique per provider.
@@ -2721,8 +2722,10 @@ use from a guest session, and sessions for local development.
   accepts `Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>` on the
   session routes when no `GAME_SERVICES_NOTIFICATIONS_AUTH` is bound,
   refuses to build its fetch handler and service with the D1 store (the
-  first request or RPC fails), and logs that sessions are not
-  authenticated. `createDevelopmentServerSession` is the game side, which
+  first request or RPC fails), answers 401 on a request whose host is not
+  a local development host (loopback, `*.localhost`, or the Android
+  emulator's `10.0.2.2`), and logs that sessions are not authenticated.
+  The service binding, the queue, and the cron take no session. `createDevelopmentServerSession` is the game side, which
   the starter uses only on the Vite dev server in the development mode
   (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).
 - Left to follow-ups: a production identity Worker, and live end-to-end

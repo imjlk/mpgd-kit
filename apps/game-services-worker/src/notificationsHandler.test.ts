@@ -1049,12 +1049,14 @@ try {
     console.warn = (...parts: unknown[]) => {
       devWarnings.push(parts.map(String).join(' '));
     };
+    // Development sessions only apply on a local development host.
+    const devBase = 'http://localhost:8787/game-services/notifications';
     try {
       const devCall = async (authorization: string) =>
-        (await devFetch(new Request(`${base}/consent`, { headers: { authorization } }))).status;
+        (await devFetch(new Request(`${devBase}/consent`, { headers: { authorization } }))).status;
       // A well-formed header is a session: its consent records read back empty.
       const accepted = await devFetch(
-        new Request(`${base}/consent`, {
+        new Request(`${devBase}/consent`, {
           headers: { authorization: 'Bearer mpgd-dev.p-dev.s-dev.i-dev' },
         }),
       );
@@ -1072,7 +1074,7 @@ try {
       ]) {
         assert.equal(await devCall(malformed), 401, malformed);
       }
-      assert.equal((await devFetch(new Request(`${base}/consent`))).status, 401);
+      assert.equal((await devFetch(new Request(`${devBase}/consent`))).status, 401);
       // One warning that sessions are not authenticated, however many requests.
       assert.deepEqual(
         devWarnings.filter((line) => line.includes('MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS')),
@@ -1081,6 +1083,58 @@ try {
             + 'accept mpgd-dev bearer headers that anyone can write: sessions are not authenticated. '
             + 'Local development only.',
         ],
+      );
+      // The local development hosts: loopback, *.localhost, and the Android emulator's alias.
+      const devHeader = { authorization: 'Bearer mpgd-dev.p-dev.s-dev.i-dev' };
+      for (const origin of [
+        'http://localhost:8787',
+        'http://127.0.0.1:8787',
+        'http://[::1]:8787',
+        'http://game.localhost',
+        'http://10.0.2.2:8787',
+      ]) {
+        const response = await devFetch(
+          new Request(`${origin}/game-services/notifications/consent`, { headers: devHeader }),
+        );
+        assert.equal(response.status, 200, origin);
+      }
+      // Any other host (a deployment on the memory store with the flag left on) takes no
+      // development session: 401, as for any header it does not recognize, logged once.
+      devWarnings.length = 0;
+      for (const origin of [
+        'https://game-services-worker.test',
+        'https://mpgd-game-services.example.workers.dev',
+        'http://192.168.1.10:8787',
+        'http://10.0.2.3:8787',
+        'http://localhost.example.com',
+        'http://127.0.0.2:8787',
+      ]) {
+        const response = await devFetch(
+          new Request(`${origin}/game-services/notifications/consent`, { headers: devHeader }),
+        );
+        assert.equal(response.status, 401, origin);
+        assert.deepEqual(await response.json(), { error: 'UNAUTHORIZED' });
+      }
+      assert.equal(
+        (await devFetch(new Request('https://game-services-worker.test/game-services/notifications/endpoints', {
+          method: 'POST',
+          headers: { ...devHeader, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            registration: { provider: 'fcm', address: { kind: 'fcm-token', value: 'tok-remote', permission: 'granted' } },
+            target: 'android',
+          }),
+        }))).status,
+        401,
+      );
+      assert.deepEqual(devWarnings, [
+        'Notifications: a development session request to game-services-worker.test was refused; '
+          + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS only applies on localhost, 127.0.0.1, '
+          + '[::1], *.localhost, or 10.0.2.2 (the Android emulator).',
+      ]);
+      // The public registry is still served on any host.
+      assert.equal(
+        (await devFetch(new Request('https://game-services-worker.test/game-services/notifications/providers'))).status,
+        200,
       );
       // With the real binding bound the flag is ignored: a development header is not a session.
       devWarnings.length = 0;
@@ -1107,6 +1161,36 @@ try {
       );
     } finally {
       console.warn = warn;
+    }
+    // Only the fetch routes read a session, development or not: the service binding
+    // (deliverNotification, endNotificationSession), the queue consumer, and the cron take no
+    // Authorization, so a development session can never authenticate them.
+    {
+      const source = await readFile(new URL('./notificationsHandler.ts', import.meta.url), 'utf8');
+      // The declaration and its one call, in createNotificationsFetchHandler.
+      assert.equal(source.match(/\bnotificationSessionAuthOf\(/gu)?.length, 2);
+      assert.equal(source.match(/\bdevelopmentNotificationSessionAuth\b/gu)?.length, 2);
+      const fetchStart = source.indexOf('export function createNotificationsFetchHandler');
+      assert.match(
+        source.slice(fetchStart, source.indexOf('\nexport ', fetchStart + 1)),
+        /notificationSessionAuthOf\(env\)/u,
+      );
+      for (const entry of [
+        'deliverWorkerNotification',
+        'endWorkerNotificationSession',
+        'consumeNotificationDispatchBatch',
+        'runScheduledNotifications',
+      ]) {
+        const start = source.indexOf(`export async function ${entry}`);
+        assert.ok(start >= 0, entry);
+        assert.doesNotMatch(
+          source.slice(start, source.indexOf('\nexport ', start + 1)),
+          /authorization|authenticate|notificationSessionAuthOf|developmentNotificationSessionAuth|GAME_SERVICES_NOTIFICATIONS_AUTH/iu,
+          entry,
+        );
+      }
+      const entrypoint = await readFile(new URL('./index.ts', import.meta.url), 'utf8');
+      assert.doesNotMatch(entrypoint, /authorization|mpgd-dev|notificationSessionAuthOf/iu);
     }
     // Never with the durable store: the Worker refuses to start, with or without the binding.
     const durable = {

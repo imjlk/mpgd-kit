@@ -408,7 +408,8 @@ try {
       installationId: 'install-dev',
     });
     const devClient = createGameServicesNotificationsClient({
-      baseUrl: 'https://game-services-worker.test',
+      // A local development host: the Worker takes development sessions nowhere else.
+      baseUrl: 'http://localhost:8787',
       fetch: async (url, init) => devWorker(new Request(url, init)),
       identity: devSession,
       getHeaders: devSession.getHeaders,
