@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +24,7 @@ import {
   notificationsCapacitorSupportFiles,
   notificationsCapacitorTemplateSupportFiles,
   notificationsGameDependencies,
+  sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from '../src/notifications-starter.js';
 
@@ -245,6 +254,208 @@ try {
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /Existing shell @capacitor\/local-notifications is 8\.3\.1 but the game uses 8\.4\.0/u,
     );
+  }
+
+  // A game that keeps its own serverSession.ts (an earlier release's) gets no
+  // developmentServerSession.ts, which nothing in it would import, and a warning.
+  {
+    const root = createGame();
+    roots.push(root);
+    // It names the module in a comment only, which is not an import.
+    const ownSession =
+      "// the game's own session module; see developmentServerSession.ts\nexport {};\n";
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(root, 'src/platform/serverSession.ts'), ownSession);
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(plan.changedFiles.includes('src/platform/serverSession.ts'), false);
+    assert.equal(plan.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+    assert.ok(
+      plan.warnings.some((warning) => /predates development notification sessions/u.test(warning)),
+    );
+    applyCapacitorShellStarter(plan);
+    assert.equal(
+      readFileSync(path.join(root, 'src/platform/serverSession.ts'), 'utf8'),
+      ownSession,
+    );
+    assert.equal(existsSync(path.join(root, 'src/platform/developmentServerSession.ts')), false);
+  }
+
+  // A current serverSession.ts names the module, so a missing one is written back.
+  {
+    const root = createGame();
+    roots.push(root);
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(
+      path.join(root, 'src/platform/serverSession.ts'),
+      readTemplate('src/platform/serverSession.ts'),
+    );
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(plan.changedFiles.includes('src/platform/developmentServerSession.ts'), true);
+    assert.equal(
+      plan.warnings.some((warning) => /predates development notification sessions/u.test(warning)),
+      false,
+    );
+  }
+
+  // developmentServerSession.ts imports createDevelopmentServerSession: a game whose
+  // installed @mpgd/game-services provably lacks it is told to upgrade, not given a module
+  // that would not build. A game that keeps its own serverSession.ts gets no module to check.
+  {
+    const installGameServices = (root: string, exportsDevelopmentSession: boolean): void => {
+      const packageRoot = path.join(root, 'node_modules/@mpgd/game-services');
+      mkdirSync(path.join(packageRoot, 'dist'), { recursive: true });
+      writeFileSync(
+        path.join(packageRoot, 'package.json'),
+        JSON.stringify({
+          name: '@mpgd/game-services',
+          version: exportsDevelopmentSession ? '0.28.0' : '0.27.2',
+          exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
+        }),
+      );
+      writeFileSync(
+        path.join(packageRoot, 'dist/index.d.ts'),
+        exportsDevelopmentSession
+          ? "export * from './runtime.js';\nexport * from './development-session.js';\n"
+          : "export * from './runtime.js';\n",
+      );
+      writeFileSync(
+        path.join(packageRoot, 'dist/runtime.d.ts'),
+        'export declare function resolveGameServicesAuthorityMode(profile: string): string;\n',
+      );
+      if (exportsDevelopmentSession) {
+        writeFileSync(
+          path.join(packageRoot, 'dist/development-session.d.ts'),
+          'export declare function createDevelopmentServerSession(input: object): object;\n',
+        );
+      }
+    };
+    const older = createGame();
+    roots.push(older);
+    installGameServices(older, false);
+    assert.throws(
+      () => planCapacitorShellStarter(input(older, ['notifications'])),
+      /imports createDevelopmentServerSession from @mpgd\/game-services; the game's @mpgd\/game-services 0\.27\.2 does not export it\. Upgrade the game's kit packages \(mpgd kit upgrade\) first\./u,
+    );
+    const current = createGame();
+    roots.push(current);
+    installGameServices(current, true);
+    const plan = planCapacitorShellStarter(input(current, ['notifications']));
+    assert.ok(plan.changedFiles.includes('src/platform/developmentServerSession.ts'));
+    const ownSession = createGame();
+    roots.push(ownSession);
+    installGameServices(ownSession, false);
+    mkdirSync(path.join(ownSession, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(ownSession, 'src/platform/serverSession.ts'), 'export {};\n');
+    const kept = planCapacitorShellStarter(input(ownSession, ['notifications']));
+    assert.equal(kept.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+    // The real package's layout: modules re-export further (client.d.ts from ./operations.js),
+    // which the check follows. The built dist with and without development-session.d.ts.
+    // Like the other CLI smokes that read package dists, it needs `pnpm build:packages` first;
+    // CI's prepared jobs extract the built dists before they run, so there it is required.
+    const realDist = path.join(kitRoot, 'packages/game-services/dist');
+    const realDistBuilt = existsSync(path.join(realDist, 'index.d.ts'));
+    if (!realDistBuilt) {
+      assert.ok(
+        process.env.CI !== 'true',
+        'packages/game-services/dist is missing in CI: the prepared job must extract the built dists.',
+      );
+      console.info(
+        'Skipping the built @mpgd/game-services layout check: run `pnpm build:packages` first to include it.',
+      );
+    }
+    for (const withDevelopmentSession of realDistBuilt ? [true, false] : []) {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, withDevelopmentSession);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      for (const file of readdirSync(realDist)) {
+        if (file.endsWith('.d.ts') && (withDevelopmentSession || file !== 'development-session.d.ts')) {
+          const content = readFileSync(path.join(realDist, file), 'utf8');
+          writeFileSync(
+            path.join(dist, file),
+            file === 'index.d.ts' && !withDevelopmentSession
+              ? content.replace(/^export \* from '\.\/development-session\.js';\n/mu, '')
+              : content,
+          );
+        }
+      }
+      if (withDevelopmentSession) {
+        assert.ok(
+          planCapacitorShellStarter(input(root, ['notifications'])).changedFiles
+            .includes('src/platform/developmentServerSession.ts'),
+        );
+      } else {
+        assert.throws(
+          () => planCapacitorShellStarter(input(root, ['notifications'])),
+          /does not export it/u,
+        );
+      }
+    }
+    // A specifier that names the declaration file itself is followed to it: refused when that
+    // file lacks the export (an unfollowed link would pass instead).
+    {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, false);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      writeFileSync(path.join(dist, 'index.d.ts'), "export * from './session.d.ts';\n");
+      writeFileSync(path.join(dist, 'session.d.ts'), 'export declare function other(): void;\n');
+      assert.throws(
+        () => planCapacitorShellStarter(input(root, ['notifications'])),
+        /does not export it/u,
+      );
+    }
+    // Declarations the check cannot follow are not proof of absence: the build decides.
+    for (const [index, files] of [
+      // A nested barrel that leads to a module the check cannot read.
+      { 'index.d.ts': "export * from './services/index.js';\n", 'services/index.d.ts': "export * from './development-session.js';\n" },
+      // A re-export from another package.
+      { 'index.d.ts': "export * from './runtime.js';\nexport * from '@mpgd/game-services-core';\n", 'runtime.d.ts': 'export {};\n' },
+      // A re-exported module that is not there.
+      { 'index.d.ts': "export * from './gone.js';\n" },
+      // Compact re-exports, followed to the module that names it.
+      { 'index.d.ts': "export*from'./runtime.js';export{x}from'./session.mjs';\n", 'session.d.mts': 'export declare function createDevelopmentServerSession(): void;\n' },
+      // A type-only star re-export from another package.
+      { 'index.d.ts': "export * from './runtime.js';\nexport type * from '@mpgd/game-services-core';\n" },
+    ].entries()) {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, false);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(dist, file)), { recursive: true });
+        writeFileSync(path.join(dist, file), content);
+      }
+      const unfollowed = planCapacitorShellStarter(input(root, ['notifications']));
+      assert.ok(
+        unfollowed.changedFiles.includes('src/platform/developmentServerSession.ts'),
+        String(index),
+      );
+    }
+  }
+
+  // What counts as importing a module: its specifier in a string outside comments.
+  {
+    const name = 'developmentServerSession';
+    for (const source of [
+      "import { a } from './developmentServerSession';",
+      'import {\n  a,\n  b,\n} from "./developmentServerSession.js";',
+      "import './developmentServerSession';",
+      "const m = await import('./developmentServerSession');",
+      "export * from './developmentServerSession.ts';",
+      "import { a } /* ; */ from './developmentServerSession';",
+    ]) {
+      assert.equal(sourceReferencesRelativeModule(source, name), true, source);
+    }
+    for (const source of [
+      '// see developmentServerSession.ts',
+      "// import { a } from './developmentServerSession';",
+      "/*\nimport { a } from './developmentServerSession';\n*/",
+      "import { a } from './developmentServerSession2';",
+      "import { a } from '../developmentServerSession';",
+    ]) {
+      assert.equal(sourceReferencesRelativeModule(source, name), false, source);
+    }
   }
 
   // With the store plugins on an unwired legacy gateway, the gateway gets the

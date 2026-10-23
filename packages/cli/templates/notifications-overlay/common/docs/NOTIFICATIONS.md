@@ -74,10 +74,22 @@ game has both:
   identity service answers to the Worker's `authenticateNotificationSession`
   for this session's header, the same across token refreshes (see the kit's
   `docs/CLOUDFLARE_WORKER_DEPLOY.md`, "Sessions"). Do not pass a per-token
-  or rotating id: a `GuestSessionCoordinator` view's `sessionId` may rotate
-  on refresh, so it is not that id.
+  or rotating id. With a guest-session backend, pass
+  `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it
+  answers the coordinator's `sessionFamilyId` (not a view's `sessionId`,
+  which may rotate on refresh), and refreshes the access token as needed
+  (an expired one before the request, one about to expire in the
+  background).
 
-Without either, it returns `undefined` and the settings screen asks only
+  ```ts
+  // src/main.ts, before bootstrap()
+  const guest = createGuestSessionCoordinator({ backend, credentials, installationId });
+  setStarterServerSession(createGuestServerSession(guest));
+  void guest.start();
+  ```
+
+Without either (on the Vite dev server, a development session counts as a
+session; see "Try it locally"), it returns `undefined` and the settings screen asks only
 for the OS or host permission (and withdraws a Devvit opt-in the game
 rendered). With them, the runtime registers the device for the signed-in
 player, keeps its registration state in the platform storage, and
@@ -102,3 +114,60 @@ Night consent adds to 광고성 정보 수신동의: the screen offers it only w
 advertising consent is granted, and turning advertising consent off also
 withdraws a granted night consent in the same call (two records, two result
 notices).
+
+## Try it locally
+
+You can see the settings switches record consent before you have an
+identity service, against the kit's game-services Worker on your machine:
+
+1. Fill in `advertisingSender` in `notifications/deployment.json` (the
+   Worker refuses a placeholder). In mpgd-kit, give the Worker this game's
+   catalog and deployment and the development sessions flag in
+   `apps/game-services-worker/.dev.vars` (local variables, never
+   committed), then run it with the memory store, the default in its
+   `wrangler.toml`:
+
+   ```sh
+   cd <mpgd-kit>
+   node - <game>/notifications/topics.json <game>/notifications/deployment.json \
+     > apps/game-services-worker/.dev.vars <<'EOF'
+   const fs = require('node:fs');
+   // One line of JSON in single quotes, with any ' written as \u0027.
+   const value = (file) =>
+     `'${JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8'))).replaceAll("'", '\\u0027')}'`;
+   console.log('MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true');
+   console.log(`MPGD_NOTIFICATIONS_CATALOG=${value(process.argv[2])}`);
+   console.log(`MPGD_NOTIFICATIONS_DEPLOYMENT=${value(process.argv[3])}`);
+   EOF
+   pnpm --dir apps/game-services-worker dev --port 8787
+   ```
+
+   The Worker logs once that sessions are not authenticated. Add an FCM
+   service-account key (`FCM_SERVICE_ACCOUNT`) to `.dev.vars` only to send
+   real pushes.
+2. Start this game's dev server with the Worker URL and a development
+   session, `<playerId>` or `<playerId>.<installationId>` (letters, digits,
+   `_`, `-`):
+
+   ```sh
+   VITE_MPGD_GAME_SERVICES_URL=http://localhost:8787 \
+   VITE_MPGD_DEV_NOTIFICATION_SESSION=player-1 \
+   pnpm dev
+   ```
+
+`src/platform/developmentServerSession.ts` then signs the game in as that
+player with `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`,
+which the Worker accepts only with the flag. Anyone can write that header,
+so it authenticates nothing: the session exists only on the Vite dev server
+(`import.meta.env.DEV`) in the `development` mode, and the Worker refuses
+the flag with its D1 store, ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
+is bound, and takes development sessions only on a local host (`localhost`,
+`127.0.0.1`, `[::1]`, `*.localhost`, or `10.0.2.2`, which the Android
+emulator uses for your machine). That check reads the request's host, so
+it protects a deployed Worker, not your network: keep the local Worker on
+loopback, its default. Calling `setStarterServerSession`, even with `undefined`, turns it
+off; the first call after the game used it warns, since the notifications
+backend keeps the session it first read.
+The development session is for the notifications backend only: the
+commerce client keeps the session the game set with `setStarterServerSession`
+(or none), so its requests never carry a development header.

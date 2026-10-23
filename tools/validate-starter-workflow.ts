@@ -342,6 +342,7 @@ validatePhaserTemplateRuntimeTargets();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validatePhaserTemplateSafeAreaContract();
+validateTemplateServerSessionAgentGuidance();
 validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
@@ -3139,5 +3140,51 @@ function readJson(path: string): unknown {
     );
 
     return null;
+  }
+}
+
+/**
+ * The server session and the local development notification session
+ * (`serverSession.ts`, `developmentServerSession.ts`) are template features
+ * an agent must find in the generated game's brief and acceptance notes.
+ */
+function validateTemplateServerSessionAgentGuidance(): void {
+  const expectations = [
+    [
+      'packages/cli/templates/phaser-game/agent/brief.md',
+      [
+        'setStarterServerSession',
+        'createGuestServerSession',
+        'VITE_MPGD_DEV_NOTIFICATION_SESSION',
+        'developmentServerSession.ts',
+      ],
+    ],
+    [
+      'packages/cli/templates/phaser-game/agent/acceptance.md',
+      ['setStarterServerSession', 'VITE_MPGD_DEV_NOTIFICATION_SESSION', 'mpgd-dev'],
+    ],
+    [
+      'packages/cli/templates/lite-overlay/agent/brief.md',
+      [
+        'setStarterServerSession',
+        'createGuestServerSession',
+        'VITE_MPGD_DEV_NOTIFICATION_SESSION',
+        'developmentServerSession.ts',
+      ],
+    ],
+    [
+      'packages/cli/templates/lite-overlay/agent/acceptance.md',
+      ['setStarterServerSession', 'VITE_MPGD_DEV_NOTIFICATION_SESSION', 'mpgd-dev'],
+    ],
+  ] as const;
+  for (const [path, requiredTexts] of expectations) {
+    if (!existsSync(path)) {
+      failures.push(`${path}: required for server-session agent guidance.`);
+      continue;
+    }
+    const content = readText(path);
+    for (const requiredText of requiredTexts) {
+      assertIncludesText(content, requiredText, `${path}: server-session agent guidance.`);
+    }
   }
 }

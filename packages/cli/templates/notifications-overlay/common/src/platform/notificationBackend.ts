@@ -90,7 +90,8 @@ export function createStarterWorkerNotificationBackend(
   if (session === undefined) {
     input.log(
       '[notifications] VITE_MPGD_GAME_SERVICES_URL is set but no server session is: call setStarterServerSession '
-        + '(src/platform/serverSession.ts) before the game starts. The settings screen shows no switch until then.',
+        + '(src/platform/serverSession.ts) before the game starts, or on the dev server set '
+        + 'VITE_MPGD_DEV_NOTIFICATION_SESSION (docs/NOTIFICATIONS.md). The settings screen shows no switch until then.',
     );
     return undefined;
   }

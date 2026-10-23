@@ -49,9 +49,10 @@ export interface GameServicesNotificationSession {
    * answers to the Worker's `authenticateNotificationSession` for this
    * session's header, the same across token refreshes. A new sign-in starts
    * a new one. A per-token or rotating id is not it (a
-   * `GuestSessionCoordinator` view's `sessionId` may rotate on refresh); with
-   * one, each rotation counts as a new session and sends the registration
-   * again.
+   * `GuestSessionCoordinator` view's `sessionId` may rotate on refresh; its
+   * `sessionFamilyId` is the id, and `createGuestServerSession` passes it);
+   * with one, each rotation counts as a new session and sends the
+   * registration again.
    */
   readonly sessionId: string;
 }

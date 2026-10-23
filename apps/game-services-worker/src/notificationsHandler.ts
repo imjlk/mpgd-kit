@@ -16,6 +16,7 @@ import {
   type NotificationSession,
   type NotificationStore,
 } from '@mpgd/game-services/notifications';
+import { parseDevelopmentNotificationSessionAuthorization } from '@mpgd/game-services';
 import {
   createAitFunctionalMessageDeliveryProvider,
   type CreateAitFunctionalMessageDeliveryProviderOptions,
@@ -88,6 +89,20 @@ export interface GameServicesNotificationsEnv {
    */
   readonly MPGD_AIT_NOTIFICATIONS?: unknown;
   readonly GAME_SERVICES_NOTIFICATIONS_AUTH?: GameServicesNotificationsAuthBinding;
+  /**
+   * Local development only. With `"true"` and no `GAME_SERVICES_NOTIFICATIONS_AUTH`
+   * binding, the session routes accept
+   * `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`
+   * (`createDevelopmentServerSession` in `@mpgd/game-services`), which anyone
+   * can write: it authenticates nothing. The Worker refuses to build its
+   * fetch handler and service with it when `MPGD_STORE` is `d1` (the first
+   * request or RPC fails), and ignores it when the binding is bound. On
+   * any other store it still applies only to requests whose host is a local
+   * development host (`isLocalDevelopmentHost`); elsewhere they answer 401.
+   * It never applies to the service binding, the queue, or the cron, which
+   * take no session.
+   */
+  readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS?: 'true';
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
@@ -146,21 +161,195 @@ export function notificationFailureCause(
     : describeFailure(error);
 }
 
-const servicesByEnv = new WeakMap<object, WorkerNotifications>();
-const memoryStoresByEnv = new WeakMap<object, NotificationStore>();
-const reportedMisconfiguration = new WeakSet<object>();
-const reportedUnreadyConsumer = new WeakSet<object>();
-const reportedMissingSessionBinding = new WeakSet<object>();
+/** What the notifications keep for one configuration: the service (with its store) and what was logged. */
+interface NotificationsConfigurationState {
+  notifications?: WorkerNotifications;
+  memoryStore?: NotificationStore;
+  readonly reported: Set<string>;
+}
+
+const statesByEnv = new WeakMap<object, NotificationsConfigurationState>();
+const statesByConfiguration = new Map<string, NotificationsConfigurationState>();
+/** Configurations kept per isolate; a deployment has one, a test run a few dozen. */
+const maxNotificationConfigurations = 64;
+/** How deep a JSON var is keyed by value; deeper (or a cycle) keeps the state per env object. */
+const maxConfigurationKeyDepth = 32;
+const configurationBindingIds = new WeakMap<object, number>();
+let nextConfigurationBindingId = 0;
 
 /**
- * The notifications service for this environment, built once per env
- * object (one per isolate): `disabled` without a catalog, `misconfigured`
+ * A key that is the same for every `env` object with the same
+ * configuration. A runtime may hand the Worker a new `env` object per
+ * request (the Cloudflare Vite plugin's dev server does), and the memory
+ * store, the cached service, and the once-only logs must outlive the
+ * request. Vars count by value: strings and numbers, and the JSON vars,
+ * which are all named `MPGD_*` or `FCM_*` (plain objects, arrays, and
+ * primitives inside them). Everything else counts by identity: a binding
+ * (`DB`, a queue, a service, an mTLS certificate), and any value inside a
+ * JSON var that is not plain data. A runtime that also re-creates its
+ * binding objects per request therefore still gets one state per request.
+ * `undefined` when the env cannot be read as data (a throwing getter, or a
+ * JSON var nested past `maxConfigurationKeyDepth`, which a cycle is); the
+ * caller then keeps the state per env object.
+ */
+function notificationsConfigurationKey(env: GameServicesNotificationsEnv): string | undefined {
+  const record = env as Readonly<Record<string, unknown>>;
+  const identityOf = (value: object): { readonly binding: number } => {
+    let id = configurationBindingIds.get(value);
+    if (id === undefined) {
+      nextConfigurationBindingId += 1;
+      id = nextConfigurationBindingId;
+      configurationBindingIds.set(value, id);
+    }
+    return { binding: id };
+  };
+  const byValue = (value: unknown, depth: number): unknown => {
+    if (depth > maxConfigurationKeyDepth) {
+      throw new Error('Too deep to key by value.');
+    }
+    if (value === undefined) {
+      return { undefined: true };
+    }
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : { number: String(value) };
+    }
+    if (typeof value !== 'object') {
+      // A function, a symbol, or a bigint.
+      return typeof value === 'function' ? identityOf(value) : { other: String(value) };
+    }
+    if (Array.isArray(value)) {
+      return { array: value.map((item: unknown) => byValue(item, depth + 1)) };
+    }
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return identityOf(value);
+    }
+    const object = value as Readonly<Record<string, unknown>>;
+    return {
+      object: Object.keys(object).sort().map((name) => [name, byValue(object[name], depth + 1)]),
+    };
+  };
+  try {
+    return JSON.stringify(Object.keys(record).sort().map((name) => {
+      const value = record[name];
+      const isVar = value === null || (typeof value !== 'object' && typeof value !== 'function')
+        || name.startsWith('MPGD_') || name.startsWith('FCM_');
+      return [name, isVar ? byValue(value, 0) : identityOf(value as object)];
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The state for this configuration, shared by every `env` object that carries it. */
+function notificationsStateOf(env: GameServicesNotificationsEnv): NotificationsConfigurationState {
+  const known = statesByEnv.get(env);
+  if (known !== undefined) {
+    return known;
+  }
+  const key = notificationsConfigurationKey(env);
+  let state = key === undefined ? undefined : statesByConfiguration.get(key);
+  if (state === undefined) {
+    state = { reported: new Set() };
+  }
+  if (key !== undefined) {
+    // Most recently used last, so the eviction below drops the least recently used.
+    statesByConfiguration.delete(key);
+    statesByConfiguration.set(key, state);
+    if (statesByConfiguration.size > maxNotificationConfigurations) {
+      const oldest = statesByConfiguration.keys().next().value;
+      if (oldest !== undefined) {
+        statesByConfiguration.delete(oldest);
+      }
+    }
+  }
+  statesByEnv.set(env, state);
+  return state;
+}
+
+/** Whether `message` is reported for this configuration for the first time (and marks it). */
+function firstReport(env: GameServicesNotificationsEnv, message: string): boolean {
+  const { reported } = notificationsStateOf(env);
+  if (reported.has(message)) {
+    return false;
+  }
+  reported.add(message);
+  return true;
+}
+
+/**
+ * Hosts a development session is accepted on: loopback (`localhost`,
+ * `127.0.0.1`, `[::1]`), any `*.localhost` name, and `10.0.2.2`, the host
+ * machine as the Android emulator reaches it. A Worker on any other host
+ * (a deployment on the memory store with the flag left on) takes none.
+ */
+export function isLocalDevelopmentHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === 'localhost'
+    || host.endsWith('.localhost')
+    || host === '127.0.0.1'
+    || host === '[::1]'
+    || host === '10.0.2.2';
+}
+
+/**
+ * Refuses `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` next to the
+ * D1 store, so a durable deployment never takes an unauthenticated session,
+ * even with the flag left in its config. The fetch handler and the service
+ * call it when they are built, and so does the notifications service's
+ * resolution, which the service-binding RPCs (`deliverNotification`,
+ * `endNotificationSession`), the queue consumer, and the cron go through:
+ * they answer `NOTIFICATIONS_CONFIGURATION_REQUIRED`, retry, or skip, as for
+ * any misconfiguration.
+ */
+export function assertDevelopmentNotificationSessionsAllowed(env: GameServicesNotificationsEnv): void {
+  if (env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true' && env.MPGD_STORE === 'd1') {
+    // Anyone can write a development session header: with a durable store, a leaked flag
+    // would let any client bind devices and write consent records for any player.
+    throw new Error(
+      'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true is refused when MPGD_STORE is d1. '
+        + 'Development notification sessions are local-only; remove the flag and bind '
+        + 'GAME_SERVICES_NOTIFICATIONS_AUTH to your identity service.',
+    );
+  }
+}
+
+/** Reads a development session header; anything else is no session (401). */
+const developmentNotificationSessionAuth: GameServicesNotificationsAuthBinding = {
+  async authenticateNotificationSession({ authorization }) {
+    return parseDevelopmentNotificationSessionAuthorization(authorization) ?? null;
+  },
+};
+
+/**
+ * The session binding the routes use: `GAME_SERVICES_NOTIFICATIONS_AUTH`, or
+ * the development sessions when only the flag is set, or none.
+ */
+function notificationSessionAuthOf(
+  env: GameServicesNotificationsEnv,
+): { readonly auth: GameServicesNotificationsAuthBinding; readonly development: boolean } | undefined {
+  if (env.GAME_SERVICES_NOTIFICATIONS_AUTH !== undefined) {
+    return { auth: env.GAME_SERVICES_NOTIFICATIONS_AUTH, development: false };
+  }
+  return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true'
+    ? { auth: developmentNotificationSessionAuth, development: true }
+    : undefined;
+}
+
+/**
+ * The notifications service for this environment, built once per
+ * configuration in an isolate (`env` objects with the same vars and
+ * bindings share it, and its memory store): `disabled` without a catalog, `misconfigured`
  * (logged once) when the catalog, the deployment, or a provider's
  * credentials do not validate. The FCM token cache lives in the cached
  * provider, so an isolate mints one token per hour, not one per request.
  */
 export function resolveWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNotifications {
-  const cached = servicesByEnv.get(env);
+  const state = notificationsStateOf(env);
+  const cached = state.notifications;
   if (cached !== undefined) {
     return cached;
   }
@@ -169,13 +358,12 @@ export function resolveWorkerNotifications(env: GameServicesNotificationsEnv): W
     built = buildWorkerNotifications(env);
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    if (!reportedMisconfiguration.has(env)) {
-      reportedMisconfiguration.add(env);
+    if (firstReport(env, 'misconfigured')) {
       console.error('GameServices Worker notifications are misconfigured:', failure.message);
     }
     built = { status: 'misconfigured', error: failure };
   }
-  servicesByEnv.set(env, built);
+  state.notifications = built;
   return built;
 }
 
@@ -284,6 +472,10 @@ function aitProviderSettings(value: unknown): Omit<CreateAitFunctionalMessageDel
 }
 
 function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNotifications {
+  // Every notifications entry point (the service binding, the queue, the
+  // cron, the routes) resolves the service here, so the development-session
+  // refusal reaches them all: the service is misconfigured, and says why.
+  assertDevelopmentNotificationSessionsAllowed(env);
   if (env.MPGD_NOTIFICATIONS_CATALOG === undefined) {
     return { status: 'disabled' };
   }
@@ -350,13 +542,14 @@ function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationSto
     }
     return createD1NotificationStore(accountingDatabase(env.DB));
   }
-  let store = memoryStoresByEnv.get(env);
+  const state = notificationsStateOf(env);
+  let store = state.memoryStore;
   if (store === undefined) {
     console.warn(
       'Notifications use the memory store: consent records and endpoints live only in this isolate. Use D1 outside local development.',
     );
     store = accountingStore(createInMemoryNotificationStore());
-    memoryStoresByEnv.set(env, store);
+    state.memoryStore = store;
   }
   return store;
 }
@@ -385,6 +578,11 @@ function parseJsonVar(value: unknown, name: string): unknown {
  *   mounted (404): binding a device to a player needs an authenticated
  *   session. A Worker with a catalog but no binding logs that once, when a
  *   session route is first asked for.
+ * - In local development, `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`
+ *   stands in for the binding (see its doc); the first session route asked
+ *   for logs that sessions are not authenticated. Throws when built with it
+ *   and the D1 store, and answers 401 (logged once) on a request whose host
+ *   is not a local development host (`isLocalDevelopmentHost`).
  *
  * Sends are never a client route; a game server sends through the
  * `deliverNotification` RPC on the service binding.
@@ -393,6 +591,8 @@ export function createNotificationsFetchHandler(
   env: GameServicesNotificationsEnv,
   corsHeaders: Readonly<Record<string, string>>,
 ): (request: Request) => Promise<Response | undefined> {
+  assertDevelopmentNotificationSessionsAllowed(env);
+  const sessions = notificationSessionAuthOf(env);
   return async (request) => {
     const { pathname } = new URL(request.url);
     if (pathname !== notificationsRoutePrefix && !pathname.startsWith(`${notificationsRoutePrefix}/`)) {
@@ -431,12 +631,29 @@ export function createNotificationsFetchHandler(
       '/reminders/cancel': ['POST'],
     };
     const methods = allowed[route];
-    const auth = env.GAME_SERVICES_NOTIFICATIONS_AUTH;
-    if (methods !== undefined && auth === undefined && !reportedMissingSessionBinding.has(env)) {
+    const auth = sessions?.auth;
+    if (methods !== undefined && sessions?.development === true && firstReport(env, 'development-sessions')) {
+      console.warn(
+        'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is on, so the session routes '
+          + 'accept mpgd-dev bearer headers that anyone can write: sessions are not authenticated. '
+          + 'Local development only.',
+      );
+    }
+    if (
+      methods !== undefined
+      && sessions?.development === false
+      && env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true'
+      && firstReport(env, 'development-sessions')
+    ) {
+      console.warn(
+        'Notifications: MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS is ignored because '
+          + 'GAME_SERVICES_NOTIFICATIONS_AUTH is bound.',
+      );
+    }
+    if (methods !== undefined && auth === undefined && firstReport(env, 'missing-session-binding')) {
       // Said when a session route is first asked for, never from the cron or
       // the queue: a send-only Worker (deliverNotification alone) needs no
       // session binding.
-      reportedMissingSessionBinding.add(env);
       console.warn(
         'Notifications: MPGD_NOTIFICATIONS_CATALOG is set but the GAME_SERVICES_NOTIFICATIONS_AUTH binding is not; '
           + 'the client session routes (consent, endpoints, notices, reminders) are off and answer 404. '
@@ -455,6 +672,20 @@ export function createNotificationsFetchHandler(
       'Cache-Control': 'no-store',
       'Access-Control-Expose-Headers': 'Retry-After',
     };
+    if (sessions?.development === true) {
+      const { hostname } = new URL(request.url);
+      if (!isLocalDevelopmentHost(hostname)) {
+        // A deployed Worker (any store) never takes a header anyone can write.
+        if (firstReport(env, 'non-local-development-host')) {
+          console.warn(
+            `Notifications: a development session request to ${hostname} was refused; `
+              + 'MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS only applies on localhost, 127.0.0.1, '
+              + '[::1], *.localhost, or 10.0.2.2 (the Android emulator).',
+          );
+        }
+        return json({ error: 'UNAUTHORIZED' }, 401, privateHeaders);
+      }
+    }
     const session = await authenticate(request, auth);
     if (session instanceof Response) {
       return withHeaders(session, privateHeaders);
@@ -597,8 +828,7 @@ export async function consumeNotificationDispatchBatch(
   const backoff = (attempts: number) => ({
     delaySeconds: Math.min(2 ** Math.max(attempts, 1) * 5, 300),
   });
-  if (notifications.status !== 'ready' && !reportedUnreadyConsumer.has(env)) {
-    reportedUnreadyConsumer.add(env);
+  if (notifications.status !== 'ready' && firstReport(env, 'unready-consumer')) {
     console.error(
       notifications.status === 'disabled'
         ? 'Notifications dispatch jobs arrived but this Worker has no MPGD_NOTIFICATIONS_CATALOG; they are acknowledged.'
@@ -948,6 +1178,8 @@ function accountingDatabase(db: D1Database): D1Database {
  * Writes of POST /endpoints one session may make per rolling day, the same
  * cap as client consent records. Counted in this isolate: it stops a guest
  * session looping on one isolate, and a repeat still costs a D1 upsert.
+ * With development sessions the client names its session id, so this is
+ * no protection there (they are local-only).
  * Answers when to retry, in seconds, once the cap is full.
  */
 function endpointWriteRetryAfter(sessionId: string, now = Date.now()): number | undefined {
