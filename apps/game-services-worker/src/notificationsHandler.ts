@@ -180,38 +180,65 @@ let nextConfigurationBindingId = 0;
  * configuration. A runtime may hand the Worker a new `env` object per
  * request (the Cloudflare Vite plugin's dev server does), and the memory
  * store, the cached service, and the once-only logs must outlive the
- * request. Vars count by value: strings, and the JSON vars, which are all
- * named `MPGD_*` or `FCM_*`. Every other object is a binding (`DB`, a
- * queue, a service, an mTLS certificate) and counts by identity, since two
- * bindings can look alike as plain objects.
+ * request. Vars count by value: strings and numbers, and the JSON vars,
+ * which are all named `MPGD_*` or `FCM_*` (plain objects, arrays, and
+ * primitives inside them). Everything else counts by identity: a binding
+ * (`DB`, a queue, a service, an mTLS certificate), and any value inside a
+ * JSON var that is not plain data. A runtime that also re-creates its
+ * binding objects per request therefore still gets one state per request.
+ * `undefined` when the env cannot be read as data (a throwing getter, a
+ * cycle, a bigint); the caller then keeps the state per env object.
  */
-function notificationsConfigurationKey(env: GameServicesNotificationsEnv): string {
+function notificationsConfigurationKey(env: GameServicesNotificationsEnv): string | undefined {
   const record = env as Readonly<Record<string, unknown>>;
-  const identityOf = (value: object): number => {
+  const identityOf = (value: object): { readonly binding: number } => {
     let id = configurationBindingIds.get(value);
     if (id === undefined) {
       nextConfigurationBindingId += 1;
       id = nextConfigurationBindingId;
       configurationBindingIds.set(value, id);
     }
-    return id;
+    return { binding: id };
   };
-  const byValue = (value: unknown): unknown => {
-    if (value === null || typeof value !== 'object') {
-      return typeof value === 'function' ? { binding: identityOf(value) } : value;
+  const byValue = (value: unknown, depth: number): unknown => {
+    if (depth > 32) {
+      throw new Error('Too deep to key by value.');
+    }
+    if (value === undefined) {
+      return { undefined: true };
+    }
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : { number: String(value) };
+    }
+    if (typeof value !== 'object') {
+      // A function, a symbol, or a bigint.
+      return typeof value === 'function' ? identityOf(value) : { other: String(value) };
     }
     if (Array.isArray(value)) {
-      return value.map(byValue);
+      return { array: value.map((item: unknown) => byValue(item, depth + 1)) };
+    }
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return identityOf(value);
     }
     const object = value as Readonly<Record<string, unknown>>;
-    return Object.keys(object).sort().map((name) => [name, byValue(object[name])]);
+    return {
+      object: Object.keys(object).sort().map((name) => [name, byValue(object[name], depth + 1)]),
+    };
   };
-  return JSON.stringify(Object.keys(record).sort().map((name) => {
-    const value = record[name];
-    const isVar = value === null || (typeof value !== 'object' && typeof value !== 'function')
-      || name.startsWith('MPGD_') || name.startsWith('FCM_');
-    return [name, isVar ? byValue(value) : { binding: identityOf(value as object) }];
-  }));
+  try {
+    return JSON.stringify(Object.keys(record).sort().map((name) => {
+      const value = record[name];
+      const isVar = value === null || (typeof value !== 'object' && typeof value !== 'function')
+        || name.startsWith('MPGD_') || name.startsWith('FCM_');
+      return [name, isVar ? byValue(value, 0) : identityOf(value as object)];
+    }));
+  } catch {
+    return undefined;
+  }
 }
 
 /** The state for this configuration, shared by every `env` object that carries it. */
@@ -221,9 +248,13 @@ function notificationsStateOf(env: GameServicesNotificationsEnv): NotificationsC
     return known;
   }
   const key = notificationsConfigurationKey(env);
-  let state = statesByConfiguration.get(key);
+  let state = key === undefined ? undefined : statesByConfiguration.get(key);
   if (state === undefined) {
     state = { reported: new Set() };
+  }
+  if (key !== undefined) {
+    // Most recently used last, so the eviction below drops the least recently used.
+    statesByConfiguration.delete(key);
     statesByConfiguration.set(key, state);
     if (statesByConfiguration.size > maxNotificationConfigurations) {
       const oldest = statesByConfiguration.keys().next().value;

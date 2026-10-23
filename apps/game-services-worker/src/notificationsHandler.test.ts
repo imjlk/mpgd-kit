@@ -1229,6 +1229,49 @@ try {
           }),
         );
         assert.deepEqual(await other.json(), { records: [] });
+        // Values that read alike are different configurations: an array of pairs and an object,
+        // undefined and null, and a class instance (by identity) and an empty object.
+        const readsEmpty = async (marker: unknown) => {
+          const response = await createWorkerFetchHandler(
+            { ...perRequestEnv(), MPGD_DEV_REQUEST_TEST: marker } as GameServicesWorkerEnv,
+          )(new Request('http://localhost:8787/game-services/notifications/consent', { headers: header }));
+          return ((await response.json()) as { readonly records: readonly unknown[] }).records.length === 0;
+        };
+        const recordOn = async (marker: unknown) => {
+          const response = await createWorkerFetchHandler(
+            { ...perRequestEnv(), MPGD_DEV_REQUEST_TEST: marker } as GameServicesWorkerEnv,
+          )(
+            new Request('http://localhost:8787/game-services/notifications/consent', {
+              method: 'POST',
+              headers: { ...header, 'content-type': 'application/json' },
+              body: JSON.stringify({
+                record: { kind: 'topic-preference', topic: 'friend-challenge', state: 'granted', source: 'player' },
+              }),
+            }),
+          );
+          assert.equal(response.status, 200);
+        };
+        await recordOn({ a: 1 });
+        assert.equal(await readsEmpty({ a: 1 }), false);
+        assert.equal(await readsEmpty([['a', 1]]), true);
+        await recordOn(null);
+        assert.equal(await readsEmpty(undefined), true);
+        await recordOn({});
+        assert.equal(await readsEmpty(new Map()), true);
+        // An env that cannot be read as data keeps its state per env object, and still serves.
+        const unreadable = perRequestEnv();
+        Object.defineProperty(unreadable, 'MPGD_DEV_REQUEST_TEST', {
+          enumerable: true,
+          get() {
+            throw new Error('unreadable');
+          },
+        });
+        const served = await createWorkerFetchHandler(unreadable)(
+          new Request('http://localhost:8787/game-services/notifications/consent', {
+            headers: header,
+          }),
+        );
+        assert.equal(served.status, 200);
       } finally {
         console.warn = realWarn;
       }
