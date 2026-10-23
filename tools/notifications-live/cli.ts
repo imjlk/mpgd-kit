@@ -47,9 +47,10 @@ const usage = `Usage: pnpm notifications:live <command> [options]
 
 /**
  * The Worker as `vite build` emits it, relative to apps/game-services-worker,
- * for `--format env-file`. `wrangler dev` on the sources does not run the
- * typia transform the kit's packages need; `pnpm dev` (Vite, the default
- * flow) or the built Worker does.
+ * for `--format env-file`. Plain `wrangler dev` on the sources resolves the
+ * kit's packages to their untransformed sources through the TypeScript
+ * paths and fails on typia; `pnpm dev` (Vite, the default flow) and the
+ * built Worker use the built packages.
  */
 const liveWorkerBuildConfig = 'dist/mpgd_game_services/wrangler.json';
 

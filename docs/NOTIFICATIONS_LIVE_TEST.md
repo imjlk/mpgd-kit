@@ -28,13 +28,14 @@ the kit does not rot between live runs.
 ## Ground rules
 
 - **Your credentials stay on your machine.** The Firebase service-account
-  key and the env file are yours: keep them out of every repository, and
+  key and the Worker's `.dev.vars` file are yours: keep them out of every repository, and
   never paste them into an issue, a PR, or an agent session.
   `google-services.json` is less sensitive but project-specific: keep the
   test game's repository local, or ignore the file there. The kit reads
-  the key only to write the env file (mode 0600 on macOS and Linux; on
+  the key only to write that file (mode 0600 on macOS and Linux; on
   Windows the file keeps your profile's permissions), and refuses to write
-  that file inside any git checkout or through a symbolic link. It never reads mise's configuration (`~/.config/mise`,
+  it inside any git checkout or through a symbolic link. It never reads
+  mise's configuration (`~/.config/mise`,
   `$XDG_CONFIG_HOME/mise`, `$MISE_CONFIG_DIR`).
 - **Use a Firebase project for testing**, not the one your released game
   sends from, and test players only.
@@ -166,9 +167,10 @@ pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787
 
 This is the flow the generated game's guide and the Worker guide use, and
 it is the simpler one for the live run: no build step, it reloads on a
-Worker source change, and it serves wrangler dev's scheduled route.
-(`wrangler dev` straight on the sources does not run the typia transform
-the kit's packages need; the Vite dev server does.) The Worker keeps its
+Worker source change, and it serves `/cdn-cgi/handler/scheduled`. It
+uses the built packages (`pnpm build:packages`); plain `wrangler dev` on
+the Worker's sources instead resolves them to their untransformed sources
+through the TypeScript paths and fails on a typia call at startup. The Worker keeps its
 notifications state per configuration, so the memory store holds the
 device's registration until you stop it; a runtime that re-created its
 binding objects on every request would not, and this flow binds none. To
@@ -267,7 +269,7 @@ the reminder fired and nothing held its send; whether FCM delivered it is
 in the Worker log and on the device.
 
 `deliverNotification` is a service-binding RPC, not an HTTP route, so the
-driver cannot call it on `wrangler dev`; the dry run covers it in process.
+driver cannot call it on the local Worker; the dry run covers it in process.
 The scheduler path above uses the same delivery and provider code.
 
 ### When something fails
@@ -276,8 +278,8 @@ The scheduler path above uses the same delivery and provider code.
 | --- | --- |
 | `providers` fails with 404 | No `MPGD_NOTIFICATIONS_CATALOG`: the Worker did not read the variables; check the `.dev.vars` link and restart it. |
 | `providers` fails with 500, or `android` has no provider | The catalog, deployment, or key does not validate (the Worker logs which once); a placeholder sender contact is the usual one. |
-| `session-required` gets 404 | The session routes are off: the `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` flag is missing, or `GAME_SERVICES_NOTIFICATIONS_AUTH` is bound and takes precedence. |
-| `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`), and that `--worker` is a local host (D1 refuses development sessions on any other host, such as a LAN address). |
+| `session-required` gets 404 | The session routes are off: the `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` flag is missing (check the `.dev.vars` link and restart the Worker). |
+| `session` gets 401 | The Worker refused the session token: check `--player`, `--session`, `--installation` (letters, digits, `_`, `-`), that `--worker` is a local host (development sessions are refused on any other host, such as a LAN address), and that no `GAME_SERVICES_NOTIFICATIONS_AUTH` binding is configured (it takes precedence over the flag, which the Worker then logs as ignored). |
 | `reminder-cancel` or `reminder` answers `permission-required` | No endpoint with a granted permission for this player: the device has not registered, or registered as another player. |
 | `scheduler` fails: did not send | The reminder was not due when the scheduler ran (clock skew), quiet hours or the daily cap held the send, or the send waits to retry a provider failure (the Worker log names it). The check cancelled it. |
 | No push, Worker log shows `Notifications: provider.rejected ... (configuration, <code>)` | FCM or Google refused the send's setup. A `TOKEN_*` code (such as `TOKEN_KEY_UNUSABLE` or `TOKEN_INVALID_GRANT`): the key is malformed, revoked, or deleted. `PERMISSION_DENIED`: the service account lacks the role that may send through FCM. Another code names FCM's own refusal. |
@@ -291,7 +293,7 @@ Notifications capability, and the AppDelegate wiring from the
 [Firebase setup guide](FIREBASE_NOTIFICATIONS.md#4-ios). A physical iPhone
 cannot reach `127.0.0.1` on your machine, and App Transport Security
 refuses plain http, so run the iOS half against a test deployment
-([Staging](#staging)) rather than `wrangler dev`. Check the cold-start tap
+([Staging](#staging)) rather than the local Worker. Check the cold-start tap
 in particular (the [Firebase guide](FIREBASE_NOTIFICATIONS.md#6-check-it)
 explains why).
 
