@@ -340,6 +340,29 @@ try {
     writeFileSync(path.join(ownSession, 'src/platform/serverSession.ts'), 'export {};\n');
     const kept = planCapacitorShellStarter(input(ownSession, ['notifications']));
     assert.equal(kept.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+    // Declarations the check cannot follow are not proof of absence: the build decides.
+    for (const [index, files] of [
+      // A nested barrel: the re-exported module re-exports further.
+      { 'index.d.ts': "export * from './services/index.js';\n", 'services/index.d.ts': "export * from './development-session.js';\n" },
+      // A re-export from another package.
+      { 'index.d.ts': "export * from './runtime.js';\nexport * from '@mpgd/game-services-core';\n", 'runtime.d.ts': 'export {};\n' },
+      // A re-exported module that is not there.
+      { 'index.d.ts': "export * from './gone.js';\n" },
+    ].entries()) {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, false);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(dist, file)), { recursive: true });
+        writeFileSync(path.join(dist, file), content);
+      }
+      const unfollowed = planCapacitorShellStarter(input(root, ['notifications']));
+      assert.ok(
+        unfollowed.changedFiles.includes('src/platform/developmentServerSession.ts'),
+        String(index),
+      );
+    }
   }
 
   // What counts as importing a module: its specifier in a string outside comments.

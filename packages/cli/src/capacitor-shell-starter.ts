@@ -3359,12 +3359,7 @@ function planNotificationsProvider(input: {
         const required = imported?.requires;
         if (required !== undefined
           && installedPackageLacksExport(gameRoot, required.packageName, required.exportName)) {
-          const installed = readExisting(
-            path.join(gameRoot, 'node_modules', required.packageName, 'package.json'),
-          );
-          const version = installed === undefined
-            ? 'unknown'
-            : String(parseJsonObject(installed, required.packageName).version);
+          const version = installedPackageVersion(gameRoot, required.packageName);
           throw new Error(
             `--providers notifications writes ${file}, which imports ${required.exportName} from `
               + `${required.packageName}; the game's ${required.packageName} ${version} does not export it. `
@@ -3514,17 +3509,23 @@ function json(value: unknown): string {
 /**
  * Whether the game's installed `packageName` provably lacks `exportName`:
  * its root type declarations, with the relative `export *` modules they
- * re-export one level deep, never name it. An uninstalled package, or
- * declarations the check cannot read, pass: the game's build then decides,
- * as for the adapter's settings opener.
+ * re-export one level deep, never name it. Anything the check cannot follow
+ * passes, and the game's build then decides, as for the adapter's settings
+ * opener: an uninstalled or unreadable package, a re-export from another
+ * package, or a re-export inside a re-exported module.
  */
 function installedPackageLacksExport(gameRoot: string, packageName: string, exportName: string): boolean {
   const packageRoot = path.join(gameRoot, 'node_modules', packageName);
-  const manifestSource = readExisting(path.join(packageRoot, 'package.json'));
-  if (manifestSource === undefined) {
+  let manifest: Record<string, unknown>;
+  try {
+    const manifestSource = readExisting(path.join(packageRoot, 'package.json'));
+    if (manifestSource === undefined) {
+      return false;
+    }
+    manifest = parseJsonObject(manifestSource, `${packageName}/package.json`);
+  } catch {
     return false;
   }
-  const manifest = parseJsonObject(manifestSource, `${packageName}/package.json`);
   const rootExport = typeof manifest.exports === 'object' && manifest.exports !== null
     ? (manifest.exports as Readonly<Record<string, unknown>>)['.']
     : undefined;
@@ -3542,8 +3543,14 @@ function installedPackageLacksExport(gameRoot: string, packageName: string, expo
   if (root === undefined) {
     return false;
   }
+  const anyReexport = /\bexport\s+(?:type\s+)?(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"]/u;
+  const relativeStar = /export\s*\*\s*from\s*['"](\.{1,2}\/[^'"]+)['"]\s*;?/gu;
+  // A re-export other than a relative `export *` (another package, a named or namespace re-export) is not followed.
+  if (anyReexport.test(root.replace(relativeStar, ''))) {
+    return false;
+  }
   const sources = [root];
-  for (const match of root.matchAll(/export\s*\*\s*from\s*['"](\.{1,2}\/[^'"]+)['"]/gu)) {
+  for (const match of root.matchAll(relativeStar)) {
     const specifier = match[1] ?? '';
     const declarations = specifier.replace(/\.(?:js|mjs)$/u, '.d.ts');
     const reexported = readExisting(
@@ -3552,11 +3559,22 @@ function installedPackageLacksExport(gameRoot: string, packageName: string, expo
         declarations.endsWith('.d.ts') ? declarations : `${declarations}.d.ts`,
       ),
     );
-    if (reexported === undefined) {
-      // A re-export the check cannot follow: do not refuse on a guess.
+    if (reexported === undefined || anyReexport.test(reexported)) {
+      // A module the check cannot read, or one that re-exports further: do not refuse on a guess.
       return false;
     }
     sources.push(reexported);
   }
   return !sources.some((source) => new RegExp(`\\b${exportName}\\b`, 'u').test(source));
+}
+
+/** The installed package's version, for a message. */
+function installedPackageVersion(gameRoot: string, packageName: string): string {
+  try {
+    const source = readExisting(path.join(gameRoot, 'node_modules', packageName, 'package.json'));
+    const version = source === undefined ? undefined : parseJsonObject(source, packageName).version;
+    return typeof version === 'string' ? version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
