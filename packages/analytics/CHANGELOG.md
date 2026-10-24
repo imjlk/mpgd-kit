@@ -1,5 +1,11 @@
 # @mpgd/analytics
 
+## 0.5.0 — 2026-10-24
+
+### Added
+
+- [11aed7bd](https://github.com/imjlk/mpgd-kit/commit/11aed7bd725bef59243dbd91b33f799c67f5fb58) Add a pure, optional monetization-attempt observer for catalog, purchase, restore, attendance and promotion stages. Observer failures are isolated and returned promises are not awaited; diagnostics never grant value. — Thanks @imjlk!
+
 ## 0.4.16 — 2026-10-21
 
 ### Patch changes

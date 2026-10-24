@@ -1,5 +1,11 @@
 # @mpgd/game-runtime
 
+## 0.8.1 — 2026-10-24
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-services@0.28.0
+
 ## 0.8.0 — 2026-10-21
 
 ### Minor changes
