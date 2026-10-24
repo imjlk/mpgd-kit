@@ -301,6 +301,10 @@ describe('notifications contract', () => {
       expectedPlayer: 't2_a',
       reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-13T03:00:00Z', link: 't3_post' },
     }).reminder.link).toBe('t3_post');
+    expect(assertNotificationBackendBridgeSetReminderPayload({
+      expectedPlayer: 't2_a',
+      reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-13T12:00:00.5+09:00' },
+    }).reminder.fireAt).toBe('2026-10-13T12:00:00.5+09:00');
     for (const reminder of [
       { key: '', topic: 'daily', fireAt: '2026-10-13T03:00:00Z' },
       { key: 'daily', topic: 'daily', fireAt: 'tomorrow' },

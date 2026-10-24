@@ -819,8 +819,10 @@ const minimal: NotificationProvider = {
   failWith = undefined;
 
   // An answer outside the contract is the backend's configuration.
+  const brokenFailures: unknown[] = [];
   const broken = createNotificationsBackendBridgeHandler({
     backend: { ...backend, setReminder: async () => 'sent' as never },
+    onError: (error) => brokenFailures.push(error),
   });
   const brokenAnswer = errorOf(await broken.request(request('notifications.backend.setReminder', {
     ...player,
@@ -832,6 +834,9 @@ const minimal: NotificationProvider = {
     brokenAnswer.message,
     'The notifications backend answered notifications.backend.setReminder outside the contract.',
   );
+  // The validator's text reaches the host's log through the cause, not the game.
+  assert.equal(brokenFailures.length, 1);
+  assert.ok((brokenFailures[0] as Error).cause instanceof Error);
   // A failure shaped as a platform failure with another code keeps its flag, not its text.
   failWith = new PlatformOperationError({ code: 'STORAGE_FAILED', message: 'redis host 10.0.0.1 refused', retryable: false });
   const platformFailure = errorOf(

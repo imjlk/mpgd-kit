@@ -24,15 +24,18 @@
           },
           "key": {
             "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The reminder's key, unique per player; setting it again replaces the reminder.",
             "readOnly": true
           },
           "fireAt": {
             "type": "string",
             "format": "date-time",
+            "description": "RFC 3339 with an explicit offset.",
             "readOnly": true
           },
           "link": {
             "$ref": "#/components/schemas/NonEmptyString",
+            "description": "A post or comment id for providers whose sends need a link (Devvit).",
             "readOnly": true
           }
         },
