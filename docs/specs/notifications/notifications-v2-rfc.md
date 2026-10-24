@@ -1091,7 +1091,10 @@ player's account would deliver that player's notifications to the device.
   session's) installation id, never a value from the request body. The
   identity service must vouch for it (issue it, or bind it to the session
   it issued): a client that could pick another installation's id could
-  move that installation's endpoint to itself. An endpoint
+  move that installation's endpoint to itself. The one exception is the
+  Worker's local development sessions (see What D1 landed), which name
+  their own ids, are refused with a durable store, and are accepted only on
+  a local development host. An endpoint
   holds the current address, the device's permission, and `lastRegisteredAt`.
   - A new address for the same installation replaces the old one.
   - An address is unique per provider.
@@ -2526,6 +2529,7 @@ publishable package carries a Sampo changeset.
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending; the Devvit scheduler path landed with P3 | No reminders |
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
 | R1 | `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
+| D1 | `sessionFamilyId` and `createGuestServerSession` in `@mpgd/game-services`, the Worker's local development notification sessions, and the starter's guest and development sessions | No stable session id from a guest session; no session without an identity service |
 
 **What S1 landed.**
 
@@ -2659,11 +2663,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   - The identity side's `NotificationSessions` binding stays with each
     game's identity service; the contract is in the
     [Worker guide](../../CLOUDFLARE_WORKER_DEPLOY.md) ("Sessions").
-  - Expose a stable session-family id from `GuestSessionCoordinator`. Its
-    view's `sessionId` may rotate on refresh, while the runtime and the
-    Worker need the id `authenticateNotificationSession` answers, which
-    stays the same across refreshes; until then a game passes that id
-    itself.
+  - Expose a stable session-family id from `GuestSessionCoordinator`:
+    landed in D1, below.
   - Android advertising rendering and bulk sends, as listed under C1; the
     shared host-side `notifications.v2` bridge handler landed in B1, below.
 
@@ -2703,6 +2704,33 @@ in Toss fixes.
   of a `reachedFailReason` and trims that slice before matching.
 - Left to follow-ups: bulk sends (open question 5) and native rendering of
   Android advertising pushes (above).
+
+**What D1 landed.** D1 is a follow-up to R1: a session id the runtime can
+use from a guest session, and sessions for local development.
+
+- `@mpgd/game-services` guest sessions carry `sessionFamilyId`, the stable
+  session-family id, optional on the wire. A backend that omits it gets a
+  derived one that only changes where the backend's family might: a new
+  guest, a bound account whose `sessionId` changed, or a restore whose
+  saved family (kept next to the refresh token, written before it) cannot
+  be read. The derived id is not the identity service's id and need not
+  be: the runtime only compares it with the id it registered under, and
+  registers again when it changes. `createGuestServerSession(coordinator)`
+  reads a coordinator as the client's identity and header resolver (the
+  family id as `sessionId`), and the starter recommends it again.
+- The Worker's `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`
+  accepts `Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>` on the
+  session routes when no `GAME_SERVICES_NOTIFICATIONS_AUTH` is bound,
+  refuses to build its fetch handler and service with the D1 store (the
+  first request or RPC fails, and the notification RPCs, queue, and cron
+  see a misconfigured service), answers 401 on a request whose host is not
+  a local development host (loopback, `*.localhost`, or the Android
+  emulator's `10.0.2.2`), and logs that sessions are not authenticated.
+  The service binding, the queue, and the cron take no session. `createDevelopmentServerSession` is the game side, which
+  the starter uses only on the Vite dev server in the development mode
+  (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).
+- Left to follow-ups: a production identity Worker, and live end-to-end
+  runs (E1).
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release

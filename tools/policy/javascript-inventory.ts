@@ -103,6 +103,11 @@ export const javascriptInventory = [
     reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
   },
   {
+    file: 'packages/analytics/test/dist-import.mjs',
+    disposition: 'runtime-exception',
+    reason: 'Plain Node consumer verifies shipped analytics exports without TypeScript loaders or source aliases masking ESM resolution failures.',
+  },
+  {
     file: 'packages/bridge/test/index-dist-import.mjs',
     disposition: 'runtime-exception',
     reason: 'Plain Node consumer verifies shipped JavaScript without TypeScript loaders or workspace source aliases.',
