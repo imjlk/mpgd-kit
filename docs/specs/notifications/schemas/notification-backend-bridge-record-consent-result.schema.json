@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-record-consent-result.schema.json",
+  "title": "NotificationBackendBridgeRecordConsentResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeRecordConsentResult",
+  "components": {
+    "schemas": {
+      "IsoDateTime": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBackendBridgeRecordConsentResult": {
+        "type": "object",
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/NotificationConsentRecord",
+            "description": "The record as stored, dated by the backend's clock.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "record"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConsentRecord": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "delivery-permission",
+                "readOnly": true
+              },
+              "state": {
+                "$ref": "#/components/schemas/NotificationRecordablePermissionState",
+                "readOnly": true
+              },
+              "source": {
+                "oneOf": [
+                  {
+                    "const": "client-report"
+                  },
+                  {
+                    "const": "player"
+                  }
+                ],
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoDateTime",
+                "readOnly": true
+              },
+              "evidence": {
+                "$ref": "#/components/schemas/PlatformEvidenceEnvelope",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "state",
+              "source",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "host-agreement",
+                "readOnly": true
+              },
+              "topic": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "state": {
+                "$ref": "#/components/schemas/NotificationRecordablePermissionState",
+                "readOnly": true
+              },
+              "source": {
+                "oneOf": [
+                  {
+                    "const": "client-report"
+                  },
+                  {
+                    "const": "provider"
+                  }
+                ],
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoDateTime",
+                "readOnly": true
+              },
+              "evidence": {
+                "$ref": "#/components/schemas/PlatformEvidenceEnvelope",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "topic",
+              "state",
+              "source",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "topic-preference",
+                "readOnly": true
+              },
+              "topic": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "state": {
+                "oneOf": [
+                  {
+                    "const": "granted"
+                  },
+                  {
+                    "const": "withdrawn"
+                  }
+                ],
+                "readOnly": true
+              },
+              "source": {
+                "const": "player",
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoDateTime",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "topic",
+              "state",
+              "source",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "oneOf": [
+                  {
+                    "const": "advertising"
+                  },
+                  {
+                    "const": "night"
+                  }
+                ],
+                "readOnly": true
+              },
+              "state": {
+                "oneOf": [
+                  {
+                    "const": "granted"
+                  },
+                  {
+                    "const": "withdrawn"
+                  }
+                ],
+                "readOnly": true
+              },
+              "source": {
+                "const": "player",
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoDateTime",
+                "readOnly": true
+              },
+              "textVersion": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "description": "Consent text version the player agreed to or withdrew from.",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "state",
+              "source",
+              "at",
+              "textVersion"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "One consent record. The per-kind shapes encode the RFC rules: permission\nkinds carry a permission state, a `delivery-permission` record comes from a\nclient report or a player revocation, a `host-agreement` record from a\nclient report or a provider answer, `host-agreement` and `topic-preference`\nname their topic, the player-authored kinds carry `granted` or `withdrawn`,\nand advertising and night consent carry the consent text version. The\nbackend stamps `at` with its own clock."
+      },
+      "NotificationRecordablePermissionState": {
+        "oneOf": [
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "prompt-with-rationale"
+          }
+        ],
+        "description": "Permission states the runtime records: decided ones, never `prompt`, `unknown`, `action-required`, or `unsupported`."
+      },
+      "PlatformEvidenceEnvelope": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "string",
+            "readOnly": true
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "schema",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "ReadonlyRecordstringstringnumberboolean": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

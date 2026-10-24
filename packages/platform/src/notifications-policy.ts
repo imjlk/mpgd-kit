@@ -1834,6 +1834,11 @@ export const notificationTimeFields = {
   NotificationConsentRecord: { at: 'date-time' },
   NotificationNotice: noticeTimeFields,
   RecordNotificationNoticeInput: noticeTimeFields,
+  NotificationBackendBridgeRecordConsentPayload: { record: { at: 'date-time' } },
+  NotificationBackendBridgeRecordConsentResult: { record: { at: 'date-time' } },
+  NotificationBackendBridgeListConsentResult: { records: { at: 'date-time' } },
+  NotificationBackendBridgeListNoticesResult: { notices: noticeTimeFields },
+  NotificationBackendBridgeRecordNoticePayload: { notice: noticeTimeFields },
   NotificationConformanceVector: {
     context: { now: 'date-time' },
     steps: {

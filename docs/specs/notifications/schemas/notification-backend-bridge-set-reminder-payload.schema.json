@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-set-reminder-payload.schema.json",
+  "title": "NotificationBackendBridgeSetReminderPayload",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeSetReminderPayload",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBackendBridgeSetReminderPayload": {
+        "type": "object",
+        "properties": {
+          "expectedPlayer": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "reminder": {
+            "$ref": "#/components/schemas/SetNotificationReminderInput",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "expectedPlayer",
+          "reminder"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationTopicId": {
+        "type": "string",
+        "description": "Open topic id declared by the game's topic catalog."
+      },
+      "ReadonlyRecordstringstringnumberboolean": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "SetNotificationReminderInput": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NotificationTopicId",
+            "readOnly": true
+          },
+          "fireAt": {
+            "type": "string",
+            "description": "RFC 3339 with an explicit offset.",
+            "readOnly": true
+          },
+          "templateData": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "readOnly": true
+          },
+          "link": {
+            "type": "string",
+            "description": "A post or comment id for providers whose sends need a link (Devvit).",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "key",
+          "topic",
+          "fireAt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

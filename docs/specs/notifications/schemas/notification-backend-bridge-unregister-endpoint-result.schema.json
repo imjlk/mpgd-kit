@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-unregister-endpoint-result.schema.json",
+  "title": "NotificationBackendBridgeUnregisterEndpointResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeUnregisterEndpointResult",
+  "components": {
+    "schemas": {
+      "NotificationBackendBridgeUnregisterEndpointResult": {
+        "type": "object",
+        "properties": {
+          "unregistered": {
+            "const": true,
+            "readOnly": true
+          }
+        },
+        "required": [
+          "unregistered"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
