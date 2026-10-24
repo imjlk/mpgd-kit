@@ -97,7 +97,8 @@ Reddit approves. The profile follows the
     out after 15 seconds. A logged-out answer settles the read: the backend
     relies on Reddit reloading the post after login, as `showLoginPrompt()`
     does, so the new page reads the logged-in user. The runtime's
-    `unregister()` call removes the user's endpoint records; the platform-user
+    `unregister()` call removes this installation's endpoint record for the
+    user and provider; the platform-user
     registration (locale and zone) is not an endpoint and stays, and sends
     still need the user's opt-in.
   - A reminder set through the runtime (`runtime.reminders.set`) is stored

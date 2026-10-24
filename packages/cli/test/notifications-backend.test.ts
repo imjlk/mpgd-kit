@@ -202,6 +202,9 @@ try {
     assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
     assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
     assert.equal(throws, 1);
+    // A new factory starts afresh.
+    setStarterHostedNotificationBackend('reddit', () => hosted);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), hosted);
     setStarterHostedNotificationBackend('reddit', undefined);
     assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
     await settle();

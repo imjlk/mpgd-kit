@@ -174,7 +174,8 @@ export function setStarterHostedNotificationBackend(
 
 /**
  * The backend `configTarget`'s own server hosts, created on the first call;
- * `undefined` when none was set for this config target.
+ * `undefined` when none was set for this config target, or when its factory
+ * threw (logged once; not called again until a new factory is set).
  */
 export function resolveStarterHostedNotificationBackend(configTarget: string): NotificationRuntimeBackend | undefined {
   if (hostedBackend === undefined || hostedBackend.configTarget !== configTarget) {

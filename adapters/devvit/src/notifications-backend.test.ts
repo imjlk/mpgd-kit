@@ -882,7 +882,8 @@ describe('createDevvitNotificationsBackend', () => {
     await flushJobs();
     expect(attempts).toBe(2);
     expect(backend.session()).toEqual({ id: `devvit:${alice}`, player: alice });
-    // Options the client refuses are not a load to retry.
+    // Options the client refuses are not a load to retry, and the refusal is logged once.
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const refused = createDevvitNotificationsBackend({
       appVersion: '1',
       buildId: 'test',
@@ -909,6 +910,10 @@ describe('createDevvitNotificationsBackend', () => {
     refusedCounted.session();
     await flushJobs();
     expect(refusedLoads).toBe(1);
+    await expect(refused.listConsent()).rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    // One log per refused backend, however often its calls refuse.
+    expect(logged).toHaveBeenCalledTimes(2);
+    logged.mockRestore();
     // A load that fails slowly waits the interval from its failure.
     let slowClock = 0;
     const slowFailures: ((error: unknown) => void)[] = [];
