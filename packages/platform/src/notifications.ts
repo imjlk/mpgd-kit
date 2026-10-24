@@ -547,7 +547,7 @@ export interface NotificationBackendBridgeReminder extends Omit<
   readonly key: NonEmptyString;
   /** RFC 3339 with an explicit offset. */
   readonly fireAt: string & tags.Format<'date-time'>;
-  /** A post or comment id for providers whose sends need a link (Devvit). */
+  /** A post or comment id, for providers whose sends need a link, such as Devvit. */
   readonly link?: NonEmptyString;
 }
 

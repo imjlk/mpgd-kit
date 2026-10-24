@@ -53,7 +53,11 @@ export interface CreateDevvitNotificationsBackendBridgeHandlerInput {
   readonly onError?: ((error: unknown, context: { readonly method: string }) => void) | undefined;
 }
 
-/** Serves the nine `notifications.backend.*` methods; the Devvit server bridge's `notificationsBackend` dependency. */
+/**
+ * Serves the nine `notifications.backend.*` methods; the handler a Devvit
+ * server bridge routes them to (the `notificationsBackend` dependency of the
+ * kit's and the CLI template's `createDevvitBridgeHandler`).
+ */
 export interface DevvitNotificationsBackendBridgeHandler {
   request(input: BridgeRequest): Promise<BridgeResponse>;
 }
@@ -99,16 +103,14 @@ export function createDevvitNotificationsBackendBridgeHandler(
     },
     backend: {
       session() {
-        let notifications: NotificationSession;
-        try {
-          notifications = devvitNotificationSessionFromContext(input.context());
-        } catch (error) {
-          // A logged-out viewer has no user id; anything else is the server's failure.
-          if (error instanceof TypeError) {
-            return undefined;
-          }
-          throw error;
+        const context = input.context();
+        // A logged-out viewer has no user id. Any other failure (a context
+        // that cannot be read, an id that is not a t2_ id) is the server's,
+        // and reaches onError rather than reading as logged out.
+        if (context.userId === undefined) {
+          return undefined;
         }
+        const notifications: NotificationSession = devvitNotificationSessionFromContext(context);
         return { id: notifications.sessionId, player: notifications.player, notifications };
       },
       recordConsent: (session, record) => service.recordConsent(session.notifications, record),

@@ -99,6 +99,7 @@ export function createDevvitNotificationsBackendClient(
   }
   let current: NotificationRuntimeSession | undefined;
   let refreshing: Promise<NotificationRuntimeSession | undefined> | undefined;
+  let everRead = false;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
 
   const send = async <TMethod extends BridgeNotificationsBackendMethod>(
@@ -156,6 +157,7 @@ export function createDevvitNotificationsBackendClient(
     if (refreshing !== undefined) {
       return refreshing;
     }
+    everRead = true;
     const attempt = (async () => {
       const { session } = await send('notifications.backend.getSession', { protocol: notificationsProtocol });
       if (session === null) {
@@ -186,11 +188,35 @@ export function createDevvitNotificationsBackendClient(
 
   const requireSession = (method: BridgeNotificationsBackendMethod): NotificationRuntimeSession => {
     if (current === undefined) {
+      if (!everRead) {
+        // Nothing read the session yet: read it now, so the runtime hears of
+        // a signed-in player through onAuthenticated instead of waiting forever.
+        void refreshSession().catch(() => undefined);
+      }
       throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
         message: `${method} needs a signed-in player; no request was sent.`,
       });
     }
     return current;
+  };
+
+  /**
+   * Reads the session again after the server refused a call for `refused`.
+   * A read already in flight may have been answered before the user
+   * changed; when it still names the refused session, one more read asks
+   * the server again. A failed read leaves the session as it was; the next
+   * refusal reads again.
+   */
+  const rereadAfterRefusal = async (refused: NotificationRuntimeSession): Promise<void> => {
+    const sameAsRefused = (read: NotificationRuntimeSession | undefined): boolean =>
+      read !== undefined && read.id === refused.id && read.player === refused.player;
+    try {
+      if (sameAsRefused(await refreshSession())) {
+        await refreshSession();
+      }
+    } catch {
+      // The refusal is what the caller needs to see.
+    }
   };
 
   /**
@@ -210,7 +236,7 @@ export function createDevvitNotificationsBackendClient(
       } as BridgeNotificationsBackendPayload<TMethod>);
     } catch (error) {
       if (error instanceof NotificationError && sessionRefusalHostCodes.has(error.hostCode)) {
-        await refreshSession().catch(() => undefined);
+        await rereadAfterRefusal(session);
       }
       throw error;
     }

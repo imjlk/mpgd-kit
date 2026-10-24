@@ -5,6 +5,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
+import { NotificationConsentRateLimitError } from '@mpgd/game-services/notifications';
 import { NotificationError } from '@mpgd/platform/notifications';
 import { createNotificationRuntime } from '@mpgd/platform/notifications-runtime';
 
@@ -143,6 +144,13 @@ function setup(input: { readonly loggedOut?: boolean } = {}) {
         installationId: `devvit:${player}`,
       }),
   };
+}
+
+/** Lets every pending promise job of the in-process bridge run; no timers. */
+async function flushJobs(): Promise<void> {
+  for (let step = 0; step < 50; step += 1) {
+    await Promise.resolve();
+  }
 }
 
 const sentBackend = (sent: readonly Sent[], method: string) =>
@@ -397,5 +405,217 @@ describe('createDevvitNotificationsBackendClient', () => {
     answer = { session: null };
     await expect(client.refreshSession()).resolves.toBeUndefined();
     expect(announced).toEqual([alice]);
+  });
+
+  it('reads the session again when a refused call joined a read answered before the switch', async () => {
+    let user = alice;
+    const reads: ((value: unknown) => void)[] = [];
+    let refuse = false;
+    const client = createDevvitNotificationsBackendClient({
+      request: (method) => {
+        if (method === 'notifications.backend.getSession') {
+          const answered = { session: { id: `devvit:${user}`, player: user } };
+          return new Promise((resolve) => {
+            reads.push(() => resolve(answered));
+          });
+        }
+        if (refuse) {
+          return Promise.reject(Object.assign(new Error('another player (host code NOTIFICATIONS_SESSION_CHANGED)'), {
+            code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+            message: 'another player (host code NOTIFICATIONS_SESSION_CHANGED)',
+            retryable: true,
+          }));
+        }
+        return Promise.resolve({ records: [] });
+      },
+    });
+    const first = client.refreshSession();
+    reads.shift()?.(undefined);
+    await first;
+    const announced: string[] = [];
+    client.onAuthenticated((session) => announced.push(session.player));
+    // A read starts and the server answers it for alice; then bob is the request user.
+    const stale = client.refreshSession();
+    const answerStale = reads.shift();
+    user = bob;
+    refuse = true;
+    const refused = client.listConsent();
+    // The refusal arrives and its re-read joins the read still in flight.
+    await flushJobs();
+    expect(reads).toHaveLength(0);
+    answerStale?.(undefined);
+    await stale;
+    // The joined read named alice again, so the client asks once more.
+    await flushJobs();
+    expect(reads).toHaveLength(1);
+    reads.shift()?.(undefined);
+    await expect(refused).rejects.toMatchObject({ hostCode: 'NOTIFICATIONS_SESSION_CHANGED' });
+    expect(client.session()?.player).toBe(bob);
+    expect(announced).toEqual([bob]);
+  });
+
+  it('clears a timed-out session read, so the next one asks again', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const client = createDevvitNotificationsBackendClient({
+      request: () => {
+        reads += 1;
+        return reads === 1 ? new Promise(() => {}) : Promise.resolve(session);
+      },
+      timeoutMs: 1000,
+    });
+    const first = expect(client.refreshSession()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await vi.advanceTimersByTimeAsync(1000);
+    await first;
+    await expect(client.refreshSession()).resolves.toEqual({ id: `devvit:${alice}`, player: alice });
+    expect(reads).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('reads the session on the first call that finds none', async () => {
+    const methods: string[] = [];
+    const client = createDevvitNotificationsBackendClient({
+      request: async (method) => {
+        methods.push(method);
+        return session;
+      },
+    });
+    const announced: string[] = [];
+    client.onAuthenticated((next) => announced.push(next.player));
+    await expect(client.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await flushJobs();
+    expect(announced).toEqual([alice]);
+    expect(methods).toEqual(['notifications.backend.getSession']);
+    expect(client.session()?.player).toBe(alice);
+  });
+
+  it('unbinds the current player and treats a refusal for a user who left as nothing to unbind', async () => {
+    const answers: (() => unknown)[] = [];
+    const methods: string[] = [];
+    const client = createDevvitNotificationsBackendClient({
+      request: async (method, payload) => {
+        methods.push(method);
+        if (method === 'notifications.backend.getSession') {
+          return session;
+        }
+        expect(payload).toEqual({ expectedPlayer: alice, provider: 'devvit' });
+        return answers.shift()?.();
+      },
+    });
+    await client.refreshSession();
+    answers.push(() => ({ unregistered: true }));
+    await client.unregisterEndpoint({ provider: 'devvit', player: alice });
+    answers.push(() => {
+      throw Object.assign(new Error('x'), {
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        message: 'signed out (host code NOTIFICATIONS_SIGNED_OUT)',
+        retryable: true,
+      });
+    });
+    await expect(client.unregisterEndpoint({ provider: 'devvit', player: alice })).resolves.toBeUndefined();
+    answers.push(() => {
+      throw Object.assign(new Error('x'), { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', message: 'busy', retryable: true });
+    });
+    await expect(client.unregisterEndpoint({ provider: 'devvit', player: alice })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+    expect(methods.filter((method) => method === 'notifications.backend.unregisterEndpoint')).toHaveLength(3);
+  });
+
+  it.each(['INVALID_BRIDGE_REQUEST', 'NOTIFICATIONS_V2_UNAVAILABLE'])(
+    'reads %s from a server that predates the backend methods as configuration-required',
+    async (code) => {
+      const client = createDevvitNotificationsBackendClient({
+        request: async () => {
+          throw Object.assign(new Error('old server'), { code, retryable: false });
+        },
+      });
+      await expect(client.refreshSession()).rejects.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+        retryable: false,
+      });
+    },
+  );
+});
+
+describe('createDevvitNotificationsBackendBridgeHandler', () => {
+  const request = (method: string, payload: unknown): BridgeRequest => ({
+    id: 'r',
+    method: method as BridgeRequest['method'],
+    payload,
+    meta: { target: 'reddit', appVersion: '1', buildId: 'test', sentAt: '2026-10-24T03:00:00Z' },
+  });
+  const failing = (error: unknown) => {
+    const fail = async (): Promise<never> => {
+      throw error;
+    };
+    return {
+      recordConsent: fail,
+      listConsent: fail,
+      registerEndpoint: fail,
+      unregisterEndpoint: fail,
+      setReminder: fail,
+      cancelReminder: fail,
+      listNotices: fail,
+      recordNoticeShown: fail,
+    };
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the service text on the server and logs failures other than the consent write cap', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const internal = createDevvitNotificationsBackendBridgeHandler({
+      service: failing(new Error('redis: WRONGTYPE at key mpgd:secret')),
+      context: () => ({ userId: alice }),
+    });
+    const answer = await internal.request(request('notifications.backend.listConsent', { expectedPlayer: alice }));
+    expect(answer).toEqual({
+      id: 'r',
+      ok: false,
+      error: {
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        message: 'notifications.backend.listConsent failed on the Devvit server.',
+        retryable: true,
+      },
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const capped = createDevvitNotificationsBackendBridgeHandler({
+      service: failing(new NotificationConsentRateLimitError(60)),
+      context: () => ({ userId: alice }),
+    });
+    const throttled = await capped.request(request('notifications.backend.recordConsent', {
+      expectedPlayer: alice,
+      record: { kind: 'topic-preference', topic: 'daily-puzzle', state: 'granted', source: 'player', at: '2026-10-24T03:00:00Z' },
+    }));
+    expect(throttled).toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true } });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a context it cannot read instead of answering logged out', async () => {
+    const failures: unknown[] = [];
+    for (const context of [
+      () => {
+        throw new TypeError('context is not available outside a request');
+      },
+      () => ({ userId: 'alice' }),
+    ]) {
+      const handler = createDevvitNotificationsBackendBridgeHandler({
+        service: failing(new Error('unused')),
+        context,
+        onError: (error) => failures.push(error),
+      });
+      const answer = await handler.request(request('notifications.backend.getSession', { protocol: 'mpgd.notifications.v2' }));
+      expect(answer).toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' } });
+    }
+    expect(failures).toHaveLength(2);
+    const loggedOut = createDevvitNotificationsBackendBridgeHandler({
+      service: failing(new Error('unused')),
+      context: () => ({}),
+    });
+    await expect(loggedOut.request(request('notifications.backend.getSession', { protocol: 'mpgd.notifications.v2' })))
+      .resolves.toEqual({ id: 'r', ok: true, data: { session: null } });
   });
 });

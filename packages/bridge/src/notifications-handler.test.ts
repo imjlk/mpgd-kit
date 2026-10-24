@@ -836,7 +836,7 @@ const minimal: NotificationProvider = {
   );
   // The validator's text reaches the host's log through the cause, not the game.
   assert.equal(brokenFailures.length, 1);
-  assert.ok((brokenFailures[0] as Error).cause instanceof Error);
+  assert.match(String(((brokenFailures[0] as Error).cause as Error).message), /status/u);
   // A failure shaped as a platform failure with another code keeps its flag, not its text.
   failWith = new PlatformOperationError({ code: 'STORAGE_FAILED', message: 'redis host 10.0.0.1 refused', retryable: false });
   const platformFailure = errorOf(

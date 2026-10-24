@@ -35,7 +35,7 @@
           },
           "link": {
             "$ref": "#/components/schemas/NonEmptyString",
-            "description": "A post or comment id for providers whose sends need a link (Devvit).",
+            "description": "A post or comment id, for providers whose sends need a link, such as Devvit.",
             "readOnly": true
           }
         },
