@@ -94,9 +94,10 @@ Reddit approves. The profile follows the
     of its own; it announces the player to the runtime, reads again when the
     server refuses a call for another user, and retries a failed read at most
     every 5 seconds when the runtime next reads the session. Requests time
-    out after 15 seconds. A logged-out answer settles the read: the backend
-    relies on Reddit reloading the post after login, as `showLoginPrompt()`
-    does, so the new page reads the logged-in user. The runtime's
+    out after 15 seconds. While the server answers signed out, the client
+    keeps reading the session at most every 5 seconds as the runtime reads
+    it, so a login is picked up whether or not Reddit reloads the post after
+    `showLoginPrompt()`. The runtime's
     `unregister()` call removes this installation's endpoint record for the
     user and provider; the platform-user
     registration (locale and zone) is not an endpoint and stays, and sends

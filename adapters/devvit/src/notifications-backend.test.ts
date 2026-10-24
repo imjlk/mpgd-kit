@@ -314,6 +314,23 @@ describe('the notifications runtime on Devvit through the backend client', () =>
     expect(harness.backendFailures).toEqual([]);
   });
 
+  it("brings in a player who logged in without a page reload through the runtime's own reads", async () => {
+    const harness = setup({ loggedOut: true });
+    await expect(harness.client.refreshSession()).resolves.toBeUndefined();
+    await harness.runtime.start();
+    await harness.runtime.runUntilIdle();
+    expect(sentBackend(harness.sent, 'registerEndpoint')).toEqual([]);
+    // Reddit logs the player in; the post is not reloaded.
+    harness.plugin.currentUserId = alice;
+    harness.advance(5_000);
+    await harness.runtime.getPermission({ topics: ['daily-puzzle'] });
+    await flushJobs();
+    await harness.runtime.runUntilIdle();
+    expect(harness.client.session()).toEqual({ id: `devvit:${alice}`, player: alice });
+    expect(sentBackend(harness.sent, 'registerEndpoint')).toHaveLength(1);
+    expect(sentBackend(harness.sent, 'registerEndpoint')[0]?.user).toBe(alice);
+  });
+
   it('never reads or changes the previous user after an account switch', async () => {
     const harness = setup();
     await harness.client.refreshSession();
@@ -643,7 +660,7 @@ describe('createDevvitNotificationsBackendClient', () => {
     expect(client.session()?.player).toBe(alice);
   });
 
-  it('tries a failed first read again on the next call, but not a settled one', async () => {
+  it('tries a failed first read again on the next call, but not one a retry cannot change', async () => {
     const methods: string[] = [];
     let answer: () => unknown = () => {
       throw Object.assign(new Error('Failed to fetch'), { code: 'DEVVIT_BRIDGE_NETWORK_ERROR', retryable: true });
@@ -660,10 +677,17 @@ describe('createDevvitNotificationsBackendClient', () => {
     await expect(client.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
     await flushJobs();
     expect(methods).toEqual(['notifications.backend.getSession', 'notifications.backend.getSession']);
-    // A logged-out answer settles the read: calls no longer ask again (Reddit reloads the post after login).
+    // A signed-out answer does not settle the read: the next call asks again.
     await expect(client.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
     await flushJobs();
-    expect(methods).toHaveLength(2);
+    expect(methods).toHaveLength(3);
+    // A signed-in answer does: the client has a session and reads no more on its own.
+    answer = () => session;
+    expect(client.session()).toBeUndefined();
+    await flushJobs();
+    expect(client.session()?.player).toBe(alice);
+    await flushJobs();
+    expect(methods).toHaveLength(4);
 
     // Nor does a server that serves no backend, which a retry cannot change.
     const oldServerMethods: string[] = [];
@@ -678,6 +702,47 @@ describe('createDevvitNotificationsBackendClient', () => {
     await expect(oldServer.listConsent()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
     await flushJobs();
     expect(oldServerMethods).toEqual(['notifications.backend.getSession']);
+  });
+
+  it('picks up a login without a page reload: signed out, then logged in, then announced', async () => {
+    let clock = 0;
+    let user: string | undefined;
+    let reads = 0;
+    const client = createDevvitNotificationsBackendClient({
+      request: async () => {
+        reads += 1;
+        return { session: user === undefined ? null : { id: `devvit:${user}`, player: user } };
+      },
+      now: () => clock,
+    });
+    const announced: string[] = [];
+    client.onAuthenticated((next) => announced.push(next.player));
+    await expect(client.refreshSession()).resolves.toBeUndefined();
+    expect(reads).toBe(1);
+    // Within the retry interval a signed-out session is not read again.
+    clock = 4_999;
+    expect(client.session()).toBeUndefined();
+    await flushJobs();
+    expect(reads).toBe(1);
+    // Still signed out after the interval: read again, nothing announced.
+    clock = 10_000;
+    expect(client.session()).toBeUndefined();
+    await flushJobs();
+    expect(reads).toBe(2);
+    expect(announced).toEqual([]);
+    // The player logs in and Reddit does not reload the post: the next read after the interval announces them.
+    user = alice;
+    clock = 15_000;
+    expect(client.session()).toBeUndefined();
+    await flushJobs();
+    expect(reads).toBe(3);
+    expect(announced).toEqual([alice]);
+    expect(client.session()).toEqual({ id: `devvit:${alice}`, player: alice });
+    // Signed in, the session is settled: no more reads on their own.
+    clock = 60_000;
+    client.session();
+    await flushJobs();
+    expect(reads).toBe(3);
   });
 
   it('unbinds the current player and treats a refusal for a user who left as nothing to unbind', async () => {

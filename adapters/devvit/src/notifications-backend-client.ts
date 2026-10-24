@@ -72,7 +72,8 @@ export interface DevvitNotificationsBackendClient extends NotificationRuntimeBac
    * Reads the session the server answers for the request's user, keeps it
    * for `session()`, and announces it through `onAuthenticated` when it is a
    * new one (a first sign-in, or another user). A logged-out answer clears
-   * it. Concurrent reads share one request. A read that fails keeps the
+   * it, and `session()` keeps reading at `retryIntervalMs` until a player
+   * signs in. Concurrent reads share one request. A read that fails keeps the
    * session as it was and rejects.
    */
   refreshSession(): Promise<NotificationRuntimeSession | undefined>;
@@ -120,13 +121,15 @@ export function createDevvitNotificationsBackendClient(
   /** When the last session read started or settled, whichever is later. */
   let lastReadAt: number | undefined;
   /**
-   * Whether a session read settled for good: the server answered (a
-   * logged-out answer too), or it failed in a way a retry cannot change (a
+   * Whether the session read settled for good: the server answered a
+   * signed-in player, or a read failed in a way a retry cannot change (a
    * server without the backend, or an answer outside the contract, which
    * only a fixed server or a reload changes). Until then `session()` and a
-   * call that finds no session start a read (`retryIfUnsettled`), so a
-   * first read that failed (offline, timed out) is tried again even though
-   * the runtime makes no backend call while it sees no session.
+   * call that finds no session start a read (`retryIfUnsettled`): a first
+   * read that failed (offline, timed out) is tried again, and so is a
+   * signed-out answer, so a login is picked up whether or not Reddit
+   * reloads the post, even though the runtime makes no backend call while
+   * it sees no session.
    */
   let sessionSettled = false;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
@@ -197,7 +200,9 @@ export function createDevvitNotificationsBackendClient(
         }
         throw error;
       }
-      sessionSettled = true;
+      // A signed-out answer leaves the read unsettled: the player may log in
+      // without the post being reloaded, so the next read asks again.
+      sessionSettled = session !== null;
       if (session === null) {
         current = undefined;
         return undefined;
@@ -239,8 +244,9 @@ export function createDevvitNotificationsBackendClient(
   };
 
   /**
-   * While no session is known and no read has settled (none was made, or
-   * the last one failed in a way a retry may fix), starts a read in the
+   * While no session is known and no read has settled (none was made, the
+   * last one answered signed out, or it failed in a way a retry may fix),
+   * starts a read in the
    * background, at most one at a time and one per `retryIntervalMs`, so the
    * runtime hears of a signed-in player through onAuthenticated instead of
    * waiting forever.

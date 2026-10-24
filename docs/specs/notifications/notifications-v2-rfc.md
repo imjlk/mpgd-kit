@@ -2799,9 +2799,10 @@ backend on Devvit, so a Reddit game keeps reminders, records, and notices.
   gateway, loaded in its own chunk. Its session is the one the server
   answers; the client reads it at load, again after a refusal for another
   user (once more when a read it joined was answered before the change),
-  and, while no read has settled, from `session()` at most every 5
-  seconds, because the runtime makes no backend call while it sees no
-  session. Requests time out after 15 seconds, and errors map to the codes
+  and, while no read has answered a signed-in player (a signed-out
+  answer included, so a login is picked up whether or not the post
+  reloads), from `session()` at most every 5 seconds, because the runtime
+  makes no backend call while it sees no session. Requests time out after 15 seconds, and errors map to the codes
   the runtime acts on as the game-services client maps the Worker's.
 - The starter: the generated Devvit server serves the backend over the
   service its scheduler tasks run, and the Reddit gateway builder sets
