@@ -193,6 +193,15 @@ try {
       ),
       undefined,
     );
+    // A factory that throws turns notifications off once, without throwing into the game.
+    let throws = 0;
+    setStarterHostedNotificationBackend('reddit', () => {
+      throws += 1;
+      throw new Error('bad options');
+    });
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
+    assert.equal(throws, 1);
     setStarterHostedNotificationBackend('reddit', undefined);
     assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
     await settle();

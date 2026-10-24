@@ -156,6 +156,8 @@ let hostedBackend:
       readonly configTarget: string;
       readonly create: () => NotificationRuntimeBackend;
       created?: NotificationRuntimeBackend;
+      /** The factory threw once: notifications stay off, and the failure is logged once. */
+      failed?: true;
     }
   | undefined;
 
@@ -178,10 +180,14 @@ export function resolveStarterHostedNotificationBackend(configTarget: string): N
   if (hostedBackend === undefined || hostedBackend.configTarget !== configTarget) {
     return undefined;
   }
+  if (hostedBackend.failed === true) {
+    return undefined;
+  }
   try {
     hostedBackend.created ??= hostedBackend.create();
   } catch (error) {
     // A backend that cannot be created turns notifications off, never the game.
+    hostedBackend.failed = true;
     console.error('[notifications] the hosted notifications backend could not be created.', error);
     return undefined;
   }

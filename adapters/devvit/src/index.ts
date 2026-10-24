@@ -221,8 +221,9 @@ export interface DevvitNotificationsBackendOptions extends DevvitBridgeTarget {
   readonly timeoutMs?: number;
   /**
    * While the client chunk has not loaded, or no session read has settled,
-   * `session()` tries again at most this often; 5 seconds by default. A load
-   * the client refuses (options out of range) is not tried again.
+   * `session()` tries again at most this often; 5 seconds by default. After a
+   * load the client refuses (options out of range), `session()` does not try
+   * again; each call still answers `NOTIFICATIONS_INVALID_INPUT`.
    */
   readonly retryIntervalMs?: number;
   /** The clock the retry interval reads, in milliseconds; `Date.now` by default. */
@@ -263,7 +264,8 @@ export interface DevvitNotificationsBackend extends NotificationRuntimeBackend {
  * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` too; the next call, or a
  * `session()` read at most once per `retryIntervalMs`, loads again, and a
  * session read that failed is retried the same way. Options the client
- * refuses are not retried: calls answer `NOTIFICATIONS_INVALID_INPUT`, and
+ * refuses are not retried from `session()`: calls answer
+ * `NOTIFICATIONS_INVALID_INPUT`, and
  * the refusal is logged once. A logged-out answer settles the read: Reddit
  * reloads the post after login, so the new page reads the session again.
  * The player is always the one the server answers for; the webview never

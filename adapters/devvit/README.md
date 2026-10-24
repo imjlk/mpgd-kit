@@ -97,9 +97,9 @@ Reddit approves. The profile follows the
     out after 15 seconds. A logged-out answer settles the read: the backend
     relies on Reddit reloading the post after login, as `showLoginPrompt()`
     does, so the new page reads the logged-in user. The runtime's
-    `unregister()` sends nothing to unbind on Devvit beyond the call: the
-    service keeps the user's platform-user locale and zone, and sends still
-    need the user's opt-in.
+    `unregister()` call removes the user's endpoint records; the platform-user
+    registration (locale and zone) is not an endpoint and stays, and sends
+    still need the user's opt-in.
   - A reminder set through the runtime (`runtime.reminders.set`) is stored
     by the service and fired by the `dispatch` task through `enqueue`, with
     the reminder's `link` (a post or comment id such as `context.postId` from
