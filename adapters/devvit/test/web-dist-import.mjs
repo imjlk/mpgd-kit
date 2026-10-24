@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-// The main entry must not load notifications runtime code: its client and
-// validators come in their own chunk (`notifications-client.js`).
+// The main entry must not load notifications runtime code: the provider
+// client and the backend client, with their validators, come in their own
+// chunks (`notifications-client.js`, `notifications-backend-client.js`).
 const mainEntry = readFileSync(new URL('../dist/index.js', import.meta.url), 'utf8');
 for (const specifier of [
   '@mpgd/bridge/notifications',

@@ -883,6 +883,48 @@ describe('createDevvitNotificationsBackend', () => {
       load: async () => backendClientModule,
     });
     await expect(refused.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    // ... and session() does not load again for it.
+    let refusedLoads = 0;
+    const refusedCounted = createDevvitNotificationsBackend({
+      appVersion: '1',
+      buildId: 'test',
+      bridge: bridgeFor({ current: alice }, []),
+      timeoutMs: 0,
+      now: () => 0,
+      retryIntervalMs: 0,
+      load: async () => {
+        refusedLoads += 1;
+        return backendClientModule;
+      },
+    });
+    await flushJobs();
+    refusedCounted.session();
+    await flushJobs();
+    expect(refusedLoads).toBe(1);
+    // A load that fails slowly waits the interval from its failure.
+    let slowClock = 0;
+    const slowFailures: ((error: unknown) => void)[] = [];
+    let slowLoads = 0;
+    const slow = createDevvitNotificationsBackend({
+      appVersion: '1',
+      buildId: 'test',
+      bridge: bridgeFor({ current: alice }, []),
+      now: () => slowClock,
+      load: () => {
+        slowLoads += 1;
+        return new Promise((_resolve, reject) => {
+          slowFailures.push(reject);
+        });
+      },
+    });
+    slowClock = 10_000;
+    slowFailures.shift()?.(new Error('chunk timed out'));
+    await flushJobs();
+    slow.session();
+    expect(slowLoads).toBe(1);
+    slowClock = 15_000;
+    slow.session();
+    expect(slowLoads).toBe(2);
     // Unbinding before anything loaded sends nothing.
     await expect(refused.unregisterEndpoint({ provider: 'devvit', player: alice })).resolves.toBeUndefined();
   });

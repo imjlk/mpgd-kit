@@ -270,6 +270,7 @@ export function createDevvitNotificationsBackend(
 ): DevvitNotificationsBackend {
   const request = createDevvitBridgeRequest(options);
   const importClient = options.load ?? (() => import('./notifications-backend-client.js'));
+  // `defaultDevvitNotificationsBackendRetryIntervalMs` of the client chunk, which this entry does not import.
   const retryIntervalMs = options.retryIntervalMs ?? 5_000;
   const now = options.now ?? Date.now;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
@@ -277,6 +278,8 @@ export function createDevvitNotificationsBackend(
   let loading: Promise<DevvitNotificationsBackend> | undefined;
   /** When the last chunk load started or failed, whichever is later. */
   let lastLoadAt: number | undefined;
+  /** A load failed in a way another load cannot change (options the client refuses). */
+  let loadRefused = false;
   const load = (): Promise<DevvitNotificationsBackend> => {
     if (client !== undefined) {
       return Promise.resolve(client);
@@ -322,9 +325,11 @@ export function createDevvitNotificationsBackend(
       () => {
         loading = undefined;
       },
-      () => {
+      (error: unknown) => {
         loading = undefined;
         lastLoadAt = now();
+        loadRefused = !(typeof error === 'object' && error !== null
+          && (error as { readonly retryable?: unknown }).retryable === true);
       },
     );
     return attempt;
@@ -337,9 +342,12 @@ export function createDevvitNotificationsBackend(
       }
       // The runtime makes no backend call while it sees no session, so a
       // chunk that failed to load is loaded again from here.
-      // A clock that went backwards counts as past the interval.
-      const elapsed = lastLoadAt === undefined ? Number.POSITIVE_INFINITY : now() - lastLoadAt;
-      if (loading === undefined && !(elapsed >= 0 && elapsed < retryIntervalMs)) {
+      // A load another load cannot fix is not retried from here; calls still report it.
+      if (
+        loading === undefined
+        && !loadRefused
+        && (lastLoadAt === undefined || !withinBackendRetryInterval(now() - lastLoadAt, retryIntervalMs))
+      ) {
         void load().catch(() => {});
       }
       return undefined;
@@ -814,6 +822,16 @@ function generateRequestId(): string {
   }
 
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Whether `elapsed` milliseconds are still inside the retry interval; a
+ * clock that went backwards (a negative or non-finite difference) counts as
+ * past it. The same rule as the client chunk's `withinRetryInterval`, which
+ * this entry does not import.
+ */
+function withinBackendRetryInterval(elapsed: number, retryIntervalMs: number): boolean {
+  return elapsed >= 0 && elapsed < retryIntervalMs;
 }
 
 function errorMessage(error: unknown): string {
