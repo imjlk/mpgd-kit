@@ -10,6 +10,7 @@ import {
   assertDevvitRealtimePermission,
   assertMicrosoftStorePwaManifestSourceContract,
   assertWebArtifactInstallability,
+  verifyEnabledDevvitPayments,
 } from './verify-target-artifacts';
 
 const webArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-target-smoke-installability-'));
@@ -202,6 +203,65 @@ assert.throws(
   () => assertDevvitInternalEndpoint('/internal/', 'fulfillOrder'),
   /must be a Devvit internal endpoint path/u,
 );
+
+const paymentArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-devvit-payment-catalog-'));
+const historicalPaymentsManifest = {
+  payments: {
+    productsFile: 'products.json',
+    endpoints: {
+      fulfillOrder: '/internal/payments/fulfill',
+      refundOrder: '/internal/payments/refund',
+    },
+  },
+};
+try {
+  const productsPath = join(paymentArtifactRoot, 'products.json');
+  const verify = (skus: readonly string[]) =>
+    verifyEnabledDevvitPayments(historicalPaymentsManifest, paymentArtifactRoot, skus, 'reddit');
+  writeFileSync(productsPath, JSON.stringify({ products: [] }));
+  const noSalesSkus = assertDevvitPaymentsReadiness(true, capabilityReadyConfig, 'reddit');
+  assert.doesNotThrow(() => verify(noSalesSkus));
+  assert.throws(() => verify(['cosmetic_1']), /SKUs must match/u);
+  assert.throws(
+    () =>
+      verifyEnabledDevvitPayments(
+        { payments: { ...historicalPaymentsManifest.payments, endpoints: {} } },
+        paymentArtifactRoot,
+        [],
+        'reddit',
+      ),
+    /fulfillOrder/u,
+  );
+  assert.throws(
+    () =>
+      verifyEnabledDevvitPayments(
+        {
+          payments: {
+            ...historicalPaymentsManifest.payments,
+            endpoints: {
+              ...historicalPaymentsManifest.payments.endpoints,
+              refundOrder: '/api/refund',
+            },
+          },
+        },
+        paymentArtifactRoot,
+        [],
+        'reddit',
+      ),
+    /refundOrder must be a Devvit internal endpoint path/u,
+  );
+  writeFileSync(productsPath, JSON.stringify({ products: [{ sku: 'cosmetic_1' }] }));
+  assert.doesNotThrow(() => verify(['cosmetic_1']));
+  assert.throws(() => verify([]), /SKUs must match/u);
+  writeFileSync(productsPath, JSON.stringify({ products: [{ sku: 'same' }, { sku: 'same' }] }));
+  assert.throws(() => verify(['same']), /duplicate SKU/u);
+  writeFileSync(productsPath, JSON.stringify({ products: null }));
+  assert.throws(() => verify([]), /must be an array/u);
+  rmSync(productsPath);
+  assert.throws(() => verify([]), /products file/u);
+} finally {
+  rmSync(paymentArtifactRoot, { recursive: true, force: true });
+}
 
 const sourcePwaManifest = {
   lang: 'en-US',

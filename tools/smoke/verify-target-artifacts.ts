@@ -888,7 +888,7 @@ export function assertDevvitRealtimePermission(input: unknown, label: string): v
   }
 }
 
-function verifyEnabledDevvitPayments(
+export function verifyEnabledDevvitPayments(
   manifest: Record<string, unknown>,
   wrapperApp: string,
   effectiveSkus: readonly string[],
@@ -917,10 +917,8 @@ function verifyEnabledDevvitPayments(
     `${label} products file products`,
   );
 
-  if (productSkus.length === 0) {
-    throw new Error(`${label} payments products file must declare at least one product.`);
-  }
-
+  // An empty catalogue can retain callbacks for historical orders/refunds.
+  // It is valid only when the effective target also exposes no purchasable SKUs.
   if (JSON.stringify([...effectiveSkus].sort()) !== JSON.stringify([...productSkus].sort())) {
     throw new Error(
       `${label} products file SKUs must match enabled effective catalog platform IDs.`,
