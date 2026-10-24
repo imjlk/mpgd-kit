@@ -749,7 +749,8 @@ export function assertMicrosoftStorePwaManifestSourceContract(
   }
 }
 
-function verifyDevvitWebManifest(
+/** Validate the wrapper's on-disk manifest against the built client, server and effective catalog. */
+export function verifyDevvitWebManifest(
   target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
@@ -888,6 +889,7 @@ export function assertDevvitRealtimePermission(input: unknown, label: string): v
   }
 }
 
+/** Require callback readiness and exact SKU agreement, including an empty historical-order catalog. */
 export function verifyEnabledDevvitPayments(
   manifest: Record<string, unknown>,
   wrapperApp: string,

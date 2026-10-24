@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import sharp from 'sharp';
 
 import { assertMiniGameRuntimeAssetOrigins } from './minigame-artifact';
 import {
@@ -10,6 +11,7 @@ import {
   assertDevvitRealtimePermission,
   assertMicrosoftStorePwaManifestSourceContract,
   assertWebArtifactInstallability,
+  verifyDevvitWebManifest,
   verifyEnabledDevvitPayments,
 } from './verify-target-artifacts';
 
@@ -25,6 +27,73 @@ for (const permission of [null, 'true', 'false', 0, 1, {}, []]) {
     () => assertDevvitRealtimePermission(permission, 'reddit permissions.realtime'),
     /reddit permissions\.realtime must be a boolean or omitted/u,
   );
+}
+
+const manifestArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-devvit-realtime-manifest-'));
+try {
+  const artifact = join(manifestArtifactRoot, 'dist');
+  mkdirSync(join(artifact, 'client'), { recursive: true });
+  mkdirSync(join(artifact, 'server'), { recursive: true });
+  writeFileSync(join(artifact, 'client', 'index.html'), '<html></html>');
+  writeFileSync(join(artifact, 'client', 'game.html'), '<html></html>');
+  writeFileSync(join(artifact, 'server', 'index.cjs'), 'module.exports = {};');
+  await sharp({ create: { width: 1024, height: 1024, channels: 4, background: '#ffffff' } })
+    .png().toFile(join(manifestArtifactRoot, 'icon.png'));
+  const effectiveConfig = join(manifestArtifactRoot, 'effective.json');
+  writeFileSync(
+    effectiveConfig,
+    JSON.stringify({
+      features: { iap: false },
+      monetization: { iap: false, products: [] },
+    }),
+  );
+  const verifyManifest = (realtime: unknown) => {
+    writeFileSync(
+      join(manifestArtifactRoot, 'devvit.json'),
+      JSON.stringify({
+        name: 'realtime-fixture',
+        marketingAssets: { icon: 'icon.png' },
+        post: {
+          dir: 'dist/client',
+          entrypoints: { default: { entry: 'index.html' }, game: { entry: 'game.html' } },
+        },
+        server: { dir: 'dist/server', entry: 'index.cjs' },
+        permissions: {
+          redis: true,
+          reddit: true,
+          payments: false,
+          ...(realtime === undefined ? {} : { realtime }),
+        },
+        menu: {
+          items: [
+            { location: 'subreddit', label: 'Create game', endpoint: '/internal/menu/create-post' },
+          ],
+        },
+      }),
+    );
+    verifyDevvitWebManifest(
+      'reddit',
+      {
+        kind: 'devvit-web',
+        gameApp: '.',
+        adapter: 'devvit',
+        wrapperApp: manifestArtifactRoot,
+      },
+      artifact,
+      effectiveConfig,
+    );
+  };
+  for (const realtime of [undefined, false, true]) {
+    assert.doesNotThrow(() => verifyManifest(realtime));
+  }
+  for (const realtime of [null, 'true', 'false', 0, 1, {}, []]) {
+    assert.throws(
+      () => verifyManifest(realtime),
+      /permissions\.realtime must be a boolean or omitted/u,
+    );
+  }
+} finally {
+  rmSync(manifestArtifactRoot, { recursive: true, force: true });
 }
 
 const expectedMiniGameOrigins = ['https://assets.example.test'];
