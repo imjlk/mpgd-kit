@@ -1839,6 +1839,7 @@ export const notificationTimeFields = {
   NotificationBackendBridgeListConsentResult: { records: { at: 'date-time' } },
   NotificationBackendBridgeListNoticesResult: { notices: noticeTimeFields },
   NotificationBackendBridgeRecordNoticePayload: { notice: noticeTimeFields },
+  NotificationBackendBridgeSetReminderPayload: { reminder: { fireAt: 'date-time' } },
   NotificationConformanceVector: {
     context: { now: 'date-time' },
     steps: {

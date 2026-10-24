@@ -301,6 +301,16 @@ describe('notifications contract', () => {
       expectedPlayer: 't2_a',
       reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-13T03:00:00Z', link: 't3_post' },
     }).reminder.link).toBe('t3_post');
+    for (const reminder of [
+      { key: '', topic: 'daily', fireAt: '2026-10-13T03:00:00Z' },
+      { key: 'daily', topic: 'daily', fireAt: 'tomorrow' },
+      { key: 'daily', topic: 'daily', fireAt: '2026-04-31T03:00:00Z' },
+      { key: 'daily', topic: 'daily', fireAt: '2026-10-13 03:00:00Z' },
+      { key: 'daily', topic: 'daily', fireAt: '2026-10-13T03:00:00Z', link: '' },
+    ]) {
+      expect(() => assertNotificationBackendBridgeSetReminderPayload({ expectedPlayer: 't2_a', reminder }))
+        .toThrow();
+    }
     expect(assertNotificationBackendBridgeSetReminderResult({ status: 'capacity-exceeded' }).status)
       .toBe('capacity-exceeded');
     expect(() => assertNotificationBackendBridgeSetReminderResult({ status: 'cancelled' })).toThrow();
@@ -866,6 +876,7 @@ describe('strict notification timestamps', () => {
       'NotificationBackendBridgeRecordConsentPayload',
       'NotificationBackendBridgeRecordConsentResult',
       'NotificationBackendBridgeRecordNoticePayload',
+      'NotificationBackendBridgeSetReminderPayload',
       'NotificationBridgeListLocalResult',
       'NotificationBridgeScheduleLocalPayload',
       'NotificationConformanceVector',

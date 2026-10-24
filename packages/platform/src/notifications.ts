@@ -457,7 +457,9 @@ export const notificationBridgeMethods = Object.freeze([
 // above reach the host's notification permission, these reach the backend
 // that keeps consent records, registrations, server reminders, and notices.
 // The host learns the player from its own authentication (Devvit's
-// `context.userId`); no payload names the player it acts for.
+// `context.userId`). Every call but the session read names the player it
+// began for (`expectedPlayer`) only as a cross-check: the host refuses a
+// call whose player is not its own and never acts for a named player.
 
 /** The authenticated session a host-served backend answers for. */
 export interface NotificationBackendBridgeSession {
@@ -531,8 +533,23 @@ export type NotificationBackendReminderSetStatus =
   | 'capacity-exceeded'
   | 'unavailable';
 
+/**
+ * A server reminder on the wire: `SetNotificationReminderInput` with a
+ * non-empty key and a `fireAt` the bridge checks as RFC 3339 with an
+ * offset. The backend still applies the reminder bounds (key characters,
+ * template data, the 90-day horizon) itself.
+ */
+export interface NotificationBackendBridgeReminder extends Omit<
+  SetNotificationReminderInput,
+  'key' | 'fireAt' | 'link'
+> {
+  readonly key: NonEmptyString;
+  readonly fireAt: string & tags.Format<'date-time'>;
+  readonly link?: NonEmptyString;
+}
+
 export interface NotificationBackendBridgeSetReminderPayload extends NotificationBackendBridgeCallPayload {
-  readonly reminder: SetNotificationReminderInput;
+  readonly reminder: NotificationBackendBridgeReminder;
 }
 
 export interface NotificationBackendBridgeSetReminderResult {
@@ -948,8 +965,11 @@ export const assertNotificationBackendBridgeUnregisterEndpointPayload =
   typia.createAssertEquals<NotificationBackendBridgeUnregisterEndpointPayload>();
 export const assertNotificationBackendBridgeUnregisterEndpointResult =
   typia.createAssertEquals<NotificationBackendBridgeUnregisterEndpointResult>();
-export const assertNotificationBackendBridgeSetReminderPayload =
-  typia.createAssertEquals<NotificationBackendBridgeSetReminderPayload>();
+export const assertNotificationBackendBridgeSetReminderPayload = withStrictTimes(
+  'setReminder payload',
+  typia.createAssertEquals<NotificationBackendBridgeSetReminderPayload>(),
+  notificationTimeFields.NotificationBackendBridgeSetReminderPayload,
+);
 export const assertNotificationBackendBridgeSetReminderResult =
   typia.createAssertEquals<NotificationBackendBridgeSetReminderResult>();
 export const assertNotificationBackendBridgeCancelReminderPayload =
