@@ -1,5 +1,6 @@
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 import { createNotificationsBackendBridgeHandler } from '@mpgd/bridge/notifications';
+import { NotificationError } from '@mpgd/platform/notifications';
 import {
   NotificationConsentRateLimitError,
   type NotificationService,
@@ -48,7 +49,8 @@ export interface CreateDevvitNotificationsBackendBridgeHandlerInput {
    * payload and a logged-out or changed session, with its cause (the
    * service's or Redis's own text, which the webview never sees).
    * Synchronous; a hook that throws or rejects changes nothing. By default
-   * `console.warn`, which skips a player's own consent write cap.
+   * `console.warn`, which skips a player's own consent write cap and an
+   * input the service refuses as invalid.
    */
   readonly onError?: ((error: unknown, context: { readonly method: string }) => void) | undefined;
 }
@@ -133,8 +135,13 @@ export function createDevvitNotificationsBackendBridgeHandler(
 }
 
 function warnBackendFailure(error: unknown, context: { readonly method: string }): void {
-  // A throttled consent write is the player's own cap, not a server failure.
-  if (error instanceof NotificationConsentRateLimitError) {
+  // A throttled consent write is the player's own cap, and an input the
+  // service refuses is the caller's: neither is a server failure, and a
+  // webview could otherwise fill the log with them.
+  if (
+    error instanceof NotificationConsentRateLimitError
+    || (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')
+  ) {
     return;
   }
   console.warn(`devvit notifications ${context.method} failed`, error);

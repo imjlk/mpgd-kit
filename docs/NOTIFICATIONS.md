@@ -164,7 +164,9 @@ Rules the starter's settings screen follows, and your own screen must too:
 > `requested` topics only.
 > The runtime compares its provider with the Worker's registry entry for the
 > target (`GET /providers`), and runs without the check when the Worker
-> cannot be reached or lists no entry for the target. The runtime keeps its last registration, push
+> cannot be reached or lists no entry for the target. The Reddit runtime
+> runs without it: its provider and the Devvit server's service come from
+> the same adapter and deployment. The runtime keeps its last registration, push
 > address included, in the platform storage, like other game data. A game
 > created before this release has no `serverSession.ts`; `mpgd target init
 > capacitor --providers notifications` writes one, and its commerce client

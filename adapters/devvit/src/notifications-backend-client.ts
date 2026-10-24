@@ -338,14 +338,16 @@ export function createDevvitNotificationsBackendClient(
       const session = current;
       if (session === undefined || session.player !== player) {
         // A Devvit registration belongs to the Reddit user, not to a device,
-        // and another user's request cannot unbind it.
+        // and another user's request cannot reach it.
         return;
       }
       try {
         await call('notifications.backend.unregisterEndpoint', { provider }, session);
       } catch (error) {
-        // The user left before the unbind reached the server: nothing on
-        // this webview is bound to that user any more.
+        // The user left before the call reached the server: nothing on this
+        // webview belongs to that user any more. (On Devvit the service keeps
+        // the user's platform-user locale and zone; sends still need the
+        // user's opt-in.)
         if (error instanceof NotificationError && sessionRefusalHostCodes.has(error.hostCode)) {
           return;
         }

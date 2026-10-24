@@ -178,7 +178,13 @@ export function resolveStarterHostedNotificationBackend(configTarget: string): N
   if (hostedBackend === undefined || hostedBackend.configTarget !== configTarget) {
     return undefined;
   }
-  hostedBackend.created ??= hostedBackend.create();
+  try {
+    hostedBackend.created ??= hostedBackend.create();
+  } catch (error) {
+    // A backend that cannot be created turns notifications off, never the game.
+    console.error('[notifications] the hosted notifications backend could not be created.', error);
+    return undefined;
+  }
   return hostedBackend.created;
 }
 

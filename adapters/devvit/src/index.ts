@@ -221,7 +221,8 @@ export interface DevvitNotificationsBackendOptions extends DevvitBridgeTarget {
   readonly timeoutMs?: number;
   /**
    * While the client chunk has not loaded, or no session read has settled,
-   * `session()` tries again at most this often; 5 seconds by default.
+   * `session()` tries again at most this often; 5 seconds by default. A load
+   * the client refuses (options out of range) is not tried again.
    */
   readonly retryIntervalMs?: number;
   /** The clock the retry interval reads, in milliseconds; `Date.now` by default. */
@@ -261,7 +262,10 @@ export interface DevvitNotificationsBackend extends NotificationRuntimeBackend {
  * user through `onAuthenticated`. A chunk that fails to load is
  * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` too; the next call, or a
  * `session()` read at most once per `retryIntervalMs`, loads again, and a
- * session read that failed is retried the same way.
+ * session read that failed is retried the same way. Options the client
+ * refuses are not retried: calls answer `NOTIFICATIONS_INVALID_INPUT`, and
+ * the refusal is logged once. A logged-out answer settles the read: Reddit
+ * reloads the post after login, so the new page reads the session again.
  * The player is always the one the server answers for; the webview never
  * names one it chose.
  */
@@ -328,8 +332,12 @@ export function createDevvitNotificationsBackend(
       (error: unknown) => {
         loading = undefined;
         lastLoadAt = now();
-        loadRefused = !(typeof error === 'object' && error !== null
+        const refused = !(typeof error === 'object' && error !== null
           && (error as { readonly retryable?: unknown }).retryable === true);
+        if (refused && !loadRefused) {
+          console.error('[notifications] the Devvit notifications backend refused its options.', error);
+        }
+        loadRefused = loadRefused || refused;
       },
     );
     return attempt;

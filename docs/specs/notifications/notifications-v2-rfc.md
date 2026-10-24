@@ -2277,8 +2277,10 @@ Other rules the profiles encode:
     chooses whom a call acts for. The refusal is
     `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with host code
     `NOTIFICATIONS_SESSION_CHANGED`; a request without a player gets the
-    same code with `NOTIFICATIONS_SIGNED_OUT`. The runtime reads both as
-    "not signed in", and the client reads the session again.
+    same code with `NOTIFICATIONS_SIGNED_OUT`. The runtime sees a
+    retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, as for a call
+    without a session; the client reads the host code and reads the
+    session again.
   - Payloads and answers have typia validators and JSON Schemas like the
     provider methods (`assertBridgeNotificationsBackendPayload` and
     `assertBridgeNotificationsBackendResult` in

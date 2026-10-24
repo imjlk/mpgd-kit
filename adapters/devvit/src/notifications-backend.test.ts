@@ -783,6 +783,14 @@ describe('createDevvitNotificationsBackendBridgeHandler', () => {
     }));
     expect(throttled).toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true } });
     expect(warn).toHaveBeenCalledTimes(1);
+    // Nor an input the service refuses, which is the caller's.
+    const invalid = createDevvitNotificationsBackendBridgeHandler({
+      service: failing(new NotificationError('NOTIFICATIONS_INVALID_INPUT', { message: 'Invalid reminder key.' })),
+      context: () => ({ userId: alice }),
+    });
+    const refusedInput = await invalid.request(request('notifications.backend.cancelReminder', { expectedPlayer: alice, key: 'k' }));
+    expect(refusedInput).toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_INVALID_INPUT' } });
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('reports a context it cannot read instead of answering logged out', async () => {
