@@ -115,7 +115,8 @@ export function createDevvitNotificationsBackendBridgeHandler(
         if (typeof userId !== 'string' || !devvitUserIdPattern.test(userId)) {
           return undefined;
         }
-        const notifications: NotificationSession = devvitNotificationSessionFromContext(context);
+        // The id checked above, so the session cannot fail on a second read of the context.
+        const notifications: NotificationSession = devvitNotificationSessionFromContext({ userId });
         return { id: notifications.sessionId, player: notifications.player, notifications };
       },
       recordConsent: (session, record) => service.recordConsent(session.notifications, record),

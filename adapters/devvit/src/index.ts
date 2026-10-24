@@ -221,7 +221,8 @@ export interface DevvitNotificationsBackendOptions extends DevvitBridgeTarget {
   readonly timeoutMs?: number;
   /**
    * While the client chunk has not loaded, or no session read has settled
-   * (none answered a signed-in player), `session()` tries again at most this
+   * (none answered a signed-in player, and none failed in a way a retry
+   * cannot change), `session()` tries again at most this
    * often; 5 seconds by default. After a
    * load the client refuses (options out of range), `session()` does not try
    * again; the other calls answer `NOTIFICATIONS_INVALID_INPUT`, except

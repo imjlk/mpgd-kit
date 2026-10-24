@@ -743,6 +743,18 @@ describe('createDevvitNotificationsBackendClient', () => {
     client.session();
     await flushJobs();
     expect(reads).toBe(3);
+    // The player logs out: an answer of signed out clears the session, and reads resume at the interval.
+    user = undefined;
+    await expect(client.refreshSession()).resolves.toBeUndefined();
+    expect(reads).toBe(4);
+    clock = 64_999;
+    expect(client.session()).toBeUndefined();
+    await flushJobs();
+    expect(reads).toBe(4);
+    clock = 65_000;
+    expect(client.session()).toBeUndefined();
+    await flushJobs();
+    expect(reads).toBe(5);
   });
 
   it('unbinds the current player and treats a refusal for a user who left as nothing to unbind', async () => {

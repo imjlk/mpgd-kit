@@ -58,9 +58,10 @@ export interface CreateDevvitNotificationsBackendClientInput {
    */
   readonly timeoutMs?: number;
   /**
-   * While no session read has settled (the first one failed, offline or
-   * timed out), `session()` and a call that finds no session start another
-   * read, at most one this often; 5 seconds by default.
+   * While no session read has settled (none was made, the last one answered
+   * signed out, or it failed in a way a retry may fix), `session()` and a
+   * call that finds no session start another read, at most one this often;
+   * 5 seconds by default. 0 reads again on every such call, one at a time.
    */
   readonly retryIntervalMs?: number;
   /** The clock the retry interval reads, in milliseconds; `Date.now` by default. */
@@ -121,7 +122,7 @@ export function createDevvitNotificationsBackendClient(
   /** When the last session read started or settled, whichever is later. */
   let lastReadAt: number | undefined;
   /**
-   * Whether the session read settled for good: the server answered a
+   * Whether the session read settled: the server answered a
    * signed-in player, or a read failed in a way a retry cannot change (a
    * server without the backend, or an answer outside the contract, which
    * only a fixed server or a reload changes). Until then `session()` and a
@@ -129,7 +130,8 @@ export function createDevvitNotificationsBackendClient(
    * read that failed (offline, timed out) is tried again, and so is a
    * signed-out answer, so a login is picked up whether or not Reddit
    * reloads the post, even though the runtime makes no backend call while
-   * it sees no session.
+   * it sees no session. A later signed-out answer (an explicit
+   * `refreshSession()`, or the read after a refusal) unsettles it again.
    */
   let sessionSettled = false;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
