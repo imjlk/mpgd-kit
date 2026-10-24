@@ -578,6 +578,7 @@ describe('createDevvitNotificationService', () => {
     expect(devvitNotificationSessionFromContext({ userId: user })).toEqual(devvitNotificationSession(user));
     expect(() => devvitNotificationSessionFromContext({})).toThrow(TypeError);
     expect(() => devvitNotificationSessionFromContext({ userId: 'guest' })).toThrow(TypeError);
+    expect(() => devvitNotificationSessionFromContext({ userId: null })).toThrow(TypeError);
   });
 
   it('plans a send when hMGet is disabled and history already exists', async () => {

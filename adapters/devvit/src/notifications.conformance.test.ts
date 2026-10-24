@@ -38,8 +38,13 @@ import {
   type FakeDevvitNotifications,
 } from '../test/fake-devvit-notifications.js';
 import { createDevvitPlatformGateway } from './index.js';
+import { createDevvitNotificationsBackendClient } from './notifications-backend-client.js';
 import { createDevvitBridgeNotificationProvider } from './notifications-client.js';
-import { createDevvitNotificationCapabilities } from './notifications-contract.js';
+import {
+  createDevvitNotificationCapabilities,
+  devvitUserIdPattern,
+} from './notifications-contract.js';
+import { createDevvitNotificationsBackendBridgeHandler } from './server/notifications-backend-bridge.js';
 import { createDevvitNotificationsV2BridgeHandler } from './server/notifications-bridge.js';
 import { createDevvitNotificationDeliveryProvider } from './server/notifications-delivery.js';
 import { createDevvitRedisNotificationStore } from './server/redis-notification-store.js';
@@ -50,7 +55,10 @@ import { createDevvitRedisNotificationStore } from './server/redis-notification-
  * and out on a fake Devvit plugin, directly and through the gateway; once
  * with the runner's fake backend and once with the notifications service
  * the Devvit server runs (`@mpgd/game-services/notifications` over the Redis
- * store, with the Devvit delivery provider over the same fake plugin).
+ * store, with the Devvit delivery provider over the same fake plugin);
+ * and once more with the runtime reaching that service through the webview
+ * backend client and the server's backend bridge handler (DV1), where the
+ * player is the request's Reddit user.
  */
 
 /** The vectors live in the checkout; resolve them as the game-services conformance test does. */
@@ -404,6 +412,206 @@ function createDevvitServiceBackend(
   };
 }
 
+/**
+ * The Devvit server's service as the backend, reached the way a Reddit game
+ * reaches it: the runtime calls the webview backend client, which sends
+ * `notifications.backend.*` requests to the server's backend bridge handler,
+ * which acts for the request's user (`context.userId`, the fake plugin's
+ * current user). A vector's player `p-1` is the Reddit user `t2_p1`; the
+ * observations name the vector's player again.
+ */
+function createDevvitClientBackend(
+  input: CreateNotificationConformanceBackendInput,
+  plugin: FakeDevvitNotifications,
+): NotificationConformanceBackend {
+  const { entry, clock } = input;
+  const store = createDevvitRedisNotificationStore(createFakeNotificationRedis());
+  const providerCalls: NotificationConformanceProviderCall[] = [];
+  const deliveries: NotificationConformanceDelivery[] = [];
+  /** Reddit user id to the vector's player. */
+  const players = new Map<string, string>();
+  const playerOf = (userId: string): string => players.get(userId) ?? userId;
+  const devvit = createDevvitNotificationDeliveryProvider({ notifications: plugin });
+  const delivery: NotificationRemoteDeliveryProvider | undefined = entry === undefined
+    ? undefined
+    : {
+        id: entry.provider,
+        async send(request) {
+          providerCalls.push({
+            idempotencyKey: request.idempotencyKey,
+            sendKey: request.sendKey,
+            provider: request.provider,
+            topic: request.topic.id,
+            player: playerOf(request.player),
+            ...(request.topic.mapping === undefined ? {} : { mapping: request.topic.mapping }),
+            ...(request.link === undefined ? {} : { link: request.link }),
+            content: request.content,
+            ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
+            ...(request.data === undefined ? {} : { data: request.data }),
+            at: request.at,
+          });
+          return devvit.send(request);
+        },
+        readPermission: (read) =>
+          (devvit.readPermission as NonNullable<typeof devvit.readPermission>)(read),
+      };
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry(
+      entry === undefined || delivery === undefined
+        ? []
+        : [{ entry, delivery, targets: ['vector'] }],
+    ),
+    catalog: {
+      defaultLocale: input.defaultLocale,
+      ...(input.notices === undefined ? {} : { notices: input.notices }),
+      topicsFor: () => input.catalog,
+    },
+    ...(input.deployment === undefined ? {} : { deployment: input.deployment }),
+    resolvePlatformRecipient: ({ player }) => (devvitUserIdPattern.test(player) ? player : undefined),
+    now: () => clock.now(),
+    random: () => 0,
+    claimLeaseSeconds: notificationConformanceLeaseSeconds,
+  });
+  const handler = createDevvitNotificationsBackendBridgeHandler({
+    service,
+    context: () => ({ userId: plugin.currentUserId }),
+  });
+  const client = createDevvitNotificationsBackendClient({
+    async request(method, payload) {
+      const response = await handler.request({
+        id: 'b',
+        method,
+        payload,
+        meta: { target: 'reddit', appVersion: '1', buildId: 'test', sentAt: '2026-10-24T00:00:00Z' },
+      });
+      if (!response.ok) {
+        throw Object.assign(new Error(response.error.message), response.error);
+      }
+      return response.data;
+    },
+  });
+  const conformanceSession = (
+    session: { readonly id: string; readonly player: string } | undefined,
+  ): NotificationConformanceSession | undefined =>
+    session === undefined ? undefined : { ...session, installationId: session.id };
+  const serverSession = (userId: string): NotificationSession =>
+    ({ player: userId, sessionId: `devvit:${userId}`, installationId: `devvit:${userId}` });
+  const record = (outcome: NotificationDeliveryOutcome, key: string, topic: string, player: string): void => {
+    deliveries.push({ ...outcome, idempotencyKey: key, topic, player, at: clock.now() });
+  };
+  const consent: (Awaited<ReturnType<typeof service.listConsent>>[number] & { player: string })[] = [];
+
+  return {
+    entry,
+    get consent() {
+      return consent;
+    },
+    endpoints: [],
+    get deliveries() {
+      return deliveries;
+    },
+    get providerCalls() {
+      return providerCalls;
+    },
+    reminders: [],
+    notices: [],
+    noticesGiven: [],
+    session: () => conformanceSession(client.session()),
+    onAuthenticated(listener) {
+      return client.onAuthenticated((session) => {
+        const started = conformanceSession(session);
+        if (started !== undefined) {
+          listener(started);
+        }
+      });
+    },
+    async authenticate(player) {
+      const userId = userOf(player);
+      players.set(userId, player);
+      // Reddit's own login: the request user is now this player, and the client reads it from the server.
+      plugin.currentUserId = userId;
+      const session = conformanceSession(await client.refreshSession());
+      if (session === undefined) {
+        throw new Error('The Devvit server answered no session after login.');
+      }
+      return session;
+    },
+    async revokeSession() {
+      plugin.currentUserId = undefined;
+      await client.refreshSession();
+    },
+    registerInstallation() {
+      throw new NotificationConformanceScriptError('Devvit registers no device installation.');
+    },
+    async recordConsent(input) {
+      const userId = client.session()?.player;
+      const before = userId === undefined ? 0 : (await service.listConsent(serverSession(userId))).length;
+      await client.recordConsent(input);
+      if (userId !== undefined) {
+        const after = await service.listConsent(serverSession(userId));
+        const stored = after.at(-1);
+        if (after.length > before && stored !== undefined) {
+          consent.push({ ...stored, player: playerOf(userId) });
+        }
+      }
+    },
+    listConsent: () => client.listConsent(),
+    registerEndpoint: (registration) => client.registerEndpoint(registration),
+    unregisterEndpoint: (unbind) => client.unregisterEndpoint(unbind),
+    setReminder: (reminder) => client.setReminder(reminder),
+    cancelReminder: (request) => client.cancelReminder(request),
+    listNotices: () => client.listNotices(),
+    async recordNotice({ channel, ...notice }) {
+      if (channel !== 'in-game') {
+        throw new Error('The game records only notices it showed in the game.');
+      }
+      await client.recordNotice({ ...notice, channel });
+    },
+    async deliver(request) {
+      const player = request.player ?? input.defaultPlayer;
+      const outcome = await service.deliver({ ...request, player: userOf(player) });
+      record(outcome, request.idempotencyKey, request.topic, player);
+      return outcome;
+    },
+    queueProviderResult(result) {
+      switch (result.status) {
+        case 'accepted':
+          plugin.enqueueAnswers.push({ successCount: 1, failureCount: 0, errors: [] });
+          return;
+        case 'rate-limited':
+          plugin.enqueueAnswers.push({
+            successCount: 0,
+            failureCount: 1,
+            errors: [{ userId: undefined, message: 'rate limit exceeded' }],
+          });
+          return;
+        case 'ambiguous':
+          plugin.enqueueAnswers.push(() => Promise.reject(new Error('deadline exceeded')));
+          return;
+        default:
+          throw new NotificationConformanceScriptError(`Devvit cannot answer ${result.status}.`);
+      }
+    },
+    async runScheduler() {
+      const { results, failed } = await service.runScheduler({ limit: 1000 });
+      expect(failed).toBe(0);
+      for (const { sendKey, outcome } of results) {
+        const previous = [...deliveries].reverse().find((delivered) => delivered.idempotencyKey === sendKey);
+        const { idempotencyKey: _key, topic, player, at: _at, ...last } = previous ?? {
+          idempotencyKey: sendKey,
+          topic: '',
+          player: '',
+          at: '',
+        };
+        if (previous === undefined || JSON.stringify(last) !== JSON.stringify(outcome)) {
+          record(outcome, sendKey, topic, player);
+        }
+      }
+    },
+  };
+}
+
 describe('Devvit notifications provider conformance', () => {
   it('runs every vector whose appliesTo the Devvit profile satisfies', () => {
     const applicable = vectors
@@ -448,5 +656,21 @@ describe('Devvit notifications provider conformance', () => {
         expect(call.data).toEqual({});
       }
     }
+  });
+  it('passes them with the runtime reaching that service through the webview backend client (DV1)', async () => {
+    const plugins = new Map<NotificationConformanceVector, FakeDevvitNotifications>();
+    const results = await runNotificationConformanceVectors(vectors, {
+      createProvider: (context) => createDevvitHarness(context, 'gateway', plugins),
+      createBackend: (input, context) => {
+        const plugin = plugins.get(context.vector);
+        if (plugin === undefined) {
+          throw new Error('The harness runs before the backend.');
+        }
+        return createDevvitClientBackend(input, plugin);
+      },
+    });
+    expect(results.filter((result) => result.status === 'failed')).toEqual([]);
+    expect(results.filter((result) => result.status === 'passed').map((result) => result.vector))
+      .toEqual(devvitVectors);
   });
 });

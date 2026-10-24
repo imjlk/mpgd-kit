@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-set-reminder-result.schema.json",
+  "title": "NotificationBackendBridgeSetReminderResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeSetReminderResult",
+  "components": {
+    "schemas": {
+      "NotificationBackendBridgeSetReminderResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/NotificationBackendReminderSetStatus",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationBackendReminderSetStatus": {
+        "oneOf": [
+          {
+            "const": "advertising-consent-missing"
+          },
+          {
+            "const": "capacity-exceeded"
+          },
+          {
+            "const": "permission-required"
+          },
+          {
+            "const": "preference-off"
+          },
+          {
+            "const": "replaced"
+          },
+          {
+            "const": "request-missing"
+          },
+          {
+            "const": "scheduled"
+          },
+          {
+            "const": "unavailable"
+          }
+        ],
+        "description": "What setting a server reminder answers: stored, the gate step 3 to 5\nrefusal, `capacity-exceeded` past a backend's cap on a player's pending\nreminders, or `unavailable` when no provider the player can be reached on\nmaps the topic. The runtime's `NotificationRuntimeReminderSetStatus`."
+      }
+    }
+  }
+}

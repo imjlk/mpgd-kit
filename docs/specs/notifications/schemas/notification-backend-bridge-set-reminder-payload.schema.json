@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-set-reminder-payload.schema.json",
+  "title": "NotificationBackendBridgeSetReminderPayload",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeSetReminderPayload",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBackendBridgeReminder": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "$ref": "#/components/schemas/NotificationTopicId",
+            "readOnly": true
+          },
+          "templateData": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "readOnly": true
+          },
+          "key": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The reminder's key, unique per player; setting it again replaces the reminder.",
+            "readOnly": true
+          },
+          "fireAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339 with an explicit offset.",
+            "readOnly": true
+          },
+          "link": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "A post or comment id, for providers whose sends need a link, such as Devvit.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "topic",
+          "key",
+          "fireAt"
+        ],
+        "additionalProperties": false,
+        "description": "A server reminder on the wire: `SetNotificationReminderInput` with a\nnon-empty key and a `fireAt` the bridge checks as RFC 3339 with an\noffset. The backend still applies the reminder bounds (key characters,\ntemplate data, the 90-day horizon) itself."
+      },
+      "NotificationBackendBridgeSetReminderPayload": {
+        "type": "object",
+        "properties": {
+          "expectedPlayer": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "reminder": {
+            "$ref": "#/components/schemas/NotificationBackendBridgeReminder",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "expectedPlayer",
+          "reminder"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationTopicId": {
+        "type": "string",
+        "description": "Open topic id declared by the game's topic catalog."
+      },
+      "ReadonlyRecordstringstringnumberboolean": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

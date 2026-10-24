@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-cancel-reminder-payload.schema.json",
+  "title": "NotificationBackendBridgeCancelReminderPayload",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeCancelReminderPayload",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBackendBridgeCancelReminderPayload": {
+        "type": "object",
+        "properties": {
+          "expectedPlayer": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "key": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "expectedPlayer",
+          "key"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

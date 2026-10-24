@@ -18,6 +18,7 @@ import {
   resolveNotificationContent,
   routeNotificationReminder,
   type CancelNotificationReminderInput,
+  type NotificationBackendReminderSetStatus,
   type NotificationCapabilities,
   type NotificationConsentKind,
   type NotificationConsentRecord,
@@ -78,17 +79,9 @@ export interface NotificationRuntimeSession {
  * What setting a server reminder answers: stored, the gate step 3 to 5
  * refusal, `capacity-exceeded` past a backend's cap on a player's pending
  * reminders, or `unavailable` when no provider the player can be reached on
- * maps the topic.
+ * maps the topic (`NotificationBackendReminderSetStatus`).
  */
-export type NotificationRuntimeReminderSetStatus =
-  | 'scheduled'
-  | 'replaced'
-  | 'permission-required'
-  | 'request-missing'
-  | 'preference-off'
-  | 'advertising-consent-missing'
-  | 'capacity-exceeded'
-  | 'unavailable';
+export type NotificationRuntimeReminderSetStatus = NotificationBackendReminderSetStatus;
 
 /**
  * The backend surface the runtime calls for the authenticated session. Every

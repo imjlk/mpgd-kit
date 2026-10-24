@@ -104,6 +104,22 @@ game's notifications backend is its Devvit server, which keeps the opt-in,
 the records, and the sends, and the Worker serves no `reddit` target. The
 Worker serves the Android, iOS, and Apps in Toss providers.
 
+On Reddit the runtime runs over the Devvit server instead:
+`src/platform/buildGateways/reddit.ts` sets
+`createDevvitNotificationsBackend` as the hosted backend
+(`setStarterHostedNotificationBackend`), and the generated Devvit server
+serves it with `createDevvitNotificationsBackendBridgeHandler`. No session
+is needed: the server answers for the logged-in Reddit user, and a
+logged-out player is asked to log in first. Once Reddit approves the app
+and `integrations.notifications` is `available`, the settings screen shows
+the reminder switches there; advertising and night consent stay off,
+because Devvit delivers `service` and `requested` topics only. A reminder
+the game schedules on Reddit (`runtime.reminders.set`) needs a post or
+comment to open: pass `link` (the post id, `context.postId` from
+`@devvit/web/client`), or give the topic's `reddit` mapping a default
+`link`; the `mpgd-notifications-dispatch` task sends it through Devvit when
+it is due.
+
 The settings screen shows each
 switch from the latest record, read every time it opens and after every
 change, so a choice made on another device shows. A tap reads the records

@@ -14,7 +14,10 @@ import {
 } from '@mpgd/game-services';
 
 import {
+  createStarterHostedNotificationBackend,
   createStarterWorkerNotificationBackend,
+  resolveStarterHostedNotificationBackend,
+  setStarterHostedNotificationBackend,
   type StarterWorkerNotificationInput,
   type StarterWorkerSession,
 } from '../templates/notifications-overlay/common/src/platform/notificationBackend.js';
@@ -138,6 +141,73 @@ try {
       undefined,
     );
     assert.deepEqual(requests, []);
+  }
+
+  // Reddit: the runtime over the backend the Devvit server hosts, set by the gateway builder.
+  {
+    const listed: string[] = [];
+    const hosted = {
+      session: () => undefined,
+      onAuthenticated: () => () => undefined,
+      recordConsent: async () => undefined,
+      listConsent: async () => {
+        listed.push('listConsent');
+        return [];
+      },
+      registerEndpoint: async () => undefined,
+      unregisterEndpoint: async () => undefined,
+      setReminder: async () => 'scheduled' as const,
+      cancelReminder: async () => false,
+      listNotices: async () => [],
+      recordNotice: async () => undefined,
+    };
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
+    let created = 0;
+    setStarterHostedNotificationBackend('reddit', () => {
+      created += 1;
+      return hosted;
+    });
+    // Created on first use, once, and only for the config target that set it.
+    assert.equal(created, 0);
+    assert.equal(resolveStarterHostedNotificationBackend('android'), undefined);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), hosted);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), hosted);
+    assert.equal(created, 1);
+    const hostedInput = { backend: hosted, topics: [], defaultLocale: 'ko', log: () => undefined };
+    const backend = createStarterHostedNotificationBackend(gateway('reddit'), hostedInput);
+    assert.ok(backend !== undefined);
+    assert.deepEqual(await backend.listConsent(), []);
+    assert.deepEqual(listed, ['listConsent']);
+    // No backend set, or no provider exposed (a gated beta Reddit has not approved): no runtime.
+    assert.equal(
+      createStarterHostedNotificationBackend(gateway('reddit'), {
+        ...hostedInput,
+        backend: undefined,
+      }),
+      undefined,
+    );
+    assert.equal(
+      createStarterHostedNotificationBackend(
+        { ...gateway('reddit'), notificationsV2: undefined } as unknown as TargetConfiguredGateway,
+        hostedInput,
+      ),
+      undefined,
+    );
+    // A factory that throws turns notifications off once, without throwing into the game.
+    let throws = 0;
+    setStarterHostedNotificationBackend('reddit', () => {
+      throws += 1;
+      throw new Error('bad options');
+    });
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
+    assert.equal(throws, 1);
+    // A new factory starts afresh.
+    setStarterHostedNotificationBackend('reddit', () => hosted);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), hosted);
+    setStarterHostedNotificationBackend('reddit', undefined);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
+    await settle();
   }
 
   // Without a session: no backend, and a message saying why.
@@ -451,4 +521,4 @@ try {
   console.error = originalError;
 }
 
-console.info('Starter Worker notifications backend checks passed.');
+console.info('Starter Worker and hosted notifications backend checks passed.');

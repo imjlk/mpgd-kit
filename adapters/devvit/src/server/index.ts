@@ -13,3 +13,4 @@ export * from './redis-verified-leaderboard.js';
 export * from './redis-notification-store.js';
 export * from './notifications-delivery.js';
 export * from './notifications-bridge.js';
+export * from './notifications-backend-bridge.js';

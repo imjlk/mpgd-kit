@@ -450,6 +450,192 @@ export const notificationBridgeMethods = Object.freeze([
   'notifications.v2.openSettings',
 ] as const satisfies readonly NotificationBridgeMethod[]);
 
+// Backend bridge method shapes (RFC "Bridge and versioning", "Backend
+// methods"): the notifications runtime's backend calls
+// (`NotificationRuntimeBackend`) for a backend that a host serves over its
+// bridge, such as the Devvit server. They are not provider methods: the nine
+// above reach the host's notification permission, these reach the backend
+// that keeps consent records, registrations, server reminders, and notices.
+// The host learns the player from its own authentication (Devvit's
+// `context.userId`). Every call but the session read names the player it
+// began for (`expectedPlayer`) only as a cross-check: the host refuses a
+// call whose player is not its own and never acts for a named player.
+
+/** The authenticated session a host-served backend answers for. */
+export interface NotificationBackendBridgeSession {
+  /** Stable for the session's life. */
+  readonly id: NonEmptyString;
+  readonly player: NonEmptyString;
+}
+
+export type NotificationBackendBridgeGetSessionPayload = NotificationBridgeProtocolPayload;
+
+export interface NotificationBackendBridgeGetSessionResult {
+  /** `null` while the request has no authenticated player (a logged-out Devvit viewer). */
+  readonly session: NotificationBackendBridgeSession | null;
+}
+
+/**
+ * Every backend call but the session read names the player the call began
+ * for. The host compares it with its own authenticated player and refuses
+ * the call when they differ: it never acts for the named player, so a
+ * payload cannot reach another player's state.
+ */
+export interface NotificationBackendBridgeCallPayload {
+  readonly expectedPlayer: NonEmptyString;
+}
+
+export interface NotificationBackendBridgeRecordConsentPayload extends NotificationBackendBridgeCallPayload {
+  readonly record: NotificationConsentRecord;
+}
+
+export interface NotificationBackendBridgeRecordConsentResult {
+  /** The record as stored, dated by the backend's clock. */
+  readonly record: NotificationConsentRecord;
+}
+
+export type NotificationBackendBridgeListConsentPayload = NotificationBackendBridgeCallPayload;
+
+export interface NotificationBackendBridgeListConsentResult {
+  /** Oldest first. */
+  readonly records: readonly NotificationConsentRecord[];
+}
+
+export interface NotificationBackendBridgeRegisterEndpointPayload extends NotificationBackendBridgeCallPayload {
+  readonly registration: NotificationEndpointRegistration;
+}
+
+export interface NotificationBackendBridgeRegisterEndpointResult {
+  readonly registered: true;
+}
+
+export interface NotificationBackendBridgeUnregisterEndpointPayload extends NotificationBackendBridgeCallPayload {
+  readonly provider: NonEmptyString;
+}
+
+export interface NotificationBackendBridgeUnregisterEndpointResult {
+  readonly unregistered: true;
+}
+
+/**
+ * What setting a server reminder answers: stored, the gate step 3 to 5
+ * refusal, `capacity-exceeded` past a backend's cap on a player's pending
+ * reminders, or `unavailable` when no provider the player can be reached on
+ * maps the topic. The runtime's `NotificationRuntimeReminderSetStatus`.
+ */
+export type NotificationBackendReminderSetStatus =
+  | 'scheduled'
+  | 'replaced'
+  | 'permission-required'
+  | 'request-missing'
+  | 'preference-off'
+  | 'advertising-consent-missing'
+  | 'capacity-exceeded'
+  | 'unavailable';
+
+/**
+ * A server reminder on the wire: `SetNotificationReminderInput` with a
+ * non-empty key and a `fireAt` the bridge checks as RFC 3339 with an
+ * offset. The backend still applies the reminder bounds (key characters,
+ * template data, the 90-day horizon) itself.
+ */
+export interface NotificationBackendBridgeReminder extends Omit<
+  SetNotificationReminderInput,
+  'key' | 'fireAt' | 'link'
+> {
+  /** The reminder's key, unique per player; setting it again replaces the reminder. */
+  readonly key: NonEmptyString;
+  /** RFC 3339 with an explicit offset. */
+  readonly fireAt: string & tags.Format<'date-time'>;
+  /** A post or comment id, for providers whose sends need a link, such as Devvit. */
+  readonly link?: NonEmptyString;
+}
+
+export interface NotificationBackendBridgeSetReminderPayload extends NotificationBackendBridgeCallPayload {
+  readonly reminder: NotificationBackendBridgeReminder;
+}
+
+export interface NotificationBackendBridgeSetReminderResult {
+  readonly status: NotificationBackendReminderSetStatus;
+}
+
+export interface NotificationBackendBridgeCancelReminderPayload extends NotificationBackendBridgeCallPayload {
+  readonly key: NonEmptyString;
+}
+
+export interface NotificationBackendBridgeCancelReminderResult {
+  /** Whether a pending reminder with the key, or a waiting send of one, existed. */
+  readonly cancelled: boolean;
+}
+
+export type NotificationBackendBridgeListNoticesPayload = NotificationBackendBridgeCallPayload;
+
+export interface NotificationBackendBridgeListNoticesResult {
+  readonly notices: readonly NotificationNotice[];
+}
+
+export interface NotificationBackendBridgeRecordNoticePayload extends NotificationBackendBridgeCallPayload {
+  readonly notice: NotificationNoticeIdentity;
+  readonly channel: 'in-game';
+}
+
+export interface NotificationBackendBridgeRecordNoticeResult {
+  readonly recorded: true;
+}
+
+export interface NotificationBackendBridgeMethods {
+  readonly 'notifications.backend.getSession': {
+    readonly payload: NotificationBackendBridgeGetSessionPayload;
+    readonly result: NotificationBackendBridgeGetSessionResult;
+  };
+  readonly 'notifications.backend.recordConsent': {
+    readonly payload: NotificationBackendBridgeRecordConsentPayload;
+    readonly result: NotificationBackendBridgeRecordConsentResult;
+  };
+  readonly 'notifications.backend.listConsent': {
+    readonly payload: NotificationBackendBridgeListConsentPayload;
+    readonly result: NotificationBackendBridgeListConsentResult;
+  };
+  readonly 'notifications.backend.registerEndpoint': {
+    readonly payload: NotificationBackendBridgeRegisterEndpointPayload;
+    readonly result: NotificationBackendBridgeRegisterEndpointResult;
+  };
+  readonly 'notifications.backend.unregisterEndpoint': {
+    readonly payload: NotificationBackendBridgeUnregisterEndpointPayload;
+    readonly result: NotificationBackendBridgeUnregisterEndpointResult;
+  };
+  readonly 'notifications.backend.setReminder': {
+    readonly payload: NotificationBackendBridgeSetReminderPayload;
+    readonly result: NotificationBackendBridgeSetReminderResult;
+  };
+  readonly 'notifications.backend.cancelReminder': {
+    readonly payload: NotificationBackendBridgeCancelReminderPayload;
+    readonly result: NotificationBackendBridgeCancelReminderResult;
+  };
+  readonly 'notifications.backend.listNotices': {
+    readonly payload: NotificationBackendBridgeListNoticesPayload;
+    readonly result: NotificationBackendBridgeListNoticesResult;
+  };
+  readonly 'notifications.backend.recordNotice': {
+    readonly payload: NotificationBackendBridgeRecordNoticePayload;
+    readonly result: NotificationBackendBridgeRecordNoticeResult;
+  };
+}
+
+export type NotificationBackendBridgeMethod = keyof NotificationBackendBridgeMethods;
+
+export const notificationBackendBridgeMethods = Object.freeze([
+  'notifications.backend.getSession',
+  'notifications.backend.recordConsent',
+  'notifications.backend.listConsent',
+  'notifications.backend.registerEndpoint',
+  'notifications.backend.unregisterEndpoint',
+  'notifications.backend.setReminder',
+  'notifications.backend.cancelReminder',
+  'notifications.backend.listNotices',
+  'notifications.backend.recordNotice',
+] as const satisfies readonly NotificationBackendBridgeMethod[]);
+
 /** A fresh capability block for a provider that has no notification path; callers must not share it. */
 export function createUnsupportedNotificationCapabilities(): NotificationCapabilities {
   return {
@@ -740,6 +926,73 @@ export const assertNotificationBridgeOpenSettingsPayload =
   typia.createAssertEquals<NotificationBridgeOpenSettingsPayload>();
 export const assertNotificationBridgeOpenSettingsResult =
   typia.createAssertEquals<NotificationBridgeOpenSettingsResult>();
+
+// Backend bridge validators: the shape with typia, then the strict time
+// fields and the registration's zone as the provider validators read them.
+
+export const assertNotificationBackendBridgeGetSessionPayload =
+  typia.createAssertEquals<NotificationBackendBridgeGetSessionPayload>();
+export const assertNotificationBackendBridgeGetSessionResult =
+  typia.createAssertEquals<NotificationBackendBridgeGetSessionResult>();
+export const assertNotificationBackendBridgeRecordConsentPayload = withStrictTimes(
+  'recordConsent payload',
+  typia.createAssertEquals<NotificationBackendBridgeRecordConsentPayload>(),
+  notificationTimeFields.NotificationBackendBridgeRecordConsentPayload,
+);
+export const assertNotificationBackendBridgeRecordConsentResult = withStrictTimes(
+  'recordConsent result',
+  typia.createAssertEquals<NotificationBackendBridgeRecordConsentResult>(),
+  notificationTimeFields.NotificationBackendBridgeRecordConsentResult,
+);
+export const assertNotificationBackendBridgeListConsentPayload =
+  typia.createAssertEquals<NotificationBackendBridgeListConsentPayload>();
+export const assertNotificationBackendBridgeListConsentResult = withStrictTimes(
+  'listConsent result',
+  typia.createAssertEquals<NotificationBackendBridgeListConsentResult>(),
+  notificationTimeFields.NotificationBackendBridgeListConsentResult,
+);
+const assertNotificationBackendBridgeRegisterEndpointPayloadShape =
+  typia.createAssertEquals<NotificationBackendBridgeRegisterEndpointPayload>();
+
+/** Validates a `registerEndpoint` payload, whose registration follows `assertNotificationEndpointRegistration`. */
+export function assertNotificationBackendBridgeRegisterEndpointPayload(
+  input: unknown,
+): NotificationBackendBridgeRegisterEndpointPayload {
+  const payload = assertNotificationBackendBridgeRegisterEndpointPayloadShape(input);
+  assertNotificationEndpointRegistration(payload.registration);
+  return payload;
+}
+export const assertNotificationBackendBridgeRegisterEndpointResult =
+  typia.createAssertEquals<NotificationBackendBridgeRegisterEndpointResult>();
+export const assertNotificationBackendBridgeUnregisterEndpointPayload =
+  typia.createAssertEquals<NotificationBackendBridgeUnregisterEndpointPayload>();
+export const assertNotificationBackendBridgeUnregisterEndpointResult =
+  typia.createAssertEquals<NotificationBackendBridgeUnregisterEndpointResult>();
+export const assertNotificationBackendBridgeSetReminderPayload = withStrictTimes(
+  'setReminder payload',
+  typia.createAssertEquals<NotificationBackendBridgeSetReminderPayload>(),
+  notificationTimeFields.NotificationBackendBridgeSetReminderPayload,
+);
+export const assertNotificationBackendBridgeSetReminderResult =
+  typia.createAssertEquals<NotificationBackendBridgeSetReminderResult>();
+export const assertNotificationBackendBridgeCancelReminderPayload =
+  typia.createAssertEquals<NotificationBackendBridgeCancelReminderPayload>();
+export const assertNotificationBackendBridgeCancelReminderResult =
+  typia.createAssertEquals<NotificationBackendBridgeCancelReminderResult>();
+export const assertNotificationBackendBridgeListNoticesPayload =
+  typia.createAssertEquals<NotificationBackendBridgeListNoticesPayload>();
+export const assertNotificationBackendBridgeListNoticesResult = withStrictTimes(
+  'listNotices result',
+  typia.createAssertEquals<NotificationBackendBridgeListNoticesResult>(),
+  notificationTimeFields.NotificationBackendBridgeListNoticesResult,
+);
+export const assertNotificationBackendBridgeRecordNoticePayload = withStrictTimes(
+  'recordNotice payload',
+  typia.createAssertEquals<NotificationBackendBridgeRecordNoticePayload>(),
+  notificationTimeFields.NotificationBackendBridgeRecordNoticePayload,
+);
+export const assertNotificationBackendBridgeRecordNoticeResult =
+  typia.createAssertEquals<NotificationBackendBridgeRecordNoticeResult>();
 
 // v1 compatibility (RFC "Migration and PR plan").
 

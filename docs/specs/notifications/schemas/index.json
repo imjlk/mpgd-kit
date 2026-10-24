@@ -124,6 +124,78 @@
       "file": "notification-bridge-open-settings-result.schema.json"
     },
     {
+      "title": "NotificationBackendBridgeGetSessionPayload",
+      "file": "notification-backend-bridge-get-session-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeGetSessionResult",
+      "file": "notification-backend-bridge-get-session-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeRecordConsentPayload",
+      "file": "notification-backend-bridge-record-consent-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeRecordConsentResult",
+      "file": "notification-backend-bridge-record-consent-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeListConsentPayload",
+      "file": "notification-backend-bridge-list-consent-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeListConsentResult",
+      "file": "notification-backend-bridge-list-consent-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeRegisterEndpointPayload",
+      "file": "notification-backend-bridge-register-endpoint-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeRegisterEndpointResult",
+      "file": "notification-backend-bridge-register-endpoint-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeUnregisterEndpointPayload",
+      "file": "notification-backend-bridge-unregister-endpoint-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeUnregisterEndpointResult",
+      "file": "notification-backend-bridge-unregister-endpoint-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeSetReminderPayload",
+      "file": "notification-backend-bridge-set-reminder-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeSetReminderResult",
+      "file": "notification-backend-bridge-set-reminder-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeCancelReminderPayload",
+      "file": "notification-backend-bridge-cancel-reminder-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeCancelReminderResult",
+      "file": "notification-backend-bridge-cancel-reminder-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeListNoticesPayload",
+      "file": "notification-backend-bridge-list-notices-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeListNoticesResult",
+      "file": "notification-backend-bridge-list-notices-result.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeRecordNoticePayload",
+      "file": "notification-backend-bridge-record-notice-payload.schema.json"
+    },
+    {
+      "title": "NotificationBackendBridgeRecordNoticeResult",
+      "file": "notification-backend-bridge-record-notice-result.schema.json"
+    },
+    {
       "title": "NotificationConformanceVector",
       "file": "notification-conformance-vector.schema.json"
     }

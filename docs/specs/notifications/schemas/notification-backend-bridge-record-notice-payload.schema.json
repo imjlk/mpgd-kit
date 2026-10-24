@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-record-notice-payload.schema.json",
+  "title": "NotificationBackendBridgeRecordNoticePayload",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeRecordNoticePayload",
+  "components": {
+    "schemas": {
+      "IsoDateTime": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBackendBridgeRecordNoticePayload": {
+        "type": "object",
+        "properties": {
+          "expectedPlayer": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "notice": {
+            "$ref": "#/components/schemas/NotificationNoticeIdentity",
+            "readOnly": true
+          },
+          "channel": {
+            "const": "in-game",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "expectedPlayer",
+          "notice",
+          "channel"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationNoticeIdentity": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NotificationNoticeKind",
+            "readOnly": true
+          },
+          "record": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "oneOf": [
+                  {
+                    "const": "advertising"
+                  },
+                  {
+                    "const": "night"
+                  }
+                ],
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoDateTime",
+                "description": "RFC 3339 with an explicit offset; compared as an instant.",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "at"
+            ],
+            "additionalProperties": false,
+            "readOnly": true
+          },
+          "dueBy": {
+            "type": "string",
+            "format": "date",
+            "description": "The notice's last Asia/Seoul calendar date, `YYYY-MM-DD`.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "kind",
+          "record",
+          "dueBy"
+        ],
+        "additionalProperties": false,
+        "description": "What names one notice: its kind, the record it reports on (that record's\nkind and time), and its `dueBy`. A listed notice carries these fields, and\n`notices.recordShown` takes the listed notice as is or exactly them."
+      },
+      "NotificationNoticeKind": {
+        "oneOf": [
+          {
+            "const": "consent-result"
+          },
+          {
+            "const": "reconfirmation"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -3,7 +3,9 @@ import {
   bridgeStorageLoadProtocol,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsBackendUnavailableBridgeError,
   createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsBackendMethod,
   isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
@@ -68,6 +70,16 @@ export interface DevvitBridgeNotificationsHandler {
   request(input: BridgeRequest): Promise<BridgeResponse>;
 }
 
+/**
+ * Serves the nine `notifications.backend.*` bridge methods:
+ * `createDevvitNotificationsBackendBridgeHandler` from
+ * `@mpgd/adapter-devvit/server` over the Devvit notifications service, for
+ * the request's logged-in user.
+ */
+export interface DevvitBridgeNotificationsBackendHandler {
+  request(input: BridgeRequest): Promise<BridgeResponse>;
+}
+
 export interface DevvitBridgeHandlerDependencies {
   readonly redis: DevvitBridgeRedisLike;
   /** Authenticated Reddit user ID from the Devvit request context, never from the payload. */
@@ -91,6 +103,14 @@ export interface DevvitBridgeHandlerDependencies {
    * `unavailable`.
    */
   readonly notifications?: DevvitBridgeNotificationsHandler | undefined;
+  /**
+   * The notifications runtime's backend: consent records, the player's
+   * registration, server reminders, and notices, kept by the Devvit
+   * notifications service. Absent, every `notifications.backend.*` method
+   * answers `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and the webview's
+   * runtime runs without a backend.
+   */
+  readonly notificationsBackend?: DevvitBridgeNotificationsBackendHandler | undefined;
   readonly warn?: ((message: string) => void) | undefined;
 }
 
@@ -119,6 +139,23 @@ export function createDevvitBridgeHandler(
       }
       try {
         return await dependencies.notifications.request(input);
+      } catch (error) {
+        warn(`devvit notifications ${input.method} failed: ${errorMessage(error)}`);
+        return createBridgeError(
+          input.id,
+          'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          `${input.method} failed on the Devvit server.`,
+          true,
+        );
+      }
+    }
+    // The runtime's backend calls, kept apart from the provider methods above.
+    if (isBridgeNotificationsBackendMethod(input.method)) {
+      if (dependencies.notificationsBackend === undefined) {
+        return createNotificationsBackendUnavailableBridgeError(input, 'Devvit server bridge');
+      }
+      try {
+        return await dependencies.notificationsBackend.request(input);
       } catch (error) {
         warn(`devvit notifications ${input.method} failed: ${errorMessage(error)}`);
         return createBridgeError(

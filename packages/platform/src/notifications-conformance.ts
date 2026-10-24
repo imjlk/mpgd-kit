@@ -777,8 +777,13 @@ export type NotificationConformanceProviderResult =
   | { readonly status: 'ambiguous' };
 
 export interface NotificationConformanceBackend extends NotificationConformanceBackendClient {
-  /** Starts a new session for `player` on the fake installation and tells the listeners. */
-  authenticate(player: string): NotificationConformanceSession;
+  /**
+   * Starts a new session for `player` on the fake installation and tells the
+   * listeners. A backend under test whose client learns the session from its
+   * server (the Devvit backend client reads it over the bridge) may finish
+   * asynchronously; the runner awaits it before the next step.
+   */
+  authenticate(player: string): NotificationConformanceSession | Promise<NotificationConformanceSession>;
   /**
    * Ends the current session; the endpoints it registered are unbound. A
    * backend under test may finish asynchronously; the runner awaits it.
@@ -804,11 +809,13 @@ export interface NotificationConformanceBackend extends NotificationConformanceB
 }
 
 /**
- * The fake backend. Its `revokeSession` and `registerInstallation` finish
- * synchronously, so its callers need not await them. `deliver`,
- * `runScheduler`, and the async client methods still return promises.
+ * The fake backend. Its `authenticate`, `revokeSession`, and
+ * `registerInstallation` finish synchronously, so its callers need not
+ * await them. `deliver`, `runScheduler`, and the async client methods still
+ * return promises.
  */
 export interface NotificationConformanceFakeBackend extends NotificationConformanceBackend {
+  authenticate(player: string): NotificationConformanceSession;
   revokeSession(): void;
   registerInstallation(input: NotificationConformanceInstallationFixture): void;
 }
@@ -2645,7 +2652,7 @@ async function runBackendStep(step: BackendStep, path: string, execution: Execut
   const { backend } = execution;
   switch (step.action) {
     case 'authenticate':
-      backend.authenticate(step.player);
+      await backend.authenticate(step.player);
       return;
     case 'deliver':
       await expectAnswer(step, path, execution, () => backend.deliver(step.input));
