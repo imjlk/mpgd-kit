@@ -51,8 +51,9 @@ export type BridgeNotificationsV2Method =
 
 /**
  * Notifications backend request methods (notifications RFC "Bridge and
- * versioning", "Backend methods"): the runtime's backend calls for a backend
- * a host serves over its bridge (the Devvit server). Separate from the nine
+ * versioning", "Backend methods"): the calls the notifications runtime makes
+ * on its backend (`NotificationRuntimeBackend`) when a host serves that
+ * backend over its bridge (the Devvit server). Separate from the nine
  * provider methods; the type check under `bridgeNotificationsBackendMethods`
  * keeps the list equal to `notificationBackendBridgeMethods` from
  * `@mpgd/platform/notifications`.
@@ -255,10 +256,13 @@ export function isBridgeNotificationsBackendMethod(
 }
 
 /**
- * Answer for a notifications backend request that reaches a transport whose
- * host serves no notifications backend: `NOTIFICATIONS_CONFIGURATION_REQUIRED`,
- * not retryable, as the game-services Worker answers a session route it does
- * not serve. The runtime then runs without a backend's records.
+ * Answer for a notifications backend request that reaches a host whose
+ * bridge could serve one but has no backend configured (the Devvit server
+ * bridge without its `notificationsBackend` handler):
+ * `NOTIFICATIONS_CONFIGURATION_REQUIRED`, not retryable, as the game-services
+ * Worker answers a session route it does not serve. A transport that never
+ * serves a backend answers `UNSUPPORTED_METHOD`, which a backend client
+ * reads the same way.
  */
 export function createNotificationsBackendUnavailableBridgeError(
   request: Pick<BridgeRequest, 'id' | 'method'>,

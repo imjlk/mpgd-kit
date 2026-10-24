@@ -828,6 +828,53 @@ const minimal: NotificationProvider = {
   })));
   assert.equal(brokenAnswer.code, 'NOTIFICATIONS_CONFIGURATION_REQUIRED');
   assert.equal(brokenAnswer.retryable, false);
+  assert.equal(
+    brokenAnswer.message,
+    'The notifications backend answered notifications.backend.setReminder outside the contract.',
+  );
+  // A failure shaped as a platform failure with another code keeps its flag, not its text.
+  failWith = new PlatformOperationError({ code: 'STORAGE_FAILED', message: 'redis host 10.0.0.1 refused', retryable: false });
+  const platformFailure = errorOf(
+    await handler.request(request('notifications.backend.listNotices', player)),
+  );
+  assert.equal(platformFailure.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(platformFailure.retryable, false);
+  assert.equal(
+    platformFailure.message,
+    'notifications.backend.listNotices failed on the test host.',
+  );
+  failWith = undefined;
+  // Without a message of its own the handler still keeps the text on the host.
+  const plain = createNotificationsBackendBridgeHandler({
+    backend: {
+      ...backend,
+      listConsent: async () => {
+        throw new Error('internal detail');
+      },
+    },
+  });
+  const plainFailure = errorOf(
+    await plain.request(request('notifications.backend.listConsent', player)),
+  );
+  assert.equal(plainFailure.message, 'notifications.backend.listConsent failed on the host.');
+  // A session read that throws is a host failure, not a signed-out answer.
+  const throwing = createNotificationsBackendBridgeHandler({
+    backend: {
+      ...backend,
+      session: () => {
+        throw new Error('context unavailable');
+      },
+    },
+  });
+  const throwingRead = errorOf(
+    await throwing.request(request('notifications.backend.getSession', protocol)),
+  );
+  assert.equal(throwingRead.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(throwingRead.message, 'notifications.backend.getSession failed on the host.');
+  assert.equal(
+    errorOf(await handler.request(request('notifications.backend.getSession', {}))).code,
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
   // A provider method is not a backend method.
   assert.equal(
     errorOf(await handler.request(request('notifications.v2.getPermission', { topics: ['a'] }))).code,

@@ -512,12 +512,19 @@ export interface CreateNotificationsBackendBridgeHandlerInput<
   readonly backend: NotificationsBackendBridgeServer<TSession>;
   /** Names the backend in error messages, as in "The Devvit notifications backend answered ...". */
   readonly label?: string | undefined;
-  /** As for `createNotificationsV2BridgeHandler`: the message an unexpected failure crosses with. */
+  /**
+   * The message a failure that is not a notifications failure crosses with
+   * (a `PlatformOperationError` with another code included), so a store's
+   * or plugin's own text stays on the host. `<method> failed on the host.`
+   * by default.
+   */
   readonly unexpectedFailureMessage?: ((method: BridgeNotificationsBackendMethod) => string) | undefined;
   /**
    * Called with every failure the handler answers with an error, except an
    * invalid payload and a signed-out or changed session (the caller's, and
-   * expected). Synchronous; a hook that throws or rejects changes nothing.
+   * expected): a backend failure, and an answer outside the contract, whose
+   * validator text is the cause. Synchronous; a hook that throws or rejects
+   * changes nothing.
    */
   readonly onError?:
     | ((error: unknown, context: { readonly method: BridgeNotificationsBackendMethod }) => void)
@@ -543,7 +550,14 @@ export interface CreateNotificationsBackendBridgeHandlerInput<
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
  * - **Failures.** As for `createNotificationsV2BridgeHandler`: a
  *   notifications failure crosses with its code, retryable flag, and host
- *   code; anything else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+ *   code; anything else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with
+ *   `unexpectedFailureMessage`.
+ * - **Retries.** An answer is checked after the backend acted, so a write
+ *   whose answer breaks the contract still happened. The runtime retries a
+ *   retryable failure, and the backend calls are written to be repeated:
+ *   reminders and registrations replace by key, a repeated permission or
+ *   preference record is not written twice (an advertising or night record
+ *   is), and a notice is recorded once.
  */
 export function createNotificationsBackendBridgeHandler<TSession extends NotificationsBackendBridgeSession>(
   input: CreateNotificationsBackendBridgeHandlerInput<TSession>,
@@ -552,6 +566,9 @@ export function createNotificationsBackendBridgeHandler<TSession extends Notific
   const name = input.label === undefined || input.label.length === 0
     ? 'The notifications backend'
     : `The ${input.label} notifications backend`;
+  // A backend's own failure text (a store's, a plugin's) stays on the host.
+  const unexpectedFailureMessage = input.unexpectedFailureMessage
+    ?? ((method: BridgeNotificationsBackendMethod) => `${method} failed on the host.`);
 
   const sessionFor = (expectedPlayer: string): TSession => {
     const session = backend.session();
@@ -664,7 +681,7 @@ export function createNotificationsBackendBridgeHandler<TSession extends Notific
       } catch (error) {
         report(error, method);
         try {
-          return toBridgeError(request.id, method, error, input.unexpectedFailureMessage);
+          return toBridgeError(request.id, method, error, unexpectedFailureMessage, true);
         } catch {
           return createBridgeError(
             request.id,
@@ -702,8 +719,9 @@ function validBackendResult<TMethod extends BridgeNotificationsBackendMethod>(
   try {
     return assertBridgeNotificationsBackendResult(method, data);
   } catch (error) {
+    // The validator's text may quote stored data; it stays in the cause, which `onError` sees.
     throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `${name} answered ${method} with invalid data: ${messageOf(error)}`,
+      message: `${name} answered ${method} outside the contract.`,
       cause: error,
     });
   }
@@ -763,6 +781,8 @@ function toBridgeError<TMethod extends string>(
   method: TMethod,
   error: unknown,
   unexpectedFailureMessage: ((method: TMethod) => string) | undefined,
+  /** Also answers a non-notifications `PlatformOperationError` with `unexpectedFailureMessage`. */
+  hidePlatformFailureText = false,
 ): BridgeResponse {
   if (error instanceof InvalidPayloadError) {
     return createBridgeError(id, 'NOTIFICATIONS_INVALID_INPUT', error.message);
@@ -787,7 +807,9 @@ function toBridgeError<TMethod extends string>(
     return createBridgeError(
       id,
       'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-      `${method} failed: ${error.message}`,
+      hidePlatformFailureText && unexpectedFailureMessage !== undefined
+        ? unexpectedFailureMessage(method)
+        : `${method} failed: ${error.message}`,
       error.retryable,
     );
   }
