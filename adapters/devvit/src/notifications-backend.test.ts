@@ -71,6 +71,8 @@ interface Sent {
 }
 
 function setup(input: { readonly loggedOut?: boolean } = {}) {
+  /** Bridge methods whose next request fails in transit, once each. */
+  const failNext = new Set<string>();
   let now = Date.parse('2026-10-24T03:00:00Z');
   const plugin: FakeDevvitNotifications = createFakeDevvitNotifications(
     input.loggedOut === true ? {} : { currentUserId: alice },
@@ -97,6 +99,12 @@ function setup(input: { readonly loggedOut?: boolean } = {}) {
   const sent: Sent[] = [];
   const serve = async (method: string, payload: unknown): Promise<unknown> => {
     sent.push({ method, payload, user: plugin.currentUserId });
+    if (failNext.delete(method)) {
+      throw Object.assign(new Error('Failed to fetch'), {
+        code: 'DEVVIT_BRIDGE_NETWORK_ERROR',
+        retryable: true,
+      });
+    }
     const request: BridgeRequest = {
       id: `r-${sent.length}`,
       method: method as BridgeRequest['method'],
@@ -116,7 +124,7 @@ function setup(input: { readonly loggedOut?: boolean } = {}) {
     timeZone: () => 'America/New_York',
     locale: () => 'en-US',
   });
-  const client = createDevvitNotificationsBackendClient({ request: serve });
+  const client = createDevvitNotificationsBackendClient({ request: serve, now: () => now });
   const errors: unknown[] = [];
   const runtime = createNotificationRuntime({
     provider,
@@ -133,6 +141,7 @@ function setup(input: { readonly loggedOut?: boolean } = {}) {
     client,
     runtime,
     sent,
+    failNext,
     errors,
     backendFailures,
     advance(ms: number) {
@@ -245,6 +254,27 @@ describe('the notifications runtime on Devvit through the backend client', () =>
       link: 't3_post',
     })).resolves.toEqual({ route: 'remote', status: 'preference-off' });
     expect(harness.errors).toEqual([]);
+  });
+
+  it("reads the session again from the runtime's own reads after the first read failed", async () => {
+    const harness = setup();
+    harness.failNext.add('notifications.backend.getSession');
+    await expect(harness.client.refreshSession()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await harness.runtime.start();
+    await harness.runtime.runUntilIdle();
+    expect(sentBackend(harness.sent, 'registerEndpoint')).toEqual([]);
+    // Within the retry interval a read asks nothing more.
+    await harness.runtime.getPermission({ topics: ['daily-puzzle'] });
+    await flushJobs();
+    expect(sentBackend(harness.sent, 'getSession')).toHaveLength(1);
+    // After it, the runtime's next read starts a session read; the user is announced and registered.
+    harness.advance(5_000);
+    await harness.runtime.getPermission({ topics: ['daily-puzzle'] });
+    await flushJobs();
+    await harness.runtime.runUntilIdle();
+    expect(sentBackend(harness.sent, 'getSession')).toHaveLength(2);
+    expect(harness.client.session()).toEqual({ id: `devvit:${alice}`, player: alice });
+    expect(sentBackend(harness.sent, 'registerEndpoint')).toHaveLength(1);
   });
 
   it('answers a logged-out viewer without reaching the service', async () => {
@@ -517,6 +547,7 @@ describe('createDevvitNotificationsBackendClient', () => {
           retryable: true,
         }));
       },
+      retryIntervalMs: 0,
     });
     const first = client.refreshSession();
     reads.shift()?.(undefined);
@@ -535,11 +566,11 @@ describe('createDevvitNotificationsBackendClient', () => {
     reads.shift();
     failures.shift()?.(Object.assign(new Error('offline'), { code: 'DEVVIT_BRIDGE_NETWORK_ERROR', retryable: true }));
     await expect(refused).rejects.toMatchObject({ hostCode: 'NOTIFICATIONS_SESSION_CHANGED' });
-    expect(client.session()).toBeUndefined();
-    // The next call finds no session and reads again; bob is announced.
+    // The next read of the session, or the next call, finds none and reads again; bob is announced.
     const announced: string[] = [];
     client.onAuthenticated((next) => announced.push(next.player));
     answer = { session: { id: `devvit:${bob}`, player: bob } };
+    expect(client.session()).toBeUndefined();
     await expect(client.listConsent()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
     await flushJobs();
     expect(reads).toHaveLength(1);
@@ -594,6 +625,7 @@ describe('createDevvitNotificationsBackendClient', () => {
         methods.push(method);
         return answer();
       },
+      retryIntervalMs: 0,
     });
     await expect(client.refreshSession()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
     answer = () => ({ session: null });
@@ -786,6 +818,44 @@ describe('createDevvitNotificationsBackend', () => {
     expect(backend.session()).toEqual({ id: `devvit:${alice}`, player: alice });
     await expect(backend.listConsent()).resolves.toEqual([]);
     expect(methods.at(-1)).toBe('notifications.backend.listConsent');
+  });
+
+  it('loads a chunk that failed again from session(), at most once per retry interval', async () => {
+    let attempts = 0;
+    let clock = 0;
+    const backend = createDevvitNotificationsBackend({
+      appVersion: '1',
+      buildId: 'test',
+      bridge: bridgeFor({ current: alice }, []),
+      now: () => clock,
+      load: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('chunk failed');
+        }
+        return backendClientModule;
+      },
+    });
+    await flushJobs();
+    expect(backend.session()).toBeUndefined();
+    await flushJobs();
+    expect(attempts).toBe(1);
+    clock = 5_000;
+    expect(backend.session()).toBeUndefined();
+    await flushJobs();
+    expect(attempts).toBe(2);
+    expect(backend.session()).toEqual({ id: `devvit:${alice}`, player: alice });
+    // Options the client refuses are not a load to retry.
+    const refused = createDevvitNotificationsBackend({
+      appVersion: '1',
+      buildId: 'test',
+      bridge: bridgeFor({ current: alice }, []),
+      timeoutMs: 0,
+      load: async () => backendClientModule,
+    });
+    await expect(refused.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    // Unbinding before anything loaded sends nothing.
+    await expect(refused.unregisterEndpoint({ provider: 'devvit', player: alice })).resolves.toBeUndefined();
   });
 
   it('answers a chunk that did not load as retryable, and loads again on the next call', async () => {

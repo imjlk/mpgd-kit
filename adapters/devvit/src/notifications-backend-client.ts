@@ -57,6 +57,14 @@ export interface CreateDevvitNotificationsBackendClientInput {
    * at most 2147483647. Devvit ends a server request after 30 seconds.
    */
   readonly timeoutMs?: number;
+  /**
+   * While no session read has settled (the first one failed, offline or
+   * timed out), `session()` and a call that finds no session start another
+   * read, at most one this often; 5 seconds by default.
+   */
+  readonly retryIntervalMs?: number;
+  /** The clock the retry interval reads, in milliseconds; `Date.now` by default. */
+  readonly now?: () => number;
 }
 
 export interface DevvitNotificationsBackendClient extends NotificationRuntimeBackend {
@@ -72,6 +80,9 @@ export interface DevvitNotificationsBackendClient extends NotificationRuntimeBac
 
 /** The default `timeoutMs`: a request still unanswered after this is no longer awaited. */
 export const defaultDevvitNotificationsBackendTimeoutMs = 15_000;
+
+/** The default `retryIntervalMs` between session reads while none has settled. */
+export const defaultDevvitNotificationsBackendRetryIntervalMs = 5_000;
 
 /** Bridge codes a server that serves no notifications backend answers with. */
 const backendUnavailableCodes: ReadonlySet<unknown> = new Set([
@@ -97,15 +108,24 @@ export function createDevvitNotificationsBackendClient(
       message: 'The Devvit notifications backend timeoutMs must be a positive number of milliseconds, at most 2147483647.',
     });
   }
+  const retryIntervalMs = input.retryIntervalMs ?? defaultDevvitNotificationsBackendRetryIntervalMs;
+  if (!Number.isFinite(retryIntervalMs) || retryIntervalMs < 0) {
+    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+      message: 'The Devvit notifications backend retryIntervalMs must be a non-negative number of milliseconds.',
+    });
+  }
+  const now = input.now ?? Date.now;
   let current: NotificationRuntimeSession | undefined;
   let refreshing: Promise<NotificationRuntimeSession | undefined> | undefined;
+  let lastReadStartedAt: number | undefined;
   /**
    * Whether a session read settled for good: the server answered (a
    * logged-out answer too), or it failed in a way a retry cannot change (a
    * server without the backend, or an answer outside the contract, which
-   * only a fixed server or a reload changes). Until then a call that finds
-   * no session starts a read, at most one at a time and one per call, so a
-   * first read that failed (offline, timed out) is tried again.
+   * only a fixed server or a reload changes). Until then `session()` and a
+   * call that finds no session start a read (`retryIfUnsettled`), so a
+   * first read that failed (offline, timed out) is tried again even though
+   * the runtime makes no backend call while it sees no session.
    */
   let sessionSettled = false;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
@@ -165,6 +185,7 @@ export function createDevvitNotificationsBackendClient(
     if (refreshing !== undefined) {
       return refreshing;
     }
+    lastReadStartedAt = now();
     const attempt = (async () => {
       let session: NotificationRuntimeSession | null;
       try {
@@ -204,17 +225,31 @@ export function createDevvitNotificationsBackendClient(
 
   const requireSession = (method: BridgeNotificationsBackendMethod): NotificationRuntimeSession => {
     if (current === undefined) {
-      if (!sessionSettled && refreshing === undefined) {
-        // No read has settled yet (none was made, or the last one failed in
-        // a way a retry may fix): read now, so the runtime hears of a
-        // signed-in player through onAuthenticated instead of waiting forever.
-        void refreshSession().catch(() => undefined);
-      }
+      retryIfUnsettled();
       throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
         message: `${method} needs a signed-in player; no request was sent.`,
       });
     }
     return current;
+  };
+
+  /**
+   * While no session is known and no read has settled (none was made, or
+   * the last one failed in a way a retry may fix), starts a read in the
+   * background, at most one at a time and one per `retryIntervalMs`, so the
+   * runtime hears of a signed-in player through onAuthenticated instead of
+   * waiting forever.
+   */
+  const retryIfUnsettled = (): void => {
+    if (
+      current !== undefined
+      || sessionSettled
+      || refreshing !== undefined
+      || (lastReadStartedAt !== undefined && now() - lastReadStartedAt < retryIntervalMs)
+    ) {
+      return;
+    }
+    void refreshSession().catch(() => undefined);
   };
 
   /**
@@ -237,10 +272,11 @@ export function createDevvitNotificationsBackendClient(
       if (contradicts(await refreshSession())) {
         await refreshSession();
       }
-    } catch {
-      // A read failed after a stale answer cleared the session: the next
-      // call reads again rather than wait for a refusal that cannot come.
-      if (current === undefined) {
+    } catch (error) {
+      // A read failed in a way a retry may fix after a stale answer cleared
+      // the session: read again later rather than wait for a refusal that
+      // cannot come.
+      if (current === undefined && error instanceof NotificationError && error.retryable) {
         sessionSettled = false;
       }
       // The refusal is what the caller needs to see.
@@ -271,7 +307,10 @@ export function createDevvitNotificationsBackendClient(
   };
 
   return {
-    session: () => current,
+    session() {
+      retryIfUnsettled();
+      return current;
+    },
     onAuthenticated(listener) {
       // The session already read when the runtime subscribes is not a new one.
       const entry = (session: NotificationRuntimeSession): void => listener(session);

@@ -219,6 +219,13 @@ function createDevvitBridgeRequest(
 export interface DevvitNotificationsBackendOptions extends DevvitBridgeTarget {
   /** How long one backend request may take; 15 seconds by default (see `createDevvitNotificationsBackendClient`). */
   readonly timeoutMs?: number;
+  /**
+   * While the client chunk has not loaded, or no session read has settled,
+   * `session()` tries again at most this often; 5 seconds by default.
+   */
+  readonly retryIntervalMs?: number;
+  /** The clock the retry interval reads, in milliseconds; `Date.now` by default. */
+  readonly now?: () => number;
   /** Loads the backend client chunk, when the backend is created; the dynamic import by default. Tests inject it. */
   readonly load?: () => Promise<DevvitNotificationsBackendClientModule>;
 }
@@ -252,7 +259,9 @@ export interface DevvitNotificationsBackend extends NotificationRuntimeBackend {
  * has answered for a logged-in user, `session()` is `undefined` and calls
  * answer `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`; the runtime hears of the
  * user through `onAuthenticated`. A chunk that fails to load is
- * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` too, and the next call loads again.
+ * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` too; the next call, or a
+ * `session()` read at most once per `retryIntervalMs`, loads again, and a
+ * session read that failed is retried the same way.
  * The player is always the one the server answers for; the webview never
  * names one it chose.
  */
@@ -261,9 +270,12 @@ export function createDevvitNotificationsBackend(
 ): DevvitNotificationsBackend {
   const request = createDevvitBridgeRequest(options);
   const importClient = options.load ?? (() => import('./notifications-backend-client.js'));
+  const retryIntervalMs = options.retryIntervalMs ?? 5_000;
+  const now = options.now ?? Date.now;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
   let client: DevvitNotificationsBackend | undefined;
   let loading: Promise<DevvitNotificationsBackend> | undefined;
+  let lastLoadStartedAt: number | undefined;
   const load = (): Promise<DevvitNotificationsBackend> => {
     if (client !== undefined) {
       return Promise.resolve(client);
@@ -271,26 +283,11 @@ export function createDevvitNotificationsBackend(
     if (loading !== undefined) {
       return loading;
     }
+    lastLoadStartedAt = now();
     const attempt = (async () => {
+      let module: DevvitNotificationsBackendClientModule;
       try {
-        const module = await importClient();
-        const created = module.createDevvitNotificationsBackendClient({
-          request: (method: BridgeNotificationsBackendMethod, payload: unknown) => request<unknown>(method, payload),
-          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        });
-        created.onAuthenticated((session) => {
-          for (const listener of [...listeners]) {
-            try {
-              listener(session);
-            } catch {
-              // One listener failing never keeps the session from the others.
-            }
-          }
-        });
-        client = created;
-        // Read the session now, so the runtime hears of a logged-in user.
-        void created.refreshSession().catch(() => {});
-        return created;
+        module = await importClient();
       } catch (error) {
         throw new PlatformOperationError({
           code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
@@ -298,6 +295,26 @@ export function createDevvitNotificationsBackend(
           retryable: true,
         });
       }
+      // Options the client refuses (a timeoutMs out of range) fail as they are, not as a load to retry.
+      const created = module.createDevvitNotificationsBackendClient({
+        request: (method: BridgeNotificationsBackendMethod, payload: unknown) => request<unknown>(method, payload),
+        retryIntervalMs,
+        now,
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      });
+      created.onAuthenticated((session) => {
+        for (const listener of [...listeners]) {
+          try {
+            listener(session);
+          } catch {
+            // One listener failing never keeps the session from the others.
+          }
+        }
+      });
+      client = created;
+      // Read the session now, so the runtime hears of a logged-in user.
+      void created.refreshSession().catch(() => {});
+      return created;
     })();
     loading = attempt;
     attempt.then(
@@ -312,7 +329,17 @@ export function createDevvitNotificationsBackend(
   };
   void load().catch(() => {});
   return {
-    session: () => client?.session(),
+    session() {
+      if (client !== undefined) {
+        return client.session();
+      }
+      // The runtime makes no backend call while it sees no session, so a
+      // chunk that failed to load is loaded again from here.
+      if (loading === undefined && (lastLoadStartedAt === undefined || now() - lastLoadStartedAt >= retryIntervalMs)) {
+        void load().catch(() => {});
+      }
+      return undefined;
+    },
     onAuthenticated(listener) {
       const entry = (session: NotificationRuntimeSession): void => listener(session);
       listeners.add(entry);
@@ -324,7 +351,8 @@ export function createDevvitNotificationsBackend(
     recordConsent: async (record) => (await load()).recordConsent(record),
     listConsent: async () => (await load()).listConsent(),
     registerEndpoint: async (registration) => (await load()).registerEndpoint(registration),
-    unregisterEndpoint: async (input) => (await load()).unregisterEndpoint(input),
+    // Nothing was registered before the client loaded, and no session is signed in.
+    unregisterEndpoint: async (input) => client?.unregisterEndpoint(input),
     setReminder: async (reminder) => (await load()).setReminder(reminder),
     cancelReminder: async (input) => (await load()).cancelReminder(input),
     listNotices: async () => (await load()).listNotices(),
