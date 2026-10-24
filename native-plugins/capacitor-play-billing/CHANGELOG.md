@@ -1,5 +1,11 @@
 # @mpgd/capacitor-play-billing
 
+## 0.3.8 — 2026-10-24
+
+### Patch changes
+
+- Updated dependencies: adapter-capacitor@0.12.4, game-services@0.28.0
+
 ## 0.3.7 — 2026-10-21
 
 ### Patch changes
@@ -52,7 +58,7 @@
 ### Minor changes
 
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: Commerce v2, PR C4: the v1 provider and recovery driver are removed.
-  
+
   - Removed `createCapacitorPlayBillingProvider` and its types
     (`PlayBillingProviderOptions`, `PlayBillingProductMapping`,
     `CapacitorPlayBillingProvider`, `PlayBillingAvailability`), and
@@ -113,7 +119,7 @@
 - [a133b175](https://github.com/imjlk/mpgd-kit/commit/a133b175421c4b2f9ccf1a84c7a99912ed181c4d) Commerce v2, PR B2: the Google Play `StoreSdk` and commerce provider in
   `@mpgd/capacitor-play-billing`, with `@mpgd/adapter-capacitor` (`^0.8.0`) as
   a new peer dependency.
-  
+
   `createCapacitorPlayBillingStoreSdk({ products, plugin?, isAndroid? })`
   implements the adapter's `StoreSdk` over the plugin: store `google-play`,
   capabilities consumable and durable (no subscriptions, no multi-quantity),
@@ -140,7 +146,7 @@
   `PLAY_BILLING_ACTIVITY_REQUIRED` (`NOT_PREPARED`),
   `PLAY_BILLING_ANDROID_REQUIRED` (`STORE_UNAVAILABLE`), and
   `PLAY_BILLING_ERROR` (`UNKNOWN`).
-  
+
   `createCapacitorPlayBillingCommerceProvider({ products, accountBinding,
   plugin?, isAndroid?, store?, mapError? })` is `createStoreCommerceProvider`
   over that SDK with evidence schema `google-play.product-purchase.v2` and the
@@ -155,7 +161,7 @@
   (`purchase-server-finish`) directly and through the gateway bridge path and
   lists the client-finish, host-finish, adapter-settled, and server-push
   vectors as not applicable with their reason.
-  
+
   The plugin surface gains the Billing Library 9.1.0 `Purchase` getters on
   every reported purchase: `products`, `purchaseState`, `purchaseTime`,
   `quantity`, `isAcknowledged`, and `obfuscatedAccountId`, plus
@@ -178,7 +184,7 @@
 
 - [b0b6e5a8](https://github.com/imjlk/mpgd-kit/commit/b0b6e5a8573cd251646600a646fa8ca2ec81292e) Commerce v2, PR A4: bridge methods and event envelope, `app-store-server`
   moved to `@mpgd/game-services`, one Google Play token key helper.
-  
+
   `@mpgd/bridge` adds the six commerce v2 methods to `BridgeMethod`
   (`commerce.v2.getCapabilities`, `commerce.v2.fetchProducts`,
   `commerce.v2.requestPurchase`, `commerce.v2.getAvailablePurchases`,
@@ -193,7 +199,7 @@
   non-retryable answer of a transport without a v2 provider; the Cloudflare
   Pages host stub returns it for every v2 method. The v1 `commerce.*` methods
   are unchanged.
-  
+
   `@mpgd/game-services` adds the `./app-store-server` subpath with
   `createAppleSignedTransactionVerifier` and
   `CreateAppleSignedTransactionVerifierOptions`, moved from
@@ -204,7 +210,7 @@
   `@mpgd/platform/commerce` (same key, same `TypeError` for an invalid token);
   import the platform helper instead. The alias is removed in the next major
   version.
-  
+
   `@mpgd/adapter-capacitor` deprecates the `./app-store-server` subpath: it
   re-exports `createAppleSignedTransactionVerifier` and its options type from
   `@mpgd/game-services/app-store-server` for one release and no longer peers on
@@ -214,11 +220,11 @@
   store provider can deliver commerce v2 events; the gateway works without it.
   `createCapacitorProviderRegistry` rejects a provider that declares a commerce
   v2 method, since v2 providers are registered through their own surface.
-  
+
   `@mpgd/capacitor-play-billing` computes the token transaction ID with
   `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce` and keeps
   `createGooglePlayTokenTransactionId` as a deprecated alias of that helper.
-  
+
   `@mpgd/adapter-devvit` and `@mpgd/adapter-ait` sandbox bridges answer
   `COMMERCE_V2_UNAVAILABLE` for commerce v2 methods instead of
   `UNSUPPORTED_METHOD`. `@mpgd/adapter-browser` only gains a test that the

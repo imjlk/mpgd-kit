@@ -1,5 +1,21 @@
 # @mpgd/create-game
 
+## 0.55.0 — 2026-10-24
+
+### Added
+
+- [fc9158f3](https://github.com/imjlk/mpgd-kit/commit/fc9158f34c54c1d88cafc040e7584e0fa9ebb69b) The starter's `serverSession.ts` recommends `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it answers the coordinator's stable `sessionFamilyId`, which the notifications runtime and the game-services Worker need, instead of a view's rotating `sessionId`.
+
+  Generated games gain `src/platform/developmentServerSession.ts`. On the Vite dev server in the development mode, `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>` (or `<playerId>.<installationId>`) signs the game in with an unauthenticated development session, so the notification settings record consent against a local Worker run with `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` before the game has an identity service. It applies to the notifications backend only: the commerce client keeps the session the game set, or none. A normal `vite build` drops it. Any `setStarterServerSession` call turns it off, and the first call after it was in use warns. The game's notifications guide gains a "Try it locally" section. `mpgd target init capacitor --providers notifications` writes the new module next to `serverSession.ts`, and leaves it out, with a warning, for a game whose own `serverSession.ts` does not import it. — Thanks @imjlk!
+
+### Changed
+
+- [6f735409](https://github.com/imjlk/mpgd-kit/commit/6f73540926badd80b98e4ae547c5a1a279154033) The generated game's notifications guide ("Try it locally") binds the local game-services Worker to `127.0.0.1` and points at mpgd-kit's live test runbook (`docs/NOTIFICATIONS_LIVE_TEST.md`) for real pushes, instead of suggesting the service-account key go into `.dev.vars` in the checkout. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: cli@0.56.0
+
 ## 0.54.0 — 2026-10-21
 
 ### Patch changes
@@ -17,14 +33,14 @@
 ### Patch changes
 
 - [38a4983d](https://github.com/imjlk/mpgd-kit/commit/38a4983d1abc03b5e7f151b12a2e57b9c1d834ad) `mpgd game create` and `pnpm create @mpgd/game` keep `$&`, `$'`, `` $` ``, and `$$` in a display title literal. Those sequences are no longer read as replacement patterns, so a title such as `Hit $&` no longer leaves `__GAME_TITLE__` in `notifications/topics.json` or injects the rest of a JSON file. Titles may also contain quotes and backslashes. Generated JSON, including `public/manifest.webmanifest`, escapes them, and single-quoted TypeScript titles escape quotes and backslashes, so the generated source still parses. Control characters and angle brackets are still refused.
-  
+
   The generated notification settings scene wraps the outcome strip to the same 840px column as the list and moves the list down when that strip wraps, so the English stale-night consent message stays on the 960x540 canvas. — Thanks @imjlk!
 - Updated dependencies: @mpgd/cli@0.54.0
 
 ### Added
 
 - [f772a896](https://github.com/imjlk/mpgd-kit/commit/f772a8964437d512349736e609668792b480fbc1) A game created with `--providers notifications` gets a notifications backend once it has one to talk to: `createStarterNotificationBackend` now builds the notifications runtime (`@mpgd/platform/notifications-runtime`) over the game-services Worker's notification routes (`@mpgd/game-services/notifications/client`) when the game has `VITE_MPGD_GAME_SERVICES_URL` (a public https URL in production, the commerce client's rule) and has set its server-backed session with the new `setStarterServerSession`, and the target exposes a notifications provider. The runtime keeps its registration state in the platform storage, and the settings screen then shows the reminder, advertising, and night switches from the player's consent records. The runtime also loads the Worker's registry entry for its target (`GET /providers`) in the background and compares the provider with it; a Worker it cannot reach is logged and the runtime runs without the check. A Reddit game gets no Worker backend, since its notifications backend is the Devvit server. Without a URL or a session it returns `undefined`, as before, and warns once when the URL is set without a session. The Worker wiring lives in the new `src/platform/notificationBackend.ts`.
-  
+
   Every generated game gains `src/platform/serverSession.ts` (`StarterServerSession`, `setStarterServerSession`, `resolveStarterServerSession`); when a session is set, the commerce client in `gameServices.ts` sends its header too. Nothing changes for a game that sets none. `mpgd target init capacitor --providers notifications` writes `serverSession.ts` into a game created by an earlier release that lacks it, next to the other notifications modules. `sessionId` must be the stable session-family id the identity service answers to `authenticateNotificationSession`, not a rotating one such as a `GuestSessionCoordinator` view's. — Thanks @imjlk!
 
 ## 0.52.0 — 2026-10-20
@@ -32,19 +48,19 @@
 ### Added
 
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `mpgd game create --providers notifications` (and `@mpgd/create-game --providers notifications`) adds the notifications v2 starter to a new Phaser or lite game:
-  
+
   - `notifications/topics.json`, a topic catalog with the starter topics `daily-ready` and `streak-at-risk` (`requested`: off until the player turns them on), `friend-challenge` (`service`), a sample `advertising` topic for iOS (an Android FCM push cannot carry the opt-out action until the shell renders advertising natively, a follow-up), and the `consent-notice` topic with every `notices.copy` variant in Korean and English (decree art. 62-2 and 62-3 wording, `{{consentDate}}` in each);
   - `notifications/deployment.json` with `advertisingRules: "kr"` and an advertising sender whose contact placeholder `pnpm validate:notifications` refuses until it is replaced;
   - the Android and iOS gateways register the Capacitor notifications provider (FCM and local reminders, named Android channels, the opt-out action, and `openCapacitorNotificationSettings`); the Reddit gateway exposes the game-rendered opt-in and the Reddit login prompt; the generated Devvit server serves the opt-in and runs the notifications service in its scheduler tasks; the Apps in Toss wrapper reads the catalog's `targets.ait` mappings;
   - `integrations.notifications: "available"` for `android`, `ios`, and `ait` (Reddit stays `approval-required` until Reddit approves the app) and `integrations.identityUpgrade: "available"` for `reddit`;
   - a game-rendered notification settings screen (a Phaser scene, or a DOM panel in the lite template) for the OS or host permission, reminder topics, 광고성 정보 수신동의, and night consent, recorded through the notifications runtime and shown from the player's latest backend consent records (never a device-side copy); night consent is offered only while advertising consent is granted and is withdrawn with it; and `docs/NOTIFICATIONS.md`.
-  
+
   The game declares `@capacitor-firebase/messaging` 8.5.2, `@capacitor/local-notifications` 8.3.1, and `firebase` 12.19.0. Without `--providers notifications` a generated game is unchanged. — Thanks @imjlk!
 
 ### Changed
 
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `@mpgd/adapter-ait/notification-config` exports `extractAitNotificationTopicConfig(catalog, { target, sourceLabel })`, which reads the `notificationTopics` of `installAitHostBridge` from a notification topic catalog's `targets.ait` mappings (`templateSetCode`, `agreement`). The catalog is checked with `validateNotificationTopicCatalog` from `@mpgd/catalog` (now a dependency) and the Apps in Toss registry entry, so for the Apps in Toss target the wrapper refuses what `pnpm validate:notifications` refuses, including an advertising topic mapped for Apps in Toss; other targets' mappings and the deployment are left to `pnpm validate:notifications`.
-  
+
   The generated Apps in Toss wrapper reads the game's notification topic catalog at build time (`MPGD_NOTIFICATION_TOPICS_FILE`, else `notifications/topics.json` when it exists) and passes its Apps in Toss topics to the host bridge, so notifications v2 agreements and landings work once the game maps its console templates. Without a catalog or a mapping the wrapper behaves as before. — Thanks @imjlk!
 
 ### Patch changes
@@ -98,7 +114,7 @@
   `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
   retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
   yet; P1–P3 add the providers.
-  
+
   - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
     answer the code without reaching the host's agreement API. The commerce v2
     provider over the bridge validates events with the commerce envelope and
@@ -131,7 +147,7 @@
 - [5871a314](https://github.com/imjlk/mpgd-kit/commit/5871a31405de4caddd7fbb5d252b452310dd44df) Commerce v2, PR C3: generated games wire every store provider from the
   catalog, and `mpgd target init capacitor --providers` installs the native
   store plugins.
-  
+
   - Template wiring. `src/platform/buildGateways/capacitorAndroid.ts` registers
     `createCapacitorPlayBillingServiceProvider` and `capacitorIos.ts` registers
     `createCapacitorStoreKitServiceProvider` for the one-time catalog products
@@ -301,7 +317,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-  
+
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes

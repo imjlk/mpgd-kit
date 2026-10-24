@@ -1,5 +1,11 @@
 # @mpgd/analytics
 
+## 0.5.0 — 2026-10-24
+
+### Added
+
+- [11aed7bd](https://github.com/imjlk/mpgd-kit/commit/11aed7bd725bef59243dbd91b33f799c67f5fb58) Add a pure, optional monetization-attempt observer for catalog, purchase, restore, attendance and promotion stages. Observer failures are isolated and returned promises are not awaited; diagnostics never grant value. — Thanks @imjlk!
+
 ## 0.4.16 — 2026-10-21
 
 ### Patch changes
@@ -127,7 +133,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-  
+
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes

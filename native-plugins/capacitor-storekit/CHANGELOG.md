@@ -1,5 +1,11 @@
 # @mpgd/capacitor-storekit
 
+## 0.3.8 — 2026-10-24
+
+### Patch changes
+
+- Updated dependencies: adapter-capacitor@0.12.4, game-services@0.28.0
+
 ## 0.3.7 — 2026-10-21
 
 ### Patch changes
@@ -52,7 +58,7 @@
 ### Minor changes
 
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: Commerce v2, PR C4: the v1 provider and recovery driver are removed.
-  
+
   - Removed `createCapacitorStoreKitProvider` and its types
     (`StoreKitProviderOptions`, `StoreKitProductMapping`,
     `CapacitorStoreKitProvider`), the `recoverStoreKitPurchases` driver with
@@ -107,7 +113,7 @@
 ### Minor changes
 
 - [da858335](https://github.com/imjlk/mpgd-kit/commit/da858335c28cd04512df73cf6484bd1d0d35b0b0) Commerce v2, PR B3: the StoreKit `StoreSdk` and commerce provider.
-  
+
   `@mpgd/capacitor-storekit` adds `createCapacitorStoreKitStoreSdk({ products,
   getAppAccountToken, sdk?, isIos?, onDiagnostic? })`, a `StoreSdk` from
   `@mpgd/adapter-capacitor` (now a peer dependency) over the native StoreKit 2
@@ -125,7 +131,7 @@
   StoreKit-verified `signedTransaction` JWS as its `token`.
   `storeKitStoreSdkErrorCodeMap` and `capacitorStoreKitErrorCodeMap` map every
   `STOREKIT_*` plugin code onto the RFC "Errors" codes.
-  
+
   The SDK checks the store product against the catalog's declared kind before
   any purchase sheet opens (`STOREKIT_CONFIGURATION_ERROR` on a kind mismatch,
   `STOREKIT_PRODUCT_UNKNOWN` / `STOREKIT_PRODUCT_UNAVAILABLE` for an unmapped or
@@ -138,7 +144,7 @@
   block a valid sibling or be journaled for the wrong player. The native
   `transactionUpdated` listener is attached while either a `purchaseUpdated`
   or a `purchaseError` subscriber exists.
-  
+
   `createCapacitorStoreKitCommerceProvider({ products, getAppAccountToken,
   bundleId?, sdk?, isIos?, mapError?, onDiagnostic? })` builds the
   `CommerceProvider` with `authority: { evidence: 'client-token',

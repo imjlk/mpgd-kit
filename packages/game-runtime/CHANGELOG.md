@@ -1,5 +1,11 @@
 # @mpgd/game-runtime
 
+## 0.8.1 — 2026-10-24
+
+### Patch changes
+
+- Updated dependencies: game-services@0.28.0
+
 ## 0.8.0 — 2026-10-21
 
 ### Minor changes
@@ -57,7 +63,7 @@
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4. `createCoordinatedPlatformGateway` coordinates the
   commerce provider's `requestPurchase` instead of the removed v1 `purchase`, and
   holds a purchase lease only when a trusted release source exists.
-  
+
   - The wrapper intercepts `gateway.commerce.requestPurchase` and keeps its
     duplicate-key, busy, and key-history guards. Its fingerprint is now the
     `logicalId`, `source`, `offerId`, and `quantity` of the request; the input
@@ -190,7 +196,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-  
+
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes

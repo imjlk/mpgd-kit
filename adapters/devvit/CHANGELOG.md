@@ -1,5 +1,11 @@
 # @mpgd/adapter-devvit
 
+## 0.13.6 — 2026-10-24
+
+### Patch changes
+
+- Updated dependencies: game-services@0.28.0
+
 ## 0.13.5 — 2026-10-21
 
 ### Changed
@@ -66,7 +72,7 @@
 
 - [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) Every target whose host builds or receives a share URL now checks
   `ShareIntent.deepLink` with one rule before the host sees the intent.
-  
+
   - `@mpgd/platform/routes` adds `normalizeShareLink(deepLink)`, the share-link
     rule web sharing already followed. A root-relative link becomes the route
     `normalizeRootRelativeRoute` returns. An absolute link must spell out
@@ -102,7 +108,7 @@
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the commerce v1 surfaces from the Devvit
   adapter. The commerce v2 provider (`createDevvitCommerceProvider`) is the only
   commerce path.
-  
+
   - `createDevvitCommerceAdapter`, `withDevvitCommerceAdapter`, and
     `CreateDevvitCommerceAdapterInput` are removed from
     `@mpgd/adapter-devvit` and `@mpgd/adapter-devvit/payments`. Use
@@ -133,7 +139,7 @@
   - The `@mpgd/adapter-devvit/payments` entry keeps `normalizeDevvitCommerceProducts`
     and the checkout types (`DevvitCheckoutResult`, `DevvitCheckoutFailure`,
     `DevvitCommerceProduct`).
-  
+
   Retired commerce flags are also removed from nested `providerAvailability`
   records returned by older Devvit bridges while current feature entries remain. — Thanks @imjlk!
 
@@ -143,7 +149,7 @@
   `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
   retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
   yet; P1–P3 add the providers.
-  
+
   - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
     answer the code without reaching the host's agreement API. The commerce v2
     provider over the bridge validates events with the commerce envelope and
@@ -174,7 +180,7 @@
 ### Minor changes
 
 - [5871a314](https://github.com/imjlk/mpgd-kit/commit/5871a31405de4caddd7fbb5d252b452310dd44df) Commerce v2, PR C3: catalog-derived host products for Apps in Toss and Devvit.
-  
+
   - `@mpgd/adapter-ait/iap-config` exports `extractAitIapProductConfig(catalog,
     { target?, sourceLabel? })`: one `AitIapProductConfig` `{ productId, sku }`
     per one-time product whose `platformProductIds.ait` (or `target`) names the
@@ -213,14 +219,14 @@
 ### Minor changes
 
 - [fe0efad2](https://github.com/imjlk/mpgd-kit/commit/fe0efad281a9cd396f6e9b7cef8494cff9fc529b) Commerce v2, PR B6: the Devvit provider on the server-push lookup.
-  
+
   Not yet usable in production before C2: the backend lookup verifier for
   `devvit.order.v1` is C2 work, so today a verify request for a Devvit purchase
   is refused by `@mpgd/game-services` (no verifier for the schema, `reddit` not
   a store target) instead of answering `pending`, and no journal record can
   reach `granted`. The gateway `commerce` option is opt-in; without it nothing
   changes.
-  
+
   `@mpgd/adapter-devvit` adds `createDevvitCommerceProvider({ products, client,
   orders, store?, onOrdersChanged?, onCheckoutError? })`, a `CommerceProvider`
   with `store: 'devvit'` and the RFC profile (consumable and durable one-time
@@ -230,7 +236,7 @@
   `DevvitPaymentsClient` checkout and never grants: Reddit's fulfillment handler
   writes the ledger on the server, and the backend's lookup verifier answers
   `pending` until that entry exists.
-  
+
   - `requestPurchase` opens the Reddit checkout. A `completed` result carrying
     the order id answers `purchased` with the order id as `transactionId` and
     `token`, `devvit.order.v1` evidence `{ orderId, sku, source: 'checkout' }`
@@ -253,7 +259,7 @@
     `createDevvitOrderEvidence`, and `assertDevvitOrderEvidence` (the server-side
     validation of `devvit.order.v1`) are exported for registries and tests;
     `normalizeDevvitCommerceProducts` is exported from `./payments`.
-  
+
   `@mpgd/adapter-devvit/server` adds `createDevvitCommerceV2BridgeHandler({
   payments, products, store?, warn? })`, which serves the six `commerce.v2.*`
   bridge methods over the Devvit `payments` plugin (`PaymentsClient` of
@@ -267,7 +273,7 @@
   `finishTransaction` refused with `COMMERCE_V2_METHOD_UNSUPPORTED`. Payloads and
   results are validated with the `@mpgd/platform/commerce` asserts; a plugin
   failure is the retryable `DEVVIT_PAYMENTS_UNAVAILABLE`.
-  
+
   `createDevvitPlatformGateway` takes an optional `commerce` option
   (`DevvitGatewayCommerceOptions`) that installs the provider as `commerceV2`
   over the gateway's bridge (`createDevvitBridgeOrderSource`:
@@ -278,7 +284,7 @@
   `commerce` capability block with `nativeIap` and `subscriptionIap` derived from
   it. Without the option the gateway is unchanged. The sandbox bridge keeps
   answering commerce v2 with `COMMERCE_V2_UNAVAILABLE`.
-  
+
   Conformance: `adapters/devvit/src/devvit-commerce-provider.conformance.test.ts`
   runs the RFC vectors through `runCommerceConformanceVectors` with a fake
   Reddit, directly and through the server bridge handler and gateway path;
@@ -303,7 +309,7 @@
 
 - [b0b6e5a8](https://github.com/imjlk/mpgd-kit/commit/b0b6e5a8573cd251646600a646fa8ca2ec81292e) Commerce v2, PR A4: bridge methods and event envelope, `app-store-server`
   moved to `@mpgd/game-services`, one Google Play token key helper.
-  
+
   `@mpgd/bridge` adds the six commerce v2 methods to `BridgeMethod`
   (`commerce.v2.getCapabilities`, `commerce.v2.fetchProducts`,
   `commerce.v2.requestPurchase`, `commerce.v2.getAvailablePurchases`,
@@ -318,7 +324,7 @@
   non-retryable answer of a transport without a v2 provider; the Cloudflare
   Pages host stub returns it for every v2 method. The v1 `commerce.*` methods
   are unchanged.
-  
+
   `@mpgd/game-services` adds the `./app-store-server` subpath with
   `createAppleSignedTransactionVerifier` and
   `CreateAppleSignedTransactionVerifierOptions`, moved from
@@ -329,7 +335,7 @@
   `@mpgd/platform/commerce` (same key, same `TypeError` for an invalid token);
   import the platform helper instead. The alias is removed in the next major
   version.
-  
+
   `@mpgd/adapter-capacitor` deprecates the `./app-store-server` subpath: it
   re-exports `createAppleSignedTransactionVerifier` and its options type from
   `@mpgd/game-services/app-store-server` for one release and no longer peers on
@@ -339,11 +345,11 @@
   store provider can deliver commerce v2 events; the gateway works without it.
   `createCapacitorProviderRegistry` rejects a provider that declares a commerce
   v2 method, since v2 providers are registered through their own surface.
-  
+
   `@mpgd/capacitor-play-billing` computes the token transaction ID with
   `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce` and keeps
   `createGooglePlayTokenTransactionId` as a deprecated alias of that helper.
-  
+
   `@mpgd/adapter-devvit` and `@mpgd/adapter-ait` sandbox bridges answer
   `COMMERCE_V2_UNAVAILABLE` for commerce v2 methods instead of
   `UNSUPPORTED_METHOD`. `@mpgd/adapter-browser` only gains a test that the
@@ -387,7 +393,7 @@
 
 - [686ea3ab](https://github.com/imjlk/mpgd-kit/commit/686ea3ab494b30d1ffd81fe0d2132e43239d940c) Require `userId` on Devvit payment orders in `normalizeDevvitFulfillmentOrder` and `normalizeDevvitRefundOrder`. Orders that omit the purchasing user are now rejected instead of being stamped with the authenticated context player, so the order-to-player binding is always enforced before fulfillment or refund. — Thanks @imjlk!
 - [686ea3ab](https://github.com/imjlk/mpgd-kit/commit/686ea3ab494b30d1ffd81fe0d2132e43239d940c) Bound per-player cloud-save keys in generated Devvit targets. The `phaser-game` template now ships `apps/target-devvit/src/server/bridge.ts`, mirroring the kit wrapper: `storage.save` tracks each player's distinct keys in a `<game-name>:save-keys:<user>` hash, enforces `maxStorageKeysPerPlayer` inside a WATCH/MULTI/EXEC transaction, and rejects saves past the cap with `DEVVIT_STORAGE_KEY_LIMIT`, so one authenticated Reddit account can no longer exhaust the installation's shared Redis quota.
-  
+
   Detect aborted Devvit Redis transactions correctly. `@devvit/redis` `TxClient.exec()` never resolves `null` for a WATCH conflict; it returns an empty array. The template bridge and the kit wrapper now treat an EXEC result with fewer entries than the queued commands as contention and retry instead of reporting an unwritten save as persisted. `createDevvitRedisPostOperationStore` applies the same rule: in addition to `null`, any EXEC result shorter than the number of queued mutations is retried as contention. — Thanks @imjlk!
 - Updated dependencies: game-services@0.17.1
 
@@ -414,7 +420,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-  
+
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes

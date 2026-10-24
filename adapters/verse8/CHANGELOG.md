@@ -1,5 +1,11 @@
 # @mpgd/adapter-verse8
 
+## 0.7.8 — 2026-10-24
+
+### Patch changes
+
+- Updated dependencies: game-runtime@0.8.1, game-services@0.28.0
+
 ## 0.7.7 — 2026-10-21
 
 ### Patch changes
@@ -54,7 +60,7 @@
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the commerce v1 surfaces from the Verse8
   adapter. The commerce v2 provider (`createVerse8CommerceProvider`) is the only
   commerce path.
-  
+
   - `createVerse8PlatformGateway()` no longer builds the v1 `gateway.commerce`
     adapter (`getProducts`, `purchase`, `restore`, `getEntitlements`, a failing
     stub when `vxShop` was absent). The provider that
@@ -89,7 +95,7 @@
 
 - [8c870580](https://github.com/imjlk/mpgd-kit/commit/8c87058002249260d63dbffe8a305417aa1db6ad) Commerce v2, PR C2: the Agent8 commerce service writes the server-push ledger
   grant the backend lookup reads.
-  
+
   `createVerse8Agent8CommerceService` accepts `ledger?: GameServicesStore`,
   `ledgerTarget?` (default `verse8`), and `resolvePlayerId?`. With a ledger,
   every `$onItemPurchased` grant is also recorded there through
@@ -113,14 +119,14 @@
 ### Minor changes
 
 - [fe0efad2](https://github.com/imjlk/mpgd-kit/commit/fe0efad281a9cd396f6e9b7cef8494cff9fc529b) Commerce v2, PR B6: the Verse8 provider on the server-push lookup.
-  
+
   Not yet usable in production before C2: the backend lookup verifier for
   `verse8.agent8-event.v1` is C2 work, so today a verify request for a Verse8
   purchase is refused by `@mpgd/game-services` (no verifier for the schema,
   `verse8` not a store target) instead of answering `pending`, and no journal
   record can reach `granted`. `vxShop.purchases` is opt-in; without it nothing
   changes.
-  
+
   `@mpgd/adapter-verse8` adds `createVerse8CommerceProvider({ products, client,
   purchases, store?, init?, canOpenShop?, onPurchasesChanged? })`, a
   `CommerceProvider` with `store: 'verse8'` and the RFC profile (consumable and
@@ -130,7 +136,7 @@
   client as the v1 adapter and never grants: the Agent8 server's reserved
   `$onItemPurchased` event writes the record, and the backend's lookup verifier
   answers `pending` until it exists.
-  
+
   - `requestPurchase` refreshes VXShop, checks the live item, and opens the
     dialog with `buyItem`, answering `launched`; outside the Verse8 iframe it
     fails with `CONFIGURATION_REQUIRED` (`VERSE8_SHOP_UNAVAILABLE`), an unlisted,
@@ -158,18 +164,18 @@
     `createVerse8Agent8EventEvidence`, and `assertVerse8Agent8EventEvidence` (the
     server-side validation of `verse8.agent8-event.v1`) are exported from the
     main entry and from `./agent8`.
-  
+
   `createVerse8Agent8CommerceService` adds `listPurchases(account, context)`,
   the purchases `$onItemPurchased` recorded for an account, oldest first
   (`Verse8RecordedPurchase`), for a game-owned authenticated Agent8 method to
   expose as the provider's purchase source.
-  
+
   `createVerse8PlatformGateway` takes `vxShop.purchases` and
   `vxShop.onPurchasesChanged`; with `purchases` configured it exposes the
   provider as `commerceV2` and adds the `commerce` capability block with
   `nativeIap` and `subscriptionIap` derived from it. Without it the gateway is
   unchanged, and the v1 adapter keeps its behaviour either way.
-  
+
   Conformance: `adapters/verse8/src/verse8-commerce-provider.conformance.test.ts`
   runs the RFC vectors through `runCommerceConformanceVectors` with a fake VXShop
   and Agent8 record, directly and through the gateway; `server-push-settlement`
@@ -205,7 +211,7 @@
   `subscriptionIap`. This is additive: no reference provider implements v2 yet,
   and the protocol version stays `2.0.0-draft.1`. The package now depends on
   `typia`.
-  
+
   `@mpgd/catalog` opens `ProductGrant.currency` and `AdReward.currency` to any
   non-empty string validated against a new optional `ProductCatalog.currencies`
   list (non-empty, unique, trimmed); when absent the catalog accepts `coin` and
@@ -214,11 +220,11 @@
   currencies against the catalog, and `resolveCatalogCurrencies` and
   `defaultCatalogCurrencies` are exported. The kit adds no wallet currency
   literal.
-  
+
   `@mpgd/adapter-verse8` keeps its `coin` and `gem` balance map and now fails a
   currency grant for any other catalog currency with a clear error instead of
   writing an untracked balance.
-  
+
   `@mpgd/game-services` accepts any currency the product catalog declares: the
   ledger grant validator no longer hard-codes `coin` and `gem` (it requires a
   trimmed non-empty code), and `createGameServicesBackend` rejects a catalog
@@ -271,7 +277,7 @@
 ### Patch changes
 
 - [c3e9f87c](https://github.com/imjlk/mpgd-kit/commit/c3e9f87cd7dc4f7c4ebcfbe6a1458b4977d363d1) Stop client adapters from returning grant-shaped rewarded-ad results.
-  
+
   - `@mpgd/adapter-verse8`: a Verse8 `rewarded` SDK callback now resolves to
     `status: 'completed', rewardGranted: false` with the `verse8.ads.reward.v1`
     evidence envelope and no `ledgerEntryId`. The Verse8 `requestId` is an
@@ -321,7 +327,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-  
+
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes

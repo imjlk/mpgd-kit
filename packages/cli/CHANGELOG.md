@@ -1,5 +1,24 @@
 # @mpgd/cli
 
+## 0.56.0 — 2026-10-24
+
+### Patch changes
+
+- [79f28520](https://github.com/imjlk/mpgd-kit/commit/79f2852070b591ebaa5fb7a35fda1ddf3a4032d2) Allow an explicitly enabled Devvit Realtime permission during target artifact smoke checks. Preserve boolean validation, disabled defaults, and separate payment-readiness checks for custom multiplayer wrappers.
+
+  Allow an empty Devvit product catalog for historical order/refund callbacks when the effective target also exposes no enabled products. Continue requiring the products file, internal fulfillment/refund endpoints, IAP readiness, unique SKUs, and exact catalog agreement. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.20.4, adapter-capacitor@0.12.4, adapter-devvit@0.13.6, adapter-verse8@0.7.8, analytics@0.5.0, capacitor-play-billing@0.3.8, capacitor-storekit@0.3.8, game-runtime@0.8.1, game-services@0.28.0
+
+### Added
+
+- [fc9158f3](https://github.com/imjlk/mpgd-kit/commit/fc9158f34c54c1d88cafc040e7584e0fa9ebb69b) The starter's `serverSession.ts` recommends `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it answers the coordinator's stable `sessionFamilyId`, which the notifications runtime and the game-services Worker need, instead of a view's rotating `sessionId`.
+
+  Generated games gain `src/platform/developmentServerSession.ts`. On the Vite dev server in the development mode, `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>` (or `<playerId>.<installationId>`) signs the game in with an unauthenticated development session, so the notification settings record consent against a local Worker run with `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` before the game has an identity service. It applies to the notifications backend only: the commerce client keeps the session the game set, or none. A normal `vite build` drops it. Any `setStarterServerSession` call turns it off, and the first call after it was in use warns. The game's notifications guide gains a "Try it locally" section. `mpgd target init capacitor --providers notifications` writes the new module next to `serverSession.ts`, and leaves it out, with a warning, for a game whose own `serverSession.ts` does not import it. — Thanks @imjlk!
+
+### Changed
+
+- [6f735409](https://github.com/imjlk/mpgd-kit/commit/6f73540926badd80b98e4ae547c5a1a279154033) The generated game's notifications guide ("Try it locally") binds the local game-services Worker to `127.0.0.1` and points at mpgd-kit's live test runbook (`docs/NOTIFICATIONS_LIVE_TEST.md`) for real pushes, instead of suggesting the service-account key go into `.dev.vars` in the checkout. — Thanks @imjlk!
+
 ## 0.55.0 — 2026-10-21
 
 ### Minor changes
@@ -16,7 +35,7 @@
 
 - [fef49ab1](https://github.com/imjlk/mpgd-kit/commit/fef49ab1919026405c27c3d8466825c346a4dcaa) `mpgd target build` and `mpgd target build-all` no longer record `uncommitted` or the kit commit as the game revision when the game checkout cannot be resolved. A missing or invalid `MPGD_SOURCE_GIT_SHA` fails those builds. Verification and preparation commands (`target smoke`, `smoke-all`, `doctor`, icon operations, and submission preflight) do not require a resolvable game revision. Release manifests now require `gitSha` to be a lowercase 40-character SHA, matching `kitGitSha`, and require effective-config and icon digests to be lowercase 64-character SHA-256 hex. — Thanks @imjlk!
 - [dbc4e240](https://github.com/imjlk/mpgd-kit/commit/dbc4e2401f39563fc65ab0fb0663ff772297b8e9) `mpgd legal build` keeps legal sources and the generated site inside the project. A symlinked `artifacts` directory, a symlinked legal page such as `legal/privacy.html`, or any other symlink component on `legal-dir` or `out-dir`, is refused, including when the link target is also inside the project. The site is published by renaming a temporary directory created on the destination filesystem, so a crash cannot leave a truncated page and a mounted `artifacts` directory does not fail the rename with `EXDEV`.
-  
+
   `mpgd kit upgrade` re-checks the planned game root, manifests, and lockfiles for symlink components immediately before each write, including rollback, and publishes those writes by renaming a temporary file. A game directory or parent swapped for a symlink after planning is no longer followed, and a `package.json` or lockfile swapped for a same-bytes symlink is no longer followed. — Thanks @imjlk!
 - Updated dependencies: @mpgd/adapter-ait@0.20.2, @mpgd/adapter-browser@0.11.6, @mpgd/adapter-capacitor@0.12.2, @mpgd/adapter-devvit@0.13.4, @mpgd/adapter-verse8@0.7.6, @mpgd/analytics@0.4.15, @mpgd/bridge@0.14.3, @mpgd/capacitor-play-billing@0.3.6, @mpgd/capacitor-storekit@0.3.6, @mpgd/catalog@0.10.6, @mpgd/game-runtime@0.7.6, @mpgd/game-services@0.27.1, @mpgd/i18n@0.6.20, @mpgd/platform@0.27.1, @mpgd/target-config@0.23.6
 
@@ -25,14 +44,14 @@
 ### Patch changes
 
 - [38a4983d](https://github.com/imjlk/mpgd-kit/commit/38a4983d1abc03b5e7f151b12a2e57b9c1d834ad) `mpgd game create` and `pnpm create @mpgd/game` keep `$&`, `$'`, `` $` ``, and `$$` in a display title literal. Those sequences are no longer read as replacement patterns, so a title such as `Hit $&` no longer leaves `__GAME_TITLE__` in `notifications/topics.json` or injects the rest of a JSON file. Titles may also contain quotes and backslashes. Generated JSON, including `public/manifest.webmanifest`, escapes them, and single-quoted TypeScript titles escape quotes and backslashes, so the generated source still parses. Control characters and angle brackets are still refused.
-  
+
   The generated notification settings scene wraps the outcome strip to the same 840px column as the list and moves the list down when that strip wraps, so the English stale-night consent message stays on the 960x540 canvas. — Thanks @imjlk!
 - Updated dependencies: @mpgd/adapter-ait@0.20.1, @mpgd/adapter-browser@0.11.5, @mpgd/adapter-capacitor@0.12.1, @mpgd/adapter-devvit@0.13.3, @mpgd/adapter-verse8@0.7.5, @mpgd/analytics@0.4.14, @mpgd/bridge@0.14.2, @mpgd/capacitor-play-billing@0.3.5, @mpgd/capacitor-storekit@0.3.5, @mpgd/catalog@0.10.5, @mpgd/game-runtime@0.7.5, @mpgd/game-services@0.27.0, @mpgd/i18n@0.6.19, @mpgd/platform@0.27.0, @mpgd/target-config@0.23.5
 
 ### Added
 
 - [f772a896](https://github.com/imjlk/mpgd-kit/commit/f772a8964437d512349736e609668792b480fbc1) A game created with `--providers notifications` gets a notifications backend once it has one to talk to: `createStarterNotificationBackend` now builds the notifications runtime (`@mpgd/platform/notifications-runtime`) over the game-services Worker's notification routes (`@mpgd/game-services/notifications/client`) when the game has `VITE_MPGD_GAME_SERVICES_URL` (a public https URL in production, the commerce client's rule) and has set its server-backed session with the new `setStarterServerSession`, and the target exposes a notifications provider. The runtime keeps its registration state in the platform storage, and the settings screen then shows the reminder, advertising, and night switches from the player's consent records. The runtime also loads the Worker's registry entry for its target (`GET /providers`) in the background and compares the provider with it; a Worker it cannot reach is logged and the runtime runs without the check. A Reddit game gets no Worker backend, since its notifications backend is the Devvit server. Without a URL or a session it returns `undefined`, as before, and warns once when the URL is set without a session. The Worker wiring lives in the new `src/platform/notificationBackend.ts`.
-  
+
   Every generated game gains `src/platform/serverSession.ts` (`StarterServerSession`, `setStarterServerSession`, `resolveStarterServerSession`); when a session is set, the commerce client in `gameServices.ts` sends its header too. Nothing changes for a game that sets none. `mpgd target init capacitor --providers notifications` writes `serverSession.ts` into a game created by an earlier release that lacks it, next to the other notifications modules. `sessionId` must be the stable session-family id the identity service answers to `authenticateNotificationSession`, not a rotating one such as a `GuestSessionCoordinator` view's. — Thanks @imjlk!
 
 ## 0.53.0 — 2026-10-20
@@ -40,26 +59,26 @@
 ### Added
 
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `mpgd game create --providers notifications` (and `@mpgd/create-game --providers notifications`) adds the notifications v2 starter to a new Phaser or lite game:
-  
+
   - `notifications/topics.json`, a topic catalog with the starter topics `daily-ready` and `streak-at-risk` (`requested`: off until the player turns them on), `friend-challenge` (`service`), a sample `advertising` topic for iOS (an Android FCM push cannot carry the opt-out action until the shell renders advertising natively, a follow-up), and the `consent-notice` topic with every `notices.copy` variant in Korean and English (decree art. 62-2 and 62-3 wording, `{{consentDate}}` in each);
   - `notifications/deployment.json` with `advertisingRules: "kr"` and an advertising sender whose contact placeholder `pnpm validate:notifications` refuses until it is replaced;
   - the Android and iOS gateways register the Capacitor notifications provider (FCM and local reminders, named Android channels, the opt-out action, and `openCapacitorNotificationSettings`); the Reddit gateway exposes the game-rendered opt-in and the Reddit login prompt; the generated Devvit server serves the opt-in and runs the notifications service in its scheduler tasks; the Apps in Toss wrapper reads the catalog's `targets.ait` mappings;
   - `integrations.notifications: "available"` for `android`, `ios`, and `ait` (Reddit stays `approval-required` until Reddit approves the app) and `integrations.identityUpgrade: "available"` for `reddit`;
   - a game-rendered notification settings screen (a Phaser scene, or a DOM panel in the lite template) for the OS or host permission, reminder topics, 광고성 정보 수신동의, and night consent, recorded through the notifications runtime and shown from the player's latest backend consent records (never a device-side copy); night consent is offered only while advertising consent is granted and is withdrawn with it; and `docs/NOTIFICATIONS.md`.
-  
+
   The game declares `@capacitor-firebase/messaging` 8.5.2, `@capacitor/local-notifications` 8.3.1, and `firebase` 12.19.0. Without `--providers notifications` a generated game is unchanged. — Thanks @imjlk!
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `mpgd target init capacitor --providers notifications` adds notifications to an existing game's game-owned Capacitor shell: it installs `@capacitor-firebase/messaging` and `@capacitor/local-notifications` into the shell (at the game's installed versions, else 8.5.2 and 8.3.1) and declares them and `firebase` in the game (a game's own `firebase` must be in the messaging plugin's peer range, `^12.6.0` for the starter's plugin, or the initializer stops before writing), syncs a preserved native project, and, when a Capacitor gateway is still the template's (store-wired or not), wires the notifications provider into it and writes the starter modules and catalog the gateway reads, keeping any the game already has. A game-owned gateway is only checked. It refuses a game or shell that lists `@capacitor/push-notifications`, drops `SCHEDULE_EXACT_ALARM` from a newly generated Android project's manifest, and warns about an existing manifest that keeps it, about missing `google-services.json` and `GoogleService-Info.plist`, and that the settings screen is not added to an existing game. `mpgd.native-shell.json` records the plugins under `providers.notifications`. — Thanks @imjlk!
 
 ### Changed
 
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `@mpgd/adapter-ait/notification-config` exports `extractAitNotificationTopicConfig(catalog, { target, sourceLabel })`, which reads the `notificationTopics` of `installAitHostBridge` from a notification topic catalog's `targets.ait` mappings (`templateSetCode`, `agreement`). The catalog is checked with `validateNotificationTopicCatalog` from `@mpgd/catalog` (now a dependency) and the Apps in Toss registry entry, so for the Apps in Toss target the wrapper refuses what `pnpm validate:notifications` refuses, including an advertising topic mapped for Apps in Toss; other targets' mappings and the deployment are left to `pnpm validate:notifications`.
-  
+
   The generated Apps in Toss wrapper reads the game's notification topic catalog at build time (`MPGD_NOTIFICATION_TOPICS_FILE`, else `notifications/topics.json` when it exists) and passes its Apps in Toss topics to the host bridge, so notifications v2 agreements and landings work once the game maps its console templates. Without a catalog or a mapping the wrapper behaves as before. — Thanks @imjlk!
 
 ### Patch changes
 
 - [51c191fb](https://github.com/imjlk/mpgd-kit/commit/51c191fba835645cc6d4b09aa8ff11b16d06ff4f) Document the official ONEstore Web SDK skill installation and explicit refresh workflow for ONEplay consumers, with a local SDK version drift check and game-owned lifecycle/authentication acceptance requirements.
-  
+
   Check the actual exported SDK URL rather than comments, and correct the installed sample with a shared browser bootstrap and mandatory server purchase verification hook. Preserve these local corrections when refreshing the official skill. — Thanks @imjlk!
 - Updated dependencies: @mpgd/adapter-ait@0.20.0, @mpgd/adapter-browser@0.11.4, @mpgd/adapter-capacitor@0.12.0, @mpgd/adapter-devvit@0.13.2, @mpgd/adapter-verse8@0.7.4, @mpgd/analytics@0.4.13, @mpgd/bridge@0.14.1, @mpgd/capacitor-play-billing@0.3.4, @mpgd/capacitor-storekit@0.3.4, @mpgd/catalog@0.10.4, @mpgd/game-runtime@0.7.4, @mpgd/game-services@0.26.0, @mpgd/i18n@0.6.18, @mpgd/platform@0.26.0, @mpgd/target-config@0.23.4
 
@@ -113,22 +132,22 @@
   Windows and conflicts with the configured public directory. Improve workspace
   build diagnostics for dependencies linked to another game's installation or the
   Kit store when a different workspace owns the active build.
-  
+
   Expose the shared collision guard through `@mpgd/cli/devvit` and register it in
   shipped wrapper Vite configurations so staging watch/playtest builds enforce the
   same output rules as production builds.
-  
+
   Workspace-generated wrappers load the guard from Kit TypeScript source without
   requiring prebuilt CLI output; standalone wrappers use the published subpath. — Thanks @imjlk!
 - [7e495bc1](https://github.com/imjlk/mpgd-kit/commit/7e495bc140c0802374eb245beb425aa19b5cf1e7) Add a preview-first TypeScript tooling migration for existing generated games, with JavaScript and TypeScript runner customization detection, stale-plan protection, rollback limited to migration-owned lockfile updates, and parent-workspace boundaries.
-  
+
   Block mixed child-package compiler versions and conflicting non-dev or peer
   toolchain declarations; recheck nested manifests and workspace configuration
   before applying a preview.
-  
+
   Preserve untouched and concurrently edited files during rollback. Record lock
   ownership and explain safe manual recovery after an interrupted migration.
-  
+
   Preserve modified lockfiles for inspection after refresh failure, reject nested
   parent-workspace migrations whose shared toolchain is not verified, and isolate
   lockfile refresh from inherited pnpm workspace selection. — Thanks @imjlk!
@@ -145,7 +164,7 @@
   `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
   retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
   yet; P1–P3 add the providers.
-  
+
   - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
     answer the code without reaching the host's agreement API. The commerce v2
     provider over the bridge validates events with the commerce envelope and
@@ -213,10 +232,10 @@
   (`maxGzipKb`, `forbidModules`, `deferredChunks`); `mpgd target smoke` checks
   the inline first-load graph only when `inlineEntry` is set, so existing
   targets are unchanged.
-  
+
   Until the private lite-shell package is initially published, lite generation
   requires `--workspace`. Generated lite guidance identifies Canvas2D ownership.
-  
+
   Lite generation configures its Reddit inline budget, preserves feed and history
   lifecycle, removes visibility listeners on disposal, and verifies HTML content
   and artifact boundaries along with linked first-load resources.
@@ -224,19 +243,19 @@
   browser history navigation keeps the game alive. Inline budgets include static
   and stylesheet imports even when a filename appears in `deferredChunks`; only
   dynamic-import edges can be deferred.
-  
+
   Explicit game disposal releases its owned audio binding, runtime and shell once. HTML first-load asset tags and attributes are matched case-insensitively.
-  
+
   HTML media and preload bytes count toward the inline budget. LiteShell size and resize notifications report the Canvas renderer's effective DPR, and repeated fits skip redundant backing-store resizes.
-  
+
   Responsive image candidates count conservatively toward the first-load budget, while data URLs remain embedded in the HTML byte count. Canvas DPR caps must be positive and finite. Inline layouts reserve all four native safe-area insets, including short screens, in both the example and generated lite template.
-  
+
   Only primary pointer activations trigger gameplay taps. Generated Devvit guides substitute the game's title and slug. — Thanks @imjlk!
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: Commerce v2, PR C4: the generated game template (and the private
   starter it mirrors) follows the removal of the commerce v1 surface. A game
   created or upgraded with this release builds against `gateway.commerce` (the
   renamed `commerceV2`) and the required `commerce` capability block.
-  
+
   - The Microsoft Store build gateway's purchase authority no longer declares
     `getEntitlements()`; entitlements come from the backend ledger through
     game-services.
@@ -255,7 +274,7 @@
 ### Changed
 
 - [295435cd](https://github.com/imjlk/mpgd-kit/commit/295435cd3f960901596f21c6e60df4edfc749825) Reuse ait-kit for SDK 3.6 single-use anonymous authentication: expose a host code issuer and a server mTLS exchange method while retaining response bounds, cancellation, and authoritative session boundaries.
-  
+
   Align generated AIT hosts and starter validation on official WebView SDK and CLI 3.6.0 so new projects can issue anonymous authentication codes. — Thanks @imjlk!
 
 ## 0.47.0 — 2026-10-12
@@ -265,7 +284,7 @@
 - [5871a314](https://github.com/imjlk/mpgd-kit/commit/5871a31405de4caddd7fbb5d252b452310dd44df) Commerce v2, PR C3: generated games wire every store provider from the
   catalog, and `mpgd target init capacitor --providers` installs the native
   store plugins.
-  
+
   - Template wiring. `src/platform/buildGateways/capacitorAndroid.ts` registers
     `createCapacitorPlayBillingServiceProvider` and `capacitorIos.ts` registers
     `createCapacitorStoreKitServiceProvider` for the one-time catalog products
@@ -433,14 +452,14 @@
 ### Patch changes
 
 - [f6d8f7e4](https://github.com/imjlk/mpgd-kit/commit/f6d8f7e41f46a34f7b20c99810f717d244631bbf) Harden the Apps in Toss host bridge: reject game `storage.save`/`storage.load` keys under the adapter-reserved `mpgd:ait:` prefix so game code cannot forge completed purchase or promotion markers, bound the client-supplied rewarded-ad `idempotencyKey` to 1-256 visible characters and document it as evidence the backend reward authority must verify, restrict `fetchAitAuthority` to `https:` resources (plain `http:` only for `localhost`/`127.0.0.1`) while accepting only a string, a URL-like object (string `href`, recognized by shape so a cross-realm `URL` is covered), or a same-realm `Request`, and forwarding only the validated representation to the transport (the resolved `href` string, or the `Request` instance after its `url` validated), and cap launch-intent `puzzleId`/`challengeToken` values and nested `queryParams` size and entry count.
-  
+
   The `@mpgd/cli` `phaser-game` template now selects the self-completing `aitSandbox` gateway only for a non-production build whose `BUILD_ID` is exactly `ait-sandbox` (the value `pnpm dev:ait` sets); every other AIT build, including other debug builds, uses the production `ait` gateway so purchases and rewards cannot be granted without the backend. — Thanks @imjlk!
 - [c756ad82](https://github.com/imjlk/mpgd-kit/commit/c756ad8207ee79c31d183f0383603691539646e9) Patch security advisories in CLI runtime dependencies. `@mpgd/cli` now requires `undici` `^7.29.1` (TLS certificate validation bypass, cross-user information disclosure, and denial-of-service fixes) and `sharp` `0.35.5` (libheif fixes plus the librsvg use-after-free in GHSA-wq5f-xc86-pv6w, which affects SVG icon inputs on glibc-based Linux). These two bumps ship in the published package.
-  
+
   The patched transitive versions of `postcss`, `nanoid`, `qs`, `brace-expansion`, `browserslist`, `baseline-browser-mapping`, and `protobufjs` are pinned through `pnpm-workspace.yaml` overrides, which apply only to this repository's workspace and CI; pnpm does not carry overrides into published packages. Consumers keep their own resolved transitive versions and should run `pnpm audit` and apply their own overrides as needed. — Thanks @imjlk!
 - [a5f74351](https://github.com/imjlk/mpgd-kit/commit/a5f74351f967fe68d887785403d6a86949dc08dc) Harden the Capacitor shell and StoreKit finish path. `mpgd target init capacitor` now opts a freshly generated Android project out of cloud backups and Android 12+ device-to-device transfers: it sets `android:allowBackup="false"`, `android:fullBackupContent="@xml/backup_rules"` and `android:dataExtractionRules="@xml/data_extraction_rules"` on the manifest and writes both rule resources, which exclude the `root`, `file`, `database`, `sharedpref` and `external` domains. Native target builds inject a restrictive Content-Security-Policy meta tag into the staged shell `index.html` unless the game page already declares an enforcing `Content-Security-Policy` meta tag (a report-only policy does not count). `finishGrantedTransaction` on the StoreKit provider only finishes a transaction with the ledger entry ID that `recoverStoreKitPurchases` recorded from a backend answer in the current session, consumes that pair before the native call so overlapping finishes share one native call, and restores it when the native finish fails. This binds finishing to the recovery flow and blocks arbitrary or accidental finish calls; it is not a trust boundary against code that controls the recovery backend object, where the server-side `recoverPurchase` verification remains the real control. — Thanks @imjlk!
 - [686ea3ab](https://github.com/imjlk/mpgd-kit/commit/686ea3ab494b30d1ffd81fe0d2132e43239d940c) Bound per-player cloud-save keys in generated Devvit targets. The `phaser-game` template now ships `apps/target-devvit/src/server/bridge.ts`, mirroring the kit wrapper: `storage.save` tracks each player's distinct keys in a `<game-name>:save-keys:<user>` hash, enforces `maxStorageKeysPerPlayer` inside a WATCH/MULTI/EXEC transaction, and rejects saves past the cap with `DEVVIT_STORAGE_KEY_LIMIT`, so one authenticated Reddit account can no longer exhaust the installation's shared Redis quota.
-  
+
   Detect aborted Devvit Redis transactions correctly. `@devvit/redis` `TxClient.exec()` never resolves `null` for a WATCH conflict; it returns an empty array. The template bridge and the kit wrapper now treat an EXEC result with fewer entries than the queued commands as contention and retry instead of reporting an unwritten save as persisted. `createDevvitRedisPostOperationStore` applies the same rule: in addition to `null`, any EXEC result shorter than the number of queued mutations is retried as contention. — Thanks @imjlk!
 - Updated dependencies: adapter-ait@0.12.7, adapter-browser@0.7.8, adapter-capacitor@0.6.1, adapter-devvit@0.9.13, adapter-verse8@0.3.11, game-services@0.17.1
 
@@ -527,7 +546,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-  
+
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes
@@ -593,20 +612,20 @@
 ### Fixed
 
 - [d809efa](https://github.com/imjlk/mpgd-kit/commit/d809efad33722a2cba5d5f8d74b62313ad046be7) Preserve user-facing command summaries, instructions and diagnostic output in compiled CLI builds. Route those messages through the informational console level so debug stripping does not silently remove them, and verify compiled/source kit-doctor output.
-  
+
   Make repeated offline-playtest packages byte-stable by minifying identifiers after random deferred asset markers are resolved. Keep collision-resistant markers, asset validation, tree shaking and network restrictions intact.
-  
+
   Restore offline inlining for assets assigned to native elements created with document.createElement, accounting for the code mask retaining a string literal opening quote while preserving native-receiver and static-argument checks.
-  
+
   Remove only evidence files or symbolic links when cleaning failed Microsoft Store acceptance output. This avoids leaving stale reports when a directory link causes non-recursive rmSync to fail, while preserving the linked target.
-  
+
   Resolve the existing game root canonically before deriving managed Microsoft Store script paths, so initialization through a linked parent remains idempotent with game creation. — Thanks @imjlk!
 
 ### Minor changes
 
 - [4f8c816](https://github.com/imjlk/mpgd-kit/commit/4f8c8161d05a6e01cf6d7e5483c6f6783b87222d) Add opt-in platform version allocation policies and a read-only preview
   command.
-  
+
   `@mpgd/target-config` gains `allocatePlatformVersions`,
   `assertPlatformVersionLedger`, and `formatHostedPwaShellVersions`: pure
   computations that separate the game SemVer, the shared release revision
@@ -621,7 +640,7 @@
   digests, counter ceilings including the documented Android maximum of
   2100000000), and failures never partially update inputs. Results are
   candidates, not reservations.
-  
+
   `mpgd target preview-versions` previews a ledger allocation as JSON or a
   human summary, exits non-zero on validation failure, and never modifies its
   input files. Ledger schema 1 is rejected rather than auto-migrated, and
@@ -631,7 +650,7 @@
 
 - [c3a1bc3](https://github.com/imjlk/mpgd-kit/commit/c3a1bc37f44e6dbf2fc21ffd9306e154f8fe7c3b) Fix two correctness bugs in the hosted PWA deployment verifier's
   `mpgd target verify-deployment` reference scan:
-  
+
   - External stylesheet checking never ran: the url()/@import pass iterated
     the normalized reference set before it was populated. Reference
     collection, normalization, stylesheet scanning, and the final existence
@@ -643,7 +662,7 @@
     Attributes are now tokenized once per start tag and every attribute-
     driven check (resource names, srcset, style, srcdoc, meta refresh)
     shares that single parse, including the iframe srcdoc override guard.
-  
+
   Both regressions are covered by deployment smoke tests, including a
   passing control case proving the failure comes from the stylesheet
   reference check rather than stale release evidence. — Thanks @imjlk!
@@ -879,11 +898,11 @@
   Storage, Ads 2.0, sharing, lifecycle, and Game Center APIs. Rewarded ads load before display and
   forward callback evidence without issuing demo grants, while commerce stays fail-closed until a
   game installs its own verified purchase flow.
-  
+
   Allow game targets to opt out of authoritative game services. Opted-out targets disable IAP and
   ad features in their effective configuration and no longer require a production backend URL,
   while targets that enable authoritative grants keep the public HTTPS backend release gate.
-  
+
   Scaffold each generated game with its own Apps in Toss wrapper, Granite configuration, and
   `@ait-co/devtools` workflow. The wrapper reuses the adapter's exported bundle loader while
   keeping app identity, console state, icons, and review metadata owned by the game repository.
