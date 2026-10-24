@@ -43,7 +43,7 @@
 ### Added
 
 - [f772a896](https://github.com/imjlk/mpgd-kit/commit/f772a8964437d512349736e609668792b480fbc1) `@mpgd/game-services/notifications/client` adds `createGameServicesNotificationsClient`, the notifications runtime's backend over the game-services Worker's session routes (`/game-services/notifications`: consent, endpoints, reminders, notices) and its public `GET /providers`. It takes the commerce client's `baseUrl`, `fetch`, `headers`, and `getHeaders`, so a game gives both clients one header resolver, and the deployment `target` the Worker needs for a device registration. The game's identity supplies the current `{ playerId, sessionId }` and an authenticated subscription; no request carries a player or an installation, which the Worker reads from the session. Worker answers map to the codes the runtime acts on (`GameServicesNotificationsRequestError`, with the status and the Worker's error): a 401 is a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, a 404 or 405 on a session route `NOTIFICATIONS_CONFIGURATION_REQUIRED`, a 400 or 413 `NOTIFICATIONS_INVALID_INPUT`, and an answer outside the route's contract `NOTIFICATIONS_CONFIGURATION_REQUIRED`. A request still unanswered after `timeoutMs` (15 seconds by default) is aborted and answers a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, so no runtime queue waits on it. Every conformance vector the service passes also passes with the runtime calling it through this client.
-
+  
   `resolveGameServicesRequestHeaders`, `GameServicesHeaderResolver`, and `GameServicesHeaderResolutionError` move to an internal module and are still exported from the package root and `./client`. `isPublicGameServicesUrl` exports the production URL rule the authoritative commerce backend already follows, so other clients that send a session's credentials can share it. — Thanks @imjlk!
 
 ## 0.26.0 — 2026-10-20
@@ -51,7 +51,7 @@
 ### Changed
 
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) Under the Korean advertising rules, `assertNotificationDeployment` refuses an advertising sender name, contact, or opt-out line that is still a common template marker (a `REPLACE-WITH-…` marker; a whole value that is an unreplaced `__TOKEN__`, `{{token}}`, `${token}`, `<token>`, or `[token]`; a reserved `example.com` address; or only `TODO`/`TBD`/`CHANGEME`/`PLACEHOLDER`/`XXX`), so a backend built from the starter's deployment file fails closed instead of sending advertising with an unusable sender line. `isNotificationPlaceholderText` and `notificationDeploymentPlaceholders` export the check, and `assertNotificationDeployment(input, { allowPlaceholders: true })` lets a validator report placeholders itself.
-
+  
   `createNotificationService` and `createNotificationServiceCatalog` in `@mpgd/game-services` assert the deployment, so they now throw for such a deployment, and the game-services Worker reports its notifications as misconfigured. — Thanks @imjlk!
 
 ### Patch changes
@@ -101,7 +101,7 @@
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the v1 purchase path from the game-services
   client. The commerce reconciler over `gateway.commerce` (a `CommerceProvider`)
   is the only purchase path, and nothing is granted from a client callback.
-
+  
   - `createGameServicesClient` and `createRecoverableMonetizationClient` buy only
     through the reconciler. A gateway without `gateway.commerce` sells nothing:
     `purchase()` answers `{ status: 'rejected', purchase: { status: 'failed',
@@ -141,19 +141,19 @@
     and a backend outage as `pending`, so those calls complete instead of ending
     in an `exception` progress event; `exception` marks a failure of the call
     itself, such as a journal write that rejects before the store opens.
-
+  
   Retired purchase recovery rejects a saved verifier request that selects a
   different deployment from the durable journal before contacting the backend.
-
+  
   Transient store readiness is refused before reserving a purchase journal entry,
   so the same idempotency key can be retried when the store becomes available.
-
+  
   Provider readiness is checked before optional catalog resolution. A retryable provider failure whose presentation source proves checkout never started stays requested with its diagnostic, so the original bound key can be retried across restarts. Recovery does not reopen the payment surface; failures without that proof retain their prior terminal behavior. — Thanks @imjlk!
 
 ### Added
 
 - [295435cd](https://github.com/imjlk/mpgd-kit/commit/295435cd3f960901596f21c6e60df4edfc749825) Reuse ait-kit for SDK 3.6 single-use anonymous authentication: expose a host code issuer and a server mTLS exchange method while retaining response bounds, cancellation, and authoritative session boundaries.
-
+  
   Align generated AIT hosts and starter validation on official WebView SDK and CLI 3.6.0 so new projects can issue anonymous authentication codes. — Thanks @imjlk!
 
 ### Patch changes
@@ -161,7 +161,7 @@
 - [dd76b8d7](https://github.com/imjlk/mpgd-kit/commit/dd76b8d736cc90b1e1d810d18745b2cd043d2c55) `@mpgd/platform/routes` exports one route-safety rule for links a game hands
   to the kit, and `@mpgd/platform/route-vectors` exports the shared `normalized`
   and `rejected` vectors that every package mapping such links runs:
-
+  
   - `normalizeRootRelativeRoute(input)` returns the path, query, and hash a
     root-relative link names on the game's origin. It answers `undefined` when a
     client could read the link as another host: a second slash or a backslash
@@ -173,16 +173,16 @@
   - `hasNetworkPathPrefix(pathname)` and `hasRouteControlCharacter(value)` are the
     checks it builds on. `hasNetworkPathPrefix` answers `true` for anything that
     is not a URL path.
-
+  
   Notification delivery in `@mpgd/game-services` and Apps in Toss sharing in
   `@mpgd/adapter-ait` use this rule instead of their own copies. They now also
   refuse a path that reaches another host when a decoded `?` or `#` stays in the
   path instead of ending it, such as `/%3F%2F..%2F%2Fhost`, and a path with more
   than 16 decoded `?` and `#`.
-
+  
   Web sharing in `@mpgd/adapter-browser` now follows the `ShareIntent.deepLink`
   contract:
-
+  
   - A root-relative link is normalized and stays relative, so Web Share resolves
     it against the document as before.
   - An absolute link must spell out `https://` or `http://`, carry no
@@ -190,10 +190,10 @@
   - It answers `unavailable` for anything else, including page-relative links
     (`./daily`, `?x=1`), `javascript:`, `data:`, and `intoss:` links, and a
     `text` or `deepLink` that is not a string. Before, it passed any string on.
-
+  
   The Apps in Toss sandbox bridge now reads share requests exactly as the host
   bridge does:
-
+  
   - It answers `unavailable` for a request the host refuses, and
     `{ status: 'shared', completion: 'presented' }` otherwise. Before, it
     answered `{ status: 'shared' }` for any request, which reads as completed.
@@ -219,7 +219,7 @@
   leading `//`, such as `/.//other.example/path` (also with `%2e` dot segments),
   passed the same-origin check and normalized to the protocol-relative
   `//other.example/path`. Delivery now also rejects:
-
+  
   - every root-relative link with a backslash right after the leading slash.
     Most were already rejected, but one naming the internal placeholder host was
     rewritten to a same-origin path, and `/\ x` threw a raw `TypeError`;
@@ -238,7 +238,7 @@
 
 - [e7fb9c54](https://github.com/imjlk/mpgd-kit/commit/e7fb9c548f1057715bf39c3b4baf95589cdd68db) Commerce v2, PR C1: one reconciler in the game-services client replaces the
   four recovery drivers.
-
+  
   `@mpgd/game-services/commerce-reconciler` adds `createCommerceReconciler({
   provider, backend, store, playerId, target, deploymentTarget?, products?,
   now?, onEvent? })`, the RFC "Reconciler" over any `CommerceProvider`. It
@@ -251,7 +251,7 @@
   backend ledger moves it to `revoked`, and an adapter-settled or wallet
   purchase (`credit-wallet.spend.v1` without a `settlement` pointer included) is
   confirmed through verify like any other.
-
+  
   - Triggers: `start()` (subscribe first, then `getAvailablePurchases` when
     declared; a provider without `lifecycle.events` is polled on every pass),
     `reconcile()` on app resume, every `purchaseUpdated` and `purchaseError`
@@ -312,7 +312,7 @@
     backend's ledger entry id and a store transaction. The v2 StoreKit SDK keeps
     no allow-list of its own (the v1 `finishGrantedTransaction` pairing is not
     reproduced); the journal revision the backend grant wrote is the pairing.
-
+  
   `createGameServicesClient` purchases through the reconciler whenever
   `gateway.commerceV2` exists and keeps the v1 path otherwise; the client
   exposes it as `commerceReconciler`, and `CreateGameServicesClientInput`
@@ -324,7 +324,7 @@
   arrive after the call included; the rewarded-ad path is untouched.
   `GameServicesPurchaseResult.status` gains `revoked` for a journaled purchase
   whose grant was reversed.
-
+  
   `createRecoverableMonetizationClient` routes v2 purchases through the same
   reconciler over the durable journal, exposes it as `commerceReconciler`,
   runs it from `reconcile()` (start on the first call, a pass afterwards) next
@@ -335,7 +335,7 @@
   `finalizationPending` is true while a v2 record is `finishing`.
   `createGameServicesRuntime` wires the recovery client's reconciler into
   `runtime.client.commerceReconciler`.
-
+  
   `MonetizationOperationRecord` gains the `commerce-purchase` kind
   (`CommercePurchaseOperationRecord`; the v1 kinds are
   `LegacyMonetizationOperationRecord`), `MonetizationOperationStore` gains the
@@ -347,7 +347,7 @@
   kind), `isMonetizationOperationGranted`, and
   `createInMemoryMonetizationOperationStore` (session-only, for tests and
   clients without a durable store).
-
+  
   Type-level changes a consumer may have to follow, kept to a minor release
   because the kit is at 0.x and every one of them is additive at runtime: code
   that reads `result`, `platform`, or `input` on a `MonetizationOperationRecord`
@@ -361,7 +361,7 @@
   filters out, and a store without `listGranted` reports reversals only for
   grants seen in the session and relies on the backend's platform-evidence
   unique index for a purchase re-listed after a restart.
-
+  
   Tests: every transition and the match order in
   `commerce-reconciler.test.ts`; the fourteen RFC vectors run through the real
   reconciler in `commerce-reconciler-conformance.test.ts` via the runner's new
@@ -371,7 +371,7 @@
 - [8c870580](https://github.com/imjlk/mpgd-kit/commit/8c87058002249260d63dbffe8a305417aa1db6ad) Commerce v2, PR C2: the server side of the protocol. Open store ids, the
   evidence registry, the provider capabilities endpoint, revocation entries,
   and the lookup verifiers for the server-push stores.
-
+  
   - Open store ids (RFC "Open store ids"): `VerifyPurchaseRequest.store?:
     StoreId` names the store a purchase was made in; `target` stays the ledger
     (deployment) target. `GameServicesStoreTarget` is now `StoreId` and the
@@ -506,7 +506,7 @@
   - `gameServicesBackendEndpoints` gains `getPurchaseLedgerStatus` and
     `getCommerceCapabilities`; the HTTP and oRPC backend adapters implement
     both reads.
-
+  
   Tests: `commerce-registry-routing.test.ts`, `commerce-registry-server.test.ts`,
   and `commerce-ledger-revocation.test.ts`, plus the reconciler alignment case. — Thanks @imjlk!
 
@@ -526,7 +526,7 @@
 
 - [da858335](https://github.com/imjlk/mpgd-kit/commit/da858335c28cd04512df73cf6484bd1d0d35b0b0) Commerce v2, PR B3: `@mpgd/game-services/app-store-verifier` accepts App
   Store signed-transaction evidence.
-
+  
   The verifier accepts request evidence with schema
   `app-store.signed-transaction.v1` (`appStoreSignedTransactionEvidenceSchema`,
   `createAppStoreSignedTransactionEvidence`; the envelope
@@ -555,7 +555,7 @@
 ### Patch changes
 
 - [58b313ce](https://github.com/imjlk/mpgd-kit/commit/58b313ce587ac2129a6306a17a069aae1e6cedb4) Commerce v2, PR B4: the Microsoft Store commerce provider.
-
+  
   `@mpgd/adapter-browser/microsoft-store` adds
   `createMicrosoftStoreCommerceProvider(input)`, a `CommerceProvider` with
   `store: 'microsoft-store'` over the same Digital Goods engine as the v1
@@ -583,7 +583,7 @@
   and `token` are the Digital Goods `purchaseToken`, which the server boundary
   already matches. The provider never grants: `settlement` is the authority's
   ledger pointer.
-
+  
   `withMicrosoftStoreCommerceProvider(gateway, provider, options)` installs the
   provider as `commerceV2`, serves v1 `commerce` through `toCommerceAdapter`,
   adds the `commerce` capability block with `nativeIap`/`subscriptionIap` derived
@@ -597,7 +597,7 @@
   `pending`. `withMicrosoftStoreCommerceAdapter` and the v1 adapter are
   unchanged. The `adapter-settled` conformance vector passes directly and through
   the gateway.
-
+  
   `@mpgd/game-services`: the client grants a completed purchase with
   `authoritativeGrant` without a second verification when the gateway's
   `commerceV2` provider declares `authority.evidence: 'adapter-settled'`
@@ -614,7 +614,7 @@
 
 - [b0b6e5a8](https://github.com/imjlk/mpgd-kit/commit/b0b6e5a8573cd251646600a646fa8ca2ec81292e) Commerce v2, PR A4: bridge methods and event envelope, `app-store-server`
   moved to `@mpgd/game-services`, one Google Play token key helper.
-
+  
   `@mpgd/bridge` adds the six commerce v2 methods to `BridgeMethod`
   (`commerce.v2.getCapabilities`, `commerce.v2.fetchProducts`,
   `commerce.v2.requestPurchase`, `commerce.v2.getAvailablePurchases`,
@@ -629,7 +629,7 @@
   non-retryable answer of a transport without a v2 provider; the Cloudflare
   Pages host stub returns it for every v2 method. The v1 `commerce.*` methods
   are unchanged.
-
+  
   `@mpgd/game-services` adds the `./app-store-server` subpath with
   `createAppleSignedTransactionVerifier` and
   `CreateAppleSignedTransactionVerifierOptions`, moved from
@@ -640,7 +640,7 @@
   `@mpgd/platform/commerce` (same key, same `TypeError` for an invalid token);
   import the platform helper instead. The alias is removed in the next major
   version.
-
+  
   `@mpgd/adapter-capacitor` deprecates the `./app-store-server` subpath: it
   re-exports `createAppleSignedTransactionVerifier` and its options type from
   `@mpgd/game-services/app-store-server` for one release and no longer peers on
@@ -650,11 +650,11 @@
   store provider can deliver commerce v2 events; the gateway works without it.
   `createCapacitorProviderRegistry` rejects a provider that declares a commerce
   v2 method, since v2 providers are registered through their own surface.
-
+  
   `@mpgd/capacitor-play-billing` computes the token transaction ID with
   `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce` and keeps
   `createGooglePlayTokenTransactionId` as a deprecated alias of that helper.
-
+  
   `@mpgd/adapter-devvit` and `@mpgd/adapter-ait` sandbox bridges answer
   `COMMERCE_V2_UNAVAILABLE` for commerce v2 methods instead of
   `UNSUPPORTED_METHOD`. `@mpgd/adapter-browser` only gains a test that the
@@ -676,7 +676,7 @@
   `subscriptionIap`. This is additive: no reference provider implements v2 yet,
   and the protocol version stays `2.0.0-draft.1`. The package now depends on
   `typia`.
-
+  
   `@mpgd/catalog` opens `ProductGrant.currency` and `AdReward.currency` to any
   non-empty string validated against a new optional `ProductCatalog.currencies`
   list (non-empty, unique, trimmed); when absent the catalog accepts `coin` and
@@ -685,11 +685,11 @@
   currencies against the catalog, and `resolveCatalogCurrencies` and
   `defaultCatalogCurrencies` are exported. The kit adds no wallet currency
   literal.
-
+  
   `@mpgd/adapter-verse8` keeps its `coin` and `gem` balance map and now fails a
   currency grant for any other catalog currency with a clear error instead of
   writing an untracked balance.
-
+  
   `@mpgd/game-services` accepts any currency the product catalog declares: the
   ledger grant validator no longer hard-codes `coin` and `gem` (it requires a
   trimmed non-empty code), and `createGameServicesBackend` rejects a catalog
@@ -753,7 +753,7 @@
 
 - [f4c4e9ad](https://github.com/imjlk/mpgd-kit/commit/f4c4e9ad3325a4497f5f555f1de5f01299d3be87) Harden the game-services request boundary. The HTTP and oRPC fetch handlers now cap request bodies (64 KiB by default, configurable through `maxBodyBytes`) and answer oversized payloads with 413 `PAYLOAD_TOO_LARGE`; client identifiers and timestamps are limited to 256 characters and evidence payloads to 64 entries before they reach ledger keys. Error responses use stable codes instead of echoing internal messages: validation failures return 400 `INVALID_REQUEST` with the field-level message (oRPC: `BAD_REQUEST`), malformed JSON returns 400 `INVALID_JSON`, and store or other unexpected failures return 500 `INTERNAL_ERROR` and are reported through the new `onInternalError` hook. Ad reward claims only persist the client-reported `platformImpressionId` as the globally unique platform evidence identity when the verifier vouches for it, mirroring purchases: a verifier-supplied `platformEvidenceId` replaces it and `null` suppresses it, so an attacker can no longer pre-register another player's impression id to deny their legitimate claim. The AdMob SSV verifier now supplies the signed transaction id as `platformEvidenceId`. — Thanks @imjlk!
 - [c3e9f87c](https://github.com/imjlk/mpgd-kit/commit/c3e9f87cd7dc4f7c4ebcfbe6a1458b4977d363d1) Stop client adapters from returning grant-shaped rewarded-ad results.
-
+  
   - `@mpgd/adapter-verse8`: a Verse8 `rewarded` SDK callback now resolves to
     `status: 'completed', rewardGranted: false` with the `verse8.ads.reward.v1`
     evidence envelope and no `ledgerEntryId`. The Verse8 `requestId` is an
@@ -821,7 +821,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-
+  
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes
@@ -841,11 +841,11 @@
 ### Added
 
 - [bf2b493](https://github.com/imjlk/mpgd-kit/commit/bf2b4933567bf6d63f809c9f601db5a9e27d363a) Expose optional, invocation-scoped purchase and rewarded-ad progress observers through the client entrypoint. Report actual platform and backend request/result stages without exposing evidence or changing grants, pending results, authoritative completion, or observer-free calls. Isolate observer exceptions and promise rejections from business results.
-
+  
   Repair extensionless internal imports and re-exports so every existing game-services public entrypoint loads directly in Node ESM, and validate those compiled entrypoints during tests.
-
+  
   Expose a DOM-free operations type entrypoint for headless service consumers.
-
+  
   Restore the durable grant idempotency key when finalizing evidence-based purchase recovery, so Microsoft Store offer-token migration can finish consumption without creating a second grant. — Thanks @imjlk!
 
 ## 0.14.0 — 2026-09-02

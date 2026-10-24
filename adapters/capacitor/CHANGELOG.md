@@ -37,7 +37,7 @@
 ### Added
 
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `@mpgd/capacitor-game-services` adds `openNotificationSettings()`, which opens this app's notification settings: `Settings.ACTION_APP_NOTIFICATION_SETTINGS` on Android 8 and later (the app details screen on Android 7) and `UIApplication.openNotificationSettingsURLString` on iOS 16 and later (the app's settings page on iOS 15). It answers `{ opened }` as soon as the screen is launched.
-
+  
   `@mpgd/adapter-capacitor/notifications` adds `openCapacitorNotificationSettings`, the opener to pass as the notifications provider's `openSettings`: with it the provider declares `permission.settings: true`. It throws when the screen did not open; a shell built with an older plugin rejects the call, and the provider then answers `unavailable`. — Thanks @imjlk!
 
 ### Patch changes
@@ -82,7 +82,7 @@
 
 - [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) Every target whose host builds or receives a share URL now checks
   `ShareIntent.deepLink` with one rule before the host sees the intent.
-
+  
   - `@mpgd/platform/routes` adds `normalizeShareLink(deepLink)`, the share-link
     rule web sharing already followed. A root-relative link becomes the route
     `normalizeRootRelativeRoute` returns. An absolute link must spell out
@@ -117,7 +117,7 @@
     used to reduce to a path. — Thanks @imjlk!
 - [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) Game links a native app opens are checked with the shared route rule before
   any router sees them.
-
+  
   - `NativeOpenUrlEvent` gains an optional `route`: for a game link, the path,
     query, and fragment of its URL, normalized with `normalizeRootRelativeRoute`
     from `@mpgd/platform/routes`. The URL's host is not part of it
@@ -137,7 +137,7 @@
     redirects are unchanged. — Thanks @imjlk!
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: Commerce v2, PR C4: the v1 commerce surface is removed from the
   Capacitor adapter.
-
+  
   - Removed the v1 gateway `commerce` object (`getProducts`, `purchase`,
     `restore`, `getEntitlements`) and the four `commerce.getProducts`,
     `commerce.purchase`, `commerce.restore`, `commerce.getEntitlements` bridge
@@ -176,7 +176,7 @@
   `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
   retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
   yet; P1–P3 add the providers.
-
+  
   - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
     answer the code without reaching the host's agreement API. The commerce v2
     provider over the bridge validates events with the commerce envelope and
@@ -227,7 +227,7 @@
 - [b9520179](https://github.com/imjlk/mpgd-kit/commit/b952017944bc6f1978fb922be405d148bf3175c0) Commerce v2, PR B1: the `StoreSdk` provider and registry wiring in
   `@mpgd/adapter-capacitor`, and the transitional `commerceV2` gateway field in
   `@mpgd/platform`.
-
+  
   `@mpgd/adapter-capacitor` adds `StoreSdk`, the in-process surface a store
   plugin exposes (`fetchProducts`, `requestPurchase`, `getAvailablePurchases`,
   optional `finishTransaction`, `restorePurchases`, and `getAvailability`,
@@ -252,7 +252,7 @@
   block from which `nativeIap` and `subscriptionIap` are derived. The
   conformance test runs every store vector against a fake `StoreSdk` directly
   and through the gateway bridge path. Without a v2 provider nothing changes.
-
+  
   Two provider rules follow the RFC "Errors" section: a store failure that
   normalizes to `OUTCOME_UNKNOWN` or `ALREADY_OWNED` answers `launched` (the
   attempt stays recoverable; `recoverableErrorCodes`) and such `purchaseError`
@@ -263,7 +263,7 @@
   instead of a rejected read) and keeps a `launched` purchase's external
   activity open until the product's event, `launchedPurchaseActivityTimeoutMs`,
   or dispose.
-
+  
   `@mpgd/platform` adds the optional `PlatformGateway.commerceV2?:
   CommerceProvider` field, transitional until C4 removes the v1 adapter. The
   client contract types (`StoreProduct`, `StorePurchase`, `CommerceProvider`,
@@ -282,7 +282,7 @@
 
 - [b0b6e5a8](https://github.com/imjlk/mpgd-kit/commit/b0b6e5a8573cd251646600a646fa8ca2ec81292e) Commerce v2, PR A4: bridge methods and event envelope, `app-store-server`
   moved to `@mpgd/game-services`, one Google Play token key helper.
-
+  
   `@mpgd/bridge` adds the six commerce v2 methods to `BridgeMethod`
   (`commerce.v2.getCapabilities`, `commerce.v2.fetchProducts`,
   `commerce.v2.requestPurchase`, `commerce.v2.getAvailablePurchases`,
@@ -297,7 +297,7 @@
   non-retryable answer of a transport without a v2 provider; the Cloudflare
   Pages host stub returns it for every v2 method. The v1 `commerce.*` methods
   are unchanged.
-
+  
   `@mpgd/game-services` adds the `./app-store-server` subpath with
   `createAppleSignedTransactionVerifier` and
   `CreateAppleSignedTransactionVerifierOptions`, moved from
@@ -308,7 +308,7 @@
   `@mpgd/platform/commerce` (same key, same `TypeError` for an invalid token);
   import the platform helper instead. The alias is removed in the next major
   version.
-
+  
   `@mpgd/adapter-capacitor` deprecates the `./app-store-server` subpath: it
   re-exports `createAppleSignedTransactionVerifier` and its options type from
   `@mpgd/game-services/app-store-server` for one release and no longer peers on
@@ -318,11 +318,11 @@
   store provider can deliver commerce v2 events; the gateway works without it.
   `createCapacitorProviderRegistry` rejects a provider that declares a commerce
   v2 method, since v2 providers are registered through their own surface.
-
+  
   `@mpgd/capacitor-play-billing` computes the token transaction ID with
   `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce` and keeps
   `createGooglePlayTokenTransactionId` as a deprecated alias of that helper.
-
+  
   `@mpgd/adapter-devvit` and `@mpgd/adapter-ait` sandbox bridges answer
   `COMMERCE_V2_UNAVAILABLE` for commerce v2 methods instead of
   `UNSUPPORTED_METHOD`. `@mpgd/adapter-browser` only gains a test that the
@@ -460,7 +460,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-
+  
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes

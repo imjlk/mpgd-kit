@@ -11,9 +11,9 @@
 ### Patch changes
 
 - [c7e1e16d](https://github.com/imjlk/mpgd-kit/commit/c7e1e16dac23683c361db096e90a01694eb871d0) Store new Apps in Toss promotion markers under `mpgd:ait:promotion-grant:v2:<campaignId>:<idempotencyKey>`, and write a v1 dispatch fence at `mpgd:ait:promotion-grant:v1:<idempotencyKey>` before that copy and before payout. The fence includes `campaignId`. Until a granted receipt replaces it, its status is `fenced`, which a rolled-back @mpgd/adapter-ait 0.20.1 bridge treats as already fenced and does not dispatch or remove. If that v1 write fails, the claim stays pending and nothing is dispatched.
-
+  
   A legacy v1 marker with no `campaignId` is still stamped in place before any scoped copy. If that stamp cannot be stored, or the legacy marker cannot be read, the claim stays pending, nothing is copied, and an authority receipt is not cached or returned. The read-failure behavior is an approved fail-closed decision: a markerless authority receipt is not persisted while the legacy read is failing. A v1 marker bound to this campaign is this campaign's record. One bound to another campaign stays pending and is not overwritten or paid again.
-
+  
   When `authorizePromotionGrant` is configured, it remains the primary dispatch fence. The local markers do not authorize a payout the authorizer did not approve, and they do not add a dispatch path that skips it. A pending scoped copy does not hide a granted v1 receipt: a retry sees that receipt and does not dispatch again. Host bridges that share storage share the claim lock. Server-issued idempotency keys should stay unique across campaigns. — Thanks @imjlk!
 - Updated dependencies: @mpgd/bridge@0.15.0, @mpgd/catalog@0.10.7, @mpgd/game-runtime@0.8.0, @mpgd/platform@0.27.2
 
@@ -36,11 +36,11 @@
 ### Patch changes
 
 - [eccdcb2c](https://github.com/imjlk/mpgd-kit/commit/eccdcb2c2cbc0629aa449ec9cde11f4864f603d8) Stop a second Apps in Toss promotion payout when a granted receipt could not be stored, when grant and recover overlap, or when an explicit failure marker could not be written. Grant and recover for one idempotency key share a lock, re-read storage and the bridge-local receipt cache before payout, and do not evict a receipt whose durable write failed.
-
+  
   Promotion markers stay keyed by the claim id, `mpgd:ait:promotion-grant:v1:<idempotencyKey>`. New records include `campaignId`. A stored record whose campaign id differs stays pending and is not overwritten or paid again. Records without `campaignId` are unchanged. Campaign-scoped keys are a follow-up.
-
+  
   A stored explicit failure can be cleared by an authority `retry`. A failure whose diagnostic write did not land stays blocked in that process.
-
+  
   An older host that does not implement `promotions.recoverReward` now answers `{ status: 'pending' }` instead of throwing. That includes a protocol validator rejection reported as `AIT_BRIDGE_REQUEST_FAILED`, not only `UNSUPPORTED_METHOD`. `grantReward` is unchanged. A late promotion observer rejection is ignored and cannot reject the payout result. — Thanks @imjlk!
 - Updated dependencies: @mpgd/bridge@0.14.2, @mpgd/catalog@0.10.5, @mpgd/game-runtime@0.7.5, @mpgd/platform@0.27.0
 
@@ -49,7 +49,7 @@
 ### Added
 
 - [ce953b5b](https://github.com/imjlk/mpgd-kit/commit/ce953b5b319cf6358d3a1b7845022bcba811bf2d) `@mpgd/adapter-ait/notification-config` exports `extractAitNotificationTopicConfig(catalog, { target, sourceLabel })`, which reads the `notificationTopics` of `installAitHostBridge` from a notification topic catalog's `targets.ait` mappings (`templateSetCode`, `agreement`). The catalog is checked with `validateNotificationTopicCatalog` from `@mpgd/catalog` (now a dependency) and the Apps in Toss registry entry, so for the Apps in Toss target the wrapper refuses what `pnpm validate:notifications` refuses, including an advertising topic mapped for Apps in Toss; other targets' mappings and the deployment are left to `pnpm validate:notifications`.
-
+  
   The generated Apps in Toss wrapper reads the game's notification topic catalog at build time (`MPGD_NOTIFICATION_TOPICS_FILE`, else `notifications/topics.json` when it exists) and passes its Apps in Toss topics to the host bridge, so notifications v2 agreements and landings work once the game maps its console templates. Without a catalog or a mapping the wrapper behaves as before. — Thanks @imjlk!
 
 ### Patch changes
@@ -94,7 +94,7 @@
 
 - [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the commerce v1 surfaces from the Apps in
   Toss adapter. The `commerce.v2.*` provider is the only commerce path.
-
+  
   - `createAitPlatformGateway()` no longer builds the v1 `gateway.commerce`
     adapter (`getProducts`, `purchase`, `restore`, `getEntitlements`). The
     provider the gateway builds over the host bridge's commerce event channel is
@@ -131,11 +131,11 @@
     `createAitCommerceProvider()`, loses `readIapEntitlements`. The provider's
     behavior (purchase, available purchases, `finishTransaction`,
     `restorePurchases`) is unchanged.
-
+  
   Gateway commerce capabilities follow the same pinned host bridge as purchase commands and events after a global bridge replacement. — Thanks @imjlk!
 - [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) Every target whose host builds or receives a share URL now checks
   `ShareIntent.deepLink` with one rule before the host sees the intent.
-
+  
   - `@mpgd/platform/routes` adds `normalizeShareLink(deepLink)`, the share-link
     rule web sharing already followed. A root-relative link becomes the route
     `normalizeRootRelativeRoute` returns. An absolute link must spell out
@@ -171,7 +171,7 @@
 - [dd76b8d7](https://github.com/imjlk/mpgd-kit/commit/dd76b8d736cc90b1e1d810d18745b2cd043d2c55) `@mpgd/platform/routes` exports one route-safety rule for links a game hands
   to the kit, and `@mpgd/platform/route-vectors` exports the shared `normalized`
   and `rejected` vectors that every package mapping such links runs:
-
+  
   - `normalizeRootRelativeRoute(input)` returns the path, query, and hash a
     root-relative link names on the game's origin. It answers `undefined` when a
     client could read the link as another host: a second slash or a backslash
@@ -183,16 +183,16 @@
   - `hasNetworkPathPrefix(pathname)` and `hasRouteControlCharacter(value)` are the
     checks it builds on. `hasNetworkPathPrefix` answers `true` for anything that
     is not a URL path.
-
+  
   Notification delivery in `@mpgd/game-services` and Apps in Toss sharing in
   `@mpgd/adapter-ait` use this rule instead of their own copies. They now also
   refuse a path that reaches another host when a decoded `?` or `#` stays in the
   path instead of ending it, such as `/%3F%2F..%2F%2Fhost`, and a path with more
   than 16 decoded `?` and `#`.
-
+  
   Web sharing in `@mpgd/adapter-browser` now follows the `ShareIntent.deepLink`
   contract:
-
+  
   - A root-relative link is normalized and stays relative, so Web Share resolves
     it against the document as before.
   - An absolute link must spell out `https://` or `http://`, carry no
@@ -200,10 +200,10 @@
   - It answers `unavailable` for anything else, including page-relative links
     (`./daily`, `?x=1`), `javascript:`, `data:`, and `intoss:` links, and a
     `text` or `deepLink` that is not a string. Before, it passed any string on.
-
+  
   The Apps in Toss sandbox bridge now reads share requests exactly as the host
   bridge does:
-
+  
   - It answers `unavailable` for a request the host refuses, and
     `{ status: 'shared', completion: 'presented' }` otherwise. Before, it
     answered `{ status: 'shared' }` for any request, which reads as completed.
@@ -216,7 +216,7 @@
   `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
   retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
   yet; P1–P3 add the providers.
-
+  
   - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
     answer the code without reaching the host's agreement API. The commerce v2
     provider over the bridge validates events with the commerce envelope and
@@ -245,7 +245,7 @@
 ### Added
 
 - [295435cd](https://github.com/imjlk/mpgd-kit/commit/295435cd3f960901596f21c6e60df4edfc749825) Reuse ait-kit for SDK 3.6 single-use anonymous authentication: expose a host code issuer and a server mTLS exchange method while retaining response bounds, cancellation, and authoritative session boundaries.
-
+  
   Align generated AIT hosts and starter validation on official WebView SDK and CLI 3.6.0 so new projects can issue anonymous authentication codes. — Thanks @imjlk!
 
 ## 0.16.0 — 2026-10-12
@@ -253,7 +253,7 @@
 ### Minor changes
 
 - [5871a314](https://github.com/imjlk/mpgd-kit/commit/5871a31405de4caddd7fbb5d252b452310dd44df) Commerce v2, PR C3: catalog-derived host products for Apps in Toss and Devvit.
-
+  
   - `@mpgd/adapter-ait/iap-config` exports `extractAitIapProductConfig(catalog,
     { target?, sourceLabel? })`: one `AitIapProductConfig` `{ productId, sku }`
     per one-time product whose `platformProductIds.ait` (or `target`) names the
@@ -289,7 +289,7 @@
   they do for notification deep links in `@mpgd/game-services`: a path that
   begins with an empty segment directly (`//host`), after dot segments collapse
   (`/.//host`), or once percent-decoded (`/%2F/host`, `/%09/host`) is refused.
-
+  
   An `intoss://` link is now read as the path it carries and rebuilt, and it
   must start with exactly `intoss://<app>` followed by `/`, `?`, `#`, or
   nothing. Before, the raw input was forwarded whenever URL parsing found the
@@ -315,7 +315,7 @@
 ### Minor changes
 
 - [d59304d8](https://github.com/imjlk/mpgd-kit/commit/d59304d8eec21ad61f8e24c07bbafb44e953b268) Commerce v2, PR B5: the Apps in Toss provider.
-
+  
   `@mpgd/adapter-ait` adds `createAitCommerceProvider({ dependencies, iapProducts,
   prepareIap, verifyIapProductGrant, readIapEntitlements?, iapProductGrantTimeoutMs?,
   onPendingOrdersChanged? })`, a `CommerceProvider` with `store: 'apps-in-toss'`
@@ -327,7 +327,7 @@
   `requestPurchase` hold the same IAP lock and the same durable attempt markers,
   pre-checkout pending-order barrier and acknowledgement barriers; the v1
   `commerce.*` bridge methods behave exactly as before.
-
+  
   - `fetchProducts` lists the configured one-time SKUs from `getProductItemList`
     (`CONSUMABLE` as `consumable`, `NON_CONSUMABLE` as `durable`, subscriptions hidden).
   - `requestPurchase` opens `createOneTimePurchaseOrder`. The game-owned
@@ -365,7 +365,7 @@
     `purchaseUpdated` once per order. Orders the host finished stay available
     until the reconciler finishes them. The provider emits no `purchaseError`:
     every checkout outcome is a synchronous result.
-
+  
   The host bridge (`createAitHostBridge`) now serves the six `commerce.v2.*`
   bridge methods from that provider with the `@mpgd/platform/commerce` asserts
   on payloads and results, pushes `BridgeEvent` envelopes through the new
@@ -377,7 +377,7 @@
   has the event channel. The sandbox bridge answers commerce v2 with an
   evidence-only stub for the `ait-sandbox` build id only; every other build keeps
   `COMMERCE_V2_UNAVAILABLE`.
-
+  
   Conformance: `adapters/ait/src/ait-commerce-provider.conformance.test.ts` runs the
   RFC vectors through `runCommerceConformanceVectors` with a fake Apps in Toss
   host, directly and through the host bridge and gateway; `purchase-host-finish`
@@ -395,7 +395,7 @@
 
 - [b0b6e5a8](https://github.com/imjlk/mpgd-kit/commit/b0b6e5a8573cd251646600a646fa8ca2ec81292e) Commerce v2, PR A4: bridge methods and event envelope, `app-store-server`
   moved to `@mpgd/game-services`, one Google Play token key helper.
-
+  
   `@mpgd/bridge` adds the six commerce v2 methods to `BridgeMethod`
   (`commerce.v2.getCapabilities`, `commerce.v2.fetchProducts`,
   `commerce.v2.requestPurchase`, `commerce.v2.getAvailablePurchases`,
@@ -410,7 +410,7 @@
   non-retryable answer of a transport without a v2 provider; the Cloudflare
   Pages host stub returns it for every v2 method. The v1 `commerce.*` methods
   are unchanged.
-
+  
   `@mpgd/game-services` adds the `./app-store-server` subpath with
   `createAppleSignedTransactionVerifier` and
   `CreateAppleSignedTransactionVerifierOptions`, moved from
@@ -421,7 +421,7 @@
   `@mpgd/platform/commerce` (same key, same `TypeError` for an invalid token);
   import the platform helper instead. The alias is removed in the next major
   version.
-
+  
   `@mpgd/adapter-capacitor` deprecates the `./app-store-server` subpath: it
   re-exports `createAppleSignedTransactionVerifier` and its options type from
   `@mpgd/game-services/app-store-server` for one release and no longer peers on
@@ -431,11 +431,11 @@
   store provider can deliver commerce v2 events; the gateway works without it.
   `createCapacitorProviderRegistry` rejects a provider that declares a commerce
   v2 method, since v2 providers are registered through their own surface.
-
+  
   `@mpgd/capacitor-play-billing` computes the token transaction ID with
   `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce` and keeps
   `createGooglePlayTokenTransactionId` as a deprecated alias of that helper.
-
+  
   `@mpgd/adapter-devvit` and `@mpgd/adapter-ait` sandbox bridges answer
   `COMMERCE_V2_UNAVAILABLE` for commerce v2 methods instead of
   `UNSUPPORTED_METHOD`. `@mpgd/adapter-browser` only gains a test that the
@@ -504,7 +504,7 @@
 ### Patch changes
 
 - [f6d8f7e4](https://github.com/imjlk/mpgd-kit/commit/f6d8f7e41f46a34f7b20c99810f717d244631bbf) Harden the Apps in Toss host bridge: reject game `storage.save`/`storage.load` keys under the adapter-reserved `mpgd:ait:` prefix so game code cannot forge completed purchase or promotion markers, bound the client-supplied rewarded-ad `idempotencyKey` to 1-256 visible characters and document it as evidence the backend reward authority must verify, restrict `fetchAitAuthority` to `https:` resources (plain `http:` only for `localhost`/`127.0.0.1`) while accepting only a string, a URL-like object (string `href`, recognized by shape so a cross-realm `URL` is covered), or a same-realm `Request`, and forwarding only the validated representation to the transport (the resolved `href` string, or the `Request` instance after its `url` validated), and cap launch-intent `puzzleId`/`challengeToken` values and nested `queryParams` size and entry count.
-
+  
   The `@mpgd/cli` `phaser-game` template now selects the self-completing `aitSandbox` gateway only for a non-production build whose `BUILD_ID` is exactly `ait-sandbox` (the value `pnpm dev:ait` sets); every other AIT build, including other debug builds, uses the production `ait` gateway so purchases and rewards cannot be granted without the backend. — Thanks @imjlk!
 
 ## 0.12.6 — 2026-09-28
@@ -536,7 +536,7 @@
 ### Changed
 
 - [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
-
+  
   Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
 
 ### Patch changes
@@ -647,11 +647,11 @@
   Storage, Ads 2.0, sharing, lifecycle, and Game Center APIs. Rewarded ads load before display and
   forward callback evidence without issuing demo grants, while commerce stays fail-closed until a
   game installs its own verified purchase flow.
-
+  
   Allow game targets to opt out of authoritative game services. Opted-out targets disable IAP and
   ad features in their effective configuration and no longer require a production backend URL,
   while targets that enable authoritative grants keep the public HTTPS backend release gate.
-
+  
   Scaffold each generated game with its own Apps in Toss wrapper, Granite configuration, and
   `@ait-co/devtools` workflow. The wrapper reuses the adapter's exported bundle loader while
   keeping app identity, console state, icons, and review metadata owned by the game repository.
