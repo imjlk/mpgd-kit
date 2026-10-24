@@ -1,5 +1,23 @@
 import { PlatformOperationError, readPlatformOperationFailure } from '@mpgd/platform';
 import {
+  assertNotificationBackendBridgeCancelReminderPayload,
+  assertNotificationBackendBridgeCancelReminderResult,
+  assertNotificationBackendBridgeGetSessionPayload,
+  assertNotificationBackendBridgeGetSessionResult,
+  assertNotificationBackendBridgeListConsentPayload,
+  assertNotificationBackendBridgeListConsentResult,
+  assertNotificationBackendBridgeListNoticesPayload,
+  assertNotificationBackendBridgeListNoticesResult,
+  assertNotificationBackendBridgeRecordConsentPayload,
+  assertNotificationBackendBridgeRecordConsentResult,
+  assertNotificationBackendBridgeRecordNoticePayload,
+  assertNotificationBackendBridgeRecordNoticeResult,
+  assertNotificationBackendBridgeRegisterEndpointPayload,
+  assertNotificationBackendBridgeRegisterEndpointResult,
+  assertNotificationBackendBridgeSetReminderPayload,
+  assertNotificationBackendBridgeSetReminderResult,
+  assertNotificationBackendBridgeUnregisterEndpointPayload,
+  assertNotificationBackendBridgeUnregisterEndpointResult,
   assertNotificationBridgeCancelLocalPayload,
   assertNotificationBridgeCancelLocalResult,
   assertNotificationBridgeGetCapabilitiesPayload,
@@ -21,15 +39,25 @@ import {
   isNotificationErrorCode,
   NotificationError,
   notificationsProtocolVersion,
+  type NotificationBackendReminderSetStatus,
+  type NotificationConsentRecord,
+  type NotificationEndpointRegistration,
+  type NotificationNotice,
+  type NotificationNoticeIdentity,
   type NotificationProvider,
+  type SetNotificationReminderInput,
 } from '@mpgd/platform/notifications';
 
 import {
   bridgeNotificationsEventProtocol,
   createBridgeError,
   createBridgeEventSource,
+  isBridgeNotificationsBackendMethod,
   isBridgeNotificationsV2Method,
   type BridgeEventStream,
+  type BridgeNotificationsBackendMethod,
+  type BridgeNotificationsBackendPayload,
+  type BridgeNotificationsBackendResult,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
   type BridgeNotificationsV2Payload,
@@ -46,6 +74,9 @@ import {
 
 // The shapes these validators return, also exported by the main entry.
 export type {
+  BridgeNotificationsBackendMethod,
+  BridgeNotificationsBackendPayload,
+  BridgeNotificationsBackendResult,
   BridgeNotificationsV2Method,
   BridgeNotificationsV2Payload,
   BridgeNotificationsV2Result,
@@ -337,6 +368,347 @@ export function createNotificationsV2BridgeHandler(
   };
 }
 
+// Backend methods (notifications RFC "Bridge and versioning", "Backend
+// methods"): the runtime's backend calls for a backend a host serves over
+// its bridge, validated with the `@mpgd/platform/notifications` validators
+// and served by `createNotificationsBackendBridgeHandler`.
+
+interface NotificationsBackendPayloadAsserts {
+  readonly 'notifications.backend.getSession': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.getSession'>;
+  readonly 'notifications.backend.recordConsent': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.recordConsent'>;
+  readonly 'notifications.backend.listConsent': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.listConsent'>;
+  readonly 'notifications.backend.registerEndpoint': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.registerEndpoint'>;
+  readonly 'notifications.backend.unregisterEndpoint': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.unregisterEndpoint'>;
+  readonly 'notifications.backend.setReminder': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.setReminder'>;
+  readonly 'notifications.backend.cancelReminder': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.cancelReminder'>;
+  readonly 'notifications.backend.listNotices': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.listNotices'>;
+  readonly 'notifications.backend.recordNotice': (input: unknown) => BridgeNotificationsBackendPayload<'notifications.backend.recordNotice'>;
+}
+
+interface NotificationsBackendResultAsserts {
+  readonly 'notifications.backend.getSession': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.getSession'>;
+  readonly 'notifications.backend.recordConsent': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.recordConsent'>;
+  readonly 'notifications.backend.listConsent': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.listConsent'>;
+  readonly 'notifications.backend.registerEndpoint': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.registerEndpoint'>;
+  readonly 'notifications.backend.unregisterEndpoint': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.unregisterEndpoint'>;
+  readonly 'notifications.backend.setReminder': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.setReminder'>;
+  readonly 'notifications.backend.cancelReminder': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.cancelReminder'>;
+  readonly 'notifications.backend.listNotices': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.listNotices'>;
+  readonly 'notifications.backend.recordNotice': (input: unknown) => BridgeNotificationsBackendResult<'notifications.backend.recordNotice'>;
+}
+
+const notificationsBackendPayloadAsserts: NotificationsBackendPayloadAsserts = {
+  'notifications.backend.getSession': assertNotificationBackendBridgeGetSessionPayload,
+  'notifications.backend.recordConsent': assertNotificationBackendBridgeRecordConsentPayload,
+  'notifications.backend.listConsent': assertNotificationBackendBridgeListConsentPayload,
+  'notifications.backend.registerEndpoint': assertNotificationBackendBridgeRegisterEndpointPayload,
+  'notifications.backend.unregisterEndpoint': assertNotificationBackendBridgeUnregisterEndpointPayload,
+  'notifications.backend.setReminder': assertNotificationBackendBridgeSetReminderPayload,
+  'notifications.backend.cancelReminder': assertNotificationBackendBridgeCancelReminderPayload,
+  'notifications.backend.listNotices': assertNotificationBackendBridgeListNoticesPayload,
+  'notifications.backend.recordNotice': assertNotificationBackendBridgeRecordNoticePayload,
+};
+
+const notificationsBackendResultAsserts: NotificationsBackendResultAsserts = {
+  'notifications.backend.getSession': assertNotificationBackendBridgeGetSessionResult,
+  'notifications.backend.recordConsent': assertNotificationBackendBridgeRecordConsentResult,
+  'notifications.backend.listConsent': assertNotificationBackendBridgeListConsentResult,
+  'notifications.backend.registerEndpoint': assertNotificationBackendBridgeRegisterEndpointResult,
+  'notifications.backend.unregisterEndpoint': assertNotificationBackendBridgeUnregisterEndpointResult,
+  'notifications.backend.setReminder': assertNotificationBackendBridgeSetReminderResult,
+  'notifications.backend.cancelReminder': assertNotificationBackendBridgeCancelReminderResult,
+  'notifications.backend.listNotices': assertNotificationBackendBridgeListNoticesResult,
+  'notifications.backend.recordNotice': assertNotificationBackendBridgeRecordNoticeResult,
+};
+
+/**
+ * Validates the payload of a notifications backend request with the
+ * `@mpgd/platform/notifications` validator for its method, as
+ * `assertBridgeNotificationsV2Payload` does for the provider methods. Throws
+ * what that validator throws, and a `TypeError` for a method that is not a
+ * notifications backend method.
+ */
+export function assertBridgeNotificationsBackendPayload<TMethod extends BridgeNotificationsBackendMethod>(
+  method: TMethod,
+  payload: unknown,
+): BridgeNotificationsBackendPayload<TMethod> {
+  assertNotificationsBackendMethod(method);
+  return notificationsBackendPayloadAsserts[method](
+    payload,
+  ) as BridgeNotificationsBackendPayload<TMethod>;
+}
+
+/** Validates the data a transport answered a notifications backend request with. */
+export function assertBridgeNotificationsBackendResult<TMethod extends BridgeNotificationsBackendMethod>(
+  method: TMethod,
+  data: unknown,
+): BridgeNotificationsBackendResult<TMethod> {
+  assertNotificationsBackendMethod(method);
+  return notificationsBackendResultAsserts[method](
+    data,
+  ) as BridgeNotificationsBackendResult<TMethod>;
+}
+
+function assertNotificationsBackendMethod(method: string): void {
+  if (!isBridgeNotificationsBackendMethod(method)) {
+    throw new TypeError(`${method} is not a notifications backend bridge method.`);
+  }
+}
+
+/**
+ * Host codes a backend bridge error names (`(host code <code>)`, read back
+ * with `readBridgeNotificationsHostCode`). Both come with
+ * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, which the runtime reads as "no
+ * signed-in player" and retries at its next trigger.
+ */
+export const notificationsBackendBridgeHostCodes = Object.freeze({
+  /** The request has no authenticated player (a logged-out Devvit viewer). */
+  signedOut: 'NOTIFICATIONS_SIGNED_OUT',
+  /**
+   * The request's authenticated player is not the call's `expectedPlayer`:
+   * another player signed in since the call began. Nothing was read or
+   * changed; the client reads the session again.
+   */
+  sessionChanged: 'NOTIFICATIONS_SESSION_CHANGED',
+} as const);
+
+/** A session a host-served backend answers for: the host's own authenticated player. */
+export interface NotificationsBackendBridgeSession {
+  /** Stable for the session's life. */
+  readonly id: string;
+  readonly player: string;
+}
+
+/**
+ * The backend a host serves, for one request: the session comes from the
+ * host's own authentication (Devvit's `context.userId`), and every other
+ * method acts for the session `session()` answered for this request.
+ */
+export interface NotificationsBackendBridgeServer<
+  TSession extends NotificationsBackendBridgeSession,
+> {
+  /** The request's authenticated session; `undefined` while it has no authenticated player. */
+  session(): TSession | undefined;
+  /** Appends a record; answers it as stored, dated by the backend's clock. */
+  recordConsent(session: TSession, record: NotificationConsentRecord): Promise<NotificationConsentRecord>;
+  listConsent(session: TSession): Promise<readonly NotificationConsentRecord[]>;
+  registerEndpoint(session: TSession, registration: NotificationEndpointRegistration): Promise<void>;
+  unregisterEndpoint(session: TSession, input: { readonly provider: string }): Promise<void>;
+  setReminder(session: TSession, reminder: SetNotificationReminderInput): Promise<NotificationBackendReminderSetStatus>;
+  cancelReminder(session: TSession, input: { readonly key: string }): Promise<boolean>;
+  listNotices(session: TSession): Promise<readonly NotificationNotice[]>;
+  recordNotice(session: TSession, notice: NotificationNoticeIdentity, input: { readonly channel: 'in-game' }): Promise<void>;
+}
+
+/** The host side of the notifications backend bridge methods. */
+export interface NotificationsBackendBridgeHandler {
+  /** Answers one of the nine `notifications.backend.*` methods; any other method answers `UNSUPPORTED_METHOD`. */
+  request(input: BridgeRequest): Promise<BridgeResponse>;
+}
+
+export interface CreateNotificationsBackendBridgeHandlerInput<
+  TSession extends NotificationsBackendBridgeSession,
+> {
+  readonly backend: NotificationsBackendBridgeServer<TSession>;
+  /** Names the backend in error messages, as in "The Devvit notifications backend answered ...". */
+  readonly label?: string | undefined;
+  /** As for `createNotificationsV2BridgeHandler`: the message an unexpected failure crosses with. */
+  readonly unexpectedFailureMessage?: ((method: BridgeNotificationsBackendMethod) => string) | undefined;
+  /**
+   * Called with every failure the handler answers with an error, except an
+   * invalid payload and a signed-out or changed session (the caller's, and
+   * expected). Synchronous; a hook that throws or rejects changes nothing.
+   */
+  readonly onError?:
+    | ((error: unknown, context: { readonly method: BridgeNotificationsBackendMethod }) => void)
+    | undefined;
+}
+
+/**
+ * Serves the nine `notifications.backend.*` bridge methods from a backend the
+ * host runs (notifications RFC "Bridge and versioning", "Backend methods"),
+ * as the Devvit server does over its notifications service.
+ *
+ * - **Session.** `getSession` answers the request's authenticated session,
+ *   or `null`. Every other method needs one: without it the call answers
+ *   `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with host code
+ *   `NOTIFICATIONS_SIGNED_OUT`, and with a player other than the payload's
+ *   `expectedPlayer` it answers the same code with host code
+ *   `NOTIFICATIONS_SESSION_CHANGED`. Neither reaches the backend. The
+ *   payload never chooses whom a call acts for.
+ * - **Payloads and answers.** Each is checked with
+ *   `assertBridgeNotificationsBackendPayload` and
+ *   `assertBridgeNotificationsBackendResult`: a payload the contract rejects
+ *   answers `NOTIFICATIONS_INVALID_INPUT`, an answer it rejects
+ *   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+ * - **Failures.** As for `createNotificationsV2BridgeHandler`: a
+ *   notifications failure crosses with its code, retryable flag, and host
+ *   code; anything else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+ */
+export function createNotificationsBackendBridgeHandler<TSession extends NotificationsBackendBridgeSession>(
+  input: CreateNotificationsBackendBridgeHandlerInput<TSession>,
+): NotificationsBackendBridgeHandler {
+  const { backend } = input;
+  const name = input.label === undefined || input.label.length === 0
+    ? 'The notifications backend'
+    : `The ${input.label} notifications backend`;
+
+  const sessionFor = (expectedPlayer: string): TSession => {
+    const session = backend.session();
+    if (session === undefined) {
+      throw new SessionRefusal('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+        message: `${name} has no signed-in player for this request.`,
+        hostCode: notificationsBackendBridgeHostCodes.signedOut,
+      });
+    }
+    if (session.player !== expectedPlayer) {
+      throw new SessionRefusal('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+        message: `${name} serves another player now; the call was not made.`,
+        hostCode: notificationsBackendBridgeHostCodes.sessionChanged,
+      });
+    }
+    return session;
+  };
+
+  const serve = async (method: BridgeNotificationsBackendMethod, payload: unknown): Promise<unknown> => {
+    switch (method) {
+      case 'notifications.backend.getSession': {
+        validBackendPayload(method, payload);
+        const session = backend.session();
+        return {
+          session: session === undefined ? null : { id: session.id, player: session.player },
+        };
+      }
+      case 'notifications.backend.recordConsent': {
+        const request = validBackendPayload(method, payload);
+        return {
+          record: await backend.recordConsent(sessionFor(request.expectedPlayer), request.record),
+        };
+      }
+      case 'notifications.backend.listConsent': {
+        const request = validBackendPayload(method, payload);
+        return { records: await backend.listConsent(sessionFor(request.expectedPlayer)) };
+      }
+      case 'notifications.backend.registerEndpoint': {
+        const request = validBackendPayload(method, payload);
+        await backend.registerEndpoint(sessionFor(request.expectedPlayer), request.registration);
+        return { registered: true };
+      }
+      case 'notifications.backend.unregisterEndpoint': {
+        const request = validBackendPayload(method, payload);
+        await backend.unregisterEndpoint(sessionFor(request.expectedPlayer), {
+          provider: request.provider,
+        });
+        return { unregistered: true };
+      }
+      case 'notifications.backend.setReminder': {
+        const request = validBackendPayload(method, payload);
+        return {
+          status: await backend.setReminder(sessionFor(request.expectedPlayer), request.reminder),
+        };
+      }
+      case 'notifications.backend.cancelReminder': {
+        const request = validBackendPayload(method, payload);
+        return {
+          cancelled: await backend.cancelReminder(sessionFor(request.expectedPlayer), { key: request.key }),
+        };
+      }
+      case 'notifications.backend.listNotices': {
+        const request = validBackendPayload(method, payload);
+        return { notices: await backend.listNotices(sessionFor(request.expectedPlayer)) };
+      }
+      case 'notifications.backend.recordNotice': {
+        const request = validBackendPayload(method, payload);
+        await backend.recordNotice(sessionFor(request.expectedPlayer), request.notice, {
+          channel: request.channel,
+        });
+        return { recorded: true };
+      }
+      default: {
+        // A method added to the list without a case here fails to compile.
+        const unhandled: never = method;
+        throw new NotificationError('NOTIFICATIONS_UNSUPPORTED', {
+          message: `The notifications backend bridge does not serve ${String(unhandled)}.`,
+        });
+      }
+    }
+  };
+
+  const report = (error: unknown, method: BridgeNotificationsBackendMethod): void => {
+    if (input.onError === undefined || error instanceof InvalidPayloadError || error instanceof SessionRefusal) {
+      return;
+    }
+    try {
+      const reported: unknown = input.onError(error, { method });
+      if (isThenable(reported)) {
+        reported.then(undefined, () => {});
+      }
+    } catch {
+      // A failing hook never changes the answer.
+    }
+  };
+
+  return {
+    async request(request) {
+      if (!isBridgeNotificationsBackendMethod(request.method)) {
+        return createBridgeError(
+          request.id,
+          'UNSUPPORTED_METHOD',
+          `${request.method} is not a notifications backend method.`,
+        );
+      }
+      const method = request.method;
+      try {
+        const data = await serve(method, request.payload);
+        return { id: request.id, ok: true, data: validBackendResult(name, method, data) };
+      } catch (error) {
+        report(error, method);
+        try {
+          return toBridgeError(request.id, method, error, input.unexpectedFailureMessage);
+        } catch {
+          return createBridgeError(
+            request.id,
+            'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+            `${method} failed.`,
+            true,
+          );
+        }
+      }
+    },
+  };
+}
+
+/** A call refused before the backend for its session: expected, so never reported. */
+class SessionRefusal extends NotificationError {}
+
+function validBackendPayload<TMethod extends BridgeNotificationsBackendMethod>(
+  method: TMethod,
+  payload: unknown,
+): BridgeNotificationsBackendPayload<TMethod> {
+  try {
+    return assertBridgeNotificationsBackendPayload(method, payload);
+  } catch (error) {
+    throw new InvalidPayloadError(`${method} payload is invalid: ${messageOf(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+function validBackendResult<TMethod extends BridgeNotificationsBackendMethod>(
+  name: string,
+  method: TMethod,
+  data: unknown,
+): BridgeNotificationsBackendResult<TMethod> {
+  try {
+    return assertBridgeNotificationsBackendResult(method, data);
+  } catch (error) {
+    throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+      message: `${name} answered ${method} with invalid data: ${messageOf(error)}`,
+      cause: error,
+    });
+  }
+}
+
 /** The host codes a bridge error names in its message, as `(host code <code>)`. */
 const hostCodeCharacters = '[A-Za-z0-9_.:-]{1,128}';
 const hostCodeValue = new RegExp(`^${hostCodeCharacters}$`, 'u');
@@ -386,11 +758,11 @@ function validResult<TMethod extends BridgeNotificationsV2Method>(
   }
 }
 
-function toBridgeError(
+function toBridgeError<TMethod extends string>(
   id: string,
-  method: BridgeNotificationsV2Method,
+  method: TMethod,
   error: unknown,
-  unexpectedFailureMessage: ((method: BridgeNotificationsV2Method) => string) | undefined,
+  unexpectedFailureMessage: ((method: TMethod) => string) | undefined,
 ): BridgeResponse {
   if (error instanceof InvalidPayloadError) {
     return createBridgeError(id, 'NOTIFICATIONS_INVALID_INPUT', error.message);

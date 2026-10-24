@@ -10,6 +10,8 @@ import {
 // so a game bundle that uses the bridge does not carry the notifications
 // validators until it calls `@mpgd/bridge/notifications`.
 import type {
+  NotificationBackendBridgeMethod,
+  NotificationBackendBridgeMethods,
   NotificationBridgeMethod,
   NotificationBridgeMethods,
   NotificationErrorCode,
@@ -47,6 +49,25 @@ export type BridgeNotificationsV2Method =
   | 'notifications.v2.listLocal'
   | 'notifications.v2.openSettings';
 
+/**
+ * Notifications backend request methods (notifications RFC "Bridge and
+ * versioning", "Backend methods"): the runtime's backend calls for a backend
+ * a host serves over its bridge (the Devvit server). Separate from the nine
+ * provider methods; the type check under `bridgeNotificationsBackendMethods`
+ * keeps the list equal to `notificationBackendBridgeMethods` from
+ * `@mpgd/platform/notifications`.
+ */
+export type BridgeNotificationsBackendMethod =
+  | 'notifications.backend.getSession'
+  | 'notifications.backend.recordConsent'
+  | 'notifications.backend.listConsent'
+  | 'notifications.backend.registerEndpoint'
+  | 'notifications.backend.unregisterEndpoint'
+  | 'notifications.backend.setReminder'
+  | 'notifications.backend.cancelReminder'
+  | 'notifications.backend.listNotices'
+  | 'notifications.backend.recordNotice';
+
 export type BridgeMethod =
   | 'runtime.getCapabilities'
   | 'identity.getPlayer'
@@ -59,6 +80,7 @@ export type BridgeMethod =
   | 'notifications.getStatus'
   | 'notifications.requestSubscription'
   | BridgeNotificationsV2Method
+  | BridgeNotificationsBackendMethod
   | 'promotions.getAvailability'
   | 'promotions.grantReward'
   | 'promotions.recoverReward'
@@ -196,6 +218,66 @@ export function createNotificationsV2UnavailableBridgeError(
     `${transport} does not provide notifications v2; ${request.method} is unavailable.`,
   );
 }
+
+// Listed here for the same reason as the provider methods.
+const notificationsBackendMethodList = [
+  'notifications.backend.getSession',
+  'notifications.backend.recordConsent',
+  'notifications.backend.listConsent',
+  'notifications.backend.registerEndpoint',
+  'notifications.backend.unregisterEndpoint',
+  'notifications.backend.setReminder',
+  'notifications.backend.cancelReminder',
+  'notifications.backend.listNotices',
+  'notifications.backend.recordNotice',
+] as const;
+export const bridgeNotificationsBackendMethods: readonly BridgeNotificationsBackendMethod[] =
+  Object.freeze(notificationsBackendMethodList);
+const bridgeNotificationsBackendMethodsAgree: MethodsAgree<
+  BridgeNotificationsBackendMethod,
+  NotificationBackendBridgeMethod
+> = true;
+void bridgeNotificationsBackendMethodsAgree;
+const bridgeNotificationsBackendMethodListAgrees: MethodsAgree<
+  (typeof notificationsBackendMethodList)[number],
+  NotificationBackendBridgeMethod
+> = true;
+void bridgeNotificationsBackendMethodListAgrees;
+
+const bridgeNotificationsBackendMethodSet: ReadonlySet<string> = new Set(
+  bridgeNotificationsBackendMethods,
+);
+
+export function isBridgeNotificationsBackendMethod(
+  method: string,
+): method is BridgeNotificationsBackendMethod {
+  return bridgeNotificationsBackendMethodSet.has(method);
+}
+
+/**
+ * Answer for a notifications backend request that reaches a transport whose
+ * host serves no notifications backend: `NOTIFICATIONS_CONFIGURATION_REQUIRED`,
+ * not retryable, as the game-services Worker answers a session route it does
+ * not serve. The runtime then runs without a backend's records.
+ */
+export function createNotificationsBackendUnavailableBridgeError(
+  request: Pick<BridgeRequest, 'id' | 'method'>,
+  transport: string,
+): BridgeResponse {
+  return createBridgeError(
+    request.id,
+    'NOTIFICATIONS_CONFIGURATION_REQUIRED' satisfies NotificationErrorCode,
+    `${transport} serves no notifications backend; ${request.method} is unavailable.`,
+  );
+}
+
+/** The payload a notifications backend method takes. */
+export type BridgeNotificationsBackendPayload<TMethod extends BridgeNotificationsBackendMethod> =
+  NotificationBackendBridgeMethods[TMethod]['payload'];
+
+/** The data a notifications backend method answers with. */
+export type BridgeNotificationsBackendResult<TMethod extends BridgeNotificationsBackendMethod> =
+  NotificationBackendBridgeMethods[TMethod]['result'];
 
 /** The payload a notifications v2 method takes. */
 export type BridgeNotificationsV2Payload<TMethod extends BridgeNotificationsV2Method> =
