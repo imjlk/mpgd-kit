@@ -7,6 +7,7 @@ import {
   type NotificationSession,
 } from '@mpgd/game-services/notifications';
 
+import { devvitUserIdPattern } from '../notifications-contract.js';
 import {
   devvitNotificationSessionFromContext,
   type DevvitNotificationSessionContext,
@@ -106,11 +107,12 @@ export function createDevvitNotificationsBackendBridgeHandler(
     backend: {
       session() {
         const context = input.context();
-        // A logged-out viewer has no user id. Any other failure (a context
-        // that cannot be read, an id that is not a t2_ id) is the server's,
-        // and reaches onError rather than reading as logged out.
-        // `null` is read the same way; an empty or malformed id is not.
-        if (context.userId === undefined || context.userId === null) {
+        // A request without a Devvit user id (missing, `null`, or not a t2_
+        // id) has no signed-in player, as the provider side reads it. A
+        // context that cannot be read at all is the server's failure and
+        // reaches onError.
+        const userId = context.userId;
+        if (typeof userId !== 'string' || !devvitUserIdPattern.test(userId)) {
           return undefined;
         }
         const notifications: NotificationSession = devvitNotificationSessionFromContext(context);

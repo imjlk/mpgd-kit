@@ -793,13 +793,12 @@ describe('createDevvitNotificationsBackendBridgeHandler', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('reports a context it cannot read instead of answering logged out', async () => {
+  it('reports a context it cannot read, and reads an id that is not a Devvit user id as logged out', async () => {
     const failures: unknown[] = [];
     for (const context of [
       () => {
         throw new TypeError('context is not available outside a request');
       },
-      () => ({ userId: 'alice' }),
     ]) {
       const handler = createDevvitNotificationsBackendBridgeHandler({
         service: failing(new Error('unused')),
@@ -809,14 +808,30 @@ describe('createDevvitNotificationsBackendBridgeHandler', () => {
       const answer = await handler.request(request('notifications.backend.getSession', { protocol: 'mpgd.notifications.v2' }));
       expect(answer).toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' } });
     }
-    expect(failures).toHaveLength(2);
-    for (const context of [() => ({}), () => ({ userId: null })]) {
+    expect(failures).toHaveLength(1);
+    for (const context of [
+      () => ({}),
+      () => ({ userId: null }),
+      () => ({ userId: 'alice' }),
+      () => ({ userId: '' }),
+      () => ({ userId: 't2_' }),
+      () => ({ userId: 't3_post' }),
+    ]) {
+      const loggedOutFailures: unknown[] = [];
       const loggedOut = createDevvitNotificationsBackendBridgeHandler({
         service: failing(new Error('unused')),
         context,
+        onError: (error) => loggedOutFailures.push(error),
       });
       await expect(loggedOut.request(request('notifications.backend.getSession', { protocol: 'mpgd.notifications.v2' })))
         .resolves.toEqual({ id: 'r', ok: true, data: { session: null } });
+      // Every other call answers the signed-out refusal, not an unexpected failure.
+      const refused = await loggedOut.request(request('notifications.backend.listConsent', { expectedPlayer: alice }));
+      expect(refused).toMatchObject({
+        ok: false,
+        error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', message: expect.stringContaining('NOTIFICATIONS_SIGNED_OUT') },
+      });
+      expect(loggedOutFailures).toEqual([]);
     }
   });
 });

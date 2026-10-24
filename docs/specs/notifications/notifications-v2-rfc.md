@@ -2790,8 +2790,9 @@ backend on Devvit, so a Reddit game keeps reminders, records, and notices.
   `createDevvitNotificationsBackendBridgeHandler({ service, context })`
   serves them from the Devvit notifications service for
   `devvitNotificationSessionFromContext(context())`; a context it cannot
-  read, or a user id that is not a `t2_` id, is the server's failure, not a
-  logged-out viewer. The kit's and the CLI template's server bridges take
+  read is the server's failure, while a request without a `t2_` user id
+  (missing, `null`, or malformed) has no signed-in player, as the provider
+  reads it. The kit's and the CLI template's server bridges take
   it as `notificationsBackend`.
 - `@mpgd/adapter-devvit`: `createDevvitNotificationsBackend({ appVersion,
   buildId })`, the runtime's backend over the same server bridge as the
