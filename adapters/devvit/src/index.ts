@@ -275,7 +275,8 @@ export function createDevvitNotificationsBackend(
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
   let client: DevvitNotificationsBackend | undefined;
   let loading: Promise<DevvitNotificationsBackend> | undefined;
-  let lastLoadStartedAt: number | undefined;
+  /** When the last chunk load started or failed, whichever is later. */
+  let lastLoadAt: number | undefined;
   const load = (): Promise<DevvitNotificationsBackend> => {
     if (client !== undefined) {
       return Promise.resolve(client);
@@ -283,7 +284,7 @@ export function createDevvitNotificationsBackend(
     if (loading !== undefined) {
       return loading;
     }
-    lastLoadStartedAt = now();
+    lastLoadAt = now();
     const attempt = (async () => {
       let module: DevvitNotificationsBackendClientModule;
       try {
@@ -323,6 +324,7 @@ export function createDevvitNotificationsBackend(
       },
       () => {
         loading = undefined;
+        lastLoadAt = now();
       },
     );
     return attempt;
@@ -335,7 +337,9 @@ export function createDevvitNotificationsBackend(
       }
       // The runtime makes no backend call while it sees no session, so a
       // chunk that failed to load is loaded again from here.
-      if (loading === undefined && (lastLoadStartedAt === undefined || now() - lastLoadStartedAt >= retryIntervalMs)) {
+      // A clock that went backwards counts as past the interval.
+      const elapsed = lastLoadAt === undefined ? Number.POSITIVE_INFINITY : now() - lastLoadAt;
+      if (loading === undefined && !(elapsed >= 0 && elapsed < retryIntervalMs)) {
         void load().catch(() => {});
       }
       return undefined;

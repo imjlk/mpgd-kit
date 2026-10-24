@@ -840,7 +840,8 @@ describe('createDevvitNotificationsBackend', () => {
     expect(backend.session()).toBeUndefined();
     await flushJobs();
     expect(attempts).toBe(1);
-    clock = 5_000;
+    // A clock that went backwards does not hold the retry back.
+    clock = -60_000;
     expect(backend.session()).toBeUndefined();
     await flushJobs();
     expect(attempts).toBe(2);

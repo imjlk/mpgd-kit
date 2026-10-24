@@ -117,7 +117,8 @@ export function createDevvitNotificationsBackendClient(
   const now = input.now ?? Date.now;
   let current: NotificationRuntimeSession | undefined;
   let refreshing: Promise<NotificationRuntimeSession | undefined> | undefined;
-  let lastReadStartedAt: number | undefined;
+  /** When the last session read started or settled, whichever is later. */
+  let lastReadAt: number | undefined;
   /**
    * Whether a session read settled for good: the server answered (a
    * logged-out answer too), or it failed in a way a retry cannot change (a
@@ -185,7 +186,7 @@ export function createDevvitNotificationsBackendClient(
     if (refreshing !== undefined) {
       return refreshing;
     }
-    lastReadStartedAt = now();
+    lastReadAt = now();
     const attempt = (async () => {
       let session: NotificationRuntimeSession | null;
       try {
@@ -211,13 +212,17 @@ export function createDevvitNotificationsBackendClient(
       return next;
     })();
     refreshing = attempt;
-    // The next read asks again once this one settles, whatever it answered.
+    // The next read asks again once this one settles, whatever it answered;
+    // a retry waits the interval from the settle, so a read that timed out
+    // is not followed by another at once.
     void attempt.then(
       () => {
         refreshing = undefined;
+        lastReadAt = now();
       },
       () => {
         refreshing = undefined;
+        lastReadAt = now();
       },
     );
     return attempt;
@@ -245,7 +250,7 @@ export function createDevvitNotificationsBackendClient(
       current !== undefined
       || sessionSettled
       || refreshing !== undefined
-      || (lastReadStartedAt !== undefined && now() - lastReadStartedAt < retryIntervalMs)
+      || (lastReadAt !== undefined && withinRetryInterval(now() - lastReadAt, retryIntervalMs))
     ) {
       return;
     }
@@ -395,4 +400,13 @@ function toNotificationError(method: BridgeNotificationsBackendMethod, error: un
     ...explicit,
     cause: error,
   });
+}
+
+/**
+ * Whether `elapsed` milliseconds are still inside the retry interval. A
+ * clock that went backwards (a negative or non-finite difference) counts
+ * as past it, so a clock change never holds a retry back.
+ */
+function withinRetryInterval(elapsed: number, retryIntervalMs: number): boolean {
+  return elapsed >= 0 && elapsed < retryIntervalMs;
 }
