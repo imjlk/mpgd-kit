@@ -1,5 +1,24 @@
 # @mpgd/cli
 
+## 0.56.0 — 2026-10-24
+
+### Patch changes
+
+- [79f28520](https://github.com/imjlk/mpgd-kit/commit/79f2852070b591ebaa5fb7a35fda1ddf3a4032d2) Allow an explicitly enabled Devvit Realtime permission during target artifact smoke checks. Preserve boolean validation, disabled defaults, and separate payment-readiness checks for custom multiplayer wrappers.
+
+  Allow an empty Devvit product catalog for historical order/refund callbacks when the effective target also exposes no enabled products. Continue requiring the products file, internal fulfillment/refund endpoints, IAP readiness, unique SKUs, and exact catalog agreement. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.20.4, adapter-capacitor@0.12.4, adapter-devvit@0.13.6, adapter-verse8@0.7.8, analytics@0.5.0, capacitor-play-billing@0.3.8, capacitor-storekit@0.3.8, game-runtime@0.8.1, game-services@0.28.0
+
+### Added
+
+- [fc9158f3](https://github.com/imjlk/mpgd-kit/commit/fc9158f34c54c1d88cafc040e7584e0fa9ebb69b) The starter's `serverSession.ts` recommends `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it answers the coordinator's stable `sessionFamilyId`, which the notifications runtime and the game-services Worker need, instead of a view's rotating `sessionId`.
+
+  Generated games gain `src/platform/developmentServerSession.ts`. On the Vite dev server in the development mode, `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>` (or `<playerId>.<installationId>`) signs the game in with an unauthenticated development session, so the notification settings record consent against a local Worker run with `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS` before the game has an identity service. It applies to the notifications backend only: the commerce client keeps the session the game set, or none. A normal `vite build` drops it. Any `setStarterServerSession` call turns it off, and the first call after it was in use warns. The game's notifications guide gains a "Try it locally" section. `mpgd target init capacitor --providers notifications` writes the new module next to `serverSession.ts`, and leaves it out, with a warning, for a game whose own `serverSession.ts` does not import it. — Thanks @imjlk!
+
+### Changed
+
+- [6f735409](https://github.com/imjlk/mpgd-kit/commit/6f73540926badd80b98e4ae547c5a1a279154033) The generated game's notifications guide ("Try it locally") binds the local game-services Worker to `127.0.0.1` and points at mpgd-kit's live test runbook (`docs/NOTIFICATIONS_LIVE_TEST.md`) for real pushes, instead of suggesting the service-account key go into `.dev.vars` in the checkout. — Thanks @imjlk!
+
 ## 0.55.0 — 2026-10-21
 
 ### Minor changes

@@ -1,5 +1,19 @@
 # @mpgd/game-services
 
+## 0.28.0 — 2026-10-24
+
+### Added
+
+- [fc9158f3](https://github.com/imjlk/mpgd-kit/commit/fc9158f34c54c1d88cafc040e7584e0fa9ebb69b) Guest sessions carry a stable session-family id. `ServerGuestSessionCredentials` gains an optional `sessionFamilyId` (`null` reads as absent), and every `ServerGuestSessionView` carries a resolved one: the backend's, or, for a backend that omits it, one the coordinator derives that changes only where the backend's family might (a new guest, a bound account whose `sessionId` changed, or a restore whose saved family cannot be read). The derived family is saved in the same secure storage under `<credentialKey>.family`, written before the refresh token and removed at logout. `GuestSessionCoordinator` gains `current()` and `onSession(listener)`; code that implements the interface itself, or builds a `ServerGuestSessionView` by hand, adds them and `sessionFamilyId`.
+
+  `createGuestServerSession(coordinator)` reads a coordinator as the server-backed session the notifications client takes (and the starter's `setStarterServerSession`): `current()` answers the server user as `playerId` and the family id as `sessionId`, `onAuthenticated` hears a new family but not a refresh, and `getHeaders()` refreshes an expired access token before answering and one that expires within `refreshAheadMs` (a minute by default) in the background, once per token and at most every ten seconds.
+
+  For local development, `createDevelopmentServerSession({ mode, playerId, installationId })` gives an unauthenticated session whose header (`Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`) a game-services Worker accepts only with `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"` on its memory store and on a local host (loopback, `*.localhost`, or the Android emulator's `10.0.2.2`); it throws in the production mode. `formatDevelopmentNotificationSessionAuthorization` and `parseDevelopmentNotificationSessionAuthorization` share the header format. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.5.0
+
 ## 0.27.2 — 2026-10-21
 
 ### Fixed
