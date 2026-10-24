@@ -4,7 +4,9 @@ import type { TargetConfiguredGateway } from '@mpgd/target-config';
 
 import notificationTopicsJson from '../../notifications/topics.json';
 import {
+  createStarterHostedNotificationBackend,
   createStarterWorkerNotificationBackend,
+  resolveStarterHostedNotificationBackend,
   type StarterNotificationBackend,
 } from './notificationBackend';
 import { resolveStarterServerSession } from './serverSession';
@@ -56,7 +58,11 @@ export type { StarterNotificationBackend } from './notificationBackend';
  * reminder, advertising, or night switch, because nothing could record them.
  *
  * Reddit gets no Worker backend: its notifications backend is the Devvit
- * server, which keeps the opt-in, the records, and the sends. The Worker
+ * server, which keeps the opt-in, the records, and the sends. The runtime
+ * there runs over the backend `buildGateways/reddit.ts` sets
+ * (`createDevvitNotificationsBackend`, through
+ * `setStarterHostedNotificationBackend`), which needs no game session: the
+ * Devvit server answers for the logged-in Reddit user. The Worker
  * serves the Android, iOS, and Apps in Toss providers and binds a device to
  * the session its `Authorization` header names, through its
  * `GAME_SERVICES_NOTIFICATIONS_AUTH` binding to your identity service
@@ -68,6 +74,15 @@ export type { StarterNotificationBackend } from './notificationBackend';
 export function createStarterNotificationBackend(
   platform: TargetConfiguredGateway,
 ): StarterNotificationBackend | undefined {
+  const hosted = resolveStarterHostedNotificationBackend();
+  if (hosted !== undefined) {
+    return createStarterHostedNotificationBackend(platform, {
+      backend: hosted,
+      topics: starterNotificationTopics(platform.configTarget),
+      defaultLocale: starterNotificationCatalog.defaultLocale,
+      log: (message, error) => warnOnce(platform, message, error),
+    });
+  }
   return createStarterWorkerNotificationBackend(platform, {
     baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL,
     mode: import.meta.env.MODE,

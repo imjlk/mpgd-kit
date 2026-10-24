@@ -16,6 +16,7 @@ import type {
 import {
   createNotificationRuntime,
   createNotificationRuntimeStorage,
+  type NotificationRuntimeBackend,
 } from '@mpgd/platform/notifications-runtime';
 import type { TargetConfiguredGateway } from '@mpgd/target-config';
 
@@ -56,8 +57,8 @@ export interface StarterWorkerNotificationInput {
  * Worker. A Reddit game's backend is its Devvit server: the opt-in, the
  * consent records, and the sends live there, and the Worker serves no
  * `reddit` target. A runtime over the Worker would send the game's session
- * header to a backend that cannot use it, so Reddit keeps no backend here,
- * as before R1, until the Devvit server has a runtime client of its own.
+ * header to a backend that cannot use it, so Reddit gets the hosted backend
+ * below instead (`createStarterHostedNotificationBackend`).
  */
 const targetsWithoutWorkerBackend: ReadonlySet<string> = new Set(['reddit']);
 
@@ -135,6 +136,77 @@ export function createStarterWorkerNotificationBackend(
     return { runtime, listConsent: () => client.listConsent() };
   } catch (error) {
     // A configuration the client refuses turns notifications off, never the game.
+    input.log('[notifications] the notifications backend could not be created.', error);
+    return undefined;
+  }
+}
+
+/**
+ * A backend the target's own server hosts, set by the target's gateway
+ * builder: on Reddit, `createDevvitNotificationsBackend` from
+ * `@mpgd/adapter-devvit` over the Devvit server bridge
+ * (`buildGateways/reddit.ts`). The server answers for the request's
+ * logged-in Reddit user, so the game sets no session of its own.
+ */
+let hostedBackend: NotificationRuntimeBackend | undefined;
+
+/** Sets (or, with `undefined`, clears) the backend the target's own server hosts. */
+export function setStarterHostedNotificationBackend(backend: NotificationRuntimeBackend | undefined): void {
+  hostedBackend = backend;
+}
+
+/** The backend set by `setStarterHostedNotificationBackend`, if any. */
+export function resolveStarterHostedNotificationBackend(): NotificationRuntimeBackend | undefined {
+  return hostedBackend;
+}
+
+export interface StarterHostedNotificationInput {
+  readonly backend: NotificationRuntimeBackend | undefined;
+  /** This target's topics, each with its mapping. */
+  readonly topics: readonly NotificationTopicDeclaration[];
+  readonly defaultLocale: string;
+  /** Logs a message, once per gateway and message. */
+  readonly log: (message: string, error?: unknown) => void;
+}
+
+/**
+ * The notifications runtime over a backend the target's own server hosts
+ * (Reddit: the Devvit server's notifications service), when the target
+ * exposes a notifications provider and its gateway builder set the backend.
+ * Otherwise `undefined`.
+ *
+ * The runtime keeps its registration state in the platform storage and
+ * starts here. It learns the player from the backend, which reads the
+ * session the server answers, so the settings screen shows the reminder
+ * switches once a logged-in Reddit user is known; a logged-out viewer is
+ * asked to log in first.
+ */
+export function createStarterHostedNotificationBackend(
+  platform: TargetConfiguredGateway,
+  input: StarterHostedNotificationInput,
+): StarterNotificationBackend | undefined {
+  const provider = platform.notificationsV2;
+  const { backend } = input;
+  if (provider === undefined || backend === undefined) {
+    return undefined;
+  }
+  try {
+    const runtime = createNotificationRuntime({
+      provider,
+      backend,
+      catalog: input.topics,
+      defaultLocale: input.defaultLocale,
+      storage: createNotificationRuntimeStorage({ storage: platform.storage }),
+      onError(error) {
+        console.error('[notifications]', error);
+      },
+    });
+    runtime.start().catch((error: unknown) => {
+      console.error('[notifications] the runtime could not start.', error);
+    });
+    return { runtime, listConsent: () => backend.listConsent() };
+  } catch (error) {
+    // A configuration the runtime refuses turns notifications off, never the game.
     input.log('[notifications] the notifications backend could not be created.', error);
     return undefined;
   }
