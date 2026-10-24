@@ -272,6 +272,23 @@ Both sides always read the `reddit` key, whatever the deployment target is
 named, and `pnpm validate:effective-config` rejects an IAP-enabled Devvit
 target whose effective products or SKUs differ from the server's list.
 
+### Retaining historical order and refund callbacks without new sales
+
+A custom wrapper can retain `permissions.payments: true` and its internal
+fulfillment/refund endpoints while publishing `{ "products": [] }`. Target smoke
+accepts this only when the effective catalog also contains no enabled products.
+It still requires the product file, both internal endpoints and IAP capability
+readiness; missing files, malformed entries, duplicate SKUs and catalog mismatches
+remain failures. The capability flags describe callback readiness, not permission
+to expose a purchase UI. Disable new purchases in the game's own client and server.
+
+The [official product schema](https://developers.reddit.com/schema/products.json)
+does not impose a minimum product count. Keeping callbacks allows historical
+orders to be handled after sales stop; the
+[refund guidance](https://developers.reddit.com/docs/earn-money/payments/payments_manage)
+still applies. Artifact smoke does not prove app approval, installation or a real
+refund; record those separately against the installed version.
+
 ## Migrating from v1
 
 C4 removed the commerce v1 surfaces of `@mpgd/adapter-devvit` in one major

@@ -749,7 +749,8 @@ export function assertMicrosoftStorePwaManifestSourceContract(
   }
 }
 
-function verifyDevvitWebManifest(
+/** Validate the wrapper's on-disk manifest against the built client, server and effective catalog. */
+export function verifyDevvitWebManifest(
   target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
@@ -869,7 +870,7 @@ function verifyDevvitWebManifest(
   } else {
     assertDisabledDevvitPermission(permissions.payments, `${label} permissions.payments`);
   }
-  assertDisabledDevvitPermission(permissions.realtime, `${label} permissions.realtime`);
+  assertDevvitRealtimePermission(permissions.realtime, `${label} permissions.realtime`);
   assertEnabledRedditPermission(permissions.reddit, `${label} permissions.reddit`);
 
   const menu = manifest.menu;
@@ -881,7 +882,15 @@ function verifyDevvitWebManifest(
   }
 }
 
-function verifyEnabledDevvitPayments(
+/** Realtime is an optional boolean capability, including for custom multiplayer wrappers. */
+export function assertDevvitRealtimePermission(input: unknown, label: string): void {
+  if (input !== undefined && typeof input !== 'boolean') {
+    throw new Error(`${label} must be a boolean or omitted.`);
+  }
+}
+
+/** Require callback readiness and exact SKU agreement, including an empty historical-order catalog. */
+export function verifyEnabledDevvitPayments(
   manifest: Record<string, unknown>,
   wrapperApp: string,
   effectiveSkus: readonly string[],
@@ -910,10 +919,8 @@ function verifyEnabledDevvitPayments(
     `${label} products file products`,
   );
 
-  if (productSkus.length === 0) {
-    throw new Error(`${label} payments products file must declare at least one product.`);
-  }
-
+  // An empty catalogue can retain callbacks for historical orders/refunds.
+  // It is valid only when the effective target also exposes no purchasable SKUs.
   if (JSON.stringify([...effectiveSkus].sort()) !== JSON.stringify([...productSkus].sort())) {
     throw new Error(
       `${label} products file SKUs must match enabled effective catalog platform IDs.`,
