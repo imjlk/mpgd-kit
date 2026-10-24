@@ -161,9 +161,18 @@ try {
       listNotices: async () => [],
       recordNotice: async () => undefined,
     };
-    assert.equal(resolveStarterHostedNotificationBackend(), undefined);
-    setStarterHostedNotificationBackend(hosted);
-    assert.equal(resolveStarterHostedNotificationBackend(), hosted);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
+    let created = 0;
+    setStarterHostedNotificationBackend('reddit', () => {
+      created += 1;
+      return hosted;
+    });
+    // Created on first use, once, and only for the config target that set it.
+    assert.equal(created, 0);
+    assert.equal(resolveStarterHostedNotificationBackend('android'), undefined);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), hosted);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), hosted);
+    assert.equal(created, 1);
     const hostedInput = { backend: hosted, topics: [], defaultLocale: 'ko', log: () => undefined };
     const backend = createStarterHostedNotificationBackend(gateway('reddit'), hostedInput);
     assert.ok(backend !== undefined);
@@ -184,8 +193,8 @@ try {
       ),
       undefined,
     );
-    setStarterHostedNotificationBackend(undefined);
-    assert.equal(resolveStarterHostedNotificationBackend(), undefined);
+    setStarterHostedNotificationBackend('reddit', undefined);
+    assert.equal(resolveStarterHostedNotificationBackend('reddit'), undefined);
     await settle();
   }
 

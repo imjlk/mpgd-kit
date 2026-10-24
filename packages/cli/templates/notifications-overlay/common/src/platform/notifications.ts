@@ -74,7 +74,10 @@ export type { StarterNotificationBackend } from './notificationBackend';
 export function createStarterNotificationBackend(
   platform: TargetConfiguredGateway,
 ): StarterNotificationBackend | undefined {
-  const hosted = resolveStarterHostedNotificationBackend();
+  // Only a hosted backend set for this config target; other targets keep the Worker path.
+  const hosted = platform.notificationsV2 === undefined
+    ? undefined
+    : resolveStarterHostedNotificationBackend(platform.configTarget);
   if (hosted !== undefined) {
     return createStarterHostedNotificationBackend(platform, {
       backend: hosted,

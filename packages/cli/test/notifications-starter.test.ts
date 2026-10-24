@@ -116,6 +116,24 @@ assert.match(server, /const notificationsBridge = notificationService === undefi
 assert.ok(
   server.indexOf('const notificationService:') < server.indexOf('const notificationsBridge'),
 );
+// The runtime's backend: served with the same service, for the request's context.
+assert.match(
+  server,
+  /createDevvitNotificationsBackendBridgeHandler\(\{ service: notificationService, context: \(\) => context \}\)/u,
+);
+assert.match(server, /\{ notificationsBackend \}/u);
+assert.ok(
+  server.indexOf('const notificationService:') < server.indexOf('const notificationsBackend'),
+);
+// The Reddit gateway builder sets the hosted backend for its config target, created on first use.
+assert.match(reddit, /setStarterHostedNotificationBackend\(runtime\.configTarget, \(\) =>/u);
+assert.match(
+  reddit,
+  /createDevvitNotificationsBackend\(\{ appVersion: runtime\.appVersion, buildId: runtime\.buildId \}\)/u,
+);
+assert.ok(
+  reddit.indexOf('if (topics.length === 0)') < reddit.indexOf('setStarterHostedNotificationBackend('),
+);
 assert.match(byPath(phaser, 'src/runtime/createGame.ts'), /NotificationSettingsScene\]/u);
 assert.match(
   byPath(phaser, 'src/runtime/createGame.ts'),

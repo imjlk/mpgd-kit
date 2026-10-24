@@ -598,6 +598,34 @@ describe('createDevvitNotificationsBackendClient', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('waits the retry interval from when a failed read settled, and retries on a clock that went back', async () => {
+    let clock = 0;
+    const failures: ((error: unknown) => void)[] = [];
+    const client = createDevvitNotificationsBackendClient({
+      request: () => new Promise((_resolve, reject) => {
+        failures.push(reject);
+      }),
+      now: () => clock,
+    });
+    expect(client.session()).toBeUndefined();
+    expect(failures).toHaveLength(1);
+    // The read fails 15 seconds later: the next read waits 5 seconds from then.
+    clock = 15_000;
+    failures.shift()?.(Object.assign(new Error('timeout'), { code: 'DEVVIT_BRIDGE_NETWORK_ERROR', retryable: true }));
+    await flushJobs();
+    client.session();
+    await flushJobs();
+    expect(failures).toHaveLength(0);
+    clock = 20_000;
+    client.session();
+    expect(failures).toHaveLength(1);
+    failures.shift()?.(Object.assign(new Error('offline'), { code: 'DEVVIT_BRIDGE_NETWORK_ERROR', retryable: true }));
+    await flushJobs();
+    clock = 0;
+    client.session();
+    expect(failures).toHaveLength(1);
+  });
+
   it('reads the session on the first call that finds none', async () => {
     const methods: string[] = [];
     const client = createDevvitNotificationsBackendClient({
