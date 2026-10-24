@@ -101,10 +101,11 @@ export function createDevvitNotificationsBackendClient(
   let refreshing: Promise<NotificationRuntimeSession | undefined> | undefined;
   /**
    * Whether a session read settled for good: the server answered (a
-   * logged-out answer too), or it refused in a way a retry cannot change
-   * (a server without the backend). Until then a call that finds no session
-   * starts a read, so a first read that failed (offline, timed out) is
-   * tried again.
+   * logged-out answer too), or it failed in a way a retry cannot change (a
+   * server without the backend, or an answer outside the contract, which
+   * only a fixed server or a reload changes). Until then a call that finds
+   * no session starts a read, at most one at a time and one per call, so a
+   * first read that failed (offline, timed out) is tried again.
    */
   let sessionSettled = false;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
@@ -237,6 +238,11 @@ export function createDevvitNotificationsBackendClient(
         await refreshSession();
       }
     } catch {
+      // A read failed after a stale answer cleared the session: the next
+      // call reads again rather than wait for a refusal that cannot come.
+      if (current === undefined) {
+        sessionSettled = false;
+      }
       // The refusal is what the caller needs to see.
     }
   };
