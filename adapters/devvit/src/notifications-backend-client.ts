@@ -219,15 +219,21 @@ export function createDevvitNotificationsBackendClient(
   /**
    * Reads the session again after the server refused a call for `refused`.
    * A read already in flight may have been answered before the user
-   * changed; when it still names the refused session, one more read asks
-   * the server again. A failed read leaves the session as it was; the next
-   * refusal reads again.
+   * changed. When its answer contradicts the refusal, one more read asks the
+   * server again: the refused session itself, or, after a refusal that said
+   * another user is signed in, no user. A failed read leaves the session as
+   * it was; the next refusal reads again.
    */
-  const rereadAfterRefusal = async (refused: NotificationRuntimeSession): Promise<void> => {
-    const sameAsRefused = (read: NotificationRuntimeSession | undefined): boolean =>
-      read !== undefined && read.id === refused.id && read.player === refused.player;
+  const rereadAfterRefusal = async (
+    refused: NotificationRuntimeSession,
+    hostCode: string | undefined,
+  ): Promise<void> => {
+    const contradicts = (read: NotificationRuntimeSession | undefined): boolean =>
+      read === undefined
+        ? hostCode === notificationsBackendBridgeHostCodes.sessionChanged
+        : read.id === refused.id && read.player === refused.player;
     try {
-      if (sameAsRefused(await refreshSession())) {
+      if (contradicts(await refreshSession())) {
         await refreshSession();
       }
     } catch {
@@ -252,7 +258,7 @@ export function createDevvitNotificationsBackendClient(
       } as BridgeNotificationsBackendPayload<TMethod>);
     } catch (error) {
       if (error instanceof NotificationError && sessionRefusalHostCodes.has(error.hostCode)) {
-        await rereadAfterRefusal(session);
+        await rereadAfterRefusal(session, error.hostCode);
       }
       throw error;
     }

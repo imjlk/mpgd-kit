@@ -454,6 +454,46 @@ describe('createDevvitNotificationsBackendClient', () => {
     expect(announced).toEqual([bob]);
   });
 
+  it('reads once more when a joined read answered logged out before another user signed in', async () => {
+    const reads: ((value: unknown) => void)[] = [];
+    let answer: unknown = session;
+    const client = createDevvitNotificationsBackendClient({
+      request: (method) => {
+        if (method === 'notifications.backend.getSession') {
+          const answered = answer;
+          return new Promise((resolve) => {
+            reads.push(() => resolve(answered));
+          });
+        }
+        return Promise.reject(Object.assign(new Error('x'), {
+          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          message: 'another player (host code NOTIFICATIONS_SESSION_CHANGED)',
+          retryable: true,
+        }));
+      },
+    });
+    const first = client.refreshSession();
+    reads.shift()?.(undefined);
+    await first;
+    const announced: string[] = [];
+    client.onAuthenticated((next) => announced.push(next.player));
+    // A read the server answered while nobody was logged in is still settling when bob logs in.
+    answer = { session: null };
+    const stale = client.refreshSession();
+    const answerStale = reads.shift();
+    answer = { session: { id: `devvit:${bob}`, player: bob } };
+    const refused = client.listNotices();
+    await flushJobs();
+    answerStale?.(undefined);
+    await stale;
+    await flushJobs();
+    expect(reads).toHaveLength(1);
+    reads.shift()?.(undefined);
+    await expect(refused).rejects.toMatchObject({ hostCode: 'NOTIFICATIONS_SESSION_CHANGED' });
+    expect(client.session()?.player).toBe(bob);
+    expect(announced).toEqual([bob]);
+  });
+
   it('clears a timed-out session read, so the next one asks again', async () => {
     vi.useFakeTimers();
     let reads = 0;
@@ -647,7 +687,7 @@ describe('createDevvitNotificationsBackendBridgeHandler', () => {
       expect(answer).toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' } });
     }
     expect(failures).toHaveLength(2);
-    for (const context of [() => ({}), () => ({ userId: null as unknown as undefined })]) {
+    for (const context of [() => ({}), () => ({ userId: null })]) {
       const loggedOut = createDevvitNotificationsBackendBridgeHandler({
         service: failing(new Error('unused')),
         context,
