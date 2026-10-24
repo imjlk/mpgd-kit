@@ -30,7 +30,12 @@ is the practical summary. For Android and iOS also read the
   `createDevvitPlatformGateway`, and the Devvit server passes
   `createDevvitNotificationsV2BridgeHandler({ notifications, currentUserId,
   topics })` to its bridge and runs `createDevvitNotificationService({ redis,
-  notifications, catalog, deployment })` in its scheduler tasks (see the
+  notifications, catalog, deployment })` in its scheduler tasks. For
+  reminders, records, and notices the server also passes
+  `createDevvitNotificationsBackendBridgeHandler({ service, context: () =>
+  context })` as the bridge's `notificationsBackend`, and the game runs
+  `createNotificationRuntime` over `createDevvitNotificationsBackend({
+  appVersion, buildId })` (see the
   [Devvit adapter README](https://github.com/imjlk/mpgd-kit/blob/main/adapters/devvit/README.md#notifications)).
 
 Before every release run `pnpm validate:notifications`. It checks the catalog
@@ -150,7 +155,13 @@ Rules the starter's settings screen follows, and your own screen must too:
 > provider) it returns `undefined`, and the settings screen asks for the OS or host
 > permission (and withdraws a Devvit opt-in the game rendered), shows no
 > reminder, advertising, or night switch, and says why. A Reddit game gets
-> no Worker backend either: its notifications backend is the Devvit server.
+> no Worker backend: its notifications backend is the Devvit server, and the
+> starter runs the runtime over it (`createDevvitNotificationsBackend`, set
+> by the Reddit gateway builder), with no game session: the server answers
+> for the logged-in Reddit user. The settings screen then shows the reminder
+> switches on Reddit too, once the player is logged in; advertising and
+> night consent stay off there, because Devvit delivers `service` and
+> `requested` topics only.
 > The runtime compares its provider with the Worker's registry entry for the
 > target (`GET /providers`), and runs without the check when the Worker
 > cannot be reached or lists no entry for the target. The runtime keeps its last registration, push

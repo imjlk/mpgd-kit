@@ -3,7 +3,7 @@
 Status: **draft**. N2 through C1 implemented this contract: the types, the
 conformance runner and vectors, the providers, the Worker and Devvit
 backends, and the CLI starter. R1 added the production runtime and the
-game-services client. The identity-side session binding belongs to each
+game-services client, and DV1 the runtime's backend on Devvit. The identity-side session binding belongs to each
 game's identity service (see [What R1 landed](#pr-plan)). It is still
 outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope, and a
@@ -2258,6 +2258,44 @@ Other rules the profiles encode:
     reads back (the Apps in Toss and Devvit clients do).
   - Events are numbered per handler from 0, one handler per session; the
     Devvit server bridge exposes none.
+- **Backend methods.** A backend a host serves over its own bridge (the
+  Devvit server) takes the runtime's backend calls
+  (`NotificationRuntimeBackend`) as nine more methods, separate from the
+  nine provider methods: `notifications.backend.getSession`,
+  `.recordConsent`, `.listConsent`, `.registerEndpoint`,
+  `.unregisterEndpoint`, `.setReminder`, `.cancelReminder`, `.listNotices`,
+  and `.recordNotice` (`bridgeNotificationsBackendMethods` in
+  `@mpgd/bridge`, kept equal to `notificationBackendBridgeMethods` in
+  `@mpgd/platform/notifications`).
+  - The host learns the player from its own authentication (Devvit's
+    `context.userId`). `getSession` answers that session, `{ id, player }`,
+    or `null` for a request without a player; it carries `protocol` as the
+    provider reads do.
+  - Every other call names the player it began for as `expectedPlayer`,
+    only as a cross-check: the host acts for its own player and refuses a
+    call whose player is not it, before the backend, so a payload never
+    chooses whom a call acts for. The refusal is
+    `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with host code
+    `NOTIFICATIONS_SESSION_CHANGED`; a request without a player gets the
+    same code with `NOTIFICATIONS_SIGNED_OUT`. The runtime reads both as
+    "not signed in", and the client reads the session again.
+  - Payloads and answers have typia validators and JSON Schemas like the
+    provider methods (`assertBridgeNotificationsBackendPayload` and
+    `assertBridgeNotificationsBackendResult` in
+    `@mpgd/bridge/notifications`). A reminder's `fireAt` is checked as RFC
+    3339 with an offset on the wire; the backend still applies the reminder
+    bounds.
+  - `createNotificationsBackendBridgeHandler` serves them from the host's
+    backend: payloads that break the contract answer
+    `NOTIFICATIONS_INVALID_INPUT`, answers that do
+    `NOTIFICATIONS_CONFIGURATION_REQUIRED`, a backend's notifications
+    failure crosses with its code, and any other failure crosses as a
+    retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with a fixed message,
+    its text left on the host.
+  - A host bridge that could serve a backend but has none configured
+    answers `NOTIFICATIONS_CONFIGURATION_REQUIRED`
+    (`createNotificationsBackendUnavailableBridgeError`); other transports
+    answer `UNSUPPORTED_METHOD`, which a backend client reads the same way.
 - **Protocol version.** `getCapabilities` answers `protocolVersion`, the
   host's `notificationsProtocolVersion`. The Apps in Toss client, whose host
   wrapper is built separately from the game, refuses an incompatible host
@@ -2357,7 +2395,11 @@ How a real provider is judged:
   permission read. The Devvit provider passes its vectors with the Devvit
   server's service over the Redis store as the backend (P3). The production
   service (S1 and S2) passes every vector except the per-send one, which its
-  registry refuses.
+  registry refuses. Since DV1 the Devvit vectors also pass with the runtime
+  reaching that service through the Devvit backend client and the server's
+  backend bridge handler, where a vector's player is the request's Reddit
+  user. A backend whose client learns its session from its server may
+  answer `authenticate` asynchronously; the runner awaits it.
 
 ### Vector format {#vector-format}
 
@@ -2530,6 +2572,7 @@ publishable package carries a Sampo changeset.
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
 | R1 | `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
 | D1 | `sessionFamilyId` and `createGuestServerSession` in `@mpgd/game-services`, the Worker's local development notification sessions, and the starter's guest and development sessions | No stable session id from a guest session; no session without an identity service |
+| DV1 | The `notifications.backend.*` bridge methods, `createDevvitNotificationsBackendBridgeHandler` in `@mpgd/adapter-devvit/server`, the webview's `createDevvitNotificationsBackend`, and the starter's runtime on Reddit | No notifications runtime on Reddit |
 
 **What S1 landed.**
 
@@ -2589,8 +2632,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
 - Left to follow-ups: a shared host-side `notifications.v2` bridge
   handler for the Apps in Toss and Devvit adapters (landed in B1, below),
   and the runtime's backend client for a service the Devvit server hosts
-  (the game-services client landed in R1 for the Worker). The wiring in
-  the generated Devvit app landed in C1.
+  (the game-services client landed in R1 for the Worker; the Devvit one
+  in DV1, below). The wiring in the generated Devvit app landed in C1.
 
 **What C1 landed.**
 
@@ -2658,7 +2701,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   (`GET /providers`, `loadRegistryEntry`) in the background and compares
   the provider with it; a Worker it cannot reach is logged and the runtime
   runs without the comparison. A Reddit game gets no Worker backend: its
-  notifications backend is the Devvit server.
+  notifications backend is the Devvit server, which DV1 (below) serves
+  the runtime from.
 - Left to follow-ups:
   - The identity side's `NotificationSessions` binding stays with each
     game's identity service; the contract is in the
@@ -2731,6 +2775,48 @@ use from a guest session, and sessions for local development.
   (`VITE_MPGD_DEV_NOTIFICATION_SESSION`).
 - Left to follow-ups: a production identity Worker, and live end-to-end
   runs (E1).
+
+**What DV1 landed.** DV1 is a follow-up to R1 and P3: the runtime's
+backend on Devvit, so a Reddit game keeps reminders, records, and notices.
+
+- `@mpgd/platform/notifications` and `@mpgd/bridge`: the nine
+  `notifications.backend.*` methods with their validators and JSON
+  Schemas, and `createNotificationsBackendBridgeHandler` (see
+  [Bridge and versioning](#bridge), "Backend methods"). The conformance
+  runner awaits a backend's `authenticate`.
+- `@mpgd/adapter-devvit/server`:
+  `createDevvitNotificationsBackendBridgeHandler({ service, context })`
+  serves them from the Devvit notifications service for
+  `devvitNotificationSessionFromContext(context())`; a context it cannot
+  read, or a user id that is not a `t2_` id, is the server's failure, not a
+  logged-out viewer. The kit's and the CLI template's server bridges take
+  it as `notificationsBackend`.
+- `@mpgd/adapter-devvit`: `createDevvitNotificationsBackend({ appVersion,
+  buildId })`, the runtime's backend over the same server bridge as the
+  gateway, loaded in its own chunk. Its session is the one the server
+  answers; the client reads it at load, again after a refusal for another
+  user (once more when a read it joined was answered before the change),
+  and, while no read has settled, from `session()` at most every 5
+  seconds, because the runtime makes no backend call while it sees no
+  session. Requests time out after 15 seconds, and errors map to the codes
+  the runtime acts on as the game-services client maps the Worker's.
+- The starter: the generated Devvit server serves the backend over the
+  service its scheduler tasks run, and the Reddit gateway builder sets
+  `createDevvitNotificationsBackend` as the hosted backend for its config
+  target (created on first use, only while the target exposes a
+  provider), so the settings screen shows the reminder switches on Reddit.
+  Advertising and night consent stay off there: the Devvit profile
+  delivers `service` and `requested` topics only. A reminder needs a post
+  or comment `link`, from the call or the topic's `reddit` mapping.
+- Tests drive the production runtime through the client against the real
+  handlers in process (opt-in and registration, preference consent, a
+  reminder fired through `enqueue` and a cancelled one, logged-out
+  requests, an account switch), and the seven Devvit vectors pass through
+  it. Only those seven apply: the others depend on capabilities the
+  Devvit profile lacks (their `appliesTo` fails), such as a device
+  address, local notifications, an OS prompt, or advertising.
+- Left to follow-ups: a live `devvit playtest` run, Android advertising
+  rendering, and bulk sends.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release

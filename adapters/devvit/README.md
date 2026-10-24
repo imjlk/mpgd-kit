@@ -4,9 +4,9 @@ Reddit Devvit Web platform adapter for mpgd games.
 
 | Entry point | Purpose |
 | --- | --- |
-| `@mpgd/adapter-devvit` | `createDevvitPlatformGateway`, the oRPC bridge and sandbox bridge, the commerce provider and catalog helpers, the Devvit notifications profile values |
+| `@mpgd/adapter-devvit` | `createDevvitPlatformGateway`, the oRPC bridge and sandbox bridge, the commerce provider and catalog helpers, the Devvit notifications profile values, `createDevvitNotificationsBackend` (the notifications runtime's backend) |
 | `@mpgd/adapter-devvit/payments` | `normalizeDevvitCommerceProducts` and the checkout types |
-| `@mpgd/adapter-devvit/server` | `createDevvitCommerceV2BridgeHandler`, `createDevvitNotificationsV2BridgeHandler`, the notifications service and delivery provider, payment-order normalizers, durable post operations, Redis stores |
+| `@mpgd/adapter-devvit/server` | `createDevvitCommerceV2BridgeHandler`, `createDevvitNotificationsV2BridgeHandler`, `createDevvitNotificationsBackendBridgeHandler`, the notifications service and delivery provider, payment-order normalizers, durable post operations, Redis stores |
 | `@mpgd/adapter-devvit/web` | Webview helpers, including `createDevvitWebPaymentsClient()` over `purchase()` and `createDevvitWebLoginPrompt()` over `showLoginPrompt()` from `@devvit/web/client` |
 | `@mpgd/adapter-devvit/surface`, `/view-mode` | Inline and expanded view-mode helpers |
 
@@ -76,6 +76,31 @@ Reddit approves. The profile follows the
   `runDevvitNotificationTask(service, task)`, as the kit's
   `apps/target-devvit` server does. A player's `setReminder` fires through
   the dispatch task.
+- **The runtime's backend.** The game's notifications runtime
+  (`createNotificationRuntime` from `@mpgd/platform/notifications-runtime`)
+  keeps consent records, the player's registration (locale and zone),
+  server reminders, and notices in that same service:
+  - The server passes
+    `createDevvitNotificationsBackendBridgeHandler({ service, context: () => context })`
+    as the bridge's `notificationsBackend` dependency. It serves the nine
+    `notifications.backend.*` methods for `devvitNotificationSessionFromContext(context())`,
+    the request's logged-in user, never a payload field; a call that names
+    another player (`expectedPlayer`) or comes from a logged-out viewer is
+    refused before the service. Without the dependency the bridge answers
+    `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
+  - The webview passes `createDevvitNotificationsBackend({ appVersion, buildId })`
+    as the runtime's `backend`. Its client loads in its own chunk and reads
+    the session the server answers (`getSession`), so the game sets no session
+    of its own; it announces the player to the runtime, reads again when the
+    server refuses a call for another user, and retries a failed read at most
+    every 5 seconds when the runtime next reads the session. Requests time
+    out after 15 seconds.
+  - A reminder set through the runtime (`runtime.reminders.set`) is stored
+    by the service and fired by the `dispatch` task through `enqueue`, with
+    the reminder's `link` (a post or comment id such as `context.postId` from
+    `@devvit/web/client`) or the topic mapping's default `link`. Notices stay empty unless the deployment applies the Korean
+    rules, and Devvit carries no advertising topic, so the starter shows no
+    advertising or night consent on Reddit.
 - **Opens.** A notification opens its post; the game routes from that post's
   data.
 
