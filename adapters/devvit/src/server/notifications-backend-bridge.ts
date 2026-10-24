@@ -107,7 +107,8 @@ export function createDevvitNotificationsBackendBridgeHandler(
         // A logged-out viewer has no user id. Any other failure (a context
         // that cannot be read, an id that is not a t2_ id) is the server's,
         // and reaches onError rather than reading as logged out.
-        if (context.userId === undefined) {
+        // `null` is read the same way; an empty or malformed id is not.
+        if (context.userId === undefined || context.userId === null) {
           return undefined;
         }
         const notifications: NotificationSession = devvitNotificationSessionFromContext(context);

@@ -489,6 +489,42 @@ describe('createDevvitNotificationsBackendClient', () => {
     expect(client.session()?.player).toBe(alice);
   });
 
+  it('tries a failed first read again on the next call, but not a settled one', async () => {
+    const methods: string[] = [];
+    let answer: () => unknown = () => {
+      throw Object.assign(new Error('Failed to fetch'), { code: 'DEVVIT_BRIDGE_NETWORK_ERROR', retryable: true });
+    };
+    const client = createDevvitNotificationsBackendClient({
+      request: async (method) => {
+        methods.push(method);
+        return answer();
+      },
+    });
+    await expect(client.refreshSession()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    answer = () => ({ session: null });
+    await expect(client.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await flushJobs();
+    expect(methods).toEqual(['notifications.backend.getSession', 'notifications.backend.getSession']);
+    // A logged-out answer settles the read: calls no longer ask again (Reddit reloads the post after login).
+    await expect(client.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await flushJobs();
+    expect(methods).toHaveLength(2);
+
+    // Nor does a server that serves no backend, which a retry cannot change.
+    const oldServerMethods: string[] = [];
+    const oldServer = createDevvitNotificationsBackendClient({
+      request: async (method) => {
+        oldServerMethods.push(method);
+        throw Object.assign(new Error('Unsupported'), { code: 'UNSUPPORTED_METHOD', retryable: false });
+      },
+    });
+    await expect(oldServer.listConsent()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await flushJobs();
+    await expect(oldServer.listConsent()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await flushJobs();
+    expect(oldServerMethods).toEqual(['notifications.backend.getSession']);
+  });
+
   it('unbinds the current player and treats a refusal for a user who left as nothing to unbind', async () => {
     const answers: (() => unknown)[] = [];
     const methods: string[] = [];
@@ -611,11 +647,13 @@ describe('createDevvitNotificationsBackendBridgeHandler', () => {
       expect(answer).toMatchObject({ ok: false, error: { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' } });
     }
     expect(failures).toHaveLength(2);
-    const loggedOut = createDevvitNotificationsBackendBridgeHandler({
-      service: failing(new Error('unused')),
-      context: () => ({}),
-    });
-    await expect(loggedOut.request(request('notifications.backend.getSession', { protocol: 'mpgd.notifications.v2' })))
-      .resolves.toEqual({ id: 'r', ok: true, data: { session: null } });
+    for (const context of [() => ({}), () => ({ userId: null as unknown as undefined })]) {
+      const loggedOut = createDevvitNotificationsBackendBridgeHandler({
+        service: failing(new Error('unused')),
+        context,
+      });
+      await expect(loggedOut.request(request('notifications.backend.getSession', { protocol: 'mpgd.notifications.v2' })))
+        .resolves.toEqual({ id: 'r', ok: true, data: { session: null } });
+    }
   });
 });

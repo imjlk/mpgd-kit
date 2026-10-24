@@ -99,7 +99,14 @@ export function createDevvitNotificationsBackendClient(
   }
   let current: NotificationRuntimeSession | undefined;
   let refreshing: Promise<NotificationRuntimeSession | undefined> | undefined;
-  let everRead = false;
+  /**
+   * Whether a session read settled for good: the server answered (a
+   * logged-out answer too), or it refused in a way a retry cannot change
+   * (a server without the backend). Until then a call that finds no session
+   * starts a read, so a first read that failed (offline, timed out) is
+   * tried again.
+   */
+  let sessionSettled = false;
   const listeners = new Set<(session: NotificationRuntimeSession) => void>();
 
   const send = async <TMethod extends BridgeNotificationsBackendMethod>(
@@ -157,9 +164,17 @@ export function createDevvitNotificationsBackendClient(
     if (refreshing !== undefined) {
       return refreshing;
     }
-    everRead = true;
     const attempt = (async () => {
-      const { session } = await send('notifications.backend.getSession', { protocol: notificationsProtocol });
+      let session: NotificationRuntimeSession | null;
+      try {
+        ({ session } = await send('notifications.backend.getSession', { protocol: notificationsProtocol }));
+      } catch (error) {
+        if (error instanceof NotificationError && !error.retryable) {
+          sessionSettled = true;
+        }
+        throw error;
+      }
+      sessionSettled = true;
       if (session === null) {
         current = undefined;
         return undefined;
@@ -188,9 +203,10 @@ export function createDevvitNotificationsBackendClient(
 
   const requireSession = (method: BridgeNotificationsBackendMethod): NotificationRuntimeSession => {
     if (current === undefined) {
-      if (!everRead) {
-        // Nothing read the session yet: read it now, so the runtime hears of
-        // a signed-in player through onAuthenticated instead of waiting forever.
+      if (!sessionSettled && refreshing === undefined) {
+        // No read has settled yet (none was made, or the last one failed in
+        // a way a retry may fix): read now, so the runtime hears of a
+        // signed-in player through onAuthenticated instead of waiting forever.
         void refreshSession().catch(() => undefined);
       }
       throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
