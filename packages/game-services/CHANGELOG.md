@@ -1,5 +1,11 @@
 # @mpgd/game-services
 
+## 0.28.1 — 2026-10-24
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.5.1, @mpgd/catalog@0.10.8, @mpgd/platform@0.28.0
+
 ## 0.28.0 — 2026-10-24
 
 ### Added
