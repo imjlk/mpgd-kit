@@ -14,6 +14,8 @@ import {
   createFakeDevvitNotifications,
   type FakeDevvitNotifications,
 } from '../test/fake-devvit-notifications.js';
+import { createDevvitNotificationsBackend } from './index.js';
+import * as backendClientModule from './notifications-backend-client.js';
 import { createDevvitNotificationsBackendClient } from './notifications-backend-client.js';
 import { createDevvitBridgeNotificationProvider } from './notifications-client.js';
 import { createDevvitNotificationsBackendBridgeHandler } from './server/notifications-backend-bridge.js';
@@ -748,5 +750,74 @@ describe('createDevvitNotificationsBackendBridgeHandler', () => {
       await expect(loggedOut.request(request('notifications.backend.getSession', { protocol: 'mpgd.notifications.v2' })))
         .resolves.toEqual({ id: 'r', ok: true, data: { session: null } });
     }
+  });
+});
+
+describe('createDevvitNotificationsBackend', () => {
+  const bridgeFor = (users: { current: string | undefined }, methods: string[]) => ({
+    async request(request: BridgeRequest): Promise<BridgeResponse> {
+      methods.push(request.method);
+      if (request.method === 'notifications.backend.getSession') {
+        return {
+          id: request.id,
+          ok: true,
+          data: { session: users.current === undefined ? null : { id: `devvit:${users.current}`, player: users.current } },
+        };
+      }
+      return { id: request.id, ok: true, data: { records: [] } };
+    },
+  });
+
+  it('loads its client chunk, reads the session at once, and forwards the announcement', async () => {
+    const methods: string[] = [];
+    const announced: string[] = [];
+    const backend = createDevvitNotificationsBackend({
+      appVersion: '1',
+      buildId: 'test',
+      bridge: bridgeFor({ current: alice }, methods),
+      load: async () => backendClientModule,
+    });
+    backend.onAuthenticated((session) => announced.push(session.player));
+    expect(backend.session()).toBeUndefined();
+    // The loader is injected, so the chunk and the session read settle in promise jobs alone.
+    await flushJobs();
+    expect(methods).toEqual(['notifications.backend.getSession']);
+    expect(announced).toEqual([alice]);
+    expect(backend.session()).toEqual({ id: `devvit:${alice}`, player: alice });
+    await expect(backend.listConsent()).resolves.toEqual([]);
+    expect(methods.at(-1)).toBe('notifications.backend.listConsent');
+  });
+
+  it('answers a chunk that did not load as retryable, and loads again on the next call', async () => {
+    let attempts = 0;
+    const methods: string[] = [];
+    const backend = createDevvitNotificationsBackend({
+      appVersion: '1',
+      buildId: 'test',
+      bridge: bridgeFor({ current: alice }, methods),
+      load: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('chunk failed');
+        }
+        return backendClientModule;
+      },
+    });
+    await flushJobs();
+    expect(attempts).toBe(1);
+    await expect(backend.refreshSession()).resolves.toEqual({ id: `devvit:${alice}`, player: alice });
+    expect(attempts).toBe(2);
+    const failing = createDevvitNotificationsBackend({
+      appVersion: '1',
+      buildId: 'test',
+      bridge: bridgeFor({ current: alice }, []),
+      load: async () => {
+        throw new Error('chunk failed');
+      },
+    });
+    await expect(failing.listNotices()).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    });
   });
 });
