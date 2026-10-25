@@ -4,6 +4,7 @@ import {
   findNotificationCopy,
   notificationNoticeCopyIssues,
   notificationProviderCarriesNotices,
+  notificationShellRenderedAdvertisingTargets,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
   resolveNotificationAdvertisingSettings,
@@ -134,8 +135,10 @@ export type NotificationTopicCatalogValidation =
  *   with the `remote` channel maps only to a provider whose `purposes`
  *   include its purpose, an `advertising` topic maps only to a provider that
  *   delivers advertising as free-form content (under the Korean rules, also
- *   with an expiry and actions, and able to carry the notice topic) and must
- *   not map to `android` until the shell renders the opt-out action, and a
+ *   with an expiry and actions, and able to carry the notice topic) and maps
+ *   to a target whose pushes cannot carry the opt-out action
+ *   (`notificationShellRenderedAdvertisingTargets`: `android`) only when the
+ *   deployment sets `shellRendersAdvertising`, and a
  *   topic on a free-form provider has its own text: `copy`, or a `title` and
  *   a `body` in the mapping, except the notice topic, whose text is
  *   `notices.copy`;
@@ -210,7 +213,7 @@ export function validateNotificationTopicCatalog(
           topic,
           mapping,
           provider,
-          rules,
+          options.deployment,
           topic.id === noticeTopic,
         ));
       }
@@ -265,9 +268,10 @@ function mappingIssues(
   topic: NotificationTopicCatalogEntry,
   mapping: NotificationTopicMapping,
   provider: NotificationProviderRegistryEntry,
-  rules: NotificationDeployment['advertisingRules'],
+  deployment: NotificationDeployment | undefined,
   noticeTopic: boolean,
 ): NotificationTopicCatalogIssue[] {
+  const rules = deployment?.advertisingRules;
   // A notice says what the player did, which only notices.copy can say: a
   // provider that sends a host template, or its mapping's own approved text,
   // cannot carry it, so its mapping rules do not apply either.
@@ -346,15 +350,21 @@ function mappingIssues(
   // and advertising unless the provider delivers it as free-form content,
   // which can carry the label and the sender, and under the Korean rules with
   // an expiry and the opt-out action. An Android FCM notification message
-  // cannot carry that action, and the shell does not render it yet, so an
-  // advertising topic must not map to `android` even when the shared FCM
-  // registry lists the purpose (the client declares the same list so pairing
-  // does not mismatch).
-  if (topic.purpose === 'advertising' && target === 'android') {
+  // cannot carry that action, so an advertising topic maps to `android` only
+  // when the deployment says the shell renders advertising itself, even
+  // though the shared FCM registry lists the purpose (the client declares the
+  // same list so pairing does not mismatch). The backend then sends it only
+  // to installations that registered the renderer.
+  if (
+    topic.purpose === 'advertising'
+    && notificationShellRenderedAdvertisingTargets.includes(target)
+    && deployment?.shellRendersAdvertising !== true
+  ) {
     issues.push({
       path: at,
-      message: 'an advertising topic must not map to android until the shell '
-        + 'renders the opt-out action; an Android FCM notification message cannot carry it',
+      message: `an advertising topic maps to ${target} only when the shell renders it with the `
+        + `opt-out action, which an FCM notification message on ${target} cannot carry; wire the `
+        + "kit's advertising renderer into the shell and set shellRendersAdvertising in the deployment",
     });
   }
   if (topic.purpose === 'advertising') {

@@ -46,6 +46,11 @@
                 "$ref": "#/components/schemas/NotificationPermissionState",
                 "description": "The device's app-scope permission when this registration was sent.",
                 "readOnly": true
+              },
+              "rendersAdvertising": {
+                "type": "boolean",
+                "description": "True when the app renders advertising pushes itself, with the\nadvertising opt-out action: an Android shell whose messaging service\nis the kit's renderer. An Android FCM notification message cannot\ncarry actions, so under the Korean rules the backend sends\nadvertising to an Android installation only when its latest\nregistration says so, as a data message the shell renders. Absent\nmeans false; the backend keeps it only for a target whose pushes\nneed it (`notificationShellRenderedAdvertisingTargets`).",
+                "readOnly": true
               }
             },
             "required": [

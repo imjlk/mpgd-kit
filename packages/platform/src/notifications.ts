@@ -132,6 +132,7 @@ export {
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationReservedKeyPrefixes,
+  notificationShellRenderedAdvertisingTargets,
   notificationSendFingerprint,
   notificationSuppressionReasons,
   notificationTemplateDataIssue,

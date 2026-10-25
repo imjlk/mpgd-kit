@@ -183,6 +183,23 @@ describe('evaluateNotificationDelivery', () => {
         deployment: { advertisingRules: 'none' },
       }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
     }
+    // An endpoint that cannot show the action (an Android installation whose
+    // shell does not render advertising) is refused the same way under the
+    // Korean rules; other purposes, and `none`, do not read it.
+    expect(evaluateNotificationDelivery(input({ topic: advertising, endpointShowsActions: false })))
+      .toEqual(unsupported);
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      endpointShowsActions: false,
+      deployment: { advertisingRules: 'none' },
+    }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    expect(evaluateNotificationDelivery(input({ endpointShowsActions: false })).status).toBe('allowed');
+    for (const endpointShowsActions of [true, undefined]) {
+      expect(evaluateNotificationDelivery(input({
+        topic: advertising,
+        ...(endpointShowsActions === undefined ? {} : { endpointShowsActions }),
+      }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    }
   });
 
   it('step 2: answers no-endpoint without a recipient and link-missing without a link where one is needed', () => {
