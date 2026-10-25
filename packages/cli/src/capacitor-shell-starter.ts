@@ -303,6 +303,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     'CLI TypeScript version',
   );
   const targetMap = requireObject(targets.targets, 'targets');
+  // Fail before anything is installed or generated when the store-facing
+  // native settings are invalid; they are applied after `cap add`.
+  readNativeShellSettings(gameRoot);
   for (const plugin of capacitorShellProviderPlugins) {
     if (providerIds.includes(plugin.id) && targetMap[plugin.platform] === undefined) {
       throw new Error(

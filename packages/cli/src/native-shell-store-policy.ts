@@ -248,7 +248,9 @@ export function inspectIosInfoPlistOrientation(
 ): readonly NativeShellPolicyIssue[] {
   const issues: NativeShellPolicyIssue[] = [];
   if (orientation !== undefined) {
-    const iphone = readPlistStrings(plist, 'UISupportedInterfaceOrientations') ?? [];
+    // A missing key means every orientation to iOS.
+    const iphone = readPlistStrings(plist, 'UISupportedInterfaceOrientations')
+      ?? iosIpadOrientations;
     const portrait = iphone.some(
       (value) => value === iosPortrait || value === iosPortraitUpsideDown,
     );
@@ -408,14 +410,20 @@ function findAndroidLauncherActivity(
   manifest: string,
 ): { readonly start: number; readonly tag: string } | undefined {
   const masked = maskXmlComments(manifest);
-  const activities = /<activity\b[^>]*?>[\s\S]*?<\/activity>|<activity\b[^>]*?\/>/gu;
-  for (const match of masked.matchAll(activities)) {
-    if (/android\.intent\.category\.LAUNCHER/u.test(match[0])) {
-      const tag = /^<activity\b[^>]*?\/?>/u.exec(match[0])?.[0] ?? '';
-      return {
-        start: match.index ?? 0,
-        tag: manifest.slice(match.index ?? 0, (match.index ?? 0) + tag.length),
-      };
+  // `<activity` followed by whitespace, `/` or `>`: never `<activity-alias`.
+  const openings = /<activity(?=[\s/>])[^>]*?(\/?)>/gu;
+  for (const opening of masked.matchAll(openings)) {
+    const start = opening.index ?? 0;
+    const tagEnd = start + opening[0].length;
+    if (opening[1] === '/') {
+      continue;
+    }
+    const close = masked.indexOf('</activity>', tagEnd);
+    if (close === -1) {
+      return undefined;
+    }
+    if (/android\.intent\.category\.LAUNCHER/u.test(masked.slice(tagEnd, close))) {
+      return { start, tag: manifest.slice(start, tagEnd) };
     }
   }
   return undefined;
@@ -464,7 +472,10 @@ function readAppTargetConfigurationIds(project: string): readonly string[] {
       }
       const list = readPbxObjectBody(project, listId);
       const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1] ?? '';
-      return [...configurations.matchAll(/\b([A-F0-9]+)\b/gu)].map((entry) => entry[1] ?? '');
+      // Entries are `ID /* Name */,`: only the token before each comma counts.
+      return configurations.split(',')
+        .map((entry) => /^\s*([A-F0-9]+)\b/u.exec(entry.replace(/\/\*[^]*?\*\//gu, ' '))?.[1])
+        .filter((id): id is string => id !== undefined);
     }
   }
   throw new Error('Xcode project has no App target build configuration list.');

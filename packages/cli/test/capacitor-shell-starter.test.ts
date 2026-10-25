@@ -310,6 +310,9 @@ try {
     displayName: options.displayName,
   });
   assert.deepEqual(omittedSelections.changedFiles, [smokePath]);
+  writeFileSync(path.join(root, 'mpgd.game.json'), '{"native":{"orientation":"bad"}}');
+  assert.throws(() => planCapacitorShellStarter(options), /native\.orientation must be/u);
+  writeFileSync(path.join(root, 'mpgd.game.json'), '{"native":{"orientation":"landscape"}}');
   const commands: string[] = [];
   materializeCapacitorShellStarter(repeat, {
     run(command, args, cwd) {
@@ -415,7 +418,7 @@ try {
   );
   assert.match(
     generatedPlist,
-    /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>\s*<\/dict><\/plist>/u,
+    /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/u,
     'a freshly generated iOS project declares exempt-only encryption',
   );
   const generatedManifest = readFileSync(
@@ -429,6 +432,16 @@ try {
     'a freshly generated Android project opts out of backups and device transfers',
   );
   assert.ok(generatedManifest.includes(` ${toolsNamespace}`), 'the tools namespace is bound');
+  assert.match(
+    generatedManifest,
+    /android:screenOrientation="sensorLandscape"/u,
+    'mpgd.game.json native.orientation reaches a freshly generated Android project',
+  );
+  assert.match(
+    readFileSync(path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist'), 'utf8'),
+    /<key>UISupportedInterfaceOrientations<\/key>\s*<array>\s*<string>UIInterfaceOrientationLandscapeLeft<\/string>\s*<string>UIInterfaceOrientationLandscapeRight<\/string>\s*<\/array>/u,
+    'and the iPhone orientations of a freshly generated iOS project',
+  );
   assert.match(
     generatedManifest,
     /<application\b[^>]*\sandroid:appCategory="game"[^>]*>/u,

@@ -275,6 +275,77 @@ try {
     'a missing appCategory is a warning',
   );
   assert.deepEqual(inspectAndroidManifestOrientation(manifest, undefined), []);
+  // A self-closing activity or an alias before the launcher is never oriented.
+  const siblings = manifest.replace(
+    '        <activity\n',
+    '        <activity android:name=".Other" android:exported="false" />\n'
+      + '        <activity-alias android:name=".Alias" android:targetActivity=".MainActivity" />\n'
+      + '        <activity\n',
+  );
+  const orientedSiblings = applyAndroidManifestOrientation(siblings, 'portrait');
+  assert.match(orientedSiblings, /<activity android:name="\.Other" android:exported="false" \/>/u);
+  assert.match(
+    orientedSiblings,
+    /<activity-alias android:name="\.Alias" android:targetActivity="\.MainActivity" \/>/u,
+  );
+  assert.match(
+    orientedSiblings,
+    /android:exported="true"\n {12}android:screenOrientation="portrait">/u,
+  );
+  assert.deepEqual(inspectAndroidManifestOrientation(orientedSiblings, 'portrait'), []);
+  // Without the key, iOS allows every orientation.
+  const noIphoneKey = template.replace(
+    /<key>UISupportedInterfaceOrientations<\/key>\s*<array>[\s\S]*?<\/array>/u,
+    '',
+  );
+  assert.deepEqual(inspectIosInfoPlistOrientation(noIphoneKey, 'any', 'universal'), []);
+  assert.equal(
+    inspectIosInfoPlistOrientation(noIphoneKey, 'portrait', 'universal')[0]?.level,
+    'error',
+  );
+  // Configuration IDs come from the list entries, not from their comments.
+  const hexNamed = project.replace(
+    /(buildConfigurations = \(\s*\n\s*[A-F0-9]+ \/\* )Debug( \*\/)/u,
+    '$1ADD$2',
+  );
+  assert.notEqual(hexNamed, project);
+  assert.equal(readIosAppReleaseDeviceFamily(applyIosProjectDeviceFamily(hexNamed, 'iphone')), '1');
+
+  // The build preflight reads native.orientation and iosDeviceFamily from the game.
+  const game = mkdtempSync(path.join(tmpdir(), 'mpgd-store-policy-game-'));
+  try {
+    const gameShell = path.join(game, 'apps/mobile-capacitor');
+    mkdirSync(path.join(gameShell, 'ios/App/App.xcodeproj'), { recursive: true });
+    mkdirSync(path.join(gameShell, 'ios/App/App'), { recursive: true });
+    mkdirSync(path.join(gameShell, 'android/app/src/main'), { recursive: true });
+    writeFileSync(path.join(gameShell, 'ios/App/App.xcodeproj/project.pbxproj'), project);
+    writeFileSync(path.join(gameShell, 'ios/App/App/Info.plist'), template);
+    writeFileSync(path.join(gameShell, 'android/app/src/main/AndroidManifest.xml'), manifest);
+    writeFileSync(path.join(game, 'mpgd.game.json'), '{"native":{"orientation":"landscape"}}');
+    const iosIssues = inspectNativeStorePolicy({
+      platform: 'ios',
+      shellApp: gameShell,
+      gameRoot: game,
+      metadata: { iosDeviceFamily: 'iphone' },
+    });
+    assert.deepEqual(
+      iosIssues.map((issue) => issue.level),
+      ['error', 'error'],
+      'device family and iPhone orientations both contradict the game',
+    );
+    assert.equal(
+      inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell, gameRoot: game })[0]?.level,
+      'error',
+    );
+    assert.deepEqual(inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell }), []);
+    writeFileSync(path.join(game, 'mpgd.game.json'), '{"native":');
+    assert.throws(
+      () => inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell, gameRoot: game }),
+      /mpgd\.game\.json is not valid JSON/u,
+    );
+  } finally {
+    rmSync(game, { recursive: true, force: true });
+  }
   assert.throws(
     () =>
       applyAndroidManifestOrientation(

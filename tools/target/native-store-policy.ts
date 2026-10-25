@@ -30,7 +30,7 @@ export function inspectNativeStorePolicy(input: {
     ? undefined
     : join(input.gameRoot, 'mpgd.game.json');
   const orientation = gameConfig !== undefined && existsSync(gameConfig)
-    ? readGameNativeOrientation(JSON.parse(readFileSync(gameConfig, 'utf8')) as unknown)
+    ? readGameNativeOrientation(readJson(gameConfig))
     : undefined;
   if (input.platform === 'ios') {
     const project = join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj');
@@ -55,6 +55,16 @@ export function inspectNativeStorePolicy(input: {
     return [];
   }
   return inspectAndroidManifestOrientation(readFileSync(manifest, 'utf8'), orientation);
+}
+
+function readJson(file: string): unknown {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(
+      `${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 export function reportNativeStorePolicy(

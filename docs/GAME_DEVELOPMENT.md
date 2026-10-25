@@ -331,7 +331,18 @@ or enables them. `--providers` is rejected for every target other than
 the game-owned backend through the commerce v2 reconciler, so a production
 build still needs the backend's evidence entries and account binding.
 For a newly added iOS project, the initializer also writes a shared App archive
-scheme tied to the generated App target.
+scheme tied to the generated App target. Preserved iOS projects must already
+have a matching shared scheme and Release plist identity placeholders; the
+initializer checks these but does not replace them.
+Preserved Android launchers must be exported and inherit from a recognized
+Android Activity class (directly or through game-owned source). Manifest
+Activity and Application classes must be public and concrete. The initializer
+rejects unresolved Gradle-generated `app_name` overrides, including eager task
+configuration; keep the release display name in checked manifest and resource
+files. Preserved iOS projects cannot preprocess the Release Info.plist, skip
+installing the App target into an archive, or link a game-owned helper target
+implicitly through the App frameworks phase. Remove those unsupported build
+customizations before initializing or packaging a production shell.
 
 #### Store-facing shell settings
 
@@ -365,18 +376,6 @@ needs the same edits by hand:
   QA (see [the mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md)). A
   shell whose App target disagrees with a configured family fails a
   production build.
- Preserved iOS projects must already
-have a matching shared scheme and Release plist identity placeholders; the
-initializer checks these but does not replace them.
-Preserved Android launchers must be exported and inherit from a recognized
-Android Activity class (directly or through game-owned source). Manifest
-Activity and Application classes must be public and concrete. The initializer
-rejects unresolved Gradle-generated `app_name` overrides, including eager task
-configuration; keep the release display name in checked manifest and resource
-files. Preserved iOS projects cannot preprocess the Release Info.plist, skip
-installing the App target into an archive, or link a game-owned helper target
-implicitly through the App frameworks phase. Remove those unsupported build
-customizations before initializing or packaging a production shell.
 
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the
