@@ -29,9 +29,11 @@ import {
 } from '@mpgd/game-services';
 
 /**
- * The identity Worker's account deletion entrypoint: revoke every session
- * family of the player and delete the guest record (idempotent; an unknown
- * player succeeds). Bind it as `GAME_SERVICES_ACCOUNT_DELETION`.
+ * The identity Worker's account deletion entrypoint (`AccountDeletion` in
+ * the reference identity Worker): `deletePlayer` deletes the player with
+ * every session family and token (idempotent; an unknown player succeeds),
+ * and `verifyAccountDeletionConfirmation` checks and uses up a request's
+ * confirmation. Bind it as `GAME_SERVICES_ACCOUNT_DELETION`.
  */
 export interface GameServicesAccountDeletionBinding
   extends AccountDeletionIdentity, AccountDeletionConfirmationVerifier {

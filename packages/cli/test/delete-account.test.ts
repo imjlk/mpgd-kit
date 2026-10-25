@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   AccountDeletionError,
   createGuestSessionCoordinator,
+  GuestSessionCoordinatorError,
   type AccountDeletionReceipt,
   type GuestSessionBackend,
 } from '@mpgd/game-services';
@@ -14,6 +15,7 @@ import {
   deleteAccountOutcomeText,
   onStarterAccountDeleted,
   resetStarterAccountDeletionForTests,
+  starterAccountDeletionConfirmation,
   starterGuestCredentialKeys,
 } from '../templates/phaser-game/src/platform/deleteAccount.js';
 import { defaultMonetizationJournalKey } from '../templates/phaser-game/src/platform/monetizationJournal.js';
@@ -303,6 +305,34 @@ const pendingPurchase = {
     }).deleteAccount(),
     { outcome: 'unavailable' },
   );
+}
+
+// The guest session's confirmation; a session the identity service refused
+// is UNAUTHORIZED (a sent request), anything else passes through.
+{
+  assert.equal(starterAccountDeletionConfirmation(undefined), undefined);
+  assert.equal(starterAccountDeletionConfirmation({}), undefined);
+  let failure: unknown;
+  const confirm = starterAccountDeletionConfirmation({
+    async requestAccountDeletionConfirmation() {
+      if (failure !== undefined) {
+        throw failure;
+      }
+      return 'mpgd_dc_ok';
+    },
+  });
+  assert.ok(confirm !== undefined);
+  assert.equal(await confirm(), 'mpgd_dc_ok');
+  for (const code of ['GUEST_SESSION_REJECTED', 'GUEST_SESSION_NOT_READY'] as const) {
+    failure = new GuestSessionCoordinatorError(code);
+    await assert.rejects(
+      confirm(),
+      (error: unknown) =>
+        error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED' && error.requestSent,
+    );
+  }
+  failure = new GuestSessionCoordinatorError('GUEST_SESSION_BACKEND_FAILED');
+  await assert.rejects(confirm(), (error: unknown) => error === failure);
 }
 
 // The entry needs a signed-in session; a journal that cannot be cleared is reported.

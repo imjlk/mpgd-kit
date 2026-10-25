@@ -3,6 +3,7 @@ import {
   createStarterAccountDeletion,
   deleteAccountConfirmText,
   deleteAccountOutcomeText,
+  starterAccountDeletionConfirmation,
   type StarterDeleteAccountOutcome,
 } from '../platform/deleteAccount';
 import { resolveStarterServerSession } from '../platform/serverSession';
@@ -16,8 +17,14 @@ import type { StarterContext } from '../runtime/gameContext';
  * (`deleteAccount.ts`). Returns the disposer.
  */
 export function mountDeleteAccountButton(mount: HTMLElement, context: StarterContext): () => void {
+  // No backend (or, in a run whose guest sign-in failed at boot, none yet: the button
+  // shows from the next launch): read no session, which `once` would pin.
+  if (context.gameServices.accountDeletion === undefined) {
+    return () => undefined;
+  }
   // The commerce client's session (`once`), so the button and the request agree.
   const session = resolveStarterServerSession({ once: true });
+  const confirmation = starterAccountDeletionConfirmation(session);
   const deletion = createStarterAccountDeletion({
     ...(context.gameServices.accountDeletion === undefined
       ? {}
@@ -27,6 +34,8 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
       ? {}
       : { secureCredentials: context.platform.secureCredentials }),
     signedIn: () => session?.current() !== undefined,
+    // The identity service's confirmation, so an access token alone cannot delete the account.
+    ...(confirmation === undefined ? {} : { requestConfirmation: confirmation }),
   });
   if (!deletion.available) {
     if (context.gameServices.accountDeletion === undefined || session === undefined) {

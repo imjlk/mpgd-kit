@@ -1,5 +1,6 @@
 import {
   AccountDeletionError,
+  GuestSessionCoordinatorError,
   isMonetizationOperationRecoverable,
   type AccountDeletionClient,
   type MonetizationOperationRecord,
@@ -20,6 +21,35 @@ export const starterGuestCredentialKeys = [
   'mpgd.guest.refresh',
   'mpgd.guest.refresh.family',
 ] as const;
+
+/**
+ * The `requestConfirmation` of `createStarterAccountDeletion` for a server
+ * session that can ask the identity service for one (the guest session's
+ * `requestAccountDeletionConfirmation`), or `undefined` for one that cannot
+ * (a development session, whose server needs none). A session the identity
+ * service refused (`GUEST_SESSION_REJECTED`, or `GUEST_SESSION_NOT_READY`
+ * once a refresh was refused) is `AccountDeletionError('UNAUTHORIZED')`.
+ */
+export function starterAccountDeletionConfirmation(
+  session: { requestAccountDeletionConfirmation?(): Promise<string> } | undefined,
+): (() => Promise<string>) | undefined {
+  if (session?.requestAccountDeletionConfirmation === undefined) {
+    return undefined;
+  }
+  return async () => {
+    try {
+      return await session.requestAccountDeletionConfirmation!();
+    } catch (error) {
+      if (
+        error instanceof GuestSessionCoordinatorError
+        && (error.code === 'GUEST_SESSION_REJECTED' || error.code === 'GUEST_SESSION_NOT_READY')
+      ) {
+        throw new AccountDeletionError('UNAUTHORIZED', { cause: error });
+      }
+      throw error;
+    }
+  };
+}
 
 export type StarterDeleteAccountOutcome =
   /**

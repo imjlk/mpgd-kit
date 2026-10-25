@@ -65,6 +65,8 @@ export type StarterSessionGatedServices = GameServicesRuntime & {
  *   caller runs the game runtime's `reconcile()` from `onActivated` (the
  *   startup recovery, with the action coordinator's). A later sign-in naming another player
  *   (not expected within one run) is ignored with a warning.
+ * - `accountDeletion` is `undefined` until then, and the services' after
+ *   (read live), so Delete account shows from the lobby's next visit.
  * - `ensureSession` is present only when the configuration has a client
  *   (a disabled configuration has nothing a sign-in could bring up).
  *
@@ -183,10 +185,12 @@ export function createSessionGatedGameServices(input: {
           },
         }),
   } as StarterSessionGatedServices;
-  // Read live: `undefined` until the player is known, so rewarded ads stay off until then.
+  // Read live: `undefined` until the player is known, so rewarded ads stay off until then,
+  // and Delete account appears once there is an account (the lobby's next visit).
   Object.defineProperties(services, {
     mode: { enumerable: true, get: () => inner?.mode ?? input.probe.mode },
     monetizationRecovery: { enumerable: true, get: () => inner?.monetizationRecovery },
+    accountDeletion: { enumerable: true, get: () => inner?.accountDeletion },
   });
   return services;
 }

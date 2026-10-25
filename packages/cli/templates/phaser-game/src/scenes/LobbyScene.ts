@@ -5,6 +5,7 @@ import {
   createStarterAccountDeletion,
   deleteAccountConfirmText,
   deleteAccountOutcomeText,
+  starterAccountDeletionConfirmation,
   type StarterDeleteAccountOutcome,
 } from '../platform/deleteAccount';
 import {
@@ -182,8 +183,14 @@ export class LobbyScene extends Phaser.Scene {
    * also start the game.
    */
   private addDeleteAccountEntry(context: StarterContext): void {
+    // No backend yet (a run whose guest sign-in failed at boot gets one later, and the
+    // lobby's next visit shows the entry): read no session, which `once` would pin.
+    if (context.gameServices.accountDeletion === undefined) {
+      return;
+    }
     // The commerce client's session (`once`), so the entry and the request agree.
     const session = resolveStarterServerSession({ once: true });
+    const confirmation = starterAccountDeletionConfirmation(session);
     const deletion = createStarterAccountDeletion({
       ...(context.gameServices.accountDeletion === undefined
         ? {}
@@ -193,6 +200,8 @@ export class LobbyScene extends Phaser.Scene {
         ? {}
         : { secureCredentials: context.platform.secureCredentials }),
       signedIn: () => session?.current() !== undefined,
+      // The identity service's confirmation, so an access token alone cannot delete the account.
+      ...(confirmation === undefined ? {} : { requestConfirmation: confirmation }),
     });
     if (!deletion.available) {
       if (context.gameServices.accountDeletion !== undefined && session !== undefined) {

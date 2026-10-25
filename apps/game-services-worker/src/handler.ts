@@ -196,10 +196,12 @@ export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv, Sto
   readonly MPGD_ADMOB_SSV_ANDROID_AD_UNIT?: string;
   readonly MPGD_ADMOB_SSV_IOS_AD_UNIT?: string;
   /**
-   * The identity Worker's account deletion entrypoint (`deletePlayer`),
-   * required by `POST /game-services/account/delete` outside local
-   * development. The route authenticates the player through
-   * `GAME_SERVICES_INGRESS_AUTH`, else `GAME_SERVICES_NOTIFICATIONS_AUTH`.
+   * The identity Worker's account deletion entrypoint (`AccountDeletion`:
+   * `deletePlayer` and `verifyAccountDeletionConfirmation`), required by
+   * `POST /game-services/account/delete` outside local development. The
+   * route authenticates the player through `GAME_SERVICES_INGRESS_AUTH`,
+   * else `GAME_SERVICES_NOTIFICATIONS_AUTH`, and checks the request's
+   * deletion confirmation through this binding.
    */
   readonly GAME_SERVICES_ACCOUNT_DELETION?: GameServicesAccountDeletionBinding;
 }
