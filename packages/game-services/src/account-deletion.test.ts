@@ -11,6 +11,7 @@ import {
   retainedPlayerIdPrefix,
   type AccountDeletionAuditEntry,
   type AccountDeletionFetch,
+  type PendingAccountErasureStore,
   type PlayerDataEraser,
 } from './account-deletion.js';
 import { createInMemoryNotificationStore } from './notifications/store.js';
@@ -668,6 +669,151 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   assert.match(String(scrubbed[0]?.[2]), /row \[player\] locked/u);
 }
 
+// --- Pending erasures: marks, sweep order, and failures ---------------------
+{
+  const consoleError = console.error;
+  const quiet = async <Value>(run: () => Promise<Value>): Promise<[Value, unknown[][]]> => {
+    const lines: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      lines.push(args);
+    };
+    try {
+      return [await run(), lines];
+    } finally {
+      console.error = consoleError;
+    }
+  };
+  const noWait = async (): Promise<void> => undefined;
+  const ok: PlayerDataEraser = { erasePlayerData: async () => ({ deleted: 1, retained: 0 }) };
+  let failSecond = 0;
+  const failsAfterFirst: PlayerDataEraser = {
+    async erasePlayerData() {
+      failSecond += 1;
+      if (failSecond > 1) {
+        throw new Error('D1_ERROR');
+      }
+      return { deleted: 1, retained: 0 };
+    },
+  };
+
+  // The mark fails three times and a store fails too: nothing finishes it,
+  // which is logged under the deletion id.
+  const inner = createInMemoryPendingAccountErasureStore();
+  const unmarkable: PendingAccountErasureStore = {
+    put: (erasure) =>
+      erasure.phase === 'identity-deleted'
+        ? Promise.reject(new Error('D1_ERROR'))
+        : inner.put(erasure),
+    clear: (input) => inner.clear(input),
+    list: (input) => inner.list(input),
+  };
+  const [, unmarkedLines] = await quiet(() =>
+    createAccountDeletionService({
+      erasers: [failsAfterFirst],
+      identity: { deletePlayer: async () => undefined },
+      pending: unmarkable,
+      sleep: noWait,
+      createDeletionId: () => 'deletion-unmarked',
+    }).deletePlayerAccount({ playerId: 'player-1' }),
+  );
+  assert.ok(
+    unmarkedLines.some((line) =>
+      String(line[0]).includes('incomplete and not pending') && line[1] === 'deletion-unmarked',
+    ),
+  );
+  assert.deepEqual(
+    (await inner.list({ limit: 10 })).map((entry) => entry.phase),
+    ['erasing'],
+  );
+
+  // Without an identity service the entry stays `erasing`: no sweep erases
+  // a player who still exists.
+  failSecond = 0;
+  const localPending = createInMemoryPendingAccountErasureStore();
+  await quiet(() =>
+    createAccountDeletionService({
+      erasers: [failsAfterFirst],
+      identity: null,
+      pending: localPending,
+      sleep: noWait,
+    }).deletePlayerAccount({ playerId: 'player-1' }),
+  );
+  assert.deepEqual(
+    (await localPending.list({ limit: 10 })).map((entry) => entry.phase),
+    ['erasing'],
+  );
+
+  // `identity-deleted` entries are listed first, then least recently tried.
+  const ordered = createInMemoryPendingAccountErasureStore();
+  const entry = (
+    deletionId: string,
+    phase: 'erasing' | 'identity-deleted',
+    recordedAt: string,
+    attemptedAt?: string,
+  ) => ({
+    playerId: `player-${deletionId}`,
+    retainedPlayerId: `deleted:${deletionId}`,
+    deletionId,
+    phase,
+    recordedAt,
+    attempts: attemptedAt === undefined ? 0 : 1,
+    ...(attemptedAt === undefined ? {} : { attemptedAt }),
+  });
+  await ordered.put(entry('a', 'erasing', '2026-10-25T00:00:00.000Z'));
+  await ordered.put(entry('b', 'identity-deleted', '2026-10-25T00:00:02.000Z'));
+  await ordered.put(
+    entry('c', 'identity-deleted', '2026-10-25T00:00:01.000Z', '2026-10-25T00:00:03.000Z'),
+  );
+  assert.deepEqual(
+    (await ordered.list({ limit: 10 })).map((pending) => pending.deletionId),
+    ['b', 'c', 'a'],
+  );
+
+  // A sweep runs every store even when an earlier one fails, and a failing
+  // discard does not stop the sweep.
+  const sweepCalls: string[] = [];
+  const failing: PlayerDataEraser = {
+    async erasePlayerData(input) {
+      sweepCalls.push(`failing:${input.playerId}`);
+      throw new Error('D1_ERROR');
+    },
+  };
+  const recording: PlayerDataEraser = {
+    async erasePlayerData(input) {
+      sweepCalls.push(`recording:${input.playerId}`);
+      return { deleted: 0, retained: 0 };
+    },
+  };
+  const brokenClear: PendingAccountErasureStore = {
+    put: (erasure) => ordered.put(erasure),
+    clear: () => Promise.reject(new Error('D1_ERROR')),
+    list: (input) => ordered.list(input),
+  };
+  const [sweep] = await quiet(() =>
+    finishPendingAccountErasures({
+      erasers: [failing, recording],
+      pending: brokenClear,
+      now: () => '2026-10-25T02:00:00.000Z',
+    }),
+  );
+  assert.deepEqual(sweep, { finished: 0, failed: 3, discarded: 0 });
+  assert.deepEqual(sweepCalls, [
+    'failing:player-b',
+    'recording:player-b',
+    'failing:player-c',
+    'recording:player-c',
+  ]);
+  assert.deepEqual(
+    (await ordered.list({ limit: 10 })).map((pending) => [pending.deletionId, pending.attempts]),
+    [
+      ['b', 1],
+      ['c', 2],
+      ['a', 0],
+    ],
+  );
+  void ok;
+}
+
 // --- The client --------------------------------------------------------------
 {
   const requests: { url: string; headers: Record<string, string>; body: string }[] = [];
@@ -784,6 +930,21 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     stalledSession.deleteAccount(),
     (error: unknown) =>
       error instanceof AccountDeletionError && error.code === 'ACCOUNT_DELETION_UNREACHABLE',
+  );
+  // A timeout that is not a positive delay falls back to the default.
+  assert.deepEqual(
+    await createAccountDeletionClient({
+      baseUrl: 'https://game.example',
+      headers: { authorization: 'Bearer token' },
+      timeoutMs: 0,
+      fetch: async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+        return { status: 200, text: async () => JSON.stringify(receipt) };
+      },
+    }).deleteAccount(),
+    receipt,
   );
   // `verified-leaderboard.ts` stays import-free and repeats the prefix literal.
   assert.equal(retainedPlayerIdPrefix, 'deleted:');
