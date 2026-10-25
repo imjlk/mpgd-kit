@@ -186,8 +186,9 @@ explicit transient dependency failures. Unexpected adapter exceptions and
 invalid runtime values propagate to the outer verifier boundary as errors
 instead of being silently converted into an infinite retry loop.
 Use distinct deployments or runtime configuration for Apple's production and
-sandbox environments; never select the authority from an untrusted client
-payload.
+sandbox environments (unless a production deployment opts into App Review
+sandbox purchases, below); never select the authority from an untrusted
+client payload.
 
 #### App Review and TestFlight purchases on a production backend
 
@@ -487,7 +488,7 @@ handles App Store Server Notifications V2 refunds and Play voided purchases
 (see [Store refunds and server-side finalization](#store-refunds-and-server-side-finalization));
 other store notification handlers are game-owned: an Apps in Toss refunded
 order or a Devvit refund order calls `revokeEntitlementGrant` from
-`@mpgd/game-services/commerce-ledger` with the notification's own key, so a
+`@mpgd/game-services` with the notification's own key, so a
 redelivered notification answers the first entry with `alreadyProcessed`
 (`key_conflict` and `evidence_already_processed` are the misuse answers).
 `revokePlatformOrder` does that for a `normalizeDevvitRefundOrder` result; a
@@ -893,9 +894,12 @@ verifies the payload through an `AppStoreServerNotificationVerifier`;
 is the implementation over Apple's library and the same root certificates as
 the purchase verifier, one per environment.
 
-- `REFUND` reverses the grant with reason `refund`, `REVOKE` with `voided`,
-  both keyed `app-store:notification:<notificationUUID>`. Non-consumables are
-  found by their original transaction id, consumables by their own.
+- `REFUND` reverses the grant with reason `refund`, keyed
+  `app-store:notification:<notificationUUID>`. Non-consumables are found by
+  their original transaction id, consumables by their own. `REVOKE` is
+  mapped to `voided` the same way, but Apple sends it when access through
+  Family Sharing or an organization ends, and such a transaction is ignored
+  by the next rule; the purchaser's own refund arrives as `REFUND`.
 - A transaction that is not the customer's own purchase (`FAMILY_SHARED`) is
   ignored: it shares the purchaser's original transaction id, and the
   purchaser keeps the grant.
@@ -933,8 +937,9 @@ the sweep clamps its start to that window measured from now and reports
 `clamped` when older voids are gone. A sweep that stops on its page cap or the
 caller's budget is `complete: false`; repeating the same window does not
 finish it, so callers sweep in shorter windows. The API allows 6,000 queries a
-day and 30 in any 30 seconds per package, and needs the service account's
-"View financial reports" permission.
+day and 30 in any 30 seconds per package, and needs the service account to
+see financial data (Google's page calls the permission "View financial
+reports"; check the name in your Play Console).
 
 Real-time developer notifications are not implemented. An RTDN
 `voidedPurchaseNotification` carries the purchase token and order id

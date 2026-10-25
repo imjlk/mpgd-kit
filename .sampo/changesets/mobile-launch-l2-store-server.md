@@ -1,11 +1,13 @@
 ---
-npm/@mpgd/game-services: minor (Added)
+npm/@mpgd/game-services: minor (Changed)
 ---
 
 Store server handling for a first App Store and Google Play launch.
 
 - App Review sandbox purchases: `createAppStoreGameServicesEvidenceVerifier` accepts `sandboxPurchases` (default `{ mode: 'reject' }`, unchanged). On a `Production` verifier, `{ mode: 'grant', signedTransactionVerifier, serverApi? }` follows Apple's production-first order: a transaction is verified against production, and only a JWS the production verifier places in the sandbox (or, without a client JWS, a production `APP_STORE_TRANSACTION_NOT_FOUND`) is verified again with the sandbox verifier and Server API. Sandbox grants keep `appStoreEnvironment: 'Sandbox'` and their own verification id. A Server API answer from another environment than the client JWS is `APP_STORE_SIGNED_TRANSACTION_ENVIRONMENT_MISMATCH`. `createAppStoreRecoveryBackend` takes `restoredNonConsumables.acceptsSandboxTransactions`.
 - Family Sharing: `AppStoreTransactionPayload` carries `inAppOwnershipType`; a `FAMILY_SHARED` transaction is refused with `APP_STORE_FAMILY_SHARED_UNSUPPORTED` (another non-`PURCHASED` value with `APP_STORE_OWNERSHIP_UNSUPPORTED`). `createAppleSignedTransactionVerifier` now answers `APP_STORE_ENVIRONMENT_MISMATCH` (not `APP_STORE_SIGNATURE_INVALID`) for a correctly signed JWS of the other environment.
-- App Store Server Notifications V2: new subpath `@mpgd/game-services/app-store-server-notifications` with `handleAppStoreServerNotification` and `appStoreServerNotificationHttpStatus`; `REFUND` and `REVOKE` of a granted one-time purchase append one `revoke` entry keyed by `notificationUUID`. `createAppleServerNotificationVerifier` in `@mpgd/game-services/app-store-server` verifies the `signedPayload` and its transaction with Apple's library.
+- App Store Server Notifications V2: new subpath `@mpgd/game-services/app-store-server-notifications` with `handleAppStoreServerNotification` and `appStoreServerNotificationHttpStatus`; `REFUND` of a granted one-time purchase appends one `revoke` entry keyed by `notificationUUID` (`REVOKE` is handled the same way, but a family-shared transaction is ignored and the purchaser keeps the grant). `createAppleServerNotificationVerifier` in `@mpgd/game-services/app-store-server` verifies the `signedPayload` and its transaction with Apple's library.
 - Google Play: new subpath `@mpgd/game-services/google-play-store-server` with `sweepGooglePlayVoidedPurchases`, `revokeGooglePlayVoidedPurchase`, and `retryGooglePlayPurchaseFinalization` (server-side acknowledge or consume from the ledger grant and a kept purchase token). `createGooglePlayPublisherClient` gains `listVoidedPurchases`; `createGooglePlayProductVerificationId` is exported from `google-play-purchase`.
-- `findPurchaseGrantByEvidenceVerificationId` is exported from `commerce-ledger`.
+- `findPurchaseGrantByEvidenceVerificationId` is exported from `@mpgd/game-services`.
+
+Changed reasons: a correctly signed JWS of the other environment is now `APP_STORE_ENVIRONMENT_MISMATCH` (was `APP_STORE_SIGNATURE_INVALID`), and a family-shared transaction is `APP_STORE_FAMILY_SHARED_UNSUPPORTED` (was `APP_STORE_ACCOUNT_TOKEN_MISMATCH`). Both stay rejections; code that matched the old reason strings should match the new ones.

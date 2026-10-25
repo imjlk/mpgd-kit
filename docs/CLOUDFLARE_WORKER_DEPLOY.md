@@ -482,10 +482,10 @@ Notifications, and set Version 2 with:
 
 Apple allows the same URL for both
 ([Enabling App Store Server Notifications](https://developer.apple.com/documentation/appstoreservernotifications/enabling-app-store-server-notifications));
-the kit uses two so each environment is verified on its own. Use App Store
-Connect's test notification (or the App Store Server API's Request a Test
-Notification) to check the route: a `TEST` notification answers 200
-`ignored`. Allow Apple's notification subnet (`17.0.0.0/8`) if the host
+the kit uses two so each environment is verified on its own. Check the route
+with the App Store Server API's
+[Request a Test Notification](https://developer.apple.com/documentation/appstoreserverapi/request-a-test-notification):
+a `TEST` notification answers 200 `ignored`. Allow Apple's notification subnet (`17.0.0.0/8`) if the host
 filters by IP.
 
 For App Review, the iOS verifier Worker also constructs its purchase verifier
@@ -511,8 +511,12 @@ neither; that finalizer owns its retries.
   raw purchase tokens; the ledger does not.
 - **Voided purchases.** The cron reads the Voided Purchases API every
   `MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES` (60 by default, `0` turns it off)
-  and revokes each voided grant. The first run reads Google's whole 30-day
-  window.
+  and revokes each voided grant. It reads its window in week-long slices and
+  moves its cursor past each finished one, so the first run's 30-day window,
+  or a backlog after an outage, is worked through over later runs (at most 20
+  API pages a run; Google allows 30 queries in 30 seconds). A slice whose
+  voids do not fit in one run is halved, down to a minute; voids older than
+  Google's 30 days are logged as gone.
 - **Play Console.** The service account the publisher-auth service signs for
   needs, under Users and permissions, the app's "View financial reports"
   permission for the Voided Purchases API and "Manage orders and
@@ -552,8 +556,9 @@ default); together they stay under the Workers Paid cap.
   `0004_entitlement_evidence.sql` in order before switching an existing
   deployment to D1.
 - Apply `0009_store_server.sql` (the owed Play finalizations and the sweep
-  cursors) before the cron runs the Play voided purchase sweep and
-  server-side acknowledge retries.
+  cursors) before deploying a Worker version that has them: without the
+  table, the purchase path's outbox write fails (logged, the purchase is
+  unaffected) and that purchase gets no server-side acknowledge retry.
 - The Worker verifies sample product/ad evidence by default. Real Google Play,
   App Store, and Apps in Toss verification adapters are described in
   [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md). AdMob

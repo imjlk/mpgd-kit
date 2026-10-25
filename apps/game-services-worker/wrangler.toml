@@ -110,7 +110,7 @@ head_sampling_rate = 1
 # (createAppleServerNotificationVerifier); the bundle id is required with it.
 # See docs/CLOUDFLARE_WORKER_DEPLOY.md#store-refunds-and-play-finalization.
 #
-# GAME_SERVICES_APP_STORE_BUNDLE_ID = "com.example.game"
+# GAME_SERVICES_APP_STORE_BUNDLE_ID = "com.example.game" (under [vars])
 #
 # [[services]]
 # binding = "GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER"
@@ -228,7 +228,8 @@ head_sampling_rate = 1
 # Store server upkeep (with D1 and the in-Worker Play boundary above): apply
 # migration 0009_store_server.sql. The same cron retries owed Play acknowledges
 # and consumes within Play's three-day window and sweeps Play voided purchases
-# (the service account needs "View financial reports" for that API).
+# (the service account needs financial data access, "View financial reports" in
+# Google's docs). Optional tuning, under [vars]:
 # MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES = "60"
 # MPGD_STORE_SERVER_SUBREQUEST_BUDGET = "300"
 # MPGD_STORE_SERVER_CRON_BUDGET_SECONDS = "15"
