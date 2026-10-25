@@ -453,7 +453,7 @@ try {
     assert.equal(
       starved?.operations,
       0,
-      'nothing fits in a budget of one: retries get half (0), the sweep needs 2',
+      'nothing fits in a budget of one: retries get half (0), the sweep needs 4',
     );
     assert.equal(starved?.sweep, undefined);
 
@@ -532,7 +532,7 @@ try {
 
       await cursors.write(voidedSweepCursor, behindNow - 3 * 3_600_000, new Date(behindNow));
       await cursors.write('google-play-voided:slice-ms', 3_600_000, new Date(behindNow));
-      // Enough to open the sweep (4), not to read a page (2 more).
+      // The retries' due read (1) and the sweep's opening reads (4), not a page (2 more).
       const starvedSweep = await runScheduledStoreServer(
         { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '5' },
         { cron: '* * * * *' },

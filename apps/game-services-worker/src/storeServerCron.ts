@@ -340,6 +340,15 @@ async function sweepVoidedPurchases(input: {
   }
   let sliceStart = Math.max(openingStart, oldest);
   let stalls = (await input.cursors.read(voidedSweepStallCursor)) ?? 0;
+  let cursorNow = cursorAtStart;
+  /**
+   * The behind state a stopped run leaves: 2 (start exactly at the cursor)
+   * when what lies before the cursor was read cleanly, by this run or the one
+   * before, and the cursor is far enough in the past that late-recorded voids
+   * have shown up; 1 (re-read the overlap) otherwise.
+   */
+  const stoppedState = (): 1 | 2 =>
+    (slices > 0 || behind === 2) && cursorNow <= nowMs - voidedSweepOverlapMs ? 2 : 1;
   const resetStalls = async () => {
     if (stalls !== 0) {
       stalls = 0;
@@ -349,11 +358,8 @@ async function sweepVoidedPurchases(input: {
   /** Moves the cursor past a finished (or skipped) slice; true once caught up. */
   const finishSlice = async (sliceEnd: number): Promise<boolean> => {
     slices += 1;
-    await input.cursors.write(
-      voidedSweepCursor,
-      Math.max(sliceEnd, cursorAtStart),
-      new Date(nowMs),
-    );
+    cursorNow = Math.max(sliceEnd, cursorAtStart);
+    await input.cursors.write(voidedSweepCursor, cursorNow, new Date(nowMs));
     if (sliceEnd < nowMs) {
       return false;
     }
@@ -381,6 +387,11 @@ async function sweepVoidedPurchases(input: {
       // moves the cursor forward.
       const sliceEnd = Math.min(Math.max(sliceStart, cursorAtStart) + sliceMs, nowMs);
       let stoppedBy: StoreServerTake | 'run-page-cap' | undefined;
+      // At the one-minute floor a slice may use the run's remaining pages:
+      // it cannot be split further.
+      const slicePageCap = sliceMs > voidedSweepMinSliceMs
+        ? voidedSweepMaxPagesPerSlice
+        : Math.max(voidedSweepMaxPagesPerRun - pages, 1);
       const sweep = await sweepGooglePlayVoidedPurchases({
         client: input.play.voidedPurchases,
         store: input.store,
@@ -388,11 +399,7 @@ async function sweepVoidedPurchases(input: {
         startTimeMillis: sliceStart,
         endTimeMillis: sliceEnd,
         signal: AbortSignal.timeout(voidedSweepTimeoutMs),
-        // At the one-minute floor a slice may use the run's remaining pages:
-        // it cannot be split further.
-        maxPages: sliceMs > voidedSweepMinSliceMs
-          ? voidedSweepMaxPagesPerSlice
-          : Math.max(voidedSweepMaxPagesPerRun - pages, 1),
+        maxPages: slicePageCap,
         now: () => new Date(input.now()).toISOString(),
         shouldContinue: (next) => {
           if (next === 'page' && pages >= voidedSweepMaxPagesPerRun) {
@@ -440,15 +447,14 @@ async function sweepVoidedPurchases(input: {
         // run's page cap, or a store error says nothing about the slice.
         // A slice that hit its own page cap is too large even when an entry
         // also failed: its unread pages must not be skipped with it.
-        const hitSlicePageCap = stoppedBy === undefined
-          && sweep.pages >= voidedSweepMaxPagesPerSlice;
+        const hitSlicePageCap = stoppedBy === undefined && sweep.pages >= slicePageCap;
         const sliceTooLarge = hitSlicePageCap
           || (stoppedBy === 'budget' && sweep.pages > 0 && sweep.errored === 0);
         // Every page was read and only store errors held the slice: after
         // voidedSweepMaxStalls runs at the same cursor, move on and say so,
         // so one void that always fails cannot hold every later one back.
         const onlyErrored = stoppedBy === undefined && sweep.errored > 0 && !hitSlicePageCap;
-        if (onlyErrored && stalls + 1 >= voidedSweepMaxStalls) {
+        if (onlyErrored && slices === 0 && stalls + 1 >= voidedSweepMaxStalls) {
           console.error(
             'Google Play voided purchases: skipping',
             sweep.errored,
@@ -458,8 +464,8 @@ async function sweepVoidedPurchases(input: {
             new Date(sliceEnd).toISOString(),
             '; revoke them by hand (see the order ids logged above).',
           );
-          const caughtUp = await finishSlice(sliceEnd);
           await resetStalls();
+          const caughtUp = await finishSlice(sliceEnd);
           if (caughtUp) {
             break;
           }
@@ -485,9 +491,9 @@ async function sweepVoidedPurchases(input: {
             );
           }
         }
-        const stoppedState = slices > 0 ? 2 : 1;
-        if (behind !== stoppedState) {
-          await input.cursors.write(voidedSweepBehindCursor, stoppedState, new Date(nowMs));
+        const stopped = stoppedState();
+        if (behind !== stopped) {
+          await input.cursors.write(voidedSweepBehindCursor, stopped, new Date(nowMs));
         }
         console.error(
           'Google Play voided purchases sweep stopped before',
@@ -506,9 +512,11 @@ async function sweepVoidedPurchases(input: {
   } catch (error) {
     // Whatever this run read is read again: the next run starts before the
     // cursor, with the overlap, unless a slice already moved it.
-    await input.cursors
-      .write(voidedSweepBehindCursor, slices > 0 ? 2 : 1, new Date(nowMs))
-      .catch(() => undefined);
+    if (!complete) {
+      await input.cursors
+        .write(voidedSweepBehindCursor, stoppedState(), new Date(nowMs))
+        .catch(() => undefined);
+    }
     throw error;
   }
   return { complete, slices, ...totals };
