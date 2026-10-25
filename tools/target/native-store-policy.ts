@@ -58,8 +58,9 @@ export function inspectNativeStorePolicy(input: {
 }
 
 function readJson(file: string): unknown {
+  const source = readFileSync(file, 'utf8');
   try {
-    return JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    return JSON.parse(source) as unknown;
   } catch (error) {
     throw new Error(
       `${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,

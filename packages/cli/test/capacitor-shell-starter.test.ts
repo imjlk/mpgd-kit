@@ -313,6 +313,12 @@ try {
   writeFileSync(path.join(root, 'mpgd.game.json'), '{"native":{"orientation":"bad"}}');
   assert.throws(() => planCapacitorShellStarter(options), /native\.orientation must be/u);
   writeFileSync(path.join(root, 'mpgd.game.json'), '{"native":{"orientation":"landscape"}}');
+  const validTargets = readFileSync(path.join(root, 'mpgd.targets.json'), 'utf8');
+  const badFamily = JSON.parse(validTargets) as { targets: { ios: { metadata?: object } } };
+  badFamily.targets.ios.metadata = { ...badFamily.targets.ios.metadata, iosDeviceFamily: 'ipad' };
+  writeFileSync(path.join(root, 'mpgd.targets.json'), JSON.stringify(badFamily));
+  assert.throws(() => planCapacitorShellStarter(options), /iosDeviceFamily must be/u);
+  writeFileSync(path.join(root, 'mpgd.targets.json'), validTargets);
   const commands: string[] = [];
   materializeCapacitorShellStarter(repeat, {
     run(command, args, cwd) {

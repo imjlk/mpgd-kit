@@ -249,8 +249,8 @@ export function inspectIosInfoPlistOrientation(
   const issues: NativeShellPolicyIssue[] = [];
   if (orientation !== undefined) {
     // A missing key means every orientation to iOS.
-    const iphone = readPlistStrings(plist, 'UISupportedInterfaceOrientations')
-      ?? iosIpadOrientations;
+    const listed = readPlistStrings(plist, 'UISupportedInterfaceOrientations');
+    const iphone = listed ?? iosIpadOrientations;
     const portrait = iphone.some(
       (value) => value === iosPortrait || value === iosPortraitUpsideDown,
     );
@@ -263,7 +263,8 @@ export function inspectIosInfoPlistOrientation(
     if (!matches) {
       issues.push({
         level: 'error',
-        message: `iOS Info.plist UISupportedInterfaceOrientations (${iphone.join(', ') || 'none'}) `
+        message: `iOS Info.plist UISupportedInterfaceOrientations (${
+          listed === undefined ? 'key missing, so every orientation' : iphone.join(', ') || 'none'}) `
           + `does not match mpgd.game.json native.orientation "${orientation}".`,
       });
     }
@@ -411,7 +412,7 @@ function findAndroidLauncherActivity(
 ): { readonly start: number; readonly tag: string } | undefined {
   const masked = maskXmlComments(manifest);
   // `<activity` followed by whitespace, `/` or `>`: never `<activity-alias`.
-  const openings = /<activity(?=[\s/>])[^>]*?(\/?)>/gu;
+  const openings = /<activity(?=[\s/>])(?:"[^"]*"|'[^']*'|[^>"'])*?(\/?)>/gu;
   for (const opening of masked.matchAll(openings)) {
     const start = opening.index ?? 0;
     const tagEnd = start + opening[0].length;
@@ -473,8 +474,8 @@ function readAppTargetConfigurationIds(project: string): readonly string[] {
       const list = readPbxObjectBody(project, listId);
       const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1] ?? '';
       // Entries are `ID /* Name */,`: only the token before each comma counts.
-      return configurations.split(',')
-        .map((entry) => /^\s*([A-F0-9]+)\b/u.exec(entry.replace(/\/\*[^]*?\*\//gu, ' '))?.[1])
+      return configurations.replace(/\/\*[^]*?\*\//gu, ' ').split(',')
+        .map((entry) => /^\s*([A-F0-9]+)\b/u.exec(entry)?.[1])
         .filter((id): id is string => id !== undefined);
     }
   }

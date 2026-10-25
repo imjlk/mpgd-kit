@@ -293,6 +293,17 @@ try {
     /android:exported="true"\n {12}android:screenOrientation="portrait">/u,
   );
   assert.deepEqual(inspectAndroidManifestOrientation(orientedSiblings, 'portrait'), []);
+  // A `>` or `/>` inside an attribute value does not end the tag.
+  const quoted = manifest.replace(
+    '        <activity\n',
+    '        <activity android:name=".A" android:label="a>b" />\n        <activity android:label="x/>y"\n',
+  );
+  const orientedQuoted = applyAndroidManifestOrientation(quoted, 'portrait');
+  assert.match(orientedQuoted, /<activity android:name="\.A" android:label="a>b" \/>/u);
+  assert.match(
+    orientedQuoted,
+    /android:exported="true"\n {12}android:screenOrientation="portrait">/u,
+  );
   // Without the key, iOS allows every orientation.
   const noIphoneKey = template.replace(
     /<key>UISupportedInterfaceOrientations<\/key>\s*<array>[\s\S]*?<\/array>/u,
@@ -309,6 +320,14 @@ try {
     '$1ADD$2',
   );
   assert.notEqual(hexNamed, project);
+  const commaNamed = project.replace(
+    /(buildConfigurations = \(\s*\n\s*[A-F0-9]+ \/\* )Debug( \*\/)/u,
+    '$1Debug, ADD$2',
+  );
+  assert.equal(
+    readIosAppReleaseDeviceFamily(applyIosProjectDeviceFamily(commaNamed, 'iphone')),
+    '1',
+  );
   assert.equal(readIosAppReleaseDeviceFamily(applyIosProjectDeviceFamily(hexNamed, 'iphone')), '1');
 
   // The build preflight reads native.orientation and iosDeviceFamily from the game.
