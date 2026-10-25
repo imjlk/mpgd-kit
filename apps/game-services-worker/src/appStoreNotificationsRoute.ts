@@ -141,8 +141,9 @@ export function createAppStoreNotificationsFetchHandler(input: {
         'App Store notification',
         environment,
         outcome.status,
+        'notificationUUID' in outcome ? (outcome.notificationUUID ?? '-') : '-',
         outcome.status === 'revoked'
-          ? `${outcome.notificationUUID} alreadyProcessed=${String(outcome.alreadyProcessed)}`
+          ? `alreadyProcessed=${String(outcome.alreadyProcessed)}`
           : outcome.reason,
       );
       return json(outcome, appStoreServerNotificationHttpStatus(outcome));

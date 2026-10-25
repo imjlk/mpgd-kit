@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS entitlement_notes (
   recorded_at TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   -- An audit record support re-grants from: like the revoke entries (0006),
-  -- it keeps the grant row referenced, so a deletion removes notes first.
+  -- deleting the grant or revoke row it names is refused until its notes are
+  -- deleted first.
   FOREIGN KEY (ledger_entry_id)
     REFERENCES entitlement_transactions (ledger_entry_id)
     ON UPDATE RESTRICT

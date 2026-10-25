@@ -488,9 +488,12 @@ with the App Store Server API's
 a `TEST` notification answers 200 `ignored`. Allow Apple's notification subnet (`17.0.0.0/8`) if the host
 filters by IP.
 
-A `REFUND_REVERSED` for a revoked grant is answered 200 and logged at warn
-(`App Store refund reversed: player … grant …`) with a ledger note in
-`entitlement_notes`; nothing is re-granted. Route that warning to support;
+A `REFUND_REVERSED` for a grant an App Store refund revoked is answered 200
+and logged at warn (`App Store refund reversed: player … grant …`) with a
+ledger note in `entitlement_notes`; nothing is re-granted. One for a grant not
+revoked yet is answered 503 so Apple redelivers it after the refund (the log
+line names its notification id); one for a grant revoked for another reason
+is answered 200 and ignored. Route that warning to support;
 [Re-granting after a refund reversal](GAME_SERVICES_BACKEND.md#re-granting-after-a-refund-reversal)
 shows the re-grant.
 

@@ -112,8 +112,8 @@ export type AppStoreServerNotificationOutcome =
   | { readonly status: 'conflict'; readonly reason: string; readonly notificationUUID: string }
   /** Malformed or not signed by Apple for this app and environment. */
   | { readonly status: 'rejected'; readonly reason: string }
-  /** A transient failure: answer non-2xx so Apple redelivers. */
-  | { readonly status: 'retry'; readonly reason: string };
+  /** A transient failure, or an order to wait for: answer non-2xx so Apple redelivers. */
+  | { readonly status: 'retry'; readonly reason: string; readonly notificationUUID?: string };
 
 /**
  * The longest `signedPayload` string accepted; Apple's notifications are a
@@ -136,9 +136,12 @@ const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> =
  * entry, keyed by the notification's `notificationUUID` so a redelivery
  * answers the first entry. Every other type, a transaction this ledger never
  * granted, and a subscription transaction are `ignored` (answer 200 so Apple
- * stops retrying). `REFUND_REVERSED` for a revoked grant is answered
- * `refund_reversed`: the reversal is recorded as a ledger note, nothing is
- * re-granted, and the game re-grants on its own terms (a new grant entry).
+ * stops retrying). `REFUND_REVERSED` for a grant an App Store refund
+ * revoked is answered `refund_reversed`: the reversal is recorded as a ledger
+ * note, nothing is re-granted, and the game re-grants on its own terms (a new
+ * grant entry). For a grant not revoked yet it is `retry` (Apple redelivers,
+ * so a refund still in flight is applied first); for a grant revoked for
+ * another reason it is `ignored`.
  *
  * A refund that arrives before its grant is ignored, not retried; the
  * purchase verifier's default Server API mode reads the transaction's current
@@ -304,7 +307,11 @@ async function recordRefundReversal(
     // its delivery is still being retried and could revoke the grant after
     // this reversal: ask Apple to redeliver (production retries for 72 hours)
     // so the reversal is seen after the refund.
-    return { status: 'retry', reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED' };
+    return {
+      status: 'retry',
+      reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED',
+      notificationUUID: input.notificationUUID,
+    };
   }
   if (revocation.reason !== 'refund' || revocation.payload.store !== 'app-store') {
     // A REFUND_REVERSED only undoes an App Store refund; a grant revoked for

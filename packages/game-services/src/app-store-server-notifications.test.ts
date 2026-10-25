@@ -476,7 +476,11 @@ function handle(
       notification({ notificationType: 'REFUND_REVERSED', notificationUUID: 'uuid-early' }),
     ),
   );
-  assert.deepEqual(early, { status: 'retry', reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED' });
+  assert.deepEqual(early, {
+    status: 'retry',
+    reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED',
+    notificationUUID: 'uuid-early',
+  });
   assert.equal(appStoreServerNotificationHttpStatus(early), 503);
   await store.recordEntitlementRevocation({
     playerId: 'player-1',
@@ -501,6 +505,50 @@ function handle(
     (await store.findEntitlementNotes({ ledgerEntryIds: [grant.ledgerEntryId] })).length,
     0,
     'no note for a revocation Apple did not reverse',
+  );
+}
+
+{
+  // Out of order: the reversal arrives, is redelivered after the refund, and is recorded.
+  const store = createInMemoryGameServicesStore();
+  const grant = await grantFor(store, consumable);
+  const reversal = verifierOf(
+    notification({
+      notificationType: 'REFUND_REVERSED',
+      notificationUUID: 'uuid-out-of-order',
+    }),
+  );
+  assert.equal((await handle(store, reversal)).status, 'retry');
+  assert.equal((await handle(store, verifierOf(notification()))).status, 'revoked');
+  const redelivered = await handle(store, reversal);
+  assert.equal(redelivered.status, 'refund_reversed', 'Apple\u2019s redelivery is recorded');
+  assert.equal(
+    (await store.findEntitlementNotes({ ledgerEntryIds: [grant.ledgerEntryId] })).length,
+    1,
+  );
+}
+
+{
+  // A refund-reason revoke from another store (a Play refund) is not an App Store refund.
+  const store = createInMemoryGameServicesStore();
+  const grant = await grantFor(store, consumable);
+  await store.recordEntitlementRevocation({
+    playerId: 'player-1',
+    revokesLedgerEntryId: grant.ledgerEntryId,
+    idempotencyKey: 'other-store-refund',
+    reason: 'refund',
+    revokedAt: '2026-10-24T00:00:00.000Z',
+    payload: { target: 'ios', store: 'google-play' },
+  });
+  const outcome = await handle(
+    store,
+    verifierOf(
+      notification({ notificationType: 'REFUND_REVERSED', notificationUUID: 'uuid-other' }),
+    ),
+  );
+  assert.equal(
+    outcome.status === 'ignored' && outcome.reason,
+    'APP_STORE_NOTIFICATION_REVOCATION_NOT_REFUND',
   );
 }
 

@@ -165,6 +165,31 @@ try {
       1,
       'the grant stays revoked',
     );
+    // A reversal for a grant that is not revoked yet asks Apple to redeliver.
+    await store.recordEntitlementGrant({
+      source: 'purchase',
+      playerId: 'ios-player',
+      grantId: 'COINS_100',
+      idempotencyKey: 'ios-checkout-2',
+      grantedAt: '2026-10-20T00:00:01.000Z',
+      evidenceVerificationId: createAppStoreVerificationId({
+        environment: 'Production',
+        bundleId,
+        transactionId: '2000000000000778',
+      }),
+      payload: { target: 'ios', store: 'app-store' },
+    });
+    answer = {
+      ...refundAnswer,
+      notificationType: 'REFUND_REVERSED',
+      notificationUUID: 'worker-reversed-early',
+      transaction: { ...transaction, transactionId: '2000000000000778', originalTransactionId: '2000000000000778' },
+    };
+    assert.equal(
+      (await post(appStoreNotificationPaths.Production, payload)).status,
+      503,
+      'a reversal before its refund is redelivered by Apple',
+    );
     answer = refundAnswer;
 
     const sandboxUrl = await post(appStoreNotificationPaths.Sandbox, payload);
