@@ -432,6 +432,9 @@ async function verifyAppStorePurchase(
     if (
       sandbox !== undefined
       && environment === 'Production'
+      // A client JWS already verified in production is a production
+      // transaction: a miss there is replication lag, not the sandbox.
+      && offlineTransaction === undefined
       && transactionResult.status === 'pending'
       && transactionResult.reason === 'APP_STORE_TRANSACTION_NOT_FOUND'
     ) {
@@ -454,7 +457,8 @@ async function verifyAppStorePurchase(
     }
     if (
       offlineTransaction !== undefined
-      && fresh.payload.transactionId !== offlineTransaction.transactionId
+      && (fresh.payload.transactionId !== offlineTransaction.transactionId
+        || fresh.payload.environment !== offlineTransaction.environment)
     ) {
       return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH' };
     }
@@ -526,6 +530,34 @@ function readSandboxGrantPolicy(
 }
 
 /**
+ * The verifier and Server API client for one environment: the configured
+ * pair for the deployment's own environment, the sandbox policy's pair for
+ * the sandbox of a production deployment that opted in, and no verifier
+ * otherwise. The only place a sandbox port is selected.
+ */
+function resolveEnvironmentPorts(
+  options: CreateAppStoreEvidenceVerifierOptions,
+  environment: AppStoreEnvironment,
+): {
+  readonly signedTransactionVerifier?: AppStoreSignedTransactionVerifier;
+  readonly serverApi: AppStoreServerApiClient;
+} {
+  if (environment === options.environment) {
+    return {
+      signedTransactionVerifier: options.signedTransactionVerifier,
+      serverApi: options.serverApi,
+    };
+  }
+  const sandbox = environment === 'Sandbox' ? readSandboxGrantPolicy(options) : undefined;
+  return sandbox === undefined
+    ? { serverApi: options.serverApi }
+    : {
+        signedTransactionVerifier: sandbox.signedTransactionVerifier,
+        serverApi: sandbox.serverApi ?? options.serverApi,
+      };
+}
+
+/**
  * Whether the production verifier placed a JWS in the sandbox: Apple's
  * adapter refuses it with `APP_STORE_ENVIRONMENT_MISMATCH` after the
  * signature check, and a custom verifier may return the decoded `Sandbox`
@@ -545,9 +577,7 @@ async function fetchTransactionInfo(
   options: CreateAppStoreEvidenceVerifierOptions,
   environment: AppStoreEnvironment,
 ): Promise<AppStoreServerApiTransactionResult> {
-  const serverApi = environment === options.environment
-    ? options.serverApi
-    : (readSandboxGrantPolicy(options)?.serverApi ?? options.serverApi);
+  const { serverApi } = resolveEnvironmentPorts(options, environment);
   let transactionResult: AppStoreServerApiTransactionResult;
   try {
     transactionResult = await serverApi.getTransactionInfo({
@@ -592,6 +622,9 @@ function assertSandboxPurchasePolicy(
   }
   if (input.serverApi !== undefined) {
     assertRecord(input.serverApi, 'sandboxPurchases.serverApi');
+    if (typeof input.serverApi.getTransactionInfo !== 'function') {
+      throw new Error('sandboxPurchases.serverApi must implement getTransactionInfo.');
+    }
   }
 }
 
@@ -622,9 +655,7 @@ async function verifySignedTransaction(
   | { readonly status: 'verified'; readonly payload: AppStoreTransactionPayload }
   | { readonly status: 'pending' | 'rejected'; readonly reason: string }
 > {
-  const verifier = environment === options.environment
-    ? options.signedTransactionVerifier
-    : readSandboxGrantPolicy(options)?.signedTransactionVerifier;
+  const { signedTransactionVerifier: verifier } = resolveEnvironmentPorts(options, environment);
   if (verifier === undefined) {
     return { status: 'rejected', reason: 'APP_STORE_ENVIRONMENT_MISMATCH' };
   }

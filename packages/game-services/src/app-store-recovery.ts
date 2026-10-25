@@ -71,6 +71,10 @@ export function createAppStoreRecoveryBackend(
     && (!Number.isSafeInteger(restoreTimeoutMs) || restoreTimeoutMs <= 0)) {
     throw new TypeError('Restored App Store verification timeout must be positive.');
   }
+  const acceptsSandbox = options.restoredNonConsumables?.acceptsSandboxTransactions;
+  if (acceptsSandbox !== undefined && typeof acceptsSandbox !== 'boolean') {
+    throw new TypeError('acceptsSandboxTransactions must be a boolean.');
+  }
 
   return {
     async recoverPurchase(input) {
@@ -97,18 +101,15 @@ export function createAppStoreRecoveryBackend(
           && input.originalTransactionId !== undefined
           && input.originalTransactionId !== input.platformTransactionId
           && restoreConfig !== undefined) {
+          const originalTransactionId = input.originalTransactionId;
           const candidateIn = (environment: AppStoreEnvironment) =>
             findByVerificationId(options.store, createAppStoreVerificationId({
               environment,
               bundleId: restoreConfig.bundleId,
-              transactionId: input.originalTransactionId ?? '',
+              transactionId: originalTransactionId,
             }));
           let candidate = await candidateIn(restoreConfig.environment);
-          if (
-            candidate === undefined
-            && restoreConfig.environment === 'Production'
-            && restoreConfig.acceptsSandboxTransactions === true
-          ) {
+          if (candidate === undefined && acceptsSandboxRestores(restoreConfig)) {
             // An App Review or TestFlight grant on this production ledger.
             candidate = await candidateIn('Sandbox');
           }
@@ -276,9 +277,7 @@ async function verifyRestoredNonConsumable(
     || originalTransactionId !== input.originalTransactionId
     || (environment !== 'Production' && environment !== 'Sandbox')
     || (environment !== config.environment
-      && !(config.environment === 'Production'
-        && environment === 'Sandbox'
-        && config.acceptsSandboxTransactions === true))
+      && !(environment === 'Sandbox' && acceptsSandboxRestores(config)))
     || bundleId !== config.bundleId
     || decision.verificationId !== createAppStoreVerificationId({
       environment,
@@ -288,6 +287,13 @@ async function verifyRestoredNonConsumable(
     return rejected('APP_STORE_RESTORE_EVIDENCE_MISMATCH');
   }
   return decision.verificationId;
+}
+
+/** A production deployment whose evidence verifier also grants App Review sandbox purchases. */
+function acceptsSandboxRestores(
+  config: NonNullable<CreateAppStoreRecoveryBackendOptions['restoredNonConsumables']>,
+): boolean {
+  return config.environment === 'Production' && config.acceptsSandboxTransactions === true;
 }
 
 async function findByPlatformEvidence(

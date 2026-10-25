@@ -1420,6 +1420,172 @@ assertEqual(
   );
 }
 
+{
+  // Review follow-ups for the sandbox opt-in.
+  const sandboxTransaction = { ...baseTransaction, environment: 'Sandbox' as const };
+  const productionCalls: string[] = [];
+  const sandboxCalls: string[] = [];
+  const recordingApi = (calls: string[], answer: 'found' | 'not-found'): AppStoreServerApiClient => ({
+    async getTransactionInfo({ environment }) {
+      calls.push(environment);
+      return answer === 'found'
+        ? { status: 'found', signedTransactionInfo: 'signed-transaction-jws' }
+        : { status: 'pending', reason: 'APP_STORE_TRANSACTION_NOT_FOUND' };
+    },
+  });
+  const permissiveVerifier = (
+    payload: AppStoreTransactionPayload,
+  ): AppStoreSignedTransactionVerifier => ({
+    async verifyAndDecode() {
+      return { status: 'verified', payload };
+    },
+  });
+  const base = {
+    bundleId: baseTransaction.bundleId,
+    environment: 'Production' as const,
+    resolveAppAccountToken: () => baseTransaction.appAccountToken ?? '',
+    now: () => '2026-07-16T13:00:00.000Z',
+  };
+
+  // The sandbox policy's own Server API client serves the sandbox only.
+  const overridden = createAppStoreGameServicesEvidenceVerifier({
+    ...base,
+    serverApi: recordingApi(productionCalls, 'not-found'),
+    // A custom production verifier that decodes without an environment check:
+    // its Sandbox payload is re-verified by the sandbox verifier.
+    signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
+    sandboxPurchases: {
+      mode: 'grant',
+      signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
+      serverApi: recordingApi(sandboxCalls, 'found'),
+    },
+  });
+  assertEqual(
+    (await overridden.verifyPurchase(baseInput)).status,
+    'verified',
+    'a production miss is verified through the sandbox policy’s client',
+  );
+  assertEqual(productionCalls.join(','), 'Production', 'production is asked once');
+  assertEqual(
+    sandboxCalls.join(','),
+    'Sandbox',
+    'the sandbox client is asked for the sandbox only',
+  );
+
+  sandboxCalls.length = 0;
+  const signalled = await overridden.verifyPurchase({
+    ...baseInput,
+    request: {
+      ...baseInput.request,
+      evidence: createAppStoreSignedTransactionEvidenceFixture({
+        signedTransaction: 'client-jws',
+        transactionId: baseInput.request.platformTransactionId,
+      }),
+    },
+  });
+  assertEqual(signalled.status, 'verified', 'a verified Sandbox payload is a sandbox signal');
+  assertEqual(sandboxCalls.join(','), 'Sandbox', 'its status is read from the sandbox only');
+
+  // Offline-only decides on the client JWS: no Server API call at all.
+  const offlineCalls: string[] = [];
+  const offlineSandbox = createAppStoreGameServicesEvidenceVerifier({
+    ...base,
+    serverApi: recordingApi(offlineCalls, 'found'),
+    signedTransactionVerifier: {
+      async verifyAndDecode() {
+        return { status: 'rejected', reason: 'APP_STORE_ENVIRONMENT_MISMATCH' };
+      },
+    },
+    signedTransactionEvidence: { mode: 'offline-only', maxSignedAgeMs: 24 * 60 * 60 * 1000 },
+    sandboxPurchases: {
+      mode: 'grant',
+      signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
+    },
+  });
+  const offlineDecision = await offlineSandbox.verifyPurchase({
+    ...baseInput,
+    request: {
+      ...baseInput.request,
+      evidence: createAppStoreSignedTransactionEvidenceFixture({
+        signedTransaction: 'client-jws',
+        transactionId: baseInput.request.platformTransactionId,
+      }),
+    },
+  });
+  assertEqual(
+    offlineDecision.status,
+    'verified',
+    'offline-only verifies a sandbox JWS in the sandbox',
+  );
+  assertEqual(offlineCalls.length, 0, 'offline-only makes no Server API call');
+
+  // A client JWS verified in production keeps a production miss pending.
+  const lagCalls: string[] = [];
+  const lagging = createAppStoreGameServicesEvidenceVerifier({
+    ...base,
+    serverApi: recordingApi(lagCalls, 'not-found'),
+    signedTransactionVerifier: permissiveVerifier(baseTransaction),
+    sandboxPurchases: {
+      mode: 'grant',
+      signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
+    },
+  });
+  assertDecision(
+    await lagging.verifyPurchase({
+      ...baseInput,
+      request: {
+        ...baseInput.request,
+        evidence: createAppStoreSignedTransactionEvidenceFixture({
+          signedTransaction: 'client-jws',
+          transactionId: baseInput.request.platformTransactionId,
+        }),
+      },
+    }),
+    'pending',
+    'APP_STORE_TRANSACTION_NOT_FOUND',
+    'a production JWS is never looked up in the sandbox',
+  );
+  assertEqual(lagCalls.join(','), 'Production', 'only production is asked');
+
+  // A transient sandbox signature outage stays pending.
+  const unavailableSandbox = createAppStoreGameServicesEvidenceVerifier({
+    ...base,
+    serverApi: recordingApi([], 'not-found'),
+    signedTransactionVerifier: permissiveVerifier(baseTransaction),
+    sandboxPurchases: {
+      mode: 'grant',
+      signedTransactionVerifier: {
+        async verifyAndDecode() {
+          throw new AppStoreDependencyUnavailableError('sandbox OCSP down');
+        },
+      },
+      serverApi: recordingApi([], 'found'),
+    },
+  });
+  assertDecision(
+    await unavailableSandbox.verifyPurchase(baseInput),
+    'pending',
+    'APP_STORE_SIGNATURE_VERIFIER_UNAVAILABLE',
+    'a sandbox verifier outage is retryable, never a grant',
+  );
+
+  await assertRejects(
+    async () =>
+      createAppStoreGameServicesEvidenceVerifier({
+        ...base,
+        serverApi: createFoundServerApi(),
+        signedTransactionVerifier: createSignedTransactionVerifier(baseTransaction),
+        sandboxPurchases: {
+          mode: 'grant',
+          signedTransactionVerifier: createSignedTransactionVerifier(sandboxTransaction),
+          serverApi: {} as AppStoreServerApiClient,
+        },
+      }),
+    'sandboxPurchases.serverApi must implement getTransactionInfo',
+    'a sandbox Server API client without getTransactionInfo is refused at construction',
+  );
+}
+
 console.log('App Store signed transaction verifier tests passed.');
 
 function createVerifier(input: {
