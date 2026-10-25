@@ -116,8 +116,18 @@ export type AccountDeletionErrorCode =
 export class AccountDeletionError extends Error {
   readonly code: AccountDeletionErrorCode;
   readonly retryable: boolean;
+  /**
+   * Whether the request may have reached the server. For
+   * `ACCOUNT_DELETION_UNREACHABLE` it was sent and its answer was lost or
+   * unreadable, so the deletion may have completed; for `UNAUTHORIZED` the
+   * server refused the session (`false`: no session on this device).
+   */
+  readonly requestSent: boolean;
 
-  constructor(code: AccountDeletionErrorCode, options: { readonly cause?: unknown } = {}) {
+  constructor(
+    code: AccountDeletionErrorCode,
+    options: { readonly cause?: unknown; readonly requestSent?: boolean } = {},
+  ) {
     super(
       `Account deletion failed: ${code}.`,
       options.cause === undefined ? {} : { cause: options.cause },
@@ -125,6 +135,7 @@ export class AccountDeletionError extends Error {
     this.name = 'AccountDeletionError';
     this.code = code;
     this.retryable = code === 'ACCOUNT_DELETION_FAILED' || code === 'ACCOUNT_DELETION_UNREACHABLE';
+    this.requestSent = options.requestSent ?? code !== 'ACCOUNT_DELETION_UNREACHABLE';
   }
 }
 
@@ -586,10 +597,11 @@ export function createAccountDeletionClient(input: {
       }
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let sent = false;
       const deadline = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           controller.abort();
-          reject(new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE'));
+          reject(new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { requestSent: sent }));
         }, timeoutMs);
       });
       try {
@@ -611,11 +623,13 @@ export function createAccountDeletionClient(input: {
             : new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { cause: error });
         }
         if (!Object.keys(headers).includes('authorization')) {
-          throw new AccountDeletionError('UNAUTHORIZED');
+          // Signed out on this device: nothing was sent.
+          throw new AccountDeletionError('UNAUTHORIZED', { requestSent: false });
         }
         let response: AccountDeletionFetchResponse;
         let text: string;
         try {
+          sent = true;
           const answer = async (): Promise<[AccountDeletionFetchResponse, string]> => {
             const received = await fetcher(url, {
               method: 'POST',
@@ -629,7 +643,10 @@ export function createAccountDeletionClient(input: {
         } catch (error) {
           throw error instanceof AccountDeletionError
             ? error
-            : new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { cause: error });
+            : new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', {
+              cause: error,
+              requestSent: true,
+            });
         }
         return readAnswer(response, text);
       } finally {
@@ -644,7 +661,7 @@ function readAnswer(response: AccountDeletionFetchResponse, text: string): Accou
   if (response.status === 200) {
     const receipt = readReceipt(body);
     if (receipt === undefined) {
-      throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE');
+      throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { requestSent: true });
     }
     return receipt;
   }

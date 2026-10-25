@@ -894,7 +894,8 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     (error: unknown) =>
       error instanceof AccountDeletionError
       && error.code === 'ACCOUNT_DELETION_UNREACHABLE'
-      && error.retryable,
+      && error.retryable
+      && !error.requestSent,
   );
   assert.equal(requests.length, before, 'no request without a session');
 
@@ -907,6 +908,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     assert.ok(error instanceof AccountDeletionError);
     assert.equal(error.code, 'ACCOUNT_DELETION_UNREACHABLE');
     assert.equal(error.retryable, true);
+    assert.equal(error.requestSent, true, 'a failed fetch may have reached the server');
     return true;
   });
 
@@ -924,7 +926,9 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   await assert.rejects(
     stalled.deleteAccount(),
     (error: unknown) =>
-      error instanceof AccountDeletionError && error.code === 'ACCOUNT_DELETION_UNREACHABLE',
+      error instanceof AccountDeletionError
+      && error.code === 'ACCOUNT_DELETION_UNREACHABLE'
+      && error.requestSent,
   );
   assert.equal(signal?.aborted, true);
   const stalledSession = createAccountDeletionClient({
@@ -936,8 +940,11 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   await assert.rejects(
     stalledSession.deleteAccount(),
     (error: unknown) =>
-      error instanceof AccountDeletionError && error.code === 'ACCOUNT_DELETION_UNREACHABLE',
+      error instanceof AccountDeletionError
+      && error.code === 'ACCOUNT_DELETION_UNREACHABLE'
+      && !error.requestSent,
   );
+  assert.equal(new AccountDeletionError('ACCOUNT_DELETION_FAILED').requestSent, true);
   // A timeout that is not a positive delay falls back to the default.
   assert.deepEqual(
     await createAccountDeletionClient({

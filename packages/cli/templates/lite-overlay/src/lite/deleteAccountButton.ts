@@ -5,6 +5,7 @@ import {
   deleteAccountOutcomeText,
   type StarterDeleteAccountOutcome,
 } from '../platform/deleteAccount';
+import { resolveStarterServerSession } from '../platform/serverSession';
 import type { StarterContext } from '../runtime/gameContext';
 
 /**
@@ -23,6 +24,7 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
     ...(context.platform.secureCredentials === undefined
       ? {}
       : { secureCredentials: context.platform.secureCredentials }),
+    signedIn: () => resolveStarterServerSession()?.current() !== undefined,
   });
   if (!deletion.available) {
     return () => undefined;
@@ -39,11 +41,13 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
   const panel = document.createElement('div');
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
-  panel.hidden = true;
-  panel.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;'
+  panel.setAttribute('aria-labelledby', 'mpgd-delete-account-message');
+  // Shown by display, not `hidden`: an inline display would override it.
+  panel.style.cssText = 'position:absolute;inset:0;display:none;flex-direction:column;'
     + 'align-items:center;justify-content:center;gap:16px;padding:24px;box-sizing:border-box;'
     + 'background:#020617eb;color:#fff;font:15px system-ui,sans-serif;text-align:center;';
   const message = document.createElement('p');
+  message.id = 'mpgd-delete-account-message';
   message.style.cssText = 'margin:0;max-width:640px;white-space:pre-line;';
   const status = document.createElement('p');
   status.setAttribute('role', 'status');
@@ -66,12 +70,30 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
     element.addEventListener('pointerdown', (event) => event.stopPropagation());
   }
   let deleting = false;
+  let signedOut = false;
+  const close = (): void => {
+    if (deleting) {
+      return;
+    }
+    if (signedOut) {
+      // A fresh start drops every in-memory trace of the deleted player.
+      globalThis.location.reload();
+      return;
+    }
+    panel.style.display = 'none';
+    open.focus();
+  };
+  panel.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      close();
+    }
+  });
   open.addEventListener('click', () => {
     status.textContent = '';
     confirm.hidden = false;
     cancel.textContent = t(locale, 'deleteAccountCancel');
     message.textContent = deleteAccountConfirmText(locale, false);
-    panel.hidden = false;
+    panel.style.display = 'flex';
     cancel.focus();
     void deletion.hasPendingPurchase().then((pending) => {
       if (pending) {
@@ -79,12 +101,7 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
       }
     });
   });
-  cancel.addEventListener('click', () => {
-    if (!deleting) {
-      panel.hidden = true;
-      open.focus();
-    }
-  });
+  cancel.addEventListener('click', close);
   confirm.addEventListener('click', () => {
     if (deleting) {
       return;
@@ -99,9 +116,12 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
         confirm.removeAttribute('aria-disabled');
         status.textContent = deleteAccountOutcomeText(locale, result);
         if (result.outcome === 'deleted' || result.outcome === 'session-ended') {
+          // Signed out: Close restarts the game.
+          signedOut = true;
           confirm.hidden = true;
           open.hidden = true;
           cancel.textContent = t(locale, 'deleteAccountClose');
+          cancel.focus();
         }
       });
   });

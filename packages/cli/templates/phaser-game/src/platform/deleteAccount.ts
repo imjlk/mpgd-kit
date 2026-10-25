@@ -22,13 +22,17 @@ export const starterGuestCredentialKeys = [
 ] as const;
 
 export type StarterDeleteAccountOutcome =
-  /** The server deleted the account; this device is signed out. */
-  | { readonly outcome: 'deleted'; readonly retainedPurchaseRecords: number }
   /**
-   * The session no longer authenticates after an earlier attempt whose
-   * answer was lost: the account was most likely deleted. Signed out too.
+   * The server deleted the account. `signedOut` is `false` when this device
+   * could not forget the session's credentials or the purchase journal.
    */
-  | { readonly outcome: 'session-ended' }
+  | { readonly outcome: 'deleted'; readonly retainedPurchaseRecords: number; readonly signedOut: boolean }
+  /**
+   * The server refused the session after an earlier attempt whose request
+   * was sent but whose answer was lost: the account was most likely
+   * deleted. Signed out too.
+   */
+  | { readonly outcome: 'session-ended'; readonly signedOut: boolean }
   /** No signed-in session to delete. */
   | { readonly outcome: 'needs-session' }
   /** Not this time; `retryable` says whether trying again can help. */
@@ -37,7 +41,7 @@ export type StarterDeleteAccountOutcome =
   | { readonly outcome: 'unavailable' };
 
 export interface StarterAccountDeletion {
-  /** Whether the game should show the Delete account entry (a server-backed session exists). */
+  /** Whether the game should show the Delete account entry: a deletion client and a signed-in session. */
   readonly available: boolean;
   /** Whether a purchase on this device is still being processed, to warn before deleting. */
   hasPendingPurchase(): Promise<boolean>;
@@ -48,6 +52,15 @@ export interface StarterAccountDeletion {
 type SignOutStep = () => void | Promise<void>;
 
 const signOutSteps = new Set<SignOutStep>();
+
+/**
+ * An earlier attempt's request was sent but its answer was lost, so the
+ * deletion may have completed. Kept for the page's life, across scenes.
+ */
+let answerLost = false;
+
+/** A local sign-out step that hangs is given up on after this long. */
+const signOutStepTimeoutMs = 5_000;
 
 /**
  * Registers a local sign-out step run after the account is deleted (for
@@ -76,27 +89,32 @@ export function createStarterAccountDeletion(input: {
   readonly storage: Pick<StorageAdapter, 'load' | 'save'>;
   readonly secureCredentials?: Pick<SecureCredentialStore, 'remove'>;
   readonly journalKey?: string;
+  /** Whether a server-backed session is signed in (`resolveStarterServerSession()?.current()`). */
+  readonly signedIn?: () => boolean;
 }): StarterAccountDeletion {
   const client = input.client;
   const journalKey = input.journalKey ?? defaultMonetizationJournalKey;
   let running: Promise<StarterDeleteAccountOutcome> | undefined;
-  /** An earlier attempt's answer was lost; the deletion may have completed. */
-  let answerLost = false;
 
-  const signOut = async (): Promise<void> => {
-    // Every step runs; one failing does not keep the others' data around.
-    const steps: (() => Promise<unknown> | unknown)[] = [
+  /** Answers whether the credentials and the journal were cleared; registered steps only log. */
+  const signOut = async (): Promise<boolean> => {
+    // Every step runs; one failing or hanging does not keep the others' data around.
+    const required: (() => Promise<unknown> | unknown)[] = [
       ...starterGuestCredentialKeys.map((key) => () => input.secureCredentials?.remove({ key })),
       () => input.storage.save({ key: journalKey, value: null }),
-      ...signOutSteps,
     ];
-    for (const step of steps) {
+    let cleared = true;
+    for (const step of [...required, ...signOutSteps]) {
       try {
-        await step();
+        await withTimeout(step);
       } catch (error) {
         console.error('[delete-account] local sign-out step failed', error);
+        if (required.includes(step)) {
+          cleared = false;
+        }
       }
     }
+    return cleared;
   };
 
   const run = async (): Promise<StarterDeleteAccountOutcome> => {
@@ -106,26 +124,34 @@ export function createStarterAccountDeletion(input: {
     try {
       const receipt = await client.deleteAccount();
       answerLost = false;
-      await signOut();
-      return { outcome: 'deleted', retainedPurchaseRecords: receipt.retainedPurchaseRecords };
+      return {
+        outcome: 'deleted',
+        retainedPurchaseRecords: receipt.retainedPurchaseRecords,
+        signedOut: await signOut(),
+      };
     } catch (error) {
       if (!(error instanceof AccountDeletionError)) {
         console.error('[delete-account]', error);
         return { outcome: 'failed', retryable: true };
       }
+      if (error.code === 'ACCOUNT_DELETION_UNREACHABLE') {
+        // Only a request that went out may have deleted the account.
+        answerLost ||= error.requestSent;
+        return { outcome: 'failed', retryable: true };
+      }
+      if (error.code === 'UNAUTHORIZED' && error.requestSent && answerLost) {
+        answerLost = false;
+        return { outcome: 'session-ended', signedOut: await signOut() };
+      }
+      if (error.requestSent) {
+        // Any other answer from the server: the account was not deleted.
+        answerLost = false;
+      }
       switch (error.code) {
         case 'UNAUTHORIZED':
-          if (answerLost) {
-            answerLost = false;
-            await signOut();
-            return { outcome: 'session-ended' };
-          }
           return { outcome: 'needs-session' };
         case 'ACCOUNT_DELETION_NOT_CONFIGURED':
           return { outcome: 'unavailable' };
-        case 'ACCOUNT_DELETION_UNREACHABLE':
-          answerLost = true;
-          return { outcome: 'failed', retryable: true };
         default:
           return { outcome: 'failed', retryable: error.retryable };
       }
@@ -133,7 +159,7 @@ export function createStarterAccountDeletion(input: {
   };
 
   return {
-    available: client !== undefined,
+    available: client !== undefined && (input.signedIn?.() ?? true),
     async hasPendingPurchase() {
       try {
         const loaded = await input.storage.load({ key: journalKey });
@@ -157,6 +183,21 @@ export function createStarterAccountDeletion(input: {
   };
 }
 
+function withTimeout(step: () => Promise<unknown> | unknown): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    Promise.resolve().then(step),
+    new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('sign-out step timed out')), signOutStepTimeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** Test seam: forget a lost answer remembered by an earlier deletion attempt. */
+export function resetStarterAccountDeletionForTests(): void {
+  answerLost = false;
+}
+
 /** The confirmation shown before deleting: what goes, what stays, and a pending purchase warning. */
 export function deleteAccountConfirmText(locale: Locale, pendingPurchase: boolean): string {
   const text = t(locale, 'deleteAccountConfirm');
@@ -170,9 +211,13 @@ export function deleteAccountOutcomeText(
 ): string {
   switch (result.outcome) {
     case 'deleted':
-      return t(locale, 'deleteAccountDone');
+      return result.signedOut
+        ? t(locale, 'deleteAccountDone')
+        : t(locale, 'deleteAccountDoneLocalFailed');
     case 'session-ended':
-      return t(locale, 'deleteAccountSessionEnded');
+      return result.signedOut
+        ? t(locale, 'deleteAccountSessionEnded')
+        : t(locale, 'deleteAccountDoneLocalFailed');
     case 'needs-session':
       return t(locale, 'deleteAccountNeedsSession');
     case 'unavailable':

@@ -13,6 +13,7 @@ import {
   deleteAccountConfirmText,
   deleteAccountOutcomeText,
   onStarterAccountDeleted,
+  resetStarterAccountDeletionForTests,
   starterGuestCredentialKeys,
 } from '../templates/phaser-game/src/platform/deleteAccount.js';
 import { defaultMonetizationJournalKey } from '../templates/phaser-game/src/platform/monetizationJournal.js';
@@ -131,7 +132,7 @@ const pendingPurchase = {
     stop();
     stopFailing();
   }
-  assert.deepEqual(first, { outcome: 'deleted', retainedPurchaseRecords: 2 });
+  assert.deepEqual(first, { outcome: 'deleted', retainedPurchaseRecords: 2, signedOut: true });
   assert.deepEqual(second, first);
   assert.equal(calls, 1);
   assert.deepEqual([...credentials.values.keys()], ['unrelated']);
@@ -140,7 +141,8 @@ const pendingPurchase = {
   assert.deepEqual(steps, ['notifications.unregister']);
 }
 
-// Failures keep the session; a lost answer followed by UNAUTHORIZED means it was deleted.
+// Failures keep the session; only a sent request whose answer was lost,
+// followed by the server refusing the session, counts as deleted.
 {
   const answers: (AccountDeletionReceipt | AccountDeletionError)[] = [];
   const credentials = memoryCredentials({ 'mpgd.guest.refresh': 'secret' });
@@ -157,20 +159,79 @@ const pendingPurchase = {
     storage: memoryStorage(),
     secureCredentials: credentials,
   });
-  answers.push(new AccountDeletionError('UNAUTHORIZED'));
-  assert.deepEqual(await deletion.deleteAccount(), { outcome: 'needs-session' });
-  answers.push(new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED'));
-  assert.deepEqual(await deletion.deleteAccount(), { outcome: 'unavailable' });
-  answers.push(new AccountDeletionError('ACCOUNT_DELETION_FAILED'));
-  assert.deepEqual(await deletion.deleteAccount(), { outcome: 'failed', retryable: true });
-  answers.push(new AccountDeletionError('ACCOUNT_DELETION_REJECTED'));
-  assert.deepEqual(await deletion.deleteAccount(), { outcome: 'failed', retryable: false });
+  const ask = async (answer: AccountDeletionError) => {
+    answers.push(answer);
+    return deletion.deleteAccount();
+  };
+  const lost = () => new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', {
+    requestSent: true,
+  });
+  const unsent = () => new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', {
+    requestSent: false,
+  });
+  const refused = () => new AccountDeletionError('UNAUTHORIZED');
+  const signedOutHere = () => new AccountDeletionError('UNAUTHORIZED', { requestSent: false });
+  resetStarterAccountDeletionForTests();
+  assert.deepEqual(await ask(refused()), { outcome: 'needs-session' });
+  assert.deepEqual(await ask(new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED')), {
+    outcome: 'unavailable',
+  });
+  assert.deepEqual(await ask(new AccountDeletionError('ACCOUNT_DELETION_FAILED')), {
+    outcome: 'failed',
+    retryable: true,
+  });
+  assert.deepEqual(await ask(new AccountDeletionError('ACCOUNT_DELETION_REJECTED')), {
+    outcome: 'failed',
+    retryable: false,
+  });
+  // Nothing sent: a later refusal is a plain missing session.
+  assert.deepEqual(await ask(unsent()), { outcome: 'failed', retryable: true });
+  assert.deepEqual(await ask(refused()), { outcome: 'needs-session' });
+  // Sent and lost, then the server answered otherwise: not deleted.
+  assert.deepEqual(await ask(lost()), { outcome: 'failed', retryable: true });
+  assert.deepEqual(await ask(new AccountDeletionError('ACCOUNT_DELETION_FAILED')), {
+    outcome: 'failed',
+    retryable: true,
+  });
+  assert.deepEqual(await ask(refused()), { outcome: 'needs-session' });
+  // Sent and lost, then signed out on this device (nothing sent): not inferred.
+  assert.deepEqual(await ask(lost()), { outcome: 'failed', retryable: true });
+  assert.deepEqual(await ask(signedOutHere()), { outcome: 'needs-session' });
   assert.equal(credentials.values.size, 1, 'nothing signed out before a deletion');
-  answers.push(new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE'));
-  assert.deepEqual(await deletion.deleteAccount(), { outcome: 'failed', retryable: true });
-  answers.push(new AccountDeletionError('UNAUTHORIZED'));
-  assert.deepEqual(await deletion.deleteAccount(), { outcome: 'session-ended' });
+  // Sent and lost, then the server refused the session: most likely deleted,
+  // even from a new scene's instance.
+  assert.deepEqual(await ask(refused()), { outcome: 'session-ended', signedOut: true });
   assert.equal(credentials.values.size, 0, 'signed out after the session ended');
+  resetStarterAccountDeletionForTests();
+}
+
+// The entry needs a signed-in session; a journal that cannot be cleared is reported.
+{
+  assert.equal(
+    createStarterAccountDeletion({
+      client: { deleteAccount: async () => receipt },
+      storage: memoryStorage(),
+      signedIn: () => false,
+    }).available,
+    false,
+  );
+  const consoleError = console.error;
+  console.error = () => undefined;
+  try {
+    assert.deepEqual(
+      await createStarterAccountDeletion({
+        client: { deleteAccount: async () => receipt },
+        storage: {
+          load: async () => null,
+          save: () => Promise.reject(new Error('storage full')),
+        },
+        signedIn: () => true,
+      }).deleteAccount(),
+      { outcome: 'deleted', retainedPurchaseRecords: 2, signedOut: false },
+    );
+  } finally {
+    console.error = consoleError;
+  }
 }
 
 // The copy: what goes, what stays, both languages, and the pending purchase warning.
@@ -180,8 +241,9 @@ for (const locale of ['en', 'ko'] as const) {
   assert.match(text, locale === 'en' ? /5 years/u : /5년/u);
   assert.ok(deleteAccountConfirmText(locale, true).length > text.length);
   for (const outcome of [
-    { outcome: 'deleted', retainedPurchaseRecords: 0 },
-    { outcome: 'session-ended' },
+    { outcome: 'deleted', retainedPurchaseRecords: 0, signedOut: true },
+    { outcome: 'deleted', retainedPurchaseRecords: 0, signedOut: false },
+    { outcome: 'session-ended', signedOut: true },
     { outcome: 'needs-session' },
     { outcome: 'unavailable' },
     { outcome: 'failed', retryable: true },

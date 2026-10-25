@@ -44,8 +44,9 @@ export function createStarterGame(input: {
     globalThis.removeEventListener('pagehide', onPageHide);
     audio.dispose();
     input.context.gameRuntime.dispose();
-    disposeRestorePurchases();
+    // In reverse order of mounting: each restores the mount's position it saw.
     disposeDeleteAccount();
+    disposeRestorePurchases();
     shell.dispose();
   };
   const onPageHide = (event: PageTransitionEvent): void => {

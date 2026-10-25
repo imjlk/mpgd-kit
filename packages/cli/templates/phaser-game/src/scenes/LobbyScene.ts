@@ -12,9 +12,13 @@ import {
   restoreOutcomeText,
   type StarterRestoreOutcome,
 } from '../platform/restorePurchases';
+import { resolveStarterServerSession } from '../platform/serverSession';
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
 
 export class LobbyScene extends Phaser.Scene {
+  /** True while the Delete account panel is open; Enter then does not start the game. */
+  private deleteAccountOpen = false;
+
   constructor() {
     super('LobbyScene');
   }
@@ -107,7 +111,13 @@ export class LobbyScene extends Phaser.Scene {
     this.addDeleteAccountEntry(context);
 
     this.input.once('pointerdown', () => this.scene.start('PlayScene'));
-    this.input.keyboard?.once('keydown-ENTER', () => this.scene.start('PlayScene'));
+    const onEnter = (): void => {
+      if (!this.deleteAccountOpen) {
+        this.input.keyboard?.off('keydown-ENTER', onEnter);
+        this.scene.start('PlayScene');
+      }
+    };
+    this.input.keyboard?.on('keydown-ENTER', onEnter);
   }
 
   /**
@@ -178,10 +188,12 @@ export class LobbyScene extends Phaser.Scene {
       ...(context.platform.secureCredentials === undefined
         ? {}
         : { secureCredentials: context.platform.secureCredentials }),
+      signedIn: () => resolveStarterServerSession()?.current() !== undefined,
     });
     if (!deletion.available) {
       return;
     }
+    this.deleteAccountOpen = false;
     const locale = context.locale;
     const swallow = (
       _pointer: Phaser.Input.Pointer,
@@ -242,8 +254,10 @@ export class LobbyScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
     panel.add([backdrop, message, status, confirm, cancel]);
     let deleting = false;
+    let signedOut = false;
     entry.on('pointerdown', (...args: Parameters<typeof swallow>) => {
       swallow(...args);
+      this.deleteAccountOpen = true;
       status.setText('');
       confirm.setVisible(true);
       cancel.setText(t(locale, 'deleteAccountCancel'));
@@ -257,9 +271,17 @@ export class LobbyScene extends Phaser.Scene {
     });
     cancel.on('pointerdown', (...args: Parameters<typeof swallow>) => {
       swallow(...args);
-      if (!deleting) {
-        panel.setVisible(false);
+      if (deleting) {
+        return;
       }
+      if (signedOut) {
+        // A fresh start drops every in-memory trace of the deleted player
+        // (the session, the reconciler, the notifications runtime).
+        globalThis.location.reload();
+        return;
+      }
+      this.deleteAccountOpen = false;
+      panel.setVisible(false);
     });
     confirm.on('pointerdown', (...args: Parameters<typeof swallow>) => {
       swallow(...args);
@@ -267,6 +289,8 @@ export class LobbyScene extends Phaser.Scene {
         return;
       }
       deleting = true;
+      confirm.setAlpha(0.5);
+      cancel.setAlpha(0.5);
       status.setText(t(locale, 'deleteAccountWorking'));
       void deletion.deleteAccount()
         .catch((): StarterDeleteAccountOutcome => ({ outcome: 'failed', retryable: true }))
@@ -275,9 +299,12 @@ export class LobbyScene extends Phaser.Scene {
           if (!status.active) {
             return;
           }
+          confirm.setAlpha(1);
+          cancel.setAlpha(1);
           status.setText(deleteAccountOutcomeText(locale, result));
           if (result.outcome === 'deleted' || result.outcome === 'session-ended') {
-            // Signed out: the entry goes; Cancel closes the panel.
+            // Signed out: the entry goes; Close restarts the game.
+            signedOut = true;
             confirm.setVisible(false);
             entry.setVisible(false);
             cancel.setText(t(locale, 'deleteAccountClose'));
