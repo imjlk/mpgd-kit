@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -6,23 +7,28 @@ import { fileURLToPath } from 'node:url';
 
 import {
   addIosAppResource,
+  applyAndroidManifestAdId,
   applyAndroidManifestOrientation,
   applyIosInfoPlistOrientation,
   applyIosInfoPlistStorePolicy,
   applyIosProjectDeviceFamily,
+  inspectAndroidManifestAds,
   inspectAndroidManifestOrientation,
   inspectIosAppPrivacyManifest,
+  inspectIosInfoPlistAds,
   inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
   inspectIosProjectDeviceFamily,
   iosAppBundlesResource,
   iosAppPrivacyManifestFile,
   iosAppPrivacyManifestXml,
+  readAndroidAdIdDeclaration,
   readGameNativeOrientation,
   readIosAppReleaseDeviceFamily,
   readIosDeviceFamily,
   readPlistTopLevelValue,
   setPlistTopLevelValue,
+  shellUsesAdMob,
 } from '../src/native-shell-store-policy.js';
 import {
   inspectNativeStorePolicy,
@@ -370,7 +376,23 @@ try {
       inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell, gameRoot: game })[0]?.level,
       'error',
     );
-    assert.deepEqual(inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell }), []);
+    assert.deepEqual(
+      inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell })
+        .map((issue) => issue.message.includes('AD_ID')),
+      [true],
+      'without a game config only the advertising ID warning remains',
+    );
+    writeFileSync(
+      path.join(gameShell, 'package.json'),
+      JSON.stringify({ dependencies: { '@capacitor-community/admob': '8.1.0' } }),
+    );
+    assert.deepEqual(
+      inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell }).map(
+        (issue) => issue.level,
+      ),
+      ['error'],
+      'a shell with AdMob needs its application ID',
+    );
     writeFileSync(path.join(game, 'mpgd.game.json'), '{"native":');
     assert.throws(
       () => inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell, gameRoot: game }),
@@ -459,4 +481,141 @@ try {
     iosAppPrivacyManifestXml,
     'the reference shell ships the same manifest the initializer writes',
   );
+}
+
+// Advertising declarations.
+{
+  assert.equal(shellUsesAdMob({ dependencies: { '@capacitor-community/admob': '8.1.0' } }), true);
+  assert.equal(shellUsesAdMob({ dependencies: { '@capacitor/core': '8.5.2' } }), false);
+  assert.equal(shellUsesAdMob(undefined), false);
+  const manifest = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '    <application android:label="Game">',
+    '    </application>',
+    '    <uses-permission android:name="android.permission.INTERNET" />',
+    '</manifest>',
+    '',
+  ].join('\n');
+  assert.equal(readAndroidAdIdDeclaration(manifest), 'absent');
+  const removed = applyAndroidManifestAdId(manifest, false);
+  assert.equal(readAndroidAdIdDeclaration(removed), 'removed');
+  assert.match(
+    removed,
+    /<manifest xmlns:android="[^"]+" xmlns:tools="http:\/\/schemas\.android\.com\/tools">/u,
+  );
+  assert.match(
+    removed,
+    /INTERNET" \/>\n {4}<uses-permission android:name="com\.google\.android\.gms\.permission\.AD_ID" tools:node="remove" \/>\n<\/manifest>/u,
+  );
+  assert.equal(applyAndroidManifestAdId(removed, false), removed, 'idempotent');
+  const declared = applyAndroidManifestAdId(removed, true);
+  assert.equal(readAndroidAdIdDeclaration(declared), 'declared');
+  assert.equal((declared.match(/AD_ID/gu) ?? []).length, 1, 'the removal is replaced');
+  assert.deepEqual(inspectAndroidManifestAds(removed, false), []);
+  assert.deepEqual(
+    inspectAndroidManifestAds(manifest, false).map((issue) => issue.level),
+    ['warning'],
+  );
+  assert.deepEqual(
+    inspectAndroidManifestAds(declared, true).map((issue) => issue.level),
+    ['error'],
+    'AdMob without its application ID meta-data crashes at launch',
+  );
+  const withAppId = declared.replace(
+    '<application android:label="Game">',
+    '<application android:label="Game">\n        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-0000000000000000~0000000000" />',
+  );
+  assert.deepEqual(inspectAndroidManifestAds(withAppId, true), []);
+  assert.deepEqual(
+    inspectAndroidManifestAds(applyAndroidManifestAdId(withAppId, false), true).map(
+      (issue) => issue.level,
+    ),
+    ['warning'],
+  );
+  // A commented-out declaration does not count.
+  assert.equal(
+    readAndroidAdIdDeclaration(manifest.replace(
+      '</manifest>',
+      '<!-- <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" /> --></manifest>',
+    )),
+    'absent',
+  );
+  // The reference shell shows no ads and removes the permission.
+  assert.equal(
+    readAndroidAdIdDeclaration(
+      readFileSync(path.join(referenceShell, 'android/app/src/main/AndroidManifest.xml'), 'utf8'),
+    ),
+    'removed',
+  );
+
+  const plist = readFileSync(path.join(referenceShell, 'ios/App/App/Info.plist'), 'utf8');
+  assert.deepEqual(inspectIosInfoPlistAds(plist, false), []);
+  assert.deepEqual(
+    inspectIosInfoPlistAds(plist, true).map((issue) => issue.level),
+    ['error', 'warning'],
+  );
+  const withAdMob = setPlistTopLevelValue(
+    setPlistTopLevelValue(
+      plist,
+      'GADApplicationIdentifier',
+      '<string>ca-app-pub-0000000000000000~0000000000</string>',
+    ),
+    'SKAdNetworkItems',
+    '<array><dict><key>SKAdNetworkIdentifier</key><string>cstr6suwn9.skadnetwork</string></dict></array>',
+  );
+  assert.deepEqual(inspectIosInfoPlistAds(withAdMob, true), []);
+}
+
+// The pinned Capacitor CLI's own native templates: what `cap add` generates.
+{
+  const assets = path.join(referenceShell, 'node_modules/@capacitor/cli/assets');
+  if (existsSync(path.join(assets, 'ios-spm-template.tar.gz'))) {
+    const extracted = mkdtempSync(path.join(tmpdir(), 'mpgd-capacitor-template-'));
+    try {
+      for (const [archive, directory] of [
+        ['ios-spm-template.tar.gz', 'ios'],
+        ['android-template.tar.gz', 'android'],
+      ] as const) {
+        mkdirSync(path.join(extracted, directory));
+        const result = spawnSync('tar', [
+          '-xzf',
+          path.join(assets, archive),
+          '-C',
+          path.join(extracted, directory),
+        ]);
+        assert.equal(result.status, 0, `extract ${archive}`);
+      }
+      const project = readFileSync(
+        path.join(extracted, 'ios/App/App.xcodeproj/project.pbxproj'),
+        'utf8',
+      );
+      const added = addIosAppResource(project, iosAppPrivacyManifestFile);
+      assert.ok(added !== undefined, 'the generated iOS layout takes the privacy manifest');
+      assert.equal(iosAppBundlesResource(added, iosAppPrivacyManifestFile), true);
+      assert.equal(
+        readIosAppReleaseDeviceFamily(applyIosProjectDeviceFamily(added, 'iphone')),
+        '1',
+      );
+      const plist = applyIosInfoPlistOrientation(
+        applyIosInfoPlistStorePolicy(
+          readFileSync(path.join(extracted, 'ios/App/App/Info.plist'), 'utf8'),
+        ),
+        'portrait',
+      );
+      assert.deepEqual(inspectIosInfoPlistStorePolicy(plist), []);
+      assert.deepEqual(inspectIosInfoPlistOrientation(plist, 'portrait', 'universal'), []);
+      const manifest = applyAndroidManifestAdId(
+        applyAndroidManifestOrientation(
+          readFileSync(path.join(extracted, 'android/app/src/main/AndroidManifest.xml'), 'utf8'),
+          'landscape',
+        ),
+        false,
+      );
+      assert.deepEqual(inspectAndroidManifestOrientation(manifest, 'landscape'), []);
+      assert.deepEqual(inspectAndroidManifestAds(manifest, false), []);
+    } finally {
+      rmSync(extracted, { recursive: true, force: true });
+    }
+  }
 }

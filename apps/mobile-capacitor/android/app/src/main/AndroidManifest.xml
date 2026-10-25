@@ -42,6 +42,10 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The kit shell shows no AdMob ads: keep the advertising ID out of the
+         merged manifest so the Play Console advertising ID answer is "no".
+         A game that installs AdMob declares it instead. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
     <!-- Notification reminders are inexact: drop the exact-alarm permission
          @capacitor/local-notifications adds (Android 14 denies it to new
          installs, and Play restricts it to alarm and calendar apps). -->

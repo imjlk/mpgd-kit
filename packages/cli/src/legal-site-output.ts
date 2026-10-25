@@ -229,3 +229,53 @@ function ensureLegalDirectory(directory: string): void {
 function isErrno(error: unknown, code: string): boolean {
   return error !== null && typeof error === 'object' && 'code' in error && error.code === code;
 }
+
+/**
+ * Google's AdMob line for `app-ads.txt` (`f08c47fec0942fa0` is Google's
+ * certification authority ID). AdMob shows the exact line for an account
+ * under Apps > View all apps > app-ads.txt; use a game-owned
+ * `legal/app-ads.txt` instead when it differs or mediation partners add lines.
+ */
+export function admobAppAdsTxtLine(publisherId: string): string {
+  if (!/^pub-\d{16}$/u.test(publisherId)) {
+    throw new Error('mpgd.game.json ads.admob.publisherId must look like pub-0000000000000000.');
+  }
+  return `google.com, ${publisherId}, DIRECT, f08c47fec0942fa0`;
+}
+
+/**
+ * The `app-ads.txt` the legal site serves at its root, or undefined: a
+ * game-owned `<legal-dir>/app-ads.txt` verbatim, else the AdMob line for
+ * `ads.admob.publisherId` in the game's `mpgd.game.json`. Store listings
+ * name this site as the developer website (Play) or marketing URL (App
+ * Store), which is where ad buyers look for the file.
+ */
+export function resolveAppAdsTxt(input: {
+  readonly ownFile?: string;
+  readonly gameConfig?: unknown;
+}): string | undefined {
+  if (input.ownFile !== undefined) {
+    if (input.ownFile.trim().length === 0) {
+      throw new Error('legal/app-ads.txt is empty.');
+    }
+    return input.ownFile.endsWith('\n') ? input.ownFile : `${input.ownFile}\n`;
+  }
+  const config = input.gameConfig;
+  if (typeof config !== 'object' || config === null || !('ads' in config)) {
+    return undefined;
+  }
+  const ads = (config as { readonly ads?: unknown }).ads;
+  const admob = typeof ads === 'object' && ads !== null
+    ? (ads as { readonly admob?: unknown }).admob
+    : undefined;
+  const publisherId = typeof admob === 'object' && admob !== null
+    ? (admob as { readonly publisherId?: unknown }).publisherId
+    : undefined;
+  if (publisherId === undefined) {
+    return undefined;
+  }
+  if (typeof publisherId !== 'string') {
+    throw new Error('mpgd.game.json ads.admob.publisherId must be a string.');
+  }
+  return `${admobAppAdsTxtLine(publisherId)}\n`;
+}

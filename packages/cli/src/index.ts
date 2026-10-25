@@ -23,7 +23,11 @@ import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import { buildAssetPackTarget } from './asset-pack-target.js';
 import { publishAssetPacks } from './asset-pack-publish.js';
-import { assertLegalProjectPath, publishLegalSiteFiles } from './legal-site-output.js';
+import {
+  assertLegalProjectPath,
+  publishLegalSiteFiles,
+  resolveAppAdsTxt,
+} from './legal-site-output.js';
 import { assertAssetPackTargetPolicy } from '@mpgd/target-config/asset-packs';
 import {
   materializeCapacitorShellStarter,
@@ -3471,8 +3475,23 @@ function createLegalSiteOutputs(
     };
   });
 
+  const ownAppAds = path.join(legalDir, 'app-ads.txt');
+  if (existsSync(ownAppAds)) {
+    assertLegalProjectPath('legal-dir', ownAppAds);
+  }
+  const gameConfigFile = path.join(process.cwd(), 'mpgd.game.json');
+  const appAdsTxt = resolveAppAdsTxt({
+    ...(existsSync(ownAppAds) ? { ownFile: readFileSync(ownAppAds, 'utf8') } : {}),
+    ...(existsSync(gameConfigFile)
+      ? { gameConfig: JSON.parse(readFileSync(gameConfigFile, 'utf8')) as unknown }
+      : {}),
+  });
+
   return [
     ...outputs,
+    ...(appAdsTxt === undefined
+      ? []
+      : [{ file: path.join(outDir, 'app-ads.txt'), content: appAdsTxt }]),
     {
       file: path.join(outDir, '_headers'),
       content: [

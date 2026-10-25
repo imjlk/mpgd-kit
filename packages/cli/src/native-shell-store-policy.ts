@@ -759,3 +759,127 @@ function uniquePbxId(project: string, seed: string): string {
     }
   }
 }
+
+// Advertising declarations.
+
+export const admobCapacitorPlugin = '@capacitor-community/admob';
+export const androidAdIdPermission = 'com.google.android.gms.permission.AD_ID';
+
+/** Whether the shell's package.json installs the AdMob Capacitor plugin. */
+export function shellUsesAdMob(shellPackage: unknown): boolean {
+  if (!isRecord(shellPackage)) {
+    return false;
+  }
+  return [shellPackage.dependencies, shellPackage.devDependencies]
+    .some((dependencies) => isRecord(dependencies) && dependencies[admobCapacitorPlugin] !== undefined);
+}
+
+function adIdPermissions(manifest: string): readonly RegExpExecArray[] {
+  const masked = maskXmlComments(manifest);
+  return [...masked.matchAll(/<uses-permission\b[^>]*?\/?>(?:\s*<\/uses-permission>)?/gu)]
+    .filter((match) => readXmlAttribute(match[0], 'android:name') === androidAdIdPermission);
+}
+
+/** `declared`, `removed` (tools:node="remove"), or `absent` from the app manifest. */
+export function readAndroidAdIdDeclaration(manifest: string): 'declared' | 'removed' | 'absent' {
+  const permissions = adIdPermissions(manifest);
+  if (permissions.length === 0) {
+    return 'absent';
+  }
+  return permissions.some((match) => readXmlAttribute(match[0], 'tools:node') === 'remove')
+    ? 'removed'
+    : 'declared';
+}
+
+/**
+ * Declares the advertising ID permission when the game shows AdMob ads
+ * (Google Mobile Ads also merges it) and removes it from the merged manifest
+ * otherwise, so the Play Console advertising ID answer matches the binary.
+ */
+export function applyAndroidManifestAdId(manifest: string, usesAds: boolean): string {
+  let next = manifest;
+  for (const permission of [...adIdPermissions(manifest)].reverse()) {
+    const start = permission.index ?? 0;
+    const lineStart = next.lastIndexOf('\n', start - 1) + 1;
+    const end = start + permission[0].length;
+    const lineEnd = /^[ \t]*\r?\n/u.exec(next.slice(end))?.[0].length ?? 0;
+    const whole = next.slice(lineStart, start).trim() === '' ? lineStart : start;
+    next = `${next.slice(0, whole)}${next.slice(end + (whole === lineStart ? lineEnd : 0))}`;
+  }
+  const masked = maskXmlComments(next);
+  const close = masked.lastIndexOf('</manifest>');
+  const root = /<manifest\b[^>]*?>/u.exec(masked);
+  if (close === -1 || root === null) {
+    throw new Error('Android manifest has no <manifest> root.');
+  }
+  const newline = next.includes('\r\n') ? '\r\n' : '\n';
+  const element = usesAds
+    ? `<uses-permission android:name="${androidAdIdPermission}" />`
+    : `<uses-permission android:name="${androidAdIdPermission}" tools:node="remove" />`;
+  let rootTag = next.slice(root.index, root.index + root[0].length);
+  if (!usesAds && !/\sxmlns:tools\s*=/u.test(rootTag)) {
+    rootTag = addXmlAttribute(rootTag, 'xmlns:tools', 'http://schemas.android.com/tools');
+  }
+  const head = `${next.slice(0, root.index)}${rootTag}${next.slice(root.index + root[0].length, close)}`;
+  return `${head.trimEnd()}${newline}    ${element}${newline}${next.slice(close)}`;
+}
+
+export function inspectAndroidManifestAds(
+  manifest: string,
+  usesAds: boolean,
+): readonly NativeShellPolicyIssue[] {
+  const issues: NativeShellPolicyIssue[] = [];
+  const declaration = readAndroidAdIdDeclaration(manifest);
+  if (usesAds) {
+    const hasAppId = [...maskXmlComments(manifest).matchAll(/<meta-data\b[^>]*?\/?>/gu)]
+      .some((match) => readXmlAttribute(match[0], 'android:name') === 'com.google.android.gms.ads.APPLICATION_ID');
+    if (!hasAppId) {
+      issues.push({
+        level: 'error',
+        message: 'The shell installs AdMob but AndroidManifest.xml has no '
+          + 'com.google.android.gms.ads.APPLICATION_ID meta-data; the app crashes at launch.',
+      });
+    }
+    if (declaration === 'removed') {
+      issues.push({
+        level: 'warning',
+        message: `AndroidManifest.xml removes ${androidAdIdPermission} although the shell shows `
+          + 'AdMob ads; answer the Play Console advertising ID question accordingly.',
+      });
+    }
+  } else if (declaration !== 'removed') {
+    issues.push({
+      level: 'warning',
+      message: `The shell shows no AdMob ads, but AndroidManifest.xml does not remove `
+        + `${androidAdIdPermission}; a dependency can still merge it. Add `
+        + `<uses-permission android:name="${androidAdIdPermission}" tools:node="remove" />.`,
+    });
+  }
+  return issues;
+}
+
+export function inspectIosInfoPlistAds(
+  plist: string,
+  usesAds: boolean,
+): readonly NativeShellPolicyIssue[] {
+  if (!usesAds) {
+    return [];
+  }
+  const issues: NativeShellPolicyIssue[] = [];
+  if (readPlistTopLevelValue(plist, 'GADApplicationIdentifier') === undefined) {
+    issues.push({
+      level: 'error',
+      message: 'The shell installs AdMob but Info.plist has no GADApplicationIdentifier; the '
+        + 'Google Mobile Ads SDK stops the app at launch.',
+    });
+  }
+  const networks = readPlistTopLevelValue(plist, 'SKAdNetworkItems');
+  if (networks === undefined || !/cstr6suwn9\.skadnetwork/u.test(networks.xml)) {
+    issues.push({
+      level: 'warning',
+      message: "Info.plist SKAdNetworkItems does not list Google's cstr6suwn9.skadnetwork; copy "
+        + 'the current list from https://developers.google.com/admob/ios/3p-skadnetworks.',
+    });
+  }
+  return issues;
+}

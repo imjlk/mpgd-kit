@@ -440,6 +440,11 @@ try {
   assert.ok(generatedManifest.includes(` ${toolsNamespace}`), 'the tools namespace is bound');
   assert.match(
     generatedManifest,
+    /<uses-permission android:name="com\.google\.android\.gms\.permission\.AD_ID" tools:node="remove" \/>/u,
+    'a shell without AdMob keeps the advertising ID out of the merged manifest',
+  );
+  assert.match(
+    generatedManifest,
     /android:screenOrientation="sensorLandscape"/u,
     'mpgd.game.json native.orientation reaches a freshly generated Android project',
   );

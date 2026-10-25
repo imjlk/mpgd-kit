@@ -3,13 +3,16 @@ import { dirname, join } from 'node:path';
 
 import { readIosReleaseInfoPlist } from '../../packages/cli/src/native-shell-identity.js';
 import {
+  inspectAndroidManifestAds,
   inspectAndroidManifestOrientation,
   inspectIosAppPrivacyManifest,
+  inspectIosInfoPlistAds,
   inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
   inspectIosProjectDeviceFamily,
   readGameNativeOrientation,
   readIosDeviceFamily,
+  shellUsesAdMob,
   type NativeShellPolicyIssue,
 } from '../../packages/cli/src/native-shell-store-policy.js';
 
@@ -33,6 +36,8 @@ export function inspectNativeStorePolicy(input: {
   const orientation = gameConfig !== undefined && existsSync(gameConfig)
     ? readGameNativeOrientation(readJson(gameConfig))
     : undefined;
+  const shellPackage = join(input.shellApp, 'package.json');
+  const usesAds = existsSync(shellPackage) && shellUsesAdMob(readJson(shellPackage));
   if (input.platform === 'ios') {
     const project = join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj');
     if (!existsSync(project)) {
@@ -50,6 +55,7 @@ export function inspectNativeStorePolicy(input: {
       issues.push(
         ...inspectIosInfoPlistStorePolicy(plistSource),
         ...inspectIosInfoPlistOrientation(plistSource, orientation, deviceFamily ?? 'universal'),
+        ...inspectIosInfoPlistAds(plistSource, usesAds),
       );
     }
     return issues;
@@ -58,7 +64,11 @@ export function inspectNativeStorePolicy(input: {
   if (!existsSync(manifest)) {
     return [];
   }
-  return inspectAndroidManifestOrientation(readFileSync(manifest, 'utf8'), orientation);
+  const manifestSource = readFileSync(manifest, 'utf8');
+  return [
+    ...inspectAndroidManifestOrientation(manifestSource, orientation),
+    ...inspectAndroidManifestAds(manifestSource, usesAds),
+  ];
 }
 
 function readJson(file: string): unknown {

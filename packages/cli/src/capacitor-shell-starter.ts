@@ -35,6 +35,7 @@ import {
 } from './notifications-starter.js';
 import {
   addIosAppResource,
+  applyAndroidManifestAdId,
   applyAndroidManifestOrientation,
   applyIosInfoPlistOrientation,
   applyIosInfoPlistStorePolicy,
@@ -44,6 +45,7 @@ import {
   isRecord,
   readGameNativeOrientation,
   readIosDeviceFamily,
+  shellUsesAdMob,
   type IosDeviceFamily,
   type NativeShellOrientation,
 } from './native-shell-store-policy.js';
@@ -1088,9 +1090,10 @@ function materializeIosStorePolicy(gameRoot: string): void {
 }
 
 /**
- * Orientation of a freshly generated Android project's launcher activity and
- * `android:appCategory="game"`; an existing project is only reported by the
- * production build.
+ * Orientation of a freshly generated Android project's launcher activity,
+ * `android:appCategory="game"`, and the advertising ID permission (declared
+ * when the shell installs AdMob, removed otherwise); an existing project is
+ * only reported by the production build.
  */
 function materializeAndroidStorePolicy(gameRoot: string): void {
   const manifestFile = safeDestination(
@@ -1101,9 +1104,11 @@ function materializeAndroidStorePolicy(gameRoot: string): void {
     return;
   }
   const source = readFileSync(manifestFile, 'utf8');
-  const next = applyAndroidManifestOrientation(
-    source,
-    readNativeShellSettings(gameRoot).orientation ?? 'any',
+  const shellPackage = path.join(gameRoot, shellPath, 'package.json');
+  const usesAds = existsSync(shellPackage) && shellUsesAdMob(readJsonObject(shellPackage));
+  const next = applyAndroidManifestAdId(
+    applyAndroidManifestOrientation(source, readNativeShellSettings(gameRoot).orientation ?? 'any'),
+    usesAds,
   );
   if (next !== source) {
     writeFileSync(manifestFile, next);
