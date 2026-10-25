@@ -36,12 +36,13 @@ export const starterGuestCredentialKeys = [
 export function starterAccountDeletionConfirmation(
   session: { requestAccountDeletionConfirmation?(): Promise<string> } | undefined,
 ): (() => Promise<string>) | undefined {
-  if (session?.requestAccountDeletionConfirmation === undefined) {
+  const request = session?.requestAccountDeletionConfirmation;
+  if (session === undefined || request === undefined) {
     return undefined;
   }
   return async () => {
     try {
-      return await session.requestAccountDeletionConfirmation!();
+      return await request.call(session);
     } catch (error) {
       if (error instanceof GuestSessionCoordinatorError && error.code === 'GUEST_SESSION_REJECTED') {
         throw new AccountDeletionError('UNAUTHORIZED', { cause: error });

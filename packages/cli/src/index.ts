@@ -3451,12 +3451,24 @@ function buildLegalSite(input: {
       // Any quoting of the link (or a full URL ending in the path).
       .filter((output) => output.content.includes(deleteAccountPath))
       .map((output) => path.relative(process.cwd(), output.file));
+    const source = path.join(
+      path.relative(process.cwd(), legalDir) || '.',
+      `${deleteAccountLegalSlug}.html`,
+    );
+    if (linking.length > 0) {
+      // The starter's privacy, support, and terms pages link to it: a site
+      // without it would publish dead deletion links, so it is required then.
+      throw new Error(
+        `No ${source}, but these pages link to ${deleteAccountPath}: ${linking.join(', ')}. `
+          + 'Google Play needs that page (Play Console > App content > Data safety): copy '
+          + 'legal/delete-account.html from a game created with the current kit, or remove the links.',
+      );
+    }
     console.warn(
-      `No ${path.join(path.relative(process.cwd(), legalDir) || '.', `${deleteAccountLegalSlug}.html`)}: `
+      `No ${source}: `
         + 'Google Play needs a web page where players request account deletion without reinstalling '
         + 'the game (Play Console > App content > Data safety). Copy legal/delete-account.html from a '
-        + 'game created with the current kit.'
-        + (linking.length === 0 ? '' : ` These pages link to it: ${linking.join(', ')}.`),
+        + 'game created with the current kit.',
     );
   }
   // app-ads.txt and the optional pages are stale once their source is gone.

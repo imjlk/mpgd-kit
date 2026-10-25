@@ -230,6 +230,16 @@ await test('builds the account deletion page when its source exists, and warns w
         path.join(project, 'legal', 'privacy.html'),
         page('Privacy <a href="/delete-account/">Delete account</a>'),
       );
+      // A page that links to the missing deletion page: build and check refuse
+      // rather than publish a dead link, and name the page.
+      for (const command of ['build', 'check']) {
+        await assert.rejects(
+          runMpgdCli(['legal', command]),
+          /these pages link to \/delete-account\/: .*privacy[/\\]index\.html/u,
+          command,
+        );
+      }
+      writeFileSync(path.join(project, 'legal', 'privacy.html'), page('Privacy'));
       warnings.length = 0;
       console.warn = (message: string) => warnings.push(message);
       try {
@@ -237,10 +247,7 @@ await test('builds the account deletion page when its source exists, and warns w
       } finally {
         console.warn = originalWarn;
       }
-      assert.ok(
-        warnings.some((line) => /These pages link to it: .*privacy[/\\]index\.html/u.test(line)),
-        'a dead link to the missing page is named',
-      );
+      assert.ok(warnings.some((line) => /Google Play needs a web page/u.test(line)));
       const rebuilt = JSON.parse(readFileSync(path.join(site, 'legal-site.json'), 'utf8')) as {
         readonly pages: readonly { readonly slug: string }[];
       };
