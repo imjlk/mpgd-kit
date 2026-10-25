@@ -325,6 +325,114 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     assert.deepEqual(ended, [issued.sessionFamilyId]);
   }
 
+  // The same race on the retry path: an abandoned retry of the replaced token A
+  // (successor B unused at its read) resumes after B -> C. Not a replay either.
+  {
+    const store = await createStore();
+    let hold: Promise<void> | undefined;
+    let entered: (() => void) | undefined;
+    const paused: IdentityStore = {
+      ...store,
+      async addAccessToken(input) {
+        if (hold !== undefined) {
+          const wait = hold;
+          hold = undefined;
+          entered?.();
+          await wait;
+        }
+        return store.addAccessToken(input);
+      },
+    };
+    const ended: string[] = [];
+    const service = createGuestIdentityService({
+      store: paused,
+      now: () => start,
+      endNotificationSession: async (sessionId) => {
+        ended.push(sessionId);
+      },
+      log: () => undefined,
+    });
+    const issued = value(await service.issueGuest({ installationId: 'install-overlap-3' }));
+    const second = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    let release: (() => void) | undefined;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const enteredAdd = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const abandonedRetry = service.refresh({ refreshToken: issued.refreshToken });
+    await enteredAdd;
+    const third = value(await service.refresh({ refreshToken: second.refreshToken }));
+    release?.();
+    assert.deepEqual(await abandonedRetry, { ok: false, error: 'UNAVAILABLE' });
+    assert.deepEqual(ended, []);
+    value(await service.refresh({ refreshToken: third.refreshToken }));
+  }
+
+  // Both rounds lose: the abandoned refresh of A loses its rotation to a retry
+  // (A -> B), re-reads A as a valid retry, and then loses that too to B -> C.
+  {
+    const store = await createStore();
+    const holds: { rotate?: Promise<void> | undefined; add?: Promise<void> | undefined } = {};
+    const entered: { rotate?: () => void; add?: () => void } = {};
+    const paused: IdentityStore = {
+      ...store,
+      async rotate(input) {
+        const wait = holds.rotate;
+        if (wait !== undefined) {
+          holds.rotate = undefined;
+          entered.rotate?.();
+          await wait;
+        }
+        return store.rotate(input);
+      },
+      async addAccessToken(input) {
+        const wait = holds.add;
+        if (wait !== undefined) {
+          holds.add = undefined;
+          entered.add?.();
+          await wait;
+        }
+        return store.addAccessToken(input);
+      },
+    };
+    const ended: string[] = [];
+    const service = createGuestIdentityService({
+      store: paused,
+      now: () => start,
+      endNotificationSession: async (sessionId) => {
+        ended.push(sessionId);
+      },
+      log: () => undefined,
+    });
+    const issued = value(await service.issueGuest({ installationId: 'install-overlap-4' }));
+    let releaseRotate: (() => void) | undefined;
+    let releaseAdd: (() => void) | undefined;
+    holds.rotate = new Promise<void>((resolve) => {
+      releaseRotate = resolve;
+    });
+    const enteredRotate = new Promise<void>((resolve) => {
+      entered.rotate = resolve;
+    });
+    const abandoned = service.refresh({ refreshToken: issued.refreshToken });
+    await enteredRotate;
+    const second = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    holds.add = new Promise<void>((resolve) => {
+      releaseAdd = resolve;
+    });
+    const enteredAdd = new Promise<void>((resolve) => {
+      entered.add = resolve;
+    });
+    releaseRotate?.();
+    await enteredAdd;
+    const third = value(await service.refresh({ refreshToken: second.refreshToken }));
+    releaseAdd?.();
+    assert.deepEqual(await abandoned, { ok: false, error: 'UNAVAILABLE' });
+    assert.deepEqual(ended, []);
+    value(await service.refresh({ refreshToken: third.refreshToken }));
+  }
+
   // Expiry: access tokens after their lifetime, families after the inactivity window.
   {
     const { service, advance } = await setup();

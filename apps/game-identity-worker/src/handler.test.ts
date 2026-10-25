@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import {
   createGuestSessionCoordinator,
@@ -364,6 +365,66 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
     now: () => clock,
   }).start();
   assert.notEqual(fresh.serverUserId, first.serverUserId);
+}
+
+// A refresh that lost a race answers 503 UNAVAILABLE (retry), never 401.
+{
+  const store = createMemoryIdentityStore();
+  let hold: Promise<void> | undefined;
+  let entered: (() => void) | undefined;
+  const paused: IdentityStore = {
+    ...store,
+    async rotate(input) {
+      if (hold !== undefined) {
+        const wait = hold;
+        hold = undefined;
+        entered?.();
+        await wait;
+      }
+      return store.rotate(input);
+    },
+  };
+  const fetch = createIdentityFetchHandler(env, { store: paused, now: () => start });
+  const issued = await read(
+    await fetch(post(guestIdentityHttpRoutes.issueGuest, { installationId: 'install-http-race' })),
+  );
+  let release: (() => void) | undefined;
+  hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const enteredRotate = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const abandoned = fetch(
+    post(guestIdentityHttpRoutes.refresh, { refreshToken: issued.body.refreshToken }),
+  );
+  await enteredRotate;
+  const second = await read(
+    await fetch(post(guestIdentityHttpRoutes.refresh, { refreshToken: issued.body.refreshToken })),
+  );
+  await fetch(post(guestIdentityHttpRoutes.refresh, { refreshToken: second.body.refreshToken }));
+  release?.();
+  assert.deepEqual(await read(await abandoned), { status: 503, body: { error: 'UNAVAILABLE' } });
+}
+
+// The [[ratelimits]] binding wrangler.toml recommends needs Wrangler 4.36.0 or later
+// (developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/): the declared
+// range must not admit an older Wrangler.
+{
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as {
+    readonly devDependencies: Readonly<Record<string, string>>;
+  };
+  const wranglerConfig = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  assert.match(wranglerConfig, /\[\[ratelimits\]\]/u);
+  const range = /^\^(\d+)\.(\d+)\.(\d+)$/u.exec(manifest.devDependencies.wrangler ?? '');
+  assert.ok(range !== null, 'wrangler is a caret range');
+  const [major, minor] = [Number(range[1]), Number(range[2])];
+  assert.ok(
+    major > 4 || (major === 4 && minor >= 36),
+    `wrangler ${manifest.devDependencies.wrangler} admits < 4.36.0`,
+  );
 }
 
 console.info('Guest identity Worker HTTP routes and bindings passed.');

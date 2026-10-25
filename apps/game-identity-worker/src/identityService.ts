@@ -186,7 +186,10 @@ export function createGuestIdentityService(input: {
   }
 
   const rejected = { ok: false, error: 'GUEST_SESSION_REJECTED' } as const;
-  const outdated = { ok: false, error: 'UNAVAILABLE' } as const;
+  const lostRace = () => {
+    log('[identity] a refresh lost a race to newer rotations; the family is kept');
+    return { ok: false, error: 'UNAVAILABLE' } as const;
+  };
 
   return {
     async issueGuest({ installationId }) {
@@ -284,8 +287,7 @@ export function createGuestIdentityService(input: {
           }
         }
         if (raced) {
-          log('[identity] a refresh lost a race to newer rotations; the family is kept');
-          return outdated;
+          return lostRace();
         }
         // RFC 9700 section 4.14.2: an invalidated refresh token was
         // presented, so one of two parties holds a stolen copy. The server
@@ -294,7 +296,8 @@ export function createGuestIdentityService(input: {
         log('[identity] refresh token reuse: the session family was revoked');
         return rejected;
       }
-      return raced ? outdated : rejected;
+      // Both rounds lost their swap (each `continue` above follows one).
+      return lostRace();
     },
 
     async revoke({ refreshToken }) {
