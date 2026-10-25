@@ -79,10 +79,11 @@ export interface StoreServerCronReport {
 export const voidedSweepCursor = 'google-play-voided:end';
 export const voidedSweepSliceCursor = 'google-play-voided:slice-ms';
 /**
- * 0 once caught up. While behind (continue on the next trigger): 1 when the
- * last run stopped without moving the cursor (the next run re-reads the
- * overlap before it), 2 when it moved the cursor past what it read (the next
- * run starts exactly at the cursor).
+ * 0 once caught up. While behind (continue on the next trigger): 2 when the
+ * read up to the cursor was clean (by the run that moved it, or kept from a
+ * run that already left 2) and the cursor is at least the overlap in the
+ * past, so the next run starts exactly at it; 1 otherwise, so the next run
+ * re-reads the overlap before it.
  */
 export const voidedSweepBehindCursor = 'google-play-voided:behind';
 /** Runs in a row whose first slice was held back only by store errors. */
@@ -510,8 +511,8 @@ async function sweepVoidedPurchases(input: {
       sliceStart = sliceEnd;
     }
   } catch (error) {
-    // Whatever this run read is read again: the next run starts before the
-    // cursor, with the overlap, unless a slice already moved it.
+    // A run that already completed keeps its state; otherwise the stopped
+    // state decides whether the next run re-reads the overlap.
     if (!complete) {
       await input.cursors
         .write(voidedSweepBehindCursor, stoppedState(), new Date(nowMs))
