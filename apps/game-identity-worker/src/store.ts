@@ -56,8 +56,7 @@ export interface IdentityStore {
   getFamily(familyId: string): Promise<IdentitySessionFamily | undefined>;
   /**
    * Compare-and-swap rotation, all or nothing: when the family is live at
-   * `now` and its current refresh hash is `expected.currentRefreshHash`
-   * (and, when given, its previous one is `expected.previousRefreshHash`),
+   * `now` and its current refresh hash is `expected.currentRefreshHash`,
    * makes `next.currentRefreshHash` current, sets the previous hash, its
    * time, nonce, and the new end, records the new refresh token, and writes
    * the access token. `false` when the family changed first.
@@ -65,7 +64,7 @@ export interface IdentityStore {
   rotate(input: {
     readonly familyId: string;
     readonly now: number;
-    readonly expected: { readonly currentRefreshHash: string; readonly previousRefreshHash?: string };
+    readonly expected: { readonly currentRefreshHash: string };
     readonly next: {
       readonly currentRefreshHash: string;
       readonly previousRefreshHash: string;
@@ -144,9 +143,7 @@ export function createMemoryIdentityStore(): IdentityStore {
     async rotate({ familyId, now, expected, next, access }) {
       const family = families.get(familyId);
       if (family === undefined || !live(family, now)
-        || family.currentRefreshHash !== expected.currentRefreshHash
-        || (expected.previousRefreshHash !== undefined
-          && family.previousRefreshHash !== expected.previousRefreshHash)) {
+        || family.currentRefreshHash !== expected.currentRefreshHash) {
         return false;
       }
       families.set(familyId, { ...family, ...next });

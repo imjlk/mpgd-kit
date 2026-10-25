@@ -90,9 +90,8 @@ export function createD1IdentityStore(
       const [swap] = await db.batch([
         db.prepare(
           'UPDATE identity_session_families SET current_refresh_hash = ?1, previous_refresh_hash = ?2, '
-            + 'rotated_at_ms = ?3, expires_at_ms = ?4, rotation_nonce = ?9 WHERE family_id = ?5 '
-            + 'AND current_refresh_hash = ?6 AND (?7 IS NULL OR previous_refresh_hash = ?7) '
-            + 'AND revoked_at_ms IS NULL AND expires_at_ms > ?8',
+            + 'rotated_at_ms = ?3, expires_at_ms = ?4, rotation_nonce = ?8 WHERE family_id = ?5 '
+            + 'AND current_refresh_hash = ?6 AND revoked_at_ms IS NULL AND expires_at_ms > ?7',
         ).bind(
           next.currentRefreshHash,
           next.previousRefreshHash,
@@ -100,7 +99,6 @@ export function createD1IdentityStore(
           next.expiresAt,
           familyId,
           expected.currentRefreshHash,
-          expected.previousRefreshHash ?? null,
           now,
           next.rotationNonce,
         ),
