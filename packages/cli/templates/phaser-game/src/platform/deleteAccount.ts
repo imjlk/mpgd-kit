@@ -88,8 +88,9 @@ type SignOutStep = () => void | Promise<void>;
 const signOutSteps = new Set<SignOutStep>();
 
 /**
- * An earlier attempt's request was sent but its answer was lost, so the
- * deletion may have completed. Kept for the page's life, across scenes.
+ * An earlier attempt's request was sent but its answer was lost or was a
+ * retryable server failure, so the deletion may have completed. Kept for
+ * the page's life, across scenes.
  */
 let answerLost = false;
 
@@ -220,9 +221,13 @@ export function createStarterAccountDeletion(input: {
         return { outcome: 'session-ended', signedOut: await signOut({ keepJournal: true }) };
       }
       if (error.requestSent && !error.retryable) {
-        // A definite answer from the server: the account was not deleted. A
-        // retryable one (a 5xx from a proxy) may hide a completed deletion.
+        // A definite answer from the server: the account was not deleted.
         answerLost = false;
+      } else if (error.requestSent) {
+        // A retryable one (a 5xx from a proxy, a deletion whose identity step
+        // answered late) may hide a completed deletion: the next attempt reads
+        // a refused session as that.
+        answerLost = true;
       }
       switch (error.code) {
         case 'UNAUTHORIZED':

@@ -372,6 +372,38 @@ const pendingPurchase = {
   resetStarterAccountDeletionForTests();
 }
 
+// A retryable server failure (a proxy's 502 over a completed deletion) is
+// ambiguous too: the refused session afterwards is the completed deletion.
+{
+  resetStarterAccountDeletionForTests();
+  let attempt = 0;
+  const proxied = createStarterAccountDeletion({
+    client: {
+      async deleteAccount() {
+        attempt += 1;
+        throw new AccountDeletionError(attempt === 1 ? 'ACCOUNT_DELETION_FAILED' : 'UNAUTHORIZED');
+      },
+    },
+    storage: memoryStorage(),
+  });
+  assert.deepEqual(await proxied.deleteAccount(), { outcome: 'failed', retryable: true });
+  assert.deepEqual(await proxied.deleteAccount(), { outcome: 'session-ended', signedOut: true });
+  // Without the ambiguous attempt, a refused session is only "sign in again".
+  resetStarterAccountDeletionForTests();
+  assert.deepEqual(
+    await createStarterAccountDeletion({
+      client: {
+        async deleteAccount() {
+          throw new AccountDeletionError('UNAUTHORIZED');
+        },
+      },
+      storage: memoryStorage(),
+    }).deleteAccount(),
+    { outcome: 'needs-session' },
+  );
+  resetStarterAccountDeletionForTests();
+}
+
 // The entry needs a signed-in session; a journal that cannot be cleared is reported.
 {
   assert.equal(
