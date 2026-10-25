@@ -76,7 +76,14 @@ export type IdentityRefusal =
   | 'INVALID_REQUEST'
   | 'GUEST_SESSION_REJECTED'
   | 'RATE_LIMITED'
-  | 'ACCOUNT_BINDING_UNSUPPORTED';
+  | 'ACCOUNT_BINDING_UNSUPPORTED'
+  /**
+   * The refresh lost a race to legitimate rotations of the same family after
+   * it read its token as current or as a valid retry (an abandoned request
+   * resuming late). Not a replay: nothing is revoked, and the client retries
+   * with the newest token it holds.
+   */
+  | 'UNAVAILABLE';
 
 export type IdentityResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -179,6 +186,7 @@ export function createGuestIdentityService(input: {
   }
 
   const rejected = { ok: false, error: 'GUEST_SESSION_REJECTED' } as const;
+  const outdated = { ok: false, error: 'UNAVAILABLE' } as const;
 
   return {
     async issueGuest({ installationId }) {
@@ -220,6 +228,11 @@ export function createGuestIdentityService(input: {
       }
       // Two rounds at most: a lost compare-and-swap means another refresh of
       // the same token won, and the token is then read again as a retry.
+      // `raced`: this request saw its token as the family's current one (or a
+      // valid retry) and lost the swap, so later rotations overtook it. That
+      // is a known race, not a replay: a stolen token presented after its
+      // successor was used never reads as current, and still revokes.
+      let raced = false;
       for (let round = 0; round < 2; round += 1) {
         const family = await store.getFamily(issuedIn.familyId);
         const at = now();
@@ -246,6 +259,7 @@ export function createGuestIdentityService(input: {
           if (rotated) {
             return { ok: true, value: credentials(family, token, nextRefreshToken, access) };
           }
+          raced = true;
           continue;
         }
         // The token the latest rotation replaced, while its successor is
@@ -265,8 +279,13 @@ export function createGuestIdentityService(input: {
             if (await store.addAccessToken({ now: at, currentRefreshHash: family.currentRefreshHash, access })) {
               return { ok: true, value: credentials(family, token, successor, access) };
             }
+            raced = true;
             continue;
           }
+        }
+        if (raced) {
+          log('[identity] a refresh lost a race to newer rotations; the family is kept');
+          return outdated;
         }
         // RFC 9700 section 4.14.2: an invalidated refresh token was
         // presented, so one of two parties holds a stolen copy. The server
@@ -275,7 +294,7 @@ export function createGuestIdentityService(input: {
         log('[identity] refresh token reuse: the session family was revoked');
         return rejected;
       }
-      return rejected;
+      return raced ? outdated : rejected;
     },
 
     async revoke({ refreshToken }) {

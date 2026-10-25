@@ -272,6 +272,59 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     assert.deepEqual(ended, []);
   }
 
+  // An abandoned refresh that resumes after the family moved on twice (A -> B by
+  // its retry, B -> C by a later launch) lost a race; it is not a replay. The
+  // family stays, nothing is revoked, and the abandoned request is told to retry.
+  {
+    const store = await createStore();
+    let hold: Promise<void> | undefined;
+    let entered: (() => void) | undefined;
+    const paused: IdentityStore = {
+      ...store,
+      async rotate(input) {
+        if (hold !== undefined) {
+          const wait = hold;
+          hold = undefined;
+          entered?.();
+          await wait;
+        }
+        return store.rotate(input);
+      },
+    };
+    const ended: string[] = [];
+    const service = createGuestIdentityService({
+      store: paused,
+      now: () => start,
+      endNotificationSession: async (sessionId) => {
+        ended.push(sessionId);
+      },
+      log: () => undefined,
+    });
+    const issued = value(await service.issueGuest({ installationId: 'install-overlap-2' }));
+    let release: (() => void) | undefined;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const enteredRotate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const abandoned = service.refresh({ refreshToken: issued.refreshToken });
+    await enteredRotate;
+    const second = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    const third = value(await service.refresh({ refreshToken: second.refreshToken }));
+    release?.();
+    assert.deepEqual(await abandoned, { ok: false, error: 'UNAVAILABLE' });
+    assert.deepEqual(ended, [], 'the family was not revoked');
+    assert.equal(
+      (await service.authenticate(`Bearer ${third.accessToken}`))?.playerId,
+      issued.serverUserId,
+    );
+    value(await service.refresh({ refreshToken: third.refreshToken }));
+    // Real replay detection is intact: the same old token presented afresh revokes.
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+  }
+
   // Expiry: access tokens after their lifetime, families after the inactivity window.
   {
     const { service, advance } = await setup();
