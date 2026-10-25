@@ -15,10 +15,10 @@ const miniflare = new Miniflare({
 });
 
 async function applyMigration(db: D1Database): Promise<void> {
-  const sql = await readFile(
-    new URL('../migrations/0001_guest_identity.sql', import.meta.url),
-    'utf8',
-  );
+  const sql = (await Promise.all(
+    ['0001_guest_identity.sql', '0002_account_deletion.sql'].map((file) =>
+      readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')),
+  )).join('\n');
   const statements = sql
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('--'))
@@ -42,6 +42,7 @@ try {
       'identity_session_families',
       'identity_refresh_tokens',
       'identity_access_tokens',
+      'identity_deletion_confirmations',
     ]) {
       await db.prepare(`DELETE FROM ${table}`).run();
     }
@@ -53,6 +54,7 @@ try {
     'identity_session_families',
     'identity_refresh_tokens',
     'identity_access_tokens',
+    'identity_deletion_confirmations',
   ]) {
     await db.prepare(`DELETE FROM ${table}`).run();
   }

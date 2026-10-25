@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import { accountDeletionConfirmationMaxLength } from '@mpgd/game-services/account-deletion';
 import type { ServerGuestSessionCredentials } from '@mpgd/game-services/guest-session';
 
 import { deriveAppAccountToken, deriveObfuscatedAccountId } from './accountBinding.js';
@@ -18,8 +19,8 @@ const day = 24 * 60 * minute;
 /**
  * The guest identity behaviour every store must give the service: issue,
  * rotation inside a stable family, expiry, replay detection, the retry
- * grace, revocation, the per-installation limit, the account bindings, and
- * the purge. `createStore` returns an empty store each call.
+ * grace, revocation, the per-installation limit, the account bindings, the
+ * purge, and account deletion (confirmations and `deletePlayer`). `createStore` returns an empty store each call.
  */
 export async function runGuestIdentityConformance(createStore: () => Promise<IdentityStore>): Promise<void> {
   const start = Date.parse('2030-01-01T00:00:00.000Z');
@@ -622,6 +623,136 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     value(await service.refresh({ refreshToken: third.refreshToken }));
   }
 
+  // Account deletion (L3b): a confirmation takes the refresh token (an access
+  // token is not enough), is bound to its player, short-lived, and used once.
+  {
+    const { service, store, advance, ended, now } = await setup();
+    const guest = value(await service.issueGuest({ installationId: 'install-delete-1' }));
+    const other = value(await service.issueGuest({ installationId: 'install-delete-2' }));
+    const confirm = (refreshToken: unknown) => service.issueAccountDeletionConfirmation({
+      refreshToken,
+    });
+    const verify = async (playerId: unknown, confirmation: unknown) =>
+      (await service.verifyAccountDeletionConfirmation({ playerId, confirmation })).confirmed;
+    assert.deepEqual(await confirm(guest.accessToken), rejected);
+    assert.deepEqual(await confirm(`mpgd_rt_${'A'.repeat(43)}`), rejected);
+    assert.deepEqual(await confirm(undefined), rejected);
+    const first = grant(await confirm(guest.refreshToken));
+    assert.match(first.confirmation, /^mpgd_dc_[A-Za-z0-9_-]{43}$/u);
+    assert.ok(first.confirmation.length <= accountDeletionConfirmationMaxLength);
+    assert.equal(
+      first.expiresAt,
+      new Date(now() + defaultIdentityServiceConfig.accountDeletionConfirmationTtlMs).toISOString(),
+    );
+    // Another player's attempt, a forged or malformed one: refused, and nothing used up.
+    assert.equal(await verify(other.serverUserId, first.confirmation), false);
+    assert.equal(await verify(guest.serverUserId, `mpgd_dc_${'A'.repeat(43)}`), false);
+    assert.equal(await verify(guest.serverUserId, 42), false);
+    assert.equal(await verify(42, first.confirmation), false);
+    // A new confirmation replaces the family's earlier one; each confirms once.
+    const second = grant(await confirm(guest.refreshToken));
+    assert.equal(await verify(guest.serverUserId, first.confirmation), false);
+    assert.equal(await verify(guest.serverUserId, second.confirmation), true);
+    assert.equal(await verify(guest.serverUserId, second.confirmation), false);
+    // Short-lived.
+    const late = grant(await confirm(guest.refreshToken));
+    advance(defaultIdentityServiceConfig.accountDeletionConfirmationTtlMs);
+    assert.equal(await verify(guest.serverUserId, late.confirmation), false);
+    // Issuing does not rotate; inside the retry grace the replaced token also
+    // gets one, and once its successor was used it is refused without a revoke.
+    const rotated = value(await service.refresh({ refreshToken: guest.refreshToken }));
+    grant(await confirm(guest.refreshToken));
+    const current = value(await service.refresh({ refreshToken: rotated.refreshToken }));
+    assert.deepEqual(await confirm(guest.refreshToken), rejected);
+    assert.equal(
+      (await service.authenticate(`Bearer ${current.accessToken}`))?.playerId,
+      guest.serverUserId,
+    );
+    // A family that logged out keeps no confirmation and gets none.
+    const loggedOut = grant(await confirm(other.refreshToken));
+    await service.revoke({ refreshToken: other.refreshToken });
+    assert.equal(await verify(other.serverUserId, loggedOut.confirmation), false);
+    assert.deepEqual(await confirm(other.refreshToken), rejected);
+    ended.length = 0;
+
+    // Deleting the player refuses every token at once, on every path.
+    const pending = grant(await confirm(current.refreshToken));
+    const kept = value(await service.issueGuest({ installationId: 'install-delete-3' }));
+    await service.deletePlayer({ playerId: guest.serverUserId });
+    await service.deletePlayer({ playerId: guest.serverUserId });
+    await service.deletePlayer({ playerId: `p_${'0'.repeat(32)}` });
+    await assert.rejects(service.deletePlayer({ playerId: 42 }), TypeError);
+    assert.equal(await service.authenticate(`Bearer ${current.accessToken}`), undefined);
+    assert.deepEqual(await service.refresh({ refreshToken: current.refreshToken }), rejected);
+    // The replaced token, still inside the retry grace, and the first one.
+    assert.deepEqual(await service.refresh({ refreshToken: rotated.refreshToken }), rejected);
+    assert.deepEqual(await service.refresh({ refreshToken: guest.refreshToken }), rejected);
+    assert.deepEqual(await confirm(current.refreshToken), rejected);
+    assert.equal(await verify(guest.serverUserId, pending.confirmation), false);
+    assert.equal(await service.resolveObfuscatedAccountId(guest.serverUserId), undefined);
+    assert.equal(await service.resolveAppAccountToken(guest.serverUserId), undefined);
+    await service.revoke({ refreshToken: current.refreshToken });
+    assert.equal(await store.hasPlayer(guest.serverUserId), false);
+    assert.equal(await store.getFamily(guest.sessionId), undefined);
+    for (const token of [guest.refreshToken, rotated.refreshToken, current.refreshToken]) {
+      assert.equal(await store.findRefreshToken(await hashToken(token)), undefined);
+    }
+    // Unknown tokens, not replays: nothing else was revoked or ended.
+    assert.deepEqual(ended, []);
+    assert.equal(
+      (await service.authenticate(`Bearer ${kept.accessToken}`))?.playerId,
+      kept.serverUserId,
+    );
+    value(await service.refresh({ refreshToken: kept.refreshToken }));
+
+    // A rotation, a retry's access token, or a confirmation racing the deletion writes nothing.
+    const racing = value(await service.issueGuest({ installationId: 'install-delete-4' }));
+    const family = await store.getFamily(racing.sessionId);
+    assert.ok(family !== undefined);
+    await service.deletePlayer({ playerId: racing.serverUserId });
+    const access = {
+      tokenHash: await hashToken('racing-access'),
+      familyId: family.familyId,
+      playerId: family.playerId,
+      expiresAt: now() + minute,
+    };
+    assert.equal(
+      await store.rotate({
+        familyId: family.familyId,
+        now: now(),
+        expected: { currentRefreshHash: family.currentRefreshHash },
+        next: {
+          currentRefreshHash: await hashToken('racing-refresh'),
+          previousRefreshHash: family.currentRefreshHash,
+          rotatedAt: now(),
+          expiresAt: now() + day,
+          rotationNonce: 'nonce',
+        },
+        access,
+      }),
+      false,
+    );
+    assert.equal(
+      await store.addAccessToken({ now: now(), currentRefreshHash: family.currentRefreshHash, access }),
+      false,
+    );
+    assert.equal(
+      await store.putDeletionConfirmation({
+        confirmation: {
+          tokenHash: await hashToken('racing-confirmation'),
+          familyId: family.familyId,
+          playerId: family.playerId,
+          expiresAt: now() + minute,
+        },
+        now: now(),
+      }),
+      false,
+    );
+    assert.equal(await store.findAccessToken(access.tokenHash), undefined);
+    assert.equal(await store.findRefreshToken(await hashToken('racing-refresh')), undefined);
+    assert.equal(await store.getFamily(family.familyId), undefined);
+  }
+
   // Configuration that cannot work is refused.
   assert.throws(
     () =>
@@ -639,6 +770,11 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
 }
 
 const rejected = { ok: false, error: 'GUEST_SESSION_REJECTED' };
+
+function grant<T>(result: IdentityResult<T>): T {
+  assert.ok(result.ok, `expected a confirmation, got ${JSON.stringify(result)}`);
+  return result.value;
+}
 
 function value(result: IdentityResult<ServerGuestSessionCredentials>): ServerGuestSessionCredentials {
   if (!result.ok) {

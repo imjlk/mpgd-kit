@@ -1,12 +1,14 @@
 /**
  * Opaque bearer tokens and identifiers. A token is 256 random bits, prefixed
- * so a leaked one is recognizable (`mpgd_at_` access, `mpgd_rt_` refresh);
+ * so a leaked one is recognizable (`mpgd_at_` access, `mpgd_rt_` refresh,
+ * `mpgd_dc_` account deletion confirmation);
  * only its SHA-256 is stored. A slow password hash would add nothing: the
  * token's entropy, not a secret salt, is what makes a stored hash useless to
  * whoever reads the database.
  */
 export const accessTokenPrefix = 'mpgd_at_';
 export const refreshTokenPrefix = 'mpgd_rt_';
+export const deletionConfirmationPrefix = 'mpgd_dc_';
 
 /** A new opaque token with `prefix`. */
 export function createOpaqueToken(prefix: string): string {

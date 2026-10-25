@@ -1,5 +1,6 @@
 import { guestIdentityHttpRoutes } from '@mpgd/game-services/guest-session';
 
+import type { GameServicesAccountDeletionBinding } from '../../game-services-worker/src/accountDeletion.js';
 import type {
   GameServicesIngressAuthBinding,
   GooglePlayAccountBinding,
@@ -83,7 +84,7 @@ function resolveStore(env: GameIdentityWorkerEnv): IdentityStore {
   if (env.MPGD_STORE === 'd1') {
     if (env.DB === undefined) {
       throw new IdentityConfigurationError(
-        'MPGD_STORE = "d1" needs the DB binding (migrations/0001_guest_identity.sql applied).',
+        'MPGD_STORE = "d1" needs the DB binding (migrations 0001_guest_identity.sql and 0002_account_deletion.sql applied).',
       );
     }
     return createD1IdentityStore(env.DB);
@@ -135,6 +136,7 @@ function resolveConfig(env: GameIdentityWorkerEnv): IdentityServiceConfig {
       1,
       defaultIdentityServiceConfig.maxGuestsPerInstallationPerDay,
     ),
+    accountDeletionConfirmationTtlMs: defaultIdentityServiceConfig.accountDeletionConfirmationTtlMs,
   };
 }
 
@@ -214,6 +216,10 @@ export function createIdentityFetchHandler(
           return json({}, 200);
         case 'bindAccount':
           return answer(await service.bindAccount(body));
+        case 'requestAccountDeletionConfirmation':
+          return answer(
+            await service.issueAccountDeletionConfirmation({ refreshToken: body.refreshToken }),
+          );
         default:
           // A route added to the shared contract that this Worker does not serve yet.
           return json({ error: 'UNKNOWN_ENDPOINT' }, 404);
@@ -314,6 +320,7 @@ export function createIdentityBindings(service: GuestIdentityService): {
   readonly appStoreAccountBinding: {
     resolveAppAccountToken(input: { readonly playerId: string }): Promise<string | null>;
   };
+  readonly accountDeletion: GameServicesAccountDeletionBinding;
 } {
   return {
     ingressAuth: {
@@ -335,6 +342,15 @@ export function createIdentityBindings(service: GuestIdentityService): {
     appStoreAccountBinding: {
       async resolveAppAccountToken({ playerId }) {
         return await service.resolveAppAccountToken(playerId) ?? null;
+      },
+    },
+    accountDeletion: {
+      async deletePlayer({ playerId }) {
+        await service.deletePlayer({ playerId });
+        return {};
+      },
+      async verifyAccountDeletionConfirmation({ playerId, confirmation }) {
+        return service.verifyAccountDeletionConfirmation({ playerId, confirmation });
       },
     },
   };

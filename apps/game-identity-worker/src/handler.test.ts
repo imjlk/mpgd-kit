@@ -69,6 +69,27 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
     externalProof: 'proof',
     idempotencyKey: 'bind-1',
   }))), { status: 501, body: { error: 'ACCOUNT_BINDING_UNSUPPORTED' } });
+  // A deletion confirmation takes the refresh token; the access token is refused.
+  // (The replay above ended the first family, so a new guest asks.)
+  const deleting = await read(
+    await fetch(post(guestIdentityHttpRoutes.issueGuest, { installationId: 'install-http-delete' })),
+  );
+  const confirmationResponse = await fetch(
+    post(guestIdentityHttpRoutes.requestAccountDeletionConfirmation, {
+      refreshToken: deleting.body.refreshToken,
+    }),
+  );
+  assert.equal(confirmationResponse.headers.get('cache-control'), 'no-store');
+  const confirmation = await read(confirmationResponse);
+  assert.equal(confirmation.status, 200);
+  assert.match(String(confirmation.body.confirmation), /^mpgd_dc_/u);
+  assert.equal(confirmation.body.expiresAt, new Date(clock + 5 * 60_000).toISOString());
+  for (const body of [{ refreshToken: deleting.body.accessToken }, {}]) {
+    assert.deepEqual(
+      await read(await fetch(post(guestIdentityHttpRoutes.requestAccountDeletionConfirmation, body))),
+      { status: 401, body: { error: 'GUEST_SESSION_REJECTED' } },
+    );
+  }
   assert.deepEqual(
     await read(await fetch(post(guestIdentityHttpRoutes.issueGuest, { installationId: 'x' }))),
     {
@@ -277,6 +298,36 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
     await bindings.appStoreAccountBinding.resolveAppAccountToken({ playerId: 'ios-local-player' }),
     null,
   );
+  // GAME_SERVICES_ACCOUNT_DELETION: the confirmation is checked and used up,
+  // and deleting the player refuses its access token at once.
+  const deletable = await service.issueGuest({ installationId: 'install-binding-3' });
+  assert.ok(deletable.ok);
+  const grant = await service.issueAccountDeletionConfirmation({
+    refreshToken: deletable.value.refreshToken,
+  });
+  assert.ok(grant.ok);
+  const verify = (playerId: string) =>
+    bindings.accountDeletion.verifyAccountDeletionConfirmation({
+      playerId,
+      confirmation: grant.value.confirmation,
+    });
+  assert.deepEqual(await verify(issued.value.serverUserId), { confirmed: false });
+  assert.deepEqual(await verify(deletable.value.serverUserId), { confirmed: true });
+  assert.deepEqual(await verify(deletable.value.serverUserId), { confirmed: false });
+  const deletableAuthorization = `Bearer ${deletable.value.accessToken}`;
+  assert.deepEqual(
+    await bindings.accountDeletion.deletePlayer({ playerId: deletable.value.serverUserId }),
+    {},
+  );
+  assert.equal(
+    await bindings.ingressAuth.authenticateGameServicesRequest({ authorization: deletableAuthorization }),
+    null,
+  );
+  assert.equal(
+    await bindings.notificationSessions.authenticateNotificationSession({ authorization: deletableAuthorization }),
+    null,
+  );
+  assert.deepEqual(ended, [], 'a deleted player ends no notification session here');
   // Logout ends the notification session through the game-services binding.
   await service.revoke({ refreshToken: issued.value.refreshToken });
   assert.deepEqual(ended, [issued.value.sessionFamilyId]);
@@ -358,13 +409,29 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
   await assert.rejects(restarted.refresh(), { code: 'GUEST_SESSION_REJECTED' });
   // Logout clears the dead token; the next start is a new guest.
   await restarted.logout();
-  const fresh = await createGuestSessionCoordinator({
+  const freshCoordinator = createGuestSessionCoordinator({
     backend,
     credentials,
     installationId: 'install-client-1',
     now: () => clock,
-  }).start();
+  });
+  const fresh = await freshCoordinator.start();
   assert.notEqual(fresh.serverUserId, first.serverUserId);
+  // A deletion confirmation over HTTP; once the player is deleted, the
+  // coordinator hears the session refused for good and stops using it.
+  const deletion = createIdentityBindings(
+    resolveIdentityService(env, { store, now: () => clock }),
+  ).accountDeletion;
+  const confirmation = await freshCoordinator.requestAccountDeletionConfirmation();
+  assert.deepEqual(
+    await deletion.verifyAccountDeletionConfirmation({ playerId: fresh.serverUserId, confirmation }),
+    { confirmed: true },
+  );
+  await deletion.deletePlayer({ playerId: fresh.serverUserId });
+  await assert.rejects(freshCoordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_REJECTED',
+  });
+  assert.equal(freshCoordinator.current(), undefined);
 }
 
 // A refresh that lost a race answers 503 UNAVAILABLE (retry), never 401.

@@ -24,7 +24,8 @@ enabled = true
 head_sampling_rate = 1
 
 # Production persistence: create a D1 database, uncomment this, set
-# MPGD_STORE = "d1", and apply migrations/0001_guest_identity.sql.
+# MPGD_STORE = "d1", and apply migrations/0001_guest_identity.sql and
+# 0002_account_deletion.sql (wrangler d1 migrations apply).
 #
 # [[d1_databases]]
 # binding = "DB"
@@ -43,6 +44,13 @@ head_sampling_rate = 1
 #   [ratelimits.simple]
 #   limit = 10
 #   period = 60
+
+# Account deletion (L3b): the game-services Worker binds this Worker's
+# AccountDeletion entrypoint as GAME_SERVICES_ACCOUNT_DELETION (deletePlayer,
+# and verifyAccountDeletionConfirmation for the confirmation a client gets
+# from POST /identity/v1/account-deletion-confirmation with its refresh
+# token). Nothing to bind here; the purge cron below also removes expired
+# confirmations.
 
 # Ends a revoked session's notification devices at once on the game-services
 # Worker (endNotificationSession). The two Workers bind each other: deploy
