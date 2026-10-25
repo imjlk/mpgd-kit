@@ -509,7 +509,7 @@ try {
     assert.equal(
       starved?.operations,
       0,
-      'nothing fits in a budget of one: retries get half (0), the sweep needs 4',
+      'nothing fits in a budget of one: retries get half (0), the sweep needs 5',
     );
     assert.equal(starved?.sweep, undefined);
 
@@ -588,9 +588,9 @@ try {
 
       await cursors.write(voidedSweepCursor, behindNow - 3 * 3_600_000, new Date(behindNow));
       await cursors.write('google-play-voided:slice-ms', 3_600_000, new Date(behindNow));
-      // The retries' due read (1) and the sweep's opening reads (4), not a page (2 more).
+      // The retries' due read (1) and the sweep's opening reads (5), not a page (2 more).
       const starvedSweep = await runScheduledStoreServer(
-        { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '5' },
+        { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '6' },
         { cron: '* * * * *' },
         {
           googlePlay: { finalizer: boundary, voidedPurchases: emptyClient, packageName },
@@ -706,6 +706,51 @@ try {
         (await findEntitlementRevocationsChunked(store, [lateGrant.ledgerEntryId])).length,
         1,
       );
+    }
+
+    // A dense overlap (more voids than one run can apply) is split across
+    // runs: the re-read resumes where it got and the cursor never moves back.
+    {
+      const cursors = createD1StoreServerCursors(db);
+      const denseNow = start + 75 * 24 * 3_600_000;
+      const lastEnd = denseNow - 61 * 60_000;
+      await cursors.write(voidedSweepCursor, lastEnd, new Date(denseNow));
+      await cursors.write('google-play-voided:behind', 0, new Date(denseNow));
+      await cursors.write('google-play-voided:slice-ms', 7 * 24 * 3_600_000, new Date(denseNow));
+      const dense = Array.from({ length: 60 }, (_, index) => ({
+        purchaseToken: `dense-${index}`,
+        recordedAt: lastEnd - 14 * 60_000 + index * 14_000,
+      }));
+      const seen = new Set<string>();
+      const denseClient: GooglePlayVoidedPurchasesClient = {
+        async listVoidedPurchases(input) {
+          const page = dense.filter((entry) =>
+            entry.recordedAt >= input.startTimeMillis && entry.recordedAt <= input.endTimeMillis);
+          for (const entry of page) {
+            seen.add(entry.purchaseToken);
+          }
+          return { voidedPurchases: page.map(({ purchaseToken }) => ({ purchaseToken })) };
+        },
+      };
+      let runs = 0;
+      let previous = lastEnd;
+      let result: Awaited<ReturnType<typeof runScheduledStoreServer>>;
+      do {
+        runs += 1;
+        result = await runScheduledStoreServer(
+          cronEnv,
+          { cron: '* * * * *' },
+          {
+            googlePlay: { finalizer: boundary, voidedPurchases: denseClient, packageName },
+            now: () => denseNow + runs * 60_000,
+          },
+        );
+        const cursor = await cursors.read(voidedSweepCursor) ?? 0;
+        assert.equal(cursor >= previous, true, 'the cursor never moves back');
+        previous = cursor;
+      } while (result?.sweep?.complete !== true && runs < 40);
+      assert.equal(result?.sweep?.complete, true, 'a dense overlap no longer blocks the sweep');
+      assert.equal(seen.size, 60, 'every void in the overlap is read');
     }
 
     // A slow Play finalization leaves the sweep its half of the wall time.

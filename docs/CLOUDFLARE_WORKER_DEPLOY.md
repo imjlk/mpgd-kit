@@ -557,8 +557,10 @@ halves are kept for the sweep),
 then sweeps when the interval has passed or a previous run stopped behind,
 and stops at the budget (D1 calls, token-service calls, and Play requests,
 counted by estimate) or the wall budget, which is kept below the cron period.
-The sweep cursor only moves forward; the 15-minute overlap that catches
-late-recorded voids is read on top of the first slice of a run. It is counted apart from
+The sweep cursor only moves forward. The 15-minute overlap that catches
+late-recorded voids is re-read in ordinary slices before the cursor; a run
+that cannot finish it keeps its place (`google-play-voided:reread`) and the
+next run resumes there, so a dense overlap is split across runs. It is counted apart from
 the notifications run (`MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET`, 1,000 by
 default); together (1,300 by default) they stay under the Workers Paid cap of
 10,000 subrequests per invocation in effect since 2026-02-11, not under the

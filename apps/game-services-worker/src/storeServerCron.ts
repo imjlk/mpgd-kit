@@ -86,6 +86,11 @@ export const voidedSweepSliceCursor = 'google-play-voided:slice-ms';
  * re-reads the overlap before it.
  */
 export const voidedSweepBehindCursor = 'google-play-voided:behind';
+/**
+ * How far the re-read of the overlap before the cursor got: a dense overlap
+ * is worked through in slices over several runs without moving the cursor.
+ */
+export const voidedSweepRereadCursor = 'google-play-voided:reread';
 /** Runs in a row whose first slice was held back only by store errors. */
 export const voidedSweepStallCursor = 'google-play-voided:stalls';
 
@@ -304,8 +309,8 @@ async function sweepVoidedPurchases(input: {
   if (intervalMinutes === 0) {
     return undefined;
   }
-  // Four cursor reads open the run.
-  const opening = input.take(4);
+  // Five cursor reads open the run.
+  const opening = input.take(5);
   if (opening !== 'ok') {
     console.error('Google Play voided purchases sweep skipped this run:', opening);
     return undefined;
@@ -337,8 +342,17 @@ async function sweepVoidedPurchases(input: {
   // or state 1) the overlap before it is re-read, so a backlog pays for it
   // once per clean stop.
   let openingStart = oldest;
-  if (lastEnd !== undefined) {
-    openingStart = behind === 2 ? lastEnd : lastEnd - voidedSweepOverlapMs;
+  if (lastEnd !== undefined && behind === 2) {
+    openingStart = lastEnd;
+  } else if (lastEnd !== undefined) {
+    // The overlap is re-read in ordinary slices; a run that could not finish
+    // it resumes where it got instead of starting the overlap again.
+    const reread = await input.cursors.read(voidedSweepRereadCursor);
+    openingStart = reread !== undefined
+        && reread > lastEnd - voidedSweepOverlapMs
+        && reread < lastEnd
+      ? reread
+      : lastEnd - voidedSweepOverlapMs;
   }
   let sliceStart = Math.max(openingStart, oldest);
   let stalls = (await input.cursors.read(voidedSweepStallCursor)) ?? 0;
@@ -350,7 +364,8 @@ async function sweepVoidedPurchases(input: {
    * have shown up; 1 (re-read the overlap) otherwise.
    */
   const stoppedState = (): 1 | 2 =>
-    (slices > 0 || behind === 2) && cursorNow <= nowMs - voidedSweepOverlapMs ? 2 : 1;
+    (movedCursor || behind === 2) && cursorNow <= nowMs - voidedSweepOverlapMs ? 2 : 1;
+  let movedCursor = false;
   const resetStalls = async () => {
     if (stalls !== 0) {
       stalls = 0;
@@ -359,11 +374,23 @@ async function sweepVoidedPurchases(input: {
   };
   /** Moves the cursor past a finished (or skipped) slice; true once caught up. */
   const finishSlice = async (sliceEnd: number): Promise<boolean> => {
-    const nextCursor = Math.max(sliceEnd, cursorAtStart);
+    if (sliceEnd < cursorAtStart) {
+      // A slice of the overlap re-read: remember how far it got, never move
+      // the cursor back.
+      await input.cursors.write(voidedSweepRereadCursor, sliceEnd, new Date(nowMs));
+      slices += 1;
+      // A cursor ahead of this run's clock: nothing newer to read.
+      if (sliceEnd >= nowMs) {
+        complete = true;
+        return true;
+      }
+      return false;
+    }
     // Counted only once written, so a failed write never reports progress.
-    await input.cursors.write(voidedSweepCursor, nextCursor, new Date(nowMs));
+    await input.cursors.write(voidedSweepCursor, sliceEnd, new Date(nowMs));
     slices += 1;
-    cursorNow = nextCursor;
+    cursorNow = sliceEnd;
+    movedCursor = true;
     if (sliceEnd < nowMs) {
       return false;
     }
@@ -387,9 +414,9 @@ async function sweepVoidedPurchases(input: {
   // voids do not fit in the run's budget is halved for the next run.
   try {
     for (;;) {
-      // The overlap is read on top of the first slice, so every finished slice
-      // moves the cursor forward.
-      const sliceEnd = Math.min(Math.max(sliceStart, cursorAtStart) + sliceMs, nowMs);
+      // Ordinary slices, the overlap included, so halving can shrink any of
+      // them down to a minute.
+      const sliceEnd = Math.min(sliceStart + sliceMs, nowMs);
       let stoppedBy: StoreServerTake | 'run-page-cap' | undefined;
       // At the one-minute floor a slice may use the run's remaining pages:
       // it cannot be split further.
