@@ -8,6 +8,7 @@ import {
   createInMemoryPendingAccountErasureStore,
   finishPendingAccountErasures,
   isRetainedPlayerId,
+  retainedPlayerIdPrefix,
   type AccountDeletionAuditEntry,
   type AccountDeletionFetch,
   type PlayerDataEraser,
@@ -432,18 +433,49 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     return true;
   });
   assert.deepEqual(await failingPending.list({ limit: 10 }), []);
-  // A failed identity deletion is retryable too, and leaves nothing pending:
-  // the player still exists, so no sweep may erase what they write next.
+  // A failed identity deletion is retryable too. Its pending erasure stays
+  // `erasing`: the player most likely still exists, so the sweep never
+  // erases it, only discards it once stale.
   const identityPending = createInMemoryPendingAccountErasureStore();
+  let identityErasures = 0;
+  const countingEraser: PlayerDataEraser = {
+    async erasePlayerData() {
+      identityErasures += 1;
+      return { deleted: 0, retained: 0 };
+    },
+  };
   const identityFailing = createAccountDeletionService({
-    erasers: [],
+    erasers: [countingEraser],
     identity: { deletePlayer: () => Promise.reject(new Error('identity unavailable')) },
     pending: identityPending,
+    now: () => '2026-10-25T00:00:00.000Z',
   });
   await assert.rejects(
     identityFailing.deletePlayerAccount({ playerId: 'player-1' }),
     (error: unknown) => error instanceof AccountDeletionError && error.retryable,
   );
+  assert.deepEqual(
+    (await identityPending.list({ limit: 10 })).map((entry) => entry.phase),
+    ['erasing'],
+  );
+  assert.equal(identityErasures, 1);
+  assert.deepEqual(
+    await finishPendingAccountErasures({
+      erasers: [countingEraser],
+      pending: identityPending,
+      now: () => '2026-10-25T00:59:59.000Z',
+    }),
+    { finished: 0, failed: 0, discarded: 0 },
+  );
+  assert.deepEqual(
+    await finishPendingAccountErasures({
+      erasers: [countingEraser],
+      pending: identityPending,
+      now: () => '2026-10-25T01:00:00.000Z',
+    }),
+    { finished: 0, failed: 0, discarded: 1 },
+  );
+  assert.equal(identityErasures, 1, 'a sweep never erases an erasing entry');
   assert.deepEqual(await identityPending.list({ limit: 10 }), []);
   for (const playerId of ['', 'deleted:deletion-1']) {
     // A `deleted:` id names kept records of another deletion, never a player.
@@ -548,26 +580,92 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   );
   const [left] = await sweepPending.list({ limit: 10 });
   assert.deepEqual(
-    { deletionId: left?.deletionId, playerId: left?.playerId, retained: left?.retainedPlayerId },
-    { deletionId: 'deletion-3', playerId: 'player-1', retained: 'deleted:deletion-3' },
+    {
+      deletionId: left?.deletionId,
+      playerId: left?.playerId,
+      retained: left?.retainedPlayerId,
+      phase: left?.phase,
+    },
+    {
+      deletionId: 'deletion-3',
+      playerId: 'player-1',
+      retained: 'deleted:deletion-3',
+      phase: 'identity-deleted',
+    },
   );
 
-  // The sweep keeps it while a store fails, and clears it once all succeed.
-  console.error = () => undefined;
+  // The sweep keeps it while a store fails (tried again least recently tried
+  // first), and clears it once all succeed, recording the completion.
+  const sweepErrors: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    sweepErrors.push(args);
+  };
   try {
     assert.deepEqual(
-      await finishPendingAccountErasures({ erasers: [recovering, broken], pending: sweepPending }),
-      { finished: 0, failed: 1 },
+      await finishPendingAccountErasures({
+        erasers: [recovering, broken],
+        pending: sweepPending,
+        now: () => '2026-10-25T02:00:00.000Z',
+      }),
+      { finished: 0, failed: 1, discarded: 0 },
     );
   } finally {
     console.error = consoleError;
   }
-  brokenRecovered = true;
+  assert.equal(JSON.stringify(sweepErrors).includes('player-1'), false);
+  const [retried] = await sweepPending.list({ limit: 10 });
   assert.deepEqual(
-    await finishPendingAccountErasures({ erasers: [recovering, broken], pending: sweepPending }),
-    { finished: 1, failed: 0 },
+    { attempts: retried?.attempts, attemptedAt: retried?.attemptedAt },
+    { attempts: 1, attemptedAt: '2026-10-25T02:00:00.000Z' },
+  );
+  brokenRecovered = true;
+  const sweepAudits: AccountDeletionAuditEntry[] = [];
+  assert.deepEqual(
+    await finishPendingAccountErasures({
+      erasers: [recovering, broken],
+      pending: sweepPending,
+      audit: async (entry) => {
+        sweepAudits.push(entry);
+      },
+      now: () => '2026-10-25T02:01:00.000Z',
+    }),
+    { finished: 1, failed: 0, discarded: 0 },
   );
   assert.deepEqual(await sweepPending.list({ limit: 10 }), []);
+  assert.deepEqual(
+    { deletionId: sweepAudits[0]?.deletionId, complete: sweepAudits[0]?.complete },
+    { deletionId: 'deletion-3', complete: true },
+  );
+
+  // A store error that names the player is scrubbed before it is logged.
+  const scrubbed: unknown[][] = [];
+  let scrubPasses = 0;
+  console.error = (...args: unknown[]) => {
+    scrubbed.push(args);
+  };
+  try {
+    await createAccountDeletionService({
+      erasers: [
+        {
+          async erasePlayerData() {
+            scrubPasses += 1;
+            if (scrubPasses > 1) {
+              throw new Error('D1_ERROR: row player-1 locked');
+            }
+            return { deleted: 0, retained: 0 };
+          },
+        },
+      ],
+      identity: null,
+      pending: createInMemoryPendingAccountErasureStore(),
+      sleep,
+    }).deletePlayerAccount({ playerId: 'player-1' });
+  } finally {
+    console.error = consoleError;
+  }
+  assert.equal(scrubbed.length, 3);
+  assert.equal(JSON.stringify(scrubbed).includes('player-1'), false);
+  assert.match(String(scrubbed[0]?.[2]), /row \[player\] locked/u);
 }
 
 // --- The client --------------------------------------------------------------
@@ -635,11 +733,15 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     createAccountDeletionClient({
       baseUrl: 'https://game.example',
       getHeaders: () => {
-        throw new Error('signed out');
+        throw new Error('refresh could not reach the identity service');
       },
       fetch: answer(200, receipt),
     }).deleteAccount(),
-    (error: unknown) => error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED',
+    // Nothing was sent, and another try may resolve the session.
+    (error: unknown) =>
+      error instanceof AccountDeletionError
+      && error.code === 'ACCOUNT_DELETION_UNREACHABLE'
+      && error.retryable,
   );
   assert.equal(requests.length, before, 'no request without a session');
 
@@ -654,6 +756,37 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     assert.equal(error.retryable, true);
     return true;
   });
+
+  // A stalled request ends at the deadline and is aborted.
+  let signal: AbortSignal | undefined;
+  const stalled = createAccountDeletionClient({
+    baseUrl: 'https://game.example',
+    headers: { authorization: 'Bearer token' },
+    timeoutMs: 5,
+    fetch: (_url, init) => {
+      signal = init.signal;
+      return new Promise(() => undefined);
+    },
+  });
+  await assert.rejects(
+    stalled.deleteAccount(),
+    (error: unknown) =>
+      error instanceof AccountDeletionError && error.code === 'ACCOUNT_DELETION_UNREACHABLE',
+  );
+  assert.equal(signal?.aborted, true);
+  const stalledSession = createAccountDeletionClient({
+    baseUrl: 'https://game.example',
+    getHeaders: () => new Promise(() => undefined),
+    timeoutMs: 5,
+    fetch: answer(200, receipt),
+  });
+  await assert.rejects(
+    stalledSession.deleteAccount(),
+    (error: unknown) =>
+      error instanceof AccountDeletionError && error.code === 'ACCOUNT_DELETION_UNREACHABLE',
+  );
+  // `verified-leaderboard.ts` stays import-free and repeats the prefix literal.
+  assert.equal(retainedPlayerIdPrefix, 'deleted:');
 }
 
 console.info('Account deletion tests passed.');

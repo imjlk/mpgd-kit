@@ -300,23 +300,8 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     }
 
     const transaction = createEntitlementTransaction(grant);
-    this.entitlementTransactionsByKey.set(key, transaction);
-    this.entitlementTransactionsById.set(transaction.ledgerEntryId, transaction);
-    if (grant.evidenceVerificationId !== undefined) {
-      this.entitlementTransactionsByEvidence.set(
-        createEntitlementEvidenceKey({
-          source: grant.source,
-          evidenceVerificationId: grant.evidenceVerificationId,
-        }),
-        transaction,
-      );
-    }
-    if (platformEvidenceIdentity !== undefined) {
-      this.entitlementTransactionsByPlatformEvidence.set(
-        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
-        transaction,
-      );
-    }
+    // The same index bookkeeping as a grant kept by `erasePlayerData`.
+    this.rememberEntitlementTransaction(transaction);
 
     return assertEntitlementLedgerResult({
       ledgerEntryId: transaction.ledgerEntryId,
@@ -407,11 +392,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       ...revocation,
       ledgerEntryId: createRevocationLedgerEntryId(revocation),
     });
-    this.revocationsByKey.set(key, transaction);
-    this.revocationsByGrant.set(revocation.revokesLedgerEntryId, transaction);
-    if (revocation.evidenceVerificationId !== undefined) {
-      this.revocationsByEvidence.set(revocation.evidenceVerificationId, transaction);
-    }
+    this.rememberEntitlementRevocation(transaction);
 
     return assertEntitlementLedgerResult({
       ledgerEntryId: transaction.ledgerEntryId,
@@ -527,11 +508,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       if (revocation.playerId !== playerId && !grantIds.has(revocation.revokesLedgerEntryId)) {
         continue;
       }
-      this.revocationsByKey.delete(createRevocationIdempotencyKey(revocation));
-      this.revocationsByGrant.delete(revocation.revokesLedgerEntryId);
-      if (revocation.evidenceVerificationId !== undefined) {
-        this.revocationsByEvidence.delete(revocation.evidenceVerificationId);
-      }
+      this.forgetEntitlementRevocation(revocation);
       // A revocation is kept with the grant it reverses, whoever wrote it.
       const keptGrantId = keptGrantIds.get(revocation.revokesLedgerEntryId)
         ?? (this.entitlementTransactionsById.has(revocation.revokesLedgerEntryId)
@@ -551,11 +528,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
         idempotencyKey: ledgerEntryId,
         payload: detachRetainedLedgerPayload(revocation.payload),
       });
-      this.revocationsByKey.set(createRevocationIdempotencyKey(kept), kept);
-      this.revocationsByGrant.set(kept.revokesLedgerEntryId, kept);
-      if (kept.evidenceVerificationId !== undefined) {
-        this.revocationsByEvidence.set(kept.evidenceVerificationId, kept);
-      }
+      this.rememberEntitlementRevocation(kept);
       retained += 1;
     }
     for (const note of [...this.notesById.values()]) {
@@ -595,6 +568,22 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       deleted += 1;
     }
     return { deleted, retained };
+  }
+
+  private rememberEntitlementRevocation(revocation: EntitlementRevocationTransaction): void {
+    this.revocationsByKey.set(createRevocationIdempotencyKey(revocation), revocation);
+    this.revocationsByGrant.set(revocation.revokesLedgerEntryId, revocation);
+    if (revocation.evidenceVerificationId !== undefined) {
+      this.revocationsByEvidence.set(revocation.evidenceVerificationId, revocation);
+    }
+  }
+
+  private forgetEntitlementRevocation(revocation: EntitlementRevocationTransaction): void {
+    this.revocationsByKey.delete(createRevocationIdempotencyKey(revocation));
+    this.revocationsByGrant.delete(revocation.revokesLedgerEntryId);
+    if (revocation.evidenceVerificationId !== undefined) {
+      this.revocationsByEvidence.delete(revocation.evidenceVerificationId);
+    }
   }
 
   private forgetEntitlementTransaction(transaction: ProductGrantTransaction): void {

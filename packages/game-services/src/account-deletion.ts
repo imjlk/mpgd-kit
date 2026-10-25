@@ -75,7 +75,8 @@ export interface AccountDeletionAuditEntry {
   /**
    * `false` when a store's second erasure pass still failed after the
    * identity was deleted: the erasure stays pending (with the player id)
-   * until `finishPendingAccountErasures` completes it.
+   * until `finishPendingAccountErasures` completes it and records a
+   * `complete: true` entry under the same `deletionId`.
    */
   readonly complete: boolean;
   /** Rows this request deleted; a retry after a failure counts only its own. */
@@ -130,38 +131,56 @@ export class AccountDeletionError extends Error {
 export interface AccountDeletionService {
   /**
    * Erases the player's data, records the erasure as pending, deletes the
-   * identity, then erases again: the second pass removes what a request that
-   * was already running wrote during the first. A failure before the
-   * identity is deleted rejects with a retryable `ACCOUNT_DELETION_FAILED`.
-   * Once the identity is deleted the player cannot retry, so each store's
-   * second pass is tried three times with a short backoff; a store that
-   * still fails leaves the pending erasure for `finishPendingAccountErasures`
-   * (the Worker's cron) and is reported in the audit entry
-   * (`complete: false`), never to the player.
+   * identity, marks the pending erasure `identity-deleted`, then erases
+   * again: the second pass removes what a request that was already running
+   * wrote during the first. A failure before the identity is deleted rejects
+   * with a retryable `ACCOUNT_DELETION_FAILED`. Once the identity is deleted
+   * the player cannot retry, so each store's second pass is tried three
+   * times with a short backoff; a store that still fails leaves the erasure
+   * pending for `finishPendingAccountErasures` (the Worker's cron) and is
+   * reported in the audit entry (`complete: false`), never to the player.
    */
   deletePlayerAccount(input: { readonly playerId: string }): Promise<AccountDeletionReceipt>;
 }
 
 /**
- * An erasure that must be finished after the identity is gone. It holds the
- * player id, so it lives only until the second pass succeeds.
+ * An erasure kept across the identity deletion. It holds the player id, so
+ * it lives only until the erasure completes.
  */
 export interface PendingAccountErasure extends PlayerDataErasureInput {
   readonly deletionId: string;
   readonly recordedAt: string;
+  /**
+   * `erasing` until the identity service confirmed the deletion. The sweep
+   * erases only `identity-deleted` erasures: an `erasing` one belongs to a
+   * request that failed or died before that confirmation, whose player most
+   * likely still exists and retries, so the sweep discards it once it is
+   * older than `staleErasingPendingMs` instead of erasing a live player.
+   */
+  readonly phase: 'erasing' | 'identity-deleted';
+  /** Sweep attempts so far. */
+  readonly attempts: number;
+  /** When the sweep last tried it; the store lists least recently tried first. */
+  readonly attemptedAt?: string;
 }
 
 export interface PendingAccountErasureStore {
-  record(erasure: PendingAccountErasure): Promise<void>;
+  /** Inserts or replaces the erasure named by `deletionId`. */
+  put(erasure: PendingAccountErasure): Promise<void>;
   clear(input: { readonly deletionId: string }): Promise<void>;
-  /** The oldest pending erasures first. */
+  /** At most `limit` erasures, least recently tried (`attemptedAt`, else `recordedAt`) first. */
   list(input: { readonly limit: number }): Promise<readonly PendingAccountErasure[]>;
 }
 
+/** An `erasing` erasure older than this (one hour) is discarded by the sweep. */
+export const staleErasingPendingMs = 60 * 60 * 1000;
+
 export function createInMemoryPendingAccountErasureStore(): PendingAccountErasureStore {
   const pending = new Map<string, PendingAccountErasure>();
+  const triedAt = (erasure: PendingAccountErasure): string =>
+    erasure.attemptedAt ?? erasure.recordedAt;
   return {
-    async record(erasure) {
+    async put(erasure) {
       pending.set(erasure.deletionId, { ...erasure });
     },
     async clear({ deletionId }) {
@@ -169,7 +188,7 @@ export function createInMemoryPendingAccountErasureStore(): PendingAccountErasur
     },
     async list({ limit }) {
       return [...pending.values()]
-        .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
+        .sort((left, right) => triedAt(left).localeCompare(triedAt(right)))
         .slice(0, limit);
     },
   };
@@ -194,16 +213,6 @@ export function createAccountDeletionService(input: {
   const now = input.now ?? (() => new Date().toISOString());
   const createDeletionId = input.createDeletionId ?? (() => crypto.randomUUID());
   const sleep = input.sleep ?? defaultSleep;
-  const eraseAll = async (erasure: PlayerDataErasureInput): Promise<PlayerDataErasureResult> => {
-    let deleted = 0;
-    let retained = 0;
-    for (const eraser of input.erasers) {
-      const result = await eraser.erasePlayerData(erasure);
-      deleted += result.deleted;
-      retained += result.retained;
-    }
-    return { deleted, retained };
-  };
   return {
     async deletePlayerAccount({ playerId }) {
       if (typeof playerId !== 'string' || playerId.length === 0 || isRetainedPlayerId(playerId)) {
@@ -213,22 +222,30 @@ export function createAccountDeletionService(input: {
       const deletionId = createDeletionId();
       const requestedAt = now();
       const erasure = { playerId, retainedPlayerId: `${retainedPlayerIdPrefix}${deletionId}` };
+      const pendingErasure: PendingAccountErasure = {
+        ...erasure,
+        deletionId,
+        recordedAt: requestedAt,
+        phase: 'erasing',
+        attempts: 0,
+      };
       let first: PlayerDataErasureResult;
       try {
-        first = await eraseAll(erasure);
-        await input.pending.record({ ...erasure, deletionId, recordedAt: requestedAt });
-      } catch (error) {
-        throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: error });
-      }
-      try {
+        first = await eraseAll(input.erasers, erasure);
+        await input.pending.put(pendingErasure);
         if (input.identity !== null) {
           await input.identity.deletePlayer({ playerId });
         }
       } catch (error) {
-        // The player still exists and retries; no sweep may erase what they
-        // write meanwhile.
-        await input.pending.clear({ deletionId }).catch(() => undefined);
+        // The player most likely still exists and retries; an `erasing`
+        // entry left behind is never erased, only discarded when stale.
         throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: error });
+      }
+      try {
+        await input.pending.put({ ...pendingErasure, phase: 'identity-deleted' });
+      } catch (error) {
+        // The inline second pass below still runs; only a sweep would miss it.
+        logFailure('Account deletion pending entry not marked:', deletionId, playerId, error);
       }
       // Each store's second pass on its own, so one failing store does not
       // stop the others.
@@ -246,8 +263,8 @@ export function createAccountDeletionService(input: {
       }
       if (complete) {
         await input.pending.clear({ deletionId }).catch((error: unknown) => {
-          // The sweep finishes (erasing nothing more) and clears it later.
-          console.error('Account deletion pending entry not cleared:', deletionId, describe(error));
+          // The sweep repeats the (now empty) erasure and clears it later.
+          logFailure('Account deletion pending entry not cleared:', deletionId, playerId, error);
         });
       }
       const completedAt = now();
@@ -260,7 +277,7 @@ export function createAccountDeletionService(input: {
         deleted,
         retained,
       };
-      await recordAudit(input.audit, entry);
+      await recordAudit(input.audit, entry, playerId);
       return {
         status: 'deleted',
         deletionId,
@@ -271,35 +288,104 @@ export function createAccountDeletionService(input: {
   };
 }
 
+export interface PendingAccountErasureSweep {
+  /** `identity-deleted` erasures that every store completed and that were cleared. */
+  readonly finished: number;
+  /** Erasures a store failed, kept for the next sweep. */
+  readonly failed: number;
+  /** Stale `erasing` erasures discarded without erasing. */
+  readonly discarded: number;
+}
+
 /**
- * Finishes erasures a deletion left pending (its second pass failed after
- * the identity was deleted): erases again and clears each one that every
- * store completed. Run it from a scheduled job.
+ * Finishes erasures a deletion left pending: an `identity-deleted` one is
+ * erased again and cleared once every store completed it, with an audit
+ * entry that marks the deletion complete; an `erasing` one older than
+ * `staleErasingPendingMs` is discarded without erasing. Run it from a
+ * scheduled job. A failing erasure is tried again later, least recently
+ * tried first, so one that keeps failing does not block the others.
  */
 export async function finishPendingAccountErasures(input: {
   readonly erasers: readonly PlayerDataEraser[];
   readonly pending: PendingAccountErasureStore;
+  readonly audit?: (entry: AccountDeletionAuditEntry) => Promise<void>;
+  readonly now?: () => string;
   readonly limit?: number;
-}): Promise<{ readonly finished: number; readonly failed: number }> {
+}): Promise<PendingAccountErasureSweep> {
+  const now = input.now ?? (() => new Date().toISOString());
   let finished = 0;
   let failed = 0;
+  let discarded = 0;
   for (const erasure of await input.pending.list({ limit: input.limit ?? 10 })) {
-    try {
-      for (const eraser of input.erasers) {
-        await eraser.erasePlayerData(erasure);
+    const at = now();
+    if (erasure.phase !== 'identity-deleted') {
+      if (Date.parse(at) - Date.parse(erasure.recordedAt) >= staleErasingPendingMs) {
+        await input.pending.clear({ deletionId: erasure.deletionId });
+        discarded += 1;
       }
-      await input.pending.clear({ deletionId: erasure.deletionId });
-      finished += 1;
+      continue;
+    }
+    let result: PlayerDataErasureResult;
+    try {
+      result = await eraseAll(input.erasers, erasure);
     } catch (error) {
       failed += 1;
-      console.error('Pending account erasure not finished:', erasure.deletionId, describe(error));
+      logFailure(
+        'Pending account erasure not finished:',
+        erasure.deletionId,
+        erasure.playerId,
+        error,
+      );
+      await input.pending
+        .put({ ...erasure, attempts: erasure.attempts + 1, attemptedAt: at })
+        .catch(() => undefined);
+      continue;
     }
+    try {
+      await input.pending.clear({ deletionId: erasure.deletionId });
+    } catch (error) {
+      // Erased; the next sweep repeats the (now empty) erasure and clears it.
+      logFailure(
+        'Pending account erasure not cleared:',
+        erasure.deletionId,
+        erasure.playerId,
+        error,
+      );
+    }
+    finished += 1;
+    await recordAudit(
+      input.audit,
+      {
+        deletionId: erasure.deletionId,
+        requestedAt: erasure.recordedAt,
+        completedAt: at,
+        identity: 'deleted',
+        complete: true,
+        deleted: result.deleted,
+        retained: result.retained,
+      },
+      erasure.playerId,
+    );
   }
-  return { finished, failed };
+  return { finished, failed, discarded };
 }
 
 const secondPassAttempts = 3;
 const secondPassBackoffMs = [100, 400] as const;
+
+async function eraseAll(
+  erasers: readonly PlayerDataEraser[],
+  erasure: PlayerDataErasureInput,
+): Promise<PlayerDataErasureResult> {
+  let deleted = 0;
+  let retained = 0;
+  for (const eraser of erasers) {
+    const result = await eraser.erasePlayerData(erasure);
+    deleted += result.deleted;
+    retained += result.retained;
+  }
+  return { deleted, retained };
+}
 
 async function eraseWithRetries(
   eraser: PlayerDataEraser,
@@ -308,17 +394,17 @@ async function eraseWithRetries(
   sleep: (ms: number) => Promise<void>,
 ): Promise<PlayerDataErasureResult | undefined> {
   for (let attempt = 0; attempt < secondPassAttempts; attempt += 1) {
-    if (attempt > 0) {
-      await sleep(secondPassBackoffMs[attempt - 1] ?? 400);
-    }
     try {
+      if (attempt > 0) {
+        await sleep(secondPassBackoffMs[attempt - 1] ?? 400);
+      }
       return await eraser.erasePlayerData(erasure);
     } catch (error) {
-      console.error(
-        'Account deletion second erasure pass failed:',
+      logFailure(
+        `Account deletion second erasure pass failed (attempt ${attempt + 1} of ${secondPassAttempts}):`,
         deletionId,
-        `attempt ${attempt + 1} of ${secondPassAttempts}`,
-        describe(error),
+        erasure.playerId,
+        error,
       );
     }
   }
@@ -328,19 +414,24 @@ async function eraseWithRetries(
 async function recordAudit(
   audit: ((entry: AccountDeletionAuditEntry) => Promise<void>) | undefined,
   entry: AccountDeletionAuditEntry,
+  playerId: string,
 ): Promise<void> {
   try {
     await audit?.(entry);
   } catch (error) {
     // The deletion itself is done; failing here would make the player retry
     // with a session that no longer exists.
-    console.error('Account deletion audit entry not recorded:', entry.deletionId, describe(error));
+    logFailure('Account deletion audit entry not recorded:', entry.deletionId, playerId, error);
   }
 }
 
-/** The error's name and message, cut short; store errors name tables, not players. */
-function describe(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 200) : 'unknown error';
+/**
+ * Logs a failure by deletion id with the error's name and message, cut
+ * short and with the player id scrubbed, so no log line names the player.
+ */
+function logFailure(message: string, deletionId: string, playerId: string, error: unknown): void {
+  const described = error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error';
+  console.error(message, deletionId, described.split(playerId).join('[player]').slice(0, 200));
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -394,8 +485,12 @@ export type AccountDeletionFetch = (
     readonly method: 'POST';
     readonly headers: Record<string, string>;
     readonly body: string;
+    readonly signal?: AbortSignal;
   },
 ) => Promise<AccountDeletionFetchResponse>;
+
+/** How long `deleteAccount()` waits for the session and the server by default. */
+export const defaultAccountDeletionTimeoutMs = 30_000;
 
 export interface AccountDeletionClient {
   /**
@@ -412,8 +507,11 @@ export function createAccountDeletionClient(input: {
   readonly headers?: Readonly<Record<string, string>>;
   readonly getHeaders?: GameServicesHeaderResolver;
   readonly fetch?: AccountDeletionFetch;
+  /** Deadline for resolving the session headers and the server's answer; 30 s by default. */
+  readonly timeoutMs?: number;
 }): AccountDeletionClient {
   const url = `${input.baseUrl.replace(/\/+$/gu, '')}${accountDeletionEndpoint}`;
+  const timeoutMs = input.timeoutMs ?? defaultAccountDeletionTimeoutMs;
   return {
     async deleteAccount() {
       const fetcher = input.fetch
@@ -421,53 +519,86 @@ export function createAccountDeletionClient(input: {
       if (fetcher === undefined) {
         throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE');
       }
-      const headers = await resolveGameServicesRequestHeaders({
-        headers: input.headers,
-        getHeaders: input.getHeaders,
-      }).catch((error: unknown) => {
-        throw new AccountDeletionError('UNAUTHORIZED', { cause: error });
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE'));
+        }, timeoutMs);
       });
-      if (!Object.keys(headers).includes('authorization')) {
-        throw new AccountDeletionError('UNAUTHORIZED');
-      }
-      let response: AccountDeletionFetchResponse;
-      let text: string;
       try {
-        response = await fetcher(url, {
-          method: 'POST',
-          headers: { ...headers, 'content-type': 'application/json' },
-          body: '{}',
-        });
-        text = await response.text();
-      } catch (error) {
-        throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { cause: error });
-      }
-      const body = parseJsonObject(text);
-      if (response.status === 200) {
-        const receipt = readReceipt(body);
-        if (receipt === undefined) {
-          throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE');
+        let headers: Readonly<Record<string, string>>;
+        try {
+          headers = await Promise.race([
+            resolveGameServicesRequestHeaders({
+              headers: input.headers,
+              getHeaders: input.getHeaders,
+            }),
+            deadline,
+          ]);
+        } catch (error) {
+          // A resolver that failed (a refresh that could not reach the
+          // identity service) sent nothing: retrying may work. A signed-out
+          // session resolves without a header and is caught below.
+          throw error instanceof AccountDeletionError
+            ? error
+            : new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { cause: error });
         }
-        return receipt;
+        if (!Object.keys(headers).includes('authorization')) {
+          throw new AccountDeletionError('UNAUTHORIZED');
+        }
+        let response: AccountDeletionFetchResponse;
+        let text: string;
+        try {
+          const answer = async (): Promise<[AccountDeletionFetchResponse, string]> => {
+            const received = await fetcher(url, {
+              method: 'POST',
+              headers: { ...headers, 'content-type': 'application/json' },
+              body: '{}',
+              signal: controller.signal,
+            });
+            return [received, await received.text()];
+          };
+          [response, text] = await Promise.race([answer(), deadline]);
+        } catch (error) {
+          throw error instanceof AccountDeletionError
+            ? error
+            : new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { cause: error });
+        }
+        return readAnswer(response, text);
+      } finally {
+        clearTimeout(timer);
       }
-      const code = body?.error;
-      if (response.status === 401) {
-        throw new AccountDeletionError('UNAUTHORIZED');
-      }
-      if (response.status === 403 && code === 'PLAYER_ID_MISMATCH') {
-        throw new AccountDeletionError('PLAYER_ID_MISMATCH');
-      }
-      if (code === 'ACCOUNT_DELETION_NOT_CONFIGURED' || response.status === 404) {
-        // 404: a server from before this route.
-        throw new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED');
-      }
-      throw new AccountDeletionError(
-        response.status >= 500 || retryableClientStatuses.has(response.status)
-          ? 'ACCOUNT_DELETION_FAILED'
-          : 'ACCOUNT_DELETION_REJECTED',
-      );
     },
   };
+}
+
+function readAnswer(response: AccountDeletionFetchResponse, text: string): AccountDeletionReceipt {
+  const body = parseJsonObject(text);
+  if (response.status === 200) {
+    const receipt = readReceipt(body);
+    if (receipt === undefined) {
+      throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE');
+    }
+    return receipt;
+  }
+  const code = body?.error;
+  if (response.status === 401) {
+    throw new AccountDeletionError('UNAUTHORIZED');
+  }
+  if (response.status === 403 && code === 'PLAYER_ID_MISMATCH') {
+    throw new AccountDeletionError('PLAYER_ID_MISMATCH');
+  }
+  if (code === 'ACCOUNT_DELETION_NOT_CONFIGURED' || response.status === 404) {
+    // 404: a server from before this route.
+    throw new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED');
+  }
+  throw new AccountDeletionError(
+    response.status >= 500 || retryableClientStatuses.has(response.status)
+      ? 'ACCOUNT_DELETION_FAILED'
+      : 'ACCOUNT_DELETION_REJECTED',
+  );
 }
 
 /** Request Timeout, Too Early, Too Many Requests: worth another try. */
