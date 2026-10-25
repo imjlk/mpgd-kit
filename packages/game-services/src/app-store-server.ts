@@ -89,7 +89,14 @@ export function createAppleSignedTransactionVerifier(
               error,
             );
           }
-          return { status: 'rejected', reason: 'APP_STORE_SIGNATURE_INVALID' };
+          // The signature checked out but the JWS belongs to the other
+          // environment: the evidence verifier may retry it in the sandbox.
+          return {
+            status: 'rejected',
+            reason: error.status === VerificationStatus.INVALID_ENVIRONMENT
+              ? 'APP_STORE_ENVIRONMENT_MISMATCH'
+              : 'APP_STORE_SIGNATURE_INVALID',
+          };
         }
         // Only Apple's explicit retryable status is a transient dependency
         // failure. Unexpected adapter/library faults must reach the caller.
@@ -138,7 +145,8 @@ function decodeOneTimeTransaction(
     || (decoded.appAccountToken !== undefined && !nonEmpty(decoded.appAccountToken))
     || (decoded.revocationDate !== undefined && !validTimestamp(decoded.revocationDate))
     || (decoded.expiresDate !== undefined && !validTimestamp(decoded.expiresDate))
-    || (decoded.isUpgraded !== undefined && typeof decoded.isUpgraded !== 'boolean')) {
+    || (decoded.isUpgraded !== undefined && typeof decoded.isUpgraded !== 'boolean')
+    || (decoded.inAppOwnershipType !== undefined && !nonEmpty(decoded.inAppOwnershipType))) {
     return undefined;
   }
   return {
@@ -155,6 +163,9 @@ function decodeOneTimeTransaction(
     ...(decoded.revocationDate === undefined ? {} : { revocationDate: decoded.revocationDate }),
     ...(decoded.expiresDate === undefined ? {} : { expiresDate: decoded.expiresDate }),
     ...(decoded.isUpgraded === undefined ? {} : { isUpgraded: decoded.isUpgraded }),
+    ...(decoded.inAppOwnershipType === undefined
+      ? {}
+      : { inAppOwnershipType: decoded.inAppOwnershipType }),
   };
 }
 

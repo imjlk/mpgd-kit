@@ -1244,6 +1244,182 @@ assertEqual(
   );
 }
 
+{
+  // App Review: a Production deployment and a transaction Apple signed in the sandbox.
+  const sandboxTransaction = { ...baseTransaction, environment: 'Sandbox' as const };
+  const sandboxHarness = (input: {
+    readonly sandboxPurchases?: 'grant' | 'reject';
+    readonly productionApi?: 'not-found' | 'found-sandbox';
+    readonly ownership?: string;
+  } = {}) => {
+    const calls: string[] = [];
+    const transaction = input.ownership === undefined
+      ? sandboxTransaction
+      : { ...sandboxTransaction, inAppOwnershipType: input.ownership };
+    const serverApi: AppStoreServerApiClient = {
+      async getTransactionInfo({ environment }) {
+        calls.push(`api:${environment}`);
+        if (environment === 'Production' && input.productionApi !== 'found-sandbox') {
+          return { status: 'pending', reason: 'APP_STORE_TRANSACTION_NOT_FOUND' };
+        }
+        return { status: 'found', signedTransactionInfo: 'signed-transaction-jws' };
+      },
+    };
+    // Apple's adapter scoped to one environment refuses the other one after
+    // the signature check.
+    const scopedVerifier = (scope: 'Production' | 'Sandbox'): AppStoreSignedTransactionVerifier => ({
+      async verifyAndDecode({ environment, signedTransaction }) {
+        calls.push(`jws:${scope}:${environment}:${signedTransaction}`);
+        if (environment !== scope) {
+          return { status: 'rejected', reason: 'APP_STORE_VERIFIER_SCOPE_MISMATCH' };
+        }
+        return scope === transaction.environment
+          ? { status: 'verified', payload: transaction }
+          : { status: 'rejected', reason: 'APP_STORE_ENVIRONMENT_MISMATCH' };
+      },
+    });
+    const verifier = createAppStoreGameServicesEvidenceVerifier({
+      bundleId: baseTransaction.bundleId,
+      environment: 'Production',
+      serverApi,
+      signedTransactionVerifier: scopedVerifier('Production'),
+      resolveAppAccountToken: () => baseTransaction.appAccountToken ?? '',
+      now: () => '2026-07-16T13:00:00.000Z',
+      ...(input.sandboxPurchases === undefined
+        ? {}
+        : {
+            sandboxPurchases: input.sandboxPurchases === 'grant'
+              ? { mode: 'grant' as const, signedTransactionVerifier: scopedVerifier('Sandbox') }
+              : { mode: 'reject' as const },
+          }),
+    });
+    return { verifier, calls };
+  };
+
+  const rejectedByDefault = sandboxHarness();
+  assertDecision(
+    await rejectedByDefault.verifier.verifyPurchase(baseInput),
+    'pending',
+    'APP_STORE_TRANSACTION_NOT_FOUND',
+    'without the opt-in a production miss stays pending and is never looked up in the sandbox',
+  );
+  assertEqual(rejectedByDefault.calls.join(','), 'api:Production', 'no sandbox lookup by default');
+  const explicitReject = sandboxHarness({
+    sandboxPurchases: 'reject',
+    productionApi: 'found-sandbox',
+  });
+  assertDecision(
+    await explicitReject.verifier.verifyPurchase(baseInput),
+    'rejected',
+    'APP_STORE_ENVIRONMENT_MISMATCH',
+    'mode reject refuses a sandbox transaction on a production deployment',
+  );
+
+  const reviewPurchase = sandboxHarness({ sandboxPurchases: 'grant' });
+  const reviewDecision = await reviewPurchase.verifier.verifyPurchase(baseInput);
+  assertEqual(reviewDecision.status, 'verified', 'mode grant verifies a sandbox purchase');
+  assertEqual(
+    reviewPurchase.calls.join(','),
+    'api:Production,api:Sandbox,jws:Sandbox:Sandbox:signed-transaction-jws',
+    'production is asked first; the sandbox Server API and verifier only after its miss',
+  );
+  if (reviewDecision.status === 'verified') {
+    assertEqual(
+      reviewDecision.verificationId,
+      '9:app-store:7:Sandbox:16:com.example.game:16:2000000123456789',
+      'a sandbox grant has its own verification identity',
+    );
+    assertEqual(
+      reviewDecision.payload?.appStoreEnvironment,
+      'Sandbox',
+      'the ledger payload records the sandbox environment',
+    );
+  }
+
+  const reviewEvidence = sandboxHarness({ sandboxPurchases: 'grant' });
+  const evidenceDecision = await reviewEvidence.verifier.verifyPurchase({
+    ...baseInput,
+    request: {
+      ...baseInput.request,
+      evidence: createAppStoreSignedTransactionEvidenceFixture({
+        signedTransaction: 'signed-transaction-jws',
+        transactionId: baseInput.request.platformTransactionId,
+      }),
+    },
+  });
+  assertEqual(evidenceDecision.status, 'verified', 'a sandbox client JWS verifies in mode grant');
+  assertEqual(
+    reviewEvidence.calls.join(','),
+    'jws:Production:Production:signed-transaction-jws,'
+      + 'jws:Sandbox:Sandbox:signed-transaction-jws,api:Sandbox,'
+      + 'jws:Sandbox:Sandbox:signed-transaction-jws',
+    'the client JWS is verified in production first, then in full in the sandbox, '
+      + 'and its status is read from the sandbox Server API only',
+  );
+
+  const productionOnlyMiss = sandboxHarness({
+    sandboxPurchases: 'grant',
+    productionApi: 'found-sandbox',
+  });
+  assertDecision(
+    await productionOnlyMiss.verifier.verifyPurchase(baseInput),
+    'rejected',
+    'APP_STORE_ENVIRONMENT_MISMATCH',
+    'a production Server API answer is never re-verified in the sandbox',
+  );
+
+  const familyShared = sandboxHarness({ sandboxPurchases: 'grant', ownership: 'FAMILY_SHARED' });
+  assertDecision(
+    await familyShared.verifier.verifyPurchase(baseInput),
+    'rejected',
+    'APP_STORE_FAMILY_SHARED_UNSUPPORTED',
+    'a family-shared transaction is refused explicitly',
+  );
+  const otherOwnership = sandboxHarness({ sandboxPurchases: 'grant', ownership: 'ORGANIZATION' });
+  assertDecision(
+    await otherOwnership.verifier.verifyPurchase(baseInput),
+    'rejected',
+    'APP_STORE_OWNERSHIP_UNSUPPORTED',
+    'an ownership type other than PURCHASED is refused',
+  );
+  const ownPurchase = sandboxHarness({ sandboxPurchases: 'grant', ownership: 'PURCHASED' });
+  assertEqual(
+    (await ownPurchase.verifier.verifyPurchase(baseInput)).status,
+    'verified',
+    'the buyer’s own transaction is granted',
+  );
+
+  await assertRejects(
+    async () =>
+      createAppStoreGameServicesEvidenceVerifier({
+        bundleId: baseTransaction.bundleId,
+        environment: 'Sandbox',
+        serverApi: createFoundServerApi(),
+        signedTransactionVerifier: createSignedTransactionVerifier(sandboxTransaction),
+        resolveAppAccountToken: () => baseTransaction.appAccountToken ?? '',
+        sandboxPurchases: {
+          mode: 'grant',
+          signedTransactionVerifier: createSignedTransactionVerifier(sandboxTransaction),
+        },
+      }),
+    'sandboxPurchases applies only to a Production verifier',
+    'the sandbox opt-in is refused on a sandbox verifier',
+  );
+  await assertRejects(
+    async () =>
+      createAppStoreGameServicesEvidenceVerifier({
+        bundleId: baseTransaction.bundleId,
+        environment: 'Production',
+        serverApi: createFoundServerApi(),
+        signedTransactionVerifier: createSignedTransactionVerifier(baseTransaction),
+        resolveAppAccountToken: () => baseTransaction.appAccountToken ?? '',
+        sandboxPurchases: { mode: 'grant' } as never,
+      }),
+    'sandboxPurchases.signedTransactionVerifier must be an object',
+    'mode grant requires a sandbox verifier',
+  );
+}
+
 console.log('App Store signed transaction verifier tests passed.');
 
 function createVerifier(input: {

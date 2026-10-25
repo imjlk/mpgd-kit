@@ -389,6 +389,84 @@ assert(
     && calls.length === beforeIdentityMismatch,
   'the signed environment must match the configured App Store identity',
 );
+{
+  // App Review restores a sandbox non-consumable on a Production deployment
+  // whose evidence verifier grants sandbox purchases.
+  const sandboxStore = createInMemoryGameServicesStore();
+  const sandboxVerificationId = createAppStoreVerificationId({
+    environment: 'Sandbox',
+    bundleId: 'com.example.game',
+    transactionId: originalTransactionId,
+  });
+  const sandboxGrant = await sandboxStore.recordEntitlementGrant({
+    source: 'purchase',
+    playerId: request.playerId,
+    grantId: 'REMOVE_ADS',
+    idempotencyKey: 'sandbox-non-consumable-checkout',
+    grantedAt: request.purchasedAt,
+    evidenceVerificationId: sandboxVerificationId,
+    payload: {
+      target: 'ios',
+      deploymentTarget: 'ios-production',
+      appStoreEnvironment: 'Sandbox',
+      appStoreBundleId: 'com.example.game',
+      productId: 'REMOVE_ADS',
+      productType: 'non_consumable',
+      platformTransactionId: '2000000123457001',
+      appStoreOriginalTransactionId: originalTransactionId,
+    },
+  });
+  const sandboxEvidenceVerifier = {
+    async verifyPurchase() {
+      return {
+        status: 'verified' as const,
+        verificationId: sandboxVerificationId,
+        verifiedAt: request.purchasedAt,
+        payload: {
+          appStoreOriginalTransactionId: originalTransactionId,
+          appStoreTransactionType: 'Non-Consumable',
+          appStoreEnvironment: 'Sandbox',
+          appStoreBundleId: 'com.example.game',
+        },
+      };
+    },
+    async verifyAdReward() {
+      return { status: 'rejected' as const, reason: 'unsupported' };
+    },
+  } satisfies GameServicesEvidenceVerifier;
+  const sandboxBackend = (acceptsSandboxTransactions: boolean) =>
+    createAppStoreRecoveryBackend({
+      playerId: request.playerId,
+      deploymentTarget: 'ios-production',
+      store: sandboxStore,
+      purchases: {
+        async verifyPurchase() {
+          return {
+            verified: true,
+            alreadyProcessed: true,
+            ledgerEntryId: sandboxGrant.ledgerEntryId,
+          };
+        },
+      },
+      restoredNonConsumables: {
+        catalog: restoredCatalog,
+        evidenceVerifier: sandboxEvidenceVerifier,
+        bundleId: 'com.example.game',
+        environment: 'Production',
+        acceptsSandboxTransactions,
+      },
+    });
+  const refusedSandbox = await sandboxBackend(false).recoverPurchase(restoredRequest);
+  assert(
+    !refusedSandbox.verified && refusedSandbox.disposition === 'rejected',
+    'a production restore refuses a sandbox transaction without the opt-in',
+  );
+  const acceptedSandbox = await sandboxBackend(true).recoverPurchase(restoredRequest);
+  assert(
+    acceptedSandbox.verified && acceptedSandbox.ledgerEntryId === sandboxGrant.ledgerEntryId,
+    'a production restore re-verifies its sandbox grant with the opt-in',
+  );
+}
 const unverifiedRestore = await createAppStoreRecoveryBackend({
   playerId: request.playerId,
   store: restoredStore,

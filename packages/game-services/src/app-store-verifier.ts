@@ -72,6 +72,12 @@ export interface AppStoreTransactionPayload {
   readonly expiresDate?: number;
   readonly revocationDate?: number;
   readonly isUpgraded?: boolean;
+  /**
+   * Apple's `inAppOwnershipType`: `PURCHASED` for the buyer's own
+   * transaction, `FAMILY_SHARED` for a family member's access. Only
+   * `PURCHASED` (or an absent value) is granted.
+   */
+  readonly inAppOwnershipType?: string;
 }
 
 export type AppStoreSignedTransactionVerificationResult =
@@ -125,7 +131,33 @@ export interface CreateAppStoreEvidenceVerifierOptions {
    * 'ignore' }` fetches by id for every request.
    */
   readonly signedTransactionEvidence?: AppStoreSignedTransactionEvidencePolicy;
+  /**
+   * Whether a Production deployment grants transactions Apple signed in the
+   * sandbox (App Review, TestFlight, and sandbox testers buy in the sandbox
+   * against the production build). Defaults to `{ mode: 'reject' }`, which
+   * answers `APP_STORE_ENVIRONMENT_MISMATCH`. `{ mode: 'grant', ... }` follows
+   * Apple's production-first order: the transaction is verified against
+   * production, and only when the verified JWS says `Sandbox` (or production
+   * answers `APP_STORE_TRANSACTION_NOT_FOUND`) is it verified again with the
+   * sandbox verifier and Server API. The grant's verification id and ledger
+   * payload carry `Sandbox`, so it stays apart from production revenue.
+   * Only valid on a `Production` verifier.
+   */
+  readonly sandboxPurchases?: AppStoreSandboxPurchasePolicy;
 }
+
+export type AppStoreSandboxPurchasePolicy =
+  | { readonly mode: 'reject' }
+  | {
+      readonly mode: 'grant';
+      /**
+       * A verifier scoped to the sandbox environment and the same bundle, for
+       * example `createAppleSignedTransactionVerifier({ environment: 'Sandbox', ... })`.
+       */
+      readonly signedTransactionVerifier: AppStoreSignedTransactionVerifier;
+      /** Defaults to the verifier's `serverApi`, which selects the sandbox host per call. */
+      readonly serverApi?: AppStoreServerApiClient;
+    };
 
 export type AppStoreSignedTransactionEvidencePolicy =
   | { readonly mode: 'ignore' }
@@ -311,6 +343,7 @@ export function createAppStoreGameServicesEvidenceVerifier(
   assertNonEmptyString(options.bundleId, 'bundleId');
   assertAppStoreEnvironment(options.environment);
   assertSignedTransactionEvidencePolicy(options.signedTransactionEvidence);
+  assertSandboxPurchasePolicy(options.sandboxPurchases, options.environment);
   const clockSkewMs = readNonNegativeSafeInteger(
     options.clockSkewMs ?? 5 * 60 * 1000,
     'clockSkewMs',
@@ -357,9 +390,27 @@ async function verifyAppStorePurchase(
     return { status: 'rejected', reason: evidence.reason };
   }
 
+  const sandbox = readSandboxGrantPolicy(options);
+  let environment: AppStoreEnvironment = options.environment;
   let offlineTransaction: AppStoreTransactionPayload | undefined;
   if (evidence.status === 'present') {
-    const offline = await verifySignedTransaction(evidence.signedTransaction, input, options);
+    let offline = await verifySignedTransaction(
+      evidence.signedTransaction,
+      input,
+      options,
+      environment,
+    );
+    if (sandbox !== undefined && isSandboxSignal(offline)) {
+      // Production first: only a JWS the production verifier places in the
+      // sandbox is verified again, in full, by the sandbox verifier.
+      environment = 'Sandbox';
+      offline = await verifySignedTransaction(
+        evidence.signedTransaction,
+        input,
+        options,
+        environment,
+      );
+    }
     if (offline.status !== 'verified') {
       return offline;
     }
@@ -377,24 +428,17 @@ async function verifyAppStorePurchase(
   } else {
     // A JWS is a snapshot: the current status (refund, revocation) is read
     // from the Server API before any grant.
-    let transactionResult: AppStoreServerApiTransactionResult;
-    try {
-      transactionResult = await options.serverApi.getTransactionInfo({
-        transactionId: input.request.platformTransactionId,
-        environment: options.environment,
-        signal: input.signal,
-      });
-    } catch (error) {
-      if (!(error instanceof AppStoreDependencyUnavailableError)) {
-        throw error;
-      }
-      return { status: 'pending', reason: 'APP_STORE_SERVER_API_UNAVAILABLE' };
-    }
-
-    try {
-      assertAppStoreServerApiTransactionResult(transactionResult);
-    } catch {
-      return { status: 'pending', reason: 'APP_STORE_SERVER_API_INVALID_RESPONSE' };
+    let transactionResult = await fetchTransactionInfo(input, options, environment);
+    if (
+      sandbox !== undefined
+      && environment === 'Production'
+      && transactionResult.status === 'pending'
+      && transactionResult.reason === 'APP_STORE_TRANSACTION_NOT_FOUND'
+    ) {
+      // Apple keeps sandbox transaction ids out of production: a production
+      // miss is looked up in the sandbox before it is reported as pending.
+      environment = 'Sandbox';
+      transactionResult = await fetchTransactionInfo(input, options, environment);
     }
     if (transactionResult.status !== 'found') {
       return { status: transactionResult.status, reason: transactionResult.reason };
@@ -403,6 +447,7 @@ async function verifyAppStorePurchase(
       transactionResult.signedTransactionInfo,
       input,
       options,
+      environment,
     );
     if (fresh.status !== 'verified') {
       return fresh;
@@ -440,7 +485,8 @@ async function verifyAppStorePurchase(
   const rejection = validateTransaction(
     input,
     transaction,
-    options,
+    options.bundleId,
+    environment,
     expectedAccountToken.value,
     nowMs,
     clockSkewMs,
@@ -469,6 +515,86 @@ const defaultSignedTransactionEvidencePolicy: AppStoreSignedTransactionEvidenceP
   mode: 'server-api',
 };
 
+type AppStoreSandboxGrantPolicy = Extract<AppStoreSandboxPurchasePolicy, { readonly mode: 'grant' }>;
+
+function readSandboxGrantPolicy(
+  options: CreateAppStoreEvidenceVerifierOptions,
+): AppStoreSandboxGrantPolicy | undefined {
+  return options.environment === 'Production' && options.sandboxPurchases?.mode === 'grant'
+    ? options.sandboxPurchases
+    : undefined;
+}
+
+/**
+ * Whether the production verifier placed a JWS in the sandbox: Apple's
+ * adapter refuses it with `APP_STORE_ENVIRONMENT_MISMATCH` after the
+ * signature check, and a custom verifier may return the decoded `Sandbox`
+ * payload. Either way it is verified again by the sandbox verifier before
+ * anything is read from it.
+ */
+function isSandboxSignal(
+  result: Awaited<ReturnType<typeof verifySignedTransaction>>,
+): boolean {
+  return result.status === 'verified'
+    ? result.payload.environment === 'Sandbox'
+    : result.reason === 'APP_STORE_ENVIRONMENT_MISMATCH';
+}
+
+async function fetchTransactionInfo(
+  input: VerifyPurchaseEvidenceInput,
+  options: CreateAppStoreEvidenceVerifierOptions,
+  environment: AppStoreEnvironment,
+): Promise<AppStoreServerApiTransactionResult> {
+  const serverApi = environment === options.environment
+    ? options.serverApi
+    : (readSandboxGrantPolicy(options)?.serverApi ?? options.serverApi);
+  let transactionResult: AppStoreServerApiTransactionResult;
+  try {
+    transactionResult = await serverApi.getTransactionInfo({
+      transactionId: input.request.platformTransactionId,
+      environment,
+      signal: input.signal,
+    });
+  } catch (error) {
+    if (!(error instanceof AppStoreDependencyUnavailableError)) {
+      throw error;
+    }
+    return { status: 'pending', reason: 'APP_STORE_SERVER_API_UNAVAILABLE' };
+  }
+  try {
+    assertAppStoreServerApiTransactionResult(transactionResult);
+  } catch {
+    return { status: 'pending', reason: 'APP_STORE_SERVER_API_INVALID_RESPONSE' };
+  }
+  return transactionResult;
+}
+
+function assertSandboxPurchasePolicy(
+  input: unknown,
+  environment: AppStoreEnvironment,
+): asserts input is AppStoreSandboxPurchasePolicy | undefined {
+  if (input === undefined) {
+    return;
+  }
+  assertRecord(input, 'sandboxPurchases');
+  if (input.mode === 'reject') {
+    return;
+  }
+  if (input.mode !== 'grant') {
+    throw new Error('sandboxPurchases.mode must be reject or grant.');
+  }
+  if (environment !== 'Production') {
+    throw new Error('sandboxPurchases applies only to a Production verifier.');
+  }
+  assertRecord(input.signedTransactionVerifier, 'sandboxPurchases.signedTransactionVerifier');
+  if (typeof input.signedTransactionVerifier.verifyAndDecode !== 'function') {
+    throw new Error('sandboxPurchases.signedTransactionVerifier must verify sandbox JWS.');
+  }
+  if (input.serverApi !== undefined) {
+    assertRecord(input.serverApi, 'sandboxPurchases.serverApi');
+  }
+}
+
 function assertSignedTransactionEvidencePolicy(
   input: unknown,
 ): asserts input is AppStoreSignedTransactionEvidencePolicy | undefined {
@@ -491,15 +617,22 @@ async function verifySignedTransaction(
   signedTransaction: string,
   input: VerifyPurchaseEvidenceInput,
   options: CreateAppStoreEvidenceVerifierOptions,
+  environment: AppStoreEnvironment,
 ): Promise<
   | { readonly status: 'verified'; readonly payload: AppStoreTransactionPayload }
   | { readonly status: 'pending' | 'rejected'; readonly reason: string }
 > {
+  const verifier = environment === options.environment
+    ? options.signedTransactionVerifier
+    : readSandboxGrantPolicy(options)?.signedTransactionVerifier;
+  if (verifier === undefined) {
+    return { status: 'rejected', reason: 'APP_STORE_ENVIRONMENT_MISMATCH' };
+  }
   let signatureResult: AppStoreSignedTransactionVerificationResult;
   try {
-    signatureResult = await options.signedTransactionVerifier.verifyAndDecode({
+    signatureResult = await verifier.verifyAndDecode({
       signedTransaction,
-      environment: options.environment,
+      environment,
       bundleId: options.bundleId,
       signal: input.signal,
     });
@@ -545,7 +678,8 @@ async function resolveExpectedAppAccountToken(
 function validateTransaction(
   input: VerifyPurchaseEvidenceInput,
   transaction: AppStoreTransactionPayload,
-  options: CreateAppStoreEvidenceVerifierOptions,
+  bundleId: string,
+  environment: AppStoreEnvironment,
   expectedAccountToken: string,
   nowMs: number,
   clockSkewMs: number,
@@ -553,14 +687,27 @@ function validateTransaction(
   if (transaction.transactionId !== input.request.platformTransactionId) {
     return 'APP_STORE_TRANSACTION_ID_MISMATCH';
   }
-  if (transaction.bundleId !== options.bundleId) {
+  if (transaction.bundleId !== bundleId) {
     return 'APP_STORE_BUNDLE_ID_MISMATCH';
   }
   if (transaction.productId !== input.platformProductId) {
     return 'APP_STORE_PRODUCT_ID_MISMATCH';
   }
-  if (transaction.environment !== options.environment) {
+  if (transaction.environment !== environment) {
     return 'APP_STORE_ENVIRONMENT_MISMATCH';
+  }
+  if (transaction.inAppOwnershipType === 'FAMILY_SHARED') {
+    // A family member's access to the organizer's non-consumable: it carries
+    // no app account token of this player, and refusing it explicitly keeps
+    // one purchase from granting several players. Leave Family Sharing off
+    // for the game's In-App Purchases in App Store Connect.
+    return 'APP_STORE_FAMILY_SHARED_UNSUPPORTED';
+  }
+  if (
+    transaction.inAppOwnershipType !== undefined
+    && transaction.inAppOwnershipType !== 'PURCHASED'
+  ) {
+    return 'APP_STORE_OWNERSHIP_UNSUPPORTED';
   }
   if (
     transaction.appAccountToken === undefined
@@ -720,6 +867,9 @@ export function assertAppStoreTransactionPayload(
   assertOptionalNonNegativeSafeInteger(input.expiresDate, 'expiresDate');
   assertOptionalNonNegativeSafeInteger(input.revocationDate, 'revocationDate');
   assertOptionalBoolean(input.isUpgraded, 'isUpgraded');
+  if (input.inAppOwnershipType !== undefined) {
+    assertNonEmptyString(input.inAppOwnershipType, 'inAppOwnershipType');
+  }
   return input as unknown as AppStoreTransactionPayload;
 }
 
