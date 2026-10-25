@@ -168,7 +168,8 @@ function handle(
   await grantFor(store, consumable);
   for (const [type, reason] of [
     ['TEST', 'APP_STORE_NOTIFICATION_TYPE_UNHANDLED'],
-    ['REFUND_REVERSED', 'APP_STORE_NOTIFICATION_TYPE_UNHANDLED'],
+    // The grant was never revoked here: the reversal changes nothing.
+    ['REFUND_REVERSED', 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED'],
     ['CONSUMPTION_REQUEST', 'APP_STORE_NOTIFICATION_TYPE_UNHANDLED'],
   ] as const) {
     const outcome = await handle(store, verifierOf(notification({ notificationType: type })));
@@ -375,6 +376,81 @@ function handle(
     }),
     { status: 'rejected', reason: 'APP_STORE_NOTIFICATION_PAYLOAD_INVALID' },
     'an oversized signedPayload is refused before verification',
+  );
+}
+
+{
+  // A refund Apple later reversed: recorded as a ledger note, never re-granted.
+  const store = createInMemoryGameServicesStore();
+  const grant = await grantFor(store, consumable);
+  const refund = await handle(store, verifierOf(notification()));
+  assert.equal(refund.status, 'revoked');
+  const reversal = verifierOf(
+    notification({
+      notificationType: 'REFUND_REVERSED',
+      notificationUUID: 'uuid-reversed-1',
+    }),
+  );
+  const reversed = await handle(store, reversal);
+  assert.deepEqual(reversed, {
+    status: 'refund_reversed',
+    notificationUUID: 'uuid-reversed-1',
+    playerId: 'player-1',
+    ledgerEntryId: grant.ledgerEntryId,
+    revocationLedgerEntryId: refund.status === 'revoked' ? refund.ledgerEntryId : '',
+    recorded: true,
+    alreadyRecorded: false,
+  });
+  assert.equal(appStoreServerNotificationHttpStatus(reversed), 200, 'Apple stops retrying');
+  const [note] = await store.findEntitlementNotes({ ledgerEntryIds: [grant.ledgerEntryId] });
+  assert.equal(note?.noteId, 'app-store:notification:uuid-reversed-1');
+  assert.equal(note?.kind, 'refund_reversed');
+  assert.equal(note?.payload.appStoreNotificationType, 'REFUND_REVERSED');
+  const replay = await handle(store, reversal);
+  assert.equal(
+    replay.status === 'refund_reversed' && replay.alreadyRecorded,
+    true,
+    'a redelivery keeps the first note',
+  );
+  assert.equal(
+    (await store.findEntitlementNotes({ ledgerEntryIds: [grant.ledgerEntryId] })).length,
+    1,
+  );
+  assert.equal(
+    (await listActiveEntitlementTransactions(store, { playerId: 'player-1' })).length,
+    0,
+    'nothing is re-granted: the grant stays reversed until the game re-grants it',
+  );
+
+  // A store without notes still answers 200; only the host's log keeps it.
+  const noteless: GameServicesStore = {
+    recordEntitlementGrant: (input) => store.recordEntitlementGrant(input),
+    getEntitlementTransaction: (id) => store.getEntitlementTransaction(id),
+    listEntitlementTransactions: () => store.listEntitlementTransactions(),
+    findEntitlementTransactionByEvidenceVerificationId: (input) =>
+      store.findEntitlementTransactionByEvidenceVerificationId(input),
+    findEntitlementRevocations: (input) => store.findEntitlementRevocations(input),
+    recordLeaderboardScore: (input) => store.recordLeaderboardScore(input),
+    getLeaderboardTransaction: (id) => store.getLeaderboardTransaction(id),
+    listLeaderboardTransactions: () => store.listLeaderboardTransactions(),
+  };
+  const unrecorded = await handle(
+    noteless,
+    verifierOf(
+      notification({ notificationType: 'REFUND_REVERSED', notificationUUID: 'uuid-reversed-2' }),
+    ),
+  );
+  assert.equal(unrecorded.status === 'refund_reversed' && !unrecorded.recorded, true);
+  await assert.rejects(
+    store.recordEntitlementNote({
+      noteId: 'orphan',
+      kind: 'refund_reversed',
+      playerId: 'player-1',
+      ledgerEntryId: 'missing',
+      recordedAt: '2026-10-24T00:00:00.000Z',
+      payload: {},
+    }),
+    /unknown grant/u,
   );
 }
 

@@ -136,6 +136,36 @@ try {
       'a redelivery answers the first entry',
     );
 
+    // Apple reverses the refund: kept as a D1 ledger note, answered 200, no re-grant.
+    const refundAnswer = answer;
+    answer = { ...refundAnswer, notificationType: 'REFUND_REVERSED', notificationUUID: 'worker-reversed-1' };
+    const reversed = await post(appStoreNotificationPaths.Production, payload);
+    assert.equal(reversed.status, 200);
+    assert.deepEqual(await reversed.json(), {
+      status: 'refund_reversed',
+      notificationUUID: 'worker-reversed-1',
+      playerId: 'ios-player',
+      ledgerEntryId: grant.ledgerEntryId,
+      revocationLedgerEntryId: revocation?.ledgerEntryId,
+      recorded: true,
+      alreadyRecorded: false,
+    });
+    const reversedAgain = await post(appStoreNotificationPaths.Production, payload);
+    assert.equal(
+      (await reversedAgain.json() as { alreadyRecorded: boolean }).alreadyRecorded,
+      true,
+      'a redelivered reversal keeps one note',
+    );
+    const notes = await store.findEntitlementNotes?.({ ledgerEntryIds: [grant.ledgerEntryId] }) ?? [];
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]?.revocationLedgerEntryId, revocation?.ledgerEntryId);
+    assert.equal(
+      (await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId])).length,
+      1,
+      'the grant stays revoked',
+    );
+    answer = refundAnswer;
+
     const sandboxUrl = await post(appStoreNotificationPaths.Sandbox, payload);
     assert.equal(sandboxUrl.status, 400, 'a production notification on the sandbox URL is refused');
     assert.equal(seen.at(-1)?.environment, 'Sandbox', 'the sandbox URL verifies in the sandbox');

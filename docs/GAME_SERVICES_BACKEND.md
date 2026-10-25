@@ -903,12 +903,22 @@ the purchase verifier, one per environment.
 - A transaction that is not the customer's own purchase (`FAMILY_SHARED`) is
   ignored: it shares the purchaser's original transaction id, and the
   purchaser keeps the grant.
+- `REFUND_REVERSED` for a grant this ledger revoked is answered
+  `refund_reversed` (200): the player paid again, but nothing is re-granted.
+  The reversal is kept as a ledger note (`EntitlementLedgerNote`, kind
+  `refund_reversed`, `noteId` `app-store:notification:<notificationUUID>`,
+  once per notification) through the store's optional `recordEntitlementNote`;
+  the memory and D1 stores implement it (D1: `entitlement_notes` in
+  `0009_store_server.sql`). The outcome names the player, the grant, and the
+  reversed `revoke` entry, and the Worker logs it at warn. A store without
+  notes still answers 200 with `recorded: false`; the host's log is then the
+  only record. A `REFUND_REVERSED` for a grant that was never revoked here
+  is `ignored` (`APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED`).
 - Every other type (`TEST`, `CONSUMPTION_REQUEST`, `REFUND_DECLINED`,
-  `REFUND_REVERSED`, subscription and summary notifications), a transaction
-  this ledger never granted, and a refund that arrives before its grant are
-  `ignored`. A reversed grant stays reversed after `REFUND_REVERSED`; re-grant
-  it on the game's own terms. A refund before its grant is safe with the
-  default Server API purchase mode, which refuses a revoked transaction.
+  subscription and summary notifications), a transaction this ledger never
+  granted, and a refund that arrives before its grant are `ignored`. A
+  refund before its grant is safe with the default Server API purchase mode,
+  which refuses a revoked transaction.
 - Answers: `revoked`, `ignored`, and `conflict` (a ledger key or identity
   conflict to alert on) are 200; `rejected` (not signed by Apple for this app
   and environment, malformed) is 400; `retry` (Apple's certificate checks are
@@ -922,6 +932,38 @@ the purchase verifier, one per environment.
 The package's vitest suite verifies real signatures from a throwaway test CA
 whose chain carries Apple's marker extensions; production verification
 additionally runs Apple's online certificate checks, which no test here makes.
+
+#### Re-granting after a refund reversal
+
+The ledger is append-only and a grant is reversed once, so a reversed refund
+is never undone in place: the game decides and writes a new grant. A
+support tool (game-owned, behind the game's own authentication) reads the
+notes, `store.findEntitlementNotes({ ledgerEntryIds })`, or the Worker's warn
+log, checks the player and product, and records an `admin` grant keyed by
+the note so a second click does nothing:
+
+```ts
+const grant = await store.getEntitlementTransaction(note.ledgerEntryId);
+if (grant === undefined || grant.playerId !== note.playerId) {
+  throw new Error('The reversed grant is not on this ledger.');
+}
+await store.recordEntitlementGrant({
+  source: 'admin',
+  playerId: note.playerId,
+  grantId: grant.grantId,
+  idempotencyKey: `regrant:${note.noteId}`,
+  grantedAt: new Date().toISOString(),
+  grant: grant.grant,
+  payload: {
+    regrantOf: note.ledgerEntryId,
+    reversedRevocation: note.revocationLedgerEntryId ?? '',
+    reason: 'app-store-refund-reversed',
+  },
+});
+```
+
+Entitlement reads (`listActiveEntitlementTransactions`) then count the new
+grant; the reversed one stays reversed, so both entries keep the history.
 
 **Google Play voided purchases** (`@mpgd/game-services/google-play-store-server`).
 `sweepGooglePlayVoidedPurchases` reads

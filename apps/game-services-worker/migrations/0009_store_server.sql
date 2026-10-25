@@ -1,7 +1,8 @@
 -- Store server upkeep (L2): Play grants whose acknowledge or consume has not
 -- completed yet, kept with the raw purchase token the ledger never stores so
--- the cron can retry within Play's three-day window, and the cursors of the
--- scheduled store sweeps. Additive: no existing table changes.
+-- the cron can retry within Play's three-day window, the cursors of the
+-- scheduled store sweeps, and ledger notes (store events that grant nothing,
+-- such as an App Store REFUND_REVERSED). Additive: no existing table changes.
 CREATE TABLE IF NOT EXISTS google_play_pending_finalizations (
   ledger_entry_id TEXT PRIMARY KEY,
   player_id TEXT NOT NULL,
@@ -27,3 +28,22 @@ CREATE TABLE IF NOT EXISTS store_server_cursors (
   value_ms INTEGER NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS entitlement_notes (
+  note_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('refund_reversed')),
+  player_id TEXT NOT NULL,
+  ledger_entry_id TEXT NOT NULL,
+  revocation_ledger_entry_id TEXT,
+  recorded_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY (ledger_entry_id)
+    REFERENCES entitlement_transactions (ledger_entry_id)
+    ON UPDATE RESTRICT
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_entitlement_notes_grant
+  ON entitlement_notes (ledger_entry_id);
+CREATE INDEX IF NOT EXISTS idx_entitlement_notes_player
+  ON entitlement_notes (player_id);

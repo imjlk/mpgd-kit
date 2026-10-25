@@ -109,6 +109,22 @@ export function createAppStoreNotificationsFetchHandler(input: {
         // Past the binding race below, so a slow binding answers 503, not 500.
         signal: AbortSignal.timeout(timeoutMs + 2 * bindingGraceMs),
       });
+      if (outcome.status === 'refund_reversed') {
+        // The player paid again but the grant stays revoked: support re-grants
+        // (docs/GAME_SERVICES_BACKEND.md, "Re-granting after a refund reversal").
+        console.warn(
+          'App Store refund reversed: player',
+          outcome.playerId,
+          'grant',
+          outcome.ledgerEntryId,
+          'revocation',
+          outcome.revocationLedgerEntryId,
+          'notification',
+          outcome.notificationUUID,
+          outcome.recorded ? '(ledger note kept)' : '(no ledger note: this log is the record)',
+        );
+        return json(outcome, appStoreServerNotificationHttpStatus(outcome));
+      }
       // The status, reason, and notification id trace a delivery; no player
       // data is logged.
       console.log(

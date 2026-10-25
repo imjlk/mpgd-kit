@@ -488,6 +488,12 @@ with the App Store Server API's
 a `TEST` notification answers 200 `ignored`. Allow Apple's notification subnet (`17.0.0.0/8`) if the host
 filters by IP.
 
+A `REFUND_REVERSED` for a revoked grant is answered 200 and logged at warn
+(`App Store refund reversed: player … grant …`) with a ledger note in
+`entitlement_notes`; nothing is re-granted. Route that warning to support;
+[Re-granting after a refund reversal](GAME_SERVICES_BACKEND.md#re-granting-after-a-refund-reversal)
+shows the re-grant.
+
 For App Review, the iOS verifier Worker also constructs its purchase verifier
 with `sandboxPurchases: { mode: 'grant', ... }`; see
 [App Review and TestFlight purchases](GAME_SERVICES_BACKEND.md#app-review-and-testflight-purchases-on-a-production-backend).

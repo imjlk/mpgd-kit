@@ -1,4 +1,5 @@
 import {
+  findEntitlementRevocationsChunked,
   findPurchaseGrantByEvidenceVerificationId,
   revokeEntitlementGrant,
 } from './commerce-ledger.js';
@@ -9,7 +10,11 @@ import {
   type AppStoreTransactionPayload,
 } from './app-store-verifier.js';
 import type { GameServicesStore } from './server.js';
-import type { EntitlementRevocationReason } from './types.js';
+import type {
+  EntitlementLedgerPayload,
+  EntitlementRevocationReason,
+  ProductGrantTransaction,
+} from './types.js';
 
 /**
  * App Store Server Notifications V2 for one-time purchases: the store-side
@@ -79,6 +84,24 @@ export type AppStoreServerNotificationOutcome =
       readonly ledgerEntryId: string;
       readonly alreadyProcessed: boolean;
     }
+  /**
+   * `REFUND_REVERSED` for a grant this ledger revoked: the player paid again
+   * but still has no item. Nothing is re-granted; the reversal is kept as a
+   * ledger note (`recorded`, once per `notificationUUID`) when the store
+   * supports notes, and the host should warn so support can re-grant.
+   */
+  | {
+      readonly status: 'refund_reversed';
+      readonly notificationUUID: string;
+      readonly playerId: string;
+      /** The original grant. */
+      readonly ledgerEntryId: string;
+      /** The `revoke` entry Apple's reversal undid. */
+      readonly revocationLedgerEntryId: string;
+      /** False on a store without `recordEntitlementNote`: only the host's log keeps it. */
+      readonly recorded: boolean;
+      readonly alreadyRecorded: boolean;
+    }
   /** Verified, but nothing to do: Apple is answered 200 so it stops retrying. */
   | { readonly status: 'ignored'; readonly reason: string; readonly notificationUUID: string }
   /**
@@ -113,8 +136,9 @@ const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> =
  * entry, keyed by the notification's `notificationUUID` so a redelivery
  * answers the first entry. Every other type, a transaction this ledger never
  * granted, and a subscription transaction are `ignored` (answer 200 so Apple
- * stops retrying). `REFUND_REVERSED` is ignored too: a reversed grant stays
- * reversed until the game re-grants it on its own terms.
+ * stops retrying). `REFUND_REVERSED` for a revoked grant is answered
+ * `refund_reversed`: the reversal is recorded as a ledger note, nothing is
+ * re-granted, and the game re-grants on its own terms (a new grant entry).
  *
  * A refund that arrives before its grant is ignored, not retried; the
  * purchase verifier's default Server API mode reads the transaction's current
@@ -156,8 +180,9 @@ export async function handleAppStoreServerNotification(
     return { status: 'rejected', reason: 'APP_STORE_NOTIFICATION_SCOPE_MISMATCH' };
   }
   const notificationUUID = notification.notificationUUID;
+  const isRefundReversal = notification.notificationType === 'REFUND_REVERSED';
   const reason = revocationReasons[notification.notificationType];
-  if (reason === undefined) {
+  if (reason === undefined && !isRefundReversal) {
     return { status: 'ignored', reason: 'APP_STORE_NOTIFICATION_TYPE_UNHANDLED', notificationUUID };
   }
   const transaction = notification.transaction;
@@ -205,8 +230,24 @@ export async function handleAppStoreServerNotification(
     };
   }
 
-  const revokedAt = readTimestamp(transaction.revocationDate)
-    ?? (input.now ?? (() => new Date().toISOString()))();
+  const now = input.now ?? (() => new Date().toISOString());
+  if (isRefundReversal || reason === undefined) {
+    return recordRefundReversal(input.store, {
+      notificationUUID,
+      grant,
+      now: now(),
+      payload: {
+        target: 'ios',
+        store: 'app-store',
+        appStoreNotificationType: notification.notificationType,
+        appStoreEnvironment: transaction.environment,
+        appStoreOriginalTransactionId: transaction.originalTransactionId,
+        platformTransactionId: transaction.transactionId,
+        platformProductId: transaction.productId,
+      },
+    });
+  }
+  const revokedAt = readTimestamp(transaction.revocationDate) ?? now();
   const result = await revokeEntitlementGrant(input.store, {
     playerId: grant.playerId,
     revokesLedgerEntryId: grant.ledgerEntryId,
@@ -247,12 +288,58 @@ export async function handleAppStoreServerNotification(
   };
 }
 
+async function recordRefundReversal(
+  store: GameServicesStore,
+  input: {
+    readonly notificationUUID: string;
+    readonly grant: ProductGrantTransaction;
+    readonly now: string;
+    readonly payload: EntitlementLedgerPayload;
+  },
+): Promise<AppStoreServerNotificationOutcome> {
+  const [revocation] = await findEntitlementRevocationsChunked(store, [input.grant.ledgerEntryId]);
+  if (revocation === undefined) {
+    // The grant is still active (the refund never reached this ledger), so
+    // the reversal changes nothing.
+    return {
+      status: 'ignored',
+      reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED',
+      notificationUUID: input.notificationUUID,
+    };
+  }
+  let recorded = false;
+  let alreadyRecorded = false;
+  if (store.recordEntitlementNote !== undefined) {
+    const result = await store.recordEntitlementNote({
+      noteId: `app-store:notification:${input.notificationUUID}`,
+      kind: 'refund_reversed',
+      playerId: input.grant.playerId,
+      ledgerEntryId: input.grant.ledgerEntryId,
+      revocationLedgerEntryId: revocation.ledgerEntryId,
+      recordedAt: input.now,
+      payload: { ...input.payload, appStoreNotificationUUID: input.notificationUUID },
+    });
+    recorded = true;
+    alreadyRecorded = result.alreadyRecorded;
+  }
+  return {
+    status: 'refund_reversed',
+    notificationUUID: input.notificationUUID,
+    playerId: input.grant.playerId,
+    ledgerEntryId: input.grant.ledgerEntryId,
+    revocationLedgerEntryId: revocation.ledgerEntryId,
+    recorded,
+    alreadyRecorded,
+  };
+}
+
 /** The HTTP status to answer Apple with: 200 stops its retries, anything else asks for one. */
 export function appStoreServerNotificationHttpStatus(
   outcome: AppStoreServerNotificationOutcome,
 ): 200 | 400 | 503 {
   switch (outcome.status) {
     case 'revoked':
+    case 'refund_reversed':
     case 'ignored':
     case 'conflict':
       return 200;
