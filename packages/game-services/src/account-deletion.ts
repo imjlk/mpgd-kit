@@ -104,7 +104,7 @@ export type AccountDeletionErrorCode =
   /** This server has no authentication or identity service for deletion. */
   | 'ACCOUNT_DELETION_NOT_CONFIGURED'
   /**
-   * The server failed before the identity was deleted (or answered 5xx/429);
+   * The server failed before the identity was deleted (or answered 5xx, 408, 425, or 429);
    * every step is idempotent, so retrying is safe.
    */
   | 'ACCOUNT_DELETION_FAILED'
@@ -462,7 +462,7 @@ async function retry<Value>(
   for (let attempt = 0; attempt < secondPassAttempts; attempt += 1) {
     try {
       if (attempt > 0) {
-        await sleep(secondPassBackoffMs[attempt - 1] ?? 400);
+        await sleep(secondPassBackoffMs[Math.min(attempt, secondPassBackoffMs.length) - 1] ?? 0);
       }
       return { value: await operation() };
     } catch (error) {

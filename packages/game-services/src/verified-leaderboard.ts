@@ -6,6 +6,9 @@ export const verifiedLeaderboardIdentifierMaximumLength = 512;
 export const verifiedLeaderboardMetricsMaximumCount = 16;
 export const verifiedLeaderboardMetricKeyMaximumLength = 64;
 
+/** `retainedPlayerIdPrefix` of `./account-deletion`; this module stays import-free. */
+const retainedPlayerIdPrefix = 'deleted:';
+
 const verifiedLeaderboardMetricKeyPattern = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
 const timestampPattern = new RegExp(
@@ -151,13 +154,12 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
     readonly retainedPlayerId: string;
   }): Promise<{ readonly deleted: number; readonly retained: number }> {
     const participantId = input.playerId;
-    // `deleted:` is `retainedPlayerIdPrefix` of `./account-deletion`.
     if (
       typeof participantId !== 'string' || participantId.length === 0
-      || participantId.startsWith('deleted:')
+      || participantId.startsWith(retainedPlayerIdPrefix)
       || typeof input.retainedPlayerId !== 'string'
-      || !input.retainedPlayerId.startsWith('deleted:')
-      || input.retainedPlayerId.length <= 'deleted:'.length
+      || !input.retainedPlayerId.startsWith(retainedPlayerIdPrefix)
+      || input.retainedPlayerId.length <= retainedPlayerIdPrefix.length
     ) {
       throw new Error(
         'Player data erasure needs a player id and a deleted:<id> retained player id.',

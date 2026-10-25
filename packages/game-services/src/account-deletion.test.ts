@@ -349,6 +349,14 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     ['player-2'],
   );
   assert.deepEqual(await leaderboard.erasePlayerData(erasure), { deleted: 0, retained: 0 });
+  for (const bad of [
+    { playerId: 'deleted:deletion-1', retainedPlayerId: 'deleted:deletion-2' },
+    { playerId: 'player-1', retainedPlayerId: 'player-2' },
+    { playerId: 'player-1', retainedPlayerId: 'deleted:' },
+    { playerId: '', retainedPlayerId: 'deleted:deletion-2' },
+  ]) {
+    await assert.rejects(leaderboard.erasePlayerData(bad));
+  }
 }
 
 // --- The deletion service ----------------------------------------------------
@@ -684,7 +692,6 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     }
   };
   const noWait = async (): Promise<void> => undefined;
-  const ok: PlayerDataEraser = { erasePlayerData: async () => ({ deleted: 1, retained: 0 }) };
   let failSecond = 0;
   const failsAfterFirst: PlayerDataEraser = {
     async erasePlayerData() {
@@ -811,7 +818,6 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       ['a', 0],
     ],
   );
-  void ok;
 }
 
 // --- The client --------------------------------------------------------------

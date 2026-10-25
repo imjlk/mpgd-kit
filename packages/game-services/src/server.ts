@@ -300,7 +300,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     }
 
     const transaction = createEntitlementTransaction(grant);
-    // The same index bookkeeping as a grant kept by `erasePlayerData`.
+    // Indexes it by idempotency key, ledger entry id, and evidence identities.
     this.rememberEntitlementTransaction(transaction);
 
     return assertEntitlementLedgerResult({
