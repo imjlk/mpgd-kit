@@ -39,8 +39,9 @@ export interface IdentityServiceConfig {
    * successor (`deriveRefreshToken` with the family's rotation nonce), so no
    * answer ever invalidates another. Default 7 days; 0 turns it off (strict
    * RFC 9700 rotation). The cost: a stolen copy of the replaced token can
-   * obtain that successor until the device's next refresh, after which it
-   * reads as a replay and ends the family.
+   * obtain that successor inside the window, and a thief who refreshes first
+   * and keeps pace with the device is answered as a retry each time, so it is
+   * not detected (docs/CLOUDFLARE_WORKER_DEPLOY.md weighs this).
    */
   readonly refreshRetryGraceMs: number;
   /** New guests per installation in a rolling day. Default 5. */

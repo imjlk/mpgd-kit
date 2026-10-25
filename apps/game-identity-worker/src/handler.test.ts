@@ -140,7 +140,7 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
   };
   try {
     const broken = {
-      async countFamiliesIssuedSince() {
+      async createGuest() {
         throw new TypeError('D1_ERROR with mpgd_rt_secret');
       },
     } as unknown as IdentityStore;

@@ -176,9 +176,14 @@ for a public client:
   the new refresh token from the old one and a nonce stored with the family
   (never sent), so a lost answer, a retried request, an abandoned request that
   finishes late, or two refreshes racing all end up holding one token, and no
-  answer invalidates another. The cost is that a stolen copy of the replaced
-  token can obtain that same successor until the device next refreshes, after
-  which the replaced token reads as a replay and ends the family.
+  answer invalidates another. The cost: a stolen copy of the replaced token
+  can obtain that same successor inside the window. If the device refreshes
+  next, the stolen token then reads as a replay and ends the family; if the
+  thief refreshes first and both keep refreshing within the window of each
+  other's rotation, each is answered as a retry and neither is detected.
+  Stealing a refresh token needs the device's Keychain or Keystore item
+  (device-only, not backed up), so the default favours keeping guests; set
+  the grace shorter, or `0`, when detection matters more than a lost answer.
 - A family ends after `IDENTITY_REFRESH_IDLE_DAYS` (180) without a refresh
   ("Refresh tokens SHOULD expire if the client has been inactive for some
   time"); each refresh extends it. A guest who stays away longer comes back as

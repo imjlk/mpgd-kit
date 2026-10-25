@@ -145,7 +145,7 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
-  // One preflight a day per route, not one per request inside the client's timeout.
+  // At most one preflight a day per route (browsers may cap it lower), not one per request.
   'Access-Control-Max-Age': '86400',
 } as const;
 
