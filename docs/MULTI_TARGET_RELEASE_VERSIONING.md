@@ -137,7 +137,11 @@ With stamping on (you can also set it for a manual `mpgd target build`):
    AAB manifest or the archived app's and IPA's `Info.plist` must carry the
    same numbers after packaging.
 
-Debug configurations and other Xcode targets are left as committed. Without
+Debug configurations and other Xcode targets are left as committed. The tool
+does not read xcconfig files, so a conditional version assignment inside an
+xcconfig (for example `MARKETING_VERSION[sdk=iphoneos*]`) is not detected;
+keep version numbers out of xcconfig files. Signed builds still catch a
+mismatch when they inspect the archived `Info.plist`. Without
 `MPGD_NATIVE_VERSION_STAMP=1` the source must hold the exact numbers, as
 before.
 
