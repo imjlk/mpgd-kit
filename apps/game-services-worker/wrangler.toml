@@ -110,7 +110,8 @@ head_sampling_rate = 1
 # (createAppleServerNotificationVerifier); the bundle id is required with it.
 # See docs/CLOUDFLARE_WORKER_DEPLOY.md#store-refunds-and-play-finalization.
 #
-# GAME_SERVICES_APP_STORE_BUNDLE_ID = "com.example.game" (under [vars])
+# Under [vars]:
+# GAME_SERVICES_APP_STORE_BUNDLE_ID = "com.example.game"
 #
 # [[services]]
 # binding = "GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER"

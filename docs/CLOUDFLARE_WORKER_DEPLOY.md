@@ -539,10 +539,13 @@ crons = ["* * * * *"]
 # MPGD_STORE_SERVER_CRON_BUDGET_SECONDS = "15"
 ```
 
-Each scheduled run retries up to 20 owed finalizations, then sweeps when the
-interval has passed, and stops at `MPGD_STORE_SERVER_SUBREQUEST_BUDGET` (D1
-calls, token-service calls, and Play requests, counted by estimate) or the
-wall budget, which is kept below the cron period. It is counted apart from
+Each scheduled run retries up to 20 owed finalizations within half of
+`MPGD_STORE_SERVER_SUBREQUEST_BUDGET` (the other half is kept for the sweep),
+then sweeps when the interval has passed or a previous run stopped behind,
+and stops at the budget (D1 calls, token-service calls, and Play requests,
+counted by estimate) or the wall budget, which is kept below the cron period.
+The sweep cursor only moves forward; the 15-minute overlap that catches
+late-recorded voids is read on top of the first slice of a run. It is counted apart from
 the notifications run (`MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET`, 1,000 by
 default); together they stay under the Workers Paid cap.
 

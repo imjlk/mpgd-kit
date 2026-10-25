@@ -102,7 +102,8 @@ export function createAppStoreNotificationsFetchHandler(input: {
         body,
         environment,
         bundleId: input.bundleId,
-        signal: AbortSignal.timeout(timeoutMs + bindingGraceMs),
+        // Past the binding race below, so a slow binding answers 503, not 500.
+        signal: AbortSignal.timeout(timeoutMs + 2 * bindingGraceMs),
       });
       // The status, reason, and notification id trace a delivery; no player
       // data is logged.

@@ -372,6 +372,7 @@ try {
       alreadyProcessed: 0,
       notFound: 1,
       failed: 0,
+      errored: 0,
     });
     assert.equal(
       voidedCalls.at(-1)?.startTimeMillis,
@@ -413,7 +414,11 @@ try {
       { cron: '* * * * *' },
       dependencies(start + 10 * 3_600_000),
     );
-    assert.equal(starved?.operations, 1, 'the run stops at its subrequest budget');
+    assert.equal(
+      starved?.operations,
+      0,
+      'nothing fits in a budget of one: retries get half (0), the sweep needs 2',
+    );
     assert.equal(starved?.sweep, undefined);
 
     // A backlog larger than one run's budget is worked through across runs.
@@ -455,6 +460,69 @@ try {
         await createD1StoreServerCursors(db).read('google-play-voided:slice-ms'),
         7 * 24 * 3_600_000,
         'the slice grows back once caught up',
+      );
+    }
+
+    // With the smallest slice the cursor still only moves forward, and a run
+    // stopped before reading anything does not shrink the slice.
+    {
+      const cursors = createD1StoreServerCursors(db);
+      const behindNow = start + 50 * 24 * 3_600_000;
+      await cursors.write(voidedSweepCursor, behindNow - 2 * 3_600_000, new Date(behindNow));
+      await cursors.write('google-play-voided:slice-ms', 60_000, new Date(behindNow));
+      const emptyClient: GooglePlayVoidedPurchasesClient = {
+        async listVoidedPurchases() {
+          return { voidedPurchases: [] };
+        },
+      };
+      let previous = await cursors.read(voidedSweepCursor) ?? 0;
+      let runs = 0;
+      let result: Awaited<ReturnType<typeof runScheduledStoreServer>>;
+      do {
+        runs += 1;
+        result = await runScheduledStoreServer(
+          { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '20' },
+          { cron: '* * * * *' },
+          {
+            googlePlay: { finalizer: boundary, voidedPurchases: emptyClient, packageName },
+            now: () => behindNow + runs * 60_000,
+          },
+        );
+        const cursor = await cursors.read(voidedSweepCursor) ?? 0;
+        assert.equal(cursor >= previous, true, 'the cursor never moves back');
+        previous = cursor;
+      } while (result?.sweep?.complete !== true && runs < 40);
+      assert.equal(result?.sweep?.complete, true, 'one-minute slices still converge');
+
+      await cursors.write(voidedSweepCursor, behindNow - 3 * 3_600_000, new Date(behindNow));
+      await cursors.write('google-play-voided:slice-ms', 3_600_000, new Date(behindNow));
+      const starvedSweep = await runScheduledStoreServer(
+        { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '3' },
+        { cron: '* * * * *' },
+        {
+          googlePlay: { finalizer: boundary, voidedPurchases: emptyClient, packageName },
+          now: () => behindNow,
+        },
+      );
+      assert.equal(starvedSweep?.sweep?.complete, false);
+      assert.equal(
+        await cursors.read('google-play-voided:slice-ms'),
+        3_600_000,
+        'a run that read nothing keeps its slice',
+      );
+      await cursors.write('google-play-voided:slice-ms', -5, new Date(behindNow));
+      const clampedSlice = await runScheduledStoreServer(
+        { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '40' },
+        { cron: '* * * * *' },
+        {
+          googlePlay: { finalizer: boundary, voidedPurchases: emptyClient, packageName },
+          now: () => behindNow,
+        },
+      );
+      assert.equal(
+        (clampedSlice?.sweep?.slices ?? 0) > 0,
+        true,
+        'an invalid stored slice is clamped, never a zero-length loop',
       );
     }
 
