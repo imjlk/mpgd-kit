@@ -59,6 +59,9 @@ const signOutSteps = new Set<SignOutStep>();
  */
 let answerLost = false;
 
+/** The PlayScene run checkpoint's storage key. */
+const starterRunKey = 'starter-run';
+
 /** A local sign-out step that hangs is given up on after this long. */
 const signOutStepTimeoutMs = 5_000;
 
@@ -109,8 +112,10 @@ export function createStarterAccountDeletion(input: {
         ? []
         : [() => input.storage.save({ key: journalKey, value: null })]),
     ];
+    // The starter's own run checkpoint (PlayScene); a game's saves register a step.
+    const clearRun = (): Promise<void> => input.storage.save({ key: starterRunKey, value: null });
     let cleared = true;
-    for (const step of [...required, ...signOutSteps]) {
+    for (const step of [...required, clearRun, ...signOutSteps]) {
       try {
         await withTimeout(step);
       } catch (error) {
