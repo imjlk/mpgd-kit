@@ -135,12 +135,38 @@ production` prints what it lacks and fails on contradictions
       SSV if ads grant rewards ([game services backend](./GAME_SERVICES_BACKEND.md),
       [AdMob SSV](./ADMOB_SSV.md)).
 - [ ] App Review buys with sandbox accounts against your production backend:
-      make sure sandbox purchases are verified and kept apart from production
-      grants **(open: L2, store server handling)**.
-- [ ] Refunds and voided purchases (Play RTDN / voided purchases, App Store
-      Server Notifications V2), and a server-side retry of a missed Play
-      acknowledgement (Play refunds unacknowledged purchases after 3 days)
-      **(open: L2)**.
+      build the iOS verifier Worker's purchase verifier with
+      `sandboxPurchases: { mode: 'grant', signedTransactionVerifier }` (a
+      sandbox-scoped Apple verifier). Sandbox grants keep
+      `appStoreEnvironment: 'Sandbox'`; leave them out of revenue reports
+      ([App Review and TestFlight purchases](./GAME_SERVICES_BACKEND.md#app-review-and-testflight-purchases-on-a-production-backend)).
+      Leave Family Sharing off for the game's In-App Purchases in App Store
+      Connect: family-shared transactions are refused.
+- [ ] Apply D1 migration `0009_store_server.sql` before deploying the Worker
+      version that has the store server code, and enable the cron trigger
+      `* * * * *` (Workers Paid): it retries owed Play acknowledges and
+      consumes within Play's 3-day window and sweeps Play voided purchases
+      every `MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES` (60)
+      ([runbook](./CLOUDFLARE_WORKER_DEPLOY.md#store-refunds-and-play-finalization)).
+      Both need the in-Worker Play boundary
+      (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` with
+      `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH`).
+- [ ] App Store Connect → App Information → App Store Server Notifications:
+      Version 2, Production Server URL
+      `https://<worker>/app-store/notifications/v2`, Sandbox Server URL
+      `https://<worker>/app-store/notifications/v2/sandbox`. Bind
+      `GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER` (the iOS verifier
+      Worker's `AppStoreNotificationVerifier` entrypoint) and set
+      `GAME_SERVICES_APP_STORE_BUNDLE_ID`; allow `17.0.0.0/8` if the host
+      filters by IP. Refunds revoke grants; a refund reversal is logged at
+      warn for support to re-grant
+      ([re-granting](./GAME_SERVICES_BACKEND.md#re-granting-after-a-refund-reversal)).
+- [ ] Play Console → Users and permissions: give the publisher service
+      account financial access ("View financial reports" in Google's API
+      docs; the Console label may differ) for the Voided Purchases API, and
+      "Manage orders and subscriptions" for server-side acknowledge and
+      consume. Real-time developer notifications are optional; the Worker
+      does not consume them yet and the sweep is what keeps the ledger right.
 
 ## 5. Identity and account deletion
 

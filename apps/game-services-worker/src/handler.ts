@@ -71,9 +71,22 @@ import {
   type GameServicesNotificationsEnv,
 } from './notificationsHandler.js';
 import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
+import {
+  createAppStoreNotificationsFetchHandler,
+  type AppStoreNotificationVerifierBinding,
+} from './appStoreNotificationsRoute.js';
+import {
+  createStoreServerGooglePlayDependencies,
+  type StoreServerCronDependencies,
+  type StoreServerCronEnv,
+} from './storeServerCron.js';
+import {
+  createD1GooglePlayFinalizationOutbox,
+  withGooglePlayFinalizationOutbox,
+} from './storeServerD1.js';
 
 /** `DB` and `MPGD_STORE` come from `GameServicesNotificationsEnv`, which every store here shares. */
-export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv {
+export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv, StoreServerCronEnv {
   /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   /**
@@ -97,6 +110,14 @@ export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv {
   };
   readonly GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_IOS_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  /**
+   * App Store Server Notifications V2 intake (`/app-store/notifications/v2`
+   * and `/app-store/notifications/v2/sandbox`): a private Worker that
+   * verifies the signed payload with Apple's library. Requires
+   * `GAME_SERVICES_APP_STORE_BUNDLE_ID`.
+   */
+  readonly GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER?: AppStoreNotificationVerifierBinding;
+  readonly GAME_SERVICES_APP_STORE_BUNDLE_ID?: string;
   readonly GAME_SERVICES_AIT_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER?:
@@ -382,8 +403,13 @@ function buildWorkerFetchHandler(
     ? undefined
     : createAdMobSsvCallbackFetchHandler(admobConfig);
   const notificationsFetch = createNotificationsFetchHandler(env, corsHeaders);
+  const appStoreNotificationsFetch = createWorkerAppStoreNotificationsFetchHandler(env, httpStore);
 
   return async (request) => {
+    const appStoreNotificationResponse = await appStoreNotificationsFetch?.(request);
+    if (appStoreNotificationResponse !== undefined) {
+      return appStoreNotificationResponse;
+    }
     const notificationsResponse = await notificationsFetch(request);
     if (notificationsResponse !== undefined) {
       return notificationsResponse;
@@ -789,8 +815,11 @@ function createWorkerCommerceEvidenceRegistry(
   });
 
   const googlePlay = resolveWorkerGooglePlayBoundary(env);
+  const googlePlayFinalizer = googlePlay === undefined
+    ? undefined
+    : withWorkerGooglePlayFinalizationOutbox(env, googlePlay);
   const androidVerifier = env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER;
-  const androidFinalizer = googlePlay
+  const androidFinalizer = googlePlayFinalizer
     ?? (env.GAME_SERVICES_ANDROID_PURCHASE_FINALIZER === undefined
       ? undefined
       : bindingFinalizer(env.GAME_SERVICES_ANDROID_PURCHASE_FINALIZER, supportsGooglePlayGrant));
@@ -830,7 +859,10 @@ function createWorkerCommerceEvidenceRegistry(
   } else if (googlePlay !== undefined) {
     // The in-Worker Play boundary verifies the token and finalizes.
     entries.push(
-      createGooglePlayCommerceEvidenceEntry({ verifier: googlePlay, finalizer: googlePlay }),
+      createGooglePlayCommerceEvidenceEntry({
+        verifier: googlePlay,
+        finalizer: googlePlayFinalizer ?? googlePlay,
+      }),
     );
   } else if (androidFinalizer !== undefined && aggregate !== undefined) {
     // The aggregate verifier serves Android purchases and the bound finalizer
@@ -1112,10 +1144,9 @@ function resolveWorkerGooglePlayBoundary(
         + 'GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true" opt-in.',
     );
   }
-  const scope = 'https://www.googleapis.com/auth/androidpublisher';
   return createGooglePlayProductPurchaseBoundary({
     client: createGooglePlayPublisherClient({
-      getAccessToken: () => auth.getAccessToken({ scope }),
+      getAccessToken: () => auth.getAccessToken({ scope: googlePlayPublisherScope }),
     }),
     packageName,
     ...(allowUnbound ? { allowUnboundAuthenticatedPlayer: true } : {}),
@@ -1133,6 +1164,79 @@ function resolveWorkerGooglePlayBoundary(
         }),
   });
 }
+
+/**
+ * With a D1 store, the in-Worker Play finalizer keeps each purchase token in
+ * `google_play_pending_finalizations` until the acknowledge or consume
+ * completes, so the store server cron can retry it within Play's three-day
+ * window when the client is gone (migration 0009_store_server.sql).
+ */
+function withWorkerGooglePlayFinalizationOutbox(
+  env: GameServicesWorkerEnv,
+  googlePlay: GameServicesPurchaseGrantFinalizer,
+): GameServicesPurchaseGrantFinalizer {
+  const db = resolveD1Database(env);
+  const packageName = env.GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME?.trim();
+  return db === undefined || packageName === undefined || packageName.length === 0
+    ? googlePlay
+    : withGooglePlayFinalizationOutbox(
+        googlePlay,
+        createD1GooglePlayFinalizationOutbox(db),
+        packageName,
+      );
+}
+
+/**
+ * What the store server cron needs from this Worker's settings: the in-Worker
+ * Play boundary (unwrapped; the cron updates the outbox itself) and the
+ * Voided Purchases client over the same token service. Undefined without the
+ * in-Worker Play boundary.
+ */
+export function createWorkerStoreServerDependencies(
+  env: GameServicesWorkerEnv,
+): StoreServerCronDependencies {
+  const googlePlay = resolveWorkerGooglePlayBoundary(env);
+  const packageName = env.GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME?.trim();
+  const auth = env.GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH;
+  if (googlePlay === undefined || packageName === undefined || auth === undefined) {
+    return {};
+  }
+  return {
+    googlePlay: createStoreServerGooglePlayDependencies({
+      packageName,
+      finalizer: googlePlay,
+      getAccessToken: () => auth.getAccessToken({ scope: googlePlayPublisherScope }),
+    }),
+  };
+}
+
+/**
+ * Mounts the App Store Server Notifications V2 routes when the verifier
+ * binding is configured; the bundle id is required with it so a payload of
+ * another app is never applied to this ledger.
+ */
+function createWorkerAppStoreNotificationsFetchHandler(
+  env: GameServicesWorkerEnv,
+  store: GameServicesStore,
+): ((request: Request) => Promise<Response | undefined>) | undefined {
+  const binding = env.GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER;
+  const bundleId = env.GAME_SERVICES_APP_STORE_BUNDLE_ID?.trim();
+  if (binding === undefined) {
+    return undefined;
+  }
+  if (bundleId === undefined || bundleId.length === 0) {
+    // Only this intake closes (Apple retries a 404); purchases, ads, and
+    // notifications keep serving.
+    console.error(
+      'App Store notifications are not mounted: GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER '
+        + 'requires GAME_SERVICES_APP_STORE_BUNDLE_ID.',
+    );
+    return undefined;
+  }
+  return createAppStoreNotificationsFetchHandler({ store, binding, bundleId });
+}
+
+const googlePlayPublisherScope = 'https://www.googleapis.com/auth/androidpublisher';
 
 function bindingFinalizer(
   binding: GameServicesPurchaseGrantFinalizerBinding,

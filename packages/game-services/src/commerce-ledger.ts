@@ -168,6 +168,29 @@ export async function revokeEntitlementGrant(
   }
 }
 
+/**
+ * The purchase grant a provider verification id names (the
+ * `evidenceVerificationId` the purchase verifier recorded), through the
+ * store's index when it has one. Store notification handlers start here:
+ * a refund names the store's transaction, never a ledger entry.
+ */
+export async function findPurchaseGrantByEvidenceVerificationId(
+  store: GameServicesStore,
+  evidenceVerificationId: string,
+): Promise<ProductGrantTransaction | undefined> {
+  const grant = store.findEntitlementTransactionByEvidenceVerificationId === undefined
+    ? (await store.listEntitlementTransactions()).find((transaction) => {
+        return transaction.source === 'purchase'
+          && (transaction.evidenceVerificationId
+            ?? transaction.payload.evidenceVerificationId) === evidenceVerificationId;
+      })
+    : await store.findEntitlementTransactionByEvidenceVerificationId({
+        source: 'purchase',
+        evidenceVerificationId,
+      });
+  return grant?.source === 'purchase' ? grant : undefined;
+}
+
 /** Whether a grant was reversed by a `revoke` entry; false on a store without revocations. */
 export async function isEntitlementGrantReversed(
   store: GameServicesStore,

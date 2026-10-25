@@ -410,6 +410,164 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
 <!-- @evidence docs/specs/notifications/notifications-v2-rfc.md#remote-delivery Partner error-code order and the production API host. -->
 <!-- @link ../apps/game-services-worker/src/notificationsD1.ts#createD1NotificationStore Purge deletes in bounded LIMIT batches. -->
 
+## Store refunds and Play finalization
+
+The Worker revokes refunded App Store and Google Play purchases and finishes
+Play purchases whose client went away. Each piece is off until it is
+configured; see
+[Store refunds and server-side finalization](GAME_SERVICES_BACKEND.md#store-refunds-and-server-side-finalization)
+for the ledger rules.
+
+### App Store Server Notifications V2
+
+The Worker mounts `POST /app-store/notifications/v2` (production) and
+`POST /app-store/notifications/v2/sandbox` when the verifier binding is set.
+Apple's library does not run in this Worker: bind the game-owned iOS verifier
+Worker (the one that already verifies purchases with Apple's root
+certificates) and set the bundle id:
+
+```toml
+[vars]
+GAME_SERVICES_APP_STORE_BUNDLE_ID = "com.example.game"
+
+[[services]]
+binding = "GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER"
+service = "game-evidence-verifier-ios"
+entrypoint = "AppStoreNotificationVerifier"
+```
+
+The binding implements
+`verifyAppStoreServerNotification({ signedPayload, environment, bundleId, timeoutMs })`
+and answers the verifier result, or `{ status: 'unavailable' }` for a
+transient certificate-check outage (errors lose their class across a binding):
+
+```ts
+import { WorkerEntrypoint } from 'cloudflare:workers';
+import { AppStoreDependencyUnavailableError } from '@mpgd/game-services/app-store-verifier';
+import { createAppleServerNotificationVerifier } from '@mpgd/game-services/app-store-server';
+
+export class AppStoreNotificationVerifier extends WorkerEntrypoint<Env> {
+  async verifyAppStoreServerNotification(input: {
+    signedPayload: string;
+    environment: 'Production' | 'Sandbox';
+    bundleId: string;
+    timeoutMs: number;
+  }) {
+    const verifier = createAppleServerNotificationVerifier({
+      rootCertificates: appleRootCertificates(this.env), // Apple's root CA files, DER
+      environment: input.environment,
+      bundleId: input.bundleId,
+      ...(input.environment === 'Production' ? { appAppleId: Number(this.env.APP_APPLE_ID) } : {}),
+    });
+    try {
+      return await verifier.verifyAndDecodeNotification({
+        ...input,
+        signal: AbortSignal.timeout(input.timeoutMs),
+      });
+    } catch (error) {
+      if (error instanceof AppStoreDependencyUnavailableError) {
+        return { status: 'unavailable' as const };
+      }
+      throw error;
+    }
+  }
+}
+```
+
+In App Store Connect, open the app, then App Information, App Store Server
+Notifications, and set Version 2 with:
+
+- Production Server URL: `https://<worker-host>/app-store/notifications/v2`
+- Sandbox Server URL: `https://<worker-host>/app-store/notifications/v2/sandbox`
+
+Apple allows the same URL for both
+([Enabling App Store Server Notifications](https://developer.apple.com/documentation/appstoreservernotifications/enabling-app-store-server-notifications));
+the kit uses two so each environment is verified on its own. Check the route
+with the App Store Server API's
+[Request a Test Notification](https://developer.apple.com/documentation/appstoreserverapi/request-a-test-notification):
+a `TEST` notification answers 200 `ignored`. Allow Apple's notification subnet (`17.0.0.0/8`) if the host
+filters by IP.
+
+A `REFUND_REVERSED` for a grant an App Store refund revoked is answered 200
+and logged at warn (`App Store refund reversed: player … grant …`) with a
+ledger note in `entitlement_notes`; nothing is re-granted. One for a grant not
+revoked yet is answered 503 so Apple redelivers it after the refund (the log
+line names its notification id); one for a grant revoked for another reason
+is answered 200 and ignored. Route that warning to support;
+[Re-granting after a refund reversal](GAME_SERVICES_BACKEND.md#re-granting-after-a-refund-reversal)
+shows the re-grant.
+
+For App Review, the iOS verifier Worker also constructs its purchase verifier
+with `sandboxPurchases: { mode: 'grant', ... }`; see
+[App Review and TestFlight purchases](GAME_SERVICES_BACKEND.md#app-review-and-testflight-purchases-on-a-production-backend).
+
+### Google Play: voided purchases and owed acknowledges
+
+Both run from the cron with the in-Worker Play boundary
+(`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` with
+`GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH`) and a D1 store. Apply
+`0009_store_server.sql` (additive: the owed-finalization table and the sweep
+cursors). Both act on grants the in-Worker Play boundary verified (their
+verification id is the purchase token's digest): a grant verified by
+`GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER` keeps the binding's own id, so the
+sweep does not find it and its token is never kept for a retry. A deployment
+that finalizes through `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` or its
+verifier binding gets neither; that finalizer owns its retries and refunds.
+
+- **Owed acknowledges and consumes.** With D1, the in-Worker Play finalizer
+  keeps each purchase token in `google_play_pending_finalizations` before it
+  calls Play and drops it when the acknowledge or consume completes. The cron
+  retries what is still owed 1, 5, and 15 minutes, 1 and 3 hours, then every
+  6 hours after the last attempt, and stops at Play's three-day window: Google
+  then refunds the purchase and the sweep revokes the grant. The table holds
+  raw purchase tokens; the ledger does not.
+- **Voided purchases.** The cron reads the Voided Purchases API every
+  `MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES` (60 by default, `0` turns it off)
+  and revokes each voided grant. It reads its window in week-long slices and
+  moves its cursor past each finished one, so the first run's 30-day window,
+  or a backlog after an outage, is worked through over later runs (at most 20
+  API pages a run; Google allows 30 queries in 30 seconds). A slice whose
+  voids do not fit in one run is halved, down to a minute; voids older than
+  Google's 30 days are logged as gone.
+- **Play Console.** The service account the publisher-auth service signs for
+  needs, under Users and permissions, the app's "View financial reports"
+  permission for the Voided Purchases API and "Manage orders and
+  subscriptions" for acknowledge and consume (Play Console's names; check them
+  in your console, they change). Real-time developer notifications (a Pub/Sub
+  topic under Monetization setup) are optional and not consumed by the Worker
+  yet; the sweep is what keeps the ledger correct.
+
+The cron shares the notifications trigger:
+
+```toml
+[triggers]
+# Workers Paid only. A free-plan cron has 10 ms of CPU and 50 external subrequests.
+crons = ["* * * * *"]
+
+[vars]
+# Optional tuning of the store server run (defaults shown).
+# MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES = "60"
+# MPGD_STORE_SERVER_SUBREQUEST_BUDGET = "300"
+# MPGD_STORE_SERVER_CRON_BUDGET_SECONDS = "15"
+```
+
+Each scheduled run retries up to 20 owed finalizations within half of
+`MPGD_STORE_SERVER_SUBREQUEST_BUDGET` and half of the wall budget (the other
+halves are kept for the sweep),
+then sweeps when the interval has passed or a previous run stopped behind,
+and stops at the budget (D1 calls, token-service calls, and Play requests,
+counted by estimate) or the wall budget, which is kept below the cron period.
+The sweep cursor only moves forward. The 15-minute overlap that catches
+late-recorded voids is re-read in ordinary slices before the cursor; a run
+that cannot finish it keeps its place (`google-play-voided:reread`) and the
+next run resumes there, so a dense overlap is split across runs. It is counted apart from
+the notifications run (`MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET`, 1,000 by
+default); together (1,300 by default) they stay under the Workers Paid cap of
+10,000 subrequests per invocation in effect since 2026-02-11, not under the
+earlier cap of 1,000. A void whose revocation keeps failing on a store error
+holds the sweep for 30 runs, then is skipped with a log line naming its
+order id, to be revoked by hand.
+
 ## Production Notes
 
 - Keep secrets out of `wrangler.toml`; use Cloudflare secret management for real
@@ -419,6 +577,10 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   `0003_verified_leaderboard_metrics.sql`, then
   `0004_entitlement_evidence.sql` in order before switching an existing
   deployment to D1.
+- Apply `0009_store_server.sql` (the owed Play finalizations and the sweep
+  cursors) before deploying a Worker version that has them: without the
+  table, the purchase path's outbox write fails (logged, the purchase is
+  unaffected) and that purchase gets no server-side acknowledge retry.
 - The Worker verifies sample product/ad evidence by default. Real Google Play,
   App Store, and Apps in Toss verification adapters are described in
   [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md). AdMob

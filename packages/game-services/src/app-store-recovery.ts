@@ -6,6 +6,7 @@ import {
   type AppStoreEnvironment,
 } from './app-store-verifier.js';
 import type { PurchaseVerificationApi } from './client.js';
+import { findPurchaseGrantByEvidenceVerificationId } from './commerce-ledger.js';
 import type { GameServicesEvidenceVerifier } from './evidence-verification.js';
 import type { GameServicesStore } from './server.js';
 import type {
@@ -36,6 +37,12 @@ export interface CreateAppStoreRecoveryBackendOptions {
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
     readonly bundleId: string;
     readonly environment: AppStoreEnvironment;
+    /**
+     * Set on a Production deployment whose evidence verifier grants sandbox
+     * purchases (`sandboxPurchases: { mode: 'grant' }`), so a restore during
+     * App Review or TestFlight re-verifies its sandbox grant too.
+     */
+    readonly acceptsSandboxTransactions?: boolean;
     readonly timeoutMs?: number;
   };
   /** Look up the original, durable checkout key; never derive one from the transaction ID. */
@@ -65,6 +72,10 @@ export function createAppStoreRecoveryBackend(
     && (!Number.isSafeInteger(restoreTimeoutMs) || restoreTimeoutMs <= 0)) {
     throw new TypeError('Restored App Store verification timeout must be positive.');
   }
+  const acceptsSandbox = options.restoredNonConsumables?.acceptsSandboxTransactions;
+  if (acceptsSandbox !== undefined && typeof acceptsSandbox !== 'boolean') {
+    throw new TypeError('acceptsSandboxTransactions must be a boolean.');
+  }
 
   return {
     async recoverPurchase(input) {
@@ -91,12 +102,18 @@ export function createAppStoreRecoveryBackend(
           && input.originalTransactionId !== undefined
           && input.originalTransactionId !== input.platformTransactionId
           && restoreConfig !== undefined) {
-          const candidateId = createAppStoreVerificationId({
-            environment: restoreConfig.environment,
-            bundleId: restoreConfig.bundleId,
-            transactionId: input.originalTransactionId,
-          });
-          const candidate = await findByVerificationId(options.store, candidateId);
+          const originalTransactionId = input.originalTransactionId;
+          const candidateIn = (environment: AppStoreEnvironment) =>
+            findByVerificationId(options.store, createAppStoreVerificationId({
+              environment,
+              bundleId: restoreConfig.bundleId,
+              transactionId: originalTransactionId,
+            }));
+          let candidate = await candidateIn(restoreConfig.environment);
+          if (candidate === undefined && acceptsSandboxRestores(restoreConfig)) {
+            // An App Review or TestFlight grant on this production ledger.
+            candidate = await candidateIn('Sandbox');
+          }
           if (candidate !== undefined) {
             if (candidate.source !== 'purchase'
               || candidate.playerId !== request.playerId
@@ -260,7 +277,8 @@ async function verifyRestoredNonConsumable(
   if (decision.payload?.appStoreTransactionType !== 'Non-Consumable'
     || originalTransactionId !== input.originalTransactionId
     || (environment !== 'Production' && environment !== 'Sandbox')
-    || environment !== config.environment
+    || (environment !== config.environment
+      && !(environment === 'Sandbox' && acceptsSandboxRestores(config)))
     || bundleId !== config.bundleId
     || decision.verificationId !== createAppStoreVerificationId({
       environment,
@@ -270,6 +288,13 @@ async function verifyRestoredNonConsumable(
     return rejected('APP_STORE_RESTORE_EVIDENCE_MISMATCH');
   }
   return decision.verificationId;
+}
+
+/** A production deployment whose evidence verifier also grants App Review sandbox purchases. */
+function acceptsSandboxRestores(
+  config: NonNullable<CreateAppStoreRecoveryBackendOptions['restoredNonConsumables']>,
+): boolean {
+  return config.environment === 'Production' && config.acceptsSandboxTransactions === true;
 }
 
 async function findByPlatformEvidence(
@@ -311,15 +336,7 @@ async function findByVerificationId(
   store: GameServicesStore,
   evidenceVerificationId: string,
 ): Promise<ProductGrantTransaction | undefined> {
-  const identity = { source: 'purchase', evidenceVerificationId } as const;
-  if (store.findEntitlementTransactionByEvidenceVerificationId !== undefined) {
-    return store.findEntitlementTransactionByEvidenceVerificationId(identity);
-  }
-  return (await store.listEntitlementTransactions()).find((transaction) => {
-    return transaction.source === identity.source
-      && (transaction.evidenceVerificationId
-        ?? transaction.payload.evidenceVerificationId) === identity.evidenceVerificationId;
-  });
+  return findPurchaseGrantByEvidenceVerificationId(store, evidenceVerificationId);
 }
 
 function matchesRecovery(
