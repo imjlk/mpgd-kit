@@ -50,7 +50,11 @@ Notes:
     Delete account URL (`https://<legal site>/delete-account/`).
   - What is deleted: the player account and sessions, scores and
     leaderboard entries, rewarded-ad records, notification tokens, settings
-    and consent records, and whatever server data the game adds.
+    and consent records. Only the stores with a registered
+    `PlayerDataEraser` are erased (the kit registers one for each store it
+    ships): a game that keeps its own player data (saves, profiles, chat,
+    its own tables) must register an eraser for each such dataset before it
+    answers this question for them, or list them as kept.
   - What is kept, why, and for how long: purchase records (product, store
     transaction and order ids, dates) for **5 years** from the purchase or
     its last refund, whichever is later, for payment and supply record

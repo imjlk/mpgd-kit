@@ -31,6 +31,12 @@ import {
   notificationsProtocolVersion,
 } from '@mpgd/platform/notifications';
 
+import {
+  argumentField,
+  refuseDeletedPlayerWrites,
+  resolveAccountDeletionTombstones,
+  type AccountDeletionTombstonesEnv,
+} from './deletionTombstones.js';
 import { createD1NotificationStore } from './notificationsD1.js';
 
 /**
@@ -531,7 +537,7 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
   const identity = env.GAME_SERVICES_NOTIFICATIONS_IDENTITY;
   const queue = env.NOTIFICATIONS_QUEUE;
   const service = createNotificationService({
-    store: notificationStoreOf(env),
+    store: refuseDeletedNotificationWrites(env, notificationStoreOf(env)),
     registry,
     catalog,
     ...(deployment === undefined ? {} : { deployment }),
@@ -568,6 +574,30 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
     },
   });
   return { status: 'ready', service };
+}
+
+/**
+ * The store refusing a deleted player's new rows (consent, endpoints,
+ * registrations, notices, sends, history, reminders) once the deployment
+ * keeps tombstones; the account erasure reads the raw store.
+ */
+export function refuseDeletedNotificationWrites(
+  env: GameServicesNotificationsEnv & AccountDeletionTombstonesEnv,
+  store: NotificationStore,
+): NotificationStore {
+  const tombstones = resolveAccountDeletionTombstones(env);
+  return tombstones === undefined
+    ? store
+    : refuseDeletedPlayerWrites(store, tombstones, {
+        appendConsent: argumentField('player'),
+        putEndpoint: argumentField('player'),
+        putPlatformRegistration: argumentField('player'),
+        addNoticeGiven: argumentField('player'),
+        createSend: (args) =>
+          (args[0] as { readonly request?: { readonly player?: unknown } } | undefined)?.request?.player,
+        addHistory: argumentField('player'),
+        createScheduleEntry: argumentField('player'),
+      });
 }
 
 function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationStore {

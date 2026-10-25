@@ -253,7 +253,10 @@ head_sampling_rate = 1
 # GAME_SERVICES_INGRESS_AUTH (else GAME_SERVICES_NOTIFICATIONS_AUTH), requires
 # the confirmation the identity Worker issued to the session's refresh token
 # (header X-MPGD-Account-Deletion-Confirmation), and answers 503 without this
-# binding. The cron above is required: it runs
+# binding. A D1 deployment also needs the secret
+# GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY (at least 32 characters; the
+# HMAC key of the deletion tombstones that refuse a deleted player's late
+# writes): wrangler secret put GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY. The cron above is required: it runs
 # each deletion's final pass (until then the pending erasure keeps the player
 # id), finishes failed erasures, and purges purchase records kept for deleted
 # players after five years.

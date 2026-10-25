@@ -855,6 +855,33 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     ['erasing'],
   );
 
+  // The mark fails but every store erases: complete, cleared, and the
+  // skipped final pass is logged under the deletion id.
+  const markless = createInMemoryPendingAccountErasureStore();
+  const [skipped, skippedLines] = await quiet(() =>
+    createAccountDeletionService({
+      erasers: [{ erasePlayerData: async () => ({ deleted: 1, retained: 0 }) }],
+      identity: { deletePlayer: async () => undefined },
+      pending: {
+        put: (erasure) =>
+          erasure.phase === 'identity-deleted'
+            ? Promise.reject(new Error('D1_ERROR'))
+            : markless.put(erasure),
+        clear: (input) => markless.clear(input),
+        list: (input) => markless.list(input),
+      },
+      sleep: noWait,
+      createDeletionId: () => 'deletion-markless',
+    }).deletePlayerAccount({ playerId: 'player-1' }),
+  );
+  assert.equal(skipped.status, 'deleted');
+  assert.ok(
+    skippedLines.some((line) =>
+      String(line[0]).includes('final pass skipped') && line[1] === 'deletion-markless',
+    ),
+  );
+  assert.deepEqual(await markless.list({ limit: 10 }), []);
+
   // Without an identity service the entry stays `erasing`: no sweep erases
   // a player who still exists.
   failSecond = 0;

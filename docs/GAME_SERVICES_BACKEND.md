@@ -1112,6 +1112,28 @@ on `createGameServicesRuntime(...).accountDeletion`.
    waiting on its store, a notifications cron run that loaded the player)
    may write after step 3, and this final pass removes it.
 
+The first eraser writes a **deletion tombstone**
+(`account_deletion_tombstones`), and every player-keyed write checks it and
+refuses (`AccountDeletedWriteError`, before anything is written): ledger
+grants (and so a new purchase's Play finalization row), leaderboard scores,
+verified leaderboard attempts, notification rows (consent, endpoints,
+registrations, notices, sends, history, reminders), and AdMob SSV callbacks
+(acknowledged to Google, not kept). So nothing new lands under the deleted
+id once the erasure started; only an operation already past its check can
+still write, within its own run, and the final pass removes that. Clearing
+the pending erasure after the final pass is safe for that reason: late
+writes are refused, not cleaned up later. The tombstone is an
+HMAC-SHA-256 of the player id under the deployment secret
+`GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY` (a D1 deployment deletes no
+accounts without it: `503`), never the id; it expires after 30 days
+(`accountDeletionTombstoneTtlMs`, far past an access token's 15 minutes, a
+request's or cron run's longest run, and AdMob SSV retries), and the cron
+purges it then. It is pseudonymous (without the key it names no one, and a
+guessable player id cannot be checked against it), time-bound, and exists
+only to enforce the deletion, which is why keeping it is compatible with
+erasing the account. A memory deployment keeps its tombstones in the
+isolate.
+
 A failure in steps 1 and 2 answers the retryable error and has erased
 nothing, so a misconfigured identity binding never leaves a live account
 stripped (the identity call is tried three times; it is idempotent). After
@@ -1135,9 +1157,18 @@ tokens at once, not when they expire.
 | Notification endpoints, consent records, notices given, platform registrations, reminders, sends, delivery history | Deleted. |
 | The guest record and every session (identity Worker) | Deleted by `deletePlayer`. |
 
-The cron purges the kept purchase records once five years have passed since
-the grant and since any revocation of it
-(`purgeExpiredRetainedPurchaseRecords`). The cron is required: without a
+Every kept ledger row carries its retention expiry (`retained_until`, five
+years from its own time). A kept grant carries its group's latest: a
+revocation or note about it, written with the erasure or later (a refund the
+store reports after the deletion, filed under `deleted:<deletionId>`),
+extends it, which the migration's triggers do on insert. The cron purges a
+group (the grant, its revocation, its notes) once the grant's expiry passed
+and no member is still within its own, and a note kept under a deleted
+player about another player's grant at its own expiry
+(`purgeExpiredRetainedPurchaseRecords`). A revocation kept under a deleted
+player for another player's grant decides that player's entitlement, so it
+stays with that grant: it is purged with it (if that grant is ever a kept
+one), not on the deleted player's schedule. The cron is required: without a
 `[triggers] crons` entry (Workers Paid) pending erasures never finish and
 kept records are never purged.
 
@@ -1183,18 +1214,21 @@ transaction). Games that sell outside a store add their own payment records.
   account (`obfuscatedAccountId`, `appAccountToken`), so a new guest's
   restore does not match. Refunds go through the store.
 - A purchase still pending at the store (Play `PENDING`, Ask to Buy) when the
-  account is deleted cannot be granted to anyone afterwards; Google refunds a
-  Play purchase that is not acknowledged within three days, and an App Store
-  one is refunded through Apple. The starter warns before deleting while a
-  purchase is still being processed.
+  account is deleted cannot be granted to anyone afterwards. Google refunds a
+  Play purchase that is not acknowledged within three days on its own. An
+  App Store purchase is **not** refunded automatically: the player asks
+  Apple for the refund (reportaproblem.apple.com), since only Apple refunds
+  App Store purchases. The starter warns before deleting while a purchase
+  is still being processed.
 
 ### Residual gaps
 
-- A request authenticated before the identity was deleted that commits
-  after the final pass, or an AdMob SSV callback Google delivers after it,
-  can leave a row under the deleted player's id (`admob_ssv_callbacks` has
-  no purge). A deletion whose `identity-deleted` mark could not be written
-  (three attempts) gets no final pass.
+- An operation that passed its tombstone check before the erasure started
+  and is still running after the final pass (longer than 15 minutes) could
+  leave a row; Workers requests and cron runs end well before that. A
+  deletion whose `identity-deleted` mark could not be written (three
+  attempts) gets no final pass; it is logged under its deletion id
+  ("final pass skipped"), and the tombstone still refuses later writes.
 - The five-year period is the package constant `retainedPurchaseRecordYears`;
   a game that needs another period changes it in its fork, with the
   starter's copy and legal pages.
@@ -1204,9 +1238,10 @@ transaction). Games that sell outside a store add their own payment records.
 - Two deletions of the same player at once may both rewrite the same rows;
   the evidence keys make the second batch fail (a retryable `500`), and its
   retry finds nothing left.
-- Purchase records kept under `deleted:` that revoke or annotate another
-  player's grant (only a game-owned writer files those) are not purged by
-  the five-year purge.
+- A revocation kept under `deleted:` for another player's grant (only a
+  game-owned writer files those) stays with that grant, as above.
+- The five years are also in migration 0010's triggers; a fork that changes
+  `retainedPurchaseRecordYears` changes them too.
 
 ## Production Gaps
 

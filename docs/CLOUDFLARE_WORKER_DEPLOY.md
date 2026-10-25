@@ -801,7 +801,11 @@ order id, to be revoked by hand.
   table, the purchase path's outbox write fails (logged, the purchase is
   unaffected) and that purchase gets no server-side acknowledge retry.
 - Apply `0010_account_deletion.sql` (the deletion audit, the pending
-  erasures, and player indexes) and bind `GAME_SERVICES_ACCOUNT_DELETION` to
+  erasures, tombstones, the retention column and its triggers, and player
+  indexes), set the secret `GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY`
+  (`openssl rand -base64 48 | pnpm --dir apps/game-services-worker exec wrangler secret put GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY`;
+  without it the route answers `503`; changing it forgets live tombstones),
+  and bind `GAME_SERVICES_ACCOUNT_DELETION` to
   the identity Worker's `AccountDeletion` entrypoint (its migration
   `0002_account_deletion.sql` applied) before players can delete
   their accounts: without the binding `POST /game-services/account/delete`

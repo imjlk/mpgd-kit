@@ -381,6 +381,13 @@ export function createAccountDeletionService(input: {
         // learn it from this line and the audit entry.
         console.error('Account deletion erasure incomplete; no sweep will finish it:', deletionId);
       }
+      if (complete && !marked && input.identity !== null) {
+        // Erased once, but the `identity-deleted` mark failed, so the sweep
+        // never runs this deletion's final pass: a write by a request that
+        // authenticated before the identity was deleted may stay. The audit
+        // entry says complete, so this line is how an operator learns it.
+        console.error('Account deletion final pass skipped (pending entry not marked):', deletionId);
+      }
       // A marked entry stays for the sweep's final pass (`finalErasureDelayMs`
       // after the request): a request authenticated before the identity was
       // deleted may still write, and only a later pass removes it. An

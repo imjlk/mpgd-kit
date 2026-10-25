@@ -28,6 +28,8 @@ import {
   type PlayerDataEraser,
 } from '@mpgd/game-services';
 
+import type { AccountDeletionTombstones } from './deletionTombstones.js';
+
 /**
  * The identity Worker's account deletion entrypoint (`AccountDeletion` in
  * the reference identity Worker): `deletePlayer` deletes the player with
@@ -576,35 +578,45 @@ export async function purgeExpiredRetainedPurchaseRecords(
   db: D1Database,
   now: Date,
 ): Promise<number> {
-  const cutoff = new Date(now);
-  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - retainedPurchaseRecordYears);
-  const cutoffText = cutoff.toISOString();
+  const nowText = now.toISOString();
   // A range over the player index: every id that starts with the prefix.
   const prefixStart = retainedPlayerIdPrefix;
   const prefixEnd = `${retainedPlayerIdPrefix.slice(0, -1)}${
     String.fromCharCode(retainedPlayerIdPrefix.charCodeAt(retainedPlayerIdPrefix.length - 1) + 1)
   }`;
+  // A kept grant goes with its revocation and notes once the group's
+  // `retained_until` passed: the grant carries the group's latest expiry (the
+  // migration's triggers extend it when a refund or note arrives later), and
+  // no member may still be within its own.
   const expired = `SELECT g.ledger_entry_id FROM entitlement_transactions g
     WHERE g.player_id >= ?2 AND g.player_id < ?3
-      AND g.granted_at < ?1
+      AND g.retained_until IS NOT NULL AND g.retained_until <= ?1
       AND NOT EXISTS (
         SELECT 1 FROM entitlement_revocations r
-        WHERE r.revokes_ledger_entry_id = g.ledger_entry_id AND r.revoked_at >= ?1
+        WHERE r.revokes_ledger_entry_id = g.ledger_entry_id
+          AND (r.retained_until IS NULL OR r.retained_until > ?1)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM entitlement_notes n
+        WHERE n.ledger_entry_id = g.ledger_entry_id AND n.retained_until > ?1
       )`;
   const results = await db.batch([
-    // Also notes about another grant that point at a revocation being purged:
-    // they would hold the revocation's RESTRICT key and fail the batch.
+    // Also notes about another grant that point at a revocation being purged
+    // (they would hold the revocation's RESTRICT key and fail the batch), and
+    // expired notes kept under a deleted player about another player's grant.
     db.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${expired})
         OR revocation_ledger_entry_id IN (
           SELECT ledger_entry_id FROM entitlement_revocations
           WHERE revokes_ledger_entry_id IN (${expired})
-        )`).bind(cutoffText, prefixStart, prefixEnd),
+        )
+        OR (player_id >= ?2 AND player_id < ?3
+          AND retained_until IS NOT NULL AND retained_until <= ?1)`).bind(nowText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM google_play_pending_finalizations WHERE ledger_entry_id IN (${expired})`)
-      .bind(cutoffText, prefixStart, prefixEnd),
+      .bind(nowText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM entitlement_revocations WHERE revokes_ledger_entry_id IN (${expired})`)
-      .bind(cutoffText, prefixStart, prefixEnd),
+      .bind(nowText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM entitlement_transactions WHERE ledger_entry_id IN (${expired})`)
-      .bind(cutoffText, prefixStart, prefixEnd),
+      .bind(nowText, prefixStart, prefixEnd),
   ]);
   return results[3]?.meta.changes ?? 0;
 }
@@ -615,6 +627,8 @@ export async function purgeExpiredRetainedPurchaseRecords(
  */
 export async function runScheduledAccountDeletion(input: {
   readonly db: D1Database | undefined;
+  /** Their expired entries are purged too. */
+  readonly tombstones?: AccountDeletionTombstones;
   readonly erasers: readonly PlayerDataEraser[];
   readonly pending: PendingAccountErasureStore;
   readonly audit: (entry: AccountDeletionAuditEntry) => Promise<void>;
@@ -638,6 +652,13 @@ export async function runScheduledAccountDeletion(input: {
       purged = await purgeExpiredRetainedPurchaseRecords(input.db, now());
     } catch (error) {
       console.error('Retained purchase records purge failed:', describe(error));
+    }
+  }
+  if (input.tombstones !== undefined) {
+    try {
+      await input.tombstones.purgeExpired(now());
+    } catch (error) {
+      console.error('Account deletion tombstones purge failed:', describe(error));
     }
   }
   return {

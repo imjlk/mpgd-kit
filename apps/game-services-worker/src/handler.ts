@@ -74,6 +74,13 @@ import {
   type AccountDeletionPrincipal,
   type GameServicesAccountDeletionBinding,
 } from './accountDeletion.js';
+import {
+  argumentField,
+  createAccountDeletionTombstoneEraser,
+  refuseDeletedPlayerWrites,
+  resolveAccountDeletionTombstones,
+  type AccountDeletionTombstonesEnv,
+} from './deletionTombstones.js';
 import { createD1GameServicesStore } from './d1Store.js';
 import {
   createAdMobSsvCallbackFetchHandler,
@@ -103,7 +110,8 @@ import {
 } from './storeServerD1.js';
 
 /** `DB` and `MPGD_STORE` come from `GameServicesNotificationsEnv`, which every store here shares. */
-export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv, StoreServerCronEnv {
+export interface GameServicesWorkerEnv
+  extends GameServicesNotificationsEnv, StoreServerCronEnv, AccountDeletionTombstonesEnv {
   /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   /**
@@ -754,6 +762,14 @@ export function createWorkerAccountDeletionService(
     return undefined;
   }
   const db = resolveD1Database(env);
+  // Without tombstones a late write could recreate the player's rows after
+  // the final pass: a D1 deployment needs the key before it deletes accounts.
+  if (db !== undefined && resolveAccountDeletionTombstones(env) === undefined && !principal.development) {
+    console.error(
+      'Account deletion needs GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY (a secret) on a D1 deployment.',
+    );
+    return undefined;
+  }
   return createAccountDeletionService({
     erasers: resolveWorkerPlayerDataErasers(env),
     identity: identity ?? null,
@@ -764,14 +780,22 @@ export function createWorkerAccountDeletionService(
   });
 }
 
-/** D1: one eraser over every table; memory: each in-memory store's own. */
+/**
+ * The tombstone first (later writes are refused from then on), then D1: one
+ * eraser over every table; memory: each in-memory store's own.
+ */
 function resolveWorkerPlayerDataErasers(env: GameServicesWorkerEnv): readonly PlayerDataEraser[] {
+  const tombstones = resolveAccountDeletionTombstones(env);
+  const tombstone = tombstones === undefined
+    ? []
+    : [createAccountDeletionTombstoneEraser(tombstones)];
   const db = resolveD1Database(env);
   if (db !== undefined) {
-    return [createD1PlayerDataEraser(db)];
+    return [...tombstone, createD1PlayerDataEraser(db)];
   }
   const notifications = workerNotificationMemoryEraser(env);
   return [
+    ...tombstone,
     fallbackMemoryStore,
     fallbackVerifiedLeaderboardService,
     ...(notifications === undefined ? [] : [notifications]),
@@ -781,8 +805,10 @@ function resolveWorkerPlayerDataErasers(env: GameServicesWorkerEnv): readonly Pl
 /** The cron's account deletion work: pending erasures and the retention purge. */
 export async function runWorkerScheduledAccountDeletion(env: GameServicesWorkerEnv): Promise<void> {
   const db = resolveD1Database(env);
+  const tombstones = resolveAccountDeletionTombstones(env);
   await runScheduledAccountDeletion({
     db,
+    ...(tombstones === undefined ? {} : { tombstones }),
     erasers: resolveWorkerPlayerDataErasers(env),
     pending: db === undefined
       ? fallbackPendingAccountErasures
@@ -1326,7 +1352,9 @@ function withWorkerGooglePlayFinalizationOutbox(
     ? googlePlay
     : withGooglePlayFinalizationOutbox(
         googlePlay,
-        createD1GooglePlayFinalizationOutbox(db),
+        withDeletedPlayerRefusal(env, createD1GooglePlayFinalizationOutbox(db), {
+          remember: argumentField('playerId'),
+        }),
         packageName,
       );
 }
@@ -1663,8 +1691,13 @@ function resolveWorkerAdMobSsvConfig(
   if (db === undefined) {
     throw new Error('AdMob SSV callback intake requires MPGD_STORE=d1 and a DB binding.');
   }
+  const tombstones = resolveAccountDeletionTombstones(env);
   return {
     db,
+    // A callback for a deleted account (Google may deliver one late) is acknowledged, never kept.
+    ...(tombstones === undefined
+      ? {}
+      : { isPlayerDeleted: (playerId: string) => tombstones.isDeleted(playerId) }),
     placements: adPlacements,
     adUnits: {
       ...(android ? { android } : {}),
@@ -1716,7 +1749,15 @@ function unavailableEvidenceVerificationDecision(): EvidenceVerificationDecision
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {
   return cachedByEnv(storesByEnv, env, () => {
     const db = resolveD1Database(env);
-    return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+    const store = db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+    // A deleted player gets no new grant or score (the erasers keep the raw store).
+    const tombstones = resolveAccountDeletionTombstones(env);
+    return tombstones === undefined
+      ? store
+      : refuseDeletedPlayerWrites(store, tombstones, {
+          recordEntitlementGrant: argumentField('playerId'),
+          recordLeaderboardScore: argumentField('playerId'),
+        });
   });
 }
 
@@ -1724,9 +1765,27 @@ function createWorkerVerifiedLeaderboardService(
   env: GameServicesWorkerEnv,
 ): VerifiedLeaderboardService {
   const db = resolveD1Database(env);
-  return db === undefined
+  const service = db === undefined
     ? fallbackVerifiedLeaderboardService
     : createD1VerifiedLeaderboardService(db);
+  const tombstones = resolveAccountDeletionTombstones(env);
+  return tombstones === undefined
+    ? service
+    : refuseDeletedPlayerWrites(service, tombstones, {
+        recordVerifiedAttempt: (args) =>
+          (args[0] as { readonly attempt?: { readonly participantId?: unknown } } | undefined)
+            ?.attempt?.participantId,
+      });
+}
+
+/** `target` refusing a deleted player's `writes` when this deployment keeps tombstones. */
+function withDeletedPlayerRefusal<Target extends object>(
+  env: GameServicesWorkerEnv,
+  target: Target,
+  writes: Parameters<typeof refuseDeletedPlayerWrites<Target>>[2],
+): Target {
+  const tombstones = resolveAccountDeletionTombstones(env);
+  return tombstones === undefined ? target : refuseDeletedPlayerWrites(target, tombstones, writes);
 }
 
 function resolveD1Database(env: GameServicesWorkerEnv): D1Database | undefined {

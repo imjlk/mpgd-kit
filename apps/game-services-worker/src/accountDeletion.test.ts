@@ -19,7 +19,14 @@ import {
   createD1PlayerDataEraser,
   d1PlayerTables,
   purgeExpiredRetainedPurchaseRecords,
+  runScheduledAccountDeletion,
 } from './accountDeletion.js';
+import {
+  AccountDeletedWriteError,
+  accountDeletionTombstoneKeyOf,
+  createAccountDeletionTombstoneEraser,
+  resolveAccountDeletionTombstones,
+} from './deletionTombstones.js';
 import { createD1GameServicesStore } from './d1Store.js';
 import {
   createWorkerFetchHandler,
@@ -27,6 +34,7 @@ import {
   type GameServicesWorkerEnv,
 } from './handler.js';
 import { createD1NotificationStore } from './notificationsD1.js';
+import { refuseDeletedNotificationWrites } from './notificationsHandler.js';
 import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 
 const miniflare = new Miniflare({
@@ -535,8 +543,94 @@ try {
     );
   }
 
+  // Every kept record carries its retention expiry, and a refund or note
+  // written after the deletion extends its group's; the purge runs by it.
+  {
+    const lateGrant = await store.recordEntitlementGrant({
+      source: 'purchase',
+      playerId: 'deleted:late',
+      grantId: 'COINS_100',
+      idempotencyKey: 'late-grant',
+      grantedAt: '2026-01-01T00:00:00.000Z',
+      payload: { target: 'ios', store: 'app-store', platformTransactionId: 'tx-late' },
+    });
+    const until = async (table: string, column: string, id: string) =>
+      (await db.prepare(`SELECT retained_until FROM ${table} WHERE ${column} = ?`).bind(id)
+        .first<{ retained_until: string | null }>())?.retained_until;
+    assert.equal(
+      await until('entitlement_transactions', 'ledger_entry_id', lateGrant.ledgerEntryId),
+      '2031-01-01T00:00:00.000Z',
+    );
+    // The store reports a refund two years after the deletion.
+    const lateRefund = await required(store.recordEntitlementRevocation).call(store, {
+      playerId: 'deleted:late',
+      revokesLedgerEntryId: lateGrant.ledgerEntryId,
+      idempotencyKey: 'late-refund',
+      reason: 'refund',
+      revokedAt: '2028-01-01T00:00:00.000Z',
+      payload: {},
+    });
+    assert.equal(
+      await until('entitlement_revocations', 'ledger_entry_id', lateRefund.ledgerEntryId),
+      '2033-01-01T00:00:00.000Z',
+    );
+    assert.equal(
+      await until('entitlement_transactions', 'ledger_entry_id', lateGrant.ledgerEntryId),
+      '2033-01-01T00:00:00.000Z',
+      'the refund extends the grant',
+    );
+    // A note under the deleted player about a live player's grant: purged at its own expiry.
+    const [liveGrant] = (await db.prepare(
+      "SELECT ledger_entry_id FROM entitlement_transactions WHERE player_id = 'player-2' AND source = 'purchase'",
+    ).all<{ ledger_entry_id: string }>()).results;
+    await required(store.recordEntitlementNote).call(store, {
+      noteId: 'late-cross-note',
+      kind: 'refund_reversed',
+      playerId: 'deleted:late',
+      ledgerEntryId: required(liveGrant).ledger_entry_id,
+      recordedAt: '2026-02-01T00:00:00.000Z',
+      payload: {},
+    });
+    assert.equal(
+      await until('entitlement_notes', 'note_id', 'late-cross-note'),
+      '2031-02-01T00:00:00.000Z',
+    );
+    // A live player's own rows carry none.
+    assert.equal(
+      await until('entitlement_transactions', 'ledger_entry_id', required(liveGrant).ledger_entry_id),
+      null,
+    );
+    assert.equal(
+      await purgeExpiredRetainedPurchaseRecords(db, new Date('2031-06-01T00:00:00.000Z')),
+      0,
+    );
+    assert.equal(
+      await db.prepare("SELECT note_id FROM entitlement_notes WHERE note_id = 'late-cross-note'").first(),
+      null,
+      'the cross note went at its own expiry',
+    );
+    assert.equal(
+      await countRows(db, 'entitlement_transactions', 'ledger_entry_id', lateGrant.ledgerEntryId),
+      1,
+      'the refunded grant stays until the refund is five years old',
+    );
+    assert.equal(
+      await purgeExpiredRetainedPurchaseRecords(db, new Date('2033-01-02T00:00:00.000Z')),
+      1,
+    );
+    assert.equal(
+      await countRows(db, 'entitlement_revocations', 'ledger_entry_id', lateRefund.ledgerEntryId),
+      0,
+    );
+    assert.equal(
+      await countRows(db, 'entitlement_transactions', 'ledger_entry_id', required(liveGrant).ledger_entry_id),
+      1,
+    );
+  }
+
   // --- The route ----------------------------------------------------------------
   const deleted: string[] = [];
+  const tombstoneKey = 't'.repeat(48);
   const env = (
     overrides: Partial<GameServicesWorkerEnv>,
     omit: readonly (keyof GameServicesWorkerEnv)[] = [],
@@ -544,6 +638,7 @@ try {
     {
       MPGD_STORE: 'd1',
       DB: db,
+      GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY: tombstoneKey,
       GAME_SERVICES_INGRESS_AUTH: {
         async authenticateGameServicesRequest({ authorization }) {
           return authorization === 'Bearer player-5-token' ? { playerId: 'player-5' } : undefined;
@@ -720,6 +815,156 @@ try {
   });
   assert.equal((await retry.json() as AccountDeletionReceipt).retainedPurchaseRecords, 0);
 
+  // --- Late writes: the tombstone refuses them after the final pass ---------
+  {
+    // Only the keyed hash of the id is kept, with its expiry.
+    const tombstoneRows = (await db.prepare('SELECT * FROM account_deletion_tombstones').all<{
+      player_key: string;
+    }>()).results;
+    assert.deepEqual(
+      tombstoneRows.map((row) => row.player_key),
+      [await accountDeletionTombstoneKeyOf(tombstoneKey, 'player-5')],
+    );
+    assert.ok(!JSON.stringify(tombstoneRows).includes('player-5'));
+    // The cron's final pass (16 minutes on) clears the pending erasure.
+    const lateEnv = env({
+      GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: {
+        async verifyPurchase(input) {
+          return {
+            status: 'verified',
+            verificationId: `play:${input.request.idempotencyKey}`,
+            verifiedAt: new Date().toISOString(),
+          };
+        },
+        async verifyAdReward(input) {
+          return {
+            status: 'verified',
+            verificationId: `admob:ssv:${input.request.idempotencyKey}`,
+            verifiedAt: new Date().toISOString(),
+          };
+        },
+      },
+      GAME_SERVICES_ANDROID_PURCHASE_FINALIZER: {
+        async finalizePurchaseGrant() {
+          return { status: 'completed', action: 'consume', alreadyCompleted: false };
+        },
+      },
+    });
+    const tombstones = required(resolveAccountDeletionTombstones(lateEnv));
+    const consoleInfo = console.info;
+    console.info = () => undefined;
+    try {
+      await runScheduledAccountDeletion({
+        db,
+        tombstones,
+        erasers: [createAccountDeletionTombstoneEraser(tombstones), createD1PlayerDataEraser(db)],
+        pending: createD1PendingAccountErasureStore(db),
+        audit: createD1AccountDeletionAudit(db),
+        now: () => new Date(Date.now() + 16 * 60 * 1000),
+      });
+    } finally {
+      console.info = consoleInfo;
+    }
+    assert.equal(await countRows(db, 'account_deletion_pending', 'player_id', 'player-5'), 0);
+    // A request that authenticated before the deletion (the ingress stub still
+    // answers player-5) writes afterwards: a purchase grant (and so its Play
+    // finalization), a score, a verified attempt, and notification rows are
+    // all refused (AdMob SSV callbacks: deletionTombstones.test.ts).
+    const late = createWorkerService(lateEnv);
+    const quiet = console.error;
+    console.error = () => undefined;
+    try {
+      const refusedPurchase = await late.verifyPurchase({
+        target: 'android',
+        playerId: 'player-5',
+        productId: 'COINS_100',
+        platformTransactionId: 'late-purchase',
+        idempotencyKey: 'late-purchase',
+        purchasedAt: new Date().toISOString(),
+      }).catch((error: unknown) => error);
+      assert.notEqual((refusedPurchase as { readonly verified?: unknown }).verified, true);
+    } finally {
+      console.error = quiet;
+    }
+    await assert.rejects(
+      late.recordLeaderboardScore({
+        target: 'browser',
+        leaderboardId: 'daily',
+        playerId: 'player-5',
+        score: 1,
+        runId: 'late-run',
+        submittedAt: new Date().toISOString(),
+      }),
+      AccountDeletedWriteError,
+    );
+    await assert.rejects(
+      late.recordVerifiedAttempt({
+        definition: { leaderboardId: 'speedrun', scoreOrder: 'ascending', attemptSelection: 'best' },
+        attempt: {
+          attemptId: 'late-attempt',
+          participantId: 'player-5',
+          score: 1,
+          completedAt: new Date().toISOString(),
+          verification: {
+            authorityId: 'game-server',
+            evidenceId: 'late',
+            verifiedAt: new Date().toISOString(),
+          },
+        },
+      }),
+      AccountDeletedWriteError,
+    );
+    const notifications = refuseDeletedNotificationWrites(lateEnv, createD1NotificationStore(db));
+    await assert.rejects(
+      notifications.appendConsent({
+        player: 'player-5',
+        record: { kind: 'advertising', state: 'granted', source: 'player', evidence: { textVersion: '1', channel: 'in-game' } } as never,
+        at: new Date().toISOString(),
+      }),
+      AccountDeletedWriteError,
+    );
+    await assert.rejects(
+      notifications.createSend({
+        key: 'late-send',
+        fingerprint: 'fingerprint',
+        request: { idempotencyKey: 'late-send', player: 'player-5', topic: 'daily-ready' },
+        origin: 'server',
+        scheduled: false,
+        rows: [],
+        changedAt: new Date().toISOString(),
+      } as never),
+      AccountDeletedWriteError,
+    );
+    for (const [table, column] of playerTables) {
+      assert.equal(await countRows(db, table, column, 'player-5'), 0, `${table} after late writes`);
+    }
+    // Another player still writes, through the same paths.
+    const before = await countRows(db, 'entitlement_transactions', 'player_id', 'player-2');
+    const live = await late.verifyPurchase({
+      target: 'android',
+      playerId: 'player-2',
+      productId: 'COINS_100',
+      platformTransactionId: 'live-purchase',
+      idempotencyKey: 'live-purchase',
+      purchasedAt: new Date().toISOString(),
+    });
+    assert.equal((live as { readonly verified?: unknown }).verified, true);
+    assert.equal(
+      await countRows(db, 'entitlement_transactions', 'player_id', 'player-2'),
+      before + 1,
+    );
+    assert.ok(
+      (await late.recordLeaderboardScore({
+        target: 'browser',
+        leaderboardId: 'daily',
+        playerId: 'player-2',
+        score: 2,
+        runId: 'live-run',
+        submittedAt: new Date().toISOString(),
+      })) !== undefined,
+    );
+  }
+
   // Without the identity binding the route refuses instead of leaving sessions alive.
   const withoutIdentity = createWorkerFetchHandler(env({}, ['GAME_SERVICES_ACCOUNT_DELETION']));
   const refused = await post(withoutIdentity, { authorization: 'Bearer player-5-token' });
@@ -796,12 +1041,8 @@ try {
   } finally {
     console.info = consoleInfo;
   }
-  assert.equal(
-    (await localService.recordLeaderboardScore(score) as { alreadyProcessed: boolean })
-      .alreadyProcessed,
-    false,
-    'the memory store erased the score',
-  );
+  // The memory deployment keeps its tombstones too: the deleted player writes nothing more.
+  await assert.rejects(localService.recordLeaderboardScore(score), AccountDeletedWriteError);
 } finally {
   await miniflare.dispose();
 }
