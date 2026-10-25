@@ -43,6 +43,14 @@ export interface IdentityServiceConfig {
   readonly maxGuestsPerInstallationPerDay: number;
 }
 
+/** A configuration the service refuses; its message names the rule and holds no secret. */
+export class IdentityConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IdentityConfigurationError';
+  }
+}
+
 export const defaultIdentityServiceConfig: IdentityServiceConfig = Object.freeze({
   accessTokenTtlMs: 15 * 60 * 1000,
   refreshIdleMs: 180 * 24 * 60 * 60 * 1000,
@@ -316,7 +324,7 @@ function resolveConfig(overrides: Partial<IdentityServiceConfig> | undefined): I
     || !(Number.isSafeInteger(config.refreshRetryGraceMs) && config.refreshRetryGraceMs >= 0)
     || config.accessTokenTtlMs >= config.refreshIdleMs
     || config.refreshRetryGraceMs >= config.refreshIdleMs) {
-    throw new Error(
+    throw new IdentityConfigurationError(
       'Identity config: lifetimes must be positive whole milliseconds, the access token shorter than '
         + 'the inactivity window, and the retry grace shorter than the inactivity window.',
     );

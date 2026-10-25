@@ -9,6 +9,7 @@ import { createD1IdentityStore } from './d1Store.js';
 import {
   createGuestIdentityService,
   defaultIdentityServiceConfig,
+  IdentityConfigurationError,
   type GuestIdentityService,
   type IdentityRefusal,
   type IdentityServiceConfig,
@@ -77,7 +78,7 @@ export function resolveIdentityService(
 function resolveStore(env: GameIdentityWorkerEnv): IdentityStore {
   if (env.MPGD_STORE === 'd1') {
     if (env.DB === undefined) {
-      throw new Error(
+      throw new IdentityConfigurationError(
         'MPGD_STORE = "d1" needs the DB binding (migrations/0001_guest_identity.sql applied).',
       );
     }
@@ -87,7 +88,7 @@ function resolveStore(env: GameIdentityWorkerEnv): IdentityStore {
     isolateMemoryStore ??= createMemoryIdentityStore();
     return isolateMemoryStore;
   }
-  throw new Error(
+  throw new IdentityConfigurationError(
     'Set MPGD_STORE to "d1" (with the DB binding) or, for local development, "memory".',
   );
 }
@@ -99,10 +100,16 @@ function resolveConfig(env: GameIdentityWorkerEnv): IdentityServiceConfig {
     }
     const parsed = Number(value);
     if (!Number.isSafeInteger(parsed) || parsed < 0) {
-      throw new Error(`${name} must be a whole number.`);
+      throw new IdentityConfigurationError(`${name} must be a whole number.`);
     }
     return parsed * unit;
   };
+  const refreshIdleMs = read(
+    env.IDENTITY_REFRESH_IDLE_DAYS,
+    'IDENTITY_REFRESH_IDLE_DAYS',
+    24 * 60 * 60 * 1000,
+    defaultIdentityServiceConfig.refreshIdleMs,
+  );
   return {
     accessTokenTtlMs: read(
       env.IDENTITY_ACCESS_TOKEN_TTL_SECONDS,
@@ -110,17 +117,13 @@ function resolveConfig(env: GameIdentityWorkerEnv): IdentityServiceConfig {
       1000,
       defaultIdentityServiceConfig.accessTokenTtlMs,
     ),
-    refreshIdleMs: read(
-      env.IDENTITY_REFRESH_IDLE_DAYS,
-      'IDENTITY_REFRESH_IDLE_DAYS',
-      24 * 60 * 60 * 1000,
-      defaultIdentityServiceConfig.refreshIdleMs,
-    ),
+    refreshIdleMs,
     refreshRetryGraceMs: read(
       env.IDENTITY_REFRESH_RETRY_GRACE_SECONDS,
       'IDENTITY_REFRESH_RETRY_GRACE_SECONDS',
       1000,
-      defaultIdentityServiceConfig.refreshRetryGraceMs,
+      // The default grace stays inside a short inactivity window.
+      Math.min(defaultIdentityServiceConfig.refreshRetryGraceMs, Math.floor(refreshIdleMs / 2)),
     ),
     maxGuestsPerInstallationPerDay: read(
       env.IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY,
@@ -181,7 +184,8 @@ export function createIdentityFetchHandler(
     // would lose its guests at every isolate restart, so it serves local hosts only.
     if (env.MPGD_STORE === 'memory' && overrides.store === undefined && !isLocalDevelopmentHost(url.hostname)) {
       console.error(
-        '[identity] MPGD_STORE = "memory" serves local development hosts only; use "d1".',
+        '[identity] MPGD_STORE = "memory" serves local development hosts only (loopback, *.localhost, '
+          + '10.0.2.2); a device on the LAN or a deployment needs MPGD_STORE = "d1".',
       );
       return json({ error: 'UNAVAILABLE' }, 503);
     }
@@ -205,9 +209,15 @@ export function createIdentityFetchHandler(
           return answer(await service.bindAccount(body));
       }
     } catch (error) {
+      // A configuration error's message names the setting; any other error is
+      // logged by name only, since a store error could quote a statement.
       console.error(
         '[identity] request failed:',
-        error instanceof Error ? error.name : 'unknown error',
+        error instanceof IdentityConfigurationError
+          ? `${error.name}: ${error.message}`
+          : error instanceof Error
+            ? error.name
+            : 'unknown error',
       );
       return json({ error: 'UNAVAILABLE' }, 503);
     }

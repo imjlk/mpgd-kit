@@ -10,6 +10,7 @@ import {
   type IdentityResult,
 } from './identityService.js';
 import type { IdentityStore } from './store.js';
+import { hashToken } from './tokens.js';
 
 const minute = 60 * 1000;
 const day = 24 * 60 * minute;
@@ -322,12 +323,22 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
 
   // Purge: ended families and their tokens go; live ones and players stay.
   {
-    const { service, advance } = await setup();
+    const { service, store, advance } = await setup();
     const kept = value(await service.issueGuest({ installationId: 'install-purge-1' }));
     const revoked = value(await service.issueGuest({ installationId: 'install-purge-2' }));
+    const idle = value(await service.issueGuest({ installationId: 'install-purge-4' }));
     await service.revoke({ refreshToken: revoked.refreshToken });
-    advance(8 * day);
-    const rotated = value(await service.refresh({ refreshToken: kept.refreshToken }));
+    // Keep `kept` alive past the inactivity window; `idle` lapses.
+    advance(defaultIdentityServiceConfig.refreshIdleMs - day);
+    const kept2 = value(await service.refresh({ refreshToken: kept.refreshToken }));
+    // `idle` ended a day later; the purge keeps ended families 7 days for support.
+    advance(9 * day);
+    await service.purge();
+    assert.equal(await store.getFamily(revoked.sessionId), undefined);
+    assert.equal(await store.getFamily(idle.sessionId), undefined);
+    assert.equal(await store.findRefreshToken(await hashToken(idle.refreshToken)), undefined);
+    assert.notEqual(await store.getFamily(kept.sessionId), undefined);
+    const rotated = value(await service.refresh({ refreshToken: kept2.refreshToken }));
     await service.purge();
     assert.equal(
       (await service.authenticate(`Bearer ${rotated.accessToken}`))?.playerId,

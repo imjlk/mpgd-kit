@@ -28,8 +28,9 @@ CREATE INDEX IF NOT EXISTS idx_identity_session_families_installation
 -- The purge's two scans: revoked families, and live ones past their window.
 CREATE INDEX IF NOT EXISTS idx_identity_session_families_revoked
   ON identity_session_families (revoked_at_ms);
-CREATE INDEX IF NOT EXISTS idx_identity_session_families_expires
-  ON identity_session_families (expires_at_ms);
+-- Partial: only live families, so the inactivity scan reads no revoked row.
+CREATE INDEX IF NOT EXISTS idx_identity_session_families_live_expires
+  ON identity_session_families (expires_at_ms) WHERE revoked_at_ms IS NULL;
 
 -- Every refresh token a family was ever issued, so a replayed old one is
 -- recognized (and revokes its family) instead of being merely unknown.

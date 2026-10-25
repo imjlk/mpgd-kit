@@ -153,12 +153,34 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
       { MPGD_STORE: 'memory', IDENTITY_ACCESS_TOKEN_TTL_SECONDS: '0' },
     ] as const satisfies readonly GameIdentityWorkerEnv[]) {
       const response = await createIdentityFetchHandler(misconfigured)(
-        post(guestIdentityHttpRoutes.issueGuest, { installationId: 'install-http-4' }),
+        new Request(`http://localhost:8788${guestIdentityHttpRoutes.issueGuest}`, {
+          method: 'POST',
+          body: JSON.stringify({ installationId: 'install-http-4' }),
+        }),
       );
       assert.equal(response.status, 503);
     }
     assert.equal(JSON.stringify(errors).includes('mpgd_rt_secret'), false);
     assert.deepEqual(errors[0], ['[identity] request failed:', 'TypeError']);
+    // A configuration error says which setting, so the 503 can be fixed from the log.
+    assert.deepEqual(
+      errors.slice(1).map((args) => String(args[1]).split(':')[0]),
+      [
+        'IdentityConfigurationError',
+        'IdentityConfigurationError',
+        'IdentityConfigurationError',
+        'IdentityConfigurationError',
+      ],
+    );
+    assert.match(String(errors[3]?.[1]), /IDENTITY_REFRESH_IDLE_DAYS must be a whole number/u);
+    // A short inactivity window alone is accepted: the default grace stays inside it.
+    const shortWindow = await createIdentityFetchHandler({ MPGD_STORE: 'memory', IDENTITY_REFRESH_IDLE_DAYS: '2' })(
+      new Request(`http://localhost:8788${guestIdentityHttpRoutes.issueGuest}`, {
+        method: 'POST',
+        body: JSON.stringify({ installationId: 'install-http-6' }),
+      }),
+    );
+    assert.equal(shortWindow.status, 200);
   } finally {
     console.error = original;
   }
