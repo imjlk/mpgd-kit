@@ -26,12 +26,14 @@ import {
   createPurchaseHolderEvidenceVerificationId,
   createPurchaseHolderIdempotencyKey,
   findEntitlementRevocationsChunked,
+  findPurchaseWideRevocation,
   isEntitlementGrantReversed,
   isRestoredAcrossPlayers,
   listPurchaseHolders,
   readPurchaseLedgerStatuses,
   readPurchaseVerificationId,
   RevocationKeyConflictError,
+  revokeEntitlementGrant,
 } from './commerce-ledger.js';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
 import {
@@ -1581,12 +1583,14 @@ async function shareRestoredPurchase(
           return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
         }
         const all = [first, ...holders.shared];
-        const reversed = new Set(
-          (await findEntitlementRevocationsChunked(store, all.map((grant) => grant.ledgerEntryId)))
-            .map((entry) => entry.revokesLedgerEntryId),
+        const revocations = await findEntitlementRevocationsChunked(
+          store,
+          all.map((grant) => grant.ledgerEntryId),
         );
-        if (reversed.has(first.ledgerEntryId)) {
-          // Refunded or revoked: a refund reverses every holder.
+        const reversed = new Set(revocations.map((entry) => entry.revokesLedgerEntryId));
+        if (await findPurchaseWideRevocation(store, all) !== undefined) {
+          // Refunded, charged back, or voided: the purchase ended for every
+          // holder. An admin entry ends one holder only and frees its place.
           return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
         }
         const own = all.find((grant) => grant.playerId === request.playerId);
@@ -1636,6 +1640,31 @@ async function shareRestoredPurchase(
             return notGranted('rejected', 'IDEMPOTENCY_KEY_CONFLICT');
           }
           return { status: 'held', grant: keyed };
+        }
+        // A refund that landed between the read and this write may have
+        // fanned out before the share existed: it then ends the share too.
+        // A refund writes its first entry before it reads the holders, so
+        // either it sees this share or this read sees its entry.
+        const written = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
+        const ended = await findPurchaseWideRevocation(
+          store,
+          written === undefined ? all : [...all, written],
+        );
+        if (ended !== undefined) {
+          if (written !== undefined && ended.revokesLedgerEntryId !== written.ledgerEntryId) {
+            await revokeEntitlementGrant(store, {
+              playerId: written.playerId,
+              revokesLedgerEntryId: written.ledgerEntryId,
+              idempotencyKey: ended.idempotencyKey,
+              reason: ended.reason,
+              revokedAt: ended.revokedAt,
+              payload: ended.payload,
+              ...(ended.evidenceVerificationId === undefined
+                ? {}
+                : { evidenceVerificationId: `${ended.evidenceVerificationId}#${written.ledgerEntryId}` }),
+            });
+          }
+          return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
         }
         return {
           status: 'written',

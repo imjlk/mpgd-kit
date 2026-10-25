@@ -322,6 +322,97 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   );
 }
 
+// An admin entry on the first grant frees the buyer's place; sharing goes on.
+{
+  const store = createInMemoryGameServicesStore();
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share' },
+  });
+  const bought = await backend.purchases.verifyPurchase(
+    restoreRequest('player-a', { intent: 'purchase' }),
+  );
+  const toB = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  await revokeEntitlementGrant(store, {
+    playerId: 'player-a',
+    revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+    idempotencyKey: 'admin:first',
+    reason: 'admin',
+    revokedAt: '2030-01-02T00:00:00.000Z',
+    payload: {},
+  });
+  const bAgain = await backend.purchases.verifyPurchase(
+    restoreRequest('player-b', { idempotencyKey: 'player-b-again' }),
+  );
+  assert.equal(bAgain.ledgerEntryId, toB.ledgerEntryId, 'another holder keeps its grant');
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-c'))).restoredAcrossPlayers,
+    true,
+  );
+}
+
+// A refund that lands between a share's read and its write ends the share too.
+{
+  const inner = createInMemoryGameServicesStore();
+  let refundFirst: (() => Promise<void>) | undefined;
+  const store: GameServicesStore = {
+    recordEntitlementGrant: async (input) => {
+      if (input.idempotencyKey.startsWith('mpgd-holder:') && refundFirst !== undefined) {
+        const refund = refundFirst;
+        refundFirst = undefined;
+        await refund();
+      }
+      return inner.recordEntitlementGrant(input);
+    },
+    findEntitlementTransactionByIdempotency: (input) =>
+      inner.findEntitlementTransactionByIdempotency(input),
+    findEntitlementTransactionByEvidenceVerificationId: (input) =>
+      inner.findEntitlementTransactionByEvidenceVerificationId(input),
+    getEntitlementTransaction: (id) => inner.getEntitlementTransaction(id),
+    listEntitlementTransactions: () => inner.listEntitlementTransactions(),
+    recordEntitlementRevocation: (input) => inner.recordEntitlementRevocation(input),
+    findEntitlementRevocations: (input) => inner.findEntitlementRevocations(input),
+    recordLeaderboardScore: (input, options) => inner.recordLeaderboardScore(input, options),
+    getLeaderboardTransaction: (id) => inner.getLeaderboardTransaction(id),
+    listLeaderboardTransactions: () => inner.listLeaderboardTransactions(),
+  };
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share' },
+  });
+  const bought = await backend.purchases.verifyPurchase(
+    restoreRequest('player-a', { intent: 'purchase' }),
+  );
+  refundFirst = async () => {
+    await revokeEntitlementGrant(inner, {
+      playerId: 'player-a',
+      revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+      idempotencyKey: 'google-play:voided:race',
+      reason: 'voided',
+      revokedAt: '2030-01-02T00:00:00.000Z',
+      payload: {},
+      evidenceVerificationId: `${purchaseVerificationId}:revoke`,
+    });
+  };
+  assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-b')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'rejected',
+    reason: 'LEDGER_GRANT_REVERSED',
+  });
+  assert.deepEqual(
+    await listActiveEntitlementTransactions(inner),
+    [],
+    'the late share is revoked too',
+  );
+}
+
 // Consumables are never shared, even under the share policy.
 {
   const store = createInMemoryGameServicesStore();

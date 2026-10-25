@@ -595,7 +595,9 @@ restoring player gets its own grant of it:
 - **Answers.** `verified` with `restoredAcrossPlayers: true` (retries
   included); `rejected` with the verifier's reason when the policy refuses or
   the product is not a non-consumable; `rejected` `LEDGER_GRANT_REVERSED` for
-  a refunded purchase; `pending` `PURCHASE_HOLDER_LIMIT_REACHED` at the
+  a purchase a store refund, chargeback, or voided purchase ended (a share
+  written while that refund fans out is revoked right after its write; an
+  `admin` entry ends one holder only); `pending` `PURCHASE_HOLDER_LIMIT_REACHED` at the
   limit; `pending` `PURCHASE_HOLDER_CONFLICT` after repeated lost races.
 - **Never shared.** Consumables and subscriptions.
 

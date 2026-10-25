@@ -152,7 +152,7 @@ export async function revokeEntitlementGrant(
   }
   try {
     const result = await store.recordEntitlementRevocation(revocation);
-    if (grant.source === 'purchase' && revocation.reason !== 'admin') {
+    if (grant.source === 'purchase' && purchaseWideRevocationReasons.has(revocation.reason)) {
       // A store event (refund, chargeback, voided purchase) is about the
       // purchase: every player a verified restore shared it with loses it
       // too (RFC "Restore sharing"). Replays finish a fan-out an earlier
@@ -282,6 +282,29 @@ export function isRestoredAcrossPlayers(transaction: ProductGrantTransaction): b
   const shared = transaction.payload.holderOfEvidenceVerificationId;
   return (typeof shared === 'string' && shared.length > 0)
     || transaction.payload.restoredAcrossAccounts === true;
+}
+
+/** The revoke reasons a store event writes: they end the purchase for every holder. */
+export const purchaseWideRevocationReasons: ReadonlySet<string> = new Set([
+  'refund',
+  'chargeback',
+  'voided',
+]);
+
+/**
+ * The store event (refund, chargeback, voided purchase) that ended a
+ * purchase, read from its holders' revoke entries, the first grant's first;
+ * undefined while the purchase is live. An `admin` entry ends one holder only.
+ */
+export async function findPurchaseWideRevocation(
+  store: GameServicesStore,
+  holders: readonly ProductGrantTransaction[],
+): Promise<EntitlementRevocationTransaction | undefined> {
+  const order = new Map(holders.map((holder, index) => [holder.ledgerEntryId, index]));
+  return (await findEntitlementRevocationsChunked(store, holders.map((holder) => holder.ledgerEntryId)))
+    .filter((entry) => purchaseWideRevocationReasons.has(entry.reason))
+    .sort((left, right) =>
+      (order.get(left.revokesLedgerEntryId) ?? 0) - (order.get(right.revokesLedgerEntryId) ?? 0))[0];
 }
 
 async function revokeOtherPurchaseHolders(
