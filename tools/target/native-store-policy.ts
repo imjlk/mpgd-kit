@@ -72,7 +72,7 @@ export function inspectNativeStorePolicy(input: {
     ...inspectAndroidManifestAds(
       manifestSource,
       usesAds,
-      readGameAdvertisingIdPolicy(gameConfigJson),
+      usesAds ? readGameAdvertisingIdPolicy(gameConfigJson) : 'declared',
     ),
   ];
 }

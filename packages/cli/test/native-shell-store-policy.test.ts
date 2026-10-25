@@ -557,6 +557,11 @@ try {
     [],
     'unless the game records a no-advertising-ID policy',
   );
+  assert.deepEqual(
+    inspectAndroidManifestAds(withAppId, true, 'removed').map((issue) => issue.level),
+    ['error'],
+    'a recorded no-advertising-ID policy needs the removal in the manifest',
+  );
   assert.equal(
     readGameAdvertisingIdPolicy({ ads: { admob: { advertisingId: 'removed' } } }),
     'removed',

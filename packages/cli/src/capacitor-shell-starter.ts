@@ -43,6 +43,7 @@ import {
   iosAppPrivacyManifestFile,
   iosAppPrivacyManifestXml,
   isRecord,
+  readGameAdvertisingIdPolicy,
   readGameNativeOrientation,
   readIosDeviceFamily,
   shellUsesAdMob,
@@ -1104,34 +1105,40 @@ function materializeAndroidStorePolicy(gameRoot: string): void {
     return;
   }
   const source = readFileSync(manifestFile, 'utf8');
-  const shellPackage = path.join(gameRoot, shellPath, 'package.json');
-  const usesAds = existsSync(shellPackage) && shellUsesAdMob(readJsonObject(shellPackage));
+  const settings = readNativeShellSettings(gameRoot);
+  const shellPackageFile = path.join(gameRoot, shellPath, 'package.json');
+  const usesAds = existsSync(shellPackageFile) && shellUsesAdMob(readJsonObject(shellPackageFile));
   const next = applyAndroidManifestAdId(
-    applyAndroidManifestOrientation(source, readNativeShellSettings(gameRoot).orientation ?? 'any'),
-    usesAds,
+    applyAndroidManifestOrientation(source, settings.orientation ?? 'any'),
+    usesAds && settings.advertisingId !== 'removed',
   );
   if (next !== source) {
     writeFileSync(manifestFile, next);
   }
 }
 
-/** The game's design orientation (mpgd.game.json) and iOS device family (ios target metadata). */
+/**
+ * The game's design orientation and advertising ID policy (mpgd.game.json)
+ * and iOS device family (ios target metadata).
+ */
 function readNativeShellSettings(gameRoot: string): {
   readonly orientation?: NativeShellOrientation;
   readonly iosDeviceFamily?: IosDeviceFamily;
+  readonly advertisingId: 'declared' | 'removed';
 } {
   const gameConfigFile = path.join(gameRoot, 'mpgd.game.json');
-  const orientation = existsSync(gameConfigFile)
-    ? readGameNativeOrientation(
-        parseJsonObject(readFileSync(gameConfigFile, 'utf8'), 'mpgd.game.json'),
-      )
+  const gameConfig = existsSync(gameConfigFile)
+    ? parseJsonObject(readFileSync(gameConfigFile, 'utf8'), 'mpgd.game.json')
     : undefined;
+  const orientation = readGameNativeOrientation(gameConfig);
+  const advertisingId = readGameAdvertisingIdPolicy(gameConfig);
   const targets = readJsonObject(path.join(gameRoot, 'mpgd.targets.json'));
   const ios = isRecord(targets.targets) ? targets.targets.ios : undefined;
   const iosDeviceFamily = readIosDeviceFamily(isRecord(ios) ? ios.metadata : undefined);
   return {
     ...(orientation === undefined ? {} : { orientation }),
     ...(iosDeviceFamily === undefined ? {} : { iosDeviceFamily }),
+    advertisingId,
   };
 }
 

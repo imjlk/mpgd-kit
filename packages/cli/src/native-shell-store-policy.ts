@@ -278,9 +278,10 @@ export function inspectIosInfoPlistOrientation(
     if (iosIpadOrientations.some((value) => !ipad.includes(value))) {
       issues.push({
         level: 'warning',
-        message: 'iOS Info.plist UISupportedInterfaceOrientations~ipad does not list all four '
-          + 'orientations; Apple asks iPad apps to support every orientation (TN3192) and '
-          + 'deprecated UIRequiresFullScreen in iPadOS 26.',
+        message: 'iOS Info.plist iPad orientations (UISupportedInterfaceOrientations~ipad, or '
+          + 'UISupportedInterfaceOrientations when that key is absent) do not list all four; '
+          + 'Apple asks iPad apps to support every orientation (TN3192) and deprecated '
+          + 'UIRequiresFullScreen in iPadOS 26.',
       });
     }
   }
@@ -573,8 +574,9 @@ export const iosAppPrivacyManifestXml = [
  * Capacitor-generated project. Returns undefined when the project does not
  * have that layout (an App group with `path = App`, a Resources phase, the
  * PBXBuildFile/PBXFileReference section markers), so the caller can leave the
- * project alone. A project that already references the file is returned
- * unchanged.
+ * project alone. A project whose Resources phase already bundles the file is
+ * returned unchanged; one whose App group references it without bundling it
+ * is left to the game (undefined).
  */
 export function addIosAppResource(project: string, fileName: string): string | undefined {
   const resourcesPhase = findAppResourcesPhase(project);
@@ -872,6 +874,14 @@ export function inspectAndroidManifestAds(
           + `<uses-permission android:name="${androidAdIdPermission}" />, or, for a deliberate `
           + 'no-advertising-ID policy (for example a child-directed game), set '
           + 'ads.admob.advertisingId to "removed" in mpgd.game.json.',
+      });
+    }
+    if (declaration !== 'removed' && advertisingIdPolicy === 'removed') {
+      issues.push({
+        level: 'error',
+        message: 'mpgd.game.json ads.admob.advertisingId is "removed", but AndroidManifest.xml '
+          + `does not remove ${androidAdIdPermission}; add `
+          + `<uses-permission android:name="${androidAdIdPermission}" tools:node="remove" />.`,
       });
     }
   } else if (declaration !== 'removed') {
