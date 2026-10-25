@@ -5,8 +5,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  applyAndroidManifestOrientation,
+  applyIosInfoPlistOrientation,
   applyIosInfoPlistStorePolicy,
+  applyIosProjectDeviceFamily,
+  inspectAndroidManifestOrientation,
+  inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
+  inspectIosProjectDeviceFamily,
+  readGameNativeOrientation,
+  readIosAppReleaseDeviceFamily,
+  readIosDeviceFamily,
   readPlistTopLevelValue,
   setPlistTopLevelValue,
 } from '../src/native-shell-store-policy.js';
@@ -147,4 +156,131 @@ try {
   );
 } finally {
   rmSync(shell, { recursive: true, force: true });
+}
+
+// Orientation and device family.
+{
+  assert.equal(readGameNativeOrientation({}), undefined);
+  assert.equal(readGameNativeOrientation({ native: { orientation: 'portrait' } }), 'portrait');
+  assert.throws(() => readGameNativeOrientation({ native: { orientation: 'up' } }), /must be/u);
+  assert.throws(() => readGameNativeOrientation({ native: { lock: true } }), /not supported/u);
+  assert.equal(readIosDeviceFamily({ iosDeviceFamily: 'iphone' }), 'iphone');
+  assert.equal(readIosDeviceFamily(undefined), undefined);
+  assert.throws(() => readIosDeviceFamily({ iosDeviceFamily: 'ipad' }), /must be/u);
+
+  const template = readFileSync(path.join(referenceShell, 'ios/App/App/Info.plist'), 'utf8');
+  const landscape = applyIosInfoPlistOrientation(template, 'landscape');
+  assert.deepEqual(
+    [...(readPlistTopLevelValue(landscape, 'UISupportedInterfaceOrientations')?.xml ?? '')
+      .matchAll(/<string>([^<]+)<\/string>/gu)].map((match) => match[1]),
+    ['UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight'],
+  );
+  assert.equal(
+    (readPlistTopLevelValue(landscape, 'UISupportedInterfaceOrientations~ipad')?.xml.match(/<string>/gu) ?? [])
+      .length,
+    4,
+    'iPad keeps every orientation (TN3192)',
+  );
+  assert.equal(applyIosInfoPlistOrientation(landscape, 'landscape'), landscape);
+  assert.deepEqual(inspectIosInfoPlistOrientation(landscape, 'landscape', 'universal'), []);
+  assert.deepEqual(inspectIosInfoPlistOrientation(template, undefined, 'universal'), []);
+  assert.equal(
+    inspectIosInfoPlistOrientation(template, 'landscape', 'universal')[0]?.level,
+    'error',
+  );
+  assert.equal(
+    inspectIosInfoPlistOrientation(template, 'portrait', 'universal')[0]?.level,
+    'error',
+  );
+  assert.deepEqual(inspectIosInfoPlistOrientation(template, 'any', 'universal'), []);
+  const portraitOnlyIpad = setPlistTopLevelValue(
+    applyIosInfoPlistOrientation(template, 'portrait'),
+    'UISupportedInterfaceOrientations~ipad',
+    '<array><string>UIInterfaceOrientationPortrait</string></array>',
+  );
+  assert.deepEqual(
+    inspectIosInfoPlistOrientation(portraitOnlyIpad, 'portrait', 'universal').map(
+      (issue) => issue.level,
+    ),
+    ['warning'],
+  );
+  assert.deepEqual(inspectIosInfoPlistOrientation(portraitOnlyIpad, 'portrait', 'iphone'), []);
+
+  const project = readFileSync(
+    path.join(referenceShell, 'ios/App/App.xcodeproj/project.pbxproj'),
+    'utf8',
+  );
+  assert.equal(readIosAppReleaseDeviceFamily(project), '1,2');
+  assert.deepEqual(inspectIosProjectDeviceFamily(project, undefined), []);
+  assert.deepEqual(inspectIosProjectDeviceFamily(project, 'universal'), []);
+  assert.equal(inspectIosProjectDeviceFamily(project, 'iphone')[0]?.level, 'error');
+  const iphoneOnly = applyIosProjectDeviceFamily(project, 'iphone');
+  assert.equal(readIosAppReleaseDeviceFamily(iphoneOnly), '1');
+  assert.equal(
+    (iphoneOnly.match(/TARGETED_DEVICE_FAMILY = "1";/gu) ?? []).length,
+    2,
+    'Debug and Release',
+  );
+  assert.deepEqual(inspectIosProjectDeviceFamily(iphoneOnly, 'iphone'), []);
+  // A target without the setting gets one; project-level settings are untouched.
+  const unset = project.replace(/\n\s*TARGETED_DEVICE_FAMILY = "1,2";/gu, '');
+  assert.equal(readIosAppReleaseDeviceFamily(unset), undefined);
+  assert.equal(
+    readIosAppReleaseDeviceFamily(applyIosProjectDeviceFamily(unset, 'universal')),
+    '1,2',
+  );
+
+  const manifest = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '    <application',
+    '        android:label="@string/app_name">',
+    '        <!-- <activity android:name=".Old"><intent-filter><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity> -->',
+    '        <activity',
+    '            android:name=".MainActivity"',
+    '            android:exported="true">',
+    '            <intent-filter>',
+    '                <action android:name="android.intent.action.MAIN" />',
+    '                <category android:name="android.intent.category.LAUNCHER" />',
+    '            </intent-filter>',
+    '        </activity>',
+    '    </application>',
+    '</manifest>',
+  ].join('\n');
+  const androidLandscape = applyAndroidManifestOrientation(manifest, 'landscape');
+  assert.match(
+    androidLandscape,
+    /android:exported="true"\n {12}android:screenOrientation="sensorLandscape">/u,
+  );
+  assert.match(
+    androidLandscape,
+    /android:label="@string\/app_name"\n {8}android:appCategory="game">/u,
+  );
+  assert.equal(applyAndroidManifestOrientation(androidLandscape, 'landscape'), androidLandscape);
+  assert.deepEqual(inspectAndroidManifestOrientation(androidLandscape, 'landscape'), []);
+  const androidPortrait = applyAndroidManifestOrientation(androidLandscape, 'portrait');
+  assert.match(androidPortrait, /android:screenOrientation="portrait">/u);
+  assert.doesNotMatch(androidPortrait, /sensorLandscape/u);
+  assert.doesNotMatch(
+    applyAndroidManifestOrientation(androidLandscape, 'any'),
+    /screenOrientation/u,
+  );
+  assert.equal(inspectAndroidManifestOrientation(manifest, 'landscape')[0]?.level, 'error');
+  assert.deepEqual(
+    inspectAndroidManifestOrientation(
+      manifest.replace('android:exported="true">', 'android:exported="true" android:screenOrientation="landscape">'),
+      'landscape',
+    ).map((issue) => issue.level),
+    ['warning'],
+    'a missing appCategory is a warning',
+  );
+  assert.deepEqual(inspectAndroidManifestOrientation(manifest, undefined), []);
+  assert.throws(
+    () =>
+      applyAndroidManifestOrientation(
+        '<manifest><application></application></manifest>',
+        'portrait',
+      ),
+    /no launcher activity/u,
+  );
 }

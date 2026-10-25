@@ -156,6 +156,20 @@ for (const attribute of [
     `The Android shell must opt out of backups and Android 12+ device transfers with ${attribute}: WebView storage and game-services SharedPreferences hold save data`,
   );
 }
+assert.ok(
+  androidApplication.includes(' android:appCategory="game"'),
+  'The Android shell is a game: Android 16 keeps orientation locks on large screens only for games',
+);
+for (const [key, value] of [
+  ['ITSAppUsesNonExemptEncryption', '<false/>'],
+  ['UIRequiredDeviceCapabilities', '<string>arm64</string>'],
+] as const) {
+  assert.match(
+    read('apps/mobile-capacitor/ios/App/App/Info.plist'),
+    new RegExp(`<key>${key}</key>\\s*(?:<array>\\s*)?${value.replaceAll('/', '\\/')}`, 'u'),
+    `The iOS shell Info.plist must declare ${key} for App Store submission`,
+  );
+}
 const backupDomains = ['root', 'file', 'database', 'sharedpref', 'external'];
 const backupRules = read('apps/mobile-capacitor/android/app/src/main/res/xml/backup_rules.xml');
 const extractionRules = read(

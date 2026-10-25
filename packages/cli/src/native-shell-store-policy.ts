@@ -24,11 +24,11 @@ export interface NativeShellPolicyIssue {
  */
 export function applyIosInfoPlistStorePolicy(plist: string): string {
   let next = plist;
-  if (readPlistTopLevelValue(next, 'ITSAppUsesNonExemptEncryption') === undefined) {
+  if (lacksExportComplianceKey(next)) {
     next = insertPlistTopLevelEntry(next, 'ITSAppUsesNonExemptEncryption', '<false/>');
   }
   const capabilities = readPlistTopLevelValue(next, 'UIRequiredDeviceCapabilities');
-  if (capabilities !== undefined && /<string>\s*armv7\s*<\/string>/u.test(capabilities.xml)) {
+  if (capabilities !== undefined && requires32BitArm(capabilities.xml)) {
     const replaced = /<string>\s*arm64\s*<\/string>/u.test(capabilities.xml)
       ? capabilities.xml.replace(/\s*<string>\s*armv7\s*<\/string>/gu, '')
       : capabilities.xml
@@ -42,7 +42,7 @@ export function applyIosInfoPlistStorePolicy(plist: string): string {
 /** What a shell's release Info.plist still lacks compared with `applyIosInfoPlistStorePolicy`. */
 export function inspectIosInfoPlistStorePolicy(plist: string): readonly NativeShellPolicyIssue[] {
   const issues: NativeShellPolicyIssue[] = [];
-  if (readPlistTopLevelValue(plist, 'ITSAppUsesNonExemptEncryption') === undefined) {
+  if (lacksExportComplianceKey(plist)) {
     issues.push({
       level: 'warning',
       message: 'iOS Info.plist has no ITSAppUsesNonExemptEncryption: App Store Connect will ask '
@@ -52,13 +52,21 @@ export function inspectIosInfoPlistStorePolicy(plist: string): readonly NativeSh
     });
   }
   const capabilities = readPlistTopLevelValue(plist, 'UIRequiredDeviceCapabilities');
-  if (capabilities !== undefined && /<string>\s*armv7\s*<\/string>/u.test(capabilities.xml)) {
+  if (capabilities !== undefined && requires32BitArm(capabilities.xml)) {
     issues.push({
       level: 'warning',
       message: 'iOS Info.plist UIRequiredDeviceCapabilities lists the 32-bit armv7; use arm64.',
     });
   }
   return issues;
+}
+
+function lacksExportComplianceKey(plist: string): boolean {
+  return readPlistTopLevelValue(plist, 'ITSAppUsesNonExemptEncryption') === undefined;
+}
+
+function requires32BitArm(capabilitiesXml: string): boolean {
+  return /<string>\s*armv7\s*<\/string>/u.test(capabilitiesXml);
 }
 
 export interface PlistValue {
@@ -126,4 +134,401 @@ function insertPlistTopLevelEntry(plist: string, key: string, valueXml: string):
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+// Orientation and device family.
+
+/** The game's design orientation (`mpgd.game.json` `native.orientation`). */
+export type NativeShellOrientation = 'portrait' | 'landscape' | 'any';
+/** iOS devices the App Store offers the game on (`mpgd.targets.json` ios `metadata.iosDeviceFamily`). */
+export type IosDeviceFamily = 'universal' | 'iphone';
+
+const nativeShellOrientations: readonly NativeShellOrientation[] = ['portrait', 'landscape', 'any'];
+
+/**
+ * Reads `native.orientation` from a parsed `mpgd.game.json`; undefined when
+ * the game has not chosen one, in which case nothing is enforced.
+ */
+export function readGameNativeOrientation(gameConfig: unknown): NativeShellOrientation | undefined {
+  if (!isRecord(gameConfig) || gameConfig.native === undefined) {
+    return undefined;
+  }
+  if (!isRecord(gameConfig.native)) {
+    throw new Error('mpgd.game.json native must be an object when present.');
+  }
+  for (const key of Object.keys(gameConfig.native)) {
+    if (key !== 'orientation') {
+      throw new Error(`mpgd.game.json native.${key} is not supported.`);
+    }
+  }
+  const orientation = gameConfig.native.orientation;
+  if (orientation === undefined) {
+    return undefined;
+  }
+  if (!nativeShellOrientations.includes(orientation as NativeShellOrientation)) {
+    throw new Error("mpgd.game.json native.orientation must be 'portrait', 'landscape' or 'any'.");
+  }
+  return orientation as NativeShellOrientation;
+}
+
+/** Reads `metadata.iosDeviceFamily` of the ios target; undefined when not chosen. */
+export function readIosDeviceFamily(metadata: unknown): IosDeviceFamily | undefined {
+  if (!isRecord(metadata) || metadata.iosDeviceFamily === undefined) {
+    return undefined;
+  }
+  if (metadata.iosDeviceFamily !== 'universal' && metadata.iosDeviceFamily !== 'iphone') {
+    throw new Error("ios metadata.iosDeviceFamily must be 'universal' or 'iphone'.");
+  }
+  return metadata.iosDeviceFamily;
+}
+
+const iosPortrait = 'UIInterfaceOrientationPortrait';
+const iosPortraitUpsideDown = 'UIInterfaceOrientationPortraitUpsideDown';
+const iosLandscape = [
+  'UIInterfaceOrientationLandscapeLeft',
+  'UIInterfaceOrientationLandscapeRight',
+];
+
+/** iPhone orientations for a design orientation (upside-down portrait stays off, as in Xcode's template). */
+export function iosIphoneOrientations(orientation: NativeShellOrientation): readonly string[] {
+  if (orientation === 'portrait') {
+    return [iosPortrait];
+  }
+  if (orientation === 'landscape') {
+    return iosLandscape;
+  }
+  return [iosPortrait, ...iosLandscape];
+}
+
+/**
+ * iPad always lists all four orientations. Apple deprecated
+ * `UIRequiresFullScreen` in iPadOS 26 and asks apps to support every
+ * orientation (TN3192); iPadOS keeps a game that prefers one orientation at a
+ * consistent scene size, and the kit's runtime orientation policy letterboxes
+ * or asks the player to rotate.
+ */
+export const iosIpadOrientations: readonly string[] = [
+  iosPortrait,
+  iosPortraitUpsideDown,
+  ...iosLandscape,
+];
+
+/** Writes the iPhone and iPad orientation lists for the game's design orientation. */
+export function applyIosInfoPlistOrientation(
+  plist: string,
+  orientation: NativeShellOrientation,
+): string {
+  const array = (values: readonly string[]): string =>
+    `<array>${values.map((value) => `\n\t\t<string>${value}</string>`).join('')}\n\t</array>`;
+  return setPlistTopLevelValue(
+    setPlistTopLevelValue(
+      plist,
+      'UISupportedInterfaceOrientations',
+      array(iosIphoneOrientations(orientation)),
+    ),
+    'UISupportedInterfaceOrientations~ipad',
+    array(iosIpadOrientations),
+  );
+}
+
+function readPlistStrings(plist: string, key: string): readonly string[] | undefined {
+  const value = readPlistTopLevelValue(plist, key);
+  if (value === undefined) {
+    return undefined;
+  }
+  return [...value.xml.matchAll(/<string>\s*([^<]*?)\s*<\/string>/gu)].map(
+    (match) => match[1] ?? '',
+  );
+}
+
+export function inspectIosInfoPlistOrientation(
+  plist: string,
+  orientation: NativeShellOrientation | undefined,
+  deviceFamily: IosDeviceFamily,
+): readonly NativeShellPolicyIssue[] {
+  const issues: NativeShellPolicyIssue[] = [];
+  if (orientation !== undefined) {
+    const iphone = readPlistStrings(plist, 'UISupportedInterfaceOrientations') ?? [];
+    const portrait = iphone.some(
+      (value) => value === iosPortrait || value === iosPortraitUpsideDown,
+    );
+    const landscape = iphone.some((value) => iosLandscape.includes(value));
+    const matches = orientation === 'portrait'
+      ? portrait && !landscape
+      : orientation === 'landscape'
+        ? landscape && !portrait
+        : portrait && landscape;
+    if (!matches) {
+      issues.push({
+        level: 'error',
+        message: `iOS Info.plist UISupportedInterfaceOrientations (${iphone.join(', ') || 'none'}) `
+          + `does not match mpgd.game.json native.orientation "${orientation}".`,
+      });
+    }
+  }
+  if (deviceFamily === 'universal') {
+    const ipad = readPlistStrings(plist, 'UISupportedInterfaceOrientations~ipad');
+    if (ipad !== undefined && iosIpadOrientations.some((value) => !ipad.includes(value))) {
+      issues.push({
+        level: 'warning',
+        message: 'iOS Info.plist UISupportedInterfaceOrientations~ipad does not list all four '
+          + 'orientations; Apple asks iPad apps to support every orientation (TN3192) and '
+          + 'deprecated UIRequiresFullScreen in iPadOS 26.',
+      });
+    }
+  }
+  return issues;
+}
+
+/** `TARGETED_DEVICE_FAMILY` value: 1 = iPhone, 2 = iPad. */
+export function iosTargetedDeviceFamily(family: IosDeviceFamily): string {
+  return family === 'iphone' ? '1' : '1,2';
+}
+
+/** Sets `TARGETED_DEVICE_FAMILY` in every build configuration of the App target. */
+export function applyIosProjectDeviceFamily(project: string, family: IosDeviceFamily): string {
+  const value = `"${iosTargetedDeviceFamily(family)}"`;
+  let next = project;
+  for (const id of readAppTargetConfigurationIds(project)) {
+    const settings = locatePbxBuildSettings(next, id);
+    const body = next.slice(settings.start, settings.end);
+    const assignment = /(\bTARGETED_DEVICE_FAMILY\s*=\s*)[^;]+;/u;
+    const updated = assignment.test(body)
+      ? body.replace(assignment, `$1${value};`)
+      : `\n\t\t\t\tTARGETED_DEVICE_FAMILY = ${value};${body}`;
+    next = `${next.slice(0, settings.start)}${updated}${next.slice(settings.end)}`;
+  }
+  return next;
+}
+
+/** The App target's Release `TARGETED_DEVICE_FAMILY`, without quotes, or undefined. */
+export function readIosAppReleaseDeviceFamily(project: string): string | undefined {
+  for (const id of readAppTargetConfigurationIds(project)) {
+    const settings = locatePbxBuildSettings(project, id);
+    if (settings.name !== 'Release') {
+      continue;
+    }
+    const value = /\bTARGETED_DEVICE_FAMILY\s*=\s*([^;]+);/u.exec(
+      project.slice(settings.start, settings.end),
+    )?.[1];
+    return value?.trim().replace(/^"(.*)"$/u, '$1').replace(/\s+/gu, '');
+  }
+  return undefined;
+}
+
+export function inspectIosProjectDeviceFamily(
+  project: string,
+  family: IosDeviceFamily | undefined,
+): readonly NativeShellPolicyIssue[] {
+  if (family === undefined) {
+    return [];
+  }
+  const actual = readIosAppReleaseDeviceFamily(project);
+  const expected = iosTargetedDeviceFamily(family);
+  if (actual === expected) {
+    return [];
+  }
+  return [{
+    level: 'error',
+    message: `iOS App target Release TARGETED_DEVICE_FAMILY is ${actual ?? 'unset'}, but `
+      + `mpgd.targets.json ios metadata.iosDeviceFamily "${family}" needs "${expected}".`,
+  }];
+}
+
+const androidOrientationValues: Record<NativeShellOrientation, readonly string[]> = {
+  portrait: ['portrait', 'sensorPortrait', 'userPortrait', 'reversePortrait'],
+  landscape: ['landscape', 'sensorLandscape', 'userLandscape', 'reverseLandscape'],
+  any: ['unspecified', 'user', 'sensor', 'fullSensor', 'fullUser'],
+};
+
+/**
+ * Sets the launcher activity's `android:screenOrientation` (`portrait`,
+ * `sensorLandscape`, or none for `any`) and marks the application
+ * `android:appCategory="game"`. Android 16 ignores orientation restrictions
+ * on large screens for apps targeting API 36 unless the app is a game.
+ */
+export function applyAndroidManifestOrientation(
+  manifest: string,
+  orientation: NativeShellOrientation,
+): string {
+  const activity = findAndroidLauncherActivity(manifest);
+  if (activity === undefined) {
+    throw new Error('Android manifest has no launcher activity to orient.');
+  }
+  let tag = removeXmlAttribute(activity.tag, 'android:screenOrientation');
+  if (orientation !== 'any') {
+    const value = orientation === 'portrait' ? 'portrait' : 'sensorLandscape';
+    tag = addXmlAttribute(tag, 'android:screenOrientation', value);
+  }
+  let next = `${manifest.slice(0, activity.start)}${tag}${manifest.slice(activity.start + activity.tag.length)}`;
+  const application = /<application\b[^>]*?>/u.exec(maskXmlComments(next));
+  if (application !== null) {
+    const applicationTag = next.slice(application.index, application.index + application[0].length);
+    if (!/\sandroid:appCategory\s*=/u.test(applicationTag)) {
+      next = `${next.slice(0, application.index)}${addXmlAttribute(applicationTag, 'android:appCategory', 'game')}${
+        next.slice(application.index + applicationTag.length)}`;
+    }
+  }
+  return next;
+}
+
+export function inspectAndroidManifestOrientation(
+  manifest: string,
+  orientation: NativeShellOrientation | undefined,
+): readonly NativeShellPolicyIssue[] {
+  if (orientation === undefined) {
+    return [];
+  }
+  const activity = findAndroidLauncherActivity(manifest);
+  if (activity === undefined) {
+    return [{ level: 'error', message: 'Android manifest has no launcher activity.' }];
+  }
+  const value = readXmlAttribute(activity.tag, 'android:screenOrientation') ?? 'unspecified';
+  const issues: NativeShellPolicyIssue[] = [];
+  if (!androidOrientationValues[orientation].includes(value)) {
+    issues.push({
+      level: 'error',
+      message: `Android launcher activity android:screenOrientation="${value}" does not match `
+        + `mpgd.game.json native.orientation "${orientation}".`,
+    });
+  }
+  const application = /<application\b[^>]*?>/u.exec(maskXmlComments(manifest))?.[0] ?? '';
+  if (orientation !== 'any' && readXmlAttribute(application, 'android:appCategory') !== 'game') {
+    issues.push({
+      level: 'warning',
+      message: 'Android <application> has no android:appCategory="game": Android 16 ignores '
+        + 'the orientation lock on tablets and foldables for apps targeting API 36 unless '
+        + 'they are games.',
+    });
+  }
+  return issues;
+}
+
+function findAndroidLauncherActivity(
+  manifest: string,
+): { readonly start: number; readonly tag: string } | undefined {
+  const masked = maskXmlComments(manifest);
+  const activities = /<activity\b[^>]*?>[\s\S]*?<\/activity>|<activity\b[^>]*?\/>/gu;
+  for (const match of masked.matchAll(activities)) {
+    if (/android\.intent\.category\.LAUNCHER/u.test(match[0])) {
+      const tag = /^<activity\b[^>]*?\/?>/u.exec(match[0])?.[0] ?? '';
+      return {
+        start: match.index ?? 0,
+        tag: manifest.slice(match.index ?? 0, (match.index ?? 0) + tag.length),
+      };
+    }
+  }
+  return undefined;
+}
+
+function maskXmlComments(xml: string): string {
+  return xml.replace(/<!--[\s\S]*?-->/gu, (comment) => comment.replace(/[^\n]/gu, ' '));
+}
+
+function xmlAttribute(name: string): RegExp {
+  return new RegExp(`(\\s+)${escapeRegExp(name)}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'u');
+}
+
+function readXmlAttribute(tag: string, name: string): string | undefined {
+  const match = xmlAttribute(name).exec(tag);
+  return match === null ? undefined : (match[2] ?? match[3]);
+}
+
+function removeXmlAttribute(tag: string, name: string): string {
+  return tag.replace(xmlAttribute(name), '');
+}
+
+/** Appends an attribute before the tag closes, reusing the last attribute's separator. */
+function addXmlAttribute(tag: string, name: string, value: string): string {
+  const close = /\s*\/?>$/u.exec(tag);
+  const end = close?.index ?? tag.length;
+  const separators = [...tag.slice(0, end).matchAll(/(\s+)[A-Za-z_:][\w:.-]*\s*=/gu)];
+  const separator = separators.at(-1)?.[1] ?? ' ';
+  return `${tag.slice(0, end)}${separator}${name}="${value}"${tag.slice(end)}`;
+}
+
+interface PbxBuildSettings {
+  readonly name: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+function readAppTargetConfigurationIds(project: string): readonly string[] {
+  for (const match of project.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]*\*\/\s*=\s*\{/gu)) {
+    const body = readBraced(project, project.indexOf('{', match.index ?? 0));
+    if (/\bisa\s*=\s*PBXNativeTarget;/u.test(body.text)
+      && /\bname\s*=\s*"?App"?\s*;/u.test(body.text)) {
+      const listId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(body.text)?.[1];
+      if (listId === undefined) {
+        break;
+      }
+      const list = readPbxObjectBody(project, listId);
+      const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1] ?? '';
+      return [...configurations.matchAll(/\b([A-F0-9]+)\b/gu)].map((entry) => entry[1] ?? '');
+    }
+  }
+  throw new Error('Xcode project has no App target build configuration list.');
+}
+
+function readPbxObjectBody(project: string, id: string): string {
+  const marker = new RegExp(`\\b${id}\\s*(?:\\/\\*[^*]*\\*\\/)?\\s*=\\s*\\{`, 'u').exec(project);
+  if (marker === null) {
+    throw new Error(`Xcode project object ${id} is missing.`);
+  }
+  return readBraced(project, project.indexOf('{', marker.index)).text;
+}
+
+function locatePbxBuildSettings(project: string, id: string): PbxBuildSettings {
+  const marker = new RegExp(`\\b${id}\\s*(?:\\/\\*[^*]*\\*\\/)?\\s*=\\s*\\{`, 'u').exec(project);
+  if (marker === null) {
+    throw new Error(`Xcode build configuration ${id} is missing.`);
+  }
+  const object = readBraced(project, project.indexOf('{', marker.index));
+  const name = /\bname\s*=\s*"?([^";]+)"?\s*;/u.exec(object.text.replace(/\bbuildSettings\s*=\s*\{[\s\S]*\}\s*;/u, ''))?.[1] ?? '';
+  const settingsMarker = /\bbuildSettings\s*=\s*\{/u.exec(object.text);
+  if (settingsMarker === null) {
+    throw new Error(`Xcode build configuration ${id} has no build settings.`);
+  }
+  const settings = readBraced(
+    project,
+    object.start + settingsMarker.index + settingsMarker[0].length - 1,
+  );
+  return { name: name.trim(), start: settings.start, end: settings.end };
+}
+
+/** The text between a `{` and its matching `}` (exclusive), skipping quoted strings and comments. */
+function readBraced(source: string, open: number): { readonly text: string; readonly start: number; readonly end: number } {
+  let depth = 0;
+  let quote = false;
+  for (let index = open; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === '\\') {
+        index += 1;
+      } else if (character === '"') {
+        quote = false;
+      }
+      continue;
+    }
+    if (character === '/' && source[index + 1] === '*') {
+      const close = source.indexOf('*/', index + 2);
+      index = close === -1 ? source.length : close + 1;
+      continue;
+    }
+    if (character === '"') {
+      quote = true;
+    } else if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return { text: source.slice(open + 1, index), start: open + 1, end: index };
+      }
+    }
+  }
+  throw new Error('Xcode project has an unclosed object.');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

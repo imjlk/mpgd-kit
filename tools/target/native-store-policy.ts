@@ -3,7 +3,12 @@ import { dirname, join } from 'node:path';
 
 import { readIosReleaseInfoPlist } from '../../packages/cli/src/native-shell-identity.js';
 import {
+  inspectAndroidManifestOrientation,
+  inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
+  inspectIosProjectDeviceFamily,
+  readGameNativeOrientation,
+  readIosDeviceFamily,
   type NativeShellPolicyIssue,
 } from '../../packages/cli/src/native-shell-store-policy.js';
 
@@ -16,22 +21,40 @@ import {
 export function inspectNativeStorePolicy(input: {
   readonly platform: 'android' | 'ios';
   readonly shellApp: string;
+  /** The game root holding mpgd.game.json; omitted when the build has none. */
+  readonly gameRoot?: string;
+  /** The target's metadata from mpgd.targets.json. */
+  readonly metadata?: unknown;
 }): readonly NativeShellPolicyIssue[] {
+  const gameConfig = input.gameRoot === undefined
+    ? undefined
+    : join(input.gameRoot, 'mpgd.game.json');
+  const orientation = gameConfig !== undefined && existsSync(gameConfig)
+    ? readGameNativeOrientation(JSON.parse(readFileSync(gameConfig, 'utf8')) as unknown)
+    : undefined;
   if (input.platform === 'ios') {
     const project = join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj');
     if (!existsSync(project)) {
       return [];
     }
-    const plist = join(
-      dirname(dirname(project)),
-      readIosReleaseInfoPlist(readFileSync(project, 'utf8')),
-    );
-    if (!existsSync(plist)) {
-      return [];
+    const projectSource = readFileSync(project, 'utf8');
+    const deviceFamily = readIosDeviceFamily(input.metadata);
+    const issues = [...inspectIosProjectDeviceFamily(projectSource, deviceFamily)];
+    const plist = join(dirname(dirname(project)), readIosReleaseInfoPlist(projectSource));
+    if (existsSync(plist)) {
+      const plistSource = readFileSync(plist, 'utf8');
+      issues.push(
+        ...inspectIosInfoPlistStorePolicy(plistSource),
+        ...inspectIosInfoPlistOrientation(plistSource, orientation, deviceFamily ?? 'universal'),
+      );
     }
-    return inspectIosInfoPlistStorePolicy(readFileSync(plist, 'utf8'));
+    return issues;
   }
-  return [];
+  const manifest = join(input.shellApp, 'android/app/src/main/AndroidManifest.xml');
+  if (!existsSync(manifest)) {
+    return [];
+  }
+  return inspectAndroidManifestOrientation(readFileSync(manifest, 'utf8'), orientation);
 }
 
 export function reportNativeStorePolicy(

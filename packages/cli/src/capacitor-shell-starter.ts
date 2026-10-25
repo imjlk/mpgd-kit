@@ -33,7 +33,16 @@ import {
   sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from './notifications-starter.js';
-import { applyIosInfoPlistStorePolicy } from './native-shell-store-policy.js';
+import {
+  applyAndroidManifestOrientation,
+  applyIosInfoPlistOrientation,
+  applyIosInfoPlistStorePolicy,
+  applyIosProjectDeviceFamily,
+  readGameNativeOrientation,
+  readIosDeviceFamily,
+  type IosDeviceFamily,
+  type NativeShellOrientation,
+} from './native-shell-store-policy.js';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
@@ -854,6 +863,9 @@ export function materializeCapacitorShellStarter(
     if (platform === 'ios' && generatedNow) {
       materializeIosStorePolicy(plan.gameRoot);
     }
+    if (platform === 'android' && generatedNow) {
+      materializeAndroidStorePolicy(plan.gameRoot);
+    }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
       const relative = `${shellPath}/ios/App/App/Info-Smoke.plist`;
@@ -1026,15 +1038,76 @@ export function applyAndroidManifestBackupPolicy(manifest: string): string {
  * alone and the production build reports what it lacks.
  */
 function materializeIosStorePolicy(gameRoot: string): void {
+  const settings = readNativeShellSettings(gameRoot);
   const plistFile = safeDestination(gameRoot, `${shellPath}/ios/App/App/Info.plist`);
-  if (!existsSync(plistFile) || !lstatSync(plistFile).isFile()) {
+  if (existsSync(plistFile) && lstatSync(plistFile).isFile()) {
+    const source = readFileSync(plistFile, 'utf8');
+    let next = applyIosInfoPlistStorePolicy(source);
+    if (settings.orientation !== undefined) {
+      next = applyIosInfoPlistOrientation(next, settings.orientation);
+    }
+    if (next !== source) {
+      writeFileSync(plistFile, next);
+    }
+  }
+  if (settings.iosDeviceFamily !== undefined) {
+    const projectFile = safeDestination(
+      gameRoot,
+      `${shellPath}/ios/App/App.xcodeproj/project.pbxproj`,
+    );
+    const source = readFileSync(projectFile, 'utf8');
+    const next = applyIosProjectDeviceFamily(source, settings.iosDeviceFamily);
+    if (next !== source) {
+      writeFileSync(projectFile, next);
+    }
+  }
+}
+
+/**
+ * Orientation of a freshly generated Android project's launcher activity and
+ * `android:appCategory="game"`; an existing project is only reported by the
+ * production build.
+ */
+function materializeAndroidStorePolicy(gameRoot: string): void {
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/android/app/src/main/AndroidManifest.xml`,
+  );
+  if (!existsSync(manifestFile) || !lstatSync(manifestFile).isFile()) {
     return;
   }
-  const source = readFileSync(plistFile, 'utf8');
-  const next = applyIosInfoPlistStorePolicy(source);
+  const source = readFileSync(manifestFile, 'utf8');
+  const next = applyAndroidManifestOrientation(
+    source,
+    readNativeShellSettings(gameRoot).orientation ?? 'any',
+  );
   if (next !== source) {
-    writeFileSync(plistFile, next);
+    writeFileSync(manifestFile, next);
   }
+}
+
+/** The game's design orientation (mpgd.game.json) and iOS device family (ios target metadata). */
+function readNativeShellSettings(gameRoot: string): {
+  readonly orientation?: NativeShellOrientation;
+  readonly iosDeviceFamily?: IosDeviceFamily;
+} {
+  const gameConfigFile = path.join(gameRoot, 'mpgd.game.json');
+  const orientation = existsSync(gameConfigFile)
+    ? readGameNativeOrientation(
+        parseJsonObject(readFileSync(gameConfigFile, 'utf8'), 'mpgd.game.json'),
+      )
+    : undefined;
+  const targets = readJsonObject(path.join(gameRoot, 'mpgd.targets.json'));
+  const ios = isRecordValue(targets.targets) ? targets.targets.ios : undefined;
+  const iosDeviceFamily = readIosDeviceFamily(isRecordValue(ios) ? ios.metadata : undefined);
+  return {
+    ...(orientation === undefined ? {} : { orientation }),
+    ...(iosDeviceFamily === undefined ? {} : { iosDeviceFamily }),
+  };
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function materializeIosArchiveScheme(gameRoot: string): void {

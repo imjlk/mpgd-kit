@@ -429,6 +429,11 @@ try {
     'a freshly generated Android project opts out of backups and device transfers',
   );
   assert.ok(generatedManifest.includes(` ${toolsNamespace}`), 'the tools namespace is bound');
+  assert.match(
+    generatedManifest,
+    /<application\b[^>]*\sandroid:appCategory="game"[^>]*>/u,
+    'a freshly generated Android project is a game, which keeps its orientation on large screens',
+  );
   const generatedXml = path.join(root, 'apps/mobile-capacitor/android/app/src/main/res/xml');
   assert.equal(
     readFileSync(path.join(generatedXml, 'backup_rules.xml'), 'utf8'),

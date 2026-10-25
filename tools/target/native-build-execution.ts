@@ -75,7 +75,12 @@ export async function executeNativeTargetBuild(input: NativeBuildExecutionInput)
   // the reserved numbers are written into the stage and checked there.
   assertNativeReleaseIdentity({ ...identityInput, versionSource });
   reportNativeStorePolicy(
-    inspectNativeStorePolicy({ platform, shellApp }),
+    inspectNativeStorePolicy({
+      platform,
+      shellApp,
+      gameRoot: input.targetPath(target.gameApp),
+      metadata: target.metadata,
+    }),
     profile === 'production',
   );
   const stage = createNativeShellStage({ shellApp, webDir });
