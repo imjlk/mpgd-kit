@@ -912,8 +912,11 @@ the purchase verifier, one per environment.
   `0009_store_server.sql`). The outcome names the player, the grant, and the
   reversed `revoke` entry, and the Worker logs it at warn. A store without
   notes still answers 200 with `recorded: false`; the host's log is then the
-  only record. A `REFUND_REVERSED` for a grant that was never revoked here
-  is `ignored` (`APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED`).
+  only record. A `REFUND_REVERSED` for a grant that is not revoked yet is
+  `retry` (503, `APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED`), so a refund
+  still being redelivered is applied first; one for a grant revoked for
+  another reason than an App Store refund is `ignored`
+  (`APP_STORE_NOTIFICATION_REVOCATION_NOT_REFUND`).
 - Every other type (`TEST`, `CONSUMPTION_REQUEST`, `REFUND_DECLINED`,
   subscription and summary notifications), a transaction this ledger never
   granted, and a refund that arrives before its grant are `ignored`. A
@@ -953,7 +956,7 @@ await store.recordEntitlementGrant({
   grantId: grant.grantId,
   idempotencyKey: `regrant:${note.noteId}`,
   grantedAt: new Date().toISOString(),
-  grant: grant.grant,
+  ...(grant.grant === undefined ? {} : { grant: grant.grant }),
   payload: {
     regrantOf: note.ledgerEntryId,
     reversedRevocation: note.revocationLedgerEntryId ?? '',
@@ -964,6 +967,9 @@ await store.recordEntitlementGrant({
 
 Entitlement reads (`listActiveEntitlementTransactions`) then count the new
 grant; the reversed one stays reversed, so both entries keep the history.
+The `admin` grant carries no App Store evidence, so a later refund of the
+same transaction finds only the original, already reversed grant: revoke
+the re-grant by hand if Apple refunds the purchase again.
 
 **Google Play voided purchases** (`@mpgd/game-services/google-play-store-server`).
 `sweepGooglePlayVoidedPurchases` reads

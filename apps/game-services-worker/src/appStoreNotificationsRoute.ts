@@ -123,10 +123,20 @@ export function createAppStoreNotificationsFetchHandler(input: {
           outcome.notificationUUID,
           outcome.recorded ? '(ledger note kept)' : '(no ledger note: this log is the record)',
         );
-        return json(outcome, appStoreServerNotificationHttpStatus(outcome));
+        // Apple ignores the body: the player and grant stay in the log only.
+        return json(
+          {
+            status: outcome.status,
+            notificationUUID: outcome.notificationUUID,
+            recorded: outcome.recorded,
+            alreadyRecorded: outcome.alreadyRecorded,
+          },
+          appStoreServerNotificationHttpStatus(outcome),
+        );
       }
-      // The status, reason, and notification id trace a delivery; no player
-      // data is logged.
+      // The status, reason, and notification id trace a delivery; the
+      // refund-reversal warning above is the one log that names the player,
+      // for support. No purchase token or JWS is logged.
       console.log(
         'App Store notification',
         environment,

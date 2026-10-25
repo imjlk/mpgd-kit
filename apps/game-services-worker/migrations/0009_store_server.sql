@@ -37,10 +37,16 @@ CREATE TABLE IF NOT EXISTS entitlement_notes (
   revocation_ledger_entry_id TEXT,
   recorded_at TEXT NOT NULL,
   payload_json TEXT NOT NULL,
+  -- An audit record support re-grants from: like the revoke entries (0006),
+  -- it keeps the grant row referenced, so a deletion removes notes first.
   FOREIGN KEY (ledger_entry_id)
     REFERENCES entitlement_transactions (ledger_entry_id)
     ON UPDATE RESTRICT
-    ON DELETE CASCADE
+    ON DELETE RESTRICT,
+  FOREIGN KEY (revocation_ledger_entry_id)
+    REFERENCES entitlement_revocations (ledger_entry_id)
+    ON UPDATE RESTRICT
+    ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_entitlement_notes_grant

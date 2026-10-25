@@ -141,15 +141,16 @@ try {
     answer = { ...refundAnswer, notificationType: 'REFUND_REVERSED', notificationUUID: 'worker-reversed-1' };
     const reversed = await post(appStoreNotificationPaths.Production, payload);
     assert.equal(reversed.status, 200);
-    assert.deepEqual(await reversed.json(), {
-      status: 'refund_reversed',
-      notificationUUID: 'worker-reversed-1',
-      playerId: 'ios-player',
-      ledgerEntryId: grant.ledgerEntryId,
-      revocationLedgerEntryId: revocation?.ledgerEntryId,
-      recorded: true,
-      alreadyRecorded: false,
-    });
+    assert.deepEqual(
+      await reversed.json(),
+      {
+        status: 'refund_reversed',
+        notificationUUID: 'worker-reversed-1',
+        recorded: true,
+        alreadyRecorded: false,
+      },
+      'the answer to Apple names no player or grant',
+    );
     const reversedAgain = await post(appStoreNotificationPaths.Production, payload);
     assert.equal(
       (await reversedAgain.json() as { alreadyRecorded: boolean }).alreadyRecorded,

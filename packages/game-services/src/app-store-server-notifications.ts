@@ -231,7 +231,8 @@ export async function handleAppStoreServerNotification(
   }
 
   const now = input.now ?? (() => new Date().toISOString());
-  if (isRefundReversal || reason === undefined) {
+  if (reason === undefined) {
+    // Only REFUND_REVERSED gets past the type gate without a revocation reason.
     return recordRefundReversal(input.store, {
       notificationUUID,
       grant,
@@ -299,11 +300,18 @@ async function recordRefundReversal(
 ): Promise<AppStoreServerNotificationOutcome> {
   const [revocation] = await findEntitlementRevocationsChunked(store, [input.grant.ledgerEntryId]);
   if (revocation === undefined) {
-    // The grant is still active (the refund never reached this ledger), so
-    // the reversal changes nothing.
+    // The grant is still active. Either the refund never applied here, or
+    // its delivery is still being retried and could revoke the grant after
+    // this reversal: ask Apple to redeliver (production retries for 72 hours)
+    // so the reversal is seen after the refund.
+    return { status: 'retry', reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED' };
+  }
+  if (revocation.reason !== 'refund' || revocation.payload.store !== 'app-store') {
+    // A REFUND_REVERSED only undoes an App Store refund; a grant revoked for
+    // another reason (REVOKE, a chargeback, an admin) stays revoked silently.
     return {
       status: 'ignored',
-      reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED',
+      reason: 'APP_STORE_NOTIFICATION_REVOCATION_NOT_REFUND',
       notificationUUID: input.notificationUUID,
     };
   }

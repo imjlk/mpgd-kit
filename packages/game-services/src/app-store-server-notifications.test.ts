@@ -168,8 +168,6 @@ function handle(
   await grantFor(store, consumable);
   for (const [type, reason] of [
     ['TEST', 'APP_STORE_NOTIFICATION_TYPE_UNHANDLED'],
-    // The grant was never revoked here: the reversal changes nothing.
-    ['REFUND_REVERSED', 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED'],
     ['CONSUMPTION_REQUEST', 'APP_STORE_NOTIFICATION_TYPE_UNHANDLED'],
   ] as const) {
     const outcome = await handle(store, verifierOf(notification({ notificationType: type })));
@@ -422,6 +420,19 @@ function handle(
     'nothing is re-granted: the grant stays reversed until the game re-grants it',
   );
 
+  // Shared access ending and its reversal never touch the purchaser's grant.
+  const sharedReversal = await handle(
+    store,
+    verifierOf(
+      notification({
+        notificationType: 'REFUND_REVERSED',
+        notificationUUID: 'uuid-reversed-shared',
+        transaction: { ...consumable, inAppOwnershipType: 'FAMILY_SHARED' },
+      }),
+    ),
+  );
+  assert.equal(sharedReversal.status, 'ignored');
+
   // A store without notes still answers 200; only the host's log keeps it.
   const noteless: GameServicesStore = {
     recordEntitlementGrant: (input) => store.recordEntitlementGrant(input),
@@ -451,6 +462,45 @@ function handle(
       payload: {},
     }),
     /unknown grant/u,
+  );
+}
+
+{
+  // A reversal before its refund applied asks Apple to redeliver; one for a
+  // grant revoked for another reason is ignored.
+  const store = createInMemoryGameServicesStore();
+  const grant = await grantFor(store, consumable);
+  const early = await handle(
+    store,
+    verifierOf(
+      notification({ notificationType: 'REFUND_REVERSED', notificationUUID: 'uuid-early' }),
+    ),
+  );
+  assert.deepEqual(early, { status: 'retry', reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_REVOKED' });
+  assert.equal(appStoreServerNotificationHttpStatus(early), 503);
+  await store.recordEntitlementRevocation({
+    playerId: 'player-1',
+    revokesLedgerEntryId: grant.ledgerEntryId,
+    idempotencyKey: 'support-revoke',
+    reason: 'admin',
+    revokedAt: '2026-10-24T00:00:00.000Z',
+    payload: { target: 'ios' },
+  });
+  assert.deepEqual(
+    await handle(
+      store,
+      verifierOf(notification({ notificationType: 'REFUND_REVERSED', notificationUUID: 'uuid-admin' })),
+    ),
+    {
+      status: 'ignored',
+      reason: 'APP_STORE_NOTIFICATION_REVOCATION_NOT_REFUND',
+      notificationUUID: 'uuid-admin',
+    },
+  );
+  assert.equal(
+    (await store.findEntitlementNotes({ ledgerEntryIds: [grant.ledgerEntryId] })).length,
+    0,
+    'no note for a revocation Apple did not reverse',
   );
 }
 
