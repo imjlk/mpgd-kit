@@ -316,8 +316,10 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
             WHERE player_id = ?1 AND source <> 'purchase'`)
           .bind(playerId),
       ];
+      // The set-based deletes are statements [setBasedStart, setBasedEnd),
+      // after the PRAGMA.
       const setBasedStart = 1;
-      const setBasedCount = statements.length;
+      const setBasedEnd = statements.length;
       for (const note of notes) {
         statements.push(session.prepare('DELETE FROM entitlement_notes WHERE note_id = ?').bind(note.note_id));
       }
@@ -422,7 +424,7 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
       // Every selected ledger row is kept (rewritten); deleted rows are the
       // set-based and by-player statements' changes.
       return {
-        deleted: changes(setBasedStart, setBasedCount) + changes(byPlayerStart, results.length),
+        deleted: changes(setBasedStart, setBasedEnd) + changes(byPlayerStart, results.length),
         retained,
       };
     },

@@ -532,7 +532,11 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       retained += 1;
     }
     for (const note of [...this.notesById.values()]) {
-      if (note.playerId !== playerId && !grantIds.has(note.ledgerEntryId)) {
+      // Also a note (of another player) pointing at a revocation rewritten
+      // above, as the D1 eraser selects it.
+      const aboutKeptRevocation = note.revocationLedgerEntryId !== undefined
+        && keptRevocationIds.has(note.revocationLedgerEntryId);
+      if (note.playerId !== playerId && !grantIds.has(note.ledgerEntryId) && !aboutKeptRevocation) {
         continue;
       }
       const keptGrantId = keptGrantIds.get(note.ledgerEntryId)

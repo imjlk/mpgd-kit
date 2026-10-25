@@ -209,6 +209,47 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     ['player-2'],
   );
 
+  // A note of another player pointing at a revocation filed under player-1
+  // for that player's grant moves with the rewritten revocation.
+  {
+    const crossStore = createInMemoryGameServicesStore();
+    const otherGrant = await crossStore.recordEntitlementGrant({
+      source: 'purchase',
+      playerId: 'player-2',
+      grantId: 'COINS_100',
+      idempotencyKey: 'player-2-purchase',
+      grantedAt: '2026-10-20T00:00:00.000Z',
+      payload: { target: 'ios', store: 'app-store', platformTransactionId: 'tx-2' },
+    });
+    const cross = await crossStore.recordEntitlementRevocation({
+      playerId: 'player-1',
+      revokesLedgerEntryId: otherGrant.ledgerEntryId,
+      idempotencyKey: 'support:cross',
+      reason: 'admin',
+      revokedAt: '2026-10-21T00:00:00.000Z',
+      payload: {},
+    });
+    await crossStore.recordEntitlementNote({
+      noteId: 'cross-note',
+      kind: 'refund_reversed',
+      playerId: 'player-2',
+      ledgerEntryId: otherGrant.ledgerEntryId,
+      revocationLedgerEntryId: cross.ledgerEntryId,
+      recordedAt: '2026-10-22T00:00:00.000Z',
+      payload: {},
+    });
+    await crossStore.erasePlayerData({ playerId: 'player-1', retainedPlayerId: 'deleted:cross' });
+    const [rewritten] = await crossStore.findEntitlementRevocations({
+      ledgerEntryIds: [otherGrant.ledgerEntryId],
+    });
+    const [note] = await crossStore.findEntitlementNotes({
+      ledgerEntryIds: [otherGrant.ledgerEntryId],
+    });
+    assert.equal(rewritten?.playerId, 'deleted:cross');
+    assert.equal(note?.revocationLedgerEntryId, rewritten?.ledgerEntryId);
+    assert.equal(JSON.stringify([rewritten, note]).includes('player-1'), false);
+  }
+
   // Idempotent: nothing of the player is left.
   assert.deepEqual(
     await store.erasePlayerData({ playerId: 'player-1', retainedPlayerId: 'deleted:deletion-2' }),

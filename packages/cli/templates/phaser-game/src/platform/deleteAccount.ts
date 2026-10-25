@@ -60,8 +60,8 @@ const signOutSteps = new Set<SignOutStep>();
  */
 let answerLost = false;
 
-/** The PlayScene run checkpoint's storage key. */
-const starterRunKey = 'starter-run';
+/** The PlayScene run checkpoint's storage key; the scene saves under it. */
+export const starterRunKey = 'starter-run';
 
 /** A local sign-out step that hangs is given up on after this long. */
 const signOutStepTimeoutMs = 5_000;
