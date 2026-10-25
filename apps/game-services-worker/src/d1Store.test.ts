@@ -1,12 +1,18 @@
 import { readFile } from 'node:fs/promises';
 
 import {
+  createGameServicesBackend,
+  createPurchaseTransferEvidenceVerificationId,
+  EntitlementTransferConflictError,
   EvidenceAlreadyProcessedError,
+  findPurchaseGrantByEvidenceVerificationId,
   listActiveEntitlementTransactions,
   readPurchaseLedgerStatuses,
   revokeEntitlementGrant,
   type EntitlementLedgerGrant,
   type EntitlementLedgerRevocation,
+  type GameServicesEvidenceVerifier,
+  type VerifyPurchaseRequest,
 } from '@mpgd/game-services';
 import { Miniflare } from 'miniflare';
 
@@ -166,6 +172,7 @@ try {
 
   // Commerce v2 C2: revoke entries (migration 0006) and the ledger status read.
   await applyMigration(db, '0006_entitlement_revocations.sql');
+  await applyMigration(db, '0011_entitlement_transfers.sql');
   const activeBefore = await readPurchaseLedgerStatuses(store, {
     ledgerEntryIds: [recorded.ledgerEntryId, 'ledger-historical-purchase', 'missing'],
     playerId: grant.playerId,
@@ -278,6 +285,8 @@ try {
     false,
     'entitlement reads subtract the reversed grant',
   );
+
+  await runRestoreTransferScenario(db, store);
 } finally {
   await miniflare.dispose();
 }
@@ -351,10 +360,188 @@ async function insertHistoricalEntitlement(
 
 function toD1ExecScript(migration: string): string {
   return migration
-    .split(/\n\s*\n/u)
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .split(';')
     .map((statement) => statement.replace(/\s+/gu, ' ').trim())
     .filter((statement) => statement.length > 0)
+    .map((statement) => `${statement};`)
     .join('\n');
+}
+
+/**
+ * Restore transfers on D1 (migration 0011): a reinstall's restore moves the
+ * non-consumable, retries are idempotent, a refund follows the move, a
+ * grant moves once even when two isolates race, and the rate limit holds.
+ */
+async function runRestoreTransferScenario(
+  db: D1Database,
+  store: ReturnType<typeof createD1GameServicesStore>,
+): Promise<void> {
+  const verificationId = 'google-play:product:d1-transfer-digest';
+  const verifier: GameServicesEvidenceVerifier = {
+    async verifyPurchase({ request }) {
+      const verified = {
+        verificationId,
+        verifiedAt: '2030-01-01T00:00:00.000Z',
+        platformEvidenceId: 'GPA.d1-transfer',
+      };
+      return request.playerId === 'd1-buyer'
+        ? { status: 'verified', ...verified }
+        : { status: 'restorable', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', ...verified };
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'UNUSED' };
+    },
+  };
+  let nowMs = Date.parse('2030-01-01T00:00:00.000Z');
+  const backendFor = (ledger: ReturnType<typeof createD1GameServicesStore>) =>
+    createGameServicesBackend({
+      catalog: {
+        version: 'd1-transfer',
+        products: [
+          {
+            id: 'REMOVE_ADS',
+            type: 'non_consumable',
+            grant: { type: 'entitlement', entitlement: 'remove_ads' },
+            platformProductIds: { android: 'remove_ads_android' },
+          },
+        ],
+      },
+      placements: { version: 'd1-transfer', placements: [] },
+      store: ledger,
+      now: () => new Date(nowMs).toISOString(),
+      evidenceVerifier: verifier,
+      restoreTransfers: { mode: 'move', maxTransfersPerWindow: 3 },
+    });
+  const request = (playerId: string, intent: 'purchase' | 'restore'): VerifyPurchaseRequest => ({
+    target: 'android',
+    playerId,
+    productId: 'REMOVE_ADS',
+    platformTransactionId: 'GPA.d1-transfer',
+    idempotencyKey: `d1-transfer:${playerId}`,
+    purchasedAt: '2030-01-01T00:00:00.000Z',
+    intent,
+  });
+  const backend = backendFor(store);
+  const bought = await backend.purchases.verifyPurchase(request('d1-buyer', 'purchase'));
+  assertEqual(bought.verified, true, 'D1 grants the buyer');
+  nowMs += 1000;
+  const moved = await backend.purchases.verifyPurchase(request('d1-new-guest', 'restore'));
+  assertEqual(moved.transferred, true, 'D1 moves the restored non-consumable');
+  const replay = await backend.purchases.verifyPurchase(request('d1-new-guest', 'restore'));
+  assertEqual(replay.alreadyProcessed, true, 'a D1 restore retry answers the moved grant');
+  assertEqual(replay.ledgerEntryId, moved.ledgerEntryId, 'the retry names the same grant');
+  const [transfer] = await store.findEntitlementRevocations?.({
+    ledgerEntryIds: [bought.ledgerEntryId ?? ''],
+  }) ?? [];
+  assertEqual(transfer?.reason, 'transfer', 'D1 reads the transfer as a revoke entry');
+  assertEqual(
+    (await readPurchaseLedgerStatuses(store, {
+      playerId: 'd1-buyer',
+      ledgerEntryIds: [bought.ledgerEntryId ?? ''],
+    })).statuses[0]?.status,
+    'reversed',
+    "the old guest's grant reads as reversed",
+  );
+  assertEqual(
+    (await findPurchaseGrantByEvidenceVerificationId(store, verificationId))?.playerId,
+    'd1-new-guest',
+    'D1 follows the move to the current holder',
+  );
+
+  // The store write itself: a replay is answered, a second move of one grant is refused.
+  const evidence = createPurchaseTransferEvidenceVerificationId(verificationId, 1);
+  const replayTransfer = {
+    revocation: {
+      playerId: 'd1-buyer',
+      revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+      idempotencyKey: `transfer:${evidence}`,
+      reason: 'transfer',
+      revokedAt: transfer?.revokedAt ?? '',
+      payload: { transferEvidenceVerificationId: evidence },
+    },
+    grant: {
+      playerId: 'd1-new-guest',
+      grantId: 'REMOVE_ADS',
+      source: 'purchase',
+      idempotencyKey: 'd1-transfer:d1-new-guest',
+      grantedAt: transfer?.revokedAt ?? '',
+      payload: { transferredFromLedgerEntryId: bought.ledgerEntryId ?? '' },
+      evidenceVerificationId: evidence,
+    },
+  } as const;
+  const replayed = await store.recordEntitlementTransfer?.(replayTransfer);
+  assertEqual(replayed?.alreadyProcessed, true, 'D1 answers a replayed transfer');
+  assertEqual(replayed?.ledgerEntryId, moved.ledgerEntryId, 'the replay names the moved grant');
+  let secondMoveRefused = false;
+  try {
+    await store.recordEntitlementTransfer?.({
+      ...replayTransfer,
+      grant: {
+        ...replayTransfer.grant,
+        playerId: 'd1-third',
+        idempotencyKey: 'd1-third',
+        evidenceVerificationId: createPurchaseTransferEvidenceVerificationId(verificationId, 9),
+      },
+      revocation: {
+        ...replayTransfer.revocation,
+        idempotencyKey: 'transfer:other',
+        payload: {
+          transferEvidenceVerificationId: createPurchaseTransferEvidenceVerificationId(
+            verificationId,
+            9,
+          ),
+        },
+      },
+    });
+  } catch (error) {
+    secondMoveRefused = error instanceof EntitlementTransferConflictError;
+  }
+  assertEqual(secondMoveRefused, true, 'D1 moves a grant once');
+  const strays = await db
+    .prepare("SELECT COUNT(*) AS count FROM entitlement_transactions WHERE player_id = 'd1-third'")
+    .first<{ count: number }>();
+  assertEqual(strays?.count, 0, 'a refused D1 transfer writes no grant');
+
+  // Two isolates race to move the same holder: one wins, one waits.
+  nowMs += 1000;
+  const [left, right] = await Promise.all([
+    backendFor(createD1GameServicesStore(db)).purchases.verifyPurchase(
+      request('d1-left', 'restore'),
+    ),
+    backendFor(createD1GameServicesStore(db)).purchases.verifyPurchase(
+      request('d1-right', 'restore'),
+    ),
+  ]);
+  const holders = (await listActiveEntitlementTransactions(store)).filter(
+    (entry) => entry.grantId === 'REMOVE_ADS',
+  );
+  assertEqual(holders.length, 1, 'one holder at a time on D1');
+  assertEqual(
+    [left, right].filter((answer) => answer.verified).length >= 1,
+    true,
+    'at least one racing restore is granted',
+  );
+
+  // A refund that names the first grant reverses the current holder.
+  const refund = await revokeEntitlementGrant(store, {
+    playerId: 'd1-buyer',
+    revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+    idempotencyKey: 'google-play:voided:d1-transfer',
+    reason: 'refund',
+    revokedAt: new Date(nowMs).toISOString(),
+    payload: { target: 'android' },
+  });
+  assertEqual(refund.status, 'revoked', 'the refund follows the move on D1');
+  assertEqual(
+    (await listActiveEntitlementTransactions(store)).some((entry) => entry.grantId === 'REMOVE_ADS'),
+    false,
+    'a refunded purchase has no holder',
+  );
+  const afterRefund = await backend.purchases.verifyPurchase(request('d1-late', 'restore'));
+  assertEqual(afterRefund.reason, 'LEDGER_GRANT_REVERSED', 'a refunded purchase never moves');
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

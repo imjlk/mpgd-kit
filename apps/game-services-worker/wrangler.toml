@@ -161,6 +161,14 @@ head_sampling_rate = 1
 # GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME = "com.example.game"
 # GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"
 #
+# Restore transfers: a verified restore of a non-consumable that Google Play
+# (obfuscatedAccountId) or the App Store (appAccountToken) binds to an earlier
+# guest moves the grant to the restoring guest, at most three times per
+# purchase in 30 days (docs/GAME_SERVICES_BACKEND.md#restore-transfers). On by
+# default; apply migration 0011_entitlement_transfers.sql first. "refuse"
+# turns it off.
+# GAME_SERVICES_RESTORE_TRANSFERS = "refuse"
+#
 # [[services]]
 # binding = "GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH"
 # service = "game-play-publisher-auth"

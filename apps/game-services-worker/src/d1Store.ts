@@ -3,20 +3,24 @@ import {
   assertEntitlementLedgerNote,
   assertEntitlementLedgerResult,
   assertEntitlementLedgerRevocation,
+  assertEntitlementLedgerTransfer,
   assertEntitlementRevocationTransaction,
   assertLeaderboardScoreTransaction,
   assertProductGrantTransaction,
   assertRecordLeaderboardScoreRequest,
   assertRecordLeaderboardScoreResponse,
   chunkLedgerEntryIds,
+  EntitlementTransferConflictError,
   EvidenceAlreadyProcessedError,
   RevocationKeyConflictError,
   type EntitlementLedgerGrant,
   type EntitlementLedgerNote,
   type EntitlementLedgerResult,
   type EntitlementLedgerRevocation,
+  type EntitlementLedgerTransfer,
   type EntitlementPlatformEvidenceIdentity,
   type EntitlementRevocationTransaction,
+  type EntitlementTransferResult,
   type GameServicesStore,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
@@ -55,6 +59,16 @@ type RevocationRow = {
   revoked_at: string;
   payload_json: string;
   evidence_verification_id: string | null;
+};
+
+type TransferRow = {
+  ledger_entry_id: string;
+  player_id: string;
+  revokes_ledger_entry_id: string;
+  idempotency_key: string;
+  revoked_at: string;
+  payload_json: string;
+  to_ledger_entry_id: string;
 };
 
 type LeaderboardRow = {
@@ -210,8 +224,13 @@ class D1GameServicesStore implements GameServicesStore {
     input: EntitlementLedgerRevocation,
   ): Promise<EntitlementLedgerResult> {
     const revocation = assertEntitlementLedgerRevocation(input);
+    if (revocation.reason === 'transfer') {
+      throw new Error('Transfer entries are written by recordEntitlementTransfer.');
+    }
     const ledgerEntryId = createRevocationLedgerEntryId(revocation);
 
+    // A grant a transfer moved (migration 0011) is not reversed a second time:
+    // the insert is skipped and the transfer entry answered below.
     const result = await this.db
       .prepare(
         `INSERT OR IGNORE INTO entitlement_revocations (
@@ -223,7 +242,11 @@ class D1GameServicesStore implements GameServicesStore {
           revoked_at,
           payload_json,
           evidence_verification_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM entitlement_transfers WHERE revokes_ledger_entry_id = ?
+        )`,
       )
       .bind(
         ledgerEntryId,
@@ -234,6 +257,7 @@ class D1GameServicesStore implements GameServicesStore {
         revocation.revokedAt,
         JSON.stringify(revocation.payload),
         revocation.evidenceVerificationId ?? null,
+        revocation.revokesLedgerEntryId,
       )
       .run();
 
@@ -263,9 +287,168 @@ class D1GameServicesStore implements GameServicesStore {
         alreadyProcessed: true,
       });
     }
+    const transfer = await this.db
+      .prepare('SELECT * FROM entitlement_transfers WHERE revokes_ledger_entry_id = ?')
+      .bind(revocation.revokesLedgerEntryId)
+      .first<TransferRow>();
+    if (transfer !== null) {
+      return assertEntitlementLedgerResult({
+        ledgerEntryId: transfer.ledger_entry_id,
+        alreadyProcessed: true,
+      });
+    }
     // Neither the key nor the grant holds the row: the insert was ignored by
     // the authority identity index.
     throw new EvidenceAlreadyProcessedError();
+  }
+
+  /**
+   * Migration 0011: the receiving player's grant and the transfer entry in
+   * one batch (one transaction). The transfer insert reads the grant it
+   * moves inside the same statement and turns NULL (a NOT NULL failure that
+   * rolls the batch back) when that grant is unknown, another player's, or
+   * already reversed by a revoke entry; the unique keys refuse a second
+   * move of it, a taken grant key, evidence id, or platform evidence.
+   */
+  async recordEntitlementTransfer(
+    input: EntitlementLedgerTransfer,
+  ): Promise<EntitlementTransferResult> {
+    const { revocation, grant } = assertEntitlementLedgerTransfer(input);
+    const grantLedgerEntryId = createEntitlementLedgerEntryId(grant);
+    const transferLedgerEntryId = createRevocationLedgerEntryId(revocation);
+    const session = this.db.withSession('first-primary');
+    try {
+      await session.batch([
+        session
+          .prepare(
+            `INSERT INTO entitlement_transactions (
+              ledger_entry_id,
+              player_id,
+              grant_id,
+              source,
+              idempotency_key,
+              granted_at,
+              grant_json,
+              payload_json,
+              evidence_verification_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            grantLedgerEntryId,
+            grant.playerId,
+            grant.grantId,
+            grant.source,
+            grant.idempotencyKey,
+            grant.grantedAt,
+            grant.grant === undefined ? null : JSON.stringify(grant.grant),
+            JSON.stringify(grant.payload),
+            grant.evidenceVerificationId ?? null,
+          ),
+        session
+          .prepare(
+            `INSERT INTO entitlement_transfers (
+              ledger_entry_id,
+              player_id,
+              revokes_ledger_entry_id,
+              idempotency_key,
+              revoked_at,
+              payload_json,
+              to_ledger_entry_id
+            ) VALUES (
+              ?,
+              ?,
+              (
+                SELECT ledger_entry_id FROM entitlement_transactions
+                WHERE ledger_entry_id = ?
+                  AND player_id = ?
+                  AND source = 'purchase'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?
+                  )
+              ),
+              ?,
+              ?,
+              ?,
+              ?
+            )`,
+          )
+          .bind(
+            transferLedgerEntryId,
+            revocation.playerId,
+            revocation.revokesLedgerEntryId,
+            revocation.playerId,
+            revocation.revokesLedgerEntryId,
+            revocation.idempotencyKey,
+            revocation.revokedAt,
+            JSON.stringify(revocation.payload),
+            grantLedgerEntryId,
+          ),
+      ]);
+      return {
+        ledgerEntryId: grantLedgerEntryId,
+        revocationLedgerEntryId: transferLedgerEntryId,
+        alreadyProcessed: false,
+      };
+    } catch (error) {
+      const recordedGrant = await this.findEntitlementTransactionByIdempotency(grant, session);
+      const recordedTransfer = await session
+        .prepare('SELECT * FROM entitlement_transfers WHERE player_id = ? AND idempotency_key = ?')
+        .bind(revocation.playerId, revocation.idempotencyKey)
+        .first<TransferRow>();
+      if (
+        recordedGrant !== undefined
+        && recordedTransfer !== null
+        && recordedGrant.evidenceVerificationId === grant.evidenceVerificationId
+        && recordedTransfer.revokes_ledger_entry_id === revocation.revokesLedgerEntryId
+        && recordedTransfer.to_ledger_entry_id === recordedGrant.ledgerEntryId
+      ) {
+        return {
+          ledgerEntryId: recordedGrant.ledgerEntryId,
+          revocationLedgerEntryId: recordedTransfer.ledger_entry_id,
+          alreadyProcessed: true,
+        };
+      }
+      const moved = await session
+        .prepare('SELECT * FROM entitlement_transactions WHERE ledger_entry_id = ?')
+        .bind(revocation.revokesLedgerEntryId)
+        .first<EntitlementRow>();
+      if (moved === null) {
+        throw new Error('Entitlement transfer references an unknown grant.');
+      }
+      const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+      const reversed = await session
+        .prepare(
+          `SELECT 1 AS found FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?
+           UNION ALL
+           SELECT 1 AS found FROM entitlement_transfers WHERE revokes_ledger_entry_id = ?`,
+        )
+        .bind(revocation.revokesLedgerEntryId, revocation.revokesLedgerEntryId)
+        .first<{ found: number }>();
+      if (
+        moved.player_id !== revocation.playerId
+        || moved.source !== 'purchase'
+        || reversed !== null
+        || recordedGrant !== undefined
+        || recordedTransfer !== null
+        || (
+          grant.evidenceVerificationId !== undefined
+          && await this.findEntitlementTransactionByEvidenceVerificationId({
+            source: grant.source,
+            evidenceVerificationId: grant.evidenceVerificationId,
+          }, session) !== undefined
+        )
+        || (
+          platformEvidenceIdentity !== undefined
+          && await this.findEntitlementTransactionByPlatformEvidence(
+            platformEvidenceIdentity,
+            session,
+          ) !== undefined
+        )
+      ) {
+        throw new EntitlementTransferConflictError();
+      }
+      throw error;
+    }
   }
 
   async findEntitlementRevocations(input: {
@@ -282,6 +465,16 @@ class D1GameServicesStore implements GameServicesStore {
         .bind(...chunk)
         .all<RevocationRow>();
       revocations.push(...results.map(revocationFromRow));
+      // Transfers (migration 0011) are revoke entries with reason `transfer`;
+      // a second query keeps each within D1's bound-parameter cap.
+      const transfers = await this.db
+        .prepare(
+          `SELECT * FROM entitlement_transfers
+           WHERE revokes_ledger_entry_id IN (${placeholders})`,
+        )
+        .bind(...chunk)
+        .all<TransferRow>();
+      revocations.push(...transfers.results.map(transferFromRow));
     }
     return revocations.sort((left, right) =>
       left.revokedAt.localeCompare(right.revokedAt)
@@ -524,6 +717,18 @@ function revocationFromRow(row: RevocationRow): EntitlementRevocationTransaction
     ...(row.evidence_verification_id === null
       ? {}
       : { evidenceVerificationId: row.evidence_verification_id }),
+  });
+}
+
+function transferFromRow(row: TransferRow): EntitlementRevocationTransaction {
+  return assertEntitlementRevocationTransaction({
+    ledgerEntryId: row.ledger_entry_id,
+    playerId: row.player_id,
+    revokesLedgerEntryId: row.revokes_ledger_entry_id,
+    idempotencyKey: row.idempotency_key,
+    reason: 'transfer',
+    revokedAt: row.revoked_at,
+    payload: JSON.parse(row.payload_json) as EntitlementRevocationTransaction['payload'],
   });
 }
 

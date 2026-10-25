@@ -23,6 +23,8 @@ import {
   devvitPaymentOrderEvidenceSchema,
   gameServicesBackendEndpoints,
   microsoftStoreDigitalGoodsEvidenceSchema,
+  movePurchaseRestoreTransfers,
+  refusePurchaseRestoreTransfers,
   type AdRewardEvidenceVerifierRegistry,
   type AdRewardVerifierDescriptor,
   type AdRewardVerifierRegistration,
@@ -144,6 +146,15 @@ export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv, Sto
    */
   readonly GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING?: GooglePlayAccountBinding;
   readonly GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER?: 'true';
+  /**
+   * Restore transfers (RFC "Restore transfers"): a verified restore of a
+   * non-consumable that the store binds to an earlier guest (a reinstall or
+   * a new device) moves the grant to the restoring guest, at most three
+   * times per purchase in 30 days. The reference Worker moves by default;
+   * `"refuse"` keeps answering the store's binding mismatch. D1 needs
+   * migration 0011_entitlement_transfers.sql.
+   */
+  readonly GAME_SERVICES_RESTORE_TRANSFERS?: 'move' | 'refuse';
   readonly GAME_SERVICES_ANDROID_PURCHASE_FINALIZER?: GameServicesPurchaseGrantFinalizerBinding;
   /**
    * The Android verifier binding acknowledges or consumes the purchase itself
@@ -730,6 +741,7 @@ function buildWorkerBackend(
     placements: adPlacements,
     store,
     deploymentTargetBindings: resolveWorkerDeploymentTargetBindings(env),
+    restoreTransfers: resolveWorkerRestoreTransfers(env),
     ...(evidenceVerifier === undefined
       ? {}
       : { evidenceVerifier }),
@@ -752,6 +764,17 @@ function buildWorkerBackend(
       getCommerceCapabilities: () => Promise.reject(error),
     },
   };
+}
+
+/**
+ * Moves by default; any value other than `move` (a typo included) refuses,
+ * so a misspelt opt-out never leaves transfers on.
+ */
+function resolveWorkerRestoreTransfers(env: GameServicesWorkerEnv) {
+  const configured: unknown = env.GAME_SERVICES_RESTORE_TRANSFERS;
+  return configured === undefined || configured === 'move'
+    ? movePurchaseRestoreTransfers
+    : refusePurchaseRestoreTransfers;
 }
 
 type WorkerCommerceEvidenceRegistry =
