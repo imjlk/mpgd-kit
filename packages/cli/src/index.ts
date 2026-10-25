@@ -3448,7 +3448,8 @@ function buildLegalSite(input: {
   const deleteAccountResult = deleteAccountBuilt ? { deleteAccountPath } : {};
   if (!deleteAccountBuilt) {
     const linking = outputs
-      .filter((output) => output.content.includes(`href="${deleteAccountPath}"`))
+      // Any quoting of the link (or a full URL ending in the path).
+      .filter((output) => output.content.includes(deleteAccountPath))
       .map((output) => path.relative(process.cwd(), output.file));
     console.warn(
       `No ${path.join(path.relative(process.cwd(), legalDir) || '.', `${deleteAccountLegalSlug}.html`)}: `
@@ -3532,7 +3533,9 @@ function buildLegalSite(input: {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && code !== 'ENOENT' && code !== 'ENOTDIR') {
           console.warn(
-            `Could not remove the empty legal page directory ${path.dirname(file)}: ${code}`,
+            `Could not remove the empty legal page directory ${
+              path.relative(process.cwd(), path.dirname(file))
+            }: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }

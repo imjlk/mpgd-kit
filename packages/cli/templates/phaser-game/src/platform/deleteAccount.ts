@@ -30,7 +30,7 @@ export type StarterDeleteAccountOutcome =
   /**
    * The server refused the session after an earlier attempt whose request
    * was sent but whose answer was lost: the account was most likely
-   * deleted. Signed out too.
+   * deleted. `signedOut` reports whether this device forgot the session.
    */
   | { readonly outcome: 'session-ended'; readonly signedOut: boolean }
   /** No signed-in session to delete. */

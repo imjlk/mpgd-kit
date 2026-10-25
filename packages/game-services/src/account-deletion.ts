@@ -172,7 +172,8 @@ export interface PendingAccountErasure extends PlayerDataErasureInput {
    * likely still exists and retries, so the sweep discards it once it is
    * older than `staleErasingPendingMs` instead of erasing a live player.
    * Residual gap: an identity call that committed but whose answer was lost
-   * (or a process that died before the mark) leaves an `erasing` entry, and
+   * on all three attempts (or a process that died before the mark) leaves
+   * an `erasing` entry, and
    * the player's data then stays under the deleted id. Closing it needs the
    * identity service to answer whether a player exists, which the binding
    * does not offer yet.
@@ -266,20 +267,20 @@ export function createAccountDeletionService(input: {
         // answer was lost succeeds the next time, and the player, whose
         // sessions may already be gone, could not retry it.
         let lastError: unknown;
-        const deleted = await retry(
+        const identityDeleted = await retry(
           () => identity.deletePlayer({ playerId }),
           sleep,
           (error, attempt) => {
             lastError = error;
             logFailure(
-              `Account deletion identity call failed (attempt ${attempt} of ${secondPassAttempts}):`,
+              `Account deletion identity call failed (attempt ${attempt} of ${retryAttempts}):`,
               deletionId,
               playerId,
               error,
             );
           },
         );
-        if (deleted === undefined) {
+        if (identityDeleted === undefined) {
           // Nothing is erased yet and the player most likely still exists and
           // retries; an `erasing` entry left behind is only discarded when stale.
           throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: lastError });
@@ -293,7 +294,7 @@ export function createAccountDeletionService(input: {
           sleep,
           (error, attempt) =>
             logFailure(
-              `Account deletion pending entry not marked (attempt ${attempt} of ${secondPassAttempts}):`,
+              `Account deletion pending entry not marked (attempt ${attempt} of ${retryAttempts}):`,
               deletionId,
               playerId,
               error,
@@ -309,7 +310,7 @@ export function createAccountDeletionService(input: {
           sleep,
           (error, attempt) =>
             logFailure(
-              `Account deletion erasure failed (attempt ${attempt} of ${secondPassAttempts}):`,
+              `Account deletion erasure failed (attempt ${attempt} of ${retryAttempts}):`,
               deletionId,
               playerId,
               error,
@@ -359,7 +360,7 @@ export function createAccountDeletionService(input: {
 export interface PendingAccountErasureSweep {
   /** `identity-deleted` erasures that every store completed and that were cleared. */
   readonly finished: number;
-  /** Erasures a store failed, kept for the next sweep. */
+  /** Erasures a store failed (kept for the next sweep), and stale entries that could not be discarded. */
   readonly failed: number;
   /** Stale `erasing` erasures discarded without erasing. */
   readonly discarded: number;
@@ -457,7 +458,7 @@ export async function finishPendingAccountErasures(input: {
     }
     finished += 1;
     // Under the same deletion id as the request's own entry; a store keyed
-    // by it (the Worker's D1 table) keeps the latest.
+    // by it adds these counts to that entry's (the Worker's D1 table does).
     await recordAudit(
       input.audit,
       {
@@ -475,10 +476,10 @@ export async function finishPendingAccountErasures(input: {
   return { finished, failed, discarded };
 }
 
-const secondPassAttempts = 3;
+const retryAttempts = 3;
 /** Sweep attempts after which a failing pending erasure is logged as needing an operator. */
 const pendingErasureAlertAttempts = 10;
-const secondPassBackoffMs = [100, 400] as const;
+const retryBackoffMs = [100, 400] as const;
 
 /** Runs `operation` up to three times with a short backoff; `undefined` when all failed. */
 async function retry<Value>(
@@ -486,10 +487,10 @@ async function retry<Value>(
   sleep: (ms: number) => Promise<void>,
   onFailure: (error: unknown, attempt: number) => void,
 ): Promise<{ readonly value: Value } | undefined> {
-  for (let attempt = 0; attempt < secondPassAttempts; attempt += 1) {
+  for (let attempt = 0; attempt < retryAttempts; attempt += 1) {
     try {
       if (attempt > 0) {
-        await sleep(secondPassBackoffMs[Math.min(attempt, secondPassBackoffMs.length) - 1] ?? 0);
+        await sleep(retryBackoffMs[Math.min(attempt, retryBackoffMs.length) - 1] ?? 0);
       }
       return { value: await operation() };
     } catch (error) {

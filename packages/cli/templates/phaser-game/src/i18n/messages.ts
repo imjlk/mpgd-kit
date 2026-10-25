@@ -70,7 +70,7 @@ const messages = {
     deleteAccountConfirm:
       'Delete your account? Your progress, scores, and notification settings are erased and you are signed out. '
       + 'Purchases are not refunded and cannot be moved to a new account; ask the store you bought from for a refund. '
-      + 'Purchase records are kept for 5 years for payment-record obligations, without your player ID.',
+      + 'Purchase records are kept for 5 years from the purchase or its last refund, for payment and supply record obligations, without your player ID.',
     deleteAccountPendingPurchase: 'A purchase is still being processed. Deleting now may lose it.',
     deleteAccountConfirmButton: 'Delete permanently',
     deleteAccountCancel: 'Cancel',
@@ -114,7 +114,7 @@ const messages = {
     deleteAccountConfirm:
       '계정을 삭제할까요? 진행 상황, 점수, 알림 설정이 지워지고 로그아웃됩니다. '
       + '구매는 환불되지 않으며 새 계정으로 옮길 수 없습니다. 환불은 구매한 스토어에 요청하세요. '
-      + '구매 기록은 거래기록 보존 의무에 따라 5년 동안 플레이어 ID 없이 보관됩니다.',
+      + '구매 기록은 거래기록 보존 의무에 따라 구매 또는 마지막 환불 시점부터 5년 동안 플레이어 ID 없이 보관됩니다.',
     deleteAccountPendingPurchase: '아직 처리 중인 구매가 있습니다. 지금 삭제하면 이 구매를 잃을 수 있습니다.',
     deleteAccountConfirmButton: '영구 삭제',
     deleteAccountCancel: '취소',
