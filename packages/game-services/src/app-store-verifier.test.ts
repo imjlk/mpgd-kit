@@ -1433,10 +1433,13 @@ assertEqual(
         : { status: 'pending', reason: 'APP_STORE_TRANSACTION_NOT_FOUND' };
     },
   });
+  const verifierCalls: string[] = [];
   const permissiveVerifier = (
     payload: AppStoreTransactionPayload,
+    name = 'verifier',
   ): AppStoreSignedTransactionVerifier => ({
-    async verifyAndDecode() {
+    async verifyAndDecode({ environment }) {
+      verifierCalls.push(`${name}:${environment}`);
       return { status: 'verified', payload };
     },
   });
@@ -1453,10 +1456,10 @@ assertEqual(
     serverApi: recordingApi(productionCalls, 'not-found'),
     // A custom production verifier that decodes without an environment check:
     // its Sandbox payload is re-verified by the sandbox verifier.
-    signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
+    signedTransactionVerifier: permissiveVerifier(sandboxTransaction, 'production'),
     sandboxPurchases: {
       mode: 'grant',
-      signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
+      signedTransactionVerifier: permissiveVerifier(sandboxTransaction, 'sandbox'),
       serverApi: recordingApi(sandboxCalls, 'found'),
     },
   });
@@ -1471,8 +1474,15 @@ assertEqual(
     'Sandbox',
     'the sandbox client is asked for the sandbox only',
   );
+  assertEqual(
+    verifierCalls.join(','),
+    'sandbox:Sandbox',
+    'the sandbox Server API answer is verified by the sandbox verifier only',
+  );
 
   sandboxCalls.length = 0;
+  productionCalls.length = 0;
+  verifierCalls.length = 0;
   const signalled = await overridden.verifyPurchase({
     ...baseInput,
     request: {
@@ -1485,6 +1495,41 @@ assertEqual(
   });
   assertEqual(signalled.status, 'verified', 'a verified Sandbox payload is a sandbox signal');
   assertEqual(sandboxCalls.join(','), 'Sandbox', 'its status is read from the sandbox only');
+  assertEqual(productionCalls.length, 0, 'the production Server API is skipped for a sandbox JWS');
+  assertEqual(
+    verifierCalls.join(','),
+    'production:Production,sandbox:Sandbox,sandbox:Sandbox',
+    'the client JWS is checked in production, then both JWS by the sandbox verifier',
+  );
+
+  // A Server API answer from another environment than the client JWS.
+  const crossed = createAppStoreGameServicesEvidenceVerifier({
+    ...base,
+    serverApi: recordingApi([], 'found'),
+    signedTransactionVerifier: {
+      async verifyAndDecode({ signedTransaction }) {
+        return {
+          status: 'verified',
+          payload: signedTransaction === 'client-jws' ? baseTransaction : sandboxTransaction,
+        };
+      },
+    },
+  });
+  assertDecision(
+    await crossed.verifyPurchase({
+      ...baseInput,
+      request: {
+        ...baseInput.request,
+        evidence: createAppStoreSignedTransactionEvidenceFixture({
+          signedTransaction: 'client-jws',
+          transactionId: baseInput.request.platformTransactionId,
+        }),
+      },
+    }),
+    'rejected',
+    'APP_STORE_SIGNED_TRANSACTION_ENVIRONMENT_MISMATCH',
+    'the decision stays in the client JWS environment',
+  );
 
   // Offline-only decides on the client JWS: no Server API call at all.
   const offlineCalls: string[] = [];

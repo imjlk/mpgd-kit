@@ -137,11 +137,14 @@ export interface CreateAppStoreEvidenceVerifierOptions {
    * against the production build). Defaults to `{ mode: 'reject' }`, which
    * answers `APP_STORE_ENVIRONMENT_MISMATCH`. `{ mode: 'grant', ... }` follows
    * Apple's production-first order: the transaction is verified against
-   * production, and only when the verified JWS says `Sandbox` (or production
-   * answers `APP_STORE_TRANSACTION_NOT_FOUND`) is it verified again with the
-   * sandbox verifier and Server API. The grant's verification id and ledger
-   * payload carry `Sandbox`, so it stays apart from production revenue.
-   * Only valid on a `Production` verifier.
+   * production, and only when the verified client JWS says `Sandbox` (or,
+   * for a request without a client JWS, production answers
+   * `APP_STORE_TRANSACTION_NOT_FOUND`) is it verified again with the sandbox
+   * verifier and Server API. A client JWS the production verifier accepted
+   * stays a production transaction: a production miss for it is pending, not
+   * a sandbox lookup. The grant's verification id and ledger payload carry
+   * `Sandbox`, so it stays apart from production revenue. Only valid on a
+   * `Production` verifier.
    */
   readonly sandboxPurchases?: AppStoreSandboxPurchasePolicy;
 }
@@ -457,10 +460,17 @@ async function verifyAppStorePurchase(
     }
     if (
       offlineTransaction !== undefined
-      && (fresh.payload.transactionId !== offlineTransaction.transactionId
-        || fresh.payload.environment !== offlineTransaction.environment)
+      && fresh.payload.transactionId !== offlineTransaction.transactionId
     ) {
       return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH' };
+    }
+    if (
+      offlineTransaction !== undefined
+      && fresh.payload.environment !== offlineTransaction.environment
+    ) {
+      // Transaction ids are unique per environment only: the decision is
+      // taken in the environment the client JWS was verified in.
+      return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_ENVIRONMENT_MISMATCH' };
     }
     transaction = fresh.payload;
   }

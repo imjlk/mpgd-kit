@@ -456,6 +456,24 @@ assert(
         acceptsSandboxTransactions,
       },
     });
+  let rejectedFlag = false;
+  try {
+    createAppStoreRecoveryBackend({
+      playerId: request.playerId,
+      store: sandboxStore,
+      purchases,
+      restoredNonConsumables: {
+        catalog: restoredCatalog,
+        evidenceVerifier: sandboxEvidenceVerifier,
+        bundleId: 'com.example.game',
+        environment: 'Production',
+        acceptsSandboxTransactions: 'true' as never,
+      },
+    });
+  } catch (error) {
+    rejectedFlag = error instanceof TypeError;
+  }
+  assert(rejectedFlag, 'a non-boolean acceptsSandboxTransactions fails at setup');
   const refusedSandbox = await sandboxBackend(false).recoverPurchase(restoredRequest);
   assert(
     !refusedSandbox.verified && refusedSandbox.disposition === 'rejected',
