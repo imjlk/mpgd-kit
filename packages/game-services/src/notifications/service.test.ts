@@ -442,6 +442,62 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   });
 }
 
+// A provider that serves android alone takes a registration without a
+// target; the endpoint is still an Android one for the advertising rule.
+{
+  const fcm = fakeProvider('fcm');
+  const events: NotificationTopicDeclaration = {
+    id: 'events',
+    purpose: 'advertising',
+    channels: ['remote'],
+    route: '/events',
+    optOutRoute: '/settings/notifications',
+    copy: { ko: { title: '이벤트', body: '이벤트가 시작됐어요.' } },
+    mapping: {},
+  };
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['android'] },
+    ]),
+    catalog: vectorCatalog([events]),
+    deployment: {
+      advertisingRules: 'kr',
+      advertisingSender: { contact: '02-000-0000' },
+      shellRendersAdvertising: true,
+    },
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  for (const [installation, rendersAdvertising] of [
+    ['old', false],
+    ['renderer', true],
+  ] as const) {
+    await service.registerEndpoint(session('p-1', installation), {
+      registration: {
+        provider: 'fcm',
+        address: {
+          kind: 'fcm-token',
+          value: `tok-${installation}`,
+          permission: 'granted',
+          rendersAdvertising,
+        },
+      },
+    });
+  }
+  await service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  await service.deliver({ idempotencyKey: 'ad-1', player: 'p-1', topic: 'events' });
+  assert.deepEqual(
+    fcm.calls.map((call) => call.idempotencyKey),
+    ['ad-1:renderer'],
+  );
+}
+
 // Queue dispatch: the gate runs when the job runs; a lost job is replayed after the lease.
 {
   const time = clock('2026-10-19T03:00:00Z');

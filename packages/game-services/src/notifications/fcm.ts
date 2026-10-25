@@ -669,7 +669,8 @@ function isReservedDataKey(key: string): boolean {
     || key === 'fcm_options'
     || lower.startsWith('google')
     || lower.startsWith('gcm')
-    // The shell renderer's keys (`fcmShellRenderedDataKeys`) and its action marker.
+    // The shell renderer's keys (`fcmShellRenderedDataKeys`) and the keys it
+    // adds to an open.
     || lower.startsWith('mpgd.');
 }
 

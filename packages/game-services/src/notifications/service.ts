@@ -543,17 +543,29 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   // Recipients (gate step 2).
 
   /**
+   * The catalog target of a device endpoint: the one its registration named,
+   * else the provider's only target (a registration on a single-target
+   * provider may leave it out).
+   */
+  const endpointTargetOf = (
+    provider: RegisteredNotificationProvider,
+    target: string | undefined,
+  ): string | undefined => target ?? (provider.targets.length === 1 ? provider.targets[0] : undefined);
+  /**
    * Whether a device endpoint shows the actions a push carries: on a target
    * whose pushes need the shell to render advertising (Android), only when
    * its latest registration said the shell does. Gate step 1 refuses
    * advertising under `kr` to one that does not.
    */
   const endpointActionsOf = (
+    provider: RegisteredNotificationProvider,
     endpoint: NotificationStoredEndpoint,
-  ): { readonly endpointShowsActions?: boolean } =>
-    endpoint.target !== undefined && notificationShellRenderedAdvertisingTargets.includes(endpoint.target)
+  ): { readonly endpointShowsActions?: boolean } => {
+    const target = endpointTargetOf(provider, endpoint.target);
+    return target !== undefined && notificationShellRenderedAdvertisingTargets.includes(target)
       ? { endpointShowsActions: endpoint.address.rendersAdvertising === true }
       : {};
+  };
   const usable = (endpoint: NotificationStoredEndpoint, at: number): boolean =>
     endpoint.status === 'valid'
     && at - Date.parse(endpoint.lastRegisteredAt) < endpointStaleMs
@@ -794,7 +806,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           consent,
           ...(serverPermission === undefined ? {} : { serverPermission }),
           ...(recipient.endpoint === undefined ? {} : { endpointPermission: recipient.endpoint.permission }),
-          ...(recipient.endpoint === undefined ? {} : endpointActionsOf(recipient.endpoint)),
+          ...(recipient.endpoint === undefined ? {} : endpointActionsOf(recipient.provider, recipient.endpoint)),
           history,
           at: formatNotificationInstant(at),
           ...(recipient.timeZone === undefined ? {} : { timeZone: recipient.timeZone }),
@@ -2604,9 +2616,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // Only a target whose pushes need the shell to render advertising keeps
       // the claim, so the FCM provider never sends another device (iOS) a
       // data message it would not show.
+      const shellTarget = endpointTargetOf(provider, request.target);
       const rendersAdvertising = address.rendersAdvertising === true
-        && request.target !== undefined
-        && notificationShellRenderedAdvertisingTargets.includes(request.target);
+        && shellTarget !== undefined
+        && notificationShellRenderedAdvertisingTargets.includes(shellTarget);
       await store.putEndpoint({
         provider: provider.entry.provider,
         installationId: current.installationId,
