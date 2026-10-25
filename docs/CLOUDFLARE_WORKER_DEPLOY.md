@@ -351,6 +351,15 @@ item after they "switch devices"
   recovery backend (`createAppStoreRecoveryBackend`) keeps refusing
   (`APP_STORE_RECOVERY_IDENTITY_MISMATCH`); the commerce v2 verify path is the
   one that moves.
+- **Two devices, one store account.** One holder at a time means a player
+  with an iPhone and an iPad (or two Android devices) on the same Apple ID or
+  Google account, each with its own guest, holds the non-consumable on the
+  device whose reconciler restored it last: opening the game on the second
+  device moves it there, and the first device's ledger status read then marks
+  its grant revoked. That device's journal keeps the purchase as revoked, so
+  it does not take the purchase back until the app is reinstalled (a new
+  guest). Account linking (one player across devices) removes this; until
+  then, say so in the support copy.
 - **Deleted accounts.** A deleted player's retained purchase records are never
   revived for that id (its identity is gone). A new guest who restores the
   purchase gets a fresh grant that names the retained record it replaces; the
