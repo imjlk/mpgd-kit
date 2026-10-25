@@ -356,7 +356,8 @@ needs the same edits by hand:
   template's 32-bit `armv7` in `UIRequiredDeviceCapabilities`. Missing keys
   are warnings.
 - **Design orientation.** `native.orientation` in `mpgd.game.json`
-  (`portrait`, `landscape` or `any`; the Phaser template uses `landscape`)
+  (`portrait`, `landscape` or `any`; the Phaser template uses `landscape`, the
+  lite template `any`)
   sets the iPhone `UISupportedInterfaceOrientations` and the Android launcher
   activity's `android:screenOrientation` (`portrait`, `sensorLandscape`, or
   none for `any`). iPad keeps all four orientations: Apple deprecated

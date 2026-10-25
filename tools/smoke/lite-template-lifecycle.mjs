@@ -13,11 +13,13 @@ for (const relativePath of [
   for (const mode of ['pagehide', 'direct']) {
     const handlers = new Map();
     let disposals = 0;
+    let restoreDisposals = 0;
     const dispose = () => { disposals += 1; };
     const context = {
       document: { getElementById: () => ({ style: {} }) },
       bindGameAudio: () => ({ dispose }),
       createTapGame: () => shell,
+      mountRestorePurchasesButton: () => () => { restoreDisposals += 1; },
       addEventListener: (type, handler) => handlers.set(type, handler),
       removeEventListener: (type, handler) => {
         if (handlers.get(type) === handler) handlers.delete(type);
@@ -35,10 +37,14 @@ for (const relativePath of [
     if (mode === 'direct') game.dispose();
     else onPageHide({ persisted: false });
     assert.equal(disposals, 3, `${relativePath}: permanent unload disposes audio, runtime, and shell`);
+    if (source.includes('mountRestorePurchasesButton')) {
+      assert.equal(restoreDisposals, 1, `${relativePath}: unload removes the Restore Purchases button`);
+    }
     assert.equal(handlers.has('pagehide'), false);
     game.dispose();
     onPageHide({ persisted: false });
     assert.equal(disposals, 3, `${relativePath}: disposal must be idempotent`);
+    assert.ok(restoreDisposals <= 1, `${relativePath}: the button disposer runs once`);
   }
 }
 for (const relativePath of [
