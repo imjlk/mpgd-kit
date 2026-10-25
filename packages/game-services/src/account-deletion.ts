@@ -200,6 +200,13 @@ export interface PendingAccountErasureStore {
 /** An `erasing` erasure older than this (one hour) is discarded by the sweep. */
 export const staleErasingPendingMs = 60 * 60 * 1000;
 
+/**
+ * The sweep erases an `identity-deleted` erasure once more, and only then
+ * clears it, this long (15 minutes) after the request: longer than any
+ * request that authenticated before the identity was deleted can still run.
+ */
+export const finalErasureDelayMs = 15 * 60 * 1000;
+
 export function createInMemoryPendingAccountErasureStore(): PendingAccountErasureStore {
   const pending = new Map<string, PendingAccountErasure>();
   const triedAt = (erasure: PendingAccountErasure): string =>
@@ -330,11 +337,14 @@ export function createAccountDeletionService(input: {
         // learn it from this line and the audit entry.
         console.error('Account deletion erasure incomplete; no sweep will finish it:', deletionId);
       }
-      if (complete) {
+      // A marked entry stays for the sweep's final pass (`finalErasureDelayMs`
+      // after the request): a request authenticated before the identity was
+      // deleted may still write, and only a later pass removes it. An
+      // unmarked one gets no sweep, so a complete erasure clears it.
+      if (complete && (!marked || input.identity === null)) {
         try {
           await input.pending.clear({ deletionId });
         } catch (error) {
-          // The sweep repeats the (now empty) erasure and clears it later.
           logFailure('Account deletion pending entry not cleared:', deletionId, playerId, error);
         }
       }
@@ -370,8 +380,11 @@ export interface PendingAccountErasureSweep {
 
 /**
  * Finishes erasures a deletion left pending: an `identity-deleted` one is
- * erased again and cleared once every store completed it, with an audit
- * entry that marks the deletion complete; an `erasing` one older than
+ * erased again `finalErasureDelayMs` after the request (every deletion
+ * gets this final pass, which removes what a request authenticated before
+ * the identity was deleted wrote later) and cleared once every store
+ * completed it, with an audit entry that marks the deletion complete; an
+ * `erasing` one older than
  * `staleErasingPendingMs` is discarded without erasing. Run it from a
  * scheduled job. A failing erasure is tried again later, least recently
  * tried first, so one that keeps failing does not block the others.
@@ -405,6 +418,11 @@ export async function finishPendingAccountErasures(input: {
           );
         }
       }
+      continue;
+    }
+    if (Date.parse(at) - Date.parse(erasure.recordedAt) < finalErasureDelayMs) {
+      // Too early for the final pass: requests that authenticated before the
+      // identity was deleted may still be writing.
       continue;
     }
     // Every store on its own, as in the inline erasure.

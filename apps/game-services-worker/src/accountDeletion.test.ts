@@ -172,18 +172,38 @@ try {
     },
     pending,
     audit,
+    now: () => '2026-10-25T00:00:00.000Z',
     createDeletionId: () => 'deletion-4',
   });
   const receipt = await service.deletePlayerAccount({ playerId: 'player-4' });
   assert.equal(receipt.retainedPurchaseRecords, 4);
   for (const [table, column] of playerTables) {
+    if (table === 'account_deletion_pending') {
+      continue;
+    }
     assert.equal(
       await countRows(db, table, column, 'player-4'),
       0,
       `${table} keeps no player-4 row`,
     );
   }
+  // The erasure waits for its final pass; the cron's sweep runs it later and
+  // clears it, and then no row names player-4.
+  assert.deepEqual(
+    (await pending.list({ limit: 10 })).map((entry) => entry.phase),
+    ['identity-deleted'],
+  );
+  assert.deepEqual(
+    await finishPendingAccountErasures({
+      erasers: [eraser],
+      pending,
+      audit,
+      now: () => '2026-10-25T00:15:00.000Z',
+    }),
+    { finished: 1, failed: 0, discarded: 0 },
+  );
   assert.deepEqual(await pending.list({ limit: 10 }), []);
+  assert.equal(await countRows(db, 'account_deletion_pending', 'player_id', 'player-4'), 0);
   const auditRows = (await db.prepare('SELECT * FROM account_deletion_audit').all()).results;
   assert.equal(auditRows.length, 1);
   assert.equal((auditRows[0] as { complete: number }).complete, 1);
@@ -352,7 +372,7 @@ try {
       erasers: [eraser],
       pending,
       audit,
-      now: () => '2026-10-25T00:01:00.000Z',
+      now: () => '2026-10-25T00:16:00.000Z',
     });
     assert.deepEqual(sweep, { finished: 1, failed: 0, discarded: 0 });
     assert.equal(await countRows(db, 'notification_endpoints', 'player_id', 'player-8'), 0);

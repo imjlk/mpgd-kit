@@ -402,11 +402,35 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     'games:player-1:deleted:deletion-1',
     'notifications:player-1:deleted:deletion-1',
   ]);
+  // The entry stays for the final pass, which runs only once requests that
+  // authenticated before the identity was deleted have finished.
   assert.deepEqual(
-    await pending.list({ limit: 10 }),
-    [],
-    'a completed deletion keeps nothing pending',
+    (await pending.list({ limit: 10 })).map((entry) => entry.phase),
+    ['identity-deleted'],
   );
+  const finalPass = (at: string) =>
+    finishPendingAccountErasures({
+      erasers: [eraser('games'), eraser('notifications')],
+      pending,
+      now: () => at,
+    });
+  calls.length = 0;
+  assert.deepEqual(await finalPass('2026-10-25T00:14:59.000Z'), {
+    finished: 0,
+    failed: 0,
+    discarded: 0,
+  });
+  assert.deepEqual(calls, [], 'too early for the final pass');
+  assert.deepEqual(await finalPass('2026-10-25T00:15:00.000Z'), {
+    finished: 1,
+    failed: 0,
+    discarded: 0,
+  });
+  assert.deepEqual(calls, [
+    'games:player-1:deleted:deletion-1',
+    'notifications:player-1:deleted:deletion-1',
+  ]);
+  assert.deepEqual(await pending.list({ limit: 10 }), [], 'cleared after the final pass');
   assert.deepEqual(audits, [
     {
       deletionId: 'deletion-1',
@@ -608,6 +632,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       secondPassAudits.push(entry);
     },
     sleep,
+    now: () => '2026-10-25T00:00:00.000Z',
     createDeletionId: () => 'deletion-3',
   });
   const secondPassErrors: unknown[][] = [];

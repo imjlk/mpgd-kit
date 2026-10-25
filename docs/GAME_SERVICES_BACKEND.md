@@ -1073,16 +1073,20 @@ on `createGameServicesRuntime(...).accountDeletion`.
    erasure `identity-deleted`.
 3. Erase every store, each on its own with three attempts (D1: one batch,
    a transaction).
-4. When every store completed, clear the pending erasure; in any case
-   write the audit entry (`account_deletion_audit`: deletion id, times,
+4. Write the audit entry (`account_deletion_audit`: deletion id, times,
    counts, no player id).
+5. 15 minutes later the Worker's cron erases once more and clears the
+   pending erasure (`finishPendingAccountErasures`, `finalErasureDelayMs`):
+   a request that authenticated before the identity was deleted (a verify
+   waiting on its store, a notifications cron run that loaded the player)
+   may write after step 3, and this final pass removes it.
 
 A failure in steps 1 and 2 answers the retryable error and has erased
 nothing, so a misconfigured identity binding never leaves a live account
-stripped. After step 2 the player can no longer authenticate, so a store
-that still fails leaves the erasure pending and the audit entry says
-`complete: false`; the Worker's cron erases it again
-(`finishPendingAccountErasures`) and completes the audit entry. An
+stripped (the identity call is tried three times; it is idempotent). After
+step 2 the player can no longer authenticate, so a store that still fails
+is reported in the audit entry (`complete: false`) and the final pass
+retries it, completing the audit entry. An
 `erasing` entry (the identity call failed or the request died first) is
 never erased by the cron, since its player most likely still exists, and
 is discarded after an hour. The identity Worker's `authenticateGameServicesRequest`
@@ -1155,11 +1159,10 @@ transaction). Games that sell outside a store add their own payment records.
 
 ### Residual gaps
 
-- A request that was authenticated before the identity was deleted and
-  commits after the erasure (a verify waiting on its store, or a
-  notifications cron run that loaded the player first) can leave a row
-  under the deleted player's id; nothing sweeps it. So can an AdMob SSV
-  callback Google delivers late (`admob_ssv_callbacks` has no purge).
+- A request authenticated before the identity was deleted that commits
+  more than 15 minutes later, or an AdMob SSV callback Google delivers
+  after the final pass, can leave a row under the deleted player's id
+  (`admob_ssv_callbacks` has no purge).
 - The five-year period is the package constant `retainedPurchaseRecordYears`;
   a game that needs another period changes it in its fork, with the
   starter's copy and legal pages.
