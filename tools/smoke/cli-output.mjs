@@ -111,6 +111,17 @@ try {
   assert.equal(typeof litePackage.dependencies['@mpgd/lite-shell'], 'string');
   assert.equal(existsSync(path.join(liteRoot, 'src/scenes')), false);
   assert.equal(existsSync(path.join(liteRoot, 'src/lite/tapGame.ts')), true);
+  // Lite games take the base template's bootstrap, guest identity included (VITE_MPGD_IDENTITY_URL).
+  for (const file of ['src/main.ts', 'src/platform/guestIdentity.ts', 'src/platform/sessionGatedServices.ts']) {
+    assert.equal(existsSync(path.join(liteRoot, file)), true, `lite games ship ${file}`);
+  }
+  const liteMain = readFileSync(path.join(liteRoot, 'src/main.ts'), 'utf8');
+  assert.match(liteMain, /createStarterGuestSignIn\(\{/u);
+  assert.match(liteMain, /createStarterSessionGatedGameServices\(\{/u);
+  assert.match(
+    readFileSync(path.join(liteRoot, 'src/lite/restorePurchasesButton.ts'), 'utf8'),
+    /ensureSession: services\.ensureSession/u,
+  );
   const liteSources = ['src/runtime/createGame.ts', 'src/platform/devvitEntrypoint.ts', 'src/lite/tapGame.ts']
     .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');
   assert.doesNotMatch(liteSources, /from 'phaser'/);

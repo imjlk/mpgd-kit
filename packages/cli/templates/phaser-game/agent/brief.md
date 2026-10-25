@@ -51,10 +51,20 @@ and reconcile existing operations on startup and resume without opening SDK UI.
 
 ## Server session
 
-Set the game's server-backed session with `setStarterServerSession`
-(`src/platform/serverSession.ts`) before `bootstrap()`; with a guest backend use
-`createGuestServerSession(coordinator)`, whose `sessionId` is the stable
-session-family id. For local notifications work only (a game created with
+With `VITE_MPGD_IDENTITY_URL` set (the kit's reference guest identity Worker,
+`apps/game-identity-worker`), `src/platform/guestIdentity.ts` signs the player
+in as a server-issued guest during bootstrap, before the game services read
+the session: it keeps the refresh token in the device's Keychain or Keystore,
+calls `setStarterServerSession` with `createGuestServerSession(coordinator)`
+(whose `sessionId` is the stable session-family id), and binds StoreKit and
+Google Play purchases to the server player. A failed boot sign-in is retried
+in the background and before each purchase or restore; the purchase,
+restore, and notification services come up when it succeeds
+(`src/platform/sessionGatedServices.ts`). Without it the native shell's
+local player binds no purchase, and StoreKit and Play refuse with the reason.
+A game with its own identity service sets its session with
+`setStarterServerSession` (`src/platform/serverSession.ts`) before the game
+services are created instead. For local notifications work only (a game created with
 `--providers notifications`), `VITE_MPGD_DEV_NOTIFICATION_SESSION` on the Vite
 dev server in the `development` mode signs in with an unauthenticated
 development session (`src/platform/developmentServerSession.ts`)

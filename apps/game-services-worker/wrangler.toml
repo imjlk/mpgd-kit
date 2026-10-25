@@ -50,8 +50,16 @@ head_sampling_rate = 1
 # database_name = "mpgd-game-services"
 # database_id = "<replace-with-wrangler-d1-create-output>"
 
+# Identity: the reference guest identity Worker (apps/game-identity-worker,
+# service name "game-identity") implements GameServicesIngressAuth,
+# NotificationSessions, GooglePlayAccountBinding, and AppStoreAccountBinding
+# (bound by the iOS verifier Worker for its resolveAppAccountToken, not here);
+# bind the others below. See
+# docs/CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker.
+#
 # Bind a private identity Worker to enable authenticated public snapshot reads.
-# The service must implement authenticateVerifiedLeaderboardSnapshot({ authorization }).
+# The service must implement authenticateVerifiedLeaderboardSnapshot({ authorization });
+# the reference guest identity Worker does not, so the example names another service.
 
 # Verse8 rewarded-ad grants can use the built-in verifier credential:
 #   pnpm exec wrangler secret put VERSE8_ADS_VERIFIER_AUTHORIZATION
@@ -63,7 +71,7 @@ head_sampling_rate = 1
 #
 # [[services]]
 # binding = "VERIFIED_LEADERBOARD_AUTH"
-# service = "game-identity"
+# service = "game-leaderboard-auth"
 
 # Optional ingress authentication for the public purchases, ad-rewards, and
 # leaderboard grant routes. The service must implement
@@ -204,7 +212,8 @@ head_sampling_rate = 1
 # Apps in Toss functional messages (the ait target): the partner API client
 # certificate, the provider settings (a var, under [vars]), and the identity
 # service that answers a player's Toss user key (any entrypoint with
-# resolveNotificationRecipient; the name below is an example).
+# resolveNotificationRecipient; the name below is an example). The reference
+# guest identity Worker does not serve it: a guest has no Toss user key.
 #
 # MPGD_AIT_NOTIFICATIONS = { recipientKey = "toss-user" }
 #
@@ -214,7 +223,7 @@ head_sampling_rate = 1
 #
 # [[services]]
 # binding = "GAME_SERVICES_NOTIFICATIONS_IDENTITY"
-# service = "game-identity"
+# service = "game-ait-identity"
 # entrypoint = "NotificationRecipients"
 #
 # [[queues.producers]]

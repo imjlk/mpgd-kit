@@ -261,6 +261,43 @@ release?.();
 await third;
 assert.equal(slowCalls, 2);
 
+// A run whose guest sign-in failed at boot: the control is shown, each tap
+// signs in first, and a failed sign-in is a retry, not a dead control.
+{
+  let online = false;
+  let ensureCalls = 0;
+  let late: typeof recovery | undefined;
+  const gated = createStarterRestorePurchases({
+    gateway: gateway('google-play', signedIn),
+    monetizationRecovery: () => late,
+    ensureSession: async () => {
+      ensureCalls += 1;
+      if (online) {
+        late = recovery;
+      }
+      return online;
+    },
+  });
+  assert.equal(gated.available, true, 'shown before the session exists');
+  calls = 0;
+  assert.deepEqual(await gated.restore(), { outcome: 'needs-connection' });
+  assert.equal(calls, 0);
+  online = true;
+  assert.deepEqual(await gated.restore(), { outcome: 'restored', granted: 1 });
+  assert.equal(calls, 1);
+  assert.equal(ensureCalls, 2);
+  assert.match(restoreOutcomeText('en', { outcome: 'needs-connection' }), /Tap to try again/u);
+}
+// Signed in, but the configuration has no recovery client: unavailable, not a retry.
+{
+  const disabled = createStarterRestorePurchases({
+    gateway: gateway('app-store', signedIn),
+    monetizationRecovery: () => undefined,
+    ensureSession: async () => true,
+  });
+  assert.deepEqual(await disabled.restore(), { outcome: 'unavailable' });
+}
+
 assert.equal(
   restoreOutcomeText('en', { outcome: 'restored', granted: 0 }),
   'No new purchases to restore',
@@ -271,7 +308,7 @@ assert.equal(
 );
 assert.equal(
   restoreOutcomeText('ko', { outcome: 'needs-session' }),
-  '구매를 복원하려면 로그인하세요',
+  '구매를 복원하려면 게임 서버 세션이 필요합니다',
 );
 assert.match(restoreOutcomeText('en', { outcome: 'incomplete', granted: 0 }), /not confirmed yet/u);
 assert.equal(

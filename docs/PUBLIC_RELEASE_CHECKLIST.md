@@ -88,7 +88,7 @@ pnpm smoke:target reddit
 - [ ] Confirm Apps in Toss release settings: app id, Toss product ids, Toss ad placement ids, review metadata, and release credentials.
 - [ ] Confirm Microsoft Store release settings: Partner Center app reservation, PWA manifest/icons, PWABuilder package output, Store listing metadata, age ratings, and whether Digital Goods API commerce is intentionally disabled. Use Microsoft's PWA Store and Digital Goods API docs as the policy source before enabling Store commerce.
 - [ ] Confirm Reddit Devvit release settings: app name, test subreddit, Devvit login state, Redis usage, and whether playtest/upload/publish are intentionally local-only.
-- [ ] Confirm placeholder IDs in `packages/catalog/catalog.json`, `packages/catalog/placements.json`, and `apps/game-services-worker/wrangler.toml` are either intentionally sample-only or replaced.
+- [ ] Confirm placeholder IDs in `packages/catalog/catalog.json`, `packages/catalog/placements.json`, `apps/game-services-worker/wrangler.toml`, and `apps/game-identity-worker/wrangler.toml` are either intentionally sample-only or replaced.
 - [ ] Confirm README/docs distinguish the bundled Google Play one-time-product, AdMob SSV, and Apps in Toss verifier boundaries from game-owned API authentication, configuration, durable callback storage, rotating public-key state, and runtime mTLS/login or reward-authority adapters. State that StoreKit/App Store Server API verification of one-time products is bundled (`@mpgd/game-services/app-store-server`), while subscriptions on either store, store refund/voided-purchase notifications, and Devvit payment/reward verification are not bundled yet.
 - [ ] Confirm emulator smoke results are attached or explicitly skipped for the public release.
 

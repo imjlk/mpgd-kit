@@ -125,8 +125,9 @@ Rules the starter's settings screen follows, and your own screen must too:
 > `@mpgd/game-services/notifications/client` is that backend over the
 > game-services Worker's notification routes. The Worker binds each request
 > to the session its `Authorization` header names, through the identity
-> service's `NotificationSessions` binding, which lives in the game's own
-> identity Worker ([Sessions](./CLOUDFLARE_WORKER_DEPLOY.md)). The starter's
+> service's `NotificationSessions` binding: the reference guest identity
+> Worker's ([Guest Identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)),
+> or the game's own identity Worker's. The starter's
 > `createStarterNotificationBackend` builds both when the game has a
 > game-services URL (`VITE_MPGD_GAME_SERVICES_URL`) and sets its
 > server-backed session with `setStarterServerSession`
