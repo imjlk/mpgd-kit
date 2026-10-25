@@ -74,7 +74,21 @@ export interface HandleAppStoreServerNotificationInput {
   readonly bundleId: string;
   readonly signal: AbortSignal;
   readonly now?: () => string;
+  /**
+   * How long after Apple revoked the transaction (its `revocationDate`, else
+   * the notification's `signedDate`) a refund for a grant this ledger does not
+   * hold yet is answered `retry` instead of `ignored`; 1 hour by default. It
+   * covers a purchase whose verification read the transaction before the
+   * refund and whose grant is still being written: Apple redelivers (the
+   * first production retry is an hour later) and the redelivery finds the
+   * grant. A refund for a grant that never appears is acknowledged once the
+   * window passes, so Apple stops retrying. `0` acknowledges at once.
+   */
+  readonly unmatchedRefundRetryMs?: number;
 }
+
+/** Default of `unmatchedRefundRetryMs`. */
+export const defaultUnmatchedRefundRetryMs = 60 * 60 * 1000;
 
 export type AppStoreServerNotificationOutcome =
   /** A grant was reversed (or already had been, for a redelivery). */
@@ -143,9 +157,10 @@ const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> =
  * so a refund still in flight is applied first); for a grant revoked for
  * another reason it is `ignored`.
  *
- * A refund that arrives before its grant is ignored, not retried; the
- * purchase verifier's default Server API mode reads the transaction's current
- * status and refuses a revoked one, so a late purchase request is not granted.
+ * A refund for a grant this ledger does not hold is `retry` while it is
+ * recent (`unmatchedRefundRetryMs`, a purchase may be committing a grant it
+ * verified before the refund) and `ignored` after; a purchase request that
+ * starts after the refund is refused by the verifier's Server API mode.
  * A thrown error (a store outage, an abort) is not an outcome: the host must
  * answer it with a 5xx so Apple redelivers.
  */
@@ -224,8 +239,23 @@ export async function handleAppStoreServerNotification(
       ? transaction.originalTransactionId
       : transaction.transactionId,
   });
+  const now = input.now ?? (() => new Date().toISOString());
   const grant = await findPurchaseGrantByEvidenceVerificationId(input.store, grantVerificationId);
   if (grant === undefined || grant.payload.target !== 'ios') {
+    if (
+      grant === undefined
+      && reason !== undefined
+      && Date.parse(now()) - (transaction.revocationDate ?? notification.signedDate)
+        < (input.unmatchedRefundRetryMs ?? defaultUnmatchedRefundRetryMs)
+    ) {
+      // A purchase in flight may have read the transaction before the
+      // refund and not written its grant yet: let Apple redeliver.
+      return {
+        status: 'retry',
+        reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_FOUND',
+        notificationUUID,
+      };
+    }
     return {
       status: 'ignored',
       reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_FOUND',
@@ -233,7 +263,6 @@ export async function handleAppStoreServerNotification(
     };
   }
 
-  const now = input.now ?? (() => new Date().toISOString());
   if (reason === undefined) {
     // Only REFUND_REVERSED gets past the type gate without a revocation reason.
     return recordRefundReversal(input.store, {

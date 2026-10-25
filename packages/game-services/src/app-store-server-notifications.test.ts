@@ -12,7 +12,11 @@ import {
   type AppStoreTransactionPayload,
 } from './app-store-verifier.js';
 import { listActiveEntitlementTransactions } from './commerce-ledger.js';
-import { createInMemoryGameServicesStore, type GameServicesStore } from './server.js';
+import {
+  createGameServicesBackend,
+  createInMemoryGameServicesStore,
+  type GameServicesStore,
+} from './server.js';
 
 const bundleId = 'com.example.game';
 const consumable: AppStoreTransactionPayload = {
@@ -203,7 +207,7 @@ function handle(
       reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_FOUND',
       notificationUUID: 'uuid-refund-1',
     },
-    'a refund for a transaction this ledger never granted is answered 200',
+    'a refund for a transaction this ledger never granted is answered 200 once it is old',
   );
   await grantFor(store, consumable, 'player-1', 'android');
   assert.equal(
@@ -550,6 +554,122 @@ function handle(
     outcome.status === 'ignored' && outcome.reason,
     'APP_STORE_NOTIFICATION_REVOCATION_NOT_REFUND',
   );
+}
+
+{
+  // The race: a purchase verified the transaction before the refund and is
+  // still writing its grant when the refund arrives.
+  const store = createInMemoryGameServicesStore();
+  let releaseVerification: (() => void) | undefined;
+  const verificationGate = new Promise<void>((resolve) => {
+    releaseVerification = resolve;
+  });
+  let verificationStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    verificationStarted = resolve;
+  });
+  const backend = createGameServicesBackend({
+    catalog: {
+      version: 'race',
+      products: [{
+        id: 'COINS_100',
+        type: 'consumable',
+        grant: { type: 'currency', currency: 'coin', amount: 100 },
+        platformProductIds: { ios: consumable.productId },
+      }],
+    },
+    placements: { version: 'race', placements: [] },
+    store,
+    evidenceVerifier: {
+      async verifyPurchase() {
+        verificationStarted?.();
+        // Apple answered before the refund; the grant is written after it.
+        await verificationGate;
+        return {
+          status: 'verified',
+          verificationId: createAppStoreVerificationId({
+            environment: 'Production',
+            bundleId,
+            transactionId: consumable.transactionId,
+          }),
+          verifiedAt: '2026-10-24T11:59:00.000Z',
+        };
+      },
+      async verifyAdReward() {
+        return { status: 'rejected', reason: 'unsupported' };
+      },
+    },
+  });
+  const purchase = backend.purchases.verifyPurchase({
+    target: 'ios',
+    playerId: 'player-race',
+    productId: 'COINS_100',
+    platformTransactionId: consumable.transactionId,
+    idempotencyKey: 'checkout-race',
+    purchasedAt: '2026-10-24T11:58:00.000Z',
+  });
+  await started;
+  const refundInFlight = verifierOf(
+    notification({
+      notificationUUID: 'uuid-race',
+      transaction: { ...consumable, revocationDate: Date.parse('2026-10-24T11:59:30.000Z') },
+    }),
+  );
+  const early = await handle(store, refundInFlight);
+  assert.deepEqual(
+    early,
+    {
+      status: 'retry',
+      reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_FOUND',
+      notificationUUID: 'uuid-race',
+    },
+    'a recent refund for a grant not written yet is not acknowledged',
+  );
+  assert.equal(appStoreServerNotificationHttpStatus(early), 503);
+  releaseVerification?.();
+  const granted = await purchase;
+  assert.equal(granted.verified, true, 'the in-flight purchase commits its grant');
+  const redelivered = await handle(store, refundInFlight);
+  assert.equal(redelivered.status, 'revoked', 'Apple\u2019s redelivery revokes the grant');
+  assert.equal(
+    (await listActiveEntitlementTransactions(store, { playerId: 'player-race' })).length,
+    0,
+    'the refund is not lost',
+  );
+
+  // Bounded: once the window passed, an unmatched refund is acknowledged.
+  const neverGranted = verifierOf(
+    notification({
+      notificationUUID: 'uuid-never',
+      transaction: {
+        ...consumable,
+        transactionId: '2000000000000999',
+        revocationDate: Date.parse('2026-10-24T11:59:30.000Z'),
+      },
+    }),
+  );
+  assert.equal((await handle(store, neverGranted)).status, 'retry');
+  const later = await handleAppStoreServerNotification({
+    store,
+    verifier: neverGranted,
+    body: { signedPayload: 'signed-payload' },
+    environment: 'Production',
+    bundleId,
+    signal: new AbortController().signal,
+    now: () => '2026-10-24T13:00:00.000Z',
+  });
+  assert.equal(later.status, 'ignored', 'an hour later the refund is acknowledged');
+  const noWindow = await handleAppStoreServerNotification({
+    store,
+    verifier: neverGranted,
+    body: { signedPayload: 'signed-payload' },
+    environment: 'Production',
+    bundleId,
+    signal: new AbortController().signal,
+    now: () => '2026-10-24T12:00:00.000Z',
+    unmatchedRefundRetryMs: 0,
+  });
+  assert.equal(noWindow.status, 'ignored', 'a zero window acknowledges at once');
 }
 
 console.log('App Store Server Notifications handler tests passed.');

@@ -917,11 +917,19 @@ the purchase verifier, one per environment.
   still being redelivered is applied first; one for a grant revoked for
   another reason than an App Store refund is `ignored`
   (`APP_STORE_NOTIFICATION_REVOCATION_NOT_REFUND`).
+- A `REFUND` or `REVOKE` for a transaction this ledger holds no grant for is
+  `retry` (503) while Apple revoked it less than `unmatchedRefundRetryMs`
+  ago (1 hour by default), then `ignored`. A purchase request that verified
+  the transaction just before the refund may still be writing its grant;
+  Apple's redelivery (an hour later in production) then finds and revokes
+  it, and a refund for a grant that never appears is acknowledged at that
+  redelivery. A purchase request that starts after the refund is refused by
+  the default Server API purchase mode, which reads the revocation. (A
+  pending-revocation record applied by the grant path would close the race
+  without a redelivery, but needs a write on every purchase; the bounded
+  retry needs none.)
 - Every other type (`TEST`, `CONSUMPTION_REQUEST`, `REFUND_DECLINED`,
-  subscription and summary notifications), a transaction this ledger never
-  granted, and a refund that arrives before its grant are `ignored`. A
-  refund before its grant is safe with the default Server API purchase mode,
-  which refuses a revoked transaction.
+  subscription and summary notifications) is `ignored`.
 - Answers: `revoked`, `ignored`, and `conflict` (a ledger key or identity
   conflict to alert on) are 200; `rejected` (not signed by Apple for this app
   and environment, malformed) is 400; `retry` (Apple's certificate checks are
