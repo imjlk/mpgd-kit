@@ -210,6 +210,15 @@ try {
     ['warning'],
   );
   assert.deepEqual(inspectIosInfoPlistOrientation(portraitOnlyIpad, 'portrait', 'iphone'), []);
+  // Without the ~ipad key iPad falls back to the iPhone list.
+  const noIpadKey = applyIosInfoPlistOrientation(template, 'portrait').replace(
+    /<key>UISupportedInterfaceOrientations~ipad<\/key>\s*<array>[\s\S]*?<\/array>/u,
+    '',
+  );
+  assert.deepEqual(
+    inspectIosInfoPlistOrientation(noIpadKey, 'portrait', 'universal').map((issue) => issue.level),
+    ['warning'],
+  );
 
   const project = readFileSync(
     path.join(referenceShell, 'ios/App/App.xcodeproj/project.pbxproj'),
@@ -417,6 +426,33 @@ try {
     addIosAppResource('// !$*UTF8*$!\n{ objects = { }; }', iosAppPrivacyManifestFile),
     undefined,
   );
+  // A `)` inside a comment does not end a list.
+  const parenthesized = without.replace('/* Info.plist */,\n', '/* Info (1).plist */,\n');
+  assert.notEqual(parenthesized, without);
+  const addedAfterParen = addIosAppResource(parenthesized, iosAppPrivacyManifestFile) ?? '';
+  assert.match(addedAfterParen, /\/\* Info \(1\)\.plist \*\/,\n/u);
+  assert.equal(iosAppBundlesResource(addedAfterParen, iosAppPrivacyManifestFile), true);
+  // Only the App group of the main group is used, not a nested folder also called App.
+  const nested = without.replace(
+    '/* Begin PBXGroup section */\n',
+    '/* Begin PBXGroup section */\n\t\t000000000000000000000001 /* App */ = {\n\t\t\tisa = PBXGroup;\n'
+      + '\t\t\tchildren = (\n\t\t\t);\n\t\t\tpath = App;\n\t\t\tsourceTree = "<group>";\n\t\t};\n',
+  );
+  const addedNested = addIosAppResource(nested, iosAppPrivacyManifestFile) ?? '';
+  assert.match(
+    addedNested,
+    /000000000000000000000001 \/\* App \*\/ = \{\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = \(\n\t\t\t\);/u,
+  );
+  assert.match(
+    addedNested,
+    /\/\* public \*\/,\n\t\t\t\t[A-F0-9]{24} \/\* PrivacyInfo\.xcprivacy \*\/,/u,
+  );
+  // Referenced in the group but not bundled: left to the game.
+  const groupOnly = added.replace(
+    /\n\t+[A-F0-9]{24} \/\* PrivacyInfo\.xcprivacy in Resources \*\/,/u,
+    '',
+  );
+  assert.equal(addIosAppResource(groupOnly, iosAppPrivacyManifestFile), undefined);
   assert.match(iosAppPrivacyManifestXml, /<key>NSPrivacyTracking<\/key>\n\t<false\/>/u);
   assert.equal(
     readFileSync(path.join(referenceShell, 'ios/App/App', iosAppPrivacyManifestFile), 'utf8'),

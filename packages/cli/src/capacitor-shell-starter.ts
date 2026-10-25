@@ -41,6 +41,7 @@ import {
   applyIosProjectDeviceFamily,
   iosAppPrivacyManifestFile,
   iosAppPrivacyManifestXml,
+  isRecord,
   readGameNativeOrientation,
   readIosDeviceFamily,
   type IosDeviceFamily,
@@ -865,12 +866,10 @@ export function materializeCapacitorShellStarter(
       if (plan.notificationPlugins.length > 0) {
         materializeAndroidInexactAlarms(plan.gameRoot);
       }
+      materializeAndroidStorePolicy(plan.gameRoot);
     }
     if (platform === 'ios' && generatedNow) {
       materializeIosStorePolicy(plan.gameRoot);
-    }
-    if (platform === 'android' && generatedNow) {
-      materializeAndroidStorePolicy(plan.gameRoot);
     }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
@@ -1123,16 +1122,12 @@ function readNativeShellSettings(gameRoot: string): {
       )
     : undefined;
   const targets = readJsonObject(path.join(gameRoot, 'mpgd.targets.json'));
-  const ios = isRecordValue(targets.targets) ? targets.targets.ios : undefined;
-  const iosDeviceFamily = readIosDeviceFamily(isRecordValue(ios) ? ios.metadata : undefined);
+  const ios = isRecord(targets.targets) ? targets.targets.ios : undefined;
+  const iosDeviceFamily = readIosDeviceFamily(isRecord(ios) ? ios.metadata : undefined);
   return {
     ...(orientation === undefined ? {} : { orientation }),
     ...(iosDeviceFamily === undefined ? {} : { iosDeviceFamily }),
   };
-}
-
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function materializeIosArchiveScheme(gameRoot: string): void {

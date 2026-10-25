@@ -255,11 +255,12 @@ export function inspectIosInfoPlistOrientation(
       (value) => value === iosPortrait || value === iosPortraitUpsideDown,
     );
     const landscape = iphone.some((value) => iosLandscape.includes(value));
-    const matches = orientation === 'portrait'
-      ? portrait && !landscape
-      : orientation === 'landscape'
-        ? landscape && !portrait
-        : portrait && landscape;
+    const matchesByOrientation: Record<NativeShellOrientation, boolean> = {
+      portrait: portrait && !landscape,
+      landscape: landscape && !portrait,
+      any: portrait && landscape,
+    };
+    const matches = matchesByOrientation[orientation];
     if (!matches) {
       issues.push({
         level: 'error',
@@ -270,8 +271,11 @@ export function inspectIosInfoPlistOrientation(
     }
   }
   if (deviceFamily === 'universal') {
-    const ipad = readPlistStrings(plist, 'UISupportedInterfaceOrientations~ipad');
-    if (ipad !== undefined && iosIpadOrientations.some((value) => !ipad.includes(value))) {
+    // Without the ~ipad key iPad uses the base list; without either, every orientation.
+    const ipad = readPlistStrings(plist, 'UISupportedInterfaceOrientations~ipad')
+      ?? readPlistStrings(plist, 'UISupportedInterfaceOrientations')
+      ?? iosIpadOrientations;
+    if (iosIpadOrientations.some((value) => !ipad.includes(value))) {
       issues.push({
         level: 'warning',
         message: 'iOS Info.plist UISupportedInterfaceOrientations~ipad does not list all four '
@@ -463,31 +467,19 @@ interface PbxBuildSettings {
 }
 
 function readAppTargetConfigurationIds(project: string): readonly string[] {
-  for (const match of project.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]*\*\/\s*=\s*\{/gu)) {
-    const body = readBraced(project, project.indexOf('{', match.index ?? 0));
-    if (/\bisa\s*=\s*PBXNativeTarget;/u.test(body.text)
-      && /\bname\s*=\s*"?App"?\s*;/u.test(body.text)) {
-      const listId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(body.text)?.[1];
-      if (listId === undefined) {
-        break;
-      }
-      const list = readPbxObjectBody(project, listId);
-      const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1] ?? '';
-      // Entries are `ID /* Name */,`: only the token before each comma counts.
-      return configurations.replace(/\/\*[^]*?\*\//gu, ' ').split(',')
-        .map((entry) => /^\s*([A-F0-9]+)\b/u.exec(entry)?.[1])
-        .filter((id): id is string => id !== undefined);
-    }
+  const target = findPbxObject(
+    project,
+    (body) => /\bisa\s*=\s*PBXNativeTarget;/u.test(body) && /\bname\s*=\s*"?App"?\s*;/u.test(body),
+  );
+  const listId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(target?.text ?? '')?.[1];
+  const list = listId === undefined ? undefined : findPbxObjectById(project, listId);
+  const ids = list === undefined
+    ? undefined
+    : readPbxList(project, list, 'buildConfigurations')?.ids;
+  if (ids === undefined) {
+    throw new Error('Xcode project has no App target build configuration list.');
   }
-  throw new Error('Xcode project has no App target build configuration list.');
-}
-
-function readPbxObjectBody(project: string, id: string): string {
-  const marker = new RegExp(`\\b${id}\\s*(?:\\/\\*[^*]*\\*\\/)?\\s*=\\s*\\{`, 'u').exec(project);
-  if (marker === null) {
-    throw new Error(`Xcode project object ${id} is missing.`);
-  }
-  return readBraced(project, project.indexOf('{', marker.index)).text;
+  return ids;
 }
 
 function locatePbxBuildSettings(project: string, id: string): PbxBuildSettings {
@@ -541,7 +533,7 @@ function readBraced(source: string, open: number): { readonly text: string; read
   throw new Error('Xcode project has an unclosed object.');
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -595,6 +587,10 @@ export function addIosAppResource(project: string, fileName: string): string | u
   if (resourcesPhase.text.includes(`/* ${fileName} in Resources */`)) {
     return project;
   }
+  if (group.text.includes(`/* ${fileName} */`)) {
+    // Referenced but not bundled: a game-owned arrangement this helper leaves alone.
+    return undefined;
+  }
   const fileId = uniquePbxId(project, `${fileName}:file`);
   const buildId = uniquePbxId(project, `${fileName}:build`);
   const edits = [
@@ -636,55 +632,109 @@ export function inspectIosAppPrivacyManifest(project: string): readonly NativeSh
 function findAppResourcesPhase(
   project: string,
 ): { readonly text: string; readonly filesEnd: number } | undefined {
-  const target = findAppTarget(project);
-  const phases = /\bbuildPhases\s*=\s*\(([^)]*)\)/u.exec(target ?? '')?.[1];
-  if (phases === undefined) {
+  const target = findPbxObject(
+    project,
+    (body) => /\bisa\s*=\s*PBXNativeTarget;/u.test(body) && /\bname\s*=\s*"?App"?\s*;/u.test(body),
+  );
+  if (target === undefined) {
     return undefined;
   }
-  for (const id of phases.replace(/\/\*[^]*?\*\//gu, ' ').split(',')
-    .map((entry) => /^\s*([A-F0-9]+)\b/u.exec(entry)?.[1])
-    .filter((value): value is string => value !== undefined)) {
-    const marker = new RegExp(`\\b${id}\\s*(?:\\/\\*[^*]*\\*\\/)?\\s*=\\s*\\{`, 'u').exec(project);
-    if (marker === null) {
+  for (const id of readPbxList(project, target, 'buildPhases')?.ids ?? []) {
+    const phase = findPbxObjectById(project, id);
+    if (phase === undefined || !/\bisa\s*=\s*PBXResourcesBuildPhase\s*;/u.test(phase.text)) {
       continue;
     }
-    const body = readBraced(project, project.indexOf('{', marker.index));
-    if (!/\bisa\s*=\s*PBXResourcesBuildPhase\s*;/u.test(body.text)) {
-      continue;
-    }
-    const files = /\bfiles\s*=\s*\(/u.exec(body.text);
-    if (files === null) {
-      return undefined;
-    }
-    const listStart = body.start + files.index + files[0].length;
-    const listEnd = project.indexOf(')', listStart);
-    return { text: project.slice(listStart, listEnd), filesEnd: listEnd };
+    const files = readPbxList(project, phase, 'files');
+    return files === undefined ? undefined : { text: files.text, filesEnd: files.end };
   }
   return undefined;
 }
 
-function findAppGroup(project: string): { readonly childrenEnd: number } | undefined {
+/** The `path = App` group listed in the project's main group, with its children list. */
+function findAppGroup(
+  project: string,
+): { readonly text: string; readonly childrenEnd: number } | undefined {
+  const projectObject = findPbxObject(project, (body) => /\bisa\s*=\s*PBXProject\s*;/u.test(body));
+  const mainGroupId = /\bmainGroup\s*=\s*([A-F0-9]+)\b/u.exec(projectObject?.text ?? '')?.[1];
+  const mainGroup = mainGroupId === undefined ? undefined : findPbxObjectById(project, mainGroupId);
+  if (mainGroup === undefined) {
+    return undefined;
+  }
+  for (const childId of readPbxList(project, mainGroup, 'children')?.ids ?? []) {
+    const child = findPbxObjectById(project, childId);
+    if (child === undefined || !/\bisa\s*=\s*PBXGroup\s*;/u.test(child.text)
+      || !/\bpath\s*=\s*"?App"?\s*;/u.test(child.text)) {
+      continue;
+    }
+    const children = readPbxList(project, child, 'children');
+    return children === undefined ? undefined : { text: children.text, childrenEnd: children.end };
+  }
+  return undefined;
+}
+
+interface PbxObject {
+  readonly text: string;
+  readonly start: number;
+}
+
+function findPbxObject(project: string, accept: (body: string) => boolean): PbxObject | undefined {
   for (const match of project.matchAll(/\b([A-F0-9]+)\s*(?:\/\*[^*]*\*\/)?\s*=\s*\{/gu)) {
     const body = readBraced(project, project.indexOf('{', match.index ?? 0));
-    if (!/\bisa\s*=\s*PBXGroup\s*;/u.test(body.text)
-      || !/\bpath\s*=\s*"?App"?\s*;/u.test(body.text)) {
-      continue;
+    if (accept(body.text)) {
+      return { text: body.text, start: body.start };
     }
-    const children = /\bchildren\s*=\s*\(/u.exec(body.text);
-    if (children === null) {
-      return undefined;
-    }
-    const listStart = body.start + children.index + children[0].length;
-    return { childrenEnd: project.indexOf(')', listStart) };
   }
   return undefined;
 }
 
-function findAppTarget(project: string): string | undefined {
-  for (const match of project.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]*\*\/\s*=\s*\{/gu)) {
-    const body = readBraced(project, project.indexOf('{', match.index ?? 0)).text;
-    if (/\bisa\s*=\s*PBXNativeTarget;/u.test(body) && /\bname\s*=\s*"?App"?\s*;/u.test(body)) {
-      return body;
+function findPbxObjectById(project: string, id: string): PbxObject | undefined {
+  const marker = new RegExp(`\\b${id}\\s*(?:\\/\\*[^*]*\\*\\/)?\\s*=\\s*\\{`, 'u').exec(project);
+  if (marker === null) {
+    return undefined;
+  }
+  const body = readBraced(project, project.indexOf('{', marker.index));
+  return { text: body.text, start: body.start };
+}
+
+/**
+ * A `key = ( ... );` list inside an object: its raw text, the IDs of its
+ * entries, and the offset of its closing parenthesis, skipping comments and
+ * quoted strings (a `/* Info (1).plist *\/` comment does not end the list).
+ */
+function readPbxList(
+  project: string,
+  object: PbxObject,
+  key: string,
+): { readonly text: string; readonly ids: readonly string[]; readonly end: number } | undefined {
+  const marker = new RegExp(`\\b${key}\\s*=\\s*\\(`, 'u').exec(object.text);
+  if (marker === null) {
+    return undefined;
+  }
+  const start = object.start + marker.index + marker[0].length;
+  let quote = false;
+  for (let index = start; index < project.length; index += 1) {
+    const character = project[index];
+    if (quote) {
+      if (character === '\\') {
+        index += 1;
+      } else if (character === '"') {
+        quote = false;
+      }
+      continue;
+    }
+    if (character === '/' && project[index + 1] === '*') {
+      const close = project.indexOf('*/', index + 2);
+      index = close === -1 ? project.length : close + 1;
+      continue;
+    }
+    if (character === '"') {
+      quote = true;
+    } else if (character === ')') {
+      const text = project.slice(start, index);
+      const ids = text.replace(/\/\*[^]*?\*\//gu, ' ').split(',')
+        .map((entry) => /^\s*([A-F0-9]+)\b/u.exec(entry)?.[1])
+        .filter((id): id is string => id !== undefined);
+      return { text, ids, end: index };
     }
   }
   return undefined;

@@ -166,7 +166,10 @@ for (const [key, value] of [
 ] as const) {
   assert.match(
     read('apps/mobile-capacitor/ios/App/App/Info.plist'),
-    new RegExp(`<key>${key}</key>\\s*(?:<array>\\s*)?${value.replaceAll('/', '\\/')}`, 'u'),
+    new RegExp(
+      `<key>${key}</key>\\s*(?:<array>(?:\\s*<string>[^<]*</string>)*\\s*)?${value.replaceAll('/', '\\/')}`,
+      'u',
+    ),
     `The iOS shell Info.plist must declare ${key} for App Store submission`,
   );
 }
