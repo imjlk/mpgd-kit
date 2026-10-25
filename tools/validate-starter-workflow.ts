@@ -848,10 +848,9 @@ function validatePhaserTemplateCommerceWiring(): void {
     if (readText(examplePath) !== readText(templatePath)) {
       failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
     }
-    // The lite starter's copy of the purchase binding decides which player a purchase binds to too.
+    // The lite starter carries the same modules (the purchase binding among them).
     const litePath = `examples/lite-starter/${relativePath}`;
-    if (relativePath === 'src/platform/commerceAccountBinding.ts'
-      && (!existsSync(litePath) || readText(litePath) !== readText(templatePath))) {
+    if (!existsSync(litePath) || readText(litePath) !== readText(templatePath)) {
       failures.push(`${litePath}: must stay in parity with ${templatePath}.`);
     }
   }

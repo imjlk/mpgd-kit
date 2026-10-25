@@ -173,7 +173,11 @@ for a public client:
   rotation's answer, or that the OS suspended mid-request, keeps the old token
   and presents it at its next launch; strict detection would end that guest for
   good. The cost is that a stolen copy of that one token stays usable until the
-  device's next refresh, which then reads as a replay and ends the family.
+  device's next refresh, which then reads as a replay and ends the family. The
+  server cannot tell a lost answer from one delivered but not yet used, so two
+  clients refreshing the same token at once (two processes of one install)
+  leave one of them with a replaced token that later reads as a replay; the
+  generated game refreshes from one coordinator only.
 - A family ends after `IDENTITY_REFRESH_IDLE_DAYS` (180) without a refresh
   ("Refresh tokens SHOULD expire if the client has been inactive for some
   time"); each refresh extends it. A guest who stays away longer comes back as
@@ -202,7 +206,10 @@ pnpm --dir apps/game-identity-worker run deploy
 ```
 
 `MPGD_STORE = "memory"` serves only local development hosts (loopback,
-`*.localhost`, `10.0.2.2`): sessions would vanish with each isolate. The daily
+`*.localhost`, `10.0.2.2`): sessions would vanish with each isolate. A native
+shell build only reaches `https:` origins (its content security policy is
+`connect-src 'self' https: wss:`), so point a device or emulator at the Worker
+through an https tunnel, not `http://10.0.2.2`. The daily
 cron purges ended families (after 7 days) and expired tokens; without it they
 accumulate.
 

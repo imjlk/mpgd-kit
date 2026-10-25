@@ -82,8 +82,8 @@ export async function resolveStoreKitAppAccountToken(
   if (playerId === undefined) {
     throw new Error(
       'A StoreKit purchase is bound to the player of a server session, and there is none: '
-        + 'set VITE_MPGD_IDENTITY_URL to the guest identity Worker (src/platform/guestIdentity.ts) '
-        + "and let it sign in. The native shell's local player cannot bind a purchase.",
+        + 'sign in to an identity service first (a generated game: VITE_MPGD_IDENTITY_URL and '
+        + "src/platform/guestIdentity.ts). The native shell's local player cannot bind a purchase.",
     );
   }
   return toUuid(await digestPlayerId(playerId));

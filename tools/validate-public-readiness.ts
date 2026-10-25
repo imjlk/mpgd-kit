@@ -91,6 +91,7 @@ const blockedTrackedGeneratedPrefixes = [
   'apps/target-devvit/dist/',
   'apps/mobile-capacitor/www/',
   'apps/game-services-worker/dist/',
+  'apps/game-identity-worker/dist/',
 ];
 const binaryFileExtensions = [
   '.png',

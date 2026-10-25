@@ -536,7 +536,10 @@ bindings. A session the identity service ended (logout, a replayed refresh
 token, or 180 days without play) is replaced by a new guest; without a linked
 account that player's purchases stay with the old one. Offline at launch,
 the game runs without a server session and purchases are refused until the
-next launch signs in. Account linking (Sign in with Apple or Google) is not
+next launch signs in; that launch's game services use the platform player id,
+so a purchase journaled under the server player is recovered on the next
+signed-in launch. A native shell only reaches `https:` origins, so test on a
+device or emulator through an https tunnel to a local Worker. Account linking (Sign in with Apple or Google) is not
 part of the reference Worker yet.
 
 ### Restore Purchases

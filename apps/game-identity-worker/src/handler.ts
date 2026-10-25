@@ -145,6 +145,8 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+  // One preflight a day per route, not one per request inside the client's timeout.
+  'Access-Control-Max-Age': '86400',
 } as const;
 
 const refusalStatus: Readonly<Record<IdentityRefusal | 'UNAVAILABLE', number>> = {

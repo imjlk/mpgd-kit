@@ -90,6 +90,7 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
   );
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-methods'), 'POST, OPTIONS');
+  assert.equal(preflight.headers.get('access-control-max-age'), '86400');
 }
 
 // The address limit runs before the store, keyed by the client address only.
