@@ -172,12 +172,13 @@ for a public client:
   answers `503` and the log names the setting). A phone that lost the
   rotation's answer, or that the OS suspended mid-request, keeps the old token
   and presents it at its next launch; strict detection would end that guest for
-  good. The cost is that a stolen copy of that one token stays usable until the
-  device's next refresh, which then reads as a replay and ends the family. The
-  server cannot tell a lost answer from one delivered but not yet used, so two
-  clients refreshing the same token at once (two processes of one install)
-  leave one of them with a replaced token that later reads as a replay; the
-  generated game refreshes from one coordinator only.
+  good. A retry is answered with the **same** successor: each rotation derives
+  the new refresh token from the old one and a nonce stored with the family
+  (never sent), so a lost answer, a retried request, an abandoned request that
+  finishes late, or two refreshes racing all end up holding one token, and no
+  answer invalidates another. The cost is that a stolen copy of the replaced
+  token can obtain that same successor until the device next refreshes, after
+  which the replaced token reads as a replay and ends the family.
 - A family ends after `IDENTITY_REFRESH_IDLE_DAYS` (180) without a refresh
   ("Refresh tokens SHOULD expire if the client has been inactive for some
   time"); each refresh extends it. A guest who stays away longer comes back as

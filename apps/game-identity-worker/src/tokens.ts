@@ -13,6 +13,26 @@ export function createOpaqueToken(prefix: string): string {
   return `${prefix}${base64Url(randomBytes(32))}`;
 }
 
+/** A new rotation nonce: 256 random bits, base64url. */
+export function createRotationNonce(): string {
+  return base64Url(randomBytes(32));
+}
+
+/**
+ * The refresh token that replaces `previous` under `nonce`: SHA-256 of the
+ * nonce and the previous token, base64url, with the refresh prefix. A retry
+ * of `previous` derives the same successor again, so rotation is idempotent;
+ * without the nonce (stored with the family, never sent) the previous token
+ * alone predicts nothing.
+ */
+export async function deriveRefreshToken(previous: string, nonce: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(`${nonce}:${previous}`),
+  );
+  return `${refreshTokenPrefix}${base64Url(new Uint8Array(digest))}`;
+}
+
 /** A new identifier: `prefix` and 128 random bits in hex. */
 export function createIdentifier(prefix: string): string {
   return `${prefix}${hex(randomBytes(16))}`;

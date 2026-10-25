@@ -19,10 +19,12 @@ interface FamilyRow {
   readonly current_refresh_hash: string;
   readonly previous_refresh_hash: string | null;
   readonly rotated_at_ms: number | null;
+  readonly rotation_nonce: string | null;
 }
 
 const familyColumns = 'f.family_id, f.player_id, f.installation_id, f.created_at_ms, f.expires_at_ms, '
-  + 'f.revoked_at_ms, f.revoke_reason, f.current_refresh_hash, f.previous_refresh_hash, f.rotated_at_ms';
+  + 'f.revoked_at_ms, f.revoke_reason, f.current_refresh_hash, f.previous_refresh_hash, f.rotated_at_ms, '
+  + 'f.rotation_nonce';
 
 /**
  * The identity store on D1 (migrations/0001_guest_identity.sql). Every
@@ -84,13 +86,13 @@ export function createD1IdentityStore(
       return row === null ? undefined : toFamily(row);
     },
 
-    async rotate({ familyId, now, expected, next, access, revokeOtherAccessTokens }) {
-      const swapped = 'EXISTS (SELECT 1 FROM identity_session_families WHERE family_id = ?1 AND current_refresh_hash = ?2)';
+    async rotate({ familyId, now, expected, next, access }) {
       const [swap] = await db.batch([
         db.prepare(
           'UPDATE identity_session_families SET current_refresh_hash = ?1, previous_refresh_hash = ?2, '
-            + 'rotated_at_ms = ?3, expires_at_ms = ?4 WHERE family_id = ?5 AND current_refresh_hash = ?6 '
-            + 'AND (?7 IS NULL OR previous_refresh_hash = ?7) AND revoked_at_ms IS NULL AND expires_at_ms > ?8',
+            + 'rotated_at_ms = ?3, expires_at_ms = ?4, rotation_nonce = ?9 WHERE family_id = ?5 '
+            + 'AND current_refresh_hash = ?6 AND (?7 IS NULL OR previous_refresh_hash = ?7) '
+            + 'AND revoked_at_ms IS NULL AND expires_at_ms > ?8',
         ).bind(
           next.currentRefreshHash,
           next.previousRefreshHash,
@@ -100,6 +102,7 @@ export function createD1IdentityStore(
           expected.currentRefreshHash,
           expected.previousRefreshHash ?? null,
           now,
+          next.rotationNonce,
         ),
         // Only when the swap above took effect: the new hash is current only then.
         db.prepare(
@@ -112,15 +115,17 @@ export function createD1IdentityStore(
             + 'SELECT ?1, family_id, player_id, ?2 FROM identity_session_families '
             + 'WHERE family_id = ?3 AND current_refresh_hash = ?4',
         ).bind(access.tokenHash, access.expiresAt, familyId, next.currentRefreshHash),
-        ...(revokeOtherAccessTokens === true
-          ? [
-              db.prepare(
-                `DELETE FROM identity_access_tokens WHERE family_id = ?1 AND token_hash != ?3 AND ${swapped}`,
-              ).bind(familyId, next.currentRefreshHash, access.tokenHash),
-            ]
-          : []),
       ]);
       return swap?.meta.changes === 1;
+    },
+
+    async addAccessToken({ now, currentRefreshHash, access }) {
+      const inserted = await db.prepare(
+        'INSERT INTO identity_access_tokens (token_hash, family_id, player_id, expires_at_ms) '
+          + 'SELECT ?1, family_id, player_id, ?2 FROM identity_session_families '
+          + 'WHERE family_id = ?3 AND current_refresh_hash = ?4 AND revoked_at_ms IS NULL AND expires_at_ms > ?5',
+      ).bind(access.tokenHash, access.expiresAt, access.familyId, currentRefreshHash, now).run();
+      return inserted.meta.changes === 1;
     },
 
     async revokeFamily(familyId: string, reason: IdentityRevokeReason, at: number) {
@@ -213,5 +218,6 @@ function toFamily(row: FamilyRow): IdentitySessionFamily {
       : {}),
     ...(row.previous_refresh_hash === null ? {} : { previousRefreshHash: row.previous_refresh_hash }),
     ...(row.rotated_at_ms === null ? {} : { rotatedAt: row.rotated_at_ms }),
+    ...(row.rotation_nonce === null ? {} : { rotationNonce: row.rotation_nonce }),
   };
 }

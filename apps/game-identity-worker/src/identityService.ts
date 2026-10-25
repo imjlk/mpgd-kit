@@ -6,6 +6,8 @@ import {
   accessTokenPrefix,
   createIdentifier,
   createOpaqueToken,
+  createRotationNonce,
+  deriveRefreshToken,
   hashToken,
   isOpaqueToken,
   readBearerToken,
@@ -33,10 +35,12 @@ export interface IdentityServiceConfig {
    * used. A client whose network dropped the rotation's answer, or that the
    * OS suspended mid-request, keeps the old token and presents it at its
    * next refresh, which may be the next launch; strict replay detection
-   * would then end the guest for good. Default 7 days; 0 turns it off
-   * (strict RFC 9700 rotation). The cost: a stolen copy of the replaced
-   * token stays usable until the device's next refresh, which then reads as
-   * a replay and ends the family.
+   * would then end the guest for good. A retry is answered with the same
+   * successor (`deriveRefreshToken` with the family's rotation nonce), so no
+   * answer ever invalidates another. Default 7 days; 0 turns it off (strict
+   * RFC 9700 rotation). The cost: a stolen copy of the replaced token can
+   * obtain that successor until the device's next refresh, after which it
+   * reads as a replay and ends the family.
    */
   readonly refreshRetryGraceMs: number;
   /** New guests per installation in a rolling day. Default 5. */
@@ -214,53 +218,61 @@ export function createGuestIdentityService(input: {
         return rejected;
       }
       // Two rounds at most: a lost compare-and-swap means another refresh of
-      // the same family won, and the token is then read again as a retry or a replay.
+      // the same token won, and the token is then read again as a retry.
       for (let round = 0; round < 2; round += 1) {
         const family = await store.getFamily(issuedIn.familyId);
         const at = now();
         if (family === undefined || family.revokedAt !== undefined || family.expiresAt <= at) {
           return rejected;
         }
-        const isCurrent = family.currentRefreshHash === presented;
-        const isRetry = !isCurrent
-          && config.refreshRetryGraceMs > 0
+        if (family.currentRefreshHash === presented) {
+          const nonce = createRotationNonce();
+          const nextRefreshToken = await deriveRefreshToken(refreshToken, nonce);
+          const { token, access } = await issueAccess(family, at);
+          const rotated = await store.rotate({
+            familyId: family.familyId,
+            now: at,
+            expected: { currentRefreshHash: presented },
+            next: {
+              currentRefreshHash: await hashToken(nextRefreshToken),
+              previousRefreshHash: presented,
+              rotatedAt: at,
+              expiresAt: at + config.refreshIdleMs,
+              rotationNonce: nonce,
+            },
+            access,
+          });
+          if (rotated) {
+            return { ok: true, value: credentials(family, token, nextRefreshToken, access) };
+          }
+          continue;
+        }
+        // The token the latest rotation replaced, while its successor is
+        // unused (still current) and within the grace window: the client
+        // lost the answer, or an abandoned request is still running. Answer
+        // the same successor again, so no answer ever invalidates another.
+        if (
+          config.refreshRetryGraceMs > 0
           && family.previousRefreshHash === presented
           && family.rotatedAt !== undefined
-          && at - family.rotatedAt <= config.refreshRetryGraceMs;
-        if (!isCurrent && !isRetry) {
-          // RFC 9700 section 4.14.2: an invalidated refresh token was
-          // presented, so one of two parties holds a stolen copy. The server
-          // cannot tell which, so the whole family ends.
-          await revoke(family, 'refresh-token-reuse', at);
-          log('[identity] refresh token reuse: the session family was revoked');
-          return rejected;
+          && family.rotationNonce !== undefined
+          && at - family.rotatedAt <= config.refreshRetryGraceMs
+        ) {
+          const successor = await deriveRefreshToken(refreshToken, family.rotationNonce);
+          if (await hashToken(successor) === family.currentRefreshHash) {
+            const { token, access } = await issueAccess(family, at);
+            if (await store.addAccessToken({ now: at, currentRefreshHash: family.currentRefreshHash, access })) {
+              return { ok: true, value: credentials(family, token, successor, access) };
+            }
+            continue;
+          }
         }
-        const nextRefreshToken = createOpaqueToken(refreshTokenPrefix);
-        const nextRefreshHash = await hashToken(nextRefreshToken);
-        const { token, access } = await issueAccess(family, at);
-        const rotated = await store.rotate({
-          familyId: family.familyId,
-          now: at,
-          expected: isCurrent
-            ? { currentRefreshHash: presented }
-            : { currentRefreshHash: family.currentRefreshHash, previousRefreshHash: presented },
-          // A retry replaces the unused successor and keeps the original
-          // rotation time, so the grace window never extends itself.
-          next: isCurrent
-            ? { currentRefreshHash: nextRefreshHash, previousRefreshHash: presented, rotatedAt: at, expiresAt: at + config.refreshIdleMs }
-            : {
-                currentRefreshHash: nextRefreshHash,
-                previousRefreshHash: presented,
-                rotatedAt: family.rotatedAt ?? at,
-                expiresAt: at + config.refreshIdleMs,
-              },
-          access,
-          // The unused successor's access token goes with it.
-          revokeOtherAccessTokens: !isCurrent,
-        });
-        if (rotated) {
-          return { ok: true, value: credentials(family, token, nextRefreshToken, access) };
-        }
+        // RFC 9700 section 4.14.2: an invalidated refresh token was
+        // presented, so one of two parties holds a stolen copy. The server
+        // cannot tell which, so the whole family ends.
+        await revoke(family, 'refresh-token-reuse', at);
+        log('[identity] refresh token reuse: the session family was revoked');
+        return rejected;
       }
       return rejected;
     },

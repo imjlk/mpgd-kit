@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS identity_session_families (
   revoke_reason TEXT,
   current_refresh_hash TEXT NOT NULL,
   previous_refresh_hash TEXT,
-  rotated_at_ms INTEGER
+  rotated_at_ms INTEGER,
+  -- The nonce the current refresh token was derived with from the previous
+  -- one, so a retry of the previous token gets the same successor back.
+  rotation_nonce TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_identity_session_families_player

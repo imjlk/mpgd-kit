@@ -20,6 +20,12 @@ export interface IdentitySessionFamily {
   readonly previousRefreshHash?: string;
   /** When `previousRefreshHash` was replaced. */
   readonly rotatedAt?: number;
+  /**
+   * The nonce the current refresh token was derived with from the previous
+   * one (`deriveRefreshToken`), so a retry of the previous token gets the
+   * same current token back.
+   */
+  readonly rotationNonce?: string;
 }
 
 export type IdentityRevokeReason = 'logout' | 'refresh-token-reuse';
@@ -53,9 +59,8 @@ export interface IdentityStore {
    * `now` and its current refresh hash is `expected.currentRefreshHash`
    * (and, when given, its previous one is `expected.previousRefreshHash`),
    * makes `next.currentRefreshHash` current, sets the previous hash, its
-   * time, and the new end, records the new refresh token, and writes the
-   * access token; with `revokeOtherAccessTokens`, deletes the family's other
-   * access tokens. `false` when the family changed first.
+   * time, nonce, and the new end, records the new refresh token, and writes
+   * the access token. `false` when the family changed first.
    */
   rotate(input: {
     readonly familyId: string;
@@ -66,9 +71,19 @@ export interface IdentityStore {
       readonly previousRefreshHash: string;
       readonly rotatedAt: number;
       readonly expiresAt: number;
+      readonly rotationNonce: string;
     };
     readonly access: IdentityAccessToken;
-    readonly revokeOtherAccessTokens?: boolean;
+  }): Promise<boolean>;
+  /**
+   * Writes an access token for a live family whose current refresh hash is
+   * still `currentRefreshHash` (a retry answered with the same successor).
+   * `false` when the family changed or ended first.
+   */
+  addAccessToken(input: {
+    readonly now: number;
+    readonly currentRefreshHash: string;
+    readonly access: IdentityAccessToken;
   }): Promise<boolean>;
   /** Revokes a live family and deletes its access tokens; `false` when it was already revoked. */
   revokeFamily(familyId: string, reason: IdentityRevokeReason, at: number): Promise<boolean>;
@@ -126,7 +141,7 @@ export function createMemoryIdentityStore(): IdentityStore {
     async getFamily(familyId) {
       return families.get(familyId);
     },
-    async rotate({ familyId, now, expected, next, access, revokeOtherAccessTokens }) {
+    async rotate({ familyId, now, expected, next, access }) {
       const family = families.get(familyId);
       if (family === undefined || !live(family, now)
         || family.currentRefreshHash !== expected.currentRefreshHash
@@ -136,12 +151,13 @@ export function createMemoryIdentityStore(): IdentityStore {
       }
       families.set(familyId, { ...family, ...next });
       refreshTokens.set(next.currentRefreshHash, { familyId, issuedAt: now });
-      if (revokeOtherAccessTokens === true) {
-        for (const [hash, other] of accessTokens) {
-          if (other.familyId === familyId) {
-            accessTokens.delete(hash);
-          }
-        }
+      accessTokens.set(access.tokenHash, access);
+      return true;
+    },
+    async addAccessToken({ now, currentRefreshHash, access }) {
+      const family = families.get(access.familyId);
+      if (family === undefined || !live(family, now) || family.currentRefreshHash !== currentRefreshHash) {
+        return false;
       }
       accessTokens.set(access.tokenHash, access);
       return true;

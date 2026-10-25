@@ -166,34 +166,35 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
   }
 
   // Retry grace: a client that lost the rotation's answer retries the old
-  // token while its successor is unused; the unused successor is then dead.
+  // token while its successor is unused, and gets the same successor back.
   {
     const { service, advance, ended } = await setup();
     const issued = value(await service.issueGuest({ installationId: 'install-retry-1' }));
     const lost = value(await service.refresh({ refreshToken: issued.refreshToken }));
-    // Inside the access token's lifetime, so only the retry can end the successor's token.
     advance(minute);
     const retried = value(await service.refresh({ refreshToken: issued.refreshToken }));
     assert.equal(retried.sessionFamilyId, issued.sessionFamilyId);
-    assert.notEqual(retried.refreshToken, lost.refreshToken);
-    // The unused successor's access token ends with it; the retry's works.
-    assert.equal(await service.authenticate(`Bearer ${lost.accessToken}`), undefined);
-    assert.equal(
-      (await service.authenticate(`Bearer ${retried.accessToken}`))?.playerId,
-      issued.serverUserId,
-    );
-    // The window counts from the first rotation: a later retry is a replay.
+    assert.equal(retried.refreshToken, lost.refreshToken);
+    assert.notEqual(retried.accessToken, lost.accessToken);
+    // No answer invalidates another: both access tokens work.
+    for (const answer of [lost, retried]) {
+      assert.equal(
+        (await service.authenticate(`Bearer ${answer.accessToken}`))?.playerId,
+        issued.serverUserId,
+      );
+    }
+    // The window counts from the rotation: a later retry is a replay.
     advance(defaultIdentityServiceConfig.refreshRetryGraceMs - minute + 1);
     assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
     assert.deepEqual(ended, [issued.sessionFamilyId]);
   }
   {
+    // Once the successor was used, the replaced token is a replay, even inside the window.
     const { service, ended } = await setup();
     const issued = value(await service.issueGuest({ installationId: 'install-retry-2' }));
-    const lost = value(await service.refresh({ refreshToken: issued.refreshToken }));
-    value(await service.refresh({ refreshToken: issued.refreshToken }));
-    // The successor the retry replaced is a replay when it shows up.
-    assert.deepEqual(await service.refresh({ refreshToken: lost.refreshToken }), rejected);
+    const second = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    value(await service.refresh({ refreshToken: second.refreshToken }));
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
     assert.deepEqual(ended, [issued.sessionFamilyId]);
   }
   {
@@ -210,7 +211,7 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
   }
 
-  // Two refreshes racing with one token: one rotates, the other is read again as a retry.
+  // Two refreshes racing with one token both get the same successor.
   {
     const { service } = await setup();
     const issued = value(await service.issueGuest({ installationId: 'install-race-1' }));
@@ -218,11 +219,57 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
       service.refresh({ refreshToken: issued.refreshToken }),
       service.refresh({ refreshToken: issued.refreshToken }),
     ]);
-    const winners = answers.filter((answer) => answer.ok);
-    assert.ok(winners.length >= 1);
-    const last = winners.at(-1);
-    assert.ok(last?.ok);
-    assert.equal(last.value.sessionFamilyId, issued.sessionFamilyId);
+    const [first, second] = answers.map(value);
+    assert.equal(first?.refreshToken, second?.refreshToken);
+    value(await service.refresh({ refreshToken: first?.refreshToken }));
+  }
+
+  // An abandoned request that finishes after its retry was answered never
+  // invalidates the token the retry returned: the client timed out a refresh,
+  // retried it, kept the retry's answer, and the first request's rotation
+  // runs last (it loses the compare-and-swap and is answered as a retry).
+  {
+    const store = await createStore();
+    let hold: Promise<void> | undefined;
+    let entered: (() => void) | undefined;
+    const paused: IdentityStore = {
+      ...store,
+      async rotate(input) {
+        if (hold !== undefined) {
+          const wait = hold;
+          hold = undefined;
+          entered?.();
+          await wait;
+        }
+        return store.rotate(input);
+      },
+    };
+    const ended: string[] = [];
+    const service = createGuestIdentityService({
+      store: paused,
+      now: () => start,
+      endNotificationSession: async (sessionId) => {
+        ended.push(sessionId);
+      },
+      log: () => undefined,
+    });
+    const issued = value(await service.issueGuest({ installationId: 'install-overlap-1' }));
+    let release: (() => void) | undefined;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const enteredRotate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const abandoned = service.refresh({ refreshToken: issued.refreshToken });
+    await enteredRotate;
+    const kept = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    release?.();
+    const late = value(await abandoned);
+    assert.equal(late.refreshToken, kept.refreshToken);
+    // The client's next refresh with the token it kept rotates normally.
+    value(await service.refresh({ refreshToken: kept.refreshToken }));
+    assert.deepEqual(ended, []);
   }
 
   // Expiry: access tokens after their lifetime, families after the inactivity window.
