@@ -87,6 +87,8 @@ export interface StarterAccountDeletion {
 type SignOutStep = () => void | Promise<void>;
 
 const signOutSteps = new Set<SignOutStep>();
+/** Steps that close a session holder, run before the credentials are removed. */
+const sessionSteps = new Set<SignOutStep>();
 
 /**
  * An earlier attempt's request was sent but its answer was lost or was a
@@ -106,10 +108,23 @@ const signOutStepTimeoutMs = 5_000;
  * example the guest session's `logout()`, the notifications runtime's
  * `unregister()`, a game-owned journal or save). Returns the unregister.
  */
-export function onStarterAccountDeleted(step: SignOutStep): () => void {
-  signOutSteps.add(step);
+export function onStarterAccountDeleted(
+  step: SignOutStep,
+  options: {
+    /**
+     * `session`: the step closes something that may still write the
+     * session's credentials (the guest session coordinator's `logout()`,
+     * which closes it at once and waits for a refresh in flight). It runs
+     * before the credentials are removed, so a refresh that answers late
+     * cannot write the deleted account's token back.
+     */
+    readonly phase?: 'session' | 'after';
+  } = {},
+): () => void {
+  const steps = options.phase === 'session' ? sessionSteps : signOutSteps;
+  steps.add(step);
   return () => {
-    signOutSteps.delete(step);
+    steps.delete(step);
   };
 }
 
@@ -161,7 +176,7 @@ export function createStarterAccountDeletion(input: {
     // The starter's own run checkpoint (PlayScene); a game's saves register a step.
     required.push(() => input.storage.save({ key: starterRunKey, value: null }));
     let cleared = true;
-    for (const step of [...required, ...signOutSteps]) {
+    for (const step of [...sessionSteps, ...required, ...signOutSteps]) {
       try {
         await withTimeout(step);
       } catch (error) {

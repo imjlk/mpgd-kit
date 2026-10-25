@@ -307,6 +307,74 @@ const pendingPurchase = {
   );
 }
 
+// A refresh in flight when the account is deleted cannot write the deleted
+// account's token back: the coordinator is closed (and drained) first.
+{
+  resetStarterAccountDeletionForTests();
+  const values = new Map<string, string>();
+  const credentials: SecureCredentialStore = {
+    async load({ key }) {
+      return values.get(key) ?? null;
+    },
+    async save({ key, value }) {
+      values.set(key, value);
+    },
+    async remove({ key }) {
+      values.delete(key);
+    },
+  };
+  let releaseRefresh: (() => void) | undefined;
+  const session = (refreshToken: string) => ({
+    serverUserId: 'p_deleted',
+    sessionId: 's_family',
+    sessionFamilyId: 's_family',
+    identityLevel: 'guest' as const,
+    accessToken: `access-${refreshToken}`,
+    refreshToken,
+    accessExpiresAt: '2099-01-01T00:00:00.000Z',
+  });
+  const coordinator = createGuestSessionCoordinator({
+    backend: {
+      issueGuest: async () => session('refresh-1'),
+      refresh: () =>
+        new Promise((resolve) => {
+          releaseRefresh = () => resolve(session('refresh-late'));
+        }),
+      // Offline: logout cannot revoke, so it removes nothing itself; only the
+      // order (close and drain first, then remove) keeps the late token out.
+      revoke: () => Promise.reject(new Error('offline')),
+      bindAccount: () => Promise.reject(new Error('not used')),
+    },
+    credentials,
+    installationId: 'installation-race',
+  });
+  await coordinator.start();
+  const refreshing = coordinator.refresh().catch(() => undefined);
+  const stop = onStarterAccountDeleted(() => coordinator.logout(), { phase: 'session' });
+  try {
+    const quiet = console.error;
+    console.error = () => undefined;
+    const deleting = createStarterAccountDeletion({
+      client: { deleteAccount: async () => receipt },
+      storage: memoryStorage(),
+      secureCredentials: credentials,
+    }).deleteAccount();
+    // The refresh answers while the sign-out runs.
+    setTimeout(() => releaseRefresh?.(), 10);
+    assert.deepEqual(await deleting, {
+      outcome: 'deleted',
+      retainedPurchaseRecords: 2,
+      signedOut: true,
+    });
+    await refreshing;
+    assert.equal(values.get('mpgd.guest.refresh'), undefined, 'the late refresh token is not kept');
+    assert.equal(coordinator.current(), undefined);
+    console.error = quiet;
+  } finally {
+    stop();
+  }
+}
+
 // The guest session's confirmation; a session the identity service refused
 // is UNAUTHORIZED (a sent request), anything else passes through.
 {
