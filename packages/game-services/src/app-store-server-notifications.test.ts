@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   appStoreServerNotificationHttpStatus,
   handleAppStoreServerNotification,
+  maxUnmatchedRefundRetryMs,
   type AppStoreServerNotification,
   type AppStoreServerNotificationVerifier,
 } from './app-store-server-notifications.js';
@@ -681,6 +682,21 @@ function handle(
     }),
   );
   assert.equal((await handle(store, revokeWithoutDate)).status, 'retry');
+  const farFuture = verifierOf(
+    notification({
+      notificationUUID: 'uuid-far-future',
+      transaction: {
+        ...consumable,
+        transactionId: '2000000000000997',
+        revocationDate: 9_000_000_000_000_000,
+      },
+    }),
+  );
+  assert.equal(
+    (await handle(store, farFuture)).status,
+    'ignored',
+    'an unrepresentable revocation date never keeps a refund unacknowledged',
+  );
   await assert.rejects(
     handleAppStoreServerNotification({
       store,
@@ -693,6 +709,35 @@ function handle(
     }),
     /unmatchedRefundRetryMs/u,
     'an unbounded window is refused',
+  );
+  for (const window of [-1, maxUnmatchedRefundRetryMs + 1]) {
+    await assert.rejects(
+      handleAppStoreServerNotification({
+        store,
+        verifier: neverGranted,
+        body: {},
+        environment: 'Production',
+        bundleId,
+        signal: new AbortController().signal,
+        unmatchedRefundRetryMs: window,
+      }),
+      /unmatchedRefundRetryMs/u,
+      `a window of ${window} ms is refused before any work`,
+    );
+  }
+  assert.equal(
+    (await handleAppStoreServerNotification({
+      store,
+      verifier: neverGranted,
+      body: { signedPayload: 'signed-payload' },
+      environment: 'Production',
+      bundleId,
+      signal: new AbortController().signal,
+      now: () => '2026-10-24T12:00:00.000Z',
+      unmatchedRefundRetryMs: maxUnmatchedRefundRetryMs,
+    })).status,
+    'retry',
+    'the largest window is accepted',
   );
 }
 

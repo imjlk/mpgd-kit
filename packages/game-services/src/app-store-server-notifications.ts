@@ -82,14 +82,16 @@ export interface HandleAppStoreServerNotificationInput {
    * refund and whose grant is still being written: Apple redelivers (the
    * first production retry is an hour later) and the redelivery finds the
    * grant. A refund for a grant that never appears is acknowledged once the
-   * window passes, so Apple stops retrying. `0` acknowledges at once.
+   * window passes, so Apple stops retrying. `0` acknowledges at once; at
+   * most `maxUnmatchedRefundRetryMs` (6 hours).
    */
   readonly unmatchedRefundRetryMs?: number;
 }
 
 /** Default of `unmatchedRefundRetryMs`. */
 export const defaultUnmatchedRefundRetryMs = 60 * 60 * 1000;
-const maxUnmatchedRefundRetryMs = 6 * 60 * 60 * 1000;
+/** Upper bound of `unmatchedRefundRetryMs`. */
+export const maxUnmatchedRefundRetryMs = 6 * 60 * 60 * 1000;
 
 export type AppStoreServerNotificationOutcome =
   /** A grant was reversed (or already had been, for a redelivery). */
@@ -168,6 +170,17 @@ const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> =
 export async function handleAppStoreServerNotification(
   input: HandleAppStoreServerNotificationInput,
 ): Promise<AppStoreServerNotificationOutcome> {
+  // A configuration error, checked before any work so it fails every call alike.
+  const unmatchedRefundRetryMs = input.unmatchedRefundRetryMs ?? defaultUnmatchedRefundRetryMs;
+  if (
+    !Number.isSafeInteger(unmatchedRefundRetryMs)
+    || unmatchedRefundRetryMs < 0
+    || unmatchedRefundRetryMs > maxUnmatchedRefundRetryMs
+  ) {
+    throw new RangeError(
+      `unmatchedRefundRetryMs must be an integer from 0 to ${maxUnmatchedRefundRetryMs} ms.`,
+    );
+  }
   const signedPayload = readSignedPayload(input.body);
   if (signedPayload === undefined) {
     return { status: 'rejected', reason: 'APP_STORE_NOTIFICATION_PAYLOAD_INVALID' };
@@ -241,20 +254,14 @@ export async function handleAppStoreServerNotification(
       : transaction.transactionId,
   });
   const now = input.now ?? (() => new Date().toISOString());
-  const unmatchedRefundRetryMs = input.unmatchedRefundRetryMs ?? defaultUnmatchedRefundRetryMs;
-  if (
-    !Number.isSafeInteger(unmatchedRefundRetryMs)
-    || unmatchedRefundRetryMs < 0
-    || unmatchedRefundRetryMs > maxUnmatchedRefundRetryMs
-  ) {
-    throw new RangeError('unmatchedRefundRetryMs must be an integer from 0 to 6 hours.');
-  }
   const grant = await findPurchaseGrantByEvidenceVerificationId(input.store, grantVerificationId);
   if (grant === undefined || grant.payload.target !== 'ios') {
     if (
       grant === undefined
       && reason !== undefined
-      && Date.parse(now()) - (transaction.revocationDate ?? notification.signedDate)
+      // Both ways, so a little clock skew still retries and a date far in
+      // the future (or not representable) cannot keep it unacknowledged.
+      && Math.abs(Date.parse(now()) - (transaction.revocationDate ?? notification.signedDate))
         < unmatchedRefundRetryMs
     ) {
       // A purchase in flight may have read the transaction before the
