@@ -146,6 +146,9 @@ const pendingPurchase = {
 {
   const answers: (AccountDeletionReceipt | AccountDeletionError)[] = [];
   const credentials = memoryCredentials({ 'mpgd.guest.refresh': 'secret' });
+  const journalStorage = memoryStorage({
+    [defaultMonetizationJournalKey]: { version: 1, records: {} },
+  });
   const deletion = createStarterAccountDeletion({
     client: {
       async deleteAccount() {
@@ -156,7 +159,7 @@ const pendingPurchase = {
         return answer;
       },
     },
-    storage: memoryStorage(),
+    storage: journalStorage,
     secureCredentials: credentials,
   });
   const ask = async (answer: AccountDeletionError) => {
@@ -187,21 +190,30 @@ const pendingPurchase = {
   // Nothing sent: a later refusal is a plain missing session.
   assert.deepEqual(await ask(unsent()), { outcome: 'failed', retryable: true });
   assert.deepEqual(await ask(refused()), { outcome: 'needs-session' });
-  // Sent and lost, then the server answered otherwise: not deleted.
+  // Sent and lost, then a definite answer from the server: not deleted.
   assert.deepEqual(await ask(lost()), { outcome: 'failed', retryable: true });
-  assert.deepEqual(await ask(new AccountDeletionError('ACCOUNT_DELETION_FAILED')), {
+  assert.deepEqual(await ask(new AccountDeletionError('ACCOUNT_DELETION_REJECTED')), {
     outcome: 'failed',
-    retryable: true,
+    retryable: false,
   });
   assert.deepEqual(await ask(refused()), { outcome: 'needs-session' });
   // Sent and lost, then signed out on this device (nothing sent): not inferred.
   assert.deepEqual(await ask(lost()), { outcome: 'failed', retryable: true });
   assert.deepEqual(await ask(signedOutHere()), { outcome: 'needs-session' });
   assert.equal(credentials.values.size, 1, 'nothing signed out before a deletion');
-  // Sent and lost, then the server refused the session: most likely deleted,
-  // even from a new scene's instance.
+  // Sent and lost, a retryable 5xx (maybe a proxy after the deletion), then
+  // the server refused the session: most likely deleted. Signed out, but the
+  // purchase journal stays in case the account still exists.
+  assert.deepEqual(await ask(new AccountDeletionError('ACCOUNT_DELETION_FAILED')), {
+    outcome: 'failed',
+    retryable: true,
+  });
   assert.deepEqual(await ask(refused()), { outcome: 'session-ended', signedOut: true });
   assert.equal(credentials.values.size, 0, 'signed out after the session ended');
+  assert.deepEqual(journalStorage.values.get(defaultMonetizationJournalKey), {
+    version: 1,
+    records: {},
+  });
   resetStarterAccountDeletionForTests();
 }
 

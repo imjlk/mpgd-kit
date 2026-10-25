@@ -3509,6 +3509,8 @@ function buildLegalSite(input: {
 
   publishLegalSiteFiles(outDir, outputs);
   for (const { file } of orphans) {
+    // Checked again right before removing: the directory may have changed.
+    assertLegalProjectPath('out-dir', file);
     rmSync(file, { force: true });
     if (path.dirname(file) !== outDir) {
       // The page's own directory, once empty.

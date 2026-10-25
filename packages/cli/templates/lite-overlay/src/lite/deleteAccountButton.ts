@@ -16,6 +16,8 @@ import type { StarterContext } from '../runtime/gameContext';
  * (`deleteAccount.ts`). Returns the disposer.
  */
 export function mountDeleteAccountButton(mount: HTMLElement, context: StarterContext): () => void {
+  // The commerce client's session (`once`), so the button and the request agree.
+  const session = resolveStarterServerSession({ once: true });
   const deletion = createStarterAccountDeletion({
     ...(context.gameServices.accountDeletion === undefined
       ? {}
@@ -24,10 +26,22 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
     ...(context.platform.secureCredentials === undefined
       ? {}
       : { secureCredentials: context.platform.secureCredentials }),
-    signedIn: () => resolveStarterServerSession()?.current() !== undefined,
+    signedIn: () => session?.current() !== undefined,
   });
   if (!deletion.available) {
-    return () => undefined;
+    if (context.gameServices.accountDeletion === undefined || session === undefined) {
+      return () => undefined;
+    }
+    // Signed in later (a guest session starts in the background): mount then.
+    let dispose = (): void => undefined;
+    const stop = session.onAuthenticated(() => {
+      stop();
+      dispose = mountDeleteAccountButton(mount, context);
+    });
+    return () => {
+      stop();
+      dispose();
+    };
   }
   const locale = context.locale;
   const previousPosition = mount.style.position;
@@ -89,6 +103,9 @@ export function mountDeleteAccountButton(mount: HTMLElement, context: StarterCon
     }
   });
   open.addEventListener('click', () => {
+    if (deleting) {
+      return;
+    }
     status.textContent = '';
     confirm.hidden = false;
     cancel.textContent = t(locale, 'deleteAccountCancel');

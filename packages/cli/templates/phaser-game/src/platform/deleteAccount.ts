@@ -96,12 +96,18 @@ export function createStarterAccountDeletion(input: {
   const journalKey = input.journalKey ?? defaultMonetizationJournalKey;
   let running: Promise<StarterDeleteAccountOutcome> | undefined;
 
-  /** Answers whether the credentials and the journal were cleared; registered steps only log. */
-  const signOut = async (): Promise<boolean> => {
+  /**
+   * Answers whether the credentials (and the journal) were cleared;
+   * registered steps only log. An inferred deletion keeps the journal: its
+   * open purchases may still need the store's answer if the account exists.
+   */
+  const signOut = async (options: { readonly keepJournal?: boolean } = {}): Promise<boolean> => {
     // Every step runs; one failing or hanging does not keep the others' data around.
     const required: (() => Promise<unknown> | unknown)[] = [
       ...starterGuestCredentialKeys.map((key) => () => input.secureCredentials?.remove({ key })),
-      () => input.storage.save({ key: journalKey, value: null }),
+      ...(options.keepJournal === true
+        ? []
+        : [() => input.storage.save({ key: journalKey, value: null })]),
     ];
     let cleared = true;
     for (const step of [...required, ...signOutSteps]) {
@@ -141,10 +147,11 @@ export function createStarterAccountDeletion(input: {
       }
       if (error.code === 'UNAUTHORIZED' && error.requestSent && answerLost) {
         answerLost = false;
-        return { outcome: 'session-ended', signedOut: await signOut() };
+        return { outcome: 'session-ended', signedOut: await signOut({ keepJournal: true }) };
       }
-      if (error.requestSent) {
-        // Any other answer from the server: the account was not deleted.
+      if (error.requestSent && !error.retryable) {
+        // A definite answer from the server: the account was not deleted. A
+        // retryable one (a 5xx from a proxy) may hide a completed deletion.
         answerLost = false;
       }
       switch (error.code) {

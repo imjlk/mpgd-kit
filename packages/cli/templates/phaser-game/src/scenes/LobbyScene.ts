@@ -24,6 +24,7 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.deleteAccountOpen = false;
     const rawContext = this.registry.get(starterContextKey);
 
     if (rawContext === undefined || rawContext === null) {
@@ -180,6 +181,8 @@ export class LobbyScene extends Phaser.Scene {
    * also start the game.
    */
   private addDeleteAccountEntry(context: StarterContext): void {
+    // The commerce client's session (`once`), so the entry and the request agree.
+    const session = resolveStarterServerSession({ once: true });
     const deletion = createStarterAccountDeletion({
       ...(context.gameServices.accountDeletion === undefined
         ? {}
@@ -188,12 +191,21 @@ export class LobbyScene extends Phaser.Scene {
       ...(context.platform.secureCredentials === undefined
         ? {}
         : { secureCredentials: context.platform.secureCredentials }),
-      signedIn: () => resolveStarterServerSession()?.current() !== undefined,
+      signedIn: () => session?.current() !== undefined,
     });
     if (!deletion.available) {
+      if (context.gameServices.accountDeletion !== undefined && session !== undefined) {
+        // Signed in later (a guest session starts in the background): add it then.
+        const stop = session.onAuthenticated(() => {
+          stop();
+          if (this.scene.isActive()) {
+            this.addDeleteAccountEntry(context);
+          }
+        });
+        this.events.once('shutdown', stop);
+      }
       return;
     }
-    this.deleteAccountOpen = false;
     const locale = context.locale;
     const swallow = (
       _pointer: Phaser.Input.Pointer,
@@ -257,6 +269,9 @@ export class LobbyScene extends Phaser.Scene {
     let signedOut = false;
     entry.on('pointerdown', (...args: Parameters<typeof swallow>) => {
       swallow(...args);
+      if (deleting) {
+        return;
+      }
       this.deleteAccountOpen = true;
       status.setText('');
       confirm.setVisible(true);
