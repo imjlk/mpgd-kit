@@ -189,6 +189,70 @@ Use distinct deployments or runtime configuration for Apple's production and
 sandbox environments; never select the authority from an untrusted client
 payload.
 
+#### App Review and TestFlight purchases on a production backend
+
+App Review tests the production build with sandbox purchases, and TestFlight
+uses the sandbox too, so a production verifier that refuses sandbox
+transactions fails the reviewer's purchase (guideline 2.1). Apple's documented
+order is production first, then sandbox: its
+[`verifyReceipt`](https://developer.apple.com/documentation/appstorereceipts/verify-receipt)
+best practice is to call the production URL first and verify in the sandbox
+only on status `21007`, so one server works in testing, during App Review,
+and live;
+[TN3122](https://developer.apple.com/documentation/technotes/tn3122-receipt-validation-with-the-app-store-fails-with-a-non-zero-error-code)
+repeats it; and the App Store Server API answers
+[`TransactionIdNotFoundError`](https://developer.apple.com/documentation/appstoreserverapi/transactionidnotfounderror)
+when a transaction id is looked up in the other environment. The kit applies
+that order to the JWS-based verifier with an explicit option:
+
+```ts
+const verifier = createAppStoreGameServicesEvidenceVerifier({
+  bundleId,
+  environment: 'Production',
+  serverApi, // createAppStoreServerApiClient: one client serves both hosts
+  signedTransactionVerifier: createAppleSignedTransactionVerifier({
+    rootCertificates, environment: 'Production', bundleId, appAppleId,
+  }),
+  resolveAppAccountToken,
+  sandboxPurchases: {
+    mode: 'grant',
+    signedTransactionVerifier: createAppleSignedTransactionVerifier({
+      rootCertificates, environment: 'Sandbox', bundleId,
+    }),
+  },
+});
+```
+
+- The default is `sandboxPurchases: { mode: 'reject' }`: a production verifier
+  answers `APP_STORE_ENVIRONMENT_MISMATCH` for a sandbox transaction, as before.
+  A production iOS deployment that goes through App Review sets `mode: 'grant'`.
+- With `mode: 'grant'`, a client JWS is verified by the production verifier
+  first. Only when that verifier places it in the sandbox (Apple's adapter
+  answers `APP_STORE_ENVIRONMENT_MISMATCH` after the signature check) is it
+  verified again, in full, by the sandbox verifier, and its current status is
+  read from the sandbox Server API. A request without a client JWS is looked up
+  in production first and in the sandbox only after `APP_STORE_TRANSACTION_NOT_FOUND`.
+  A client JWS the production verifier accepted is never looked up in the
+  sandbox; a Server API answer from another environment than the client JWS is
+  `APP_STORE_SIGNED_TRANSACTION_ENVIRONMENT_MISMATCH`.
+- A sandbox grant keeps its own identity: its verification id names `Sandbox`,
+  and its ledger payload carries `appStoreEnvironment: 'Sandbox'`. Exclude
+  those grants from revenue and purchase analytics by that field (the
+  `purchase_granted` analytics event carries the `ledgerEntryId` to join on).
+  They are real grants: anyone on the team's sandbox or TestFlight accounts
+  gets the items for free on the production ledger.
+- `createAppStoreRecoveryBackend` re-verifies sandbox restores on such a
+  deployment with `restoredNonConsumables.acceptsSandboxTransactions: true`.
+
+Family Sharing: the verifier refuses a transaction whose `inAppOwnershipType`
+is `FAMILY_SHARED` with `APP_STORE_FAMILY_SHARED_UNSUPPORTED` (and any other
+non-`PURCHASED` value with `APP_STORE_OWNERSHIP_UNSUPPORTED`) instead of
+silently failing the account-token check. A family member's transaction does
+not carry that player's `appAccountToken`, and granting it would let one
+purchase grant several players. Leave Family Sharing off for the game's
+non-consumables in App Store Connect (it only applies to non-consumables and
+auto-renewable subscriptions, and cannot be turned off once on).
+
 This boundary rejects auto-renewable and non-renewing subscriptions. A single
 transaction lookup doesn't model renewal, grace-period, upgrade, expiration,
 refund-reversal, or server-notification-driven entitlement removal, while the
@@ -418,10 +482,11 @@ grant (`GameServicesStore.recordEntitlementRevocation`,
 `findEntitlementRevocations`, and the batched `getEntitlementTransactions`;
 the memory and D1 stores implement all three, a grant is reversed once, a
 notification key reused for another grant is `RevocationKeyConflictError`,
-and a reused authority identity is `EvidenceAlreadyProcessedError`). Store
-notification handlers are game-owned: a Play voided purchase, an App Store
-Server Notification refund, an Apps in Toss refunded order, or a Devvit refund
-order calls `revokeEntitlementGrant` from
+and a reused authority identity is `EvidenceAlreadyProcessedError`). The kit
+handles App Store Server Notifications V2 refunds and Play voided purchases
+(see [Store refunds and server-side finalization](#store-refunds-and-server-side-finalization));
+other store notification handlers are game-owned: an Apps in Toss refunded
+order or a Devvit refund order calls `revokeEntitlementGrant` from
 `@mpgd/game-services/commerce-ledger` with the notification's own key, so a
 redelivered notification answers the first entry with `alreadyProcessed`
 (`key_conflict` and `evidence_already_processed` are the misuse answers).
@@ -809,6 +874,89 @@ Protocol references:
   fail closed. See
   [Apps in Toss Production Evidence](APPS_IN_TOSS_PRODUCTION_EVIDENCE.md).
 
+### Store refunds and server-side finalization
+
+A refund, a chargeback, or a store revoking a purchase reaches the ledger as a
+`revoke` entry, and a Play purchase whose client went away before the
+acknowledge or consume is finished by the server. Each handler finds the grant
+by the verification id the purchase verifier recorded, never by a client
+value, and keys its revocation so a redelivered or re-read notification
+answers the first entry.
+
+**App Store Server Notifications V2**
+(`@mpgd/game-services/app-store-server-notifications`). Apple posts
+`{ "signedPayload": "<JWS>" }` to the URLs set in App Store Connect
+([Enabling App Store Server Notifications](https://developer.apple.com/documentation/appstoreservernotifications/enabling-app-store-server-notifications)).
+`handleAppStoreServerNotification({ store, verifier, body, environment, bundleId, signal })`
+verifies the payload through an `AppStoreServerNotificationVerifier`;
+`createAppleServerNotificationVerifier` in `@mpgd/game-services/app-store-server`
+is the implementation over Apple's library and the same root certificates as
+the purchase verifier, one per environment.
+
+- `REFUND` reverses the grant with reason `refund`, `REVOKE` with `voided`,
+  both keyed `app-store:notification:<notificationUUID>`. Non-consumables are
+  found by their original transaction id, consumables by their own.
+- A transaction that is not the customer's own purchase (`FAMILY_SHARED`) is
+  ignored: it shares the purchaser's original transaction id, and the
+  purchaser keeps the grant.
+- Every other type (`TEST`, `CONSUMPTION_REQUEST`, `REFUND_DECLINED`,
+  `REFUND_REVERSED`, subscription and summary notifications), a transaction
+  this ledger never granted, and a refund that arrives before its grant are
+  `ignored`. A reversed grant stays reversed after `REFUND_REVERSED`; re-grant
+  it on the game's own terms. A refund before its grant is safe with the
+  default Server API purchase mode, which refuses a revoked transaction.
+- Answers: `revoked`, `ignored`, and `conflict` (a ledger key or identity
+  conflict to alert on) are 200; `rejected` (not signed by Apple for this app
+  and environment, malformed) is 400; `retry` (Apple's certificate checks are
+  unavailable) is 503; a thrown store error must be a 5xx. Apple retries a
+  non-200 answer five times, 1, 12, 24, 48, and 72 hours apart, in production
+  only; the sandbox sends once
+  ([Responding to App Store Server Notifications](https://developer.apple.com/documentation/appstoreservernotifications/responding-to-app-store-server-notifications)).
+- Set both URLs: the sandbox one revokes App Review, TestFlight, and sandbox
+  grants of a deployment with `sandboxPurchases: { mode: 'grant' }`.
+
+The package's vitest suite verifies real signatures from a throwaway test CA
+whose chain carries Apple's marker extensions; production verification
+additionally runs Apple's online certificate checks, which no test here makes.
+
+**Google Play voided purchases** (`@mpgd/game-services/google-play-store-server`).
+`sweepGooglePlayVoidedPurchases` reads
+[`purchases.voidedpurchases.list`](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.voidedpurchases/list)
+(in-app products, `type=0`) for a window, page by page, and
+`revokeGooglePlayVoidedPurchase` reverses each grant, found by the purchase
+token's verification id (`createGooglePlayProductVerificationId`) and keyed by
+it: reason `chargeback` for `voidedReason` 7, `voided` otherwise (including 8,
+Play's refund of a purchase left unacknowledged). Google keeps voids for 30
+days and filters on when it recorded the void, not on `voidedTimeMillis`
+([Voided Purchases API](https://developers.google.com/android-publisher/voided-purchases));
+the sweep clamps its start to that window measured from now and reports
+`clamped` when older voids are gone. A sweep that stops on its page cap or the
+caller's budget is `complete: false`; repeating the same window does not
+finish it, so callers sweep in shorter windows. The API allows 6,000 queries a
+day and 30 in any 30 seconds per package, and needs the service account's
+"View financial reports" permission.
+
+Real-time developer notifications are not implemented. An RTDN
+`voidedPurchaseNotification` carries the purchase token and order id
+([RTDN reference](https://developer.android.com/google/play/billing/rtdn-reference#voided-purchase)),
+so a Pub/Sub push endpoint that verifies the push's OIDC token could pass it to
+`revokeGooglePlayVoidedPurchase` for a faster revocation. The sweep stays
+required next to it, because a push can be missed, and it is the minimal
+reliable design the Worker ships.
+
+**Server-side acknowledge and consume.** Play refunds a purchase that is not
+acknowledged within three days of becoming `PURCHASED`; consuming a consumable
+counts as the acknowledgement
+([Process purchases](https://developer.android.com/google/play/billing/integrate#process)).
+The ledger keeps only the purchase token's digest, so a server retry needs the
+token: `retryGooglePlayPurchaseFinalization({ finalizer, store, ledgerEntryId,
+purchaseToken, signal, timeoutMs })` rebuilds the finalization input from the
+ledger grant, checks the token against the grant's verification id, and runs
+the same Play boundary (which re-reads the provider state first); a reversed
+grant is never finalized. The Worker keeps the token in D1 until the
+acknowledge or consume completes and retries it from its cron; see the
+[Worker runbook](CLOUDFLARE_WORKER_DEPLOY.md#store-refunds-and-play-finalization).
+
 ## Production Gaps
 
 This repository provides the reusable contract, client orchestration, backend
@@ -818,9 +966,13 @@ starter. Game-specific production integrations still need these pieces:
 - A game-owned authenticated Google Play API client and production package,
   product, and obfuscated account identifiers for the shared one-time product
   verifier boundary.
-- App Store Server API or signed StoreKit transaction verification, and the
-  App Store Server Notifications and Play voided-purchase handlers that call
-  `revokeEntitlementGrant`.
+- App Store Server API or signed StoreKit transaction verification (a
+  game-owned verifier Worker with Apple's library and root certificates),
+  including the App Store Server Notifications verifier binding the Worker's
+  notification route calls.
+- Play Console and App Store Connect configuration for the refund paths:
+  notification URLs, the service account's financial and order permissions,
+  and the cron trigger (see the Worker runbook).
 - Deployment-owned AdMob callback persistence and public-key refresh wiring.
 - Game-specific Apps in Toss mTLS transport, optional Toss Login binding or a
   verified anonymous-player/order association, and independently verified
