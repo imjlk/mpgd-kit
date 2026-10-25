@@ -101,7 +101,7 @@ public final class AdvertisingPushRenderer {
             return false;
         }
         if (!pluginEntryPointsResolve()) {
-            Log.w(TAG, "The messaging plugin's entry points do not resolve; no advertising renderer.");
+            Log.w(TAG, "The messaging plugin's entry points do not resolve; no advertising renderer.", entryPointFailure);
             return false;
         }
         return true;
@@ -126,9 +126,14 @@ public final class AdvertisingPushRenderer {
                 plugin.getMethod("onMessageReceived", Class.forName(REMOTE_MESSAGE_CLASS)),
             };
         } catch (ReflectiveOperationException | LinkageError error) {
+            // Kept for the callers' logs; this method stays free of android.util.Log.
+            entryPointFailure = error;
             return null;
         }
     }
+
+    /** Why `pluginEntryPoints()` last answered null, for the callers' logs. */
+    static volatile Throwable entryPointFailure;
 
     private static boolean declaresRenderer(Context context) {
         Intent intent = new Intent(MESSAGING_EVENT).setPackage(context.getPackageName());

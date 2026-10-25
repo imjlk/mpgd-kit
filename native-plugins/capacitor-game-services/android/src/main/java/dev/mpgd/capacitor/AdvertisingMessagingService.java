@@ -86,7 +86,11 @@ public class AdvertisingMessagingService extends FirebaseMessagingService {
             }
             java.lang.reflect.Method[] entryPoints = AdvertisingPushRenderer.pluginEntryPoints();
             if (entryPoints == null) {
-                Log.w(TAG, "@capacitor-firebase/messaging entry points not found.");
+                Log.w(
+                    TAG,
+                    "@capacitor-firebase/messaging entry points not found.",
+                    AdvertisingPushRenderer.entryPointFailure
+                );
             } else {
                 onNewToken = entryPoints[0];
                 onMessageReceived = entryPoints[1];
