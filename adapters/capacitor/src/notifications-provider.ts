@@ -125,8 +125,8 @@ export interface CreateCapacitorNotificationProviderInput {
    * the provider sets when this answers true. It is read once, when the
    * provider is created, and only when the catalog maps an advertising
    * topic to Android. A failure, or no answer within
-   * `capacitorAdvertisingRendererTimeoutMs`, reads as false; a shell whose
-   * plugin lacks the method (`UNIMPLEMENTED`) is not reported as an error.
+   * `capacitorAdvertisingRendererTimeoutMs`, reads as false and is reported;
+   * a shell whose plugin lacks the method (`UNIMPLEMENTED`) is not.
    * Ignored on iOS, which shows the opt-out category's action itself.
    */
   readonly advertisingRenderer?: () => Promise<boolean>;
@@ -305,7 +305,14 @@ export function createCapacitorNotificationProvider(
         try {
           const read = Promise.resolve().then(() => input.advertisingRenderer?.());
           const late = new Promise<false>((resolve) => {
-            timer = setTimeout(() => resolve(false), capacitorAdvertisingRendererTimeoutMs);
+            timer = setTimeout(() => {
+              // A native call that never answers would otherwise go unnoticed.
+              reportError(new Error(
+                `The advertising renderer read did not answer within ${capacitorAdvertisingRendererTimeoutMs} ms; `
+                  + 'registering without rendersAdvertising.',
+              ));
+              resolve(false);
+            }, capacitorAdvertisingRendererTimeoutMs);
           });
           rendersAdvertising = (await Promise.race([read, late])) === true;
         } catch (error) {

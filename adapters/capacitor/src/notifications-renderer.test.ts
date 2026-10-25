@@ -133,9 +133,9 @@ describe('Capacitor notifications provider: Android advertising rendering', () =
     expect(errors).toEqual([]);
   });
 
-  it('stops waiting for a renderer read that never answers', async () => {
+  it('stops waiting for a renderer read that never answers, and reports it', async () => {
     vi.useFakeTimers();
-    const { sdks, provider } = setup({ renderer: () => new Promise<boolean>(() => undefined) });
+    const { sdks, provider, errors } = setup({ renderer: () => new Promise<boolean>(() => undefined) });
     sdks.issueEndpoint({ kind: 'fcm-token', value: 'token-1' });
     const registration = provider.register?.();
     await vi.advanceTimersByTimeAsync(capacitorAdvertisingRendererTimeoutMs);
@@ -144,6 +144,19 @@ describe('Capacitor notifications provider: Android advertising rendering', () =
       value: 'token-1',
       permission: 'granted',
     });
+    expect(errors).toEqual([expect.objectContaining({ message: expect.stringMatching(/did not answer/u) })]);
+  });
+
+  it('clears its timer after a prompt answer, and reports a coded failure that is not UNIMPLEMENTED', async () => {
+    vi.useFakeTimers();
+    const prompt = setup({ renderer: async () => true });
+    await vi.advanceTimersByTimeAsync(0);
+    await prompt.provider.getCapabilities();
+    expect(vi.getTimerCount()).toBe(0);
+    const denied = Object.assign(new Error('bridge down'), { code: 'UNAVAILABLE' });
+    const failed = setup({ renderer: async () => Promise.reject(denied) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failed.errors).toEqual([denied]);
   });
 
   it('announces a token again once the renderer read answers', async () => {

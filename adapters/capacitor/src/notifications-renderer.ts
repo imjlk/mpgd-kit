@@ -16,9 +16,10 @@ export type CapacitorAdvertisingPushRendererPlugin = Pick<
  * `mpgd target init capacitor --providers notifications` declares in a new
  * Android project). Pass it as the provider's `advertisingRenderer`, which
  * then registers `rendersAdvertising` on Android. It throws when the plugin
- * answers anything but `{ installed: boolean }`, and the plugin rejects it as
- * unimplemented on iOS and in a shell built with an older plugin; the
- * provider reports either failure and registers without the claim.
+ * answers anything but `{ installed: boolean }`, which the provider reports;
+ * a shell built with an older plugin rejects it as `UNIMPLEMENTED`, which
+ * the provider reads as no renderer without reporting it. Either way the
+ * provider registers without the claim.
  */
 export async function readCapacitorAdvertisingPushRenderer(
   plugin: CapacitorAdvertisingPushRendererPlugin = CapacitorGameServices,

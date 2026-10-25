@@ -123,15 +123,27 @@ public final class AdvertisingPushRenderer {
         NotificationManagerCompat manager = NotificationManagerCompat.from(context);
         // Android drops these posts without an error, so say why here.
         if (!manager.areNotificationsEnabled()) {
-            Log.w(TAG, "Dropped an advertising push: the player turned notifications off.");
+            Log.w(
+                TAG,
+                "Dropped an advertising push: notifications are off for the app "
+                    + "(turned off, or POST_NOTIFICATIONS not granted)."
+            );
             return;
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager.getNotificationChannel(push.channel) == null) {
-            // The provider creates the catalog's channels before it registers
-            // a token; a channel that is gone was deleted since, and posting
-            // without it would show nothing.
-            Log.w(TAG, "Dropped an advertising push: its channel " + push.channel + " does not exist.");
-            return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.NotificationChannel channel = manager.getNotificationChannel(push.channel);
+            if (channel == null) {
+                // The provider creates the catalog's channels before it
+                // registers a token; a channel that is gone was deleted since,
+                // and posting without it would show nothing.
+                Log.w(TAG, "Dropped an advertising push: its channel " + push.channel + " does not exist.");
+                return;
+            }
+            if (channel.getImportance() == android.app.NotificationManager.IMPORTANCE_NONE) {
+                // The player turned this channel off in system settings.
+                Log.i(TAG, "Dropped an advertising push: its channel " + push.channel + " is turned off.");
+                return;
+            }
         }
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, push.channel)
             .setSmallIcon(smallIcon(context))
