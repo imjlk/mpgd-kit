@@ -57,7 +57,9 @@ export interface PlayerDataEraser {
  * The identity service's part (implemented by the identity Worker): revoke
  * every session family of the player and delete the guest record, so no
  * session authenticates as the player again. Idempotent: an unknown player
- * succeeds.
+ * succeeds. It should delete the record last (or atomically): a failure
+ * after the sessions are revoked answers the player a retryable error, but
+ * the retry can no longer authenticate.
  */
 export interface AccountDeletionIdentity {
   deletePlayer(input: { readonly playerId: string }): Promise<unknown>;
@@ -71,12 +73,12 @@ export interface AccountDeletionAuditEntry {
   /** `not-configured` only where no identity service exists (local development). */
   readonly identity: 'deleted' | 'not-configured';
   /**
-   * `false` when the second erasure pass still failed after the identity
-   * was deleted: rows a request wrote during the first pass may remain under
-   * the deleted player's id. An operator finds them by that id's absence
-   * from the identity service; the player can no longer retry.
+   * `false` when a store's second erasure pass still failed after the
+   * identity was deleted: the erasure stays pending (with the player id)
+   * until `finishPendingAccountErasures` completes it.
    */
   readonly complete: boolean;
+  /** Rows this request deleted; a retry after a failure counts only its own. */
   readonly deleted: number;
   readonly retained: number;
 }
@@ -127,15 +129,50 @@ export class AccountDeletionError extends Error {
 
 export interface AccountDeletionService {
   /**
-   * Erases the player's data, deletes the identity, then erases again: the
-   * second pass removes what a request that was already running wrote
-   * during the first. A failure before the identity is deleted rejects with
-   * a retryable `ACCOUNT_DELETION_FAILED`; once the identity is deleted the
-   * player cannot retry, so the second pass is tried three times and a
-   * failure is reported in the audit entry (`complete: false`) and the log,
-   * never to the player.
+   * Erases the player's data, records the erasure as pending, deletes the
+   * identity, then erases again: the second pass removes what a request that
+   * was already running wrote during the first. A failure before the
+   * identity is deleted rejects with a retryable `ACCOUNT_DELETION_FAILED`.
+   * Once the identity is deleted the player cannot retry, so each store's
+   * second pass is tried three times with a short backoff; a store that
+   * still fails leaves the pending erasure for `finishPendingAccountErasures`
+   * (the Worker's cron) and is reported in the audit entry
+   * (`complete: false`), never to the player.
    */
   deletePlayerAccount(input: { readonly playerId: string }): Promise<AccountDeletionReceipt>;
+}
+
+/**
+ * An erasure that must be finished after the identity is gone. It holds the
+ * player id, so it lives only until the second pass succeeds.
+ */
+export interface PendingAccountErasure extends PlayerDataErasureInput {
+  readonly deletionId: string;
+  readonly recordedAt: string;
+}
+
+export interface PendingAccountErasureStore {
+  record(erasure: PendingAccountErasure): Promise<void>;
+  clear(input: { readonly deletionId: string }): Promise<void>;
+  /** The oldest pending erasures first. */
+  list(input: { readonly limit: number }): Promise<readonly PendingAccountErasure[]>;
+}
+
+export function createInMemoryPendingAccountErasureStore(): PendingAccountErasureStore {
+  const pending = new Map<string, PendingAccountErasure>();
+  return {
+    async record(erasure) {
+      pending.set(erasure.deletionId, { ...erasure });
+    },
+    async clear({ deletionId }) {
+      pending.delete(deletionId);
+    },
+    async list({ limit }) {
+      return [...pending.values()]
+        .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
+        .slice(0, limit);
+    },
+  };
 }
 
 export function createAccountDeletionService(input: {
@@ -145,13 +182,18 @@ export function createAccountDeletionService(input: {
    * the player's sessions then survive the deletion.
    */
   readonly identity: AccountDeletionIdentity | null;
+  /** Keeps an erasure across the identity deletion; see `finishPendingAccountErasures`. */
+  readonly pending: PendingAccountErasureStore;
   /** Records the audit entry. A failure is logged and does not fail the deletion. */
   readonly audit?: (entry: AccountDeletionAuditEntry) => Promise<void>;
   readonly now?: () => string;
   readonly createDeletionId?: () => string;
+  /** Waits between second-pass attempts; defaults to a timer. */
+  readonly sleep?: (ms: number) => Promise<void>;
 }): AccountDeletionService {
   const now = input.now ?? (() => new Date().toISOString());
   const createDeletionId = input.createDeletionId ?? (() => crypto.randomUUID());
+  const sleep = input.sleep ?? defaultSleep;
   const eraseAll = async (erasure: PlayerDataErasureInput): Promise<PlayerDataErasureResult> => {
     let deleted = 0;
     let retained = 0;
@@ -174,24 +216,39 @@ export function createAccountDeletionService(input: {
       let first: PlayerDataErasureResult;
       try {
         first = await eraseAll(erasure);
+        await input.pending.record({ ...erasure, deletionId, recordedAt: requestedAt });
+      } catch (error) {
+        throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: error });
+      }
+      try {
         if (input.identity !== null) {
           await input.identity.deletePlayer({ playerId });
         }
       } catch (error) {
+        // The player still exists and retries; no sweep may erase what they
+        // write meanwhile.
+        await input.pending.clear({ deletionId }).catch(() => undefined);
         throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: error });
       }
-      let second: PlayerDataErasureResult | undefined;
-      for (let attempt = 0; attempt < secondPassAttempts && second === undefined; attempt += 1) {
-        try {
-          second = await eraseAll(erasure);
-        } catch (error) {
-          console.error(
-            'Account deletion second erasure pass failed:',
-            deletionId,
-            `attempt ${attempt + 1} of ${secondPassAttempts}`,
-            error instanceof Error ? error.name : 'unknown error',
-          );
+      // Each store's second pass on its own, so one failing store does not
+      // stop the others.
+      let deleted = first.deleted;
+      let retained = first.retained;
+      let complete = true;
+      for (const eraser of input.erasers) {
+        const result = await eraseWithRetries(eraser, erasure, deletionId, sleep);
+        if (result === undefined) {
+          complete = false;
+          continue;
         }
+        deleted += result.deleted;
+        retained += result.retained;
+      }
+      if (complete) {
+        await input.pending.clear({ deletionId }).catch((error: unknown) => {
+          // The sweep finishes (erasing nothing more) and clears it later.
+          console.error('Account deletion pending entry not cleared:', deletionId, describe(error));
+        });
       }
       const completedAt = now();
       const entry: AccountDeletionAuditEntry = {
@@ -199,32 +256,98 @@ export function createAccountDeletionService(input: {
         requestedAt,
         completedAt,
         identity: input.identity === null ? 'not-configured' : 'deleted',
-        complete: second !== undefined,
-        deleted: first.deleted + (second?.deleted ?? 0),
-        retained: first.retained + (second?.retained ?? 0),
+        complete,
+        deleted,
+        retained,
       };
-      try {
-        await input.audit?.(entry);
-      } catch (error) {
-        // The deletion itself is done; failing here would make the player
-        // retry with a session that no longer exists.
-        console.error(
-          'Account deletion audit entry not recorded:',
-          deletionId,
-          error instanceof Error ? error.name : 'unknown error',
-        );
-      }
+      await recordAudit(input.audit, entry);
       return {
         status: 'deleted',
         deletionId,
         completedAt,
-        retainedPurchaseRecords: entry.retained,
+        retainedPurchaseRecords: retained,
       };
     },
   };
 }
 
+/**
+ * Finishes erasures a deletion left pending (its second pass failed after
+ * the identity was deleted): erases again and clears each one that every
+ * store completed. Run it from a scheduled job.
+ */
+export async function finishPendingAccountErasures(input: {
+  readonly erasers: readonly PlayerDataEraser[];
+  readonly pending: PendingAccountErasureStore;
+  readonly limit?: number;
+}): Promise<{ readonly finished: number; readonly failed: number }> {
+  let finished = 0;
+  let failed = 0;
+  for (const erasure of await input.pending.list({ limit: input.limit ?? 10 })) {
+    try {
+      for (const eraser of input.erasers) {
+        await eraser.erasePlayerData(erasure);
+      }
+      await input.pending.clear({ deletionId: erasure.deletionId });
+      finished += 1;
+    } catch (error) {
+      failed += 1;
+      console.error('Pending account erasure not finished:', erasure.deletionId, describe(error));
+    }
+  }
+  return { finished, failed };
+}
+
 const secondPassAttempts = 3;
+const secondPassBackoffMs = [100, 400] as const;
+
+async function eraseWithRetries(
+  eraser: PlayerDataEraser,
+  erasure: PlayerDataErasureInput,
+  deletionId: string,
+  sleep: (ms: number) => Promise<void>,
+): Promise<PlayerDataErasureResult | undefined> {
+  for (let attempt = 0; attempt < secondPassAttempts; attempt += 1) {
+    if (attempt > 0) {
+      await sleep(secondPassBackoffMs[attempt - 1] ?? 400);
+    }
+    try {
+      return await eraser.erasePlayerData(erasure);
+    } catch (error) {
+      console.error(
+        'Account deletion second erasure pass failed:',
+        deletionId,
+        `attempt ${attempt + 1} of ${secondPassAttempts}`,
+        describe(error),
+      );
+    }
+  }
+  return undefined;
+}
+
+async function recordAudit(
+  audit: ((entry: AccountDeletionAuditEntry) => Promise<void>) | undefined,
+  entry: AccountDeletionAuditEntry,
+): Promise<void> {
+  try {
+    await audit?.(entry);
+  } catch (error) {
+    // The deletion itself is done; failing here would make the player retry
+    // with a session that no longer exists.
+    console.error('Account deletion audit entry not recorded:', entry.deletionId, describe(error));
+  }
+}
+
+/** The error's name and message, cut short; store errors name tables, not players. */
+function describe(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 200) : 'unknown error';
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 /** The player id stored on a deleted player's kept purchase records. */
 export function isRetainedPlayerId(playerId: string): boolean {
@@ -339,13 +462,16 @@ export function createAccountDeletionClient(input: {
         throw new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED');
       }
       throw new AccountDeletionError(
-        response.status >= 500 || response.status === 429
+        response.status >= 500 || retryableClientStatuses.has(response.status)
           ? 'ACCOUNT_DELETION_FAILED'
           : 'ACCOUNT_DELETION_REJECTED',
       );
     },
   };
 }
+
+/** Request Timeout, Too Early, Too Many Requests: worth another try. */
+const retryableClientStatuses: ReadonlySet<number> = new Set([408, 425, 429]);
 
 function parseJsonObject(text: string): Readonly<Record<string, unknown>> | undefined {
   try {

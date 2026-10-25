@@ -5,6 +5,8 @@ import {
   AccountDeletionError,
   createAccountDeletionClient,
   createAccountDeletionService,
+  createInMemoryPendingAccountErasureStore,
+  finishPendingAccountErasures,
   isRetainedPlayerId,
   type AccountDeletionAuditEntry,
   type AccountDeletionFetch,
@@ -358,13 +360,17 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   });
   const audits: AccountDeletionAuditEntry[] = [];
   const times = ['2026-10-25T00:00:00.000Z', '2026-10-25T00:00:01.000Z'];
+  const pending = createInMemoryPendingAccountErasureStore();
   const service = createAccountDeletionService({
     erasers: [eraser('games'), eraser('notifications')],
     identity: {
       async deletePlayer({ playerId }) {
         calls.push(`identity:${playerId}`);
+        // The erasure is pending (with the player id) while the identity goes.
+        assert.equal((await pending.list({ limit: 10 }))[0]?.playerId, 'player-1');
       },
     },
+    pending,
     audit: async (entry) => {
       audits.push(entry);
     },
@@ -386,6 +392,11 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     'games:player-1:deleted:deletion-1',
     'notifications:player-1:deleted:deletion-1',
   ]);
+  assert.deepEqual(
+    await pending.list({ limit: 10 }),
+    [],
+    'a completed deletion keeps nothing pending',
+  );
   assert.deepEqual(audits, [
     {
       deletionId: 'deletion-1',
@@ -403,7 +414,8 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     'the audit entry has no player id',
   );
 
-  // A failing step is retryable and nothing after it runs.
+  // A failing first pass is retryable and nothing after it runs.
+  const failingPending = createInMemoryPendingAccountErasureStore();
   const failing = createAccountDeletionService({
     erasers: [{ erasePlayerData: () => Promise.reject(new Error('D1_ERROR')) }],
     identity: {
@@ -411,6 +423,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
         throw new Error('identity must not run after a failed erasure');
       },
     },
+    pending: failingPending,
   });
   await assert.rejects(failing.deletePlayerAccount({ playerId: 'player-1' }), (error: unknown) => {
     assert.ok(error instanceof AccountDeletionError);
@@ -418,20 +431,28 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     assert.equal(error.retryable, true);
     return true;
   });
+  assert.deepEqual(await failingPending.list({ limit: 10 }), []);
+  // A failed identity deletion is retryable too, and leaves nothing pending:
+  // the player still exists, so no sweep may erase what they write next.
+  const identityPending = createInMemoryPendingAccountErasureStore();
   const identityFailing = createAccountDeletionService({
     erasers: [],
     identity: { deletePlayer: () => Promise.reject(new Error('identity unavailable')) },
+    pending: identityPending,
   });
   await assert.rejects(
     identityFailing.deletePlayerAccount({ playerId: 'player-1' }),
-    AccountDeletionError,
+    (error: unknown) => error instanceof AccountDeletionError && error.retryable,
   );
+  assert.deepEqual(await identityPending.list({ limit: 10 }), []);
   for (const playerId of ['', 'deleted:deletion-1']) {
     // A `deleted:` id names kept records of another deletion, never a player.
     await assert.rejects(
-      createAccountDeletionService({ erasers: [], identity: null }).deletePlayerAccount({
-        playerId,
-      }),
+      createAccountDeletionService({
+        erasers: [],
+        identity: null,
+        pending: createInMemoryPendingAccountErasureStore(),
+      }).deletePlayerAccount({ playerId }),
       (error: unknown) => error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED',
     );
   }
@@ -443,11 +464,16 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   console.error = (...args: unknown[]) => {
     errors.push(args);
   };
+  const localAudits: AccountDeletionAuditEntry[] = [];
   try {
     const local = createAccountDeletionService({
       erasers: [],
       identity: null,
-      audit: () => Promise.reject(new Error('audit table missing')),
+      pending: createInMemoryPendingAccountErasureStore(),
+      audit: (entry) => {
+        localAudits.push(entry);
+        return Promise.reject(new Error('audit table missing'));
+      },
       createDeletionId: () => 'deletion-2',
     });
     assert.equal(
@@ -457,29 +483,49 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   } finally {
     console.error = consoleError;
   }
+  assert.equal(localAudits[0]?.identity, 'not-configured');
   assert.equal(errors.length, 1);
   assert.equal(JSON.stringify(errors).includes('player-1'), false);
 
-  // Once the identity is deleted the player cannot retry: a failing second
-  // pass is tried three times, then reported in the audit entry only.
-  let passes = 0;
+  // Once the identity is deleted the player cannot retry: each store's
+  // second pass is tried three times with a backoff; a store that recovers
+  // counts, one that does not leaves the erasure pending for the sweep.
+  const waits: number[] = [];
+  const sleep = async (ms: number): Promise<void> => {
+    waits.push(ms);
+  };
+  let recoveringPasses = 0;
+  let brokenPasses = 0;
+  let brokenRecovered = false;
+  const recovering: PlayerDataEraser = {
+    async erasePlayerData() {
+      recoveringPasses += 1;
+      if (recoveringPasses === 2) {
+        throw new Error('D1_ERROR: transient');
+      }
+      return { deleted: 1, retained: 1 };
+    },
+  };
+  const broken: PlayerDataEraser = {
+    async erasePlayerData() {
+      brokenPasses += 1;
+      if (brokenPasses > 1 && !brokenRecovered) {
+        throw new Error('D1_ERROR: unavailable');
+      }
+      return { deleted: 1, retained: 0 };
+    },
+  };
+  const sweepPending = createInMemoryPendingAccountErasureStore();
   const secondPassAudits: AccountDeletionAuditEntry[] = [];
   const flaky = createAccountDeletionService({
-    erasers: [
-      {
-        async erasePlayerData() {
-          passes += 1;
-          if (passes > 1) {
-            throw new Error('D1_ERROR');
-          }
-          return { deleted: 1, retained: 0 };
-        },
-      },
-    ],
+    erasers: [recovering, broken],
     identity: { deletePlayer: async () => undefined },
+    pending: sweepPending,
     audit: async (entry) => {
       secondPassAudits.push(entry);
     },
+    sleep,
+    createDeletionId: () => 'deletion-3',
   });
   const secondPassErrors: unknown[][] = [];
   console.error = (...args: unknown[]) => {
@@ -490,10 +536,38 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   } finally {
     console.error = consoleError;
   }
-  assert.equal(passes, 4);
-  assert.equal(secondPassErrors.length, 3);
-  assert.equal(secondPassAudits[0]?.complete, false);
-  assert.equal(secondPassAudits[0]?.deleted, 1);
+  // recovering: first pass, a failed attempt, a good one; broken: first pass, three failed.
+  assert.equal(recoveringPasses, 3);
+  assert.equal(brokenPasses, 4);
+  assert.deepEqual(waits, [100, 100, 400]);
+  assert.equal(secondPassErrors.length, 4);
+  assert.equal(JSON.stringify(secondPassErrors).includes('player-1'), false);
+  assert.deepEqual(
+    { complete: secondPassAudits[0]?.complete, deleted: secondPassAudits[0]?.deleted },
+    { complete: false, deleted: 3 },
+  );
+  const [left] = await sweepPending.list({ limit: 10 });
+  assert.deepEqual(
+    { deletionId: left?.deletionId, playerId: left?.playerId, retained: left?.retainedPlayerId },
+    { deletionId: 'deletion-3', playerId: 'player-1', retained: 'deleted:deletion-3' },
+  );
+
+  // The sweep keeps it while a store fails, and clears it once all succeed.
+  console.error = () => undefined;
+  try {
+    assert.deepEqual(
+      await finishPendingAccountErasures({ erasers: [recovering, broken], pending: sweepPending }),
+      { finished: 0, failed: 1 },
+    );
+  } finally {
+    console.error = consoleError;
+  }
+  brokenRecovered = true;
+  assert.deepEqual(
+    await finishPendingAccountErasures({ erasers: [recovering, broken], pending: sweepPending }),
+    { finished: 1, failed: 0 },
+  );
+  assert.deepEqual(await sweepPending.list({ limit: 10 }), []);
 }
 
 // --- The client --------------------------------------------------------------
@@ -544,7 +618,9 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   await failure(404, { error: 'UNKNOWN_ENDPOINT' }, 'ACCOUNT_DELETION_NOT_CONFIGURED');
   await failure(500, { error: 'ACCOUNT_DELETION_FAILED' }, 'ACCOUNT_DELETION_FAILED');
   await failure(429, { error: 'RATE_LIMITED' }, 'ACCOUNT_DELETION_FAILED');
+  await failure(408, { error: 'TIMEOUT' }, 'ACCOUNT_DELETION_FAILED');
   await failure(400, { error: 'BAD_REQUEST' }, 'ACCOUNT_DELETION_REJECTED');
+  assert.equal(new AccountDeletionError('ACCOUNT_DELETION_REJECTED').retryable, false);
   await failure(200, { status: 'pending' }, 'ACCOUNT_DELETION_UNREACHABLE');
 
   const before = requests.length;

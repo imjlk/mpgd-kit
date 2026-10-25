@@ -151,9 +151,17 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
     readonly retainedPlayerId: string;
   }): Promise<{ readonly deleted: number; readonly retained: number }> {
     const participantId = input.playerId;
-    if (typeof participantId !== 'string' || participantId.length === 0
-      || participantId.startsWith('deleted:')) {
-      throw new Error('Player data erasure needs the player id of a player.');
+    // `deleted:` is `retainedPlayerIdPrefix` of `./account-deletion`.
+    if (
+      typeof participantId !== 'string' || participantId.length === 0
+      || participantId.startsWith('deleted:')
+      || typeof input.retainedPlayerId !== 'string'
+      || !input.retainedPlayerId.startsWith('deleted:')
+      || input.retainedPlayerId.length <= 'deleted:'.length
+    ) {
+      throw new Error(
+        'Player data erasure needs a player id and a deleted:<id> retained player id.',
+      );
     }
     let removed = 0;
     for (const [key, stored] of [...this.attemptsById]) {
