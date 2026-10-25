@@ -194,8 +194,11 @@ export function createStarterAccountDeletion(input: {
         case 'ACCOUNT_DELETION_NOT_CONFIGURED':
           return { outcome: 'unavailable' };
         case 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED':
-          // Expired or already used; the next tap asks for a new one.
-          return { outcome: 'failed', retryable: true };
+          // Expired or already used, the next tap asks for a new one;
+          // without a way to ask, the server's check cannot be met.
+          return input.requestConfirmation === undefined
+            ? { outcome: 'unavailable' }
+            : { outcome: 'failed', retryable: true };
         default:
           return { outcome: 'failed', retryable: error.retryable };
       }

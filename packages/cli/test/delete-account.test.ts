@@ -292,6 +292,17 @@ const pendingPurchase = {
     }).deleteAccount(),
     { outcome: 'needs-session' },
   );
+  // A server that requires a confirmation the game cannot ask for.
+  assert.deepEqual(
+    await createStarterAccountDeletion({
+      client: {
+        deleteAccount: () =>
+          Promise.reject(new AccountDeletionError('ACCOUNT_DELETION_CONFIRMATION_REQUIRED')),
+      },
+      storage: memoryStorage(),
+    }).deleteAccount(),
+    { outcome: 'unavailable' },
+  );
 }
 
 // The entry needs a signed-in session; a journal that cannot be cleared is reported.

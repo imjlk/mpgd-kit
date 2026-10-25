@@ -553,9 +553,12 @@ try {
           deleted.push(playerId);
         },
         async verifyAccountDeletionConfirmation({ playerId, confirmation }) {
-          // Single use, bound to the player.
+          // Single use, bound to the player; another player's attempt does
+          // not use it up.
           const confirmed = confirmations.get(confirmation) === playerId;
-          confirmations.delete(confirmation);
+          if (confirmed) {
+            confirmations.delete(confirmation);
+          }
           return { confirmed };
         },
       },
@@ -631,6 +634,58 @@ try {
     const unconfirmed = await post(route, headers);
     assert.equal(unconfirmed.status, 403);
     assert.deepEqual(await unconfirmed.json(), { error: 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED' });
+  }
+  for (const confirmation of ['', 'x'.repeat(4097)]) {
+    assert.equal(
+      (await post(route, {
+        authorization: 'Bearer player-5-token',
+        'x-mpgd-account-deletion-confirmation': confirmation,
+      })).status,
+      403,
+      `confirmation of ${confirmation.length} characters`,
+    );
+  }
+  assert.equal(confirmations.get('confirm-2'), 'player-2', "another player's attempt keeps it");
+  // Only `{ confirmed: true }` confirms; a verifier that throws erases nothing.
+  for (const answer of [{ confirmed: 'true' }, null, undefined, {}]) {
+    const loose = createWorkerFetchHandler(
+      env({
+        GAME_SERVICES_ACCOUNT_DELETION: {
+          deletePlayer: async ({ playerId }) => void deleted.push(playerId),
+          verifyAccountDeletionConfirmation: async () => answer as never,
+        },
+      }),
+    );
+    assert.equal(
+      (await post(loose, {
+        authorization: 'Bearer player-5-token',
+        'x-mpgd-account-deletion-confirmation': 'confirm-5a',
+      })).status,
+      403,
+      JSON.stringify(answer),
+    );
+  }
+  {
+    const throwingVerifier = createWorkerFetchHandler(
+      env({
+        GAME_SERVICES_ACCOUNT_DELETION: {
+          deletePlayer: async ({ playerId }) => void deleted.push(playerId),
+          verifyAccountDeletionConfirmation: () => Promise.reject(new Error('identity down')),
+        },
+      }),
+    );
+    const consoleError = console.error;
+    console.error = () => undefined;
+    try {
+      const failed = await post(throwingVerifier, {
+        authorization: 'Bearer player-5-token',
+        'x-mpgd-account-deletion-confirmation': 'confirm-5a',
+      });
+      assert.equal(failed.status, 500);
+      assert.deepEqual(await failed.json(), { error: 'ACCOUNT_DELETION_FAILED', retryable: true });
+    } finally {
+      console.error = consoleError;
+    }
   }
   assert.deepEqual(deleted, [], 'nothing deleted without a confirmation');
   assert.equal(await countRows(db, 'leaderboard_transactions', 'player_id', 'player-5'), 1);
@@ -728,6 +783,15 @@ try {
   console.info = () => undefined;
   try {
     assert.equal((await post(localRoute, devSession, '{}', 'http://localhost:8787')).status, 200);
+    // A development session needs no confirmation, even with the binding.
+    const boundLocal = createWorkerFetchHandler({
+      ...local,
+      GAME_SERVICES_ACCOUNT_DELETION: {
+        deletePlayer: async () => undefined,
+        verifyAccountDeletionConfirmation: () => Promise.reject(new Error('not called')),
+      },
+    });
+    assert.equal((await post(boundLocal, devSession, '{}', 'http://localhost:8787')).status, 200);
   } finally {
     console.info = consoleInfo;
   }

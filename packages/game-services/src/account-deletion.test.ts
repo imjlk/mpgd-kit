@@ -1008,6 +1008,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   await failure(429, { error: 'RATE_LIMITED' }, 'ACCOUNT_DELETION_FAILED');
   await failure(408, { error: 'TIMEOUT' }, 'ACCOUNT_DELETION_FAILED');
   await failure(400, { error: 'BAD_REQUEST' }, 'ACCOUNT_DELETION_REJECTED');
+  await failure(403, { error: 'FORBIDDEN' }, 'ACCOUNT_DELETION_REJECTED');
   assert.equal(new AccountDeletionError('ACCOUNT_DELETION_REJECTED').retryable, false);
   await failure(200, { status: 'pending' }, 'ACCOUNT_DELETION_UNREACHABLE');
 
