@@ -130,8 +130,9 @@ production` prints what it lacks and fails on contradictions
 
 ## 4. Backend
 
-- [ ] Worker deployed with D1 and the cron, game-owned identity service for
-      guest sessions, purchase verification for Play and the App Store, AdMob
+- [ ] Worker deployed with D1 and the cron, the guest identity Worker
+      deployed and bound ([Guest Identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)),
+      purchase verification for Play and the App Store, AdMob
       SSV if ads grant rewards ([game services backend](./GAME_SERVICES_BACKEND.md),
       [AdMob SSV](./ADMOB_SSV.md)).
 - [ ] App Review buys with sandbox accounts against your production backend:
@@ -170,14 +171,24 @@ production` prints what it lacks and fails on contradictions
 
 ## 5. Identity and account deletion
 
-- [ ] A signed-in session for purchases: StoreKit and Play purchases are bound
-      to the authenticated player, so a guest cannot buy or restore. The
-      template's Restore Purchases control says so **(open: L3, identity)**.
+- [ ] A server session for purchases: StoreKit and Play purchases are bound
+      to the server player, and the native shell's local player binds
+      nothing. Deploy the reference guest identity Worker
+      (`apps/game-identity-worker`, D1, `IDENTITY_ISSUE_RATE_LIMITER`), bind
+      the game-services Worker's `GAME_SERVICES_INGRESS_AUTH`,
+      `GAME_SERVICES_NOTIFICATIONS_AUTH` and
+      `GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING` to it, have the iOS verifier
+      Worker resolve `appAccountToken` through its `AppStoreAccountBinding`,
+      and set `VITE_MPGD_IDENTITY_URL` in the game's production build
+      ([Guest Identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)).
+      A guest who logs out, or stays away longer than the inactivity window
+      (180 days), comes back as a new player without the old purchases until
+      account linking exists; say so in the game's support copy.
 - [ ] In-app account deletion and a web deletion URL. Play requires both for
       apps that create accounts
       ([Play account deletion](https://support.google.com/googleplay/android-developer/answer/13327111));
       the App Store requires in-app deletion (guideline 5.1.1(v))
-      **(open: L3)**. Put the URL into the privacy policy and the Play Data
+      **(open: L3b)**. Put the URL into the privacy policy and the Play Data
       safety form.
 
 ## 6. Legal pages and privacy answers

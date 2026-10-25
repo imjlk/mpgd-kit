@@ -136,6 +136,124 @@ The verified-attempt writer is intentionally available only through the
 private service binding. It is not routed through the public JSON or oRPC
 surfaces.
 
+## Guest Identity Worker
+
+`apps/game-identity-worker` is the reference identity service for mobile
+games: server-issued guest sessions now, account linking later. The
+game-services Worker reaches it through service bindings; the game reaches it
+over HTTP with `createGuestSessionHttpBackend` (the generated game's
+`src/platform/guestIdentity.ts`, configured with `VITE_MPGD_IDENTITY_URL`).
+
+**Sessions.** `POST /identity/v1/guest` (`{ installationId }`) issues a new
+player and session family; `POST /identity/v1/refresh` (`{ refreshToken }`)
+rotates the refresh token inside the same family; `POST /identity/v1/revoke`
+ends the family (and answers `200` for a token it does not know, as
+[RFC 7009 section 2.2](https://www.rfc-editor.org/rfc/rfc7009#section-2.2)
+asks); `POST /identity/v1/bind-account` answers `501
+ACCOUNT_BINDING_UNSUPPORTED`, the seam for Sign in with Apple or Google later.
+Token answers carry `Cache-Control: no-store`
+([RFC 6749 section 5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1)).
+The token model follows
+[RFC 9700 section 4.14.2](https://www.rfc-editor.org/rfc/rfc9700#section-4.14.2)
+for a public client:
+
+- Access tokens are opaque and short-lived (15 minutes,
+  `IDENTITY_ACCESS_TOKEN_TTL_SECONDS`). Refresh tokens rotate on every
+  refresh; the family id (`sessionFamilyId`, also the session id the
+  notifications Worker sees) never changes.
+- Presenting a refresh token the family has already replaced revokes the
+  whole family and ends its notification session: one of two parties holds a
+  stolen copy, and the server cannot tell which.
+- One exception keeps mobile guests from being lost: the token replaced by
+  the latest rotation may be presented again while its successor has never
+  been used, up to `IDENTITY_REFRESH_RETRY_GRACE_SECONDS` (7 days, at most half
+  the inactivity window; `0` is strict rotation). A phone that lost the
+  rotation's answer, or that the OS suspended mid-request, keeps the old token
+  and presents it at its next launch; strict detection would end that guest for
+  good. The cost is that a stolen copy of that one token stays usable until the
+  device's next refresh, which then reads as a replay and ends the family.
+- A family ends after `IDENTITY_REFRESH_IDLE_DAYS` (180) without a refresh
+  ("Refresh tokens SHOULD expire if the client has been inactive for some
+  time"); each refresh extends it. A guest who stays away longer comes back as
+  a new guest, without the old player's purchases, until account linking
+  exists.
+- Only SHA-256 hashes of tokens are stored. Every table carries `player_id`,
+  so deleting a player (L3b) is one key across all of them.
+- New guests are limited to `IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY` (5)
+  per installation in D1. The installation id is client-chosen, so that limit
+  only stops a misbehaving client: bind the optional
+  `IDENTITY_ISSUE_RATE_LIMITER`
+  ([Workers Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/),
+  keyed by `CF-Connecting-IP`; its counts are per Cloudflare location and
+  approximate) in production.
+
+**Deploy.**
+
+```sh
+pnpm --dir apps/game-identity-worker exec wrangler d1 create game-identity
+# put the database_id into apps/game-identity-worker/wrangler.toml, uncomment
+# [[d1_databases]], and set MPGD_STORE = "d1"
+pnpm --dir apps/game-identity-worker exec wrangler d1 migrations apply game-identity --remote
+pnpm --dir apps/game-identity-worker run deploy
+```
+
+`MPGD_STORE = "memory"` serves only local development hosts (loopback,
+`*.localhost`, `10.0.2.2`): sessions would vanish with each isolate. The daily
+cron in its `wrangler.toml` purges ended families and expired tokens.
+
+**Bind the game-services Worker to it.** The entrypoint names are the ones
+its `wrangler.toml` examples use:
+
+```toml
+[[services]]
+binding = "GAME_SERVICES_INGRESS_AUTH"
+service = "game-identity"
+entrypoint = "GameServicesIngressAuth"
+
+[[services]]
+binding = "GAME_SERVICES_NOTIFICATIONS_AUTH"
+service = "game-identity"
+entrypoint = "NotificationSessions"
+
+[[services]]
+binding = "GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING"
+service = "game-identity"
+entrypoint = "GooglePlayAccountBinding"
+```
+
+`GameServicesIngressAuth` answers `{ playerId }` for a live access token,
+`NotificationSessions` answers `{ playerId, sessionId, installationId,
+expiresAt }` (the family's end), and `GooglePlayAccountBinding` answers the
+player's `obfuscatedAccountId` (`null` for a player it did not issue). The
+game-owned iOS verifier Worker binds `AppStoreAccountBinding` and calls its
+`resolveAppAccountToken({ playerId })` from the App Store verifier's
+`resolveAppAccountToken` (a `null` answer is an unknown player: throw, so the
+purchase is refused). Both values are the same digests the generated game
+derives on the device (`src/platform/commerceAccountBinding.ts`).
+
+The identity Worker binds back to end a revoked family's notification
+session at once:
+
+```toml
+# apps/game-identity-worker/wrangler.toml
+[[services]]
+binding = "GAME_SERVICES"
+service = "mpgd-game-services"
+```
+
+The two Workers bind each other, so deploy the identity Worker first without
+`GAME_SERVICES`, then the game-services Worker with its identity bindings, then
+the identity Worker again with `GAME_SERVICES`. Without it, a revoked family's
+devices are unbound when its `expiresAt` passes. Each service-binding call
+counts toward a request's limit of 32 Worker invocations
+([service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/));
+an authenticated game-services request uses one.
+
+Not served by the reference Worker: `GAME_SERVICES_NOTIFICATIONS_IDENTITY`
+(`resolveNotificationRecipient` maps a player to an Apps in Toss user key, and
+a guest has none), `VERIFIED_LEADERBOARD_AUTH`, and account linking. Account
+deletion is the next step (L3b).
+
 ## Authenticated Snapshot Reads
 
 Bind a private identity Worker that implements
@@ -267,9 +385,10 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   the missing binding the first time a session route is asked for (a
   send-only Worker, which serves only `deliverNotification`, can ignore
   it). The
-  identity Worker's side (the `NotificationSessions` entrypoint) belongs to
-  the game's identity service and is not in this repository: implement
-  `authenticateNotificationSession` and call `endNotificationSession` as
+  identity Worker's side (the `NotificationSessions` entrypoint) is the
+  reference guest identity Worker ([Guest Identity Worker](#guest-identity-worker));
+  a game with its own identity service implements
+  `authenticateNotificationSession` and calls `endNotificationSession` as
   **Sessions** above describes.
 - **Local development sessions.** Without an identity service, a local
   Worker can take `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS =

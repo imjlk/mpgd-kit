@@ -236,9 +236,11 @@ with native Node imports, without a bundler or TypeScript runtime loader.
 ## Guest session and account binding foundation
 
 `createGuestSessionCoordinator` from `@mpgd/game-services/guest-session`
-accepts a game-owned `GuestSessionBackend` and a dedicated
-`SecureCredentialStore`. The kit does **not** issue tokens or infer server
-authentication from `installationId` or a local `playerId`. The backend must
+accepts a `GuestSessionBackend` and a dedicated `SecureCredentialStore`.
+The client never issues tokens or infers server authentication from
+`installationId` or a local `playerId`; the reference guest identity Worker
+in the kit repository (`apps/game-identity-worker`) is one backend that does,
+over `createGuestSessionHttpBackend`. The backend must
 authenticate opaque refresh tokens, verify external account proofs, atomically
 deduplicate account binding by idempotency key, return `conflict` for an account
 owned by another server user, and revoke sessions durably. It must define

@@ -58,7 +58,8 @@ head_sampling_rate = 1
 # docs/CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker.
 #
 # Bind a private identity Worker to enable authenticated public snapshot reads.
-# The service must implement authenticateVerifiedLeaderboardSnapshot({ authorization }).
+# The service must implement authenticateVerifiedLeaderboardSnapshot({ authorization });
+# the reference guest identity Worker does not, so the example names another service.
 
 # Verse8 rewarded-ad grants can use the built-in verifier credential:
 #   pnpm exec wrangler secret put VERSE8_ADS_VERIFIER_AUTHORIZATION
@@ -70,7 +71,7 @@ head_sampling_rate = 1
 #
 # [[services]]
 # binding = "VERIFIED_LEADERBOARD_AUTH"
-# service = "game-identity"
+# service = "game-leaderboard-auth"
 
 # Optional ingress authentication for the public purchases, ad-rewards, and
 # leaderboard grant routes. The service must implement
@@ -222,7 +223,7 @@ head_sampling_rate = 1
 #
 # [[services]]
 # binding = "GAME_SERVICES_NOTIFICATIONS_IDENTITY"
-# service = "game-identity"
+# service = "game-ait-identity"
 # entrypoint = "NotificationRecipients"
 #
 # [[queues.producers]]

@@ -142,8 +142,10 @@ PR C3): the service provider is registered for every catalog product whose
 `platformProductIds.android` names a Play SKU (subscriptions are skipped),
 and `accountBinding` is the reference binding in
 `src/platform/commerceAccountBinding.ts`, the 64-character hex SHA-256 of
-`mpgd-commerce-account:<playerId>` for the authenticated player (a guest
-session binds nothing, so the purchase is refused with
+`mpgd-commerce-account:<playerId>` for the server session's player (the
+generated game's `guestIdentity.ts` signs in a server-issued guest when
+`VITE_MPGD_IDENTITY_URL` is set) or an authenticated platform player; the
+native shell's local player binds nothing, so the purchase is refused with
 `ACCOUNT_BINDING_REQUIRED`). The backend's `resolveObfuscatedAccountId`
 must derive the same value, or both are replaced together.
 

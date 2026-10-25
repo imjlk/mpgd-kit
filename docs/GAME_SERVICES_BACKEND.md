@@ -783,8 +783,15 @@ obfuscated account id is the lowercase hex SHA-256 of
 first 16 bytes of the same digest laid out as a version 5 UUID (version
 nibble `5`, variant bits `10`). A backend serving those games derives the
 same values in `resolveObfuscatedAccountId` and `resolveAppAccountToken`
-from the authenticated player id; a game with its own account scheme
-replaces the module and both resolvers together.
+from the authenticated player id; the reference guest identity Worker
+(`apps/game-identity-worker`) does, through its `GooglePlayAccountBinding`
+and `AppStoreAccountBinding` entrypoints
+([Guest Identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)).
+The player is the server session's (`setStarterCommerceServerPlayer`, which
+the generated game's `guestIdentity.ts` sets when `VITE_MPGD_IDENTITY_URL`
+is configured, a server-issued guest included); without one, only an
+authenticated, non-local platform session binds. A game with its own account
+scheme replaces the module and both resolvers together.
 
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider
@@ -1041,6 +1048,10 @@ starter. Game-specific production integrations still need these pieces:
 - Real product, ad placement, leaderboard, app, and bundle identifiers.
 - Cloudflare D1 provisioning plus `MPGD_STORE = "d1"` for persistent Worker
   deployments.
+- The identity service: deploy the reference guest identity Worker
+  (`apps/game-identity-worker`) and bind it, or bind the game's own service to
+  the same entrypoints. Account linking and account deletion are not in it
+  yet.
 
 The sample catalog, sample ad placements, in-process backend, and Worker memory
 store are intentionally starter defaults. They are safe for local smoke tests,
