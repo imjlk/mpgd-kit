@@ -246,6 +246,12 @@ try {
       ['pending-a', 'erasing', 0],
     ],
   );
+  // An identity-deleted erasure not due for its final pass is left out.
+  assert.deepEqual(
+    (await pending.list({ limit: 10, identityDeletedBefore: '2026-10-25T00:00:00.500Z' }))
+      .map((entry) => entry.deletionId),
+    ['pending-a'],
+  );
   await pending.clear({ deletionId: 'pending-a' });
   await pending.clear({ deletionId: 'pending-b' });
 

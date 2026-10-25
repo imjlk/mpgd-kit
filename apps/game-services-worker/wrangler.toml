@@ -239,8 +239,10 @@ head_sampling_rate = 1
 # migration 0010_account_deletion.sql and bind the identity Worker's
 # deletePlayer entrypoint. POST /game-services/account/delete authenticates the
 # player through GAME_SERVICES_INGRESS_AUTH (else GAME_SERVICES_NOTIFICATIONS_AUTH)
-# and answers 503 without this binding. The cron above finishes pending
-# erasures and purges purchase records kept for deleted players after five years.
+# and answers 503 without this binding. The cron above is required: it runs
+# each deletion's final pass (until then the pending erasure keeps the player
+# id), finishes failed erasures, and purges purchase records kept for deleted
+# players after five years.
 # Support tooling deletes a player (a web request handled by an operator) through
 # this Worker's own entrypoint: bind service = "mpgd-game-services" with
 # entrypoint = "GameServicesAccountDeletion" and call deletePlayerAccount({ playerId }).

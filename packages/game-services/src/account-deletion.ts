@@ -192,9 +192,15 @@ export interface PendingAccountErasureStore {
   clear(input: { readonly deletionId: string }): Promise<void>;
   /**
    * At most `limit` erasures: `identity-deleted` ones first, then by least
-   * recently tried (`attemptedAt`, else `recordedAt`).
+   * recently tried (`attemptedAt`, else `recordedAt`). With
+   * `identityDeletedBefore`, an `identity-deleted` erasure recorded after it
+   * is left out (it is not due for its final pass yet), so young entries
+   * never take the slots of due ones.
    */
-  list(input: { readonly limit: number }): Promise<readonly PendingAccountErasure[]>;
+  list(input: {
+    readonly limit: number;
+    readonly identityDeletedBefore?: string;
+  }): Promise<readonly PendingAccountErasure[]>;
 }
 
 /** An `erasing` erasure older than this (one hour) is discarded by the sweep. */
@@ -202,8 +208,10 @@ export const staleErasingPendingMs = 60 * 60 * 1000;
 
 /**
  * The sweep erases an `identity-deleted` erasure once more, and only then
- * clears it, this long (15 minutes) after the request: longer than any
- * request that authenticated before the identity was deleted can still run.
+ * clears it, at its first run at least this long (15 minutes) after the
+ * request: longer than any request that authenticated before the identity
+ * was deleted can still run. Until then the pending entry (with the player
+ * id) is kept, so a deployment must run the sweep (the Worker's cron).
  */
 export const finalErasureDelayMs = 15 * 60 * 1000;
 
@@ -218,10 +226,15 @@ export function createInMemoryPendingAccountErasureStore(): PendingAccountErasur
     async clear({ deletionId }) {
       pending.delete(deletionId);
     },
-    async list({ limit }) {
+    async list({ limit, identityDeletedBefore }) {
       const rank = (erasure: PendingAccountErasure): number =>
         erasure.phase === 'identity-deleted' ? 0 : 1;
       return [...pending.values()]
+        .filter((erasure) =>
+          identityDeletedBefore === undefined
+          || erasure.phase !== 'identity-deleted'
+          || Date.parse(erasure.recordedAt) <= Date.parse(identityDeletedBefore),
+        )
         .sort((left, right) =>
           rank(left) - rank(right) || triedAt(left).localeCompare(triedAt(right)))
         .slice(0, limit);
@@ -400,7 +413,11 @@ export async function finishPendingAccountErasures(input: {
   let finished = 0;
   let failed = 0;
   let discarded = 0;
-  for (const erasure of await input.pending.list({ limit: input.limit ?? 10 })) {
+  const identityDeletedBefore = new Date(Date.parse(now()) - finalErasureDelayMs).toISOString();
+  for (const erasure of await input.pending.list({
+    limit: input.limit ?? 25,
+    identityDeletedBefore,
+  })) {
     const at = now();
     if (erasure.phase !== 'identity-deleted') {
       if (Date.parse(at) - Date.parse(erasure.recordedAt) >= staleErasingPendingMs) {

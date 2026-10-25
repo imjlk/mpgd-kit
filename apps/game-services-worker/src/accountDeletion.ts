@@ -469,12 +469,13 @@ export function createD1PendingAccountErasureStore(db: D1Database): PendingAccou
     async clear({ deletionId }) {
       await db.prepare('DELETE FROM account_deletion_pending WHERE deletion_id = ?').bind(deletionId).run();
     },
-    async list({ limit }) {
+    async list({ limit, identityDeletedBefore }) {
       const rows = (await db.prepare(`SELECT * FROM account_deletion_pending
+          WHERE ?1 IS NULL OR phase <> 'identity-deleted' OR recorded_at <= ?1
           ORDER BY CASE phase WHEN 'identity-deleted' THEN 0 ELSE 1 END,
             COALESCE(attempted_at, recorded_at), deletion_id
-          LIMIT ?`)
-        .bind(limit)
+          LIMIT ?2`)
+        .bind(identityDeletedBefore ?? null, limit)
         .all<PendingRow>()).results;
       return rows.map((row) => ({
         deletionId: row.deletion_id,

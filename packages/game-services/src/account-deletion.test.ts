@@ -843,6 +843,13 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     (await ordered.list({ limit: 10 })).map((pending) => pending.deletionId),
     ['b', 'c', 'a'],
   );
+  // Not yet due for the final pass: an identity-deleted entry recorded after
+  // the cutoff is left out, an erasing one is not.
+  assert.deepEqual(
+    (await ordered.list({ limit: 10, identityDeletedBefore: '2026-10-25T00:00:01.500Z' }))
+      .map((pending) => pending.deletionId),
+    ['c', 'a'],
+  );
 
   // A sweep runs every store even when an earlier one fails, and a failing
   // discard does not stop the sweep.

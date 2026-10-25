@@ -1075,8 +1075,10 @@ on `createGameServicesRuntime(...).accountDeletion`.
    a transaction).
 4. Write the audit entry (`account_deletion_audit`: deletion id, times,
    counts, no player id).
-5. 15 minutes later the Worker's cron erases once more and clears the
-   pending erasure (`finishPendingAccountErasures`, `finalErasureDelayMs`):
+5. At its first run at least 15 minutes later the Worker's cron erases
+   once more and clears the pending erasure (`finishPendingAccountErasures`,
+   `finalErasureDelayMs`); until then the pending erasure keeps the player
+   id, so without the cron every deletion leaves it behind:
    a request that authenticated before the identity was deleted (a verify
    waiting on its store, a notifications cron run that loaded the player)
    may write after step 3, and this final pass removes it.
@@ -1160,9 +1162,10 @@ transaction). Games that sell outside a store add their own payment records.
 ### Residual gaps
 
 - A request authenticated before the identity was deleted that commits
-  more than 15 minutes later, or an AdMob SSV callback Google delivers
-  after the final pass, can leave a row under the deleted player's id
-  (`admob_ssv_callbacks` has no purge).
+  after the final pass, or an AdMob SSV callback Google delivers after it,
+  can leave a row under the deleted player's id (`admob_ssv_callbacks` has
+  no purge). A deletion whose `identity-deleted` mark could not be written
+  (three attempts) gets no final pass.
 - The five-year period is the package constant `retainedPurchaseRecordYears`;
   a game that needs another period changes it in its fork, with the
   starter's copy and legal pages.
