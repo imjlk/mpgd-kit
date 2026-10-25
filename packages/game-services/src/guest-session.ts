@@ -85,6 +85,12 @@ export type GuestSessionCoordinatorErrorCode =
   | 'GUEST_SESSION_INVALID_RESPONSE'
   | 'GUEST_SESSION_OWNERSHIP_CONFLICT'
   | 'GUEST_SESSION_BACKEND_FAILED'
+  /**
+   * The identity service refused the refresh token: revoked (logout,
+   * replay), expired after inactivity, or unknown. That session cannot come
+   * back; log out (which removes the stored token) and start a new guest.
+   */
+  | 'GUEST_SESSION_REJECTED'
   | 'GUEST_SESSION_CREDENTIAL_LOAD_FAILED'
   | 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED'
   | 'GUEST_SESSION_LOGOUT_UNCERTAIN';
@@ -97,6 +103,18 @@ export class GuestSessionCoordinatorError extends Error {
     super(`Guest session operation failed: ${code}.`);
     this.name = 'GuestSessionCoordinatorError';
     this.code = code;
+  }
+}
+
+/**
+ * A `GuestSessionBackend` throws this when the identity service refused the
+ * refresh token for good (revoked, expired, replayed, or unknown), as
+ * opposed to an outage. The coordinator reports it as `GUEST_SESSION_REJECTED`.
+ */
+export class GuestSessionRejectedError extends Error {
+  constructor() {
+    super('The identity service rejected the guest session.');
+    this.name = 'GuestSessionRejectedError';
   }
 }
 
@@ -213,10 +231,14 @@ export function createGuestSessionCoordinator(input: {
   async function fromBackend<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
-    } catch {
+    } catch (error) {
       // Backend exceptions can contain URLs, proofs, or tokens. The public
       // coordinator surface intentionally exposes only a stable error code.
-      throw new GuestSessionCoordinatorError('GUEST_SESSION_BACKEND_FAILED');
+      throw new GuestSessionCoordinatorError(
+        error instanceof GuestSessionRejectedError
+          ? 'GUEST_SESSION_REJECTED'
+          : 'GUEST_SESSION_BACKEND_FAILED',
+      );
     }
   }
 
@@ -604,4 +626,153 @@ export function createGuestServerSession(
       return coordinator.getHeaders();
     },
   };
+}
+
+/**
+ * The HTTP routes of a guest identity service, relative to its base URL:
+ * the contract between `createGuestSessionHttpBackend` and the reference
+ * identity Worker (`apps/game-identity-worker`). Every route takes a JSON
+ * `POST` body. `issueGuest` and `refresh` answer `200` with
+ * `ServerGuestSessionCredentials`; `revoke` answers `200` with `{}`, also for
+ * a token it does not know (RFC 7009 section 2.2); a refusal answers
+ * `{ error: GuestIdentityHttpErrorCode }`.
+ */
+export const guestIdentityHttpRoutes = Object.freeze({
+  issueGuest: '/identity/v1/guest',
+  refresh: '/identity/v1/refresh',
+  revoke: '/identity/v1/revoke',
+  bindAccount: '/identity/v1/bind-account',
+} as const);
+
+/**
+ * - `INVALID_REQUEST` (400): a body the route does not take.
+ * - `GUEST_SESSION_REJECTED` (401): the refresh token is revoked, expired,
+ *   replayed, or unknown; the session cannot come back.
+ * - `RATE_LIMITED` (429): too many guests for this installation or address.
+ * - `ACCOUNT_BINDING_UNSUPPORTED` (501): the service binds no external account.
+ * - `UNAVAILABLE` (503): the service could not answer; retry later.
+ */
+export type GuestIdentityHttpErrorCode =
+  | 'INVALID_REQUEST'
+  | 'GUEST_SESSION_REJECTED'
+  | 'RATE_LIMITED'
+  | 'ACCOUNT_BINDING_UNSUPPORTED'
+  | 'UNAVAILABLE';
+
+/** A failed identity request. The message names the route and the code, never a token. */
+export class GuestSessionHttpError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(route: string, status: number, code: string) {
+    super(`Guest identity request ${route} failed: ${status} ${code}.`);
+    this.name = 'GuestSessionHttpError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/** How long one identity request may take by default: 15 seconds. */
+export const defaultGuestSessionHttpTimeoutMs = 15_000;
+
+/**
+ * A `GuestSessionBackend` over a guest identity service's HTTP routes
+ * (`guestIdentityHttpRoutes`). A `refresh` the service refuses with
+ * `GUEST_SESSION_REJECTED` throws `GuestSessionRejectedError` (the
+ * coordinator's `GUEST_SESSION_REJECTED`); any other failure throws
+ * `GuestSessionHttpError` or the fetch error, which the coordinator reports
+ * as `GUEST_SESSION_BACKEND_FAILED`. `baseUrl` must be `https:`, except on a
+ * local development host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`,
+ * `10.0.2.2`). Requests never follow a redirect, so a token is only ever sent
+ * to `baseUrl`'s origin.
+ */
+export function createGuestSessionHttpBackend(input: {
+  readonly baseUrl: string;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly timeoutMs?: number;
+}): GuestSessionBackend {
+  const base = parseGuestIdentityBaseUrl(input.baseUrl);
+  const timeoutMs = input.timeoutMs ?? defaultGuestSessionHttpTimeoutMs;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
+  }
+  const fetchImpl = input.fetch ?? ((request: Request) => globalThis.fetch(request));
+
+  async function post(route: string, body: Readonly<Record<string, string>>): Promise<unknown> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(
+        new Request(new URL(route.slice(1), base), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(body),
+          redirect: 'manual',
+          signal: controller.signal,
+        }),
+      );
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = undefined;
+      }
+      if (response.status !== 200) {
+        const code = isRecord(payload) && typeof payload.error === 'string' && /^[A-Z_]{1,64}$/u.test(payload.error)
+          ? payload.error
+          : 'UNKNOWN';
+        throw new GuestSessionHttpError(route, response.status, code);
+      }
+      return payload;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return {
+    async issueGuest({ installationId }) {
+      return await post(guestIdentityHttpRoutes.issueGuest, { installationId }) as ServerGuestSessionCredentials;
+    },
+    async refresh({ refreshToken }) {
+      try {
+        return await post(guestIdentityHttpRoutes.refresh, { refreshToken }) as ServerGuestSessionCredentials;
+      } catch (error) {
+        if (error instanceof GuestSessionHttpError && error.status === 401 && error.code === 'GUEST_SESSION_REJECTED') {
+          throw new GuestSessionRejectedError();
+        }
+        throw error;
+      }
+    },
+    async revoke({ refreshToken }) {
+      await post(guestIdentityHttpRoutes.revoke, { refreshToken });
+    },
+    async bindAccount({ refreshToken, externalProof, idempotencyKey }) {
+      return await post(guestIdentityHttpRoutes.bindAccount, {
+        refreshToken,
+        externalProof,
+        idempotencyKey,
+      }) as AccountBindingOutcome;
+    },
+  };
+}
+
+function parseGuestIdentityBaseUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
+  }
+  const host = url.hostname.toLowerCase();
+  const local = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1'
+    || host === '[::1]' || host === '10.0.2.2';
+  if (!(url.protocol === 'https:' || (url.protocol === 'http:' && local))
+    || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+    throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
+  }
+  // Routes resolve under the base path, so `https://host/api` serves `/api/identity/v1/...`.
+  if (!url.pathname.endsWith('/')) {
+    url.pathname = `${url.pathname}/`;
+  }
+  return url;
 }

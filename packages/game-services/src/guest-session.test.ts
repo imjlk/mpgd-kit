@@ -6,7 +6,11 @@ import type { GameServicesHeaderResolver } from './request-headers.js';
 import {
   createGuestServerSession,
   createGuestSessionCoordinator,
+  createGuestSessionHttpBackend,
+  guestIdentityHttpRoutes,
   GuestSessionCoordinatorError,
+  GuestSessionHttpError,
+  GuestSessionRejectedError,
   type GuestSessionBackend,
   type ServerGuestSessionCredentials,
 } from './guest-session.js';
@@ -968,6 +972,156 @@ function familyBackend() {
   assert.throws(() => createGuestServerSession(coordinator, { refreshAheadMs: -1 }), {
     code: 'GUEST_SESSION_INVALID_INPUT',
   });
+}
+
+// A refresh the backend rejects for good is GUEST_SESSION_REJECTED, not an outage.
+{
+  const native = credentialFixture();
+  native.values.set('mpgd.guest.refresh', 'revoked-refresh');
+  let rejectRefresh = true;
+  const coordinator = createGuestSessionCoordinator({
+    backend: {
+      async issueGuest() {
+        return session('access-new', 'refresh-new');
+      },
+      async refresh() {
+        if (rejectRefresh) {
+          throw new GuestSessionRejectedError();
+        }
+        throw new Error('outage with refresh-secret in the message');
+      },
+      async revoke() {},
+      async bindAccount() {
+        return { status: 'conflict' };
+      },
+    },
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_REJECTED' });
+  rejectRefresh = false;
+  await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_BACKEND_FAILED' });
+  // Logout removes the dead token, so a new coordinator issues a new guest.
+  await coordinator.logout();
+  assert.equal(native.values.get('mpgd.guest.refresh'), undefined);
+}
+
+// The HTTP backend: routes, bodies, refusals, and the base URL rules.
+{
+  const requests: { url: string; method: string; body: unknown; redirect: string }[] = [];
+  const answers: (() => Response)[] = [];
+  const fetch = async (request: Request): Promise<Response> => {
+    requests.push({
+      url: request.url,
+      method: request.method,
+      body: JSON.parse(await request.text()) as unknown,
+      redirect: request.redirect,
+    });
+    const answer = answers.shift();
+    if (answer === undefined) {
+      throw new Error('no answer');
+    }
+    return answer();
+  };
+  const json = (body: unknown, status = 200) => () => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+  const backend = createGuestSessionHttpBackend({
+    baseUrl: 'https://identity.example.test/api',
+    fetch: fetch as typeof globalThis.fetch,
+  });
+  answers.push(json({ ...session('access-1', 'refresh-1'), sessionFamilyId: 'family-1' }));
+  const issued = await backend.issueGuest({ installationId: 'install-1' });
+  assert.equal(issued.sessionFamilyId, 'family-1');
+  assert.deepEqual(requests[0], {
+    url: `https://identity.example.test/api${guestIdentityHttpRoutes.issueGuest}`,
+    method: 'POST',
+    body: { installationId: 'install-1' },
+    redirect: 'manual',
+  });
+  answers.push(json({ error: 'GUEST_SESSION_REJECTED' }, 401));
+  await assert.rejects(backend.refresh({ refreshToken: 'refresh-1' }), GuestSessionRejectedError);
+  assert.equal(
+    requests[1]?.url,
+    `https://identity.example.test/api${guestIdentityHttpRoutes.refresh}`,
+  );
+  // A 401 with another code (a proxy in front, say) is not a rejection.
+  answers.push(json({ error: 'UNAUTHORIZED' }, 401));
+  await assert.rejects(backend.refresh({ refreshToken: 'refresh-1' }), GuestSessionHttpError);
+  answers.push(json({ error: 'RATE_LIMITED' }, 429));
+  try {
+    await backend.issueGuest({ installationId: 'install-1' });
+    throw new Error('expected a refusal');
+  } catch (error) {
+    assert.equal(error instanceof GuestSessionHttpError && error.code, 'RATE_LIMITED');
+    assert.equal(error instanceof GuestSessionHttpError && error.status, 429);
+    assert.equal(String(error).includes('install-1'), false);
+  }
+  answers.push(() => new Response('<html>', { status: 502 }));
+  await assert.rejects(backend.issueGuest({ installationId: 'install-1' }), /502 UNKNOWN/u);
+  answers.push(json({}));
+  await backend.revoke({ refreshToken: 'refresh-2' });
+  assert.deepEqual(requests.at(-1)?.body, { refreshToken: 'refresh-2' });
+  answers.push(json({ error: 'ACCOUNT_BINDING_UNSUPPORTED' }, 501));
+  await assert.rejects(
+    backend.bindAccount({
+      refreshToken: 'refresh-2',
+      externalProof: 'proof',
+      idempotencyKey: 'bind',
+    }),
+    /501 ACCOUNT_BINDING_UNSUPPORTED/u,
+  );
+  // A redirect is never followed: the manual answer is a failure, and no token leaves the origin.
+  answers.push(
+    () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.test/' } }),
+  );
+  await assert.rejects(backend.refresh({ refreshToken: 'refresh-3' }), GuestSessionHttpError);
+  for (const baseUrl of [
+    'http://identity.example.test',
+    'not a url',
+    'https://user:secret@identity.example.test',
+    'https://identity.example.test/?token=1',
+  ]) {
+    assert.throws(
+      () => createGuestSessionHttpBackend({ baseUrl, fetch: fetch as typeof globalThis.fetch }),
+      {
+        code: 'GUEST_SESSION_INVALID_INPUT',
+      },
+    );
+  }
+  assert.throws(
+    () => createGuestSessionHttpBackend({ baseUrl: 'https://identity.example.test', timeoutMs: 0 }),
+    {
+      code: 'GUEST_SESSION_INVALID_INPUT',
+    },
+  );
+  for (const baseUrl of [
+    'http://localhost:8788',
+    'http://10.0.2.2:8788/',
+    'http://game.localhost',
+  ]) {
+    createGuestSessionHttpBackend({ baseUrl, fetch: fetch as typeof globalThis.fetch });
+  }
+  answers.push(json(session('access-9', 'refresh-9')));
+  await createGuestSessionHttpBackend({
+    baseUrl: 'http://localhost:8788',
+    fetch: fetch as typeof globalThis.fetch,
+  }).issueGuest({ installationId: 'install-9' });
+  assert.equal(requests.at(-1)?.url, `http://localhost:8788${guestIdentityHttpRoutes.issueGuest}`);
+}
+
+// A request that outlives the timeout is aborted.
+{
+  const backend = createGuestSessionHttpBackend({
+    baseUrl: 'https://identity.example.test',
+    timeoutMs: 5,
+    fetch: ((request: Request) => new Promise<Response>((_resolve, reject) => {
+      request.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    })) as typeof globalThis.fetch,
+  });
+  await assert.rejects(backend.issueGuest({ installationId: 'install-1' }), /aborted/u);
 }
 
 console.info('Guest session coordinator conformance passed.');
