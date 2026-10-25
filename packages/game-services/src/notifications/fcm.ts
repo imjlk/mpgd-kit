@@ -56,8 +56,9 @@ export const fcmAdvertisingCategory = 'mpgd-advertising';
  * messaging service receives it in the background too and posts it with the
  * opt-out action. `render` is `fcmShellRenderedAdvertising`; `title` and
  * `body` are the gate's rendered text, `channel` the Android channel,
- * `actionTitle` the opt-out action's title when the content carries the
- * action, and `expiresAt` the expiry in epoch milliseconds, after which the
+ * `actionTitle` and `optOutRoute` the opt-out action's title and route (the
+ * topic's declared opt-out route) when the content carries the action, and
+ * `expiresAt` the expiry in epoch milliseconds, after which the
  * shell does not show it. The send's `topic` and `route` stay in their own
  * keys, as on every push. A send's routing data may not use the `mpgd.`
  * prefix.
@@ -68,6 +69,7 @@ export const fcmShellRenderedDataKeys = Object.freeze({
   body: 'mpgd.body',
   channel: 'mpgd.channel',
   actionTitle: 'mpgd.actionTitle',
+  optOutRoute: 'mpgd.optOutRoute',
   expiresAt: 'mpgd.expiresAt',
 } as const);
 /** The `mpgd.render` value of an advertising push the shell renders. */
@@ -425,16 +427,20 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
     // notification messages alike: FCM keeps high priority for urgent,
     // time-sensitive messages, and advertising is not one. The shell's
     // renderer checks the expiry again, since arrival decides.
-    const actionTitle = content.actions
-      ?.find((action) => action.id === notificationAdvertisingOptOutActionId)
-      ?.title;
+    const optOut = content.actions
+      ?.find((action) => action.id === notificationAdvertisingOptOutActionId);
     const rendered: Record<string, string> = Object.create(null) as Record<string, string>;
     Object.assign(rendered, data, {
       [fcmShellRenderedDataKeys.render]: fcmShellRenderedAdvertising,
       [fcmShellRenderedDataKeys.title]: content.title,
       [fcmShellRenderedDataKeys.body]: content.body,
       [fcmShellRenderedDataKeys.channel]: channelId,
-      ...(actionTitle === undefined ? {} : { [fcmShellRenderedDataKeys.actionTitle]: actionTitle }),
+      ...(optOut === undefined
+        ? {}
+        : {
+            [fcmShellRenderedDataKeys.actionTitle]: optOut.title,
+            [fcmShellRenderedDataKeys.optOutRoute]: optOut.route,
+          }),
       ...(expiresAt === undefined ? {} : { [fcmShellRenderedDataKeys.expiresAt]: String(expiresAt) }),
     });
     return sizedMessage(recipient.address.value, {

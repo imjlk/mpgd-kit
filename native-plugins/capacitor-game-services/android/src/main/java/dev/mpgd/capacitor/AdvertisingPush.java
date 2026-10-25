@@ -30,7 +30,10 @@ final class AdvertisingPush {
     static final String KEY_CHANNEL = "mpgd.channel";
     static final String KEY_ACTION_TITLE = "mpgd.actionTitle";
     static final String KEY_EXPIRES_AT = "mpgd.expiresAt";
+    /** The topic's declared opt-out route, which the backend's gate put in the action. */
+    static final String KEY_OPT_OUT_ROUTE = "mpgd.optOutRoute";
     static final String KEY_TOPIC = "topic";
+    static final String KEY_ROUTE = "route";
     /** The prefix of the renderer's own keys, which never reach the game as data. */
     static final String RESERVED_PREFIX = "mpgd.";
     /** The extra the messaging plugin reads to report a notification open. */
@@ -53,6 +56,8 @@ final class AdvertisingPush {
     /** Epoch milliseconds after which the push is not shown, or {@code null}. */
     final Long expiresAt;
     final String tag;
+    /** The topic's opt-out route the backend sent, or {@code null}. */
+    final String optOutRoute;
     private final Map<String, String> openData;
 
     private AdvertisingPush(
@@ -62,6 +67,7 @@ final class AdvertisingPush {
         String actionTitle,
         Long expiresAt,
         String tag,
+        String optOutRoute,
         Map<String, String> openData
     ) {
         this.title = title;
@@ -70,6 +76,7 @@ final class AdvertisingPush {
         this.actionTitle = actionTitle;
         this.expiresAt = expiresAt;
         this.tag = tag;
+        this.optOutRoute = optOutRoute;
         this.openData = openData;
     }
 
@@ -122,6 +129,7 @@ final class AdvertisingPush {
         }
         openData.put(EXTRA_MESSAGE_ID, isBlank(messageId) ? tag : messageId);
         openData.put(EXTRA_TAG, tag);
+        String optOutRoute = isBlank(data.get(KEY_OPT_OUT_ROUTE)) ? null : data.get(KEY_OPT_OUT_ROUTE);
         return new AdvertisingPush(
             title,
             body,
@@ -129,6 +137,7 @@ final class AdvertisingPush {
             actionTitle,
             expiresAt,
             tag,
+            optOutRoute,
             Collections.unmodifiableMap(openData)
         );
     }
@@ -143,9 +152,18 @@ final class AdvertisingPush {
         return openData;
     }
 
-    /** The extras of the opt-out action: the tap's, and the action id. */
+    /**
+     * The extras of the opt-out action: the tap's without the send's route,
+     * the topic's opt-out route when the backend sent it, and the action id.
+     * The Capacitor provider opens the opt-out route its own catalog
+     * declares for the topic, whatever the intent carries.
+     */
     Map<String, String> optOutExtras() {
         Map<String, String> extras = new LinkedHashMap<>(openData);
+        extras.remove(KEY_ROUTE);
+        if (optOutRoute != null) {
+            extras.put(KEY_ROUTE, optOutRoute);
+        }
         extras.put(EXTRA_ACTION, OPT_OUT_ACTION_ID);
         return Collections.unmodifiableMap(extras);
     }

@@ -1623,9 +1623,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `fcmShellRenderedDataKeys`: `mpgd.render` (`advertising`), `mpgd.title`
     and `mpgd.body` (the gate's rendered text, with the label, sender line,
     and opt-out line under `kr`), `mpgd.channel` (the Android channel),
-    `mpgd.actionTitle` (the opt-out action's title, when the content
-    carries the action), and `mpgd.expiresAt` (the expiry in epoch
-    milliseconds). `android.ttl` and `android.collapse_key` are set as for
+    `mpgd.actionTitle` and `mpgd.optOutRoute` (the opt-out action's title
+    and route, the topic's declared `optOutRoute`, when the content carries
+    the action), and `mpgd.expiresAt` (the expiry in epoch milliseconds). `android.ttl` and `android.collapse_key` are set as for
     any send; there is no `apns` block. It keeps FCM's default normal
     priority: FCM gives data and notification messages normal priority by
     default and keeps high priority for urgent, time-sensitive messages
@@ -1970,9 +1970,17 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     the plugin's `presentationOptions`. Android drops a post
     silently when notifications are off or the channel is missing or
     turned off; the renderer logs those.
+  - **Deciding.** `AdvertisingNotificationPlan` makes every decision in
+    plain Java, which the JUnit tests cover: whether the message is the
+    renderer's, malformed, expired, or arrived in the foreground, and for a
+    post its channel, text, action label, both intents' extras and request
+    codes, tag, and time in the shade. `AdvertisingPushRenderer` only turns
+    a post plan into the notification and its intents.
   - **Opening.** The body and the action open the launcher activity with
-    `google.message_id`, the push's `topic`, `route`, and routing data; the
-    action adds `mpgd.action: advertising-opt-out`. The plugin reports an
+    `google.message_id`, the push's `topic`, and its routing data. The
+    body's intent carries the send's `route`; the action's carries the
+    topic's opt-out route (`mpgd.optOutRoute`) in its place, never the
+    send's, and `mpgd.action: advertising-opt-out`. The plugin reports an
     activity intent that carries `google.message_id` as
     `notificationActionPerformed` (`handleOnNewIntent`), and Capacitor
     passes the launch intent there on a cold start too
@@ -1985,6 +1993,13 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     declared opt-out screen, which must not withdraw consent without the
     player's own tap there. The kit's plugin clears the notification when
     such an open arrives, because an action does not dismiss it.
+  - **Known behaviour: a recreated process replays the open.** When the
+    system kills the app and later recreates its activity from the
+    original launch intent, Capacitor passes that intent to the plugins
+    again, so the messaging plugin reports the open (the opt-out action
+    included) a second time. `@capacitor-firebase/messaging` does the same
+    for every FCM tap, so the renderer's opens share the behaviour; the
+    kit does not change it.
   - **Declaring.** `getAdvertisingPushRenderer()` in
     `@mpgd/capacitor-game-services` answers whether the resolved messaging
     service declares the meta-data and the messaging plugin's entry points

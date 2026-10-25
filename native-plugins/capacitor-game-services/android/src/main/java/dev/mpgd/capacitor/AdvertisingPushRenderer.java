@@ -59,28 +59,24 @@ public final class AdvertisingPushRenderer {
      * gets a {@code received} event and no notification is shown.
      */
     public static boolean handle(
-        Context context,
+        final Context context,
         Map<String, String> data,
         String messageId,
         String collapseKey
     ) {
-        if (!AdvertisingPush.isShellRendered(data)) {
-            return false;
-        }
-        AdvertisingPush push = AdvertisingPush.parse(data, messageId, collapseKey);
-        if (push == null) {
+        AdvertisingNotificationPlan plan = AdvertisingNotificationPlan.decide(
+            data,
+            messageId,
+            collapseKey,
+            System.currentTimeMillis(),
+            () -> isAppInForeground(context)
+        );
+        if (plan.kind == AdvertisingNotificationPlan.Kind.DROP_MALFORMED) {
             Log.w(TAG, "Dropped an advertising push without a title, body, topic, or readable expiry.");
-            return true;
+        } else if (plan.kind == AdvertisingNotificationPlan.Kind.POST) {
+            post(context, plan);
         }
-        if (push.isExpired(System.currentTimeMillis())) {
-            // The Korean rules judge arrival: one that arrives too late is not shown.
-            return true;
-        }
-        if (isAppInForeground(context)) {
-            return false;
-        }
-        post(context, push);
-        return true;
+        return plan.consumed();
     }
 
     /** The messaging plugin's entry points the kit's service forwards to. */
@@ -161,7 +157,7 @@ public final class AdvertisingPushRenderer {
         NotificationManagerCompat.from(context).cancel(tag, AdvertisingPush.NOTIFICATION_ID);
     }
 
-    private static void post(Context context, AdvertisingPush push) {
+    private static void post(Context context, AdvertisingNotificationPlan plan) {
         Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
         if (launch == null) {
             Log.w(TAG, "Dropped an advertising push: the app has no launcher activity to open.");
@@ -178,42 +174,42 @@ public final class AdvertisingPushRenderer {
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            android.app.NotificationChannel channel = manager.getNotificationChannel(push.channel);
+            android.app.NotificationChannel channel = manager.getNotificationChannel(plan.channelId);
             if (channel == null) {
                 // The provider creates the catalog's channels before it
                 // registers a token; a channel that is gone was deleted since,
                 // and posting without it would show nothing.
-                Log.w(TAG, "Dropped an advertising push: its channel " + push.channel + " does not exist.");
+                Log.w(TAG, "Dropped an advertising push: its channel " + plan.channelId + " does not exist.");
                 return;
             }
             if (channel.getImportance() == android.app.NotificationManager.IMPORTANCE_NONE) {
                 // The player turned this channel off in system settings.
-                Log.i(TAG, "Dropped an advertising push: its channel " + push.channel + " is turned off.");
+                Log.i(TAG, "Dropped an advertising push: its channel " + plan.channelId + " is turned off.");
                 return;
             }
         }
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, push.channel)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, plan.channelId)
             .setSmallIcon(smallIcon(context))
-            .setContentTitle(push.title)
-            .setContentText(push.body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(push.body))
+            .setContentTitle(plan.title)
+            .setContentText(plan.body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(plan.body))
             .setAutoCancel(true)
-            .setContentIntent(openIntent(context, launch, push.tapExtras(), push.requestCode(false)))
+            .setContentIntent(openIntent(context, launch, plan.bodyExtras, plan.bodyRequestCode))
             .addAction(
                 0,
-                push.actionTitle,
-                openIntent(context, launch, push.optOutExtras(), push.requestCode(true))
+                plan.actionLabel,
+                openIntent(context, launch, plan.actionExtras, plan.actionRequestCode)
             );
         Integer color = color(context);
         if (color != null) {
             builder.setColor(color);
         }
-        if (push.expiresAt != null) {
+        if (plan.timeoutAfterMillis != null) {
             // Taken off the shade once it expires (Android 8+).
-            builder.setTimeoutAfter(Math.max(1L, push.expiresAt - System.currentTimeMillis()));
+            builder.setTimeoutAfter(plan.timeoutAfterMillis);
         }
         try {
-            manager.notify(push.tag, AdvertisingPush.NOTIFICATION_ID, builder.build());
+            manager.notify(plan.tag, plan.notificationId, builder.build());
         } catch (SecurityException error) {
             // Some builds throw instead of dropping when POST_NOTIFICATIONS is missing.
             Log.w(TAG, "Dropped an advertising push: notifications are not permitted.", error);

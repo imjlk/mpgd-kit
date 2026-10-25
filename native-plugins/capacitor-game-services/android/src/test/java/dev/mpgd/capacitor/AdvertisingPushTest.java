@@ -25,6 +25,7 @@ public class AdvertisingPushTest {
         data.put("mpgd.channel", "promotions");
         data.put("mpgd.actionTitle", "수신거부");
         data.put("mpgd.expiresAt", "1760875200000");
+        data.put("mpgd.optOutRoute", "/settings/ads");
         return data;
     }
 
@@ -51,9 +52,10 @@ public class AdvertisingPushTest {
         expected.put("google.message_id", "0:1%abc");
         expected.put("mpgd.tag", "c0ffee");
         assertEquals(expected, push.tapExtras());
-        // The action adds only its id: the provider opens the topic's declared
-        // opt-out route, never a route from the payload.
+        // The action carries the topic's opt-out route in place of the send's,
+        // and its id; the provider still opens the route its catalog declares.
         Map<String, String> optOut = new LinkedHashMap<>(expected);
+        optOut.put("route", "/settings/ads");
         optOut.put("mpgd.action", "advertising-opt-out");
         assertEquals(optOut, push.optOutExtras());
         assertEquals(

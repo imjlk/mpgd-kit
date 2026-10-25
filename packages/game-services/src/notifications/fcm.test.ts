@@ -257,6 +257,7 @@ const request: NotificationRemoteDeliveryRequest = {
         'mpgd.body': '(광고) 02-000-0000\n세일 중\n무료 수신거부: 수신거부 버튼',
         'mpgd.channel': 'promotions',
         'mpgd.actionTitle': '수신거부',
+        'mpgd.optOutRoute': '/settings/ads',
         'mpgd.expiresAt': String(Date.parse('2026-10-19T12:00:00Z')),
       },
       // Normal priority (FCM's default): no `priority` key.
@@ -268,6 +269,7 @@ const request: NotificationRemoteDeliveryRequest = {
     'mpgd.body',
     'mpgd.channel',
     'mpgd.expiresAt',
+    'mpgd.optOutRoute',
     'mpgd.render',
     'mpgd.title',
   ]);
