@@ -167,7 +167,6 @@ export function validateNotificationTopicCatalog(
   }
   const catalog = shape.data;
   const targetProviders = options.targetProviders ?? {};
-  const rules = options.deployment?.advertisingRules;
   const noticeTopic = catalog.notices?.topic;
   const issues: NotificationTopicCatalogIssue[] = [];
   const ids = new Map<string, number>();

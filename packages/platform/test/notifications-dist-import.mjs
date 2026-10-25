@@ -12,6 +12,7 @@ import {
   listNotificationNotices,
   NotificationError,
   notificationBridgeMethods,
+  notificationShellRenderedAdvertisingTargets,
   notificationsProtocol,
   notificationsProtocolVersion,
   referenceNotificationProviders,
@@ -26,6 +27,9 @@ import {
 assert.equal(notificationsProtocolVersion, '2.0.0-draft.1');
 assert.equal(notificationsProtocol, 'mpgd.notifications.v2');
 assert.equal(notificationBridgeMethods.length, 9);
+// The targets whose pushes need the shell to render advertising (AR1).
+assert.deepEqual(notificationShellRenderedAdvertisingTargets, ['android']);
+assert.ok(Object.isFrozen(notificationShellRenderedAdvertisingTargets));
 
 const unsupported = createUnsupportedNotificationCapabilities();
 assert.notEqual(createUnsupportedNotificationCapabilities(), unsupported);

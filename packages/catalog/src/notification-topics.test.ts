@@ -967,6 +967,20 @@ assert.deepEqual(
   ).issues,
   [],
 );
+// The switch does not lift the provider's own rules: under the Korean rules
+// an android provider without an expiry still cannot carry advertising.
+assert.ok(
+  validateNotificationTopicCatalog(withNotices(
+    'consent-notice',
+    { ...advertising, targets: { android: {} } },
+    noticeTopic,
+  ), {
+    targetProviders: { android: noExpiry },
+    deployment: { ...krDeployment, shellRendersAdvertising: true },
+  }).issues.some((issue) =>
+    issue.path === 'topics[0].targets.android' && /expiry and the opt-out action/u.test(issue.message)),
+  'shellRendersAdvertising does not lift the provider rules',
+);
 // Under the Korean rules, a target that delivers advertising also delivers its notices.
 assertIssue(
   withNotices('consent-notice', { ...advertising, targets: { android: {}, ios: {} } }, noticeTopic),

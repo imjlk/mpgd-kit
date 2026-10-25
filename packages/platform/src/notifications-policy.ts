@@ -769,7 +769,9 @@ export interface EvaluateNotificationDeliveryInput {
    * notification carries. `false` (an Android installation whose shell does
    * not render advertising) makes an advertising send under `kr`
    * `suppressed: purpose-unsupported`, as an entry without `actions` does.
-   * Absent counts as true.
+   * Absent counts as true: the backend passes it for an endpoint on a
+   * target in `notificationShellRenderedAdvertisingTargets`, the only ones
+   * whose pushes can lack the action. Other addressing ignores it.
    */
   readonly endpointShowsActions?: boolean;
   /**
@@ -856,7 +858,11 @@ export function evaluateNotificationDelivery(
       topic.purpose === 'advertising'
       && (
         entry.content !== 'free-form'
-        || (rules === 'kr' && (!entry.expiry || !entry.actions || input.endpointShowsActions === false))
+        || (rules === 'kr' && (
+          !entry.expiry
+          || !entry.actions
+          || (entry.addressing === 'device' && input.endpointShowsActions === false)
+        ))
       )
     )
   ) {

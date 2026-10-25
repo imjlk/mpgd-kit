@@ -194,6 +194,13 @@ describe('evaluateNotificationDelivery', () => {
       deployment: { advertisingRules: 'none' },
     }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
     expect(evaluateNotificationDelivery(input({ endpointShowsActions: false })).status).toBe('allowed');
+    // Only device addressing reads it.
+    expect(evaluateNotificationDelivery(input({
+      entry: { ...fcm, addressing: 'platform-user' },
+      topic: advertising,
+      endpointShowsActions: false,
+      consent: [record('delivery-permission', 'granted')],
+    }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
     for (const endpointShowsActions of [true, undefined]) {
       expect(evaluateNotificationDelivery(input({
         topic: advertising,
