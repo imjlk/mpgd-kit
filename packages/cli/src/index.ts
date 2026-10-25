@@ -1307,9 +1307,15 @@ const legalPageSlugs = ['privacy', 'support', 'terms'] as const;
  * Google Play's Data safety form asks for. A missing one is warned about.
  */
 const optionalLegalPageSlugs = ['delete-account'] as const;
-const legalPageFileList = `${legalPageSlugs.map((slug) => `${slug}.html`).join(', ')}, and optionally ${
-  optionalLegalPageSlugs.map((slug) => `${slug}.html`).join(', ')
-}`;
+const legalPageFileList = legalPageSlugs.map((slug) => `${slug}.html`).join(', ');
+const optionalLegalPageFileList = optionalLegalPageSlugs.map((slug) => `${slug}.html`).join(', ');
+/** The account deletion page's slug, whose URL the Play Data safety form asks for. */
+const deleteAccountLegalSlug = optionalLegalPageSlugs[0];
+
+/** Where a legal page is published: `<out-dir>/<slug>/index.html`, served at `/<slug>/`. */
+function legalPageOutputFile(outDir: string, slug: string): string {
+  return path.join(outDir, slug, 'index.html');
+}
 
 interface AcceptGameInput {
   readonly gameRoot: string;
@@ -3385,7 +3391,7 @@ function legalArgs() {
       type: 'string',
       required: false,
       default: defaultLegalDir,
-      description: `Directory containing ${legalPageFileList}.`,
+      description: `Directory containing ${legalPageFileList} (and optionally ${optionalLegalPageFileList}).`,
     },
     'out-dir': {
       type: 'string',
@@ -3399,8 +3405,8 @@ function legalArgs() {
 function legalArgResources(): Record<string, LocalizedText> {
   return {
     'legal-dir': {
-      en: `Directory containing ${legalPageFileList}.`,
-      ko: `${legalPageFileList} 이 있는 디렉터리.`,
+      en: `Directory containing ${legalPageFileList} (and optionally ${optionalLegalPageFileList}).`,
+      ko: `${legalPageFileList} (선택: ${optionalLegalPageFileList}) 이 있는 디렉터리.`,
     },
     'out-dir': {
       en: 'Output directory for the static legal site.',
@@ -3435,23 +3441,28 @@ function buildLegalSite(input: {
   assertLegalProjectPath('legal-dir', legalDir);
   assertLegalProjectPath('out-dir', outDir);
   const outputs = createLegalSiteOutputs(legalDir, outDir);
+  const deleteAccountPath = `/${deleteAccountLegalSlug}/`;
   const deleteAccountBuilt = outputs.some((output) =>
-    output.file === path.join(outDir, 'delete-account', 'index.html'),
+    output.file === legalPageOutputFile(outDir, deleteAccountLegalSlug),
   );
-  const deleteAccountResult = deleteAccountBuilt ? { deleteAccountPath: '/delete-account/' } : {};
+  const deleteAccountResult = deleteAccountBuilt ? { deleteAccountPath } : {};
   if (!deleteAccountBuilt) {
+    const linking = outputs
+      .filter((output) => output.content.includes(`href="${deleteAccountPath}"`))
+      .map((output) => path.relative(process.cwd(), output.file));
     console.warn(
-      `No ${path.join(path.relative(process.cwd(), legalDir) || '.', 'delete-account.html')}: Google Play `
-        + 'needs a web page where players request account deletion without reinstalling the game '
-        + '(Play Console > App content > Data safety). Copy legal/delete-account.html from a game '
-        + 'created with the current kit.',
+      `No ${path.join(path.relative(process.cwd(), legalDir) || '.', `${deleteAccountLegalSlug}.html`)}: `
+        + 'Google Play needs a web page where players request account deletion without reinstalling '
+        + 'the game (Play Console > App content > Data safety). Copy legal/delete-account.html from a '
+        + 'game created with the current kit.'
+        + (linking.length === 0 ? '' : ` These pages link to it: ${linking.join(', ')}.`),
     );
   }
   // app-ads.txt and the optional pages are stale once their source is gone.
   const optionalOutputs = [
     { file: path.join(outDir, 'app-ads.txt'), source: 'app-ads.txt' },
     ...optionalLegalPageSlugs.map((slug) => ({
-      file: path.join(outDir, slug, 'index.html'),
+      file: legalPageOutputFile(outDir, slug),
       source: `${slug}.html`,
     })),
   ];
@@ -3516,8 +3527,14 @@ function buildLegalSite(input: {
       // The page's own directory, once empty.
       try {
         rmdirSync(path.dirname(file));
-      } catch {
-        // Not empty, or already gone: leave it.
+      } catch (error) {
+        // Not empty, or already gone: leave it. Anything else is reported.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && code !== 'ENOENT' && code !== 'ENOTDIR') {
+          console.warn(
+            `Could not remove the empty legal page directory ${path.dirname(file)}: ${code}`,
+          );
+        }
       }
     }
   }
@@ -3556,7 +3573,7 @@ function createLegalSiteOutputs(
     assertLegalProjectPath('legal-dir', sourceFile);
 
     return {
-      file: path.join(outDir, slug, 'index.html'),
+      file: legalPageOutputFile(outDir, slug),
       content: normalizeLegalHtml(readFileSync(sourceFile, 'utf8'), sourceFile),
     };
   });

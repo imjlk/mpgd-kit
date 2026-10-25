@@ -226,6 +226,21 @@ await test('builds the account deletion page when its source exists, and warns w
         console.warn = originalWarn;
       }
       assert.ok(warnings.some((line) => /Google Play needs a web page/u.test(line)));
+      writeFileSync(
+        path.join(project, 'legal', 'privacy.html'),
+        page('Privacy <a href="/delete-account/">Delete account</a>'),
+      );
+      warnings.length = 0;
+      console.warn = (message: string) => warnings.push(message);
+      try {
+        await runMpgdCli(['legal', 'build']);
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.ok(
+        warnings.some((line) => /These pages link to it: .*privacy[/\\]index\.html/u.test(line)),
+        'a dead link to the missing page is named',
+      );
       const rebuilt = JSON.parse(readFileSync(path.join(site, 'legal-site.json'), 'utf8')) as {
         readonly pages: readonly { readonly slug: string }[];
       };
@@ -248,13 +263,16 @@ await test('builds the account deletion page when its source exists, and warns w
 await test('the starter template ships a deletion page linked from its privacy policy', () => {
   const legal = new URL('../templates/phaser-game/legal/', import.meta.url);
   const deletion = readFileSync(new URL('delete-account.html', legal), 'utf8');
-  const privacy = readFileSync(new URL('privacy.html', legal), 'utf8');
-  assert.match(privacy, /href="\/delete-account\/"/u);
+  for (const name of ['privacy.html', 'support.html', 'terms.html']) {
+    assert.match(readFileSync(new URL(name, legal), 'utf8'), /href="\/delete-account\/"/u, name);
+  }
   for (const section of ['In the Game', 'Without the Game', 'What Is Deleted', 'What We Keep']) {
     assert.ok(deletion.includes(section), section);
   }
   assert.match(deletion, /Play Console > App content > Data safety/u);
   assert.match(deletion, /\[REPLACE: support email address or request form URL\]/u);
+  // The deletion and retention answers match what the server does.
+  assert.match(deletion, /5 years from the purchase or its\s+last refund/u);
 });
 
 await test('still rejects a legal out-dir that lexically leaves the project', async () => {
