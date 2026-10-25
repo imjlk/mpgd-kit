@@ -155,7 +155,7 @@ export function createD1IdentityStore(db: D1Database): IdentityStore {
     async purge({ now, refreshTokensBefore, familiesEndedBefore }) {
       // Two indexed scans: revoked families, and live ones whose inactivity window passed.
       const ended = await db.prepare(
-        'SELECT family_id FROM (SELECT family_id FROM identity_session_families WHERE revoked_at_ms < ?1 LIMIT ?2) '
+        'SELECT family_id FROM (SELECT family_id FROM identity_session_families WHERE revoked_at_ms IS NOT NULL AND revoked_at_ms < ?1 LIMIT ?2) '
           + 'UNION SELECT family_id FROM (SELECT family_id FROM identity_session_families '
           + 'WHERE revoked_at_ms IS NULL AND expires_at_ms < ?1 LIMIT ?2)',
       ).bind(familiesEndedBefore, d1IdentityPurgeBatch).all<{ family_id: string }>();

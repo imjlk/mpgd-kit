@@ -171,7 +171,8 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     const { service, advance, ended } = await setup();
     const issued = value(await service.issueGuest({ installationId: 'install-retry-1' }));
     const lost = value(await service.refresh({ refreshToken: issued.refreshToken }));
-    advance(defaultIdentityServiceConfig.refreshRetryGraceMs / 2);
+    // Inside the access token's lifetime, so only the retry can end the successor's token.
+    advance(minute);
     const retried = value(await service.refresh({ refreshToken: issued.refreshToken }));
     assert.equal(retried.sessionFamilyId, issued.sessionFamilyId);
     assert.notEqual(retried.refreshToken, lost.refreshToken);
@@ -182,7 +183,7 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
       issued.serverUserId,
     );
     // The window counts from the first rotation: a later retry is a replay.
-    advance(defaultIdentityServiceConfig.refreshRetryGraceMs / 2 + 1);
+    advance(defaultIdentityServiceConfig.refreshRetryGraceMs - minute + 1);
     assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
     assert.deepEqual(ended, [issued.sessionFamilyId]);
   }
@@ -374,6 +375,34 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     await shortWindow.purge();
     // The family (issued under 180 days) is still live; its current token survived the purge.
     value(await shortWindow.refresh({ refreshToken: rotated.refreshToken }));
+  }
+
+  // The purge does remove an old token no family holds: it is unknown afterwards, not a replay.
+  {
+    const store = await createStore();
+    let clock = start;
+    const ended: string[] = [];
+    const service = createGuestIdentityService({
+      store,
+      now: () => clock,
+      endNotificationSession: async (sessionId) => {
+        ended.push(sessionId);
+      },
+      log: () => undefined,
+    });
+    const issued = value(await service.issueGuest({ installationId: 'install-purge-5' }));
+    const second = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    clock += 170 * day;
+    const third = value(await service.refresh({ refreshToken: second.refreshToken }));
+    clock += 20 * day;
+    // The first token (issued 190 days ago) is neither current nor previous, so it goes.
+    await service.purge();
+    assert.equal(await store.findRefreshToken(await hashToken(issued.refreshToken)), undefined);
+    assert.notEqual(await store.findRefreshToken(await hashToken(second.refreshToken)), undefined);
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+    // Unknown, so not a replay: the family lives on.
+    assert.deepEqual(ended, []);
+    value(await service.refresh({ refreshToken: third.refreshToken }));
   }
 
   // Configuration that cannot work is refused.

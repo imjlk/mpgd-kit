@@ -26,8 +26,9 @@ CREATE INDEX IF NOT EXISTS idx_identity_session_families_player
 CREATE INDEX IF NOT EXISTS idx_identity_session_families_installation
   ON identity_session_families (installation_id, created_at_ms);
 -- The purge's two scans: revoked families, and live ones past their window.
+-- Partial: only revoked families, so the revoked scan skips every live one.
 CREATE INDEX IF NOT EXISTS idx_identity_session_families_revoked
-  ON identity_session_families (revoked_at_ms);
+  ON identity_session_families (revoked_at_ms) WHERE revoked_at_ms IS NOT NULL;
 -- Partial: only live families, so the inactivity scan reads no revoked row.
 CREATE INDEX IF NOT EXISTS idx_identity_session_families_live_expires
   ON identity_session_families (expires_at_ms) WHERE revoked_at_ms IS NULL;
