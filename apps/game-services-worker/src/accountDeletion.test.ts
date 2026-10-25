@@ -272,7 +272,7 @@ try {
       playerId: 'player-6',
       idempotencyKey: 'rewarded-ad:player-6:0',
     });
-    await required(store.recordEntitlementRevocation).call(store, {
+    const adRevocation = await required(store.recordEntitlementRevocation).call(store, {
       playerId: 'player-6',
       revokesLedgerEntryId: required(adGrant).ledgerEntryId,
       idempotencyKey: 'support:revoke-ad',
@@ -324,6 +324,16 @@ try {
       ) VALUES (?, 'player-6', 'token-cross', 0, 0, 0)`)
       .bind(other.ledgerEntryId)
       .run();
+    // Player-7's note pointing at the rewarded ad's revocation goes with it.
+    await required(store.recordEntitlementNote).call(store, {
+      noteId: 'note-on-ad-revocation',
+      kind: 'refund_reversed',
+      playerId: 'player-7',
+      ledgerEntryId: other.ledgerEntryId,
+      revocationLedgerEntryId: adRevocation.ledgerEntryId,
+      recordedAt: '2026-10-23T00:00:00.000Z',
+      payload: {},
+    });
     const bulk = await eraser.erasePlayerData({
       playerId: 'player-6',
       retainedPlayerId: 'deleted:deletion-6',
@@ -331,7 +341,12 @@ try {
     // 250 rewarded-ad grants, the revocation of one, and the mismatched note,
     // set-based; the cross-player revocation and the note pointing at it are
     // rewritten.
-    assert.deepEqual(bulk, { deleted: 252, retained: 2 });
+    assert.deepEqual(bulk, { deleted: 253, retained: 2 });
+    assert.equal(
+      await db.prepare("SELECT note_id FROM entitlement_notes WHERE note_id = 'note-on-ad-revocation'")
+        .first(),
+      null,
+    );
     assert.equal(
       await db.prepare("SELECT note_id FROM entitlement_notes WHERE note_id = 'mismatched-note'").first(),
       null,

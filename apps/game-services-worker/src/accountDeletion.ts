@@ -263,6 +263,8 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
       const otherGrants = `SELECT ledger_entry_id FROM entitlement_transactions
         WHERE player_id = ?1 AND source <> 'purchase'`;
       const allGrants = 'SELECT ledger_entry_id FROM entitlement_transactions WHERE player_id = ?1';
+      const otherRevocations = `SELECT ledger_entry_id FROM entitlement_revocations
+        WHERE revokes_ledger_entry_id IN (${otherGrants})`;
       // Revocations and notes about the player's purchase grants, and those a
       // game-owned writer filed under the player for another player's grant.
       const revocationsWhere = `revokes_ledger_entry_id IN (${purchaseGrants})
@@ -282,8 +284,11 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
                 SELECT ledger_entry_id FROM entitlement_revocations WHERE ${revocationsWhere}
               )
               OR (player_id = ?1 AND ledger_entry_id NOT IN (${allGrants})))
-            /* Notes about the player's other grants go with them, set-based. */
-            AND ledger_entry_id NOT IN (${otherGrants})`)
+            /* Notes about the player's other grants, or pointing at their
+               revocations, go with them, set-based. */
+            AND ledger_entry_id NOT IN (${otherGrants})
+            AND (revocation_ledger_entry_id IS NULL
+              OR revocation_ledger_entry_id NOT IN (${otherRevocations}))`)
         .bind(playerId)
         .all<NoteRow>()).results;
 
@@ -306,7 +311,10 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
         // the old grants go: their keys point at the new ids until those are
         // inserted later in this transaction.
         session.prepare('PRAGMA defer_foreign_keys = true'),
-        session.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${otherGrants})`)
+        // Also notes (of anyone) pointing at those grants' revocations: they
+        // would hold the revocations' RESTRICT key and fail the batch.
+        session.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${otherGrants})
+            OR revocation_ledger_entry_id IN (${otherRevocations})`)
           .bind(playerId),
         session.prepare(`DELETE FROM entitlement_revocations
             WHERE revokes_ledger_entry_id IN (${otherGrants})`)

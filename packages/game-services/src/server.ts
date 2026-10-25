@@ -504,6 +504,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       retained += 1;
     }
     const keptRevocationIds = new Map<string, string>();
+    const deletedRevocationIds = new Set<string>();
     for (const revocation of [...this.revocationsByGrant.values()]) {
       if (revocation.playerId !== playerId && !grantIds.has(revocation.revokesLedgerEntryId)) {
         continue;
@@ -515,6 +516,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
           ? revocation.revokesLedgerEntryId
           : undefined);
       if (keptGrantId === undefined) {
+        deletedRevocationIds.add(revocation.ledgerEntryId);
         deleted += 1;
         continue;
       }
@@ -536,6 +538,12 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       // above, as the D1 eraser selects it.
       const aboutKeptRevocation = note.revocationLedgerEntryId !== undefined
         && keptRevocationIds.has(note.revocationLedgerEntryId);
+      if (note.revocationLedgerEntryId !== undefined && deletedRevocationIds.has(note.revocationLedgerEntryId)) {
+        // It points at a revocation deleted with the player's other grant.
+        this.notesById.delete(note.noteId);
+        deleted += 1;
+        continue;
+      }
       if (note.playerId !== playerId && !grantIds.has(note.ledgerEntryId) && !aboutKeptRevocation) {
         continue;
       }

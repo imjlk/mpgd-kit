@@ -117,13 +117,26 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     submittedAt: '2026-10-20T00:00:00.000Z',
   });
 
+  // Another player's note pointing at the ad reward's revocation (only a
+  // game-owned writer files those) goes with that revocation.
+  await store.recordEntitlementNote({
+    noteId: 'note-on-ad-revocation',
+    kind: 'refund_reversed',
+    playerId: 'player-2',
+    ledgerEntryId: other.ledgerEntryId,
+    revocationLedgerEntryId: adRevocation.ledgerEntryId,
+    recordedAt: '2026-10-23T00:00:00.000Z',
+    payload: {},
+  });
+
   const result = await store.erasePlayerData({
     playerId: 'player-1',
     retainedPlayerId: 'deleted:deletion-1',
   });
   // The ad reward and its revocation, the admin grant, and the score are
   // deleted; two purchases, the refund's revocation, and the note are kept.
-  assert.deepEqual(result, { deleted: 4, retained: 4 });
+  assert.deepEqual(result, { deleted: 5, retained: 4 });
+  assert.deepEqual(await store.findEntitlementNotes({ ledgerEntryIds: [other.ledgerEntryId] }), []);
   // The ad reward's revocation went with it: replaying its key now needs a grant.
   await assert.rejects(
     store.recordEntitlementRevocation({
