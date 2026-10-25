@@ -35,8 +35,8 @@ export type StarterSessionGatedServices = GameServicesRuntime & {
  *   could not be claimed), and the Restore Purchases control signs in first
  *   through `ensureSession`.
  * - When the player becomes known, the services are created once; the
- *   caller runs the game runtime's `reconcile()` then (the startup recovery,
- *   with the action coordinator's). A later sign-in naming another player
+ *   caller runs the game runtime's `reconcile()` from `onActivated` (the
+ *   startup recovery, with the action coordinator's). A later sign-in naming another player
  *   (not expected within one run) is ignored with a warning.
  * - `ensureSession` is present only when the configuration has a client
  *   (a disabled configuration has nothing a sign-in could bring up).
@@ -50,6 +50,11 @@ export function createSessionGatedGameServices(input: {
   readonly ensurePlayer: () => Promise<string | undefined>;
   readonly onPlayer: (listener: (playerId: string) => void) => () => void;
   readonly create: (playerId: string) => GameServicesRuntime;
+  /**
+   * Called once, when the services were created (by a background sign-in or
+   * one a purchase or restore started): run the game runtime's `reconcile()`.
+   */
+  readonly onActivated?: () => void;
   readonly warn?: (message: string, error?: unknown) => void;
 }): StarterSessionGatedServices {
   const warn = input.warn ?? ((message: string, error?: unknown) => console.warn(message, error ?? ''));
@@ -68,6 +73,7 @@ export function createSessionGatedGameServices(input: {
     try {
       inner = input.create(playerId);
       innerPlayer = playerId;
+      input.onActivated?.();
     } catch (error) {
       // Stays gated: purchases keep answering StarterSessionRequiredError, never a raw error.
       warn('[game-services] the services could not be created after sign-in', error);

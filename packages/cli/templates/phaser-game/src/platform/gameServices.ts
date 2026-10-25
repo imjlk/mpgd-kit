@@ -73,15 +73,20 @@ export function createStarterGameServices(input: StarterGameServicesInput): Star
  * `signIn.onSignedIn` listener registered before this, so the services read it.
  */
 export function createStarterSessionGatedGameServices(
-  input: Omit<StarterGameServicesInput, 'playerId'> & { readonly signIn: StarterGuestSignIn },
+  input: Omit<StarterGameServicesInput, 'playerId'> & {
+    readonly signIn: StarterGuestSignIn;
+    /** Called once the services exist for the server player: run the game runtime's `reconcile()`. */
+    readonly onActivated?: () => void;
+  },
 ): StarterGameServices {
-  const { signIn, ...rest } = input;
+  const { signIn, onActivated, ...rest } = input;
   return createSessionGatedGameServices({
     // Configuration only (mode, target, whether a client exists); never sends a request.
     probe: createRuntime({ ...rest, playerId: 'session-pending' }, undefined),
     ensurePlayer: async () => (await signIn.ensure())?.playerId,
     onPlayer: (listener) => signIn.onSignedIn((signedIn) => listener(signedIn.playerId)),
     create: (playerId) => createStarterGameServices({ ...rest, playerId }),
+    ...(onActivated === undefined ? {} : { onActivated }),
   });
 }
 

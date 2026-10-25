@@ -432,6 +432,7 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     },
   });
   const signedInAs: { player?: string } = {};
+  let activations = 0;
   let notify: ((playerId: string) => void) | undefined;
   const gated = createSessionGatedGameServices({
     probe: { ...runtimeFor('session-pending'), mode: 'http' },
@@ -443,6 +444,9 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     create: (playerId) => {
       created.push(playerId);
       return runtimeFor(playerId);
+    },
+    onActivated: () => {
+      activations += 1;
     },
     warn,
   });
@@ -466,13 +470,15 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.equal(bought.status, 'granted');
   assert.deepEqual(created, ['p_server']);
   assert.deepEqual(purchases, ['p_server:REMOVE_ADS']);
-  // The startup recovery is the game runtime's reconcile (main.ts), not the gated services'.
+  // The startup recovery is the game runtime's reconcile, which main.ts runs from onActivated.
   assert.deepEqual(reconciles, []);
+  assert.equal(activations, 1);
   assert.ok(gated.monetizationRecovery !== undefined);
   assert.equal(await gated.ensureSession?.(), true);
   // A background sign-in naming another player is ignored for the run.
   notify?.('p_other');
   assert.deepEqual(created, ['p_server']);
+  assert.equal(activations, 1, 'activated once');
   assert.match(warnings.at(-1) ?? '', /another player/u);
 }
 

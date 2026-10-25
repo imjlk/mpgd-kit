@@ -117,7 +117,9 @@ export class PlayScene extends Phaser.Scene {
   private rewardHint(): string {
     const rewardedAds = this.context.runtime.features.rewardedAds;
 
-    if (!rewardedAds.enabled || this.context.gameServices.client === undefined || this.context.gameServices.monetizationRecovery === undefined) {
+    // A run that booted before its guest sign-in (session-gated services) shows no rewarded ad.
+    if (!rewardedAds.enabled || this.context.gameServices.client === undefined || this.context.gameServices.monetizationRecovery === undefined
+      || this.context.gameServices.ensureSession !== undefined) {
       return t(this.context.locale, 'rewardUnavailable');
     }
 
@@ -128,7 +130,8 @@ export class PlayScene extends Phaser.Scene {
     const rewardedAds = this.context.runtime.features.rewardedAds;
     const action = this.rewardedAction;
 
-    if (!rewardedAds.enabled || action === undefined || this.context.gameServices.monetizationRecovery === undefined) {
+    if (!rewardedAds.enabled || action === undefined || this.context.gameServices.monetizationRecovery === undefined
+      || this.context.gameServices.ensureSession !== undefined) {
       this.rewardText.setText(t(this.context.locale, 'rewardUnavailable'));
       return;
     }

@@ -154,7 +154,16 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
         // Configured but not signed in yet: the services wait for the server player, never
         // binding purchases or the journal to the platform's local placeholder.
         return sessionGated
-          ? createStarterSessionGatedGameServices({ ...servicesInput, signIn: guestSignIn })
+          ? createStarterSessionGatedGameServices({
+              ...servicesInput,
+              signIn: guestSignIn,
+              // The startup recovery the boot ran without a player, with the action coordinator's.
+              onActivated: () => {
+                void gameRuntime?.reconcile().catch((error: unknown) => {
+                  console.error('[game-services] recovery after sign-in failed', error);
+                });
+              },
+            })
           : createStarterGameServices({
               ...servicesInput,
               playerId: identitySession.playerId ?? player.playerId,
@@ -163,15 +172,6 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
     });
     gameRuntime = ownedRuntime;
     const gameServices = ownedRuntime.services;
-    if (sessionGated) {
-      // After the gated services' own listener: the startup recovery the boot ran without a
-      // player, and the action coordinator's reconciliation with it.
-      guestSignIn.onSignedIn(() => {
-        void ownedRuntime.reconcile().catch((error: unknown) => {
-          console.error('[game-services] recovery after sign-in failed', error);
-        });
-      });
-    }
     try {
       await ownedRuntime.reconcile();
     } catch (error) {

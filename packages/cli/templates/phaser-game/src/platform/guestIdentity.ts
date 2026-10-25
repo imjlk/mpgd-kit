@@ -275,7 +275,11 @@ export function createStarterGuestSignIn(input: Parameters<typeof startStarterGu
     onSignedIn(listener) {
       // Already signed in (a retry won the race with the caller): heard at once.
       if (signedIn !== undefined) {
-        listener(signedIn);
+        try {
+          listener(signedIn);
+        } catch (error) {
+          console.error('[identity] a sign-in listener failed', error);
+        }
         return () => undefined;
       }
       listeners.add(listener);
