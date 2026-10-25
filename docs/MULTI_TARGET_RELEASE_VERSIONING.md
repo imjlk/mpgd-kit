@@ -111,6 +111,31 @@ The values are also captured in the release manifest. A mismatch fails before
 an artifact is produced; the target tool never silently rewrites a store
 identity.
 
+#### Stamping the reserved version numbers
+
+`mpgd deploy run` sets `MPGD_NATIVE_VERSION_STAMP=1` for its builds, so a
+release does not need a commit of the next `versionCode` or build number.
+With stamping on (you can also set it for a manual `mpgd target build`):
+
+1. The game-owned source is checked as above, except that its version
+   numbers may be any readable literal (the committed `versionCode 1` /
+   `CURRENT_PROJECT_VERSION = 1` is fine). The package ID, bundle ID,
+   suffix, setter and xcconfig rules still apply, because every assignment
+   must be one the tool can rewrite.
+2. The reserved numbers are written into the build's staged copy of the
+   shell, never into the game checkout: every literal `versionCode` /
+   `versionName` of the app Gradle file, and `MARKETING_VERSION` /
+   `CURRENT_PROJECT_VERSION` in the App target's `Release` build settings
+   (added there when the target inherits them; target settings take
+   precedence over the project level and an xcconfig).
+3. The staged copy must then pass the strict check against the
+   reservation, and after packaging the signed AAB manifest or the archived
+   app's and IPA's `Info.plist` must carry the same numbers.
+
+Debug configurations and other Xcode targets are left as committed. Without
+`MPGD_NATIVE_VERSION_STAMP=1` the source must hold the exact numbers, as
+before.
+
 ### Native build modes and submission evidence
 
 Set `MPGD_NATIVE_BUILD_MODE` explicitly for a production native build. Staging
