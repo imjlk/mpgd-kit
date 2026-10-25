@@ -848,6 +848,7 @@ export function materializeCapacitorShellStarter(
       materializeAndroidBackupPolicy(plan.gameRoot);
       if (plan.notificationPlugins.length > 0) {
         materializeAndroidInexactAlarms(plan.gameRoot);
+        materializeAndroidAdvertisingRenderer(plan.gameRoot);
       }
     }
     if (platform === 'ios') {
@@ -3100,6 +3101,102 @@ export function applyAndroidManifestInexactAlarms(manifest: string): string {
   return `${head.trimEnd()}${newline}    ${androidInexactAlarmPermission}${newline}${manifest.slice(close)}`;
 }
 
+/** The kit's messaging service that renders Android advertising pushes with the opt-out action. */
+export const androidAdvertisingRendererService = 'dev.mpgd.capacitor.AdvertisingMessagingService';
+/** The messaging service `@capacitor-firebase/messaging` 8.x declares, which the renderer replaces. */
+export const androidMessagingPluginService = 'io.capawesome.capacitorjs.plugins.firebase.messaging.MessagingService';
+/** The meta-data the renderer's service declares, which `getAdvertisingPushRenderer` reads. */
+export const androidAdvertisingRendererMetaData = 'dev.mpgd.notifications.advertising_renderer';
+
+/**
+ * The manifest entries that make the kit's renderer the shell's one Firebase
+ * messaging service (notifications RFC "Capacitor"). Android hands a
+ * messaging event to one service, so the plugin's own is removed from the
+ * merge; the kit's forwards every message it does not render, and every new
+ * token, to the plugin.
+ */
+export const androidAdvertisingRendererEntries: readonly string[] = [
+  `<service android:name="${androidAdvertisingRendererService}" android:exported="false">`,
+  '    <intent-filter>',
+  '        <action android:name="com.google.firebase.MESSAGING_EVENT" />',
+  '    </intent-filter>',
+  `    <meta-data android:name="${androidAdvertisingRendererMetaData}" android:value="true" />`,
+  '</service>',
+  `<service android:name="${androidMessagingPluginService}" tools:node="remove" />`,
+];
+
+/**
+ * Whether an Android manifest declares the kit's advertising renderer as its
+ * messaging service, with its meta-data, and removes the plugin's service.
+ */
+export function androidManifestRendersAdvertising(manifest: string): boolean {
+  const code = withoutXmlComments(manifest);
+  const escape = (text: string): string => text.replaceAll('.', '\\.');
+  const renderer = new RegExp(
+    `<service\\b[^>]*android:name\\s*=\\s*"${escape(androidAdvertisingRendererService)}"[\\s\\S]*?</service>`,
+    'u',
+  ).exec(code)?.[0];
+  const removed = new RegExp(
+    `<service\\b(?=[^>]*android:name\\s*=\\s*"${escape(androidMessagingPluginService)}")(?=[^>]*tools:node\\s*=\\s*"remove")[^>]*>`,
+    'u',
+  ).test(code);
+  return renderer !== undefined
+    && renderer.includes('com.google.firebase.MESSAGING_EVENT')
+    && new RegExp(
+      `<meta-data\\b(?=[^>]*android:name\\s*=\\s*"${escape(androidAdvertisingRendererMetaData)}")(?=[^>]*android:value\\s*=\\s*"true")`,
+      'u',
+    ).test(renderer)
+    && removed;
+}
+
+/**
+ * Declares the kit's advertising renderer as the shell's messaging service
+ * inside `<application>` (`androidAdvertisingRendererEntries`), binding the
+ * tools namespace on the manifest root when missing. A manifest that
+ * already has it, or one this cannot place it in (no `<application>` with a
+ * closing tag), is returned unchanged.
+ */
+export function applyAndroidManifestAdvertisingRenderer(manifest: string): string {
+  if (androidManifestRendersAdvertising(manifest)) {
+    return manifest;
+  }
+  const code = withoutXmlComments(manifest);
+  const root = /<manifest\b[^>]*?>/u.exec(code);
+  const close = code.lastIndexOf('</application>');
+  const application = /<application\b[^>]*?>/u.exec(code);
+  if (
+    root === null || application === null || close === -1 || root[0].endsWith('/>')
+    || application[0].endsWith('/>') || close < application.index || application.index < root.index
+  ) {
+    return manifest;
+  }
+  const newline = manifest.includes('\r\n') ? '\r\n' : '\n';
+  let rootTag = manifest.slice(root.index, root.index + root[0].length);
+  if (!/\sxmlns:tools\s*=/u.test(rootTag)) {
+    rootTag = rootTag.replace(/^<manifest\b/u, `<manifest xmlns:tools="${androidToolsNamespace}"`);
+  }
+  const head = `${manifest.slice(0, root.index)}${rootTag}${manifest.slice(root.index + root[0].length, close)}`;
+  const entries = androidAdvertisingRendererEntries
+    .map((line) => `${newline}        ${line}`)
+    .join('');
+  return `${head.trimEnd()}${newline}${entries}${newline}    ${manifest.slice(close)}`;
+}
+
+function materializeAndroidAdvertisingRenderer(gameRoot: string): void {
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/android/app/src/main/AndroidManifest.xml`,
+  );
+  if (!existsSync(manifestFile) || !lstatSync(manifestFile).isFile()) {
+    return;
+  }
+  const source = readFileSync(manifestFile, 'utf8');
+  const next = applyAndroidManifestAdvertisingRenderer(source);
+  if (next !== source) {
+    writeFileSync(manifestFile, next);
+  }
+}
+
 function materializeAndroidInexactAlarms(gameRoot: string): void {
   const manifestFile = safeDestination(
     gameRoot,
@@ -3191,10 +3288,10 @@ function planNotificationsProvider(input: {
         + 'packages (mpgd kit upgrade) first.',
     );
   }
-  // The starter's provider module also imports the settings opener, which
-  // an adapter older than this CLI's notifications starter does not have.
-  // The subpath's declared types file (dist/notifications.d.ts today), and
-  // the module it re-exports the opener from.
+  // The starter's provider module also imports the settings opener and the
+  // advertising renderer read, which an adapter older than this CLI's
+  // notifications starter does not have. The subpath's declared types file
+  // (dist/notifications.d.ts today), and the modules it re-exports them from.
   const adapterRoot = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor');
   const declaredTypes = (adapterExports as Readonly<Record<string, unknown>>)['./notifications'];
   const typesPath = typeof declaredTypes === 'object' && declaredTypes !== null
@@ -3202,18 +3299,24 @@ function planNotificationsProvider(input: {
     ? (declaredTypes as { readonly types: string }).types
     : './dist/notifications.d.ts';
   const adapterTypes = readExisting(path.join(adapterRoot, typesPath));
-  const openerTypes = readExisting(
-    path.join(adapterRoot, path.dirname(typesPath), 'notifications-settings.d.ts'),
-  );
-  // Refused only when the declarations show the opener is absent: an
+  const helperTypes = ['notifications-settings.d.ts', 'notifications-renderer.d.ts']
+    .map((file) => readExisting(path.join(adapterRoot, path.dirname(typesPath), file)) ?? '')
+    .join('\n');
+  // Refused only when the declarations show a helper is absent: an
   // `export *` the check cannot follow passes, and the build then decides.
-  if (adapterTypes !== undefined && !/\bexport\s*\*/u.test(adapterTypes)
-    && !`${adapterTypes}\n${openerTypes ?? ''}`.includes('openCapacitorNotificationSettings')) {
-    throw new Error(
-      `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `
-        + 'openCapacitorNotificationSettings, which the notifications starter uses; upgrade the '
-        + "game's kit packages (mpgd kit upgrade) first.",
-    );
+  // The advertising renderer read came after the opener (AR1).
+  for (const helper of [
+    'openCapacitorNotificationSettings',
+    'readCapacitorAdvertisingPushRenderer',
+  ]) {
+    if (adapterTypes !== undefined && !/\bexport\s*\*/u.test(adapterTypes)
+      && !`${adapterTypes}\n${helperTypes}`.includes(helper)) {
+      throw new Error(
+        `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `
+          + `${helper}, which the notifications starter uses; upgrade the `
+          + "game's kit packages (mpgd kit upgrade) first.",
+      );
+    }
   }
   // The adapter's other peers (Capacitor core) must accept the game's
   // installed copies too; the plugins get their own message below.
@@ -3384,6 +3487,14 @@ function planNotificationsProvider(input: {
       `${shellPath}/android/app/src/main/AndroidManifest.xml keeps SCHEDULE_EXACT_ALARM, which `
         + '@capacitor/local-notifications adds; reminders are inexact, so add '
         + `${androidInexactAlarmPermission} to the manifest.`,
+    );
+  }
+  if (androidManifest !== undefined && !androidManifestRendersAdvertising(androidManifest)) {
+    warnings.push(
+      `${shellPath}/android/app/src/main/AndroidManifest.xml does not declare the kit's advertising `
+        + 'renderer, so this shell receives no advertising push (the backend sends Android '
+        + 'advertising only to a shell that shows the opt-out action). To render them, add inside '
+        + `<application> (with xmlns:tools on <manifest>): ${androidAdvertisingRendererEntries.join(' ')}`,
     );
   }
   if (readExisting(safeDestination(gameRoot, `${shellPath}/android/app/google-services.json`)) === undefined) {

@@ -13,8 +13,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  androidAdvertisingRendererEntries,
+  androidAdvertisingRendererMetaData,
+  androidAdvertisingRendererService,
   androidInexactAlarmPermission,
   androidManifestRemovesExactAlarm,
+  androidManifestRendersAdvertising,
+  androidMessagingPluginService,
+  applyAndroidManifestAdvertisingRenderer,
   applyAndroidManifestInexactAlarms,
   applyCapacitorShellStarter,
   planCapacitorShellStarter,
@@ -684,6 +690,16 @@ try {
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /has no openCapacitorNotificationSettings/u,
     );
+    // One that has the opener but predates the advertising renderer read (AR1).
+    writeFileSync(
+      types,
+      'export declare function loadCapacitorNotificationSdks(): void;\n'
+        + 'export declare function openCapacitorNotificationSettings(): Promise<void>;\n',
+    );
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /has no readCapacitorAdvertisingPushRenderer/u,
+    );
     // A subpath that re-exports the opener with `export *` still passes.
     writeFileSync(types, "export * from './notifications-settings.js';\n");
     writeFileSync(
@@ -858,6 +874,77 @@ try {
       ),
     ),
   );
+}
+
+// The Android manifest declares the kit's advertising renderer as the one
+// Firebase messaging service and removes the messaging plugin's (AR1).
+{
+  const plain = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '    <application android:label="Game">',
+    '        <activity android:name=".MainActivity" />',
+    '    </application>',
+    '</manifest>',
+    '',
+  ].join('\n');
+  assert.equal(androidManifestRendersAdvertising(plain), false);
+  const rendered = applyAndroidManifestAdvertisingRenderer(plain);
+  assert.ok(androidManifestRendersAdvertising(rendered));
+  assert.match(
+    rendered,
+    /<manifest xmlns:tools="http:\/\/schemas\.android\.com\/tools" xmlns:android=/u,
+  );
+  for (const line of androidAdvertisingRendererEntries) {
+    assert.ok(rendered.includes(`        ${line}\n`), line);
+  }
+  // Inside <application>, after what it had.
+  assert.ok(
+    rendered.indexOf('.MainActivity') < rendered.indexOf(androidAdvertisingRendererService),
+  );
+  assert.ok(rendered.indexOf(androidMessagingPluginService) < rendered.indexOf('</application>'));
+  assert.equal(applyAndroidManifestAdvertisingRenderer(rendered), rendered, 'idempotent');
+  // The names the Android library reads.
+  assert.equal(androidAdvertisingRendererService, 'dev.mpgd.capacitor.AdvertisingMessagingService');
+  assert.equal(androidAdvertisingRendererMetaData, 'dev.mpgd.notifications.advertising_renderer');
+  const library = readFileSync(
+    path.join(
+      kitRoot,
+      'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/AdvertisingPushRenderer.java',
+    ),
+    'utf8',
+  );
+  assert.ok(library.includes(`"${androidAdvertisingRendererMetaData}"`));
+  assert.ok(existsSync(path.join(
+    kitRoot,
+    'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/AdvertisingMessagingService.java',
+  )));
+  // Each part is needed: the plugin's service left in, the meta-data, or a comment.
+  assert.equal(
+    androidManifestRendersAdvertising(
+      rendered.replace(/\s*<service[^>]*tools:node="remove" \/>/u, ''),
+    ),
+    false,
+  );
+  assert.equal(
+    androidManifestRendersAdvertising(rendered.replace(/\s*<meta-data[^>]*\/>/u, '')),
+    false,
+  );
+  assert.equal(
+    androidManifestRendersAdvertising(
+      plain.replace(
+        '</application>',
+        `<!-- ${androidAdvertisingRendererEntries.join('')} -->\n    </application>`,
+      ),
+    ),
+    false,
+  );
+  // CRLF is kept, and a manifest without an <application> body is left alone.
+  const crlf = applyAndroidManifestAdvertisingRenderer(plain.replaceAll('\n', '\r\n'));
+  assert.ok(androidManifestRendersAdvertising(crlf));
+  assert.equal(crlf.replaceAll('\r\n', '').includes('\n'), false);
+  const bare = '<manifest xmlns:android="a">\n    <application android:label="Game" />\n</manifest>\n';
+  assert.equal(applyAndroidManifestAdvertisingRenderer(bare), bare);
 }
 
 console.info('Capacitor shell notifications checks passed.');
