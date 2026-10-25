@@ -309,7 +309,7 @@ async function sweepVoidedPurchases(input: {
   if (intervalMinutes === 0) {
     return undefined;
   }
-  // Five cursor reads open the run.
+  // At most five cursor reads open the run.
   const opening = input.take(5);
   if (opening !== 'ok') {
     console.error('Google Play voided purchases sweep skipped this run:', opening);
@@ -342,15 +342,18 @@ async function sweepVoidedPurchases(input: {
   // or state 1) the overlap before it is re-read, so a backlog pays for it
   // once per clean stop.
   let openingStart = oldest;
+  let rereadInUse = false;
   if (lastEnd !== undefined && behind === 2) {
     openingStart = lastEnd;
   } else if (lastEnd !== undefined) {
-    // The overlap is re-read in ordinary slices; a run that could not finish
-    // it resumes where it got instead of starting the overlap again.
-    const reread = await input.cursors.read(voidedSweepRereadCursor);
-    openingStart = reread !== undefined
-        && reread > lastEnd - voidedSweepOverlapMs
-        && reread < lastEnd
+    // The overlap is re-read in ordinary slices; a run that stopped inside it
+    // (state 1) resumes where it got instead of starting the overlap again.
+    // A caught-up run always re-reads the whole overlap.
+    const reread = behind === 1 ? await input.cursors.read(voidedSweepRereadCursor) : undefined;
+    rereadInUse = reread !== undefined
+      && reread > lastEnd - voidedSweepOverlapMs
+      && reread < lastEnd;
+    openingStart = rereadInUse && reread !== undefined
       ? reread
       : lastEnd - voidedSweepOverlapMs;
   }
@@ -374,22 +377,26 @@ async function sweepVoidedPurchases(input: {
   };
   /** Moves the cursor past a finished (or skipped) slice; true once caught up. */
   const finishSlice = async (sliceEnd: number): Promise<boolean> => {
-    if (sliceEnd < cursorAtStart) {
+    if (sliceEnd < cursorAtStart && sliceEnd < nowMs) {
       // A slice of the overlap re-read: remember how far it got, never move
-      // the cursor back.
+      // the cursor back. Remembered even when young: not remembering it
+      // would make a run that cannot finish the overlap repeat it forever.
       await input.cursors.write(voidedSweepRereadCursor, sliceEnd, new Date(nowMs));
+      rereadInUse = true;
       slices += 1;
-      // A cursor ahead of this run's clock: nothing newer to read.
-      if (sliceEnd >= nowMs) {
-        complete = true;
-        return true;
-      }
       return false;
     }
+    // Never behind the cursor (a cursor ahead of this run's clock stays).
+    const nextCursor = Math.max(sliceEnd, cursorAtStart);
     // Counted only once written, so a failed write never reports progress.
-    await input.cursors.write(voidedSweepCursor, sliceEnd, new Date(nowMs));
+    await input.cursors.write(voidedSweepCursor, nextCursor, new Date(nowMs));
+    if (rereadInUse) {
+      // The overlap of the old cursor is done; a later run must not resume it.
+      await input.cursors.write(voidedSweepRereadCursor, 0, new Date(nowMs));
+      rereadInUse = false;
+    }
     slices += 1;
-    cursorNow = sliceEnd;
+    cursorNow = nextCursor;
     movedCursor = true;
     if (sliceEnd < nowMs) {
       return false;
