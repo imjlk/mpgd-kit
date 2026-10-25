@@ -194,7 +194,7 @@ production` prints what it lacks and fails on contradictions
       and set `VITE_MPGD_IDENTITY_URL` in the game's production build
       ([Guest Identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)).
       A guest who logs out, or stays away longer than the inactivity window
-      (180 days), comes back as a new player without the old purchases until
+      (`IDENTITY_REFRESH_IDLE_DAYS`, 180 by default), comes back as a new player without the old purchases until
       account linking exists; say so in the game's support copy.
 - [ ] **Launch blocker while the game sells non-consumables (open: L3c):**
       a reinstall on Android, a new device, or a logout makes a new guest,

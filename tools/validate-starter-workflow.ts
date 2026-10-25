@@ -3172,6 +3172,7 @@ function readJson(path: string): unknown {
  */
 function validateTemplateGuestIdentityWiring(): void {
   const root = 'packages/cli/templates/phaser-game';
+  const lateSessionListener = 'guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession))';
   const expectations = [
     [
       `${root}/src/platform/guestIdentity.ts`,
@@ -3201,7 +3202,7 @@ function validateTemplateGuestIdentityWiring(): void {
         'identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL',
         'credentials: platform.secureCredentials',
         'setStarterServerSession(guestIdentity.serverSession)',
-        'guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession))',
+        lateSessionListener,
         'signIn: guestSignIn,',
         'void gameRuntime?.reconcile()',
         'identityLevel: guestIdentity.identityLevel',
@@ -3230,11 +3231,13 @@ function validateTemplateGuestIdentityWiring(): void {
   const setSession = main.indexOf('setStarterServerSession(guestIdentity.serverSession)');
   const services = main.indexOf('createStarterGameServices({');
   // The late session setter is registered before the runtime creates the gated services.
-  const lateSession = main.indexOf(
-    'guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession))',
-  );
+  const lateSession = main.indexOf(lateSessionListener);
   const runtime = main.indexOf('createGamePlatformRuntime({');
-  if (lateSession < 0 || runtime < 0 || lateSession > runtime) {
+  if (runtime < 0) {
+    failures.push(
+      `${root}/src/main.ts: createGamePlatformRuntime({ not found for the guest identity ordering check.`,
+    );
+  } else if (lateSession > runtime) {
     failures.push(
       `${root}/src/main.ts: the late setStarterServerSession listener must precede createGamePlatformRuntime.`,
     );

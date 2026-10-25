@@ -533,7 +533,7 @@ server player becomes the game services' `playerId` and the purchases'
 binding, and `setStarterServerSession` sends its access token to the
 game-services Worker, which resolves it through the identity Worker's
 bindings. A session the identity service ended (logout, a replayed refresh
-token, or 180 days without play) is replaced by a new guest; without a linked
+token, or 180 days without play by default) is replaced by a new guest; without a linked
 account that player's purchases stay with the old one.
 
 Offline at launch, the game starts anyway and keeps trying in the background
@@ -569,7 +569,7 @@ the button says to connect to the game server instead of restoring; keep it reac
 store or settings screen when you replace the lobby.
 
 Until the kit's follow-up L3c lands, a restore only finds purchases made by
-the same guest. A reinstall on Android, a new device, a logout, or 180 days
+the same guest. A reinstall on Android, a new device, a logout, or (by default) 180 days
 away make a new guest, and the store then returns the old guest's
 non-consumables, which the backend refuses (an iOS reinstall on the same
 device usually keeps the guest). See "Reinstalls and new devices" in the
