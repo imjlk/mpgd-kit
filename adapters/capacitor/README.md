@@ -321,14 +321,23 @@ is created, which is how a cold-start open reaches it.
     send names the category in `apns.payload.aps.category`.
   - The action opens the `optOutRoute` of the advertising topic the push names
     in its `topic` data key; without that key it opens nothing.
-  - An Android FCM notification message cannot carry actions, so an Android
-    advertising push needs the shell to render it natively with the action,
-    which is not built yet (a follow-up after C1). Android `remote.purposes`
-    still lists `advertising` so the provider pairs with the standard FCM
-    registry, but `validateNotificationTopicCatalog` refuses a catalog that
-    maps an advertising topic to `android`: the push would arrive without the
-    opt-out action the Korean rules require (see the RFC's advertising
-    rules). The kit's starter maps its sample advertising topic to iOS only.
+  - An Android FCM notification message cannot carry actions, so the shell
+    renders Android advertising pushes itself (AR1): the backend sends them
+    as data messages, and `dev.mpgd.capacitor.AdvertisingMessagingService`
+    from `@mpgd/capacitor-game-services`, declared as the shell's messaging
+    service in place of the messaging plugin's, posts them with the action.
+    Pass `advertisingRenderer: readCapacitorAdvertisingPushRenderer`: on
+    Android, with a catalog that maps an advertising topic, the provider
+    reads it once and registers `rendersAdvertising: true` when that service
+    is installed. The backend sends Android advertising only to such an
+    installation, and `validateNotificationTopicCatalog` accepts an
+    advertising topic mapped to `android` only when the deployment sets
+    `shellRendersAdvertising: true`. Both taps open the game through the
+    messaging plugin as any push does; the plugin reports the action as a
+    `tap` with `mpgd.action: advertising-opt-out` in its data, which the
+    provider reads as the opt-out action. A read that fails or takes more
+    than five seconds counts as no renderer. The manifest lines are in the
+    [Firebase setup guide](../../docs/FIREBASE_NOTIFICATIONS.md#3-android).
 - **Settings.** Neither plugin opens the notification settings, so the
   provider takes an `openSettings` opener; without one `permission.settings`
   is `false` and `openSettings` answers `unavailable`.
