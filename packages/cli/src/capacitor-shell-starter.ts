@@ -3115,20 +3115,33 @@ export const androidAdvertisingRendererMetaData = 'dev.mpgd.notifications.advert
  * merge; the kit's forwards every message it does not render, and every new
  * token, to the plugin.
  */
-export const androidAdvertisingRendererEntries: readonly string[] = [
+const androidAdvertisingRendererServiceEntry: readonly string[] = [
   `<service android:name="${androidAdvertisingRendererService}" android:exported="false">`,
   '    <intent-filter>',
   '        <action android:name="com.google.firebase.MESSAGING_EVENT" />',
   '    </intent-filter>',
   `    <meta-data android:name="${androidAdvertisingRendererMetaData}" android:value="true" />`,
   '</service>',
-  `<service android:name="${androidMessagingPluginService}" tools:node="remove" />`,
+];
+const androidMessagingPluginServiceRemoval =
+  `<service android:name="${androidMessagingPluginService}" tools:node="remove" />`;
+/** The renderer's service element, then the removal of the plugin's service. */
+export const androidAdvertisingRendererEntries: readonly string[] = [
+  ...androidAdvertisingRendererServiceEntry,
+  androidMessagingPluginServiceRemoval,
 ];
 
-/** An attribute `name="value"` inside a start tag, in either quote style; `.` in the value is literal. */
+/** `text` as a literal inside a regular expression. */
+function regexLiteral(text: string): string {
+  // Only syntax characters: the `u` flag refuses an escaped `-` or letter.
+  return text.replace(/[.*+?^${}()|[\]\\/]/gu, '\\$&');
+}
+
+/** An attribute `name="value"` (or `'value'`) inside a start tag; both are literal. */
 function xmlAttributeLookahead(name: string, value: string): string {
-  const literal = value.replaceAll('.', '\\.');
-  return `(?=[^>]*\\s${name}\\s*=\\s*["']${literal}["'])`;
+  const attribute = `\\s${regexLiteral(name)}\\s*=\\s*`;
+  const literal = regexLiteral(value);
+  return `(?=[^>]*${attribute}(?:"${literal}"|'${literal}'))`;
 }
 
 /** The manifest's `<service>` element for `name`, self-closed or with a body, or `undefined`. */
@@ -3180,12 +3193,11 @@ export function applyAndroidManifestAdvertisingRenderer(manifest: string): strin
     return manifest;
   }
   const code = withoutXmlComments(manifest);
-  const removal = androidAdvertisingRendererEntries.at(-1) ?? '';
   const missing = [
     ...(androidServiceElement(code, androidAdvertisingRendererService) === undefined
-      ? androidAdvertisingRendererEntries.slice(0, -1)
+      ? androidAdvertisingRendererServiceEntry
       : []),
-    ...(androidManifestRemovesMessagingPluginService(code) ? [] : [removal]),
+    ...(androidManifestRemovesMessagingPluginService(code) ? [] : [androidMessagingPluginServiceRemoval]),
   ];
   const root = /<manifest\b[^>]*?>/u.exec(code);
   const close = code.lastIndexOf('</application>');

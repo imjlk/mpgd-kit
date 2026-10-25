@@ -533,6 +533,51 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     await ios.deliver({ idempotencyKey: 'ad-ios', player: 'p-1', topic: 'events' }),
     { status: 'delivered', alreadyProcessed: false },
   );
+  // A stored target the provider no longer serves reads as `topicFor` reads
+  // it: an Android endpoint kept from before reads the ios mapping on an
+  // ios-only provider and delivers, and on a provider that still serves
+  // android among others its missing claim keeps advertising away.
+  const staleStore = createInMemoryNotificationStore();
+  await staleStore.putEndpoint({
+    provider: 'fcm',
+    installationId: 'old-android',
+    player: 'p-1',
+    address: { kind: 'fcm-token', value: 'tok-old-android' },
+    permission: 'granted',
+    target: 'android',
+    sessionId: 's-old',
+    lastRegisteredAt: '2026-10-19T03:00:00Z',
+  });
+  for (const [targets, expected] of [
+    [['ios'], 'delivered'],
+    [['web', 'android'], 'suppressed'],
+  ] as const) {
+    const stale = createNotificationService({
+      store: staleStore,
+      registry: createNotificationProviderRegistry([
+        { entry: fcmEntry, delivery: fakeProvider('fcm'), targets },
+      ]),
+      catalog: vectorCatalog([events]),
+      deployment: {
+        advertisingRules: 'kr',
+        advertisingSender: { contact: '02-000-0000' },
+        shellRendersAdvertising: true,
+      },
+      now: () => '2026-10-19T03:00:00Z',
+    });
+    await stale.recordConsent(session('p-1', 'old-android'), {
+      kind: 'advertising',
+      state: 'granted',
+      source: 'player',
+      textVersion: 'v1',
+    });
+    const outcome = await stale.deliver({
+      idempotencyKey: `ad-stale-${targets.join('-')}`,
+      player: 'p-1',
+      topic: 'events',
+    });
+    assert.equal(outcome.status, expected, targets.join(','));
+  }
 }
 
 // Queue dispatch: the gate runs when the job runs; a lost job is replayed after the lease.

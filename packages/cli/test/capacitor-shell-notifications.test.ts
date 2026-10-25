@@ -971,6 +971,16 @@ try {
   assert.equal(restored.split(androidAdvertisingRendererService).length - 1, 1);
   const incomplete = rendered.replace(/\s*<meta-data[^>]*\/>/u, '');
   assert.equal(applyAndroidManifestAdvertisingRenderer(incomplete), incomplete);
+  // Mismatched quotes do not count as the attribute.
+  assert.equal(
+    androidManifestRendersAdvertising(
+      completed.replace(
+        `android:name='${androidMessagingPluginService}'`,
+        `android:name="${androidMessagingPluginService}'`,
+      ),
+    ),
+    false,
+  );
   // A self-closed renderer is not completed by another service's body.
   const selfClosedRenderer = plain.replace(
     '</application>',

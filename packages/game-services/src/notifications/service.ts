@@ -494,6 +494,16 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 
   // Topics.
 
+  /**
+   * The catalog targets a recipient's topic is read from: the target its
+   * registration named while the provider still serves it, else every
+   * target the provider serves, in order.
+   */
+  const candidateTargetsOf = (
+    provider: RegisteredNotificationProvider,
+    target: string | undefined,
+  ): readonly string[] =>
+    target !== undefined && provider.targets.includes(target) ? [target] : provider.targets;
   /** The topic as declared for the recipient's target, else for the provider's first target that declares it. */
   const topicFor = (
     provider: RegisteredNotificationProvider,
@@ -501,10 +511,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     topicId: string,
     origin: NotificationSendOrigin,
   ): NotificationTopicDeclaration | undefined => {
-    const targets = target !== undefined && provider.targets.includes(target)
-      ? [target]
-      : provider.targets;
-    for (const candidate of targets) {
+    for (const candidate of candidateTargetsOf(provider, target)) {
       const topic = catalog.topicsFor(candidate).find((declared) => declared.id === topicId);
       if (topic !== undefined) {
         // A notice says only its variant of notices.copy.
@@ -543,35 +550,29 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   // Recipients (gate step 2).
 
   /**
-   * The catalog target of a device endpoint, as `topicFor` reads it: the one
-   * its registration named while the provider still serves it, else the
-   * provider's only target (a registration on a single-target provider may
-   * leave it out).
+   * Whether an endpoint's topic may be read from a target whose pushes need
+   * the shell to render advertising (Android), as `topicFor` picks it: the
+   * named target while the provider serves it, else any target it serves.
    */
-  const endpointTargetOf = (
+  const mayNeedShellRendering = (
     provider: RegisteredNotificationProvider,
     target: string | undefined,
-  ): string | undefined =>
-    target !== undefined && provider.targets.includes(target)
-      ? target
-      : provider.targets.length === 1
-        ? provider.targets[0]
-        : undefined;
+  ): boolean =>
+    candidateTargetsOf(provider, target)
+      .some((candidate) => notificationShellRenderedAdvertisingTargets.includes(candidate));
   /**
-   * Whether a device endpoint shows the actions a push carries: on a target
-   * whose pushes need the shell to render advertising (Android), only when
-   * its latest registration said the shell does. Gate step 1 refuses
-   * advertising under `kr` to one that does not.
+   * Whether a device endpoint shows the actions a push carries: where its
+   * topic may come from a target that needs the shell to render advertising
+   * (Android), only when its latest registration said the shell does. Gate
+   * step 1 refuses advertising under `kr` to one that does not.
    */
   const endpointActionsOf = (
     provider: RegisteredNotificationProvider,
     endpoint: NotificationStoredEndpoint,
-  ): { readonly endpointShowsActions?: boolean } => {
-    const target = endpointTargetOf(provider, endpoint.target);
-    return target !== undefined && notificationShellRenderedAdvertisingTargets.includes(target)
+  ): { readonly endpointShowsActions?: boolean } =>
+    mayNeedShellRendering(provider, endpoint.target)
       ? { endpointShowsActions: endpoint.address.rendersAdvertising === true }
       : {};
-  };
   const usable = (endpoint: NotificationStoredEndpoint, at: number): boolean =>
     endpoint.status === 'valid'
     && at - Date.parse(endpoint.lastRegisteredAt) < endpointStaleMs
@@ -2622,10 +2623,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // Only a target whose pushes need the shell to render advertising keeps
       // the claim, so the FCM provider never sends another device (iOS) a
       // data message it would not show.
-      const shellTarget = endpointTargetOf(provider, request.target);
       const rendersAdvertising = address.rendersAdvertising === true
-        && shellTarget !== undefined
-        && notificationShellRenderedAdvertisingTargets.includes(shellTarget);
+        && mayNeedShellRendering(provider, request.target);
       await store.putEndpoint({
         provider: provider.entry.provider,
         installationId: current.installationId,
