@@ -276,7 +276,17 @@ await test('serves app-ads.txt from the AdMob publisher ID or a game-owned file'
     );
     const appAds = path.join(project, 'artifacts', 'legal-site', 'app-ads.txt');
     await inProject(project, async () => {
-      await runMpgdCli(['legal', 'build']);
+      const warnings: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (message: string) => warnings.push(message);
+      try {
+        writeFileSync(path.join(project, 'legal', 'privacy.html'), page('[REPLACE: name] Privacy'));
+        await runMpgdCli(['legal', 'build']);
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0] ?? '', /privacy[/\\]index\.html/u);
       assert.equal(
         readFileSync(appAds, 'utf8'),
         'google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0\n',

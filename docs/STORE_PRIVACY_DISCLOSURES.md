@@ -24,15 +24,15 @@ on Play, which marks it ephemeral. Every kit network call uses HTTPS, so
 
 | Kit feature | Data sent off the device | Play Data safety type | App Store data type | Purpose | Linked to the player |
 | --- | --- | --- | --- | --- | --- |
-| Game services guest session (`@mpgd/game-services`, game-owned identity service) | Server-issued guest player ID, refresh token family | Personal info › **User IDs** | Identifiers › **User ID** | App functionality | Yes |
+| Game services guest session (`@mpgd/game-services`, game-owned identity service) | Server-issued guest player ID, refresh token family, and the client-generated installation ID sent when the guest is issued | Personal info › **User IDs**; Device or other IDs for the installation ID | Identifiers › **User ID**; Identifiers › Device ID for the installation ID | App functionality | Yes |
 | Sign-in (game-owned, later) | Provider account ID, maybe name or email | Personal info › User IDs (and Name / Email address if received) | Identifiers › User ID; Contact info › Name / Email Address if received | App functionality | Yes |
-| Saves, progress, leaderboards (game services) | Save data, scores, leaderboard entries | App activity › **Other user-generated content** or **Other actions** | Gameplay Content; Usage Data › **Product Interaction** for scores | App functionality | Yes |
+| Saves, progress, leaderboards (game services) | Save data, scores, leaderboard entries | App activity › **Other user-generated content** or **Other actions** | User Content › **Gameplay Content**; Usage Data › **Product Interaction** for scores | App functionality | Yes |
 | Purchases (Play Billing / StoreKit plugins, backend ledger) | Product IDs, store transaction IDs / purchase tokens, obfuscated account ID or app account token | Financial info › **Purchase history** | Purchases › **Purchase History** | App functionality, fraud prevention | Yes |
 | Rewarded ads ledger (AdMob SSV) | Reward claim records, placement, player ID | App activity › Other actions | Usage Data › Product Interaction | App functionality, fraud prevention | Yes |
 | Google Mobile Ads SDK (AdMob, opt-in) | Advertising ID (Android, unless removed), IP address, device and app information, ad interactions | Device or other IDs; App activity › App interactions; App info and performance › Diagnostics; disclose **shared** with Google | Identifiers › **Device ID** (only if the IDFA is used, which needs ATT); Usage Data › **Advertising Data**; Diagnostics | Advertising or marketing, analytics, fraud prevention | Depends on consent and ATT; see Google's [Play](https://developers.google.com/admob/android/privacy/play-data-disclosure) and [App Store](https://developers.google.com/admob/ios/privacy/data-disclosure) disclosure guides |
 | UMP consent (AdMob) | Consent choice | Not separately listed | Not separately listed | Compliance | — |
 | Push notifications (FCM, `@capacitor-firebase/messaging`) | FCM registration token, Firebase installation ID, notification consent records on the game server | Device or other IDs; App activity › Other actions for consent records | Identifiers › Device ID; Usage Data › Other Usage Data for consent records | App functionality; Developer's advertising or marketing for advertising topics | Yes |
-| Game server logs (Cloudflare Worker) | IP address, user agent, request metadata | Not collected if only processed for security and not stored; otherwise App info and performance › Diagnostics | Diagnostics › Other Diagnostic Data if stored | Security, fraud prevention | Usually no |
+| Game server logs (Cloudflare Worker) | IP address, user agent, request metadata | App info and performance › Diagnostics; mark it ephemeral if it is only processed in memory and not stored | Diagnostics › Other Diagnostic Data if stored | Security, fraud prevention | Usually no |
 | Crash reporting | **Not in the kit yet.** Adding Crashlytics or Sentry adds crash logs and diagnostics. | App info and performance › Crash logs, Diagnostics | Diagnostics › Crash Data, Performance Data | Analytics | Depends on the SDK |
 | Analytics (`@mpgd/analytics`) | **Nothing by default**: the package defines events and sinks but sends nothing until the game adds a transport. | Depends on the transport | Depends on the transport | Analytics | Depends |
 
@@ -40,8 +40,9 @@ Notes:
 
 - **Play account deletion.** An app that lets players create an account must
   offer deletion in the app and through a web link entered in the Data safety
-  form. The kit's guest session is an account created by the game server, so
-  this applies. The kit does not ship a deletion flow yet (tracked for the
+  form. Whether an automatically issued guest ID counts is a judgement call;
+  it applies as soon as the game offers sign-in or account binding, so plan
+  for it. The kit does not ship a deletion flow yet (tracked for the
   identity and account deletion PR, L3); the privacy policy template already
   has the section and a placeholder for the URL.
 - **App Store tracking.** The kit does no tracking and never shows the App

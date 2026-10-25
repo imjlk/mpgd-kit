@@ -256,7 +256,7 @@ export function resolveAppAdsTxt(input: {
 }): string | undefined {
   if (input.ownFile !== undefined) {
     if (input.ownFile.trim().length === 0) {
-      throw new Error('legal/app-ads.txt is empty.');
+      throw new Error('app-ads.txt in the legal directory is empty.');
     }
     return input.ownFile.endsWith('\n') ? input.ownFile : `${input.ownFile}\n`;
   }

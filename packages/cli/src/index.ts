@@ -7,7 +7,6 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -3421,11 +3420,13 @@ function buildLegalSite(input: {
   const outputs = createLegalSiteOutputs(legalDir, outDir);
   // app-ads.txt is optional: an earlier one is stale once its source is gone.
   const appAdsOutput = path.join(outDir, 'app-ads.txt');
-  const orphanedAppAds = !outputs.some((output) => output.file === appAdsOutput)
-    && lstatIfExists(appAdsOutput) !== undefined;
-  if (orphanedAppAds) {
+  const orphanStat = outputs.some((output) => output.file === appAdsOutput)
+    ? undefined
+    : lstatIfExists(appAdsOutput);
+  const orphanedAppAds = orphanStat !== undefined;
+  if (orphanStat !== undefined) {
     assertLegalProjectPath('out-dir', appAdsOutput);
-    if (!lstatSync(appAdsOutput).isFile()) {
+    if (!orphanStat.isFile()) {
       throw new Error(`Legal site app-ads.txt output is not a regular file: ${appAdsOutput}`);
     }
   }
@@ -3461,9 +3462,10 @@ function buildLegalSite(input: {
     };
   }
 
+  warnLegalPlaceholders(outputs);
   publishLegalSiteFiles(outDir, outputs);
   if (orphanedAppAds) {
-    unlinkSync(appAdsOutput);
+    rmSync(appAdsOutput, { force: true });
   }
 
   return {
@@ -3574,6 +3576,23 @@ function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
       return undefined;
     }
     throw error;
+  }
+}
+
+/**
+ * The starter's legal pages mark what only the game owner can write with
+ * `[REPLACE: ...]`. Building with them is allowed (a new game builds its
+ * Pages host at once), but the store listing must not link to them.
+ */
+function warnLegalPlaceholders(outputs: readonly { readonly file: string; readonly content: string }[]): void {
+  const pending = outputs
+    .filter((output) => output.content.includes('[REPLACE:'))
+    .map((output) => path.relative(process.cwd(), output.file));
+  if (pending.length > 0) {
+    console.warn(
+      `Legal pages still contain [REPLACE: ...] markers; fill them in before linking the site from a store listing: ${
+        pending.join(', ')}`,
+    );
   }
 }
 

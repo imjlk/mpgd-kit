@@ -24,9 +24,11 @@ the stores change their rules, so re-check the linked pages before you submit.
 - **iPadOS 26.** `UIRequiresFullScreen` is deprecated; Apple asks iPad apps to
   support every orientation ([TN3192](https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key)).
   Kit shells list all four iPad orientations.
-- **16 KB memory pages (Android).** Not checked by the kit. The shell has no
-  native libraries of its own; check the AAB's libraries from AdMob or
-  Firebase with the APK Analyzer before release.
+- **16 KB memory pages (Android).** Apps targeting API 35+ that ship native
+  code must support 16 KB pages on Google Play; from 1 February 2027 updates
+  that do not cannot be released ([page sizes](https://developer.android.com/guide/practices/page-sizes)).
+  The shell has no native libraries of its own, but AdMob or Firebase may add
+  some: check the AAB with the APK Analyzer. The kit does not check this.
 
 ## 1. Accounts and keys
 
@@ -46,7 +48,8 @@ Google:
       in the console; Google keeps the app-signing key.
 - [ ] A Google Cloud service account added to Play Console users: release
       manager rights for uploads, plus financial data for purchase
-      verification (`GOOGLE_PLAY_PUBLISHER_AUTH` in the Worker).
+      verification (the Worker's `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH`
+      service binding, see [game services backend](./GAME_SERVICES_BACKEND.md)).
 - [ ] Firebase project with the Android and iOS apps, `google-services.json`
       and `GoogleService-Info.plist` committed, an FCM service-account key in
       the Worker ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md)).
@@ -149,8 +152,10 @@ production` prints what it lacks and fails on contradictions
 
 ## 6. Legal pages and privacy answers
 
-- [ ] Fill in `legal/privacy.html` (every `[REPLACE: …]`), `terms.html`,
-      `support.html`; run `pnpm exec mpgd legal build` and deploy the site.
+- [ ] Fill in `legal/privacy.html` (every `[REPLACE: …]`, and delete what
+      the game does not do), `terms.html`, `support.html`; run
+      `pnpm exec mpgd legal build` (it warns while `[REPLACE:` markers remain)
+      and deploy the site.
       `app-ads.txt` is served from `ads.admob.publisherId` or
       `legal/app-ads.txt`.
 - [ ] Answer Play **Data safety** and App Store **App Privacy** from
@@ -159,6 +164,7 @@ production` prints what it lacks and fails on contradictions
 ## 7. Build, version, upload
 
 ```sh
+pnpm exec mpgd deploy init --game .   # once: writes mpgd.deploy.json (credential variable names only)
 pnpm exec mpgd deploy plan --game . --profile beta --targets android,ios --out ../release-plan.json
 pnpm exec mpgd deploy doctor --game . --profile beta
 pnpm exec mpgd deploy run --plan ../release-plan.json \
