@@ -54,7 +54,11 @@ initializer refuses a game or shell that lists it; remove it first.
    `apps/mobile-capacitor/android/app/google-services.json`. The Capacitor 8
    Android template applies the Google services Gradle plugin when that file
    exists; without it the push half fails closed (the provider declares no
-   remote delivery) and the initializer warns.
+   remote delivery) and the initializer warns. Commit it: Firebase documents
+   the file as non-secret project identifiers, and `mpgd deploy run` builds
+   from a pinned Git checkout, so an ignored file would drop push from
+   release builds. (The APNs `.p8` key and signing files, by contrast, are
+   ignored by the generated `.gitignore`.)
 2. Notification channels are created by the provider at start, from the
    catalog (`targets.android.channelId`, else `mpgd-service`,
    `mpgd-requested`, or `mpgd-advertising` by purpose). Advertising always
@@ -102,7 +106,8 @@ initializer refuses a game or shell that lists it; remove it first.
    production.
 2. **`GoogleService-Info.plist`.** Download it for the iOS app and add it to
    the `App` target in Xcode (`apps/mobile-capacitor/ios/App/App/`). The
-   initializer warns while it is missing.
+   initializer warns while it is missing. Commit it for the same reason as
+   `google-services.json`.
 3. **Capabilities.** In Xcode, add *Push Notifications* to the `App` target
    (this writes the `aps-environment` entitlement). Add *Background Modes →
    Remote notifications* only if the game handles silent data pushes; the kit

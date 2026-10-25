@@ -250,6 +250,10 @@ async function buildAndRecordTarget(
     BUILD_ID: reserved.buildId,
     MPGD_RELEASE_REVISION: String(reserved.releaseRevision),
     MPGD_RELEASE_LABEL: reserved.releaseLabel,
+    // The reserved numbers are stamped into the build's staged shell copy, so
+    // a release does not need a hand commit of versionCode/build number; the
+    // signed-artifact inspection still compares the emitted values with them.
+    MPGD_NATIVE_VERSION_STAMP: '1',
     ...(target === 'android' ? {
       MPGD_TARGET_VERSION_CODE: String(version.versionCode),
       MPGD_TARGET_VERSION_NAME: String(version.versionName),

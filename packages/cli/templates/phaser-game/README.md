@@ -507,3 +507,16 @@ credentials: Game Services reports `missing_authoritative_backend` or
 backends require both a non-production authority mode and an explicit
 `allowLocalBackend` opt-in, so they cannot manufacture successful production
 purchase, rewarded-ad, or leaderboard ledger results.
+
+### Restore Purchases
+
+The lobby (Phaser) or a corner button (lite) shows **Restore purchases** on
+targets that sell through a store and have a Game Services client. It calls
+`monetizationRecovery.restorePurchases()` (`src/platform/restorePurchases.ts`):
+the store resynchronizes (StoreKit `AppStore.sync()`; Google Play re-reads owned
+items) and every purchase is verified through the backend ledger before anything
+is granted. App Review expects this control while the catalog sells a
+non-consumable such as `REMOVE_ADS`. On the App Store and Google Play a purchase
+is bound to the signed-in player, so without an authenticated session the button
+says to sign in instead of restoring; keep it reachable from the game's own
+store or settings screen when you replace the lobby.
