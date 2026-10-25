@@ -803,3 +803,32 @@ describe('adapter-ait', () => {
     }
   });
 });
+
+it('passes optional host authority confirmation through without making it payout authority', async () => {
+  const authorityConfirmation = {
+    playerId: 'a',
+    campaignId: 'DAILY',
+    claimId: 'claim',
+    receiptKey: 'receipt',
+    confirmedAt: 10,
+    state: { status: 'granted' },
+  };
+  const gateway = createAitPlatformGateway({
+    appVersion: '1.0.0',
+    buildId: 'fixture',
+    fallbackBridge: {
+      request: async (input) => ({
+        id: input.id,
+        ok: true,
+        data: { status: 'granted', receiptKey: 'receipt', authorityConfirmation },
+      }),
+    },
+  });
+  expect(await gateway.promotions?.grantReward({ campaignId: 'DAILY', idempotencyKey: 'claim' })).toEqual(
+    {
+      status: 'granted',
+      receiptKey: 'receipt',
+      authorityConfirmation,
+    },
+  );
+});
