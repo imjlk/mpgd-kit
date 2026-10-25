@@ -78,7 +78,8 @@ export function createAccountDeletionFetchHandler(
     if (principal.status === 'rejected') {
       return withHeaders(principal.response, input.corsHeaders);
     }
-    const body = await readBody(request);
+    // A body the client cut off reads as malformed, not as a server failure.
+    const body = await readBody(request).catch(() => undefined);
     if (body === undefined) {
       return json({ error: 'BAD_REQUEST' }, 400, input.corsHeaders);
     }
@@ -97,9 +98,12 @@ export function createAccountDeletionFetchHandler(
       if (error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED') {
         return json({ error: 'UNAUTHORIZED' }, 401, input.corsHeaders);
       }
+      // The cause's name and message (store errors name tables, not players).
       console.error(
         'Account deletion failed:',
-        error instanceof Error && error.cause instanceof Error ? error.cause.name : 'unknown error',
+        describe(error instanceof Error && error.cause !== undefined ? error.cause : error)
+          .split(principal.playerId)
+          .join('[player]'),
       );
       return json({ error: 'ACCOUNT_DELETION_FAILED', retryable: true }, 500, input.corsHeaders);
     }

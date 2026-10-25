@@ -38,3 +38,6 @@ CREATE INDEX IF NOT EXISTS idx_verified_leaderboard_entries_participant
   ON verified_leaderboard_entries (participant_id);
 CREATE INDEX IF NOT EXISTS idx_notification_sends_player
   ON notification_sends (player_id);
+-- Notes are found (and their RESTRICT key checked) by the revocation they name.
+CREATE INDEX IF NOT EXISTS idx_entitlement_notes_revocation
+  ON entitlement_notes (revocation_ledger_entry_id);
