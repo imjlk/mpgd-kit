@@ -248,15 +248,6 @@ export function createPurchaseHolderEvidenceVerificationId(
 }
 
 /**
- * The idempotency key of a player's shared grant of a purchase: one per
- * player and purchase, so a player holds a purchase once even when two of
- * its requests race.
- */
-export function createPurchaseHolderIdempotencyKey(purchaseVerificationId: string): string {
-  return `mpgd-holder:${purchaseVerificationId}`;
-}
-
-/**
  * The store verification id of the purchase a grant records: the purchase's
  * own id for a shared grant (whose ledger evidence id names its slot),
  * otherwise the grant's evidence id. Finalizers (a Play acknowledge) and

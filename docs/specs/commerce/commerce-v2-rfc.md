@@ -584,10 +584,11 @@ restoring player gets its own grant of it:
   before. Ad reward claims treat it as a verifier error.
 - **Ledger.** The purchase's holders are the grant its verification id names
   and the shared grants at slots 1, 2, ... (evidence id
-  `mpgd-holder:<slot>:<verification id>`, idempotency key
-  `mpgd-holder:<verification id>` per player). A share takes the next free
-  slot, so concurrent shares collide and the limit holds; nothing is revoked
-  to make room. A store refund, chargeback, or voided purchase of any holder's
+  `mpgd-holder:<slot>:<verification id>`, under the request's key). A share
+  takes the next free slot, so concurrent shares collide and the limit holds;
+  a player that already holds the purchase gets its grant back; nothing is
+  revoked to make room. A purchase whose every holder is revoked is never
+  shared again. A store refund, chargeback, or voided purchase of any holder's
   grant revokes every holder.
 - **Limit.** At most `maxHolders` (default 5) players hold a purchase at the
   same time; reversed grants and a deleted player's retained record do not

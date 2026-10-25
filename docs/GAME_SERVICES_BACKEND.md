@@ -542,8 +542,8 @@ platform are in
   purchase's holders are its first grant (the evidence id the verifier names)
   and the shares, `listPurchaseHolders`. A share is written at the next free
   slot, evidence id `createPurchaseHolderEvidenceVerificationId(purchaseId,
-  slot)`, under the key `createPurchaseHolderIdempotencyKey(purchaseId)` (one
-  per player and purchase, so a player holds a purchase once); its payload
+  slot)`, under the request's own key (a player that already holds the
+  purchase gets its grant back instead of a second one); its payload
   names the purchase (`holderOfEvidenceVerificationId`, which finalizers such
   as the Play acknowledge are keyed by, `readPurchaseVerificationId`) and the
   first grant (`sharedFromLedgerEntryId`), and the store transaction id stays
@@ -566,7 +566,8 @@ platform are in
   other holders' grants, so the Play voided-purchase sweep and the App Store
   refund notification revoke them all; a replay finishes a fan-out an earlier
   attempt left part-way. An `admin` revocation stays on the grant it names
-  and frees that holder's place.
+  and frees that holder's place; a purchase whose every holder is revoked is
+  never shared again.
 - Deleted accounts (with account deletion, L3b): a deleted player's
   retained record (`deleted:<id>`) is never revived and does not count toward
   the limit; a new guest's share links to it and counts.

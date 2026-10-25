@@ -12,7 +12,6 @@ import {
 } from './app-store-verifier-conformance.js';
 import {
   createPurchaseHolderEvidenceVerificationId,
-  createPurchaseHolderIdempotencyKey,
   listActiveEntitlementTransactions,
   listPurchaseHolders,
   readPurchaseLedgerStatuses,
@@ -190,7 +189,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     shared?.evidenceVerificationId,
     createPurchaseHolderEvidenceVerificationId(purchaseVerificationId, 1),
   );
-  assert.equal(shared?.idempotencyKey, createPurchaseHolderIdempotencyKey(purchaseVerificationId));
+  assert.equal(shared?.idempotencyKey, 'play-token-sha256:player-b');
   assert.equal(shared?.payload.holderOfEvidenceVerificationId, purchaseVerificationId);
   assert.equal(shared?.payload.sharedFromLedgerEntryId, firstLedgerEntryId);
   assert.equal(shared?.payload.platformTransactionId, undefined);
@@ -348,9 +347,26 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     restoreRequest('player-b', { idempotencyKey: 'player-b-again' }),
   );
   assert.equal(bAgain.ledgerEntryId, toB.ledgerEntryId, 'another holder keeps its grant');
+  const toC = await backend.purchases.verifyPurchase(restoreRequest('player-c'));
+  assert.equal(toC.restoredAcrossPlayers, true, 'sharing goes on');
+  // A purchase whose every holder an operator revoked is never shared again
+  // (a refund arriving then would find no grant left to mark).
+  for (const [playerId, ledgerEntryId] of [
+    ['player-b', toB.ledgerEntryId ?? ''],
+    ['player-c', toC.ledgerEntryId ?? ''],
+  ] as const) {
+    await revokeEntitlementGrant(store, {
+      playerId,
+      revokesLedgerEntryId: ledgerEntryId,
+      idempotencyKey: `admin:${playerId}`,
+      reason: 'admin',
+      revokedAt: '2030-01-02T00:00:00.000Z',
+      payload: {},
+    });
+  }
   assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-c'))).restoredAcrossPlayers,
-    true,
+    (await backend.purchases.verifyPurchase(restoreRequest('player-z'))).reason,
+    'LEDGER_GRANT_REVERSED',
   );
 }
 
@@ -360,7 +376,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   let refundFirst: (() => Promise<void>) | undefined;
   const store: GameServicesStore = {
     recordEntitlementGrant: async (input) => {
-      if (input.idempotencyKey.startsWith('mpgd-holder:') && refundFirst !== undefined) {
+      if (input.evidenceVerificationId?.startsWith('mpgd-holder:') === true && refundFirst !== undefined) {
         const refund = refundFirst;
         refundFirst = undefined;
         await refund();
@@ -583,7 +599,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   // per store object, so only the ledger write decides the race.
   const isolate = (): GameServicesStore => ({
     recordEntitlementGrant: async (input) => {
-      if (input.idempotencyKey.startsWith('mpgd-holder:') && arrived < writers) {
+      if (input.evidenceVerificationId?.startsWith('mpgd-holder:') === true && arrived < writers) {
         arrived += 1;
         if (arrived === writers) {
           releaseWriters();

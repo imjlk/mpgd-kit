@@ -24,7 +24,6 @@ import {
 } from './commerce-evidence-registry.js';
 import {
   createPurchaseHolderEvidenceVerificationId,
-  createPurchaseHolderIdempotencyKey,
   findEntitlementRevocationsChunked,
   findPurchaseWideRevocation,
   isEntitlementGrantReversed,
@@ -1588,9 +1587,14 @@ async function shareRestoredPurchase(
           all.map((grant) => grant.ledgerEntryId),
         );
         const reversed = new Set(revocations.map((entry) => entry.revokesLedgerEntryId));
-        if (await findPurchaseWideRevocation(store, all) !== undefined) {
+        if (
+          await findPurchaseWideRevocation(store, all) !== undefined
+          || all.every((grant) => reversed.has(grant.ledgerEntryId))
+        ) {
           // Refunded, charged back, or voided: the purchase ended for every
-          // holder. An admin entry ends one holder only and frees its place.
+          // holder. An admin entry ends one holder only and frees its place,
+          // but a purchase no holder keeps is never shared again (a refund
+          // that arrives then finds no grant left to mark).
           return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
         }
         const own = all.find((grant) => grant.playerId === request.playerId);
@@ -1613,8 +1617,9 @@ async function shareRestoredPurchase(
           playerId: request.playerId,
           grantId: product.id,
           source: 'purchase',
-          // One key per player and purchase: a player holds it once.
-          idempotencyKey: createPurchaseHolderIdempotencyKey(purchaseVerificationId),
+          // The request's key, so a retry under it answers this grant; a
+          // player that already holds the purchase was answered above.
+          idempotencyKey: request.idempotencyKey,
           grantedAt: context.now(),
           grant: product.grant,
           evidenceVerificationId: holderEvidenceVerificationId,
@@ -1634,9 +1639,17 @@ async function shareRestoredPurchase(
           continue;
         }
         if (recorded.result.alreadyProcessed) {
-          // This player's share landed meanwhile (another request of it).
+          // The key held a grant already (this request's share landed from
+          // another isolate, or the key names something else).
           const keyed = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
-          if (keyed === undefined || readPurchaseVerificationId(keyed) !== purchaseVerificationId) {
+          if (
+            keyed === undefined
+            || !matchesEntitlementRetry(keyed, {
+              ...holderIdentity,
+              idempotencyKey: request.idempotencyKey,
+            })
+            || readPurchaseVerificationId(keyed) !== purchaseVerificationId
+          ) {
             return notGranted('rejected', 'IDEMPOTENCY_KEY_CONFLICT');
           }
           return { status: 'held', grant: keyed };
