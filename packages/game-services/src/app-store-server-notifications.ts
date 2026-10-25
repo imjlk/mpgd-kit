@@ -89,6 +89,7 @@ export interface HandleAppStoreServerNotificationInput {
 
 /** Default of `unmatchedRefundRetryMs`. */
 export const defaultUnmatchedRefundRetryMs = 60 * 60 * 1000;
+const maxUnmatchedRefundRetryMs = 6 * 60 * 60 * 1000;
 
 export type AppStoreServerNotificationOutcome =
   /** A grant was reversed (or already had been, for a redelivery). */
@@ -240,13 +241,21 @@ export async function handleAppStoreServerNotification(
       : transaction.transactionId,
   });
   const now = input.now ?? (() => new Date().toISOString());
+  const unmatchedRefundRetryMs = input.unmatchedRefundRetryMs ?? defaultUnmatchedRefundRetryMs;
+  if (
+    !Number.isSafeInteger(unmatchedRefundRetryMs)
+    || unmatchedRefundRetryMs < 0
+    || unmatchedRefundRetryMs > maxUnmatchedRefundRetryMs
+  ) {
+    throw new RangeError('unmatchedRefundRetryMs must be an integer from 0 to 6 hours.');
+  }
   const grant = await findPurchaseGrantByEvidenceVerificationId(input.store, grantVerificationId);
   if (grant === undefined || grant.payload.target !== 'ios') {
     if (
       grant === undefined
       && reason !== undefined
       && Date.parse(now()) - (transaction.revocationDate ?? notification.signedDate)
-        < (input.unmatchedRefundRetryMs ?? defaultUnmatchedRefundRetryMs)
+        < unmatchedRefundRetryMs
     ) {
       // A purchase in flight may have read the transaction before the
       // refund and not written its grant yet: let Apple redeliver.

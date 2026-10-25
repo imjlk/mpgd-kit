@@ -670,6 +670,30 @@ function handle(
     unmatchedRefundRetryMs: 0,
   });
   assert.equal(noWindow.status, 'ignored', 'a zero window acknowledges at once');
+  // Without a revocationDate the notification's signedDate bounds the window.
+  const { revocationDate: _none, ...unrevoked } = consumable;
+  const revokeWithoutDate = verifierOf(
+    notification({
+      notificationType: 'REVOKE',
+      notificationUUID: 'uuid-no-date',
+      signedDate: Date.parse('2026-10-24T11:59:00.000Z'),
+      transaction: { ...unrevoked, transactionId: '2000000000000998' },
+    }),
+  );
+  assert.equal((await handle(store, revokeWithoutDate)).status, 'retry');
+  await assert.rejects(
+    handleAppStoreServerNotification({
+      store,
+      verifier: neverGranted,
+      body: { signedPayload: 'signed-payload' },
+      environment: 'Production',
+      bundleId,
+      signal: new AbortController().signal,
+      unmatchedRefundRetryMs: Number.POSITIVE_INFINITY,
+    }),
+    /unmatchedRefundRetryMs/u,
+    'an unbounded window is refused',
+  );
 }
 
 console.log('App Store Server Notifications handler tests passed.');
