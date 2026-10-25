@@ -181,6 +181,52 @@ describe('Capacitor notifications provider: Android advertising rendering', () =
     expect(announced.at(-1)).toBe(true);
   });
 
+  it('announces the registration at start when the token predates the provider (an app update)', async () => {
+    for (const installed of [true, false]) {
+      const sdks = createFakeNotificationSdks({ platform: 'android', now: () => '2026-10-25T03:00:00Z' });
+      sdks.osState = 'granted';
+      // The token Firebase issued to the previous build, whose process is
+      // gone: no `tokenReceived` follows for the new one.
+      sdks.issueEndpoint({ kind: 'fcm-token', value: 'token-1' });
+      sdks.emitPush('tokenReceived', { token: 'token-1' });
+      createCapacitorNotificationProvider({
+        platform: 'android',
+        topics: [service],
+        ...(sdks.push === undefined ? {} : { push: sdks.push }),
+        app: sdks.app,
+      });
+      sdks.restart();
+      const provider = createCapacitorNotificationProvider({
+        platform: 'android',
+        topics: [advertising, service],
+        ...(sdks.push === undefined ? {} : { push: sdks.push }),
+        ...(sdks.local === undefined ? {} : { local: sdks.local }),
+        app: sdks.app,
+        timeZone: () => 'Asia/Seoul',
+        locale: () => 'ko-KR',
+        advertisingRenderer: async () => installed,
+      });
+      await settle();
+      await settle();
+      const events: NotificationEvent[] = [];
+      provider.subscribe((event) => events.push(event));
+      expect(events).toEqual([{
+        type: 'endpoint-changed',
+        registration: {
+          provider: 'fcm',
+          address: {
+            kind: 'fcm-token',
+            value: 'token-1',
+            permission: 'granted',
+            ...(installed ? { rendersAdvertising: true } : {}),
+          },
+          locale: 'ko-KR',
+          timeZone: 'Asia/Seoul',
+        },
+      }]);
+    }
+  });
+
   it('opens the declared opt-out screen from the renderer action, which the plugin reports as a tap', () => {
     const { sdks, provider } = setup({ renderer: async () => true });
     const events: NotificationEvent[] = [];

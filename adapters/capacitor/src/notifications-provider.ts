@@ -296,10 +296,11 @@ export function createCapacitorNotificationProvider(
   // Android advertising rendering: read once, before any registration
   // names it. Only an Android catalog with an advertising topic asks.
   let rendersAdvertising = false;
-  const rendererRead: Promise<void> = platform === 'android'
-      && push !== undefined
-      && input.advertisingRenderer !== undefined
-      && mappedTopics.some((topic) => topic.purpose === 'advertising')
+  const rendererAsked = platform === 'android'
+    && push !== undefined
+    && input.advertisingRenderer !== undefined
+    && mappedTopics.some((topic) => topic.purpose === 'advertising');
+  const rendererRead: Promise<void> = rendererAsked
     ? (async () => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -779,6 +780,30 @@ export function createCapacitorNotificationProvider(
   if (!unsupported) {
     ensureChannels().catch(reportSetupFailure);
     ensureActionTypes().catch(reportSetupFailure);
+  }
+  // A shell update that adds or removes the renderer changes the
+  // registration without a new token, and Firebase announces a token only
+  // when it changes. Once the read answers, the current registration is
+  // announced; the runtime sends it only when it differs from the last one
+  // it sent, so an app update reaches the backend at its first start.
+  if (rendererAsked && configurationIssue === undefined) {
+    const generation = tokenGeneration;
+    void rendererRead
+      .then(async () => {
+        await ensureChannels();
+        const token = push === undefined ? undefined : (await push.getToken()).token;
+        if (typeof token !== 'string' || token === '' || generation !== tokenGeneration) {
+          return;
+        }
+        const registration = await registrationOf(token);
+        // A `tokenReceived` meanwhile announced its own, which is newer.
+        if (generation === tokenGeneration) {
+          dispatch({ type: 'endpoint-changed', registration });
+        }
+      })
+      // No token yet, or no channel: `tokenReceived` and the foreground
+      // retry announce it later.
+      .catch(() => undefined);
   }
 
   // Local reminder operations run one at a time: each reads the pending list
