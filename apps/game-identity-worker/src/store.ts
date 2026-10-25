@@ -49,7 +49,8 @@ export interface IdentityStore {
    * (and, when given, its previous one is `expected.previousRefreshHash`),
    * makes `next.currentRefreshHash` current, sets the previous hash, its
    * time, and the new end, records the new refresh token, and writes the
-   * access token. `false` when the family changed first.
+   * access token; with `revokeOtherAccessTokens`, deletes the family's other
+   * access tokens. `false` when the family changed first.
    */
   rotate(input: {
     readonly familyId: string;
@@ -62,6 +63,7 @@ export interface IdentityStore {
       readonly expiresAt: number;
     };
     readonly access: IdentityAccessToken;
+    readonly revokeOtherAccessTokens?: boolean;
   }): Promise<boolean>;
   /** Revokes a live family and deletes its access tokens; `false` when it was already revoked. */
   revokeFamily(familyId: string, reason: IdentityRevokeReason, at: number): Promise<boolean>;
@@ -73,7 +75,8 @@ export interface IdentityStore {
   /**
    * Upkeep, bounded per call: access tokens past their end, refresh tokens
    * issued before `refreshTokensBefore` (too old to tell a replay from an
-   * unknown token), and families (with their tokens) that ended, by
+   * unknown token) unless a family still holds them as its current or
+   * previous one, and families (with their tokens) that ended, by
    * revocation or inactivity, before `familiesEndedBefore`. Players stay.
    */
   purge(input: {
@@ -114,7 +117,7 @@ export function createMemoryIdentityStore(): IdentityStore {
     async getFamily(familyId) {
       return families.get(familyId);
     },
-    async rotate({ familyId, now, expected, next, access }) {
+    async rotate({ familyId, now, expected, next, access, revokeOtherAccessTokens }) {
       const family = families.get(familyId);
       if (family === undefined || !live(family, now)
         || family.currentRefreshHash !== expected.currentRefreshHash
@@ -124,6 +127,13 @@ export function createMemoryIdentityStore(): IdentityStore {
       }
       families.set(familyId, { ...family, ...next });
       refreshTokens.set(next.currentRefreshHash, { familyId, issuedAt: now });
+      if (revokeOtherAccessTokens === true) {
+        for (const [hash, other] of accessTokens) {
+          if (other.familyId === familyId) {
+            accessTokens.delete(hash);
+          }
+        }
+      }
       accessTokens.set(access.tokenHash, access);
       return true;
     },
@@ -154,8 +164,12 @@ export function createMemoryIdentityStore(): IdentityStore {
           accessTokens.delete(hash);
         }
       }
+      const held = new Set([...families.values()].flatMap((family) =>
+        family.previousRefreshHash === undefined
+          ? [family.currentRefreshHash]
+          : [family.currentRefreshHash, family.previousRefreshHash]));
       for (const [hash, row] of refreshTokens) {
-        if (row.issuedAt < refreshTokensBefore) {
+        if (row.issuedAt < refreshTokensBefore && !held.has(hash)) {
           refreshTokens.delete(hash);
         }
       }

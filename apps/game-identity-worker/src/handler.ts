@@ -28,15 +28,16 @@ export interface GameIdentityWorkerEnv {
   readonly IDENTITY_ACCESS_TOKEN_TTL_SECONDS?: string;
   /** Days a session family lives without a refresh (default 180). */
   readonly IDENTITY_REFRESH_IDLE_DAYS?: string;
-  /** Seconds a replaced refresh token may be retried while its successor is unused (default 30; 0 off). */
+  /** Seconds a replaced refresh token may be retried while its successor is unused (default 604800, 7 days; 0 off). */
   readonly IDENTITY_REFRESH_RETRY_GRACE_SECONDS?: string;
   /** New guests per installation in a rolling day (default 5). */
   readonly IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY?: string;
   /**
    * Optional Workers Rate Limiting binding for guest issuance, keyed by the
    * client address (`CF-Connecting-IP`). Its counts are per Cloudflare
-   * location and approximate; the per-installation limit above is the
-   * durable one.
+   * location and approximate. Recommended for any deployment: the
+   * installation id is client-chosen, so the per-installation limit only
+   * stops a misbehaving client.
    */
   readonly IDENTITY_ISSUE_RATE_LIMITER?: RateLimit;
   /**
@@ -158,7 +159,8 @@ export function createIdentityFetchHandler(
   overrides: { readonly store?: IdentityStore; readonly now?: () => number } = {},
 ): (request: Request) => Promise<Response> {
   return async (request) => {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     const route = Object.entries(guestIdentityHttpRoutes).find(
       ([, routePath]) => routePath === path,
     )?.[0];
@@ -174,6 +176,14 @@ export function createIdentityFetchHandler(
     const body = await readJsonBody(request);
     if (body === undefined) {
       return json({ error: 'INVALID_REQUEST' }, 400);
+    }
+    // The memory store keeps sessions in one isolate: a deployment left on it
+    // would lose its guests at every isolate restart, so it serves local hosts only.
+    if (env.MPGD_STORE === 'memory' && overrides.store === undefined && !isLocalDevelopmentHost(url.hostname)) {
+      console.error(
+        '[identity] MPGD_STORE = "memory" serves local development hosts only; use "d1".',
+      );
+      return json({ error: 'UNAVAILABLE' }, 503);
     }
     try {
       const service = resolveIdentityService(env, overrides);
@@ -202,6 +212,16 @@ export function createIdentityFetchHandler(
       return json({ error: 'UNAVAILABLE' }, 503);
     }
   };
+}
+
+/** Loopback, `*.localhost`, and `10.0.2.2` (the Android emulator's host), as the game-services Worker reads them. */
+export function isLocalDevelopmentHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === 'localhost'
+    || host.endsWith('.localhost')
+    || host === '127.0.0.1'
+    || host === '[::1]'
+    || host === '10.0.2.2';
 }
 
 function answer(

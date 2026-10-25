@@ -52,7 +52,7 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
   })));
   assert.equal(refreshed.status, 200);
   assert.equal(refreshed.body.sessionFamilyId, issued.body.sessionFamilyId);
-  clock += 60_000;
+  clock += 8 * 24 * 60 * 60_000; // past the 7-day retry grace
   assert.deepEqual(await read(await fetch(post(guestIdentityHttpRoutes.refresh, {
     refreshToken: issued.body.refreshToken,
   }))), { status: 401, body: { error: 'GUEST_SESSION_REJECTED' } });
@@ -159,6 +159,35 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
     }
     assert.equal(JSON.stringify(errors).includes('mpgd_rt_secret'), false);
     assert.deepEqual(errors[0], ['[identity] request failed:', 'TypeError']);
+  } finally {
+    console.error = original;
+  }
+}
+
+// The memory store serves local development hosts only.
+{
+  const errors: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args);
+  };
+  try {
+    const fetch = createIdentityFetchHandler({ MPGD_STORE: 'memory' });
+    const body = { installationId: 'install-http-5' };
+    assert.deepEqual(await read(await fetch(post(guestIdentityHttpRoutes.issueGuest, body))), {
+      status: 503,
+      body: { error: 'UNAVAILABLE' },
+    });
+    assert.match(String(errors[0]?.[0]), /local development hosts only/u);
+    for (const host of ['http://localhost:8788', 'http://10.0.2.2:8788', 'http://game.localhost']) {
+      const response = await fetch(
+        new Request(`${host}${guestIdentityHttpRoutes.issueGuest}`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      );
+      assert.equal(response.status, 200);
+    }
   } finally {
     console.error = original;
   }
@@ -298,7 +327,7 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
   assert.equal(restored.sessionFamilyId, first.sessionFamilyId);
   // The first coordinator's token was rotated away by the restart: using it is a replay,
   // which ends the family for both.
-  clock += 60_000;
+  clock += 8 * 24 * 60 * 60_000; // past the 7-day retry grace
   await assert.rejects(coordinator.refresh(), { code: 'GUEST_SESSION_REJECTED' });
   await assert.rejects(restarted.refresh(), { code: 'GUEST_SESSION_REJECTED' });
   // Logout clears the dead token; the next start is a new guest.

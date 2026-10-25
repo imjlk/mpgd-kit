@@ -153,8 +153,14 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     const issued = value(await service.issueGuest({ installationId: 'install-replay-2' }));
     const second = value(await service.refresh({ refreshToken: issued.refreshToken }));
     const third = value(await service.refresh({ refreshToken: second.refreshToken }));
+    assert.equal(
+      (await service.authenticate(`Bearer ${third.accessToken}`))?.playerId,
+      issued.serverUserId,
+    );
     assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
     assert.deepEqual(await service.refresh({ refreshToken: third.refreshToken }), rejected);
+    // Every access token of the family ends with it, before its own expiry.
+    assert.equal(await service.authenticate(`Bearer ${third.accessToken}`), undefined);
     assert.deepEqual(ended, [issued.sessionFamilyId]);
   }
 
@@ -168,6 +174,12 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     const retried = value(await service.refresh({ refreshToken: issued.refreshToken }));
     assert.equal(retried.sessionFamilyId, issued.sessionFamilyId);
     assert.notEqual(retried.refreshToken, lost.refreshToken);
+    // The unused successor's access token ends with it; the retry's works.
+    assert.equal(await service.authenticate(`Bearer ${lost.accessToken}`), undefined);
+    assert.equal(
+      (await service.authenticate(`Bearer ${retried.accessToken}`))?.playerId,
+      issued.serverUserId,
+    );
     // The window counts from the first rotation: a later retry is a replay.
     advance(defaultIdentityServiceConfig.refreshRetryGraceMs / 2 + 1);
     assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
@@ -234,11 +246,12 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     assert.deepEqual(ended, [issued.sessionFamilyId]);
     assert.equal(await service.authenticate(`Bearer ${rotated.accessToken}`), undefined);
     assert.deepEqual(await service.refresh({ refreshToken: rotated.refreshToken }), rejected);
+    // A repeated logout sends the end again (a retry for a missed one); unknown tokens send nothing.
     await service.revoke({ refreshToken: rotated.refreshToken });
     await service.revoke({ refreshToken: 'mpgd_rt_' + 'A'.repeat(43) });
     await service.revoke({ refreshToken: 'nope' });
     await service.revoke({ refreshToken: undefined });
-    assert.deepEqual(ended, [issued.sessionFamilyId]);
+    assert.deepEqual(ended, [issued.sessionFamilyId, issued.sessionFamilyId]);
     for (const refreshToken of ['nope', undefined, 'mpgd_rt_' + 'A'.repeat(43)]) {
       assert.deepEqual(await service.refresh({ refreshToken }), rejected);
     }
@@ -329,6 +342,29 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     );
   }
 
+  // A shorter inactivity window later never purges a token a live family still holds.
+  {
+    const store = await createStore();
+    let clock = start;
+    const longWindow = createGuestIdentityService({
+      store,
+      now: () => clock,
+      log: () => undefined,
+    });
+    const issued = value(await longWindow.issueGuest({ installationId: 'install-purge-3' }));
+    const rotated = value(await longWindow.refresh({ refreshToken: issued.refreshToken }));
+    clock += 100 * day;
+    const shortWindow = createGuestIdentityService({
+      store,
+      now: () => clock,
+      config: { refreshIdleMs: 30 * day, refreshRetryGraceMs: day },
+      log: () => undefined,
+    });
+    await shortWindow.purge();
+    // The family (issued under 180 days) is still live; its current token survived the purge.
+    value(await shortWindow.refresh({ refreshToken: rotated.refreshToken }));
+  }
+
   // Configuration that cannot work is refused.
   assert.throws(
     () =>
@@ -339,7 +375,7 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     () =>
       createGuestIdentityService({
         store: {} as IdentityStore,
-        config: { refreshRetryGraceMs: 15 * minute },
+        config: { refreshRetryGraceMs: 200 * day },
       }),
     /Identity config/u,
   );

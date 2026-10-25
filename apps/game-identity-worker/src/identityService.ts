@@ -30,8 +30,13 @@ export interface IdentityServiceConfig {
   /**
    * How long after a rotation the replaced refresh token may be presented
    * again without counting as a replay, while its successor has not been
-   * used: a client whose network dropped the rotation's answer retries the
-   * old token. Default 30 seconds; 0 turns it off.
+   * used. A client whose network dropped the rotation's answer, or that the
+   * OS suspended mid-request, keeps the old token and presents it at its
+   * next refresh, which may be the next launch; strict replay detection
+   * would then end the guest for good. Default 7 days; 0 turns it off
+   * (strict RFC 9700 rotation). The cost: a stolen copy of the replaced
+   * token stays usable until the device's next refresh, which then reads as
+   * a replay and ends the family.
    */
   readonly refreshRetryGraceMs: number;
   /** New guests per installation in a rolling day. Default 5. */
@@ -41,7 +46,7 @@ export interface IdentityServiceConfig {
 export const defaultIdentityServiceConfig: IdentityServiceConfig = Object.freeze({
   accessTokenTtlMs: 15 * 60 * 1000,
   refreshIdleMs: 180 * 24 * 60 * 60 * 1000,
-  refreshRetryGraceMs: 30 * 1000,
+  refreshRetryGraceMs: 7 * 24 * 60 * 60 * 1000,
   maxGuestsPerInstallationPerDay: 5,
 });
 
@@ -138,9 +143,14 @@ export function createGuestIdentityService(input: {
     };
   }
 
+  /**
+   * Revokes the family and ends its notification session. The end is sent
+   * again when a logout finds the family already revoked, so a logout the
+   * client retries also retries an end the game-services Worker missed.
+   */
   async function revoke(family: IdentitySessionFamily, reason: 'logout' | 'refresh-token-reuse', at: number) {
-    const revoked = await store.revokeFamily(family.familyId, reason, at);
-    if (!revoked || input.endNotificationSession === undefined) {
+    await store.revokeFamily(family.familyId, reason, at);
+    if (input.endNotificationSession === undefined) {
       return;
     }
     try {
@@ -230,6 +240,8 @@ export function createGuestIdentityService(input: {
                 expiresAt: at + config.refreshIdleMs,
               },
           access,
+          // The unused successor's access token goes with it.
+          revokeOtherAccessTokens: !isCurrent,
         });
         if (rotated) {
           return { ok: true, value: credentials(family, token, nextRefreshToken, access) };
@@ -303,10 +315,10 @@ function resolveConfig(overrides: Partial<IdentityServiceConfig> | undefined): I
     || !positive(config.maxGuestsPerInstallationPerDay)
     || !(Number.isSafeInteger(config.refreshRetryGraceMs) && config.refreshRetryGraceMs >= 0)
     || config.accessTokenTtlMs >= config.refreshIdleMs
-    || config.refreshRetryGraceMs >= config.accessTokenTtlMs) {
+    || config.refreshRetryGraceMs >= config.refreshIdleMs) {
     throw new Error(
       'Identity config: lifetimes must be positive whole milliseconds, the access token shorter than '
-        + 'the inactivity window, and the retry grace shorter than the access token.',
+        + 'the inactivity window, and the retry grace shorter than the inactivity window.',
     );
   }
   return config;

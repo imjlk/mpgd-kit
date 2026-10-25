@@ -13,7 +13,10 @@ MPGD_STORE = "memory"
 # refresh rotates the refresh token and extends the family by the idle window.
 # IDENTITY_ACCESS_TOKEN_TTL_SECONDS = "900"
 # IDENTITY_REFRESH_IDLE_DAYS = "180"
-# IDENTITY_REFRESH_RETRY_GRACE_SECONDS = "30"
+# A replaced refresh token may be retried while its successor is unused (a
+# lost answer, an app suspended mid-request), up to this long; 0 is strict
+# RFC 9700 rotation.
+# IDENTITY_REFRESH_RETRY_GRACE_SECONDS = "604800"
 # IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY = "5"
 
 [observability]
@@ -28,9 +31,10 @@ head_sampling_rate = 1
 # database_name = "game-identity"
 # database_id = "<replace-with-wrangler-d1-create-output>"
 
-# Optional per-address limit on new guests (Workers Rate Limiting; Wrangler
-# 4.36+). Counts are per Cloudflare location and approximate; the D1
-# per-installation limit above is the durable one. namespace_id must be a
+# Per-address limit on new guests (Workers Rate Limiting; Wrangler 4.36+).
+# Recommended for any deployment: the installation id is client-chosen, so the
+# D1 per-installation limit only stops a misbehaving client, not an abuser.
+# Counts are per Cloudflare location and approximate. namespace_id must be a
 # positive integer unique in the account.
 #
 # [[ratelimits]]

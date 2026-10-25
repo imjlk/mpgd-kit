@@ -75,7 +75,8 @@ export function createD1IdentityStore(db: D1Database): IdentityStore {
       return row === null ? undefined : toFamily(row);
     },
 
-    async rotate({ familyId, now, expected, next, access }) {
+    async rotate({ familyId, now, expected, next, access, revokeOtherAccessTokens }) {
+      const swapped = 'EXISTS (SELECT 1 FROM identity_session_families WHERE family_id = ?1 AND current_refresh_hash = ?2)';
       const [swap] = await db.batch([
         db.prepare(
           'UPDATE identity_session_families SET current_refresh_hash = ?1, previous_refresh_hash = ?2, '
@@ -102,6 +103,13 @@ export function createD1IdentityStore(db: D1Database): IdentityStore {
             + 'SELECT ?1, family_id, player_id, ?2 FROM identity_session_families '
             + 'WHERE family_id = ?3 AND current_refresh_hash = ?4',
         ).bind(access.tokenHash, access.expiresAt, familyId, next.currentRefreshHash),
+        ...(revokeOtherAccessTokens === true
+          ? [
+              db.prepare(
+                `DELETE FROM identity_access_tokens WHERE family_id = ?1 AND token_hash != ?3 AND ${swapped}`,
+              ).bind(familyId, next.currentRefreshHash, access.tokenHash),
+            ]
+          : []),
       ]);
       return swap?.meta.changes === 1;
     },
@@ -145,9 +153,11 @@ export function createD1IdentityStore(db: D1Database): IdentityStore {
     },
 
     async purge({ now, refreshTokensBefore, familiesEndedBefore }) {
+      // Two indexed scans: revoked families, and live ones whose inactivity window passed.
       const ended = await db.prepare(
-        'SELECT family_id FROM identity_session_families '
-          + 'WHERE COALESCE(revoked_at_ms, expires_at_ms) < ?1 LIMIT ?2',
+        'SELECT family_id FROM (SELECT family_id FROM identity_session_families WHERE revoked_at_ms < ?1 LIMIT ?2) '
+          + 'UNION SELECT family_id FROM (SELECT family_id FROM identity_session_families '
+          + 'WHERE revoked_at_ms IS NULL AND expires_at_ms < ?1 LIMIT ?2)',
       ).bind(familiesEndedBefore, d1IdentityPurgeBatch).all<{ family_id: string }>();
       const endedIds = JSON.stringify(ended.results.map((row) => row.family_id));
       await db.batch([
@@ -155,9 +165,13 @@ export function createD1IdentityStore(db: D1Database): IdentityStore {
           'DELETE FROM identity_access_tokens WHERE rowid IN '
             + '(SELECT rowid FROM identity_access_tokens WHERE expires_at_ms <= ?1 LIMIT ?2)',
         ).bind(now, d1IdentityPurgeBatch),
+        // Never a token a family still holds as its current or previous one:
+        // a family issued under a longer inactivity window outlives the cutoff.
         db.prepare(
           'DELETE FROM identity_refresh_tokens WHERE rowid IN '
-            + '(SELECT rowid FROM identity_refresh_tokens WHERE issued_at_ms < ?1 LIMIT ?2)',
+            + '(SELECT t.rowid FROM identity_refresh_tokens t WHERE t.issued_at_ms < ?1 '
+            + 'AND NOT EXISTS (SELECT 1 FROM identity_session_families f WHERE f.family_id = t.family_id '
+            + 'AND (f.current_refresh_hash = t.token_hash OR f.previous_refresh_hash = t.token_hash)) LIMIT ?2)',
         ).bind(refreshTokensBefore, d1IdentityPurgeBatch),
         db.prepare('DELETE FROM identity_refresh_tokens WHERE family_id IN (SELECT value FROM json_each(?1))')
           .bind(endedIds),
