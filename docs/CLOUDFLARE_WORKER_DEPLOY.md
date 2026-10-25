@@ -200,7 +200,7 @@ pnpm --dir apps/game-identity-worker exec wrangler d1 create game-identity
 # In apps/game-identity-worker/wrangler.toml: uncomment [[d1_databases]] and put
 # the database_id there (keep binding = "DB"), set MPGD_STORE = "d1", uncomment
 # [[ratelimits]] (Wrangler 4.36+; a namespace_id unique in the account; period
-# 10 or 60), and uncomment [triggers] for the daily purge.
+# 10 or 60), and uncomment [triggers] for the hourly purge.
 pnpm --dir apps/game-identity-worker exec wrangler d1 migrations apply game-identity --remote
 pnpm --dir apps/game-identity-worker run deploy
 ```
@@ -209,9 +209,11 @@ pnpm --dir apps/game-identity-worker run deploy
 `*.localhost`, `10.0.2.2`): sessions would vanish with each isolate. A native
 shell build only reaches `https:` origins (its content security policy is
 `connect-src 'self' https: wss:`), so point a device or emulator at the Worker
-through an https tunnel, not `http://10.0.2.2`. The daily
-cron purges ended families (after 7 days) and expired tokens; without it they
-accumulate.
+through an https tunnel, not `http://10.0.2.2`. The hourly
+cron purges ended families (after 7 days) and expired tokens in bounded
+500-row statements, up to 50 rounds a run (a backlog continues on the next
+run); without it they accumulate. A guest's issuance limit is checked in the
+same D1 transaction as its writes, so concurrent requests cannot exceed it.
 
 **Bind the game-services Worker to it.** The entrypoint names are the ones
 its `wrangler.toml` examples use:

@@ -185,7 +185,7 @@ production` prints what it lacks and fails on contradictions
       to the server player, and the native shell's local player binds
       nothing. Deploy the reference guest identity Worker
       (`apps/game-identity-worker`: D1, the `IDENTITY_ISSUE_RATE_LIMITER`
-      binding, and the daily purge cron, all commented in its
+      binding, and the hourly purge cron, all commented in its
       `wrangler.toml`), bind
       the game-services Worker's `GAME_SERVICES_INGRESS_AUTH`,
       `GAME_SERVICES_NOTIFICATIONS_AUTH` and

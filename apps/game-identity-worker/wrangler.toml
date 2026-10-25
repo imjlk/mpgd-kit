@@ -53,6 +53,7 @@ head_sampling_rate = 1
 # binding = "GAME_SERVICES"
 # service = "mpgd-game-services"
 
-# Purge ended families and expired tokens daily.
+# Purge ended families and expired tokens hourly (bounded batches per run;
+# a backlog continues on the next run).
 # [triggers]
-# crons = ["17 3 * * *"]
+# crons = ["17 * * * *"]

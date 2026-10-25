@@ -101,6 +101,9 @@ export function isInstallationId(value: unknown): value is string {
 
 const playerIdPattern = /^p_[0-9a-f]{32}$/u;
 
+/** Store purge rounds per `purge()` call: 50 rounds of 500-row statements per run. */
+export const purgeMaxRounds = 50;
+
 /** How long an ended family's rows are kept for support before the purge removes them. */
 const endedFamilyRetentionMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -178,11 +181,6 @@ export function createGuestIdentityService(input: {
         return { ok: false, error: 'INVALID_REQUEST' };
       }
       const at = now();
-      // A rolling day: a guest issued exactly 24 hours ago no longer counts.
-      const issued = await store.countFamiliesIssuedSince(installationId, at - 24 * 60 * 60 * 1000 + 1);
-      if (issued >= config.maxGuestsPerInstallationPerDay) {
-        return { ok: false, error: 'RATE_LIMITED' };
-      }
       const refreshToken = createOpaqueToken(refreshTokenPrefix);
       const family: IdentitySessionFamily = {
         familyId: createIdentifier('s_'),
@@ -193,7 +191,16 @@ export function createGuestIdentityService(input: {
         currentRefreshHash: await hashToken(refreshToken),
       };
       const { token, access } = await issueAccess(family, at);
-      await store.createGuest({ playerId: family.playerId, family, access });
+      const created = await store.createGuest({
+        playerId: family.playerId,
+        family,
+        access,
+        // A rolling day: a guest issued exactly 24 hours ago no longer counts.
+        limit: { since: at - 24 * 60 * 60 * 1000 + 1, max: config.maxGuestsPerInstallationPerDay },
+      });
+      if (!created) {
+        return { ok: false, error: 'RATE_LIMITED' };
+      }
       return { ok: true, value: credentials(family, token, refreshToken, access) };
     },
 
@@ -306,12 +313,19 @@ export function createGuestIdentityService(input: {
 
     async purge() {
       const at = now();
-      await store.purge({
-        now: at,
-        // A day past the inactivity window: no live family's current or previous token is that old.
-        refreshTokensBefore: at - config.refreshIdleMs - 24 * 60 * 60 * 1000,
-        familiesEndedBefore: at - endedFamilyRetentionMs,
-      });
+      // Bounded statements, repeated until the backlog is gone or the round cap
+      // (purgeMaxRounds per run, so one cron invocation stays short); the next run continues.
+      for (let round = 0; round < purgeMaxRounds; round += 1) {
+        const { more } = await store.purge({
+          now: at,
+          // A day past the inactivity window: no live family's current or previous token is that old.
+          refreshTokensBefore: at - config.refreshIdleMs - 24 * 60 * 60 * 1000,
+          familiesEndedBefore: at - endedFamilyRetentionMs,
+        });
+        if (!more) {
+          return;
+        }
+      }
     },
   };
 }

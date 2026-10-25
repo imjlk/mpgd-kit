@@ -32,14 +32,19 @@ export interface IdentityAccessToken {
 }
 
 export interface IdentityStore {
-  /** Families issued for `installationId` at or after `since`. */
-  countFamiliesIssuedSince(installationId: string, since: number): Promise<number>;
-  /** Writes a new player and its first family, refresh token, and access token, all or nothing. */
+  /**
+   * Writes a new player and its first family, refresh token, and access
+   * token, all or nothing, unless the installation already has `limit.max`
+   * families issued at or after `limit.since`: then nothing and `false`. The
+   * count and the writes are one atomic step, so concurrent requests cannot
+   * all pass the limit.
+   */
   createGuest(input: {
     readonly playerId: string;
     readonly family: IdentitySessionFamily;
     readonly access: IdentityAccessToken;
-  }): Promise<void>;
+    readonly limit: { readonly since: number; readonly max: number };
+  }): Promise<boolean>;
   /** The family a refresh token was ever issued in, or `undefined`. */
   findRefreshToken(tokenHash: string): Promise<{ readonly familyId: string } | undefined>;
   getFamily(familyId: string): Promise<IdentitySessionFamily | undefined>;
@@ -78,12 +83,13 @@ export interface IdentityStore {
    * unknown token) unless a family still holds them as its current or
    * previous one, and families (with their tokens) that ended, by
    * revocation or inactivity, before `familiesEndedBefore`. Players stay.
+   * `more` when a bounded statement hit its limit, so another call has work.
    */
   purge(input: {
     readonly now: number;
     readonly refreshTokensBefore: number;
     readonly familiesEndedBefore: number;
-  }): Promise<void>;
+  }): Promise<{ readonly more: boolean }>;
 }
 
 /** An in-memory store for tests and local development (`MPGD_STORE = "memory"`). */
@@ -95,12 +101,14 @@ export function createMemoryIdentityStore(): IdentityStore {
   const live = (family: IdentitySessionFamily, now: number) =>
     family.revokedAt === undefined && family.expiresAt > now;
   return {
-    async countFamiliesIssuedSince(installationId, since) {
-      return [...families.values()]
-        .filter((family) => family.installationId === installationId && family.createdAt >= since)
+    async createGuest({ playerId, family, access, limit }) {
+      // No await before the writes: one synchronous step, as atomic as D1's batch.
+      const issued = [...families.values()]
+        .filter((other) => other.installationId === family.installationId && other.createdAt >= limit.since)
         .length;
-    },
-    async createGuest({ playerId, family, access }) {
+      if (issued >= limit.max) {
+        return false;
+      }
       if (players.has(playerId) || families.has(family.familyId)
         || refreshTokens.has(family.currentRefreshHash) || accessTokens.has(access.tokenHash)) {
         throw new Error('Identity row already exists.');
@@ -109,6 +117,7 @@ export function createMemoryIdentityStore(): IdentityStore {
       families.set(family.familyId, family);
       refreshTokens.set(family.currentRefreshHash, { familyId: family.familyId, issuedAt: family.createdAt });
       accessTokens.set(access.tokenHash, access);
+      return true;
     },
     async findRefreshToken(tokenHash) {
       const row = refreshTokens.get(tokenHash);
@@ -189,6 +198,7 @@ export function createMemoryIdentityStore(): IdentityStore {
           }
         }
       }
+      return { more: false };
     },
   };
 }

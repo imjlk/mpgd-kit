@@ -290,6 +290,15 @@ export async function runGuestIdentityConformance(createStore: () => Promise<Ide
     value(await service.issueGuest({ installationId: 'install-limit-2' }));
     advance(day);
     value(await service.issueGuest({ installationId: 'install-limit-1' }));
+    // Concurrent requests cannot all pass the limit: it is checked in the same step as the write.
+    const burst = await Promise.all(
+      Array.from({ length: 8 }, () => service.issueGuest({ installationId: 'install-limit-3' })),
+    );
+    assert.equal(
+      burst.filter((answer) => answer.ok).length,
+      defaultIdentityServiceConfig.maxGuestsPerInstallationPerDay,
+    );
+    assert.equal(burst.filter((answer) => !answer.ok && answer.error === 'RATE_LIMITED').length, 3);
   }
 
   // Account binding is the seam for later, not a provider login.
