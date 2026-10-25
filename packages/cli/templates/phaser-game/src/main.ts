@@ -18,6 +18,8 @@ import { createClientId } from './runtime/id';
 import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
 import { createStarterGameServices, type StarterMonetizationPorts } from './platform/gameServices';
+import { startStarterGuestIdentity } from './platform/guestIdentity';
+import { setStarterServerSession } from './platform/serverSession';
 import { installPlatform } from './platform/installPlatform';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
@@ -58,10 +60,22 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
         playerId: 'local-player',
         displayName: 'Local Player',
       };
-    const [identitySession, launchIntent] = await Promise.all([
+    // The server-issued guest (VITE_MPGD_IDENTITY_URL), before the game services read the session.
+    const guestIdentity = await startStarterGuestIdentity({
+      identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL,
+      credentials: platform.secureCredentials,
+    });
+    if (guestIdentity.status === 'signed-in') {
+      setStarterServerSession(guestIdentity.serverSession);
+    }
+    const [platformSession, launchIntent] = await Promise.all([
       resolveIdentitySession(platform, player.playerId),
       resolveLaunchIntent(platform),
     ]);
+    // Signed in, the server player replaces the platform's (on the native shell a local placeholder).
+    const identitySession: IdentitySession = guestIdentity.status === 'signed-in'
+      ? { identityLevel: 'guest', playerId: guestIdentity.playerId, trustLevel: 'server-verified' }
+      : platformSession;
     locale = resolveTargetMpgdLocale({
       capabilities: runtime.capabilities,
       ...(platform.gameSettings?.getLocale === undefined ? {} : { preferredLocales: [platform.gameSettings.getLocale()] }),

@@ -8,23 +8,44 @@ import type { StorePurchaseAccountBinding } from '@mpgd/platform/commerce';
  * (`resolveObfuscatedAccountId` of the Play verifier,
  * `resolveAppAccountToken` of the App Store verifier), which is how the
  * backend ties a store purchase to the player before it grants. This module
- * derives both from a SHA-256 digest of the authenticated player id; a game
- * with its own account scheme replaces these two functions and the backend
+ * derives both from a SHA-256 digest of the server player id (the reference
+ * identity Worker, apps/game-identity-worker, derives the same); a game with
+ * its own account scheme replaces these two functions and the backend
  * resolvers together. Nothing here grants anything.
  */
 export const starterAccountBindingDigestPrefix = 'mpgd-commerce-account:';
 
+/** The game's server player source; see `setStarterCommerceServerPlayer`. */
+let serverPlayer: (() => string | undefined) | undefined;
+
 /**
- * The authenticated player id a purchase is bound to. Only an
- * `authenticated` session whose trust is not `local` binds: a guest, a
- * platform-anonymous session (the native shell's default
- * `android-local-player` / `ios-local-player`), or a locally asserted id
- * would give every install the same binding, and the backend binds the
- * purchase to its own authenticated player id anyway.
+ * Binds store purchases to the player of the game's server session (the
+ * identity service's player, a server-issued guest included) instead of the
+ * platform session. A generated game's `guestIdentity.ts` sets it when
+ * `VITE_MPGD_IDENTITY_URL` is configured; `undefined` restores the platform
+ * session. While it is set, no server player (not signed in yet, or the
+ * sign-in failed) binds nothing: the platform's local player never stands in.
+ */
+export function setStarterCommerceServerPlayer(source: (() => string | undefined) | undefined): void {
+  serverPlayer = source;
+}
+
+/**
+ * The player id a purchase is bound to: the server session's player when
+ * the game set one (`setStarterCommerceServerPlayer`), else an
+ * `authenticated` platform session whose trust is not `local`. A
+ * platform-anonymous session (the native shell's `android-local-player` /
+ * `ios-local-player`) or a locally asserted id would give every install the
+ * same binding, so it binds nothing; the backend binds the purchase to the
+ * player its ingress authentication resolved anyway.
  */
 export async function resolveStarterCommercePlayerId(
   gateway: Pick<PlatformGateway, 'identity'>,
 ): Promise<string | undefined> {
+  if (serverPlayer !== undefined) {
+    const playerId = serverPlayer()?.trim();
+    return playerId === undefined || playerId.length === 0 ? undefined : playerId;
+  }
   let session: IdentitySession | undefined;
   try {
     session = await gateway.identity.getSession?.();
@@ -38,7 +59,11 @@ export async function resolveStarterCommercePlayerId(
   return playerId === undefined || playerId.length === 0 ? undefined : playerId;
 }
 
-/** Google Play `obfuscatedAccountId`: 64 hex characters, within Play's 64-character limit. */
+/**
+ * Google Play `obfuscatedAccountId`: 64 hex characters, within Play's
+ * 64-character limit. `undefined` without a player, which the Play
+ * provider refuses with `ACCOUNT_BINDING_REQUIRED`.
+ */
 export async function resolvePlayBillingAccountBinding(
   gateway: Pick<PlatformGateway, 'identity'>,
 ): Promise<StorePurchaseAccountBinding | undefined> {
@@ -55,7 +80,11 @@ export async function resolveStoreKitAppAccountToken(
 ): Promise<string> {
   const playerId = await resolveStarterCommercePlayerId(gateway);
   if (playerId === undefined) {
-    throw new Error('A StoreKit purchase requires an authenticated player session.');
+    throw new Error(
+      'A StoreKit purchase is bound to the player of a server session, and there is none: '
+        + 'set VITE_MPGD_IDENTITY_URL to the guest identity Worker (src/platform/guestIdentity.ts) '
+        + "and let it sign in. The native shell's local player cannot bind a purchase.",
+    );
   }
   return toUuid(await digestPlayerId(playerId));
 }

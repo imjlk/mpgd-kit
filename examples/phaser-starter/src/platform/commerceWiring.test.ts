@@ -12,6 +12,7 @@ import {
   resolvePlayBillingAccountBinding,
   resolveStarterCommercePlayerId,
   resolveStoreKitAppAccountToken,
+  setStarterCommerceServerPlayer,
 } from './commerceAccountBinding';
 import {
   purchaseKindOf,
@@ -82,7 +83,7 @@ for (const nativeDefault of [
   );
   await assert.rejects(
     resolveStoreKitAppAccountToken(gatewayFor('ios-local-player', false, nativeDefault)),
-    /requires an authenticated player session/u,
+    /server session/u,
   );
 }
 assert.equal(
@@ -110,10 +111,32 @@ assert.equal(
   (Number.parseInt(digestHex[16] ?? '', 16) & 0x3) | 0x8,
 );
 assert.equal(tokenHex.slice(17), digestHex.slice(17));
-await assert.rejects(
-  resolveStoreKitAppAccountToken(gatewayFor(undefined)),
-  /requires an authenticated player session/u,
+await assert.rejects(resolveStoreKitAppAccountToken(gatewayFor(undefined)), /server session/u);
+
+// A game's server session (guestIdentity.ts in a generated game) replaces the platform session.
+setStarterCommerceServerPlayer(() => 'p_server-player');
+assert.equal(
+  await resolveStarterCommercePlayerId(gatewayFor('ios-local-player', false, { identityLevel: 'guest', trustLevel: 'local' })),
+  'p_server-player',
 );
+assert.deepEqual(
+  await resolvePlayBillingAccountBinding(gatewayFor('ios-local-player')),
+  await (async () => {
+    setStarterCommerceServerPlayer(undefined);
+    const expected = await resolvePlayBillingAccountBinding(gatewayFor('p_server-player'));
+    setStarterCommerceServerPlayer(() => 'p_server-player');
+    return expected;
+  })(),
+);
+// Signed out of the server session, nothing binds, not even an authenticated platform player.
+setStarterCommerceServerPlayer(() => undefined);
+assert.equal(await resolveStarterCommercePlayerId(gatewayFor('player-1')), undefined);
+await assert.rejects(
+  resolveStoreKitAppAccountToken(gatewayFor('player-1')),
+  /VITE_MPGD_IDENTITY_URL/u,
+);
+setStarterCommerceServerPlayer(undefined);
+assert.equal(await resolveStarterCommercePlayerId(gatewayFor('player-1')), 'player-1');
 
 // The durable journal over platform storage.
 function createMemoryStorage() {

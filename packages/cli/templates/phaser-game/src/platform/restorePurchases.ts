@@ -6,9 +6,10 @@ import { t } from '../i18n/messages';
 import { resolveStarterCommercePlayerId } from './commerceAccountBinding';
 
 /**
- * Stores whose purchases are bound to the signed-in player (StoreKit
- * `appAccountToken`, Google Play `obfuscatedAccountId`): restoring needs an
- * authenticated, non-local session so the backend can match the purchases.
+ * Stores whose purchases are bound to the player (StoreKit
+ * `appAccountToken`, Google Play `obfuscatedAccountId`): restoring needs the
+ * server session's player (`guestIdentity.ts`), or an authenticated,
+ * non-local platform session, so the backend can match the purchases.
  */
 const accountBoundStores: ReadonlySet<string> = new Set(['app-store', 'google-play']);
 

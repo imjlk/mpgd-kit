@@ -508,6 +508,37 @@ backends require both a non-production authority mode and an explicit
 `allowLocalBackend` opt-in, so they cannot manufacture successful production
 purchase, rewarded-ad, or leaderboard ledger results.
 
+### Guest identity
+
+Store purchases on Android and iOS are bound to the player of a server
+session: Google Play's `obfuscatedAccountId` and StoreKit's `appAccountToken`
+are derived from that player's id (`src/platform/commerceAccountBinding.ts`),
+and the backend checks them before it grants. The native shell's local player
+(`android-local-player` / `ios-local-player`) is the same on every install, so
+it binds nothing: Play refuses with `ACCOUNT_BINDING_REQUIRED` and StoreKit
+throws an error naming the missing session.
+
+Point the game at the kit's reference guest identity Worker
+(`apps/game-identity-worker` in mpgd-kit, deployed per
+`docs/CLOUDFLARE_WORKER_DEPLOY.md`):
+
+```sh
+VITE_MPGD_IDENTITY_URL=https://identity.example.com
+```
+
+`src/platform/guestIdentity.ts` then signs the player in during bootstrap: a
+server-issued guest on the first launch, kept with a rotating refresh token in
+the device's Keychain or Keystore, and the same guest on later launches. The
+server player becomes the game services' `playerId` and the purchases'
+binding, and `setStarterServerSession` sends its access token to the
+game-services Worker, which resolves it through the identity Worker's
+bindings. A session the identity service ended (logout, a replayed refresh
+token, or 180 days without play) is replaced by a new guest; without a linked
+account that player's purchases stay with the old one. Offline at launch,
+the game runs without a server session and purchases are refused until the
+next launch signs in. Account linking (Sign in with Apple or Google) is not
+part of the reference Worker yet.
+
 ### Restore Purchases
 
 The lobby (Phaser) or a corner button (lite) shows **Restore purchases** on
@@ -517,6 +548,6 @@ the store resynchronizes (StoreKit `AppStore.sync()`; Google Play re-reads owned
 items) and every purchase is verified through the backend ledger before anything
 is granted. App Review expects this control while the catalog sells a
 non-consumable such as `REMOVE_ADS`. On the App Store and Google Play a purchase
-is bound to the signed-in player, so without an authenticated session the button
-says to sign in instead of restoring; keep it reachable from the game's own
+is bound to the server player, so without a server session (see Guest identity)
+the button says to connect to the game server instead of restoring; keep it reachable from the game's own
 store or settings screen when you replace the lobby.

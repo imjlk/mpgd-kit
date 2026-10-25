@@ -67,7 +67,10 @@ the snapshot bounds for persistent controls.
 ## Server session
 
 Verify the game sets its real server-backed session with `setStarterServerSession`
-before `bootstrap()` (a guest backend through `createGuestServerSession`) and does
+before the game services are created (the starter's `guestIdentity.ts` does it
+with `VITE_MPGD_IDENTITY_URL`, a guest backend through `createGuestServerSession`),
+that a store purchase on Android and iOS carries the server player's binding
+(not `android-local-player` / `ios-local-player`), and that the game does
 not rely on the development fallback, which only a game created with
 `--providers notifications` reads. `VITE_MPGD_DEV_NOTIFICATION_SESSION` is local-only evidence:
 a `pnpm build` never signs in with it (its `mpgd-dev` header needs the Vite dev

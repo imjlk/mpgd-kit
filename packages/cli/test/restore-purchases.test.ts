@@ -271,7 +271,7 @@ assert.equal(
 );
 assert.equal(
   restoreOutcomeText('ko', { outcome: 'needs-session' }),
-  '구매를 복원하려면 로그인하세요',
+  '구매를 복원하려면 게임 서버에 연결해야 해요',
 );
 assert.match(restoreOutcomeText('en', { outcome: 'incomplete', granted: 0 }), /not confirmed yet/u);
 assert.equal(

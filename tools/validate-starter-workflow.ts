@@ -343,6 +343,7 @@ validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validatePhaserTemplateSafeAreaContract();
 validateTemplateServerSessionAgentGuidance();
+validateTemplateGuestIdentityWiring();
 validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
@@ -3156,6 +3157,58 @@ function readJson(path: string): unknown {
     );
 
     return null;
+  }
+}
+
+/**
+ * Guest identity (L3a): the generated game signs in to the guest identity
+ * Worker before its game services read the server session, binds store
+ * purchases to that server player, and its agent notes name the variable.
+ */
+function validateTemplateGuestIdentityWiring(): void {
+  const root = 'packages/cli/templates/phaser-game';
+  const expectations = [
+    [
+      `${root}/src/platform/guestIdentity.ts`,
+      [
+        'createGuestSessionHttpBackend({ baseUrl: identityUrl })',
+        'setStarterCommerceServerPlayer(() => serverSession.current()?.playerId)',
+        "error.code !== 'GUEST_SESSION_REJECTED'",
+      ],
+    ],
+    [
+      `${root}/src/main.ts`,
+      [
+        'identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL',
+        'credentials: platform.secureCredentials',
+        'setStarterServerSession(guestIdentity.serverSession)',
+      ],
+    ],
+    [`${root}/src/env.d.ts`, ['readonly VITE_MPGD_IDENTITY_URL?: string;']],
+    [`${root}/agent/brief.md`, ['VITE_MPGD_IDENTITY_URL', 'guestIdentity.ts']],
+    [
+      'packages/cli/templates/lite-overlay/agent/brief.md',
+      ['VITE_MPGD_IDENTITY_URL', 'guestIdentity.ts'],
+    ],
+  ] as const;
+  for (const [path, requiredTexts] of expectations) {
+    if (!existsSync(path)) {
+      failures.push(`${path}: required for guest identity wiring.`);
+      continue;
+    }
+    const content = readText(path);
+    for (const requiredText of requiredTexts) {
+      assertIncludesText(content, requiredText, `${path}: guest identity wiring.`);
+    }
+  }
+  // main.ts must start the identity before the game services read the session once.
+  const main = existsSync(`${root}/src/main.ts`) ? readText(`${root}/src/main.ts`) : '';
+  const signIn = main.indexOf('startStarterGuestIdentity(');
+  const services = main.indexOf('createStarterGameServices({');
+  if (signIn < 0 || services < 0 || signIn > services) {
+    failures.push(
+      `${root}/src/main.ts: startStarterGuestIdentity must run before createStarterGameServices.`,
+    );
   }
 }
 

@@ -11,7 +11,7 @@ Preserve the generated JSON and Markdown in `artifacts/acceptance` or the target
 - Verify renderer teardown removes its own listeners and never updates a replacement view from an old promise.
 - Purchases and rewarded-ad callbacks never grant locally; verify authoritative ledger grants and durable reconciliation before release.
 - Keep unknown native outcomes and late recovery observers; closing one lease must not release another owner's presentation or audio.
-- Verify the game sets its real server session with `setStarterServerSession` and does not rely on the development fallback (read only with `--providers notifications`): `VITE_MPGD_DEV_NOTIFICATION_SESSION` is local-only (its `mpgd-dev` header needs the Vite dev server, so a `pnpm build` never signs in with it), and deployed acceptance uses the identity service's sessions.
+- Verify the game sets its real server session with `setStarterServerSession` (the starter's `guestIdentity.ts` with `VITE_MPGD_IDENTITY_URL`), that store purchases bind to the server player rather than the native shell's local one, and that it does not rely on the development fallback (read only with `--providers notifications`): `VITE_MPGD_DEV_NOTIFICATION_SESSION` is local-only (its `mpgd-dev` header needs the Vite dev server, so a `pnpm build` never signs in with it), and deployed acceptance uses the identity service's sessions.
 
 ## Reddit Devvit
 
