@@ -63,6 +63,11 @@
             "$ref": "#/components/schemas/NonEmptyString",
             "description": "IANA zone for recipients that registered none; Asia/Seoul when absent.",
             "readOnly": true
+          },
+          "shellRendersAdvertising": {
+            "type": "boolean",
+            "description": "Whether the game's shell renders advertising pushes itself, with the\nopt-out action, on the targets in\n`notificationShellRenderedAdvertisingTargets` (Android, through the\nkit's messaging service in `@mpgd/capacitor-game-services`). An Android\nFCM notification message cannot carry actions, so the catalog validator\nrefuses an advertising topic mapped to such a target unless this is\ntrue. With it, the backend still sends advertising under `kr` only to an\ninstallation whose registration says it renders it\n(`rendersAdvertising`); one that does not is `suppressed:\npurpose-unsupported`. Absent means false.",
+            "readOnly": true
           }
         },
         "required": [],

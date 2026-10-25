@@ -3,7 +3,8 @@
 Status: **draft**. N2 through C1 implemented this contract: the types, the
 conformance runner and vectors, the providers, the Worker and Devvit
 backends, and the CLI starter. R1 added the production runtime and the
-game-services client, and DV1 the runtime's backend on Devvit. The identity-side session binding belongs to each
+game-services client, DV1 the runtime's backend on Devvit, and AR1 Android
+advertising pushes that the shell renders with the opt-out action. The identity-side session binding belongs to each
 game's identity service (see [What R1 landed](#pr-plan)). It is still
 outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope, and a
@@ -1106,6 +1107,16 @@ player's account would deliver that player's notifications to the device.
     a provider without one; the game-services client, which knows its
     target, adds it to the request (a later PR). A topic the target does not
     map is `topic-unknown` for that endpoint.
+  - **Shell-rendered advertising (AR1).** An FCM address may carry
+    `rendersAdvertising: true`: the app renders advertising pushes itself,
+    with the opt-out action. The backend keeps it only for an endpoint whose
+    target, read as the gate reads it (the named target while the provider
+    serves it, else the provider's only target), is in
+    `notificationShellRenderedAdvertisingTargets` (`android`), so an iOS
+    device that claimed it still gets the notification message it shows.
+    Each registration writes it anew, so a shell that loses the renderer
+    loses the claim at its next registration, which the Capacitor provider
+    announces at the app's first start after the update.
 - **Unbinding.** An authenticated unbind, or the end of the session that
   registered the installation, removes the endpoint from the player.
   - The identity service ends a session by calling the backend at logout or
@@ -1325,7 +1336,17 @@ client's declaration. The steps run in order and the first failure decides:
    channel-unsupported`). The provider's `purposes` include its purpose (or
    `suppressed: purpose-unsupported`). An `advertising` topic also needs
    free-form content and, under the Korean rules, a provider that can carry
-   an expiry and the opt-out action (or `suppressed: purpose-unsupported`).
+   an expiry and the opt-out action, delivered to a device endpoint known
+   to show the action (or `suppressed: purpose-unsupported`). The check
+   fails closed: a resolved device endpoint needs `endpointShowsActions:
+   true`, and `false` or an absent value is refused. The backend passes
+   `true` for an endpoint whose pushes show the action (iOS, through the
+   `mpgd-advertising` category, and an Android installation whose latest
+   registration claimed `rendersAdvertising`) and `false` for any other
+   endpoint on a target in `notificationShellRenderedAdvertisingTargets`
+   (an Android shell without the renderer). An unresolved recipient goes
+   on to answer `unavailable: no-endpoint` at step 2, and platform-user
+   addressing ignores the input.
 2. **Recipients.** They resolve to every valid endpoint of the player on a
    device provider (see [Device fan-out](#fan-out)), or to the authenticated
    platform identity on a platform-user provider; otherwise `unavailable:
@@ -1590,11 +1611,27 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     the mapping's `channelId`, else to `mpgd-service`, `mpgd-requested`, or
     `mpgd-advertising` by purpose. An advertising send names the iOS
     category `mpgd-advertising` in `apns.payload.aps.category`, whose
-    opt-out action the app registers. An Android FCM notification message
-    cannot carry actions; rendering advertising natively in the shell is a
-    follow-up after C1, and until then a catalog maps no advertising topic to
-    Android ([Capacitor](#profile-capacitor)). FCM's
-    reserved data keys are refused before the send.
+    opt-out action the app registers. FCM's reserved data keys are refused
+    before the send, and so are keys that start with `mpgd.` (the
+    renderer's), with `rejected`, reason `configuration`.
+  - **Shell-rendered advertising (AR1).** An Android FCM notification
+    message cannot carry actions. An advertising send to an endpoint whose
+    address has `rendersAdvertising` is therefore a data message with no
+    `notification` block, so the app's messaging service receives it in the
+    background too and renders it ([Capacitor](#profile-capacitor)). Its
+    `data` holds the send's routing data, `topic`, and `route`, and
+    `fcmShellRenderedDataKeys`: `mpgd.render` (`advertising`), `mpgd.title`
+    and `mpgd.body` (the gate's rendered text, with the label, sender line,
+    and opt-out line under `kr`), `mpgd.channel` (the Android channel),
+    `mpgd.actionTitle` and `mpgd.optOutRoute` (the opt-out action's title
+    and route, the topic's declared `optOutRoute`, when the content carries
+    the action), and `mpgd.expiresAt` (the expiry in epoch milliseconds). `android.ttl` and `android.collapse_key` are set as for
+    any send; there is no `apns` block. It keeps FCM's default normal
+    priority: FCM gives data and notification messages normal priority by
+    default and keeps high priority for urgent, time-sensitive messages
+    that the user acts on ([message priority](https://firebase.google.com/docs/cloud-messaging/android-message-priority)),
+    which advertising is not. Under normal priority a device in Doze may
+    receive it late; the shell checks the expiry again on arrival.
 - **Apps in Toss.**
   `createAitFunctionalMessageDeliveryProvider` in
   `@mpgd/game-services/notifications/ait-functional-delivery`.
@@ -1815,7 +1852,7 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 
 | Profile | `permission` | `remote` | `local` | `open` |
 | --- | --- | --- | --- | --- |
-| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form; all three purposes on both, matching the standard FCM registry. Map no advertising topic to Android until the shell renders the opt-out action | supported, iOS `maxPending` 64 | payload |
+| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form; all three purposes on both, matching the standard FCM registry. Android advertising needs the shell's renderer and the deployment's `shellRendersAdvertising` (AR1) | supported, iOS `maxPending` 64 | payload |
 | Apps in Toss | topic, host, not readable, persistent, gesture required, no settings link; per-topic `agreement` | platform-user, host-template, `service` and `requested` | unsupported | landing-url |
 | Devvit | app, game, readable through the server bridge and server-readable, persistent, gesture required, revocable in the game | platform-user, free-form (approved copy), `service` and `requested` | unsupported | host-link |
 | Web, Microsoft Store PWA, CrazyGames, OnePlay, Verse8 | `availability: 'unsupported'` | unsupported | unsupported | none |
@@ -1883,26 +1920,113 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   - On iOS that sets the app's notification category, which remote
     notifications share, so an FCM send names it in
     `apns.payload.aps.category`. Firebase Messaging has no category API.
-  - An Android FCM notification message cannot carry actions. An Android
-    advertising push needs the shell to render it natively with the action,
-    which is a follow-up after C1. Until then, under the Korean rules, map
-    no advertising topic to Android: the push would arrive without the
-    opt-out action the rules require, and a settings path described in the
-    body does not replace it ([Advertising rules](#advertising-rules)).
-    `validateNotificationTopicCatalog` refuses that mapping, and the
-    notifications service will not start on a catalog that has it, so the
-    send is not left to the client. The Android and iOS providers still
-    declare `service`, `requested`, and `advertising`, the same list as
-    `referenceNotificationProviders.fcm` (the entry
-    `createFcmProviderRegistration` publishes for both targets).
-    `notificationRegistryMismatch` requires that list exactly; omitting
-    `advertising` on Android would make every standard pairing
-    `configuration-required`. The starter maps its sample
-    advertising topic to iOS only. The game's
+  - An Android FCM notification message cannot carry actions, so the shell
+    renders Android advertising pushes itself (AR1, below). A settings path
+    described in the body does not replace the action
+    ([Advertising rules](#advertising-rules)). `validateNotificationTopicCatalog`
+    refuses an advertising topic mapped to a target in
+    `notificationShellRenderedAdvertisingTargets` (`android`) unless the
+    deployment sets `shellRendersAdvertising: true`, and the notifications
+    service will not start on a catalog that has it without the setting.
+    The Android and iOS providers declare `service`, `requested`, and
+    `advertising`, the same list as `referenceNotificationProviders.fcm`
+    (the entry `createFcmProviderRegistration` publishes for both targets);
+    `notificationRegistryMismatch` requires that list exactly. The game's
     settings screen stays the in-game opt-out on every target.
   - Tapping the action opens the declared `optOutRoute` of the advertising
     topic the push names in its `topic` data key, never a route from the
     payload.
+- **Android advertising rendering (AR1).**
+  - **Receiving.** `@capacitor-firebase/messaging` 8.x declares one
+    `FirebaseMessagingService` (`io.capawesome…MessagingService`), which
+    only forwards each message and token to its plugin
+    (`FirebaseMessagingPlugin.onMessageReceived` and `onNewToken`, public
+    and static); it never posts a notification for a data message.
+    Firebase Messaging hands a messaging event to the one service
+    `resolveService` picks for `com.google.firebase.MESSAGING_EVENT`, so a
+    second service would not receive it. The shell instead declares
+    `dev.mpgd.capacitor.AdvertisingMessagingService` from
+    `@mpgd/capacitor-game-services` with the meta-data
+    `dev.mpgd.notifications.advertising_renderer`, and removes the plugin's
+    service from the merged manifest (`tools:node="remove"`). The kit's
+    service renders what the backend marked (`mpgd.render: advertising`)
+    and hands every other message, and every new token, to the plugin's
+    static entry points, which Capacitor's ProGuard rules keep. The library
+    compiles against `firebase-messaging` without shipping it, and no
+    library manifest declares the service, so a shell without Firebase
+    never loads it.
+  - **Showing.** The renderer posts the push on `mpgd.channel` with the
+    title and body as sent, the opt-out action titled `mpgd.actionTitle`
+    (`수신거부` when absent), the small icon and color Firebase Messaging's
+    `default_notification_icon` and `default_notification_color` meta-data
+    name (else the app icon), and the collapse key as its tag, so a replay
+    replaces it. A push that arrives at or after `mpgd.expiresAt` is not
+    shown, and a posted one is taken off the shade then (Android 8+). One without a
+    title, body, or topic, or with an expiry that is not a number, is
+    dropped. A push that arrives while the app is in the foreground (an
+    unlocked screen and a foreground process, as Firebase Messaging
+    decides for a notification message) is handed to the plugin instead:
+    the game gets a `received` event and no notification is shown, whatever
+    the plugin's `presentationOptions`. Android drops a post
+    silently when notifications are off or the channel is missing or
+    turned off; the renderer logs those.
+  - **Deciding.** `AdvertisingNotificationPlan` makes every decision in
+    plain Java, which the JUnit tests cover: whether the message is the
+    renderer's, malformed, expired, or arrived in the foreground, and for a
+    post its channel, text, action label, both intents' extras and request
+    codes, tag, and time in the shade. `AdvertisingPushRenderer` only turns
+    a post plan into the notification and its intents.
+  - **Opening.** The body and the action open the launcher activity with
+    `google.message_id`, the push's `topic`, and its routing data. The
+    body's intent carries the send's `route`; the action's carries the
+    topic's opt-out route (`mpgd.optOutRoute`) in its place, never the
+    send's, and `mpgd.action: advertising-opt-out`. The plugin reports an
+    activity intent that carries `google.message_id` as
+    `notificationActionPerformed` (`handleOnNewIntent`), and Capacitor
+    passes the launch intent there on a cold start too
+    (`BridgeActivity.load`), so the provider's `opened` event and its
+    cold-start buffering work as for every push. The plugin reports both as
+    `tap`; the provider reads `mpgd.action` as the opt-out action and opens
+    the topic's declared `optOutRoute`. Keys that start with `mpgd.` never
+    reach an open's `data`. The launcher activity is exported, so another
+    app can start it with the same extras: the most it can do is open the
+    declared opt-out screen, which must not withdraw consent without the
+    player's own tap there. The kit's plugin clears the notification when
+    such an open arrives, because an action does not dismiss it.
+  - **Known behaviour: a recreated process replays the open.** When the
+    system kills the app and later recreates its activity from the
+    original launch intent, Capacitor passes that intent to the plugins
+    again, so the messaging plugin reports the open (the opt-out action
+    included) a second time. `@capacitor-firebase/messaging` does the same
+    for every FCM tap, so the renderer's opens share the behaviour; the
+    kit does not change it.
+  - **Declaring.** `getAdvertisingPushRenderer()` in
+    `@mpgd/capacitor-game-services` answers whether the resolved messaging
+    service declares the meta-data and the messaging plugin's entry points
+    resolve, so a plugin release that renamed them reads as no renderer. The provider reads it once through its
+    `advertisingRenderer` input (`readCapacitorAdvertisingPushRenderer`),
+    only on Android with a catalog that maps advertising, and registers
+    `rendersAdvertising: true` when it answers true. A read that fails or
+    takes longer than five seconds counts as no renderer and is reported;
+    a shell built with an older plugin answers `UNIMPLEMENTED`, which is
+    not. Once the read answers, the provider announces its registration
+    (`endpoint-changed`), and the runtime sends it when it differs from the
+    last one it sent, so an app update that adds or removes the renderer
+    reaches the backend at its first start.
+  - **Gating.** Under `kr` the backend sends Android advertising only to
+    an installation whose latest registration claims the renderer; any
+    other Android installation is `suppressed: purpose-unsupported` for
+    advertising ([Policy gate](#policy-gate)). Under `none` such an
+    installation gets the notification message, as the gate needs no
+    action there. A game opts in with the
+    deployment's `shellRendersAdvertising`, which the catalog validator
+    requires before it accepts an Android advertising mapping.
+  - **Wiring.** `mpgd target init capacitor --providers notifications`
+    writes the service entry and the removal into a newly generated Android
+    project and warns for a game-owned one; the starter's Capacitor
+    provider passes the renderer read. The reference shell bundles no
+    messaging plugin, so its README lists the same lines for a shell that
+    adds one.
 - **Opens.** A push carries its topic and its route in the data keys `topic`
   and `route`; every other string entry except the transport's own keys
   reaches the game as untrusted `data`.
@@ -2166,11 +2290,14 @@ What the kit enforces for `advertising` topics under `kr`:
   - The message carries an opt-out action that opens the opt-out screen
     directly; describing a settings path is not enough (p.44). An Android FCM
     notification message cannot show actions, so an Android advertising push
-    needs the Capacitor shell to render it natively with the action (see
-    [Capacitor](#profile-capacitor)). Until the shell does, a catalog
-    should map no advertising topic to Android. The kit does not enforce
-    this yet (the reference `fcm` entry serves both `android` and `ios`), so
-    it is a rule the game keeps; the starter's sample is iOS only.
+    is a data message the Capacitor shell renders with the action (see
+    [Capacitor](#profile-capacitor), AR1). The catalog validator refuses an
+    Android advertising mapping unless the deployment sets
+    `shellRendersAdvertising`, and the gate sends it only to an installation
+    that registered the renderer. The gate fails closed: under `kr` a
+    device endpoint receives advertising only when the backend says it
+    shows the opt-out action (`endpointShowsActions: true`), so a backend
+    that does not say sends none.
 - **Notices.**
   - A result notice is due within 14 days of a consent, refusal, or
     withdrawal. It gives the sender's name, the act and its date, and the
@@ -2206,8 +2333,8 @@ purposes were decided for C1 (open question 1, resolved below): none of
 the three retention topics (`daily-ready`, `streak-at-risk`,
 `friend-challenge`) is advertising. The starter's `events` topic is a
 sample of an `advertising` topic, with the advertising consent, night
-window, labels, and notices that brings (iOS only, see
-[Capacitor](#profile-capacitor)).
+window, labels, and notices that brings, on iOS and, through the shell's
+renderer, on Android (see [Capacitor](#profile-capacitor)).
 
 Other rules the profiles encode:
 
@@ -2575,6 +2702,7 @@ publishable package carries a Sampo changeset.
 | R1 | `@mpgd/platform/notifications-runtime` (the production runtime, which the conformance runner drives), `@mpgd/game-services/notifications/client` (the runtime's backend over the Worker's session routes), and the starter's backend over both | No production runtime, no client for the session routes |
 | D1 | `sessionFamilyId` and `createGuestServerSession` in `@mpgd/game-services`, the Worker's local development notification sessions, and the starter's guest and development sessions | No stable session id from a guest session; no session without an identity service |
 | DV1 | The `notifications.backend.*` bridge methods, `createDevvitNotificationsBackendBridgeHandler` in `@mpgd/adapter-devvit/server`, the webview's `createDevvitNotificationsBackend`, and the starter's runtime on Reddit | No notifications runtime on Reddit |
+| AR1 | Android advertising pushes the shell renders with the opt-out action: `rendersAdvertising`, `shellRendersAdvertising`, and the gate's `endpointShowsActions` in `@mpgd/platform`; the catalog switch; the FCM data message in `@mpgd/game-services`; the renderer and its messaging service in `@mpgd/capacitor-game-services`; the provider's renderer read in `@mpgd/adapter-capacitor`; the CLI's manifest wiring and the starter's Android mapping | No Android advertising |
 
 **What S1 landed.**
 
@@ -2642,8 +2770,8 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
 - `mpgd game create --providers notifications` (and `@mpgd/create-game`)
   adds a notifications starter to a new Phaser or lite game: the topic
   catalog `notifications/topics.json` with the starter purposes of open
-  question 1, a sample advertising topic (iOS only, until Android
-  advertising pushes can carry the opt-out action), and the notice topic with every
+  question 1, a sample advertising topic (iOS only until AR1, which maps it
+  to Android through the shell's renderer), and the notice topic with every
   `notices.copy` variant in Korean and English; the deployment settings
   `notifications/deployment.json` with `advertisingRules: "kr"`; the wiring
   for Android and iOS (the Capacitor provider with named channels, the
@@ -2668,8 +2796,7 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
   - The runtime's backend client (a game-services client over the Worker's
     notification routes) and a production runtime: landed in R1, below.
   - Native rendering of Android advertising pushes with the opt-out action
-    in the Capacitor shell; until then the starter maps no advertising topic
-    to Android.
+    in the Capacitor shell: landed in AR1, below.
   - The shared host-side `notifications.v2` bridge handler (landed in B1,
     below), and bulk sends (open question 5).
 
@@ -2711,7 +2838,7 @@ provider, and Redis-backed store; see [Devvit](#profile-devvit),
     [Worker guide](../../CLOUDFLARE_WORKER_DEPLOY.md) ("Sessions").
   - Expose a stable session-family id from `GuestSessionCoordinator`:
     landed in D1, below.
-  - Android advertising rendering and bulk sends, as listed under C1; the
+  - Android advertising rendering (landed in AR1, below) and bulk sends, as listed under C1; the
     shared host-side `notifications.v2` bridge handler landed in B1, below.
 
 **What B1 landed.** B1 is a follow-up to the first release wave: the shared
@@ -2749,7 +2876,7 @@ in Toss fixes.
   code units once trimmed, since it takes the first 1,024 UTF-16 code units
   of a `reachedFailReason` and trims that slice before matching.
 - Left to follow-ups: bulk sends (open question 5) and native rendering of
-  Android advertising pushes (above).
+  Android advertising pushes (landed in AR1, below).
 
 **What D1 landed.** D1 is a follow-up to R1: a session id the runtime can
 use from a guest session, and sessions for local development.
@@ -2820,7 +2947,38 @@ backend on Devvit, so a Reddit game keeps reminders, records, and notices.
   Devvit profile lacks (their `appliesTo` fails), such as a device
   address, local notifications, an OS prompt, or advertising.
 - Left to follow-ups: a live `devvit playtest` run, Android advertising
-  rendering, and bulk sends.
+  rendering (landed in AR1, below), and bulk sends.
+
+**What AR1 landed.** AR1 is the follow-up the C1, R1, B1, and DV1 notes
+left open: Android advertising pushes with the opt-out action.
+
+- `@mpgd/platform/notifications`: `rendersAdvertising` on an FCM device
+  address, `NotificationDeployment.shellRendersAdvertising`,
+  `notificationShellRenderedAdvertisingTargets` (`android`), and the gate
+  input `endpointShowsActions` (see [Policy gate](#policy-gate)), with
+  regenerated JSON Schemas. The gate fails closed on it (round 2, after
+  review): under `kr` an advertising send to a device endpoint needs
+  `true`. No vector's expected outcome changed: vectors run one fixture
+  profile with no catalog target, and the conformance fake backend now
+  passes `true` for its fixture device, which shows the actions a push
+  carries, as the service does for iOS. The service tests cover the
+  per-target values.
+- `@mpgd/catalog`: an Android advertising mapping is valid only with
+  `shellRendersAdvertising`.
+- `@mpgd/game-services/notifications`: the registration keeps the claim for
+  an Android target only, the gate reads it, and the FCM provider sends a
+  shell-rendered data message (see [Delivery providers](#remote-delivery)).
+- `@mpgd/capacitor-game-services` and `@mpgd/adapter-capacitor`: the
+  renderer, its messaging service, `getAdvertisingPushRenderer`, and the
+  provider's `advertisingRenderer` (see [Capacitor](#profile-capacitor)).
+- `@mpgd/cli`: the manifest wiring for a new Android project, a warning for
+  an existing one, and the starter's `events` topic mapped to Android with
+  `shellRendersAdvertising: true`.
+- Left to follow-ups: a live run on a device (E1's runbook has the Android
+  advertising step), and bulk sends (open question 5). A process that the
+  system kills and recreates from the original launch intent reports that
+  open again: the messaging plugin does so for every FCM tap, so the
+  renderer's opens share the behaviour.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
@@ -2948,10 +3106,14 @@ that also removes commerce v1.
   <https://github.com/capawesome-team/capacitor-firebase/tree/main/packages/messaging>
 - Android: <https://developer.android.com/develop/ui/views/notifications/notification-permission>,
   <https://developer.android.com/about/versions/14/changes/schedule-exact-alarms>
+- `@capacitor-firebase/messaging` 8.5.2 Android source (AR1): `MessagingService`,
+  `FirebaseMessagingPlugin.handleOnNewIntent`, `onMessageReceived`, and `onNewToken`,
+  <https://github.com/capawesome-team/capacitor-firebase/tree/main/packages/messaging/android/src/main/java/io/capawesome/capacitorjs/plugins/firebase/messaging>
 - Apple: <https://developer.apple.com/app-store/review/guidelines/>,
   <https://developer.apple.com/documentation/usernotifications/asking-permission-to-use-notifications>
 - FCM HTTP v1: <https://firebase.google.com/docs/cloud-messaging/auth-server>,
   <https://firebase.google.com/docs/reference/fcm/rest/v1/ErrorCode>,
-  message lifespan <https://firebase.google.com/docs/cloud-messaging/customize-messages/setting-message-lifespan>
+  message lifespan <https://firebase.google.com/docs/cloud-messaging/customize-messages/setting-message-lifespan>,
+  message priority <https://firebase.google.com/docs/cloud-messaging/android-message-priority>
 - WeChat subscribe messages:
   <https://developers.weixin.qq.com/minigame/dev/api/open-api/subscribe-message/wx.requestSubscribeMessage.html>

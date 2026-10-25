@@ -133,6 +133,7 @@ function input(patch: Partial<EvaluateNotificationDeliveryInput> = {}): Evaluate
     recipientResolved: true,
     consent: [],
     endpointPermission: 'granted',
+    endpointShowsActions: true,
     history: [],
     at: noon,
     timeZone: 'Asia/Seoul',
@@ -183,6 +184,34 @@ describe('evaluateNotificationDelivery', () => {
         deployment: { advertisingRules: 'none' },
       }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
     }
+    // An endpoint that cannot show the action (an Android installation whose
+    // shell does not render advertising) is refused the same way under the
+    // Korean rules; other purposes, and `none`, do not read it.
+    expect(evaluateNotificationDelivery(input({ topic: advertising, endpointShowsActions: false })))
+      .toEqual(unsupported);
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      endpointShowsActions: false,
+      deployment: { advertisingRules: 'none' },
+    }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    expect(evaluateNotificationDelivery(input({ endpointShowsActions: false })).status).toBe('allowed');
+    // Only device addressing reads it.
+    expect(evaluateNotificationDelivery(input({
+      entry: { ...fcm, addressing: 'platform-user' },
+      topic: advertising,
+      endpointShowsActions: false,
+      consent: [record('delivery-permission', 'granted')],
+    }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    expect(evaluateNotificationDelivery(input({ topic: advertising })))
+      .toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    // It fails closed: a caller that does not say is refused under the Korean rules.
+    const { endpointShowsActions: _shows, ...unsaid } = input({ topic: advertising });
+    expect(evaluateNotificationDelivery(unsaid)).toEqual(unsupported);
+    expect(evaluateNotificationDelivery({ ...unsaid, deployment: { advertisingRules: 'none' } }))
+      .toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    // An unresolved recipient still answers step 2.
+    expect(evaluateNotificationDelivery({ ...unsaid, recipientResolved: false }))
+      .toEqual({ status: 'unavailable', reason: 'no-endpoint' });
   });
 
   it('step 2: answers no-endpoint without a recipient and link-missing without a link where one is needed', () => {

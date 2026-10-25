@@ -133,6 +133,7 @@ export {
   notificationReservedKeyPrefix,
   notificationReservedKeyPrefixes,
   notificationSendFingerprint,
+  notificationShellRenderedAdvertisingTargets,
   notificationSuppressionReasons,
   notificationTemplateDataIssue,
   notificationTopicDefinitionIssues,

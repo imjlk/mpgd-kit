@@ -188,6 +188,8 @@ try {
       advertisingRules: 'kr',
       advertisingSender: { name: title, contact: '080-000-0000' },
       timeZone: 'Asia/Seoul',
+      // As the starter's: its catalog maps the advertising topic to android.
+      shellRendersAdvertising: true,
     }),
   );
 

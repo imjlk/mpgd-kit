@@ -14,6 +14,7 @@ import {
   createCapacitorNotificationServiceProvider,
   loadCapacitorNotificationSdks,
   openCapacitorNotificationSettings,
+  readCapacitorAdvertisingPushRenderer,
 } from '@mpgd/adapter-capacitor/notifications';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
@@ -241,6 +242,12 @@ await openCapacitorNotificationSettings({ openNotificationSettings: async () => 
 await assert.rejects(
   openCapacitorNotificationSettings({ openNotificationSettings: async () => ({ opened: false }) }),
   /could not be opened/u,
+);
+
+// The advertising renderer read answers the plugin's installed flag.
+assert.equal(
+  await readCapacitorAdvertisingPushRenderer({ getAdvertisingPushRenderer: async () => ({ installed: true }) }),
+  true,
 );
 
 // The notifications subpath loads without its optional plugins, which this

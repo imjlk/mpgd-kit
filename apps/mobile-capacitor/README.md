@@ -31,6 +31,24 @@ To try `@mpgd/adapter-capacitor/notifications` here (see the
   `mpgd target init capacitor --providers notifications` adds the same line to
   a game-owned shell's newly generated Android project, and warns about an
   existing one that lacks it.
+- To render Android advertising pushes with the opt-out action, declare the
+  kit's messaging service in place of the messaging plugin's, inside
+  `<application>` of `android/app/src/main/AndroidManifest.xml` (the
+  manifest root already binds `xmlns:tools`):
+
+  ```xml
+  <service android:name="dev.mpgd.capacitor.AdvertisingMessagingService" android:exported="false">
+      <intent-filter>
+          <action android:name="com.google.firebase.MESSAGING_EVENT" />
+      </intent-filter>
+      <meta-data android:name="dev.mpgd.notifications.advertising_renderer" android:value="true" />
+  </service>
+  <service android:name="io.capawesome.capacitorjs.plugins.firebase.messaging.MessagingService" tools:node="remove" />
+  ```
+
+  This shell does not declare it, because it bundles no messaging plugin
+  for the service to forward to. `mpgd target init capacitor --providers
+  notifications` writes these lines into a newly generated Android project.
 - This shell's `SceneDelegate` forwards a killed-app notification tap
   (`connectionOptions.notificationResponse`) to the notification-center
   delegate on the first `capacitorViewDidAppear`. Capacitor's stock scene

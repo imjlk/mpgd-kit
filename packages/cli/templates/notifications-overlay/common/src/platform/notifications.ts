@@ -25,9 +25,13 @@ import {
  * The starter topics' purposes follow the notifications RFC (open question 1):
  * `daily-ready` and `streak-at-risk` are `requested` reminders the player
  * turns on, `friend-challenge` is `service`, and `events` is the sample
- * `advertising` topic, mapped to iOS only: an Android FCM push cannot carry
- * the opt-out action the Korean rules require yet. A topic whose copy offers a reward, a benefit, or a
- * promotion is advertising: declare it so, never `requested`.
+ * `advertising` topic. On Android an FCM notification cannot carry the
+ * opt-out action the Korean rules require, so the shell renders advertising
+ * pushes itself (`mpgd target init capacitor --providers notifications`
+ * declares the kit's renderer, and `notifications/deployment.json` sets
+ * `shellRendersAdvertising`); the backend sends one only to an installation
+ * whose shell has the renderer. A topic whose copy offers a reward, a
+ * benefit, or a promotion is advertising: declare it so, never `requested`.
  */
 export const starterNotificationCatalog = notificationTopicsJson as NotificationTopicCatalog;
 
