@@ -76,6 +76,25 @@ export interface GuestSessionBackend {
     readonly externalProof: string;
     readonly idempotencyKey: string;
   }): Promise<AccountBindingOutcome>;
+  /**
+   * A short-lived, single-use account deletion confirmation for the refresh
+   * token's player, which the game-services deletion route requires besides
+   * the access token (`accountDeletionConfirmationHeader`). It must
+   * authenticate the refresh token like `refresh`, without rotating it, and
+   * throw `GuestSessionRejectedError` for one refused for good. Optional: a
+   * backend without it cannot delete accounts through the starter.
+   */
+  requestAccountDeletionConfirmation?(input: {
+    readonly refreshToken: string;
+  }): Promise<AccountDeletionConfirmationGrant>;
+}
+
+/** A deletion confirmation, as the identity service answers it. */
+export interface AccountDeletionConfirmationGrant {
+  /** Opaque; sent once, in `accountDeletionConfirmationHeader`. */
+  readonly confirmation: string;
+  /** When it stops being accepted (ISO 8601). */
+  readonly expiresAt: string;
 }
 
 export type GuestSessionCoordinatorErrorCode =
@@ -96,7 +115,9 @@ export type GuestSessionCoordinatorErrorCode =
   | 'GUEST_SESSION_REJECTED'
   | 'GUEST_SESSION_CREDENTIAL_LOAD_FAILED'
   | 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED'
-  | 'GUEST_SESSION_LOGOUT_UNCERTAIN';
+  | 'GUEST_SESSION_LOGOUT_UNCERTAIN'
+  /** The backend has no `requestAccountDeletionConfirmation`. */
+  | 'GUEST_SESSION_UNSUPPORTED';
 
 /** Error messages intentionally contain no token, proof, or installation ID. */
 export class GuestSessionCoordinatorError extends Error {
@@ -140,6 +161,16 @@ export interface GuestSessionCoordinator {
     readonly idempotencyKey: string;
   }): Promise<{ readonly status: 'bound' | 'already-bound' | 'conflict' }>;
   getHeaders(): Readonly<Record<'authorization', string>>;
+  /**
+   * Asks the backend for an account deletion confirmation with the active
+   * session's refresh token (queued with refreshes, so it never presents a
+   * token a rotation in flight replaces). Fails with
+   * `GUEST_SESSION_NOT_READY` without an active session,
+   * `GUEST_SESSION_REJECTED` when the service refused the session for good
+   * (as `refresh` does, the coordinator then stops using it), and
+   * `GUEST_SESSION_UNSUPPORTED` when the backend cannot issue one.
+   */
+  requestAccountDeletionConfirmation(): Promise<string>;
   logout(): Promise<void>;
 }
 
@@ -411,6 +442,23 @@ export function createGuestSessionCoordinator(input: {
         return { status: result.status };
       });
     },
+    requestAccountDeletionConfirmation() {
+      assertOpen();
+      const request = input.backend.requestAccountDeletionConfirmation?.bind(input.backend);
+      if (request === undefined) {
+        return Promise.reject(new GuestSessionCoordinatorError('GUEST_SESSION_UNSUPPORTED'));
+      }
+      return enqueue(async () => {
+        assertOpen();
+        const active = requireCurrent();
+        const grant: unknown = await fromBackend(() => request({ refreshToken: active.refreshToken }));
+        if (!isRecord(grant) || typeof grant.confirmation !== 'string' || grant.confirmation.trim() === ''
+          || typeof grant.expiresAt !== 'string' || !Number.isFinite(Date.parse(grant.expiresAt))) {
+          throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
+        }
+        return grant.confirmation;
+      });
+    },
     current() {
       return status === 'active' && current !== undefined ? view(current) : undefined;
     },
@@ -559,6 +607,13 @@ export interface GuestServerSession {
    * background refresh is retried when the token has expired.
    */
   getHeaders(): Promise<Readonly<Record<'authorization', string>>>;
+  /**
+   * An account deletion confirmation for the current session
+   * (`GuestSessionCoordinator.requestAccountDeletionConfirmation`), which the
+   * game-services deletion route requires. Optional, so another session
+   * holder (a development session) may leave it out.
+   */
+  requestAccountDeletionConfirmation?(): Promise<string>;
 }
 
 /** How long before its access token expires `createGuestServerSession` refreshes a session: one minute. */
@@ -608,6 +663,7 @@ export function createGuestServerSession(
         listener(next);
       });
     },
+    requestAccountDeletionConfirmation: () => coordinator.requestAccountDeletionConfirmation(),
     async getHeaders() {
       const active = coordinator.current();
       if (active !== undefined) {
@@ -644,14 +700,17 @@ export function createGuestServerSession(
  * a token it does not know (RFC 7009 section 2.2); a refusal answers
  * `{ error: GuestIdentityHttpErrorCode }`. `bindAccount` answers `200` with
  * an `AccountBindingOutcome` (a `conflict` too), or a refusal; the reference
- * Worker binds nothing yet and answers `ACCOUNT_BINDING_UNSUPPORTED`. A
- * refresh token any route refuses for good is `GUEST_SESSION_REJECTED`.
+ * Worker binds nothing yet and answers `ACCOUNT_BINDING_UNSUPPORTED`.
+ * `requestAccountDeletionConfirmation` takes `{ refreshToken }` and answers
+ * `200` with an `AccountDeletionConfirmationGrant`. A refresh token any
+ * route refuses for good is `GUEST_SESSION_REJECTED`.
  */
 export const guestIdentityHttpRoutes = Object.freeze({
   issueGuest: '/identity/v1/guest',
   refresh: '/identity/v1/refresh',
   revoke: '/identity/v1/revoke',
   bindAccount: '/identity/v1/bind-account',
+  requestAccountDeletionConfirmation: '/identity/v1/account-deletion-confirmation',
 } as const);
 
 /**
@@ -766,6 +825,11 @@ export function createGuestSessionHttpBackend(input: {
         externalProof,
         idempotencyKey,
       })) as AccountBindingOutcome;
+    },
+    async requestAccountDeletionConfirmation({ refreshToken }) {
+      return await withRejection(
+        post(guestIdentityHttpRoutes.requestAccountDeletionConfirmation, { refreshToken }),
+      ) as AccountDeletionConfirmationGrant;
     },
   };
 }
