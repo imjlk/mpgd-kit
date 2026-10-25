@@ -11,8 +11,10 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import {
   createWorkerFetchHandler,
   createWorkerService,
+  createWorkerStoreServerDependencies,
   type GameServicesWorkerEnv,
 } from './handler.js';
+import { runScheduledStoreServer } from './storeServerCron.js';
 import {
   asWorkerNotificationRpcResult,
   consumeNotificationDispatchBatch,
@@ -74,9 +76,28 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
     await consumeNotificationDispatchBatch(this.env, batch);
   }
 
-  /** The cron trigger: notification purges and the scheduler (reminders, notice pushes, due rows). */
+  /**
+   * The cron trigger: notification purges and the scheduler (reminders,
+   * notice pushes, due rows), and the store server upkeep (owed Play
+   * acknowledges and consumes, the Play voided purchases sweep). Each keeps
+   * to its own subrequest budget; one failing never skips the other.
+   */
   override async scheduled(controller: ScheduledController): Promise<void> {
-    await runScheduledNotifications(this.env, { cron: controller.cron });
+    await Promise.all([
+      runScheduledNotifications(this.env, { cron: controller.cron }),
+      runStoreServer(this.env, controller.cron),
+    ]);
+  }
+}
+
+async function runStoreServer(env: GameServicesWorkerEnv, cron: string): Promise<void> {
+  try {
+    await runScheduledStoreServer(env, { cron }, createWorkerStoreServerDependencies(env));
+  } catch (error) {
+    console.error(
+      'Store server cron failed:',
+      error instanceof Error ? error.name : 'unknown error',
+    );
   }
 }
 

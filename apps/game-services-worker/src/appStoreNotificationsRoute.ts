@@ -1,0 +1,136 @@
+import {
+  AppStoreDependencyUnavailableError,
+  appStoreServerNotificationHttpStatus,
+  handleAppStoreServerNotification,
+  maxAppStoreServerNotificationBytes,
+  type AppStoreEnvironment,
+  type AppStoreServerNotificationVerificationResult,
+  type AppStoreServerNotificationVerifier,
+  type GameServicesStore,
+} from '@mpgd/game-services';
+
+/**
+ * App Store Server Notifications V2 intake. Set these URLs in App Store
+ * Connect (App Information, App Store Server Notifications, Version 2): the
+ * production URL and the sandbox URL. The sandbox one revokes App Review,
+ * TestFlight, and sandbox-tester grants a production deployment recorded
+ * with `sandboxPurchases: { mode: 'grant' }`.
+ */
+export const appStoreNotificationPaths = Object.freeze({
+  Production: '/app-store/notifications/v2',
+  Sandbox: '/app-store/notifications/v2/sandbox',
+} as const) satisfies Readonly<Record<AppStoreEnvironment, string>>;
+
+/**
+ * A private Worker that verifies the `signedPayload` with Apple's library
+ * (`createAppleServerNotificationVerifier` from
+ * `@mpgd/game-services/app-store-server`, one per environment, over the same
+ * Apple root certificates as the purchase verifier). Errors do not keep their
+ * class across a service binding, so a transient certificate check outage is
+ * answered as `{ status: 'unavailable' }`.
+ */
+export interface AppStoreNotificationVerifierBinding {
+  verifyAppStoreServerNotification(input: {
+    readonly signedPayload: string;
+    readonly environment: AppStoreEnvironment;
+    readonly bundleId: string;
+    readonly timeoutMs: number;
+  }): Promise<
+    AppStoreServerNotificationVerificationResult | { readonly status: 'unavailable' }
+  >;
+}
+
+export function createAppStoreNotificationsFetchHandler(input: {
+  readonly store: GameServicesStore;
+  readonly binding: AppStoreNotificationVerifierBinding;
+  readonly bundleId: string;
+  readonly timeoutMs?: number;
+}): (request: Request) => Promise<Response | undefined> {
+  const timeoutMs = input.timeoutMs ?? 10_000;
+  const verifier: AppStoreServerNotificationVerifier = {
+    async verifyAndDecodeNotification({ signedPayload, environment, bundleId }) {
+      // AbortSignal is not structured-cloneable across a service binding;
+      // the binding enforces timeoutMs itself.
+      const result = await input.binding.verifyAppStoreServerNotification({
+        signedPayload,
+        environment,
+        bundleId,
+        timeoutMs,
+      });
+      if (result.status === 'unavailable') {
+        throw new AppStoreDependencyUnavailableError(
+          'The App Store notification verifier is unavailable.',
+        );
+      }
+      return result;
+    },
+  };
+
+  return async (request) => {
+    const environment = matchEnvironment(new URL(request.url).pathname);
+    if (environment === undefined) {
+      return undefined;
+    }
+    if (request.method !== 'POST') {
+      return json({ error: 'METHOD_NOT_ALLOWED' }, 405, { allow: 'POST' });
+    }
+    const declaredLength = Number(request.headers.get('content-length') ?? '0');
+    if (declaredLength > maxAppStoreServerNotificationBytes + 1024) {
+      return json({ error: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
+    let body: unknown;
+    try {
+      const text = await request.text();
+      if (text.length > maxAppStoreServerNotificationBytes + 1024) {
+        return json({ error: 'PAYLOAD_TOO_LARGE' }, 413);
+      }
+      body = JSON.parse(text);
+    } catch {
+      return json({ status: 'rejected', reason: 'APP_STORE_NOTIFICATION_PAYLOAD_INVALID' }, 400);
+    }
+    try {
+      const outcome = await handleAppStoreServerNotification({
+        store: input.store,
+        verifier,
+        body,
+        environment,
+        bundleId: input.bundleId,
+        signal: AbortSignal.timeout(timeoutMs + 5_000),
+      });
+      if (outcome.status !== 'revoked') {
+        // Apple notifications carry no player data the log needs; the
+        // reason and id are enough to trace a delivery.
+        console.log('App Store notification', environment, outcome.status, outcome.reason);
+      }
+      return json(outcome, appStoreServerNotificationHttpStatus(outcome));
+    } catch (error) {
+      // A store or binding failure: answer 500 so Apple redelivers (1, 12,
+      // 24, 48, and 72 hours later in production; sandbox does not retry).
+      console.error(
+        'App Store notification failed:',
+        error instanceof Error ? error.name : 'unknown error',
+      );
+      return json({ error: 'INTERNAL_ERROR' }, 500);
+    }
+  };
+}
+
+function matchEnvironment(pathname: string): AppStoreEnvironment | undefined {
+  const normalised = pathname.length > 1 && pathname.endsWith('/')
+    ? pathname.slice(0, -1)
+    : pathname;
+  if (normalised === appStoreNotificationPaths.Production) {
+    return 'Production';
+  }
+  if (normalised === appStoreNotificationPaths.Sandbox) {
+    return 'Sandbox';
+  }
+  return undefined;
+}
+
+function json(body: unknown, status: number, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', ...headers },
+  });
+}
