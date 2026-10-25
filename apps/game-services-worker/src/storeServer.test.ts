@@ -40,7 +40,6 @@ try {
     '0004_entitlement_evidence.sql',
     '0006_entitlement_revocations.sql',
     '0009_store_server.sql',
-    '0011_entitlement_transfers.sql',
   ]) {
     await applyMigration(db, migration);
   }

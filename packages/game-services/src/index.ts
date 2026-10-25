@@ -26,7 +26,7 @@ export * from './monetization-recovery.js';
 export * from './notification-delivery.js';
 export * from './platform-order.js';
 export * from './progress-link.js';
-export * from './purchase-transfer.js';
+export * from './purchase-sharing.js';
 export * from './runtime.js';
 export * from './server.js';
 export * from './types.js';

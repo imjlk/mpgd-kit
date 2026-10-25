@@ -508,22 +508,24 @@ revocation rows before the grants they reverse. The subscription `period`
 entry (`EntitlementLedgerPeriod`) is a validated shape only; nothing writes it
 until a subscription verifier exists.
 
-### Restore transfers
+### Restore sharing
 
 A guest player lives in the device's secure store, so a reinstall on Android,
-a new iOS device, or a logout makes a new guest while the store keeps
-returning the old guest's non-consumables with the old account binding
-(Google Play `obfuscatedAccountId`, StoreKit `appAccountToken`). A **restore
-transfer** moves such a purchase's grant to the restoring player
-([RFC](specs/commerce/commerce-v2-rfc.md#restore-transfers); the cases per
+a new iOS device, a logout, or a second device on the same store account is a
+new guest while the store keeps returning the purchase's non-consumables with
+the buying guest's binding (Google Play `obfuscatedAccountId`, StoreKit
+`appAccountToken`). **Restore sharing** grants the restoring player its own
+entitlement linked to the purchase; earlier holders keep theirs
+([RFC](specs/commerce/commerce-v2-rfc.md#restore-sharing); the cases per
 platform are in
-[CLOUDFLARE_WORKER_DEPLOY.md](CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-transfers)).
+[CLOUDFLARE_WORKER_DEPLOY.md](CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-sharing)).
 
-- `createGameServicesBackend({ restoreTransfers })` sets the policy:
-  `{ mode: 'move', maxTransfersPerWindow?: 3, windowMs?: 30 days }` or
-  `{ mode: 'refuse' }`, the library default, which answers the binding
-  mismatch as before. The reference Worker moves unless
-  `GAME_SERVICES_RESTORE_TRANSFERS = "refuse"`.
+- `createGameServicesBackend({ restoreSharing })` sets the policy:
+  `{ mode: 'share', maxHolders?: 5 }` (1 to 100) or `{ mode: 'refuse' }`,
+  the library default, which answers the binding mismatch as before. The
+  reference Worker shares unless `GAME_SERVICES_RESTORE_SHARING = "refuse"`;
+  `GAME_SERVICES_RESTORE_MAX_HOLDERS` sets the limit (an invalid value turns
+  sharing off).
 - The client asks for it: `VerifyPurchaseRequest.intent: 'restore'`. The
   commerce reconciler sends it for every purchase it discovered from the store
   (not one this install's journal started); a game-started checkout sends no
@@ -536,46 +538,38 @@ platform are in
   a purchase made outside the app with no ids, or
   `APP_STORE_ACCOUNT_TOKEN_MISMATCH` with the client's verified JWS present).
   A custom verifier can answer it too; anything else stays `rejected`.
-- The backend moves it: the purchase's current grant is found by following
-  earlier moves from the grant its verification id names
-  (`findPurchaseGrantByEvidenceVerificationId`, which now answers the current
-  holder; `{ followTransfers: false }` answers the first grant). If another
-  player holds it, `GameServicesStore.recordEntitlementTransfer` appends a
-  `revoke` entry with reason `transfer` for that grant and the restoring
-  player's grant together, or neither. The new grant's evidence id names the
-  move (`createPurchaseTransferEvidenceVerificationId(purchaseId, n)`), its
-  payload names the grant it replaces (`transferredFromLedgerEntryId`) and the
-  purchase (`transferOfEvidenceVerificationId`, which finalizers such as the
-  Play acknowledge are keyed by), and the store transaction id stays on the
-  first grant. A purchase no grant holds yet is granted to the restoring
-  player (`restoredAcrossAccounts: true`). The answer is `verified` with
-  `transferred: true`, on retries too.
-- The answers that are not a move: a consumable or a game-started checkout
+- The backend shares it with ordinary ledger grants, on any store: the
+  purchase's holders are its first grant (the evidence id the verifier names)
+  and the shares, `listPurchaseHolders`. A share is written at the next free
+  slot, evidence id `createPurchaseHolderEvidenceVerificationId(purchaseId,
+  slot)`, under the key `createPurchaseHolderIdempotencyKey(purchaseId)` (one
+  per player and purchase, so a player holds a purchase once); its payload
+  names the purchase (`holderOfEvidenceVerificationId`, which finalizers such
+  as the Play acknowledge are keyed by, `readPurchaseVerificationId`) and the
+  first grant (`sharedFromLedgerEntryId`), and the store transaction id stays
+  on the first grant. Two writers that read the same holders take the same
+  slot, so one loses on the unique evidence id and reads again: the limit
+  holds under concurrency. A purchase no grant holds yet is granted to the
+  restoring player as its first grant (`restoredAcrossAccounts: true`). The
+  answer is `verified` with `restoredAcrossPlayers: true`, on retries too.
+- The answers that are not a share: a consumable or a game-started checkout
   gets the verifier's reason (`rejected`); a refunded or revoked purchase
-  `LEDGER_GRANT_REVERSED`; more than `maxTransfersPerWindow` moves in the
-  window `pending` with `PURCHASE_TRANSFER_RATE_LIMITED`; a lost race with
-  another restore or a refund `pending` with `PURCHASE_TRANSFER_CONFLICT`.
-  A retry by the player who holds it answers that grant
-  (`alreadyProcessed: true`); a resend under the key of a grant a later
-  restore moved away answers `LEDGER_GRANT_REVERSED`, so two devices of one
-  store account do not move it back and forth.
-- Refunds follow: `revokeEntitlementGrant` on a grant that moved reverses
-  the grant that holds the purchase now, so the Play voided-purchase sweep and
-  the App Store refund notification reach the current holder. An `admin`
-  revocation of a moved grant reverses nothing and answers
-  `{ status: 'grant_transferred', holderLedgerEntryId }`. A
-  `recordEntitlementRevocation` of a moved grant answers its transfer entry.
-- Deleted accounts (with account deletion, L3b): a moved grant is a fresh grant of the new player that
-  links to the record it replaces, so a deleted player's retained purchase
-  records are never revived for the deleted id; the retained record keeps
-  its content and gains the `transfer` entry.
+  `LEDGER_GRANT_REVERSED`; a purchase `maxHolders` players hold `pending`
+  with `PURCHASE_HOLDER_LIMIT_REACHED` (nobody is evicted); three lost races
+  in a row `pending` with `PURCHASE_HOLDER_CONFLICT`. A player who already
+  holds it gets its grant back (`alreadyProcessed: true`); a resend under the
+  key of a reversed grant answers `LEDGER_GRANT_REVERSED`.
+- Refunds reach every holder: `revokeEntitlementGrant` with a store reason
+  (`refund`, `chargeback`, `voided`) on any holder's grant also revokes the
+  other holders' grants, so the Play voided-purchase sweep and the App Store
+  refund notification revoke them all; a replay finishes a fan-out an earlier
+  attempt left part-way. An `admin` revocation stays on the grant it names
+  and frees that holder's place.
+- Deleted accounts (with account deletion, L3b): a deleted player's
+  retained record (`deleted:<id>`) is never revived and does not count toward
+  the limit; a new guest's share links to it and counts.
 
-The memory store and the D1 store (migration
-`0011_entitlement_transfers.sql`, a separate table read with
-`entitlement_revocations` as one revoke list; each table's write refuses a
-grant the other already reversed) implement it; a store without
-`recordEntitlementTransfer` keeps refusing restores across players.
-Subscriptions never move (no subscription verifier yet), and the legacy
+Subscriptions are never shared (no subscription verifier yet), and the legacy
 `createAppStoreRecoveryBackend` keeps refusing.
 
 If any target-specific binding is configured, the Worker enters strict
@@ -863,9 +857,9 @@ is configured, a server-issued guest included); without one, only an
 authenticated, non-local platform session binds. A game with its own account
 scheme replaces the module and both resolvers together. A new guest (after
 an Android reinstall, on a new device, or after a logout) does not match the
-binding of its earlier purchases; a restored non-consumable then moves to it
-under the backend's [restore transfer](#restore-transfers) policy
-([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-transfers)).
+binding of its earlier purchases; a restored non-consumable is then granted
+to it as well under the backend's [restore sharing](#restore-sharing) policy
+([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-sharing)).
 
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider

@@ -8,11 +8,12 @@ export interface VerifyPurchaseResponse {
   readonly reason?: string;
   readonly finalization?: PurchaseGrantFinalization;
   /**
-   * The grant was moved to this player from an earlier one on a verified
-   * restore (a reinstall or a new device): the game can say the purchase was
-   * restored to this device. Present only on a verified response.
+   * This player's grant comes from a verified restore of a purchase the
+   * store binds to another player (a reinstall or another device): the game
+   * can say the purchase was restored to this device. Present only on a
+   * verified response.
    */
-  readonly transferred?: true;
+  readonly restoredAcrossPlayers?: true;
 }
 
 export type PurchaseGrantFinalizationAction =

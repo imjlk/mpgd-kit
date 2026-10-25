@@ -264,9 +264,9 @@ async function verifyRestoredNonConsumable(
     return pending(decision.reason ?? 'APP_STORE_RESTORE_VERIFICATION_PENDING');
   }
   if (decision.status === 'rejected' || decision.status === 'restorable') {
-    // This recovery path never moves a grant between players; restore
-    // transfers belong to the commerce v2 verify path (RFC "Restore
-    // transfers"), so a purchase bound to another account stays refused.
+    // This recovery path never grants across players; restore sharing
+    // belongs to the commerce v2 verify path (RFC "Restore sharing"), so a
+    // purchase bound to another account stays refused here.
     return rejected(decision.reason);
   }
   if (decision.status === 'settled') {

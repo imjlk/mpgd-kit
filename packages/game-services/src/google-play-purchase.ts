@@ -160,7 +160,7 @@ export function createGooglePlayProductPurchaseBoundary(
         allowConsumed: false,
         // A restored non-consumable bound to an earlier player (a reinstall,
         // a new device) is reported, not refused: the backend's restore
-        // transfer policy decides (RFC "Restore transfers").
+        // sharing policy decides (RFC "Restore sharing").
         reportForeignBinding: verificationInput.request.intent === 'restore'
           && verificationInput.product.type === 'non_consumable',
         signal: verificationInput.signal,

@@ -8,10 +8,32 @@ import {
 import {
   createWorkerFetchHandler,
   createWorkerService,
+  resolveWorkerRestoreSharing,
   type GameServicesEvidenceVerifierBinding,
   type GameServicesPurchaseGrantFinalizerBinding,
   type GameServicesWorkerEnv,
 } from './handler.js';
+
+// Restore sharing settings: share by default, refuse on any other mode or a bad limit.
+for (const [env, expected] of [
+  [{}, { mode: 'share' }],
+  [{ GAME_SERVICES_RESTORE_SHARING: 'share' }, { mode: 'share' }],
+  [{ GAME_SERVICES_RESTORE_SHARING: 'refuse' }, { mode: 'refuse' }],
+  [{ GAME_SERVICES_RESTORE_SHARING: 'shar' }, { mode: 'refuse' }],
+  [{ GAME_SERVICES_RESTORE_MAX_HOLDERS: '2' }, { mode: 'share', maxHolders: 2 }],
+  [{ GAME_SERVICES_RESTORE_MAX_HOLDERS: '0' }, { mode: 'refuse' }],
+  [{ GAME_SERVICES_RESTORE_MAX_HOLDERS: '101' }, { mode: 'refuse' }],
+  [{ GAME_SERVICES_RESTORE_MAX_HOLDERS: 'five' }, { mode: 'refuse' }],
+] as const) {
+  const resolved = resolveWorkerRestoreSharing(
+    env as Parameters<typeof resolveWorkerRestoreSharing>[0],
+  );
+  if (JSON.stringify(resolved) !== JSON.stringify(expected)) {
+    throw new Error(
+      `restore sharing ${JSON.stringify(env)}: received ${JSON.stringify(resolved)}.`,
+    );
+  }
+}
 
 const workerEnv = {
   MPGD_STORE: 'memory',

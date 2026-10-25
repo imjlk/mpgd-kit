@@ -23,8 +23,8 @@ import {
   devvitPaymentOrderEvidenceSchema,
   gameServicesBackendEndpoints,
   microsoftStoreDigitalGoodsEvidenceSchema,
-  movePurchaseRestoreTransfers,
-  refusePurchaseRestoreTransfers,
+  refusePurchaseRestoreSharing,
+  sharePurchaseRestores,
   type AdRewardEvidenceVerifierRegistry,
   type AdRewardVerifierDescriptor,
   type AdRewardVerifierRegistration,
@@ -147,14 +147,20 @@ export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv, Sto
   readonly GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING?: GooglePlayAccountBinding;
   readonly GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER?: 'true';
   /**
-   * Restore transfers (RFC "Restore transfers"): a verified restore of a
-   * non-consumable that the store binds to an earlier guest (a reinstall or
-   * a new device) moves the grant to the restoring guest, at most three
-   * times per purchase in 30 days. The reference Worker moves by default;
-   * `"refuse"` keeps answering the store's binding mismatch. D1 needs
-   * migration 0011_entitlement_transfers.sql.
+   * Restore sharing (RFC "Restore sharing"): a verified restore of a
+   * non-consumable that the store binds to another guest (a reinstall, a new
+   * device, a second device on the same store account) grants the restoring
+   * guest its own entitlement; earlier holders keep theirs. The reference
+   * Worker shares by default; `"refuse"` keeps answering the store's binding
+   * mismatch.
    */
-  readonly GAME_SERVICES_RESTORE_TRANSFERS?: 'move' | 'refuse';
+  readonly GAME_SERVICES_RESTORE_SHARING?: 'share' | 'refuse';
+  /**
+   * How many guests may hold one purchase at the same time (1 to 100,
+   * default 5); past it a restore answers `PURCHASE_HOLDER_LIMIT_REACHED`.
+   * An invalid value turns sharing off rather than guessing a limit.
+   */
+  readonly GAME_SERVICES_RESTORE_MAX_HOLDERS?: string;
   readonly GAME_SERVICES_ANDROID_PURCHASE_FINALIZER?: GameServicesPurchaseGrantFinalizerBinding;
   /**
    * The Android verifier binding acknowledges or consumes the purchase itself
@@ -741,7 +747,7 @@ function buildWorkerBackend(
     placements: adPlacements,
     store,
     deploymentTargetBindings: resolveWorkerDeploymentTargetBindings(env),
-    restoreTransfers: resolveWorkerRestoreTransfers(env),
+    restoreSharing: resolveWorkerRestoreSharing(env),
     ...(evidenceVerifier === undefined
       ? {}
       : { evidenceVerifier }),
@@ -767,14 +773,26 @@ function buildWorkerBackend(
 }
 
 /**
- * Moves by default; any value other than `move` (a typo included) refuses,
- * so a misspelt opt-out never leaves transfers on.
+ * Shares by default; any mode other than `share` (a typo included) refuses,
+ * so a misspelt opt-out never leaves sharing on, and so does a holder limit
+ * that is not an integer from 1 to 100.
  */
-function resolveWorkerRestoreTransfers(env: GameServicesWorkerEnv) {
-  const configured: unknown = env.GAME_SERVICES_RESTORE_TRANSFERS;
-  return configured === undefined || configured === 'move'
-    ? movePurchaseRestoreTransfers
-    : refusePurchaseRestoreTransfers;
+export function resolveWorkerRestoreSharing(
+  env: Pick<GameServicesWorkerEnv, 'GAME_SERVICES_RESTORE_SHARING' | 'GAME_SERVICES_RESTORE_MAX_HOLDERS'>,
+) {
+  const configured: unknown = env.GAME_SERVICES_RESTORE_SHARING;
+  if (configured !== undefined && configured !== 'share') {
+    return refusePurchaseRestoreSharing;
+  }
+  const rawLimit: unknown = env.GAME_SERVICES_RESTORE_MAX_HOLDERS;
+  if (rawLimit === undefined) {
+    return sharePurchaseRestores;
+  }
+  const text = typeof rawLimit === 'number' ? String(rawLimit) : rawLimit;
+  if (typeof text !== 'string' || !/^[1-9][0-9]{0,2}$/u.test(text.trim()) || Number(text) > 100) {
+    return refusePurchaseRestoreSharing;
+  }
+  return { mode: 'share' as const, maxHolders: Number(text) };
 }
 
 type WorkerCommerceEvidenceRegistry =

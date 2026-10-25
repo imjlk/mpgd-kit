@@ -11,10 +11,10 @@ import {
   createAppStoreTransactionConformanceFixture,
 } from './app-store-verifier-conformance.js';
 import {
-  createPurchaseTransferEvidenceVerificationId,
-  EntitlementTransferConflictError,
-  findPurchaseGrantByEvidenceVerificationId,
+  createPurchaseHolderEvidenceVerificationId,
+  createPurchaseHolderIdempotencyKey,
   listActiveEntitlementTransactions,
+  listPurchaseHolders,
   readPurchaseLedgerStatuses,
   revokeEntitlementGrant,
 } from './commerce-ledger.js';
@@ -29,13 +29,13 @@ import type {
   FinalizePurchaseGrantInput,
   GameServicesEvidenceVerifier,
 } from './evidence-verification.js';
-import { resolvePurchaseRestoreTransferPolicy } from './purchase-transfer.js';
+import { resolvePurchaseRestoreSharingPolicy } from './purchase-sharing.js';
 import {
   createGameServicesBackend,
   createInMemoryGameServicesStore,
   type GameServicesStore,
 } from './server.js';
-import type { ProductGrantTransaction, VerifyPurchaseRequest } from './types.js';
+import type { VerifyPurchaseRequest } from './types.js';
 
 const catalog = {
   version: 'test',
@@ -90,16 +90,6 @@ function createStoreVerifier(options: {
   };
 }
 
-function createClock(start = '2030-01-01T00:00:00.000Z') {
-  let nowMs = Date.parse(start);
-  return {
-    now: () => new Date(nowMs).toISOString(),
-    advance(ms: number) {
-      nowMs += ms;
-    },
-  };
-}
-
 function restoreRequest(
   playerId: string,
   overrides: Partial<VerifyPurchaseRequest> = {},
@@ -116,19 +106,15 @@ function restoreRequest(
   };
 }
 
-const day = 24 * 60 * 60 * 1000;
-
 // Policy validation.
-assert.deepEqual(resolvePurchaseRestoreTransferPolicy(undefined), {
-  mode: 'refuse',
-  maxTransfersPerWindow: 3,
-  windowMs: 30 * day,
+assert.deepEqual(resolvePurchaseRestoreSharingPolicy(undefined), { mode: 'refuse', maxHolders: 5 });
+assert.deepEqual(resolvePurchaseRestoreSharingPolicy({ mode: 'share', maxHolders: 2 }), {
+  mode: 'share',
+  maxHolders: 2,
 });
-assert.throws(() =>
-  resolvePurchaseRestoreTransferPolicy({ mode: 'move', maxTransfersPerWindow: 0 }),
-);
-assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'move', windowMs: -1 }));
-assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'move' }));
+assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'share', maxHolders: 0 }));
+assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'share', maxHolders: 101 }));
+assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'share' }));
 
 // The default policy keeps refusing a restore across players.
 {
@@ -148,16 +134,14 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   });
 }
 
-// Reinstall: the old guest's non-consumable moves to the new guest.
+// Reinstall or a second device: the new guest gets its own grant; the buyer keeps theirs.
 {
   const store = createInMemoryGameServicesStore();
-  const clock = createClock();
   const finalized: FinalizePurchaseGrantInput[] = [];
   const backend = createGameServicesBackend({
     catalog,
     placements,
     store,
-    now: clock.now,
     evidenceVerifier: createStoreVerifier(),
     purchaseGrantFinalizer: {
       async finalizePurchaseGrant(input) {
@@ -169,184 +153,176 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
         };
       },
     },
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share' },
   });
   const bought = await backend.purchases.verifyPurchase(
     restoreRequest('player-a', { intent: 'purchase' }),
   );
   assert.equal(bought.verified, true);
-  assert.equal(bought.transferred, undefined);
+  assert.equal(bought.restoredAcrossPlayers, undefined);
   const firstLedgerEntryId = bought.ledgerEntryId ?? '';
 
-  clock.advance(1000);
   const restored = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
   assert.equal(restored.verified, true);
   assert.equal(restored.alreadyProcessed, false);
-  assert.equal(restored.transferred, true);
+  assert.equal(restored.restoredAcrossPlayers, true);
   assert.notEqual(restored.ledgerEntryId, firstLedgerEntryId);
-  // The finalizer acknowledges the purchase, not the move.
+  // The finalizer acknowledges the purchase, not the share.
   assert.equal(finalized.at(-1)?.evidenceVerificationId, purchaseVerificationId);
-  assert.equal(finalized.at(-1)?.request.playerId, 'player-b');
 
-  // One holder at a time: the old guest's grant reads as reversed.
-  const oldStatus = await readPurchaseLedgerStatuses(store, {
-    playerId: 'player-a',
-    ledgerEntryIds: [firstLedgerEntryId],
-  });
-  assert.equal(oldStatus.statuses[0]?.status, 'reversed');
-  const newStatus = await readPurchaseLedgerStatuses(store, {
-    playerId: 'player-b',
-    ledgerEntryIds: [restored.ledgerEntryId ?? ''],
-  });
-  assert.equal(newStatus.statuses[0]?.status, 'active');
-  const active = await listActiveEntitlementTransactions(store);
+  // Earlier holders keep theirs: both are active.
   assert.deepEqual(
-    active.map((grant) => grant.playerId),
+    (await listActiveEntitlementTransactions(store)).map((grant) => grant.playerId).sort(),
+    ['player-a', 'player-b'],
+  );
+  for (const [playerId, ledgerEntryId] of [
+    ['player-a', firstLedgerEntryId],
+    ['player-b', restored.ledgerEntryId ?? ''],
+  ] as const) {
+    assert.equal(
+      (await readPurchaseLedgerStatuses(store, { playerId, ledgerEntryIds: [ledgerEntryId] }))
+        .statuses[0]?.status,
+      'active',
+    );
+  }
+  const shared = await store.getEntitlementTransaction(restored.ledgerEntryId ?? '');
+  assert.equal(
+    shared?.evidenceVerificationId,
+    createPurchaseHolderEvidenceVerificationId(purchaseVerificationId, 1),
+  );
+  assert.equal(shared?.idempotencyKey, createPurchaseHolderIdempotencyKey(purchaseVerificationId));
+  assert.equal(shared?.payload.holderOfEvidenceVerificationId, purchaseVerificationId);
+  assert.equal(shared?.payload.sharedFromLedgerEntryId, firstLedgerEntryId);
+  assert.equal(shared?.payload.platformTransactionId, undefined);
+  const holders = await listPurchaseHolders(store, purchaseVerificationId);
+  assert.equal(holders.first?.ledgerEntryId, firstLedgerEntryId);
+  assert.deepEqual(
+    holders.shared.map((grant) => grant.playerId),
     ['player-b'],
   );
+  assert.equal(holders.nextSlot, 2);
 
-  // The move is a ledger entry pair: no personal data beyond the player ids the ledger keys on.
-  const [transfer] = await store.findEntitlementRevocations({
-    ledgerEntryIds: [firstLedgerEntryId],
-  });
-  assert.equal(transfer?.reason, 'transfer');
-  assert.equal(transfer?.playerId, 'player-a');
-  assert.equal(
-    transfer?.payload.transferEvidenceVerificationId,
-    createPurchaseTransferEvidenceVerificationId(purchaseVerificationId, 1),
-  );
-  const moved = await store.getEntitlementTransaction(restored.ledgerEntryId ?? '');
-  assert.equal(moved?.payload.transferredFromLedgerEntryId, firstLedgerEntryId);
-  assert.equal(moved?.payload.transferOfEvidenceVerificationId, purchaseVerificationId);
-  assert.equal(moved?.payload.platformTransactionId, undefined);
-
-  // The purchase's verification id now finds the current holder.
-  assert.equal(
-    (await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId))?.playerId,
-    'player-b',
-  );
-  assert.equal(
-    (await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId, {
-      followTransfers: false,
-    }))?.playerId,
-    'player-a',
-  );
-
-  // Idempotent retries: the same key answers the same grant; another key of the holder too.
+  // Idempotent per purchase and guest: the same key, and another key of the same guest.
   const replay = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
-  assert.equal(replay.verified, true);
   assert.equal(replay.alreadyProcessed, true);
-  assert.equal(replay.transferred, true);
+  assert.equal(replay.restoredAcrossPlayers, true);
   assert.equal(replay.ledgerEntryId, restored.ledgerEntryId);
   assert.equal(finalized.at(-1)?.evidenceVerificationId, purchaseVerificationId);
   const otherKey = await backend.purchases.verifyPurchase(
     restoreRequest('player-b', { idempotencyKey: 'another-key' }),
   );
-  assert.equal(otherKey.verified, true);
   assert.equal(otherKey.alreadyProcessed, true);
   assert.equal(otherKey.ledgerEntryId, restored.ledgerEntryId);
-
-  // A purchase intent (a checkout this client started) never moves a grant.
-  const purchaseIntent = await backend.purchases.verifyPurchase(
-    restoreRequest('player-c', { intent: 'purchase' }),
-  );
-  assert.equal(purchaseIntent.verified, false);
-  assert.equal(purchaseIntent.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
-  const { intent: _intent, ...withoutIntent } = restoreRequest('player-c');
-  void _intent;
-  const noIntent = await backend.purchases.verifyPurchase(withoutIntent);
-  assert.equal(noIntent.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
-
-  // The buyer, whose binding matches, restores it back from the other guest.
-  clock.advance(1000);
-  const back = await backend.purchases.verifyPurchase(
+  // The buyer restoring again (a new journal record) answers its own grant.
+  const buyerAgain = await backend.purchases.verifyPurchase(
     restoreRequest('player-a', { idempotencyKey: 'player-a-restore' }),
   );
-  assert.equal(back.verified, true);
-  assert.equal(back.transferred, true);
-  assert.deepEqual(
-    (await listActiveEntitlementTransactions(store)).map((grant) => grant.playerId),
-    ['player-a'],
+  assert.equal(buyerAgain.ledgerEntryId, firstLedgerEntryId);
+
+  // A checkout this client started (no restore intent) never shares.
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-c', { intent: 'purchase' }))).reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+  );
+  const { intent: _intent, ...withoutIntent } = restoreRequest('player-c');
+  void _intent;
+  assert.equal(
+    (await backend.purchases.verifyPurchase(withoutIntent)).reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
   );
 
-  // A refund that names the first grant reverses the grant that holds the purchase now.
+  // A refund that names the first grant revokes every holder.
   const refund = await revokeEntitlementGrant(store, {
     playerId: 'player-a',
     revokesLedgerEntryId: firstLedgerEntryId,
     idempotencyKey: 'google-play:voided:token',
     reason: 'refund',
-    revokedAt: clock.now(),
+    revokedAt: '2030-01-02T00:00:00.000Z',
     payload: { target: 'android' },
+    evidenceVerificationId: `${purchaseVerificationId}:revoke`,
   });
   assert.equal(refund.status, 'revoked');
   assert.deepEqual(await listActiveEntitlementTransactions(store), []);
-  // A refunded purchase never moves again.
+  // A replay finds the same entries and writes nothing new.
+  assert.equal(
+    (await revokeEntitlementGrant(store, {
+      playerId: 'player-a',
+      revokesLedgerEntryId: firstLedgerEntryId,
+      idempotencyKey: 'google-play:voided:token',
+      reason: 'refund',
+      revokedAt: '2030-01-02T00:00:00.000Z',
+      payload: { target: 'android' },
+      evidenceVerificationId: `${purchaseVerificationId}:revoke`,
+    })).status,
+    'revoked',
+  );
+  // A refunded purchase is never shared again, and the holders' keys answer reversed.
   assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-d')), {
     verified: false,
     alreadyProcessed: false,
     disposition: 'rejected',
     reason: 'LEDGER_GRANT_REVERSED',
   });
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-b'))).reason,
+    'LEDGER_GRANT_REVERSED',
+  );
 }
 
-// A resend under the key of a grant a later restore moved away (the losing
-// device's journal record) answers that grant as reversed, so two devices of
-// one store account cannot move it back and forth; a new journal record (a new
-// key) of the same player takes it back. An admin entry stays on its grant.
+// A refund naming a shared grant revokes the first grant and the other shares;
+// an admin entry stays on the grant it names.
 {
   const store = createInMemoryGameServicesStore();
-  const clock = createClock();
   const backend = createGameServicesBackend({
     catalog,
     placements,
     store,
-    now: clock.now,
     evidenceVerifier: createStoreVerifier(),
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share' },
   });
-  await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }));
+  const bought = await backend.purchases.verifyPurchase(
+    restoreRequest('player-a', { intent: 'purchase' }),
+  );
   const toB = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
-  clock.advance(1000);
   const toC = await backend.purchases.verifyPurchase(restoreRequest('player-c'));
-  assert.equal(toC.transferred, true);
-  clock.advance(1000);
-  assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-b')), {
-    verified: false,
-    alreadyProcessed: false,
-    disposition: 'rejected',
-    reason: 'LEDGER_GRANT_REVERSED',
-  });
-  assert.equal(
-    (await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId))?.playerId,
-    'player-c',
-  );
-  const backToB = await backend.purchases.verifyPurchase(
-    restoreRequest('player-b', { idempotencyKey: 'player-b-new-journal' }),
-  );
-  assert.equal(backToB.verified, true);
-  assert.equal(backToB.transferred, true);
-  assert.notEqual(backToB.ledgerEntryId, toB.ledgerEntryId);
-
-  // An operator's admin entry on a moved grant reverses nothing and says where it went.
   const admin = await revokeEntitlementGrant(store, {
     playerId: 'player-c',
     revokesLedgerEntryId: toC.ledgerEntryId ?? '',
     idempotencyKey: 'admin:1',
     reason: 'admin',
-    revokedAt: clock.now(),
+    revokedAt: '2030-01-02T00:00:00.000Z',
     payload: {},
   });
-  assert.deepEqual(admin, {
-    status: 'grant_transferred',
-    holderLedgerEntryId: backToB.ledgerEntryId,
-  });
+  assert.equal(admin.status, 'revoked');
   assert.deepEqual(
-    (await listActiveEntitlementTransactions(store)).map((grant) => grant.ledgerEntryId),
-    [backToB.ledgerEntryId],
+    (await listActiveEntitlementTransactions(store)).map((grant) => grant.playerId).sort(),
+    ['player-a', 'player-b'],
+  );
+  // The revoked holder does not get another share.
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-c', { idempotencyKey: 'new' })))
+      .reason,
+    'LEDGER_GRANT_REVERSED',
+  );
+  await revokeEntitlementGrant(store, {
+    playerId: 'player-b',
+    revokesLedgerEntryId: toB.ledgerEntryId ?? '',
+    idempotencyKey: 'app-store:notification:1',
+    reason: 'refund',
+    revokedAt: '2030-01-03T00:00:00.000Z',
+    payload: {},
+  });
+  assert.deepEqual(await listActiveEntitlementTransactions(store), []);
+  assert.equal(
+    (await readPurchaseLedgerStatuses(store, {
+      playerId: 'player-a',
+      ledgerEntryIds: [bought.ledgerEntryId ?? ''],
+    })).statuses[0]?.status,
+    'reversed',
   );
 }
 
-// Consumables never move, even under the move policy.
+// Consumables are never shared, even under the share policy.
 {
   const store = createInMemoryGameServicesStore();
   const backend = createGameServicesBackend({
@@ -354,7 +330,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
     placements,
     store,
     evidenceVerifier: createStoreVerifier(),
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share' },
   });
   assert.deepEqual(
     await backend.purchases.verifyPurchase(restoreRequest('player-b', { productId: 'HINT_PACK_5' })),
@@ -368,7 +344,8 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   assert.deepEqual(await store.listEntitlementTransactions(), []);
 }
 
-// A purchase no grant holds yet is granted to the restoring player.
+// A purchase no grant holds yet is granted to the restoring player; the buyer's
+// restore then gets its own share.
 {
   const store = createInMemoryGameServicesStore();
   const backend = createGameServicesBackend({
@@ -376,34 +353,30 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
     placements,
     store,
     evidenceVerifier: createStoreVerifier(),
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share' },
   });
   const restored = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
   assert.equal(restored.verified, true);
-  assert.equal(restored.transferred, true);
+  assert.equal(restored.restoredAcrossPlayers, true);
   const [grant] = await store.listEntitlementTransactions();
   assert.equal(grant?.playerId, 'player-b');
   assert.equal(grant?.evidenceVerificationId, purchaseVerificationId);
   assert.equal(grant?.payload.restoredAcrossAccounts, true);
+  assert.equal(grant?.payload.platformTransactionId, 'GPA.1234');
   const retried = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
   assert.equal(retried.alreadyProcessed, true);
-  assert.equal(retried.transferred, true, 'a retry still says the purchase was restored here');
-  assert.equal(grant?.payload.platformTransactionId, 'GPA.1234');
-  // The buyer's later checkout answers that another player holds the purchase;
-  // the buyer's restore (binding matches) moves it back.
-  const buyer = await backend.purchases.verifyPurchase(
-    restoreRequest('player-a', { intent: 'purchase' }),
+  assert.equal(retried.restoredAcrossPlayers, true);
+  // The buyer's checkout answers that another player holds the purchase; its restore shares.
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }))).reason,
+    'EVIDENCE_ALREADY_PROCESSED',
   );
-  assert.equal(buyer.reason, 'EVIDENCE_ALREADY_PROCESSED');
   const buyerRestore = await backend.purchases.verifyPurchase(
     restoreRequest('player-a', { idempotencyKey: 'player-a-restore' }),
   );
   assert.equal(buyerRestore.verified, true);
-  assert.equal(buyerRestore.transferred, true);
-  assert.equal(
-    (await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId))?.playerId,
-    'player-a',
-  );
+  assert.equal(buyerRestore.restoredAcrossPlayers, true);
+  assert.equal((await listActiveEntitlementTransactions(store)).length, 2);
 }
 
 // A key another isolate filled with a different purchase after the lookup is a
@@ -427,7 +400,6 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
     getEntitlementTransaction: (id) => inner.getEntitlementTransaction(id),
     listEntitlementTransactions: async () => [],
     findEntitlementRevocations: (input) => inner.findEntitlementRevocations(input),
-    recordEntitlementTransfer: (input) => inner.recordEntitlementTransfer(input),
     recordLeaderboardScore: (input, options) => inner.recordLeaderboardScore(input, options),
     getLeaderboardTransaction: (id) => inner.getLeaderboardTransaction(id),
     listLeaderboardTransactions: () => inner.listLeaderboardTransactions(),
@@ -437,7 +409,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
     placements,
     store,
     evidenceVerifier: createStoreVerifier(),
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share' },
   });
   assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-b')), {
     verified: false,
@@ -447,186 +419,8 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   });
 }
 
-// Rate limit: at most N moves per purchase in the window; later restores wait for it.
-{
-  const store = createInMemoryGameServicesStore();
-  const clock = createClock();
-  const backend = createGameServicesBackend({
-    catalog,
-    placements,
-    store,
-    now: clock.now,
-    evidenceVerifier: createStoreVerifier(),
-    restoreTransfers: { mode: 'move', maxTransfersPerWindow: 2, windowMs: 30 * day },
-  });
-  await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }));
-  clock.advance(day);
-  assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-b'))).transferred,
-    true,
-  );
-  clock.advance(day);
-  assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-c'))).transferred,
-    true,
-  );
-  clock.advance(day);
-  assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-d')), {
-    verified: false,
-    alreadyProcessed: false,
-    disposition: 'pending',
-    reason: 'PURCHASE_TRANSFER_RATE_LIMITED',
-  });
-  // The first move leaves the window after 30 days.
-  clock.advance(28 * day);
-  const later = await backend.purchases.verifyPurchase(restoreRequest('player-d'));
-  assert.equal(later.verified, true);
-  assert.equal(later.transferred, true);
-  const holder = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId);
-  assert.equal(holder?.playerId, 'player-d');
-  assert.equal(holder?.payload.transferSequence, 3);
-}
-
-// Concurrent restores from two guests in separate processes: one wins, one waits.
-{
-  const shared = createInMemoryGameServicesStore();
-  // Both isolates have read the ledger before either writes its move.
-  let arrived = 0;
-  let releaseWriters = (): void => {};
-  const writersReady = new Promise<void>((resolve) => {
-    releaseWriters = resolve;
-  });
-  // Two wrappers model two Worker isolates: the in-process locks are per
-  // store object, so only the ledger write decides the race.
-  const isolate = (): GameServicesStore => {
-    const wrapper: GameServicesStore = {
-      recordEntitlementGrant: (input) => shared.recordEntitlementGrant(input),
-      findEntitlementTransactionByIdempotency: (input) =>
-        shared.findEntitlementTransactionByIdempotency(input),
-      findEntitlementTransactionByEvidenceVerificationId: (input) =>
-        shared.findEntitlementTransactionByEvidenceVerificationId(input),
-      findEntitlementTransactionByPlatformEvidence: (input) =>
-        shared.findEntitlementTransactionByPlatformEvidence(input),
-      getEntitlementTransaction: (id) => shared.getEntitlementTransaction(id),
-      getEntitlementTransactions: (ids) => shared.getEntitlementTransactions(ids),
-      listEntitlementTransactions: () => shared.listEntitlementTransactions(),
-      recordEntitlementRevocation: (input) => shared.recordEntitlementRevocation(input),
-      findEntitlementRevocations: (input) => shared.findEntitlementRevocations(input),
-      recordEntitlementTransfer: async (input) => {
-        arrived += 1;
-        if (arrived === 2) {
-          releaseWriters();
-        }
-        await writersReady;
-        return shared.recordEntitlementTransfer(input);
-      },
-      recordLeaderboardScore: (input, options) => shared.recordLeaderboardScore(input, options),
-      getLeaderboardTransaction: (id) => shared.getLeaderboardTransaction(id),
-      listLeaderboardTransactions: () => shared.listLeaderboardTransactions(),
-    };
-    return wrapper;
-  };
-  const backendFor = (store: GameServicesStore) => createGameServicesBackend({
-    catalog,
-    placements,
-    store,
-    evidenceVerifier: createStoreVerifier(),
-    restoreTransfers: { mode: 'move' },
-  });
-  await backendFor(shared).purchases.verifyPurchase(
-    restoreRequest('player-a', { intent: 'purchase' }),
-  );
-  const [left, right] = await Promise.all([
-    backendFor(isolate()).purchases.verifyPurchase(restoreRequest('player-b')),
-    backendFor(isolate()).purchases.verifyPurchase(restoreRequest('player-c')),
-  ]);
-  const answers = [left, right];
-  assert.equal(answers.filter((answer) => answer.verified).length, 1);
-  assert.deepEqual(
-    answers.find((answer) => !answer.verified),
-    {
-      verified: false,
-      alreadyProcessed: false,
-      disposition: 'pending',
-      reason: 'PURCHASE_TRANSFER_CONFLICT',
-    },
-  );
-  assert.equal((await listActiveEntitlementTransactions(shared)).length, 1);
-}
-
-// The store's transfer write: atomic, replay-safe, and a grant moves once.
-{
-  const store = createInMemoryGameServicesStore();
-  await store.recordEntitlementGrant({
-    playerId: 'player-a',
-    grantId: 'REMOVE_ADS',
-    source: 'purchase',
-    idempotencyKey: 'buy',
-    grantedAt: '2030-01-01T00:00:00.000Z',
-    payload: { target: 'android', platformTransactionId: 'GPA.1' },
-    evidenceVerificationId: purchaseVerificationId,
-  });
-  const [first] = await store.listEntitlementTransactions() as ProductGrantTransaction[];
-  const transferTo = (playerId: string, sequence = 1) => {
-    const evidence = createPurchaseTransferEvidenceVerificationId(purchaseVerificationId, sequence);
-    return {
-      revocation: {
-        playerId: 'player-a',
-        revokesLedgerEntryId: first?.ledgerEntryId ?? '',
-        idempotencyKey: `transfer:${evidence}`,
-        reason: 'transfer' as const,
-        revokedAt: '2030-01-02T00:00:00.000Z',
-        payload: { transferEvidenceVerificationId: evidence },
-      },
-      grant: {
-        playerId,
-        grantId: 'REMOVE_ADS',
-        source: 'purchase' as const,
-        idempotencyKey: `restore:${playerId}`,
-        grantedAt: '2030-01-02T00:00:00.000Z',
-        payload: { target: 'android', transferredFromLedgerEntryId: first?.ledgerEntryId ?? '' },
-        evidenceVerificationId: evidence,
-      },
-    };
-  };
-  const written = await store.recordEntitlementTransfer(transferTo('player-b'));
-  assert.equal(written.alreadyProcessed, false);
-  assert.deepEqual(await store.recordEntitlementTransfer(transferTo('player-b')), {
-    ...written,
-    alreadyProcessed: true,
-  });
-  await assert.rejects(
-    store.recordEntitlementTransfer(transferTo('player-c')),
-    EntitlementTransferConflictError,
-  );
-  await assert.rejects(
-    store.recordEntitlementTransfer(transferTo('player-c', 2)),
-    EntitlementTransferConflictError,
-  );
-  assert.equal((await store.listEntitlementTransactions()).length, 2);
-  // The transfer reason is the transfer write's alone.
-  await assert.rejects(
-    store.recordEntitlementRevocation({
-      ...transferTo('player-c').revocation,
-      idempotencyKey: 'other',
-    }),
-  );
-  // A refund of a moved grant answers the transfer entry instead of a second reversal.
-  const refund = await store.recordEntitlementRevocation({
-    playerId: 'player-a',
-    revokesLedgerEntryId: first?.ledgerEntryId ?? '',
-    idempotencyKey: 'refund',
-    reason: 'refund',
-    revokedAt: '2030-01-03T00:00:00.000Z',
-    payload: {},
-  });
-  assert.deepEqual(refund, {
-    ledgerEntryId: written.revocationLedgerEntryId,
-    alreadyProcessed: true,
-  });
-}
-
-// A deleted player's retained record is never revived for that id; a new guest gets a fresh grant linked to it.
+// The cap: at most maxHolders players hold a purchase; past it the restore waits
+// (retryable) and nobody is evicted. A deleted player's retained record does not count.
 {
   const store = createInMemoryGameServicesStore();
   const backend = createGameServicesBackend({
@@ -634,8 +428,9 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
     placements,
     store,
     evidenceVerifier: createStoreVerifier({ buyer: 'nobody' }),
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share', maxHolders: 3 },
   });
+  // The buyer deleted its account: its retained record keeps the purchase's evidence id.
   await store.recordEntitlementGrant({
     playerId: 'deleted:deletion-1',
     grantId: 'REMOVE_ADS',
@@ -646,35 +441,113 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
     payload: { target: 'android', productId: 'REMOVE_ADS', platformTransactionId: 'GPA.1234' },
     evidenceVerificationId: purchaseVerificationId,
   });
-  const restored = await backend.purchases.verifyPurchase(restoreRequest('player-new'));
-  assert.equal(restored.transferred, true);
-  const retained = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId, {
-    followTransfers: false,
+  for (const playerId of ['player-b', 'player-c', 'player-d']) {
+    assert.equal(
+      (await backend.purchases.verifyPurchase(restoreRequest(playerId))).restoredAcrossPlayers,
+      true,
+      `${playerId} gets a slot`,
+    );
+  }
+  assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-e')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'pending',
+    reason: 'PURCHASE_HOLDER_LIMIT_REACHED',
   });
-  assert.equal(retained?.playerId, 'deleted:deletion-1');
-  assert.equal(retained?.payload.platformTransactionId, 'GPA.1234');
-  const fresh = await store.getEntitlementTransaction(restored.ledgerEntryId ?? '');
-  assert.equal(fresh?.playerId, 'player-new');
-  assert.equal(fresh?.payload.transferredFromLedgerEntryId, retained?.ledgerEntryId);
+  assert.equal((await listActiveEntitlementTransactions(store)).length, 4, 'nobody was evicted');
+  // The retained record is never revived for the deleted id, and the new grants link to it.
+  const holders = await listPurchaseHolders(store, purchaseVerificationId);
+  assert.equal(holders.first?.playerId, 'deleted:deletion-1');
+  assert.equal(holders.first?.payload.platformTransactionId, 'GPA.1234');
+  assert.equal(holders.shared[0]?.payload.sharedFromLedgerEntryId, holders.first?.ledgerEntryId);
+  // A holder revoked by an operator frees its place for another player.
+  await revokeEntitlementGrant(store, {
+    playerId: 'player-c',
+    revokesLedgerEntryId: holders.shared[1]?.ledgerEntryId ?? '',
+    idempotencyKey: 'admin:free',
+    reason: 'admin',
+    revokedAt: '2030-01-02T00:00:00.000Z',
+    payload: {},
+  });
+  const later = await backend.purchases.verifyPurchase(restoreRequest('player-e'));
+  assert.equal(later.restoredAcrossPlayers, true);
+  assert.equal(
+    (await store.getEntitlementTransaction(later.ledgerEntryId ?? ''))?.payload.holderSlot,
+    4,
+  );
 }
 
-// A store without the transfer write keeps refusing.
+// Concurrent restores from separate isolates: all succeed while slots are free,
+// and the cap holds under the race.
 {
-  const inner = createInMemoryGameServicesStore();
-  const store: GameServicesStore = {
-    recordEntitlementGrant: (input) => inner.recordEntitlementGrant(input),
-    getEntitlementTransaction: (id) => inner.getEntitlementTransaction(id),
-    listEntitlementTransactions: () => inner.listEntitlementTransactions(),
-    recordLeaderboardScore: (input, options) => inner.recordLeaderboardScore(input, options),
-    getLeaderboardTransaction: (id) => inner.getLeaderboardTransaction(id),
-    listLeaderboardTransactions: () => inner.listLeaderboardTransactions(),
-  };
-  const backend = createGameServicesBackend({
+  const shared = createInMemoryGameServicesStore();
+  // Every isolate has read the holders before any writes its share.
+  let arrived = 0;
+  const writers = 4;
+  let releaseWriters = (): void => {};
+  const writersReady = new Promise<void>((resolve) => {
+    releaseWriters = resolve;
+  });
+  // Separate wrappers model separate Worker isolates: the in-process locks are
+  // per store object, so only the ledger write decides the race.
+  const isolate = (): GameServicesStore => ({
+    recordEntitlementGrant: async (input) => {
+      if (input.idempotencyKey.startsWith('mpgd-holder:') && arrived < writers) {
+        arrived += 1;
+        if (arrived === writers) {
+          releaseWriters();
+        }
+        await writersReady;
+      }
+      return shared.recordEntitlementGrant(input);
+    },
+    findEntitlementTransactionByIdempotency: (input) =>
+      shared.findEntitlementTransactionByIdempotency(input),
+    findEntitlementTransactionByEvidenceVerificationId: (input) =>
+      shared.findEntitlementTransactionByEvidenceVerificationId(input),
+    findEntitlementTransactionByPlatformEvidence: (input) =>
+      shared.findEntitlementTransactionByPlatformEvidence(input),
+    getEntitlementTransaction: (id) => shared.getEntitlementTransaction(id),
+    getEntitlementTransactions: (ids) => shared.getEntitlementTransactions(ids),
+    listEntitlementTransactions: () => shared.listEntitlementTransactions(),
+    recordEntitlementRevocation: (input) => shared.recordEntitlementRevocation(input),
+    findEntitlementRevocations: (input) => shared.findEntitlementRevocations(input),
+    recordLeaderboardScore: (input, options) => shared.recordLeaderboardScore(input, options),
+    getLeaderboardTransaction: (id) => shared.getLeaderboardTransaction(id),
+    listLeaderboardTransactions: () => shared.listLeaderboardTransactions(),
+  });
+  const backendFor = (store: GameServicesStore) => createGameServicesBackend({
     catalog,
     placements,
     store,
     evidenceVerifier: createStoreVerifier(),
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share', maxHolders: 3 },
+  });
+  await backendFor(shared).purchases.verifyPurchase(
+    restoreRequest('player-a', { intent: 'purchase' }),
+  );
+  const answers = await Promise.all(
+    ['player-b', 'player-c', 'player-d', 'player-e'].map((playerId) =>
+      backendFor(isolate()).purchases.verifyPurchase(restoreRequest(playerId)),
+    ),
+  );
+  assert.equal(answers.filter((answer) => answer.verified).length, 2, 'two free slots, two shares');
+  assert.deepEqual(
+    answers.filter((answer) => !answer.verified).map((answer) => answer.reason),
+    ['PURCHASE_HOLDER_LIMIT_REACHED', 'PURCHASE_HOLDER_LIMIT_REACHED'],
+  );
+  assert.equal((await listActiveEntitlementTransactions(shared)).length, 3, 'the cap holds');
+}
+
+// Without the share policy's store reads the restore is refused as before.
+{
+  const inner = createInMemoryGameServicesStore();
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store: inner,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'refuse' },
   });
   assert.equal(
     (await backend.purchases.verifyPurchase(restoreRequest('player-b'))).reason,
@@ -708,7 +581,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   };
   const boundary = createGooglePlayProductPurchaseBoundary({
     client,
-    packageName: 'dev.mpgd.transfer',
+    packageName: 'dev.mpgd.sharing',
     now: () => '2030-01-02T03:04:06.000Z',
     resolveObfuscatedAccountId: (playerId) => `account:${playerId}`,
   });
@@ -747,7 +620,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
       verifyAdReward: async () => ({ status: 'rejected', reason: 'UNUSED' }),
     },
     purchaseGrantFinalizer: boundary,
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share' },
   });
 
   // The verifier reports the foreign binding only for a restore of a non-consumable.
@@ -783,7 +656,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   assert.equal(bought.finalization?.status, 'completed');
   const restored = await backend.purchases.verifyPurchase(playRequest('token-1', 'player-b'));
   assert.equal(restored.verified, true);
-  assert.equal(restored.transferred, true);
+  assert.equal(restored.restoredAcrossPlayers, true);
   assert.equal(restored.finalization?.status, 'completed');
   assert.equal(restored.finalization?.alreadyCompleted, true);
   assert.deepEqual(acknowledged, ['token-1']);
@@ -799,7 +672,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   setPurchase('token-2');
   const unacknowledged = await backend.purchases.verifyPurchase(playRequest('token-2', 'player-b'));
   assert.equal(unacknowledged.verified, true);
-  assert.equal(unacknowledged.transferred, true);
+  assert.equal(unacknowledged.restoredAcrossPlayers, true);
   assert.equal(unacknowledged.finalization?.status, 'completed');
   assert.equal(unacknowledged.finalization?.alreadyCompleted, false);
   assert.deepEqual(acknowledged, ['token-1', 'token-2']);
@@ -808,7 +681,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   setPurchase('token-3');
   delete purchases.get('token-3')?.obfuscatedExternalAccountId;
   assert.equal(
-    (await backend.purchases.verifyPurchase(playRequest('token-3', 'player-b'))).transferred,
+    (await backend.purchases.verifyPurchase(playRequest('token-3', 'player-b'))).restoredAcrossPlayers,
     true,
   );
 
@@ -882,7 +755,7 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
     placements,
     store,
     evidenceVerifier: verifier,
-    restoreTransfers: { mode: 'move' },
+    restoreSharing: { mode: 'share' },
   });
   const bought = await backend.purchases.verifyPurchase(
     iosRequest('player-a', { intent: 'purchase' }),
@@ -890,13 +763,13 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   assert.equal(bought.verified, true);
   const restored = await backend.purchases.verifyPurchase(iosRequest('player-b'));
   assert.equal(restored.verified, true);
-  assert.equal(restored.transferred, true);
+  assert.equal(restored.restoredAcrossPlayers, true);
   assert.deepEqual(
-    (await listActiveEntitlementTransactions(store)).map((grant) => grant.playerId),
-    ['player-b'],
+    (await listActiveEntitlementTransactions(store)).map((grant) => grant.playerId).sort(),
+    ['player-a', 'player-b'],
   );
 
-  // Without the client's StoreKit-verified JWS a transaction id alone never moves a purchase.
+  // Without the client's StoreKit-verified JWS a transaction id alone never shares a purchase.
   const { evidence: _evidence, ...withoutEvidence } = iosRequest('player-c');
   void _evidence;
   assert.equal(
@@ -916,4 +789,4 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   );
 }
 
-console.log('purchase transfer tests passed');
+console.log('purchase sharing tests passed');

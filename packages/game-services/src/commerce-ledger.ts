@@ -109,19 +109,6 @@ export async function readPurchaseLedgerStatuses(
   return assertPurchaseLedgerStatusResponse({ statuses });
 }
 
-/**
- * A transfer that cannot be written as asked (RFC "Restore transfers"): the
- * grant it moves was already reversed (a refund, or another transfer that
- * won the race), or the move's grant key or evidence id is taken by
- * another entry. Nothing was written.
- */
-export class EntitlementTransferConflictError extends Error {
-  constructor() {
-    super('The entitlement transfer conflicts with an existing ledger entry.');
-    this.name = 'EntitlementTransferConflictError';
-  }
-}
-
 /** A revocation key reused for another grant than the one it first reversed. */
 export class RevocationKeyConflictError extends Error {
   constructor() {
@@ -137,13 +124,7 @@ export type RevokeEntitlementGrantResult =
   /** The notification key already reversed another grant. */
   | { readonly status: 'key_conflict' }
   /** The notification's authority identity already reversed another grant. */
-  | { readonly status: 'evidence_already_processed' }
-  /**
-   * An admin entry for a grant a restore transfer moved: nothing was
-   * reversed; `holderLedgerEntryId` holds the purchase now (RFC "Restore
-   * transfers"). Store events follow the move instead.
-   */
-  | { readonly status: 'grant_transferred'; readonly holderLedgerEntryId: string };
+  | { readonly status: 'evidence_already_processed' };
 
 /**
  * Appends a `revoke` entry for an earlier grant: the write path of store
@@ -158,14 +139,6 @@ export async function revokeEntitlementGrant(
   store: GameServicesStore,
   input: EntitlementLedgerRevocation,
 ): Promise<RevokeEntitlementGrantResult> {
-  return revokeEntitlementGrantAt(store, input, 0);
-}
-
-async function revokeEntitlementGrantAt(
-  store: GameServicesStore,
-  input: EntitlementLedgerRevocation,
-  depth: number,
-): Promise<RevokeEntitlementGrantResult> {
   const revocation = assertEntitlementLedgerRevocation(input);
   if (store.recordEntitlementRevocation === undefined) {
     throw new Error('This GameServicesStore does not record entitlement revocations.');
@@ -177,33 +150,14 @@ async function revokeEntitlementGrantAt(
   if (grant.playerId !== revocation.playerId) {
     return { status: 'grant_mismatch' };
   }
-  if (revocation.reason === 'transfer') {
-    throw new Error(
-      'Transfers are written by recordEntitlementTransfer, not revokeEntitlementGrant.',
-    );
-  }
   try {
     const result = await store.recordEntitlementRevocation(revocation);
-    if (result.alreadyProcessed && grant.source === 'purchase') {
-      // The grant moved to another player (a restore transfer) before this
-      // store event: the event is about the purchase, so it reverses the
-      // grant that holds it now. An admin entry names its grant: it is told
-      // the grant moved, and reverses nothing.
-      const holder = await resolvePurchaseGrantHolder(store, grant);
-      if (holder.grant.ledgerEntryId !== grant.ledgerEntryId && revocation.reason === 'admin') {
-        return { status: 'grant_transferred', holderLedgerEntryId: holder.grant.ledgerEntryId };
-      }
-      if (holder.grant.ledgerEntryId !== grant.ledgerEntryId && depth < maxPurchaseTransferChain) {
-        return revokeEntitlementGrantAt(
-          store,
-          {
-            ...revocation,
-            playerId: holder.grant.playerId,
-            revokesLedgerEntryId: holder.grant.ledgerEntryId,
-          },
-          depth + 1,
-        );
-      }
+    if (grant.source === 'purchase' && revocation.reason !== 'admin') {
+      // A store event (refund, chargeback, voided purchase) is about the
+      // purchase: every player a verified restore shared it with loses it
+      // too (RFC "Restore sharing"). Replays finish a fan-out an earlier
+      // attempt left part-way. An admin entry stays on the grant it names.
+      await revokeOtherPurchaseHolders(store, grant, revocation);
     }
     return {
       status: 'revoked',
@@ -225,108 +179,9 @@ async function revokeEntitlementGrantAt(
  * The purchase grant a provider verification id names (the
  * `evidenceVerificationId` the purchase verifier recorded), through the
  * store's index when it has one. Store notification handlers start here:
- * a refund names the store's transaction, never a ledger entry. A purchase
- * moved by restore transfers answers the grant that holds it now (RFC
- * "Restore transfers"); `followTransfers: false` answers the first grant.
+ * a refund names the store's transaction, never a ledger entry.
  */
 export async function findPurchaseGrantByEvidenceVerificationId(
-  store: GameServicesStore,
-  evidenceVerificationId: string,
-  options: { readonly followTransfers?: boolean } = {},
-): Promise<ProductGrantTransaction | undefined> {
-  const grant = await findPurchaseGrantRecord(store, evidenceVerificationId);
-  if (grant === undefined || options.followTransfers === false) {
-    return grant;
-  }
-  return (await resolvePurchaseGrantHolder(store, grant)).grant;
-}
-
-/** Longest chain of moves one purchase may have; a longer one is a ledger error. */
-export const maxPurchaseTransferChain = 1000;
-
-/**
- * Where a purchase is now (RFC "Restore transfers"): `grant` holds it
- * unless `reversal` says otherwise. `transfers` are the `revoke` entries
- * (reason `transfer`) the purchase moved through from the first grant,
- * oldest first. `reversal` is the entry that reversed `grant`: a refund or
- * other reversal, or a transfer whose receiving grant cannot be read.
- */
-export interface PurchaseGrantHolder {
-  readonly grant: ProductGrantTransaction;
-  readonly transfers: readonly EntitlementRevocationTransaction[];
-  readonly reversal?: EntitlementRevocationTransaction;
-}
-
-/** Follows a purchase grant's transfers to the grant that holds the purchase now. */
-export async function resolvePurchaseGrantHolder(
-  store: GameServicesStore,
-  first: ProductGrantTransaction,
-): Promise<PurchaseGrantHolder> {
-  let grant = first;
-  const transfers: EntitlementRevocationTransaction[] = [];
-  const seen = new Set<string>([grant.ledgerEntryId]);
-  for (let step = 0; step <= maxPurchaseTransferChain; step += 1) {
-    const [reversal] = await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId]);
-    if (reversal === undefined) {
-      return { grant, transfers };
-    }
-    const nextEvidence = reversal.payload.transferEvidenceVerificationId;
-    const next = reversal.reason === 'transfer' && typeof nextEvidence === 'string'
-      ? await findPurchaseGrantRecord(store, nextEvidence)
-      : undefined;
-    if (next === undefined || seen.has(next.ledgerEntryId)) {
-      return { grant, transfers, reversal };
-    }
-    seen.add(next.ledgerEntryId);
-    transfers.push(reversal);
-    grant = next;
-  }
-  throw new Error('A purchase grant moved more often than maxPurchaseTransferChain.');
-}
-
-/**
- * The store verification id of the purchase a grant records: the
- * purchase's own id for a grant a restore transfer wrote (whose ledger
- * evidence id names the move), otherwise the grant's evidence id. A
- * finalizer (a Play acknowledge) is keyed by it.
- */
-export function readPurchaseVerificationId(
-  transaction: ProductGrantTransaction,
-): string | undefined {
-  const transferred = transaction.payload.transferOfEvidenceVerificationId;
-  if (typeof transferred === 'string' && transferred.length > 0) {
-    return transferred;
-  }
-  const recorded = transaction.evidenceVerificationId ?? transaction.payload.evidenceVerificationId;
-  return typeof recorded === 'string' && recorded.length > 0 ? recorded : undefined;
-}
-
-/**
- * Whether a restore transfer wrote this grant (RFC "Restore transfers"): a
- * move from another player's grant, or a restore of a purchase no grant held
- * yet that the store bound to another player (`restoredAcrossAccounts`).
- */
-export function isPurchaseTransferGrant(transaction: ProductGrantTransaction): boolean {
-  const from = transaction.payload.transferredFromLedgerEntryId;
-  return (typeof from === 'string' && from.length > 0)
-    || transaction.payload.restoredAcrossAccounts === true;
-}
-
-/**
- * The evidence id of the `sequence`-th move of a purchase (1 for the first):
- * unique per move, so two concurrent moves of the same holder collide.
- */
-export function createPurchaseTransferEvidenceVerificationId(
-  purchaseVerificationId: string,
-  sequence: number,
-): string {
-  if (!Number.isSafeInteger(sequence) || sequence < 1) {
-    throw new RangeError('A transfer sequence is a positive integer.');
-  }
-  return `mpgd-transfer:${String(sequence)}:${purchaseVerificationId}`;
-}
-
-async function findPurchaseGrantRecord(
   store: GameServicesStore,
   evidenceVerificationId: string,
 ): Promise<ProductGrantTransaction | undefined> {
@@ -341,6 +196,129 @@ async function findPurchaseGrantRecord(
         evidenceVerificationId,
       });
   return grant?.source === 'purchase' ? grant : undefined;
+}
+
+/** Longest run of holder slots one purchase may have; more is a ledger error. */
+export const maxPurchaseHolderSlots = 10_000;
+
+/**
+ * Every grant of one purchase (RFC "Restore sharing"): `first`, the grant its
+ * store verification id names, and `shared`, the grants verified restores
+ * wrote for other players, in slot order. Slots are dense: a share is
+ * written at `nextSlot`, the first free one, so two concurrent writers that
+ * read the same holders collide on one evidence id and the holder cap holds.
+ */
+export interface PurchaseHolders {
+  readonly first?: ProductGrantTransaction;
+  readonly shared: readonly ProductGrantTransaction[];
+  readonly nextSlot: number;
+}
+
+export async function listPurchaseHolders(
+  store: GameServicesStore,
+  purchaseVerificationId: string,
+): Promise<PurchaseHolders> {
+  const first = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId);
+  const shared: ProductGrantTransaction[] = [];
+  for (let slot = 1; slot <= maxPurchaseHolderSlots; slot += 1) {
+    const grant = await findPurchaseGrantByEvidenceVerificationId(
+      store,
+      createPurchaseHolderEvidenceVerificationId(purchaseVerificationId, slot),
+    );
+    if (grant === undefined) {
+      return { ...(first === undefined ? {} : { first }), shared, nextSlot: slot };
+    }
+    shared.push(grant);
+  }
+  throw new Error('A purchase has more holder slots than maxPurchaseHolderSlots.');
+}
+
+/**
+ * The evidence id of a purchase's `slot`-th shared grant (1 for the first
+ * share): unique per slot, so a slot is written once.
+ */
+export function createPurchaseHolderEvidenceVerificationId(
+  purchaseVerificationId: string,
+  slot: number,
+): string {
+  if (!Number.isSafeInteger(slot) || slot < 1) {
+    throw new RangeError('A holder slot is a positive integer.');
+  }
+  return `mpgd-holder:${String(slot)}:${purchaseVerificationId}`;
+}
+
+/**
+ * The idempotency key of a player's shared grant of a purchase: one per
+ * player and purchase, so a player holds a purchase once even when two of
+ * its requests race.
+ */
+export function createPurchaseHolderIdempotencyKey(purchaseVerificationId: string): string {
+  return `mpgd-holder:${purchaseVerificationId}`;
+}
+
+/**
+ * The store verification id of the purchase a grant records: the purchase's
+ * own id for a shared grant (whose ledger evidence id names its slot),
+ * otherwise the grant's evidence id. Finalizers (a Play acknowledge) and
+ * refunds are keyed by it.
+ */
+export function readPurchaseVerificationId(
+  transaction: ProductGrantTransaction,
+): string | undefined {
+  const shared = transaction.payload.holderOfEvidenceVerificationId;
+  if (typeof shared === 'string' && shared.length > 0) {
+    return shared;
+  }
+  const recorded = transaction.evidenceVerificationId ?? transaction.payload.evidenceVerificationId;
+  return typeof recorded === 'string' && recorded.length > 0 ? recorded : undefined;
+}
+
+/**
+ * Whether a verified restore across players wrote this grant: a shared
+ * grant, or a purchase's first grant written for a player the store did not
+ * bind it to (`restoredAcrossAccounts`).
+ */
+export function isRestoredAcrossPlayers(transaction: ProductGrantTransaction): boolean {
+  const shared = transaction.payload.holderOfEvidenceVerificationId;
+  return (typeof shared === 'string' && shared.length > 0)
+    || transaction.payload.restoredAcrossAccounts === true;
+}
+
+async function revokeOtherPurchaseHolders(
+  store: GameServicesStore,
+  named: ProductGrantTransaction,
+  revocation: EntitlementLedgerRevocation,
+): Promise<void> {
+  const purchaseVerificationId = readPurchaseVerificationId(named);
+  const record = store.recordEntitlementRevocation;
+  if (purchaseVerificationId === undefined || record === undefined) {
+    return;
+  }
+  const holders = await listPurchaseHolders(store, purchaseVerificationId);
+  const others = [...(holders.first === undefined ? [] : [holders.first]), ...holders.shared]
+    .filter((holder) => holder.ledgerEntryId !== named.ledgerEntryId);
+  if (others.length === 0) {
+    return;
+  }
+  const reversed = new Set(
+    (await findEntitlementRevocationsChunked(store, others.map((holder) => holder.ledgerEntryId)))
+      .map((entry) => entry.revokesLedgerEntryId),
+  );
+  for (const holder of others) {
+    if (reversed.has(holder.ledgerEntryId)) {
+      continue;
+    }
+    await record.call(store, {
+      ...revocation,
+      playerId: holder.playerId,
+      revokesLedgerEntryId: holder.ledgerEntryId,
+      // The store event's own identity names one entry; each holder's is
+      // derived from it, so a replay finds the same entries.
+      ...(revocation.evidenceVerificationId === undefined
+        ? {}
+        : { evidenceVerificationId: `${revocation.evidenceVerificationId}#${holder.ledgerEntryId}` }),
+    });
+  }
 }
 
 /** Whether a grant was reversed by a `revoke` entry; false on a store without revocations. */

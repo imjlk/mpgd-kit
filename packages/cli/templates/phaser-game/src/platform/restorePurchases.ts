@@ -21,12 +21,22 @@ type RestoreRecovery = Pick<RecoverableMonetizationClient, 'restorePurchases' | 
 export type StarterRestoreOutcome =
   /**
    * `granted`: purchases the backend ledger granted in this pass (0 when
-   * nothing new). `moved`: how many of them the backend moved to this player
-   * from an earlier guest (a reinstall or a new device); absent when none.
+   * nothing new). `restoredHere`: how many of them the backend granted this
+   * player from a purchase another guest of the same store account made or
+   * holds (a reinstall, a new device, a second device); absent when none.
    */
-  | { readonly outcome: 'restored'; readonly granted: number; readonly moved?: number }
-  /** Some purchases are still unconfirmed; `granted` were confirmed in this pass. */
-  | { readonly outcome: 'incomplete'; readonly granted: number; readonly moved?: number }
+  | { readonly outcome: 'restored'; readonly granted: number; readonly restoredHere?: number }
+  /**
+   * Some purchases are still unconfirmed; `granted` were confirmed in this
+   * pass. `atHolderLimit`: how many of the unconfirmed ones are already held
+   * by the most devices the backend allows (`PURCHASE_HOLDER_LIMIT_REACHED`).
+   */
+  | {
+      readonly outcome: 'incomplete';
+      readonly granted: number;
+      readonly restoredHere?: number;
+      readonly atHolderLimit?: number;
+    }
   /** No server session can bind the purchases (no identity service configured). */
   | { readonly outcome: 'needs-session' }
   /** The guest sign-in failed again (offline, an outage); the control is a retry. */
@@ -101,13 +111,19 @@ export function createStarterRestorePurchases(input: {
     // A purchase found, verified and finished within this pass is no longer
     // recoverable afterwards, so the summaries miss it; its transitions do not.
     const settledKeys = new Set<string>();
-    // Purchases the backend moved from an earlier guest of this device's
-    // store account (a reinstall or a new device): "restored to this device".
-    const movedKeys = new Set<string>();
+    // Purchases the backend granted from another guest of this device's
+    // store account (a reinstall, a new device): "restored to this device".
+    const restoredKeys = new Set<string>();
+    // Purchases already held by the most devices the backend allows.
+    const limitKeys = new Set<string>();
     const unsubscribe = recovery.commerceReconciler?.subscribe((event) => {
-      if (event.type === 'verify-result' && event.response.verified
-        && event.response.transferred === true) {
-        movedKeys.add(event.record.idempotencyKey);
+      if (event.type === 'verify-result') {
+        if (event.response.verified && event.response.restoredAcrossPlayers === true) {
+          restoredKeys.add(event.record.idempotencyKey);
+        } else if (!event.response.verified
+          && event.response.reason === 'PURCHASE_HOLDER_LIMIT_REACHED') {
+          limitKeys.add(event.record.idempotencyKey);
+        }
       } else if (event.type === 'transition' && settledStates.has(event.record.state)) {
         settledKeys.add(event.record.idempotencyKey);
       } else if (event.type === 'failure' && event.stage === 'restore') {
@@ -128,16 +144,22 @@ export function createStarterRestorePurchases(input: {
         }
       }
       const granted = settledKeys.size;
-      const moved = [...movedKeys].filter((key) => settledKeys.has(key)).length;
-      const movedCount = moved === 0 ? {} : { moved };
+      const restoredHere = [...restoredKeys].filter((key) => settledKeys.has(key)).length;
+      const restoredCount = restoredHere === 0 ? {} : { restoredHere };
+      const atHolderLimit = [...limitKeys].filter((key) => !settledKeys.has(key)).length;
       // A purchase the backend has not settled yet (verify unreachable, still
-      // pending at the store, waiting on an operator) is reported as such,
-      // never as "nothing to restore".
-      if (readFailed || summaries.some((summary) => summary.status === 'pending'
+      // pending at the store, waiting on an operator, at the holder limit) is
+      // reported as such, never as "nothing to restore".
+      if (atHolderLimit > 0 || readFailed || summaries.some((summary) => summary.status === 'pending'
         || summary.status === 'action-required' || summary.status === 'failed')) {
-        return { outcome: 'incomplete', granted, ...movedCount };
+        return {
+          outcome: 'incomplete',
+          granted,
+          ...restoredCount,
+          ...(atHolderLimit === 0 ? {} : { atHolderLimit }),
+        };
       }
-      return { outcome: 'restored', granted, ...movedCount };
+      return { outcome: 'restored', granted, ...restoredCount };
     } catch (error) {
       console.error('[restore-purchases]', error);
       return { outcome: 'failed' };
@@ -163,10 +185,13 @@ export function restoreOutcomeText(locale: Locale, result: StarterRestoreOutcome
       if (result.granted === 0) {
         return t(locale, 'restoreNothing');
       }
-      return (result.moved ?? 0) > 0
-        ? t(locale, 'restoreMoved', { count: result.granted })
+      return (result.restoredHere ?? 0) > 0
+        ? t(locale, 'restoreToDevice', { count: result.granted })
         : t(locale, 'restoreDone', { count: result.granted });
     case 'incomplete':
+      if ((result.atHolderLimit ?? 0) > 0) {
+        return t(locale, 'restoreHolderLimit');
+      }
       return result.granted === 0
         ? t(locale, 'restoreIncomplete')
         : t(locale, 'restorePartial', { count: result.granted });

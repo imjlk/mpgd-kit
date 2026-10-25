@@ -23,13 +23,14 @@ import {
   type CommerceEvidenceRegistry,
 } from './commerce-evidence-registry.js';
 import {
-  createPurchaseTransferEvidenceVerificationId,
-  EntitlementTransferConflictError,
+  createPurchaseHolderEvidenceVerificationId,
+  createPurchaseHolderIdempotencyKey,
+  findEntitlementRevocationsChunked,
   isEntitlementGrantReversed,
-  isPurchaseTransferGrant,
+  isRestoredAcrossPlayers,
+  listPurchaseHolders,
   readPurchaseLedgerStatuses,
   readPurchaseVerificationId,
-  resolvePurchaseGrantHolder,
   RevocationKeyConflictError,
 } from './commerce-ledger.js';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
@@ -47,7 +48,6 @@ import {
   assertEntitlementLedgerNote,
   assertEntitlementLedgerResult,
   assertEntitlementLedgerRevocation,
-  assertEntitlementLedgerTransfer,
   assertEntitlementRevocationTransaction,
   assertGameServicesDeploymentTarget,
   assertLeaderboardScoreTransaction,
@@ -64,9 +64,7 @@ import {
   type EntitlementLedgerPayload,
   type EntitlementLedgerResult,
   type EntitlementLedgerRevocation,
-  type EntitlementLedgerTransfer,
   type EntitlementRevocationTransaction,
-  type EntitlementTransferResult,
   type GameServicesAdRewardTarget,
   type GameServicesStoreTarget,
   type LeaderboardScoreTransaction,
@@ -79,10 +77,11 @@ import {
   type VerifyPurchaseResponse,
 } from './types.js';
 import {
-  resolvePurchaseRestoreTransferPolicy,
-  type PurchaseRestoreTransferPolicy,
-  type ResolvedPurchaseRestoreTransferPolicy,
-} from './purchase-transfer.js';
+  isRetainedPurchasePlayerId,
+  resolvePurchaseRestoreSharingPolicy,
+  type PurchaseRestoreSharingPolicy,
+  type ResolvedPurchaseRestoreSharingPolicy,
+} from './purchase-sharing.js';
 import { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
 
 export { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
@@ -122,14 +121,13 @@ export interface CreateGameServicesBackendInput {
   readonly commerceEvidenceRegistry?: CommerceEvidenceRegistry;
   /**
    * How a restored non-consumable that the store binds to another player is
-   * answered (RFC "Restore transfers"). `{ mode: 'move' }` moves the grant
-   * to the restoring player, at most `maxTransfersPerWindow` (3) times per
-   * purchase in `windowMs` (30 days), on a store with
-   * `recordEntitlementTransfer`. Defaults to `{ mode: 'refuse' }`, which
-   * keeps answering the binding mismatch; the reference Worker moves by
-   * default (`GAME_SERVICES_RESTORE_TRANSFERS`).
+   * answered (RFC "Restore sharing"). `{ mode: 'share' }` grants the
+   * restoring player its own entitlement while earlier holders keep theirs,
+   * up to `maxHolders` (5) players per purchase. Defaults to
+   * `{ mode: 'refuse' }`, which keeps answering the binding mismatch; the
+   * reference Worker shares by default (`GAME_SERVICES_RESTORE_SHARING`).
    */
-  readonly restoreTransfers?: PurchaseRestoreTransferPolicy;
+  readonly restoreSharing?: PurchaseRestoreSharingPolicy;
   /**
    * Receives unexpected (non-validation) failures such as store errors before the
    * transport answers with the generic `INTERNAL_ERROR` code. Defaults to `console.error`.
@@ -208,22 +206,6 @@ export interface GameServicesStore {
   findEntitlementRevocations?(input: {
     readonly ledgerEntryIds: readonly string[];
   }): Promise<readonly EntitlementRevocationTransaction[]>;
-  /**
-   * Moves a purchase grant to another player (RFC "Restore transfers"):
-   * appends the `revoke` entry (reason `transfer`) of the grant that moves
-   * and the receiving player's grant in one write, or neither. The moved
-   * grant must exist, belong to the revocation's player, and not be
-   * reversed yet; `findEntitlementRevocations` then answers the transfer
-   * entry for it, so a grant moves once and a later refund of it answers
-   * the transfer. A replay of the same transfer (same grant key, evidence
-   * id and moved grant) answers `alreadyProcessed: true`; anything else that
-   * collides throws `EntitlementTransferConflictError` and writes nothing.
-   * `recordEntitlementRevocation` refuses reason `transfer`. Optional: a
-   * store without it keeps refusing restores across players.
-   */
-  recordEntitlementTransfer?(
-    input: EntitlementLedgerTransfer,
-  ): Promise<EntitlementTransferResult>;
   /**
    * Keeps a ledger note (a store event that grants nothing), once per
    * `noteId`: a replay answers `alreadyRecorded: true` and keeps the first.
@@ -398,9 +380,6 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     input: EntitlementLedgerRevocation,
   ): Promise<EntitlementLedgerResult> {
     const revocation = assertEntitlementLedgerRevocation(input);
-    if (revocation.reason === 'transfer') {
-      throw new Error('Transfer entries are written by recordEntitlementTransfer.');
-    }
     const key = createRevocationIdempotencyKey(revocation);
     const byKey = this.revocationsByKey.get(key);
     if (byKey !== undefined) {
@@ -444,78 +423,6 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: false,
     });
-  }
-
-  async recordEntitlementTransfer(
-    input: EntitlementLedgerTransfer,
-  ): Promise<EntitlementTransferResult> {
-    const { revocation, grant } = assertEntitlementLedgerTransfer(input);
-    const grantKey = createEntitlementIdempotencyKey(grant);
-    const revocationKey = createRevocationIdempotencyKey(revocation);
-    const recordedGrant = this.entitlementTransactionsByKey.get(grantKey);
-    const recordedRevocation = this.revocationsByKey.get(revocationKey);
-    if (recordedGrant !== undefined || recordedRevocation !== undefined) {
-      if (
-        recordedGrant !== undefined
-        && recordedRevocation !== undefined
-        && recordedGrant.evidenceVerificationId === grant.evidenceVerificationId
-        && recordedRevocation.revokesLedgerEntryId === revocation.revokesLedgerEntryId
-        && recordedRevocation.reason === 'transfer'
-      ) {
-        return {
-          ledgerEntryId: recordedGrant.ledgerEntryId,
-          revocationLedgerEntryId: recordedRevocation.ledgerEntryId,
-          alreadyProcessed: true,
-        };
-      }
-      throw new EntitlementTransferConflictError();
-    }
-    const moved = this.entitlementTransactionsById.get(revocation.revokesLedgerEntryId);
-    if (moved === undefined) {
-      // The D1 store's foreign key refuses the same write.
-      throw new Error('Entitlement transfer references an unknown grant.');
-    }
-    const evidenceKey = createEntitlementEvidenceKey({
-      source: grant.source,
-      evidenceVerificationId: grant.evidenceVerificationId ?? '',
-    });
-    const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
-    if (
-      moved.playerId !== revocation.playerId
-      || moved.source !== 'purchase'
-      || this.revocationsByGrant.has(moved.ledgerEntryId)
-      || this.entitlementTransactionsByEvidence.has(evidenceKey)
-      || (
-        platformEvidenceIdentity !== undefined
-        && this.entitlementTransactionsByPlatformEvidence.has(
-          createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
-        )
-      )
-    ) {
-      throw new EntitlementTransferConflictError();
-    }
-
-    const transaction = createEntitlementTransaction(grant);
-    const transferEntry = assertEntitlementRevocationTransaction({
-      ...revocation,
-      ledgerEntryId: createRevocationLedgerEntryId(revocation),
-    });
-    this.entitlementTransactionsByKey.set(grantKey, transaction);
-    this.entitlementTransactionsById.set(transaction.ledgerEntryId, transaction);
-    this.entitlementTransactionsByEvidence.set(evidenceKey, transaction);
-    if (platformEvidenceIdentity !== undefined) {
-      this.entitlementTransactionsByPlatformEvidence.set(
-        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
-        transaction,
-      );
-    }
-    this.revocationsByKey.set(revocationKey, transferEntry);
-    this.revocationsByGrant.set(moved.ledgerEntryId, transferEntry);
-    return {
-      ledgerEntryId: transaction.ledgerEntryId,
-      revocationLedgerEntryId: transferEntry.ledgerEntryId,
-      alreadyProcessed: false,
-    };
   }
 
   async findEntitlementRevocations(input: {
@@ -639,7 +546,7 @@ export function createGameServicesBackend(
     input.purchaseGrantFinalizationTimeoutMs,
   );
   const deploymentTargetBindings = resolveDeploymentTargetBindings(input.deploymentTargetBindings);
-  const restoreTransfers = resolvePurchaseRestoreTransferPolicy(input.restoreTransfers);
+  const restoreSharing = resolvePurchaseRestoreSharingPolicy(input.restoreSharing);
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -680,7 +587,7 @@ export function createGameServicesBackend(
           evidenceVerificationTimeoutMs,
           purchaseGrantFinalizationTimeoutMs,
           deploymentTargetBindings,
-          restoreTransfers,
+          restoreSharing,
           ...(purchaseGrantFinalizer === undefined
             ? {}
             : { purchaseGrantFinalizer }),
@@ -701,7 +608,7 @@ export function createGameServicesBackend(
               finalizationAction: verification.finalization?.action,
               finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
               finalizationReason: verification.finalization?.reason,
-              transferred: verification.transferred,
+              restoredAcrossPlayers: verification.restoredAcrossPlayers,
             },
           });
         });
@@ -1097,7 +1004,7 @@ interface PurchaseVerificationContext {
   readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
   readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
   readonly registry?: CommerceEvidenceRegistry;
-  readonly restoreTransfers: ResolvedPurchaseRestoreTransferPolicy;
+  readonly restoreSharing: ResolvedPurchaseRestoreSharingPolicy;
 }
 
 /** The ledger targets a v1 backend (no registry) accepts: the platform targets with a ledger. */
@@ -1215,16 +1122,13 @@ async function verifyPurchaseForRetry(
       ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: true,
       ...(finalization === undefined ? {} : { finalization }),
-      ...(isPurchaseTransferGrant(transaction) ? { transferred: true } : {}),
+      ...(isRestoredAcrossPlayers(transaction) ? { restoredAcrossPlayers: true } : {}),
     });
   };
   const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
 
-  // A key names one grant: a resend under the key of a grant a later
-  // restore moved away (the losing device's journal record still in flight)
-  // answers that grant as reversed. Taking the purchase back under it would
-  // let two devices of one store account move it back and forth until the
-  // rate limit locks both; a new install restores under a new player.
+  // A key names one grant: a resend under the key of a reversed grant
+  // answers it as reversed, never as a new restore.
   if (existing !== undefined) {
     return completeExistingRetry(existing);
   }
@@ -1277,7 +1181,7 @@ async function verifyPurchaseForRetry(
 
   if (verification.status === 'restorable') {
     // A verified restore of a purchase the store binds to another player.
-    return transferRestoredPurchase(
+    return shareRestoredPurchase(
       request,
       {
         product,
@@ -1350,15 +1254,12 @@ async function verifyPurchaseForRetry(
       existingEvidence !== undefined
       && request.intent === 'restore'
       && product.type === 'non_consumable'
-      && (
-        await isPurchaseTransferredAway(context.store, existingEvidence)
-        || (existingEvidence.playerId !== request.playerId && isPurchaseTransferGrant(existingEvidence))
-      )
+      && existingEvidence.playerId !== request.playerId
     ) {
-      // The store binds the purchase to this player, but a restore moved its
-      // grant to another one (or granted it to another one first, before
-      // this player's grant reached the ledger): restoring it here moves it back.
-      return transferRestoredPurchase(
+      // The store binds the purchase to this player, but a restore granted
+      // it to another player first (before this player's grant reached the
+      // ledger): this player gets its own share.
+      return shareRestoredPurchase(
         request,
         {
           product,
@@ -1547,32 +1448,18 @@ function createPurchaseGrantPayload(
   };
 }
 
-/** Whether a restore transfer moved this grant to another player. */
-async function isPurchaseTransferredAway(
-  store: GameServicesStore,
-  grant: ProductGrantTransaction,
-): Promise<boolean> {
-  if (store.findEntitlementRevocations === undefined) {
-    return false;
-  }
-  const [reversal] = await store.findEntitlementRevocations({
-    ledgerEntryIds: [grant.ledgerEntryId],
-  });
-  return reversal?.reason === 'transfer';
-}
-
 /**
- * A verified restore of a non-consumable the ledger holds for another
- * player (RFC "Restore transfers"). Under the `move` policy, for a request
- * with `intent: 'restore'` of a non-consumable on a store that writes
- * transfers, the purchase's current grant is reversed by a `transfer` entry
- * and the restoring player's grant written in the same ledger operation;
- * otherwise `refusal` is answered. A purchase no grant holds yet is granted
- * to the restoring player. A refunded purchase is refused, moves past the
- * rate limit and a lost race with another restore answer `pending`, and a
- * retry by the player who holds it answers that grant.
+ * A verified restore of a non-consumable the store binds to another player
+ * (RFC "Restore sharing"). Under the `share` policy, for a request with
+ * `intent: 'restore'` of a non-consumable, the restoring player gets its own
+ * grant linked to the purchase and earlier holders keep theirs; otherwise
+ * `refusal` is answered. A purchase no grant holds yet is granted to the
+ * restoring player as its first grant. A refunded or revoked purchase is
+ * refused, a purchase already held by `maxHolders` players answers
+ * `pending` (`PURCHASE_HOLDER_LIMIT_REACHED`) and evicts nobody, and a
+ * player that already holds it gets its grant back.
  */
-async function transferRestoredPurchase(
+async function shareRestoredPurchase(
   request: VerifyPurchaseRequest,
   input: {
     readonly product: ProductCatalog['products'][number];
@@ -1583,17 +1470,15 @@ async function transferRestoredPurchase(
   },
   context: PurchaseVerificationContext,
 ): Promise<VerifyPurchaseResponse> {
-  const { store, restoreTransfers: policy } = context;
+  const { store, restoreSharing: policy } = context;
   const { product, verification } = input;
   if (
-    policy.mode !== 'move'
+    policy.mode !== 'share'
     || request.intent !== 'restore'
     || product.type !== 'non_consumable'
-    || store.recordEntitlementTransfer === undefined
   ) {
     return input.refusal;
   }
-  const recordTransfer = store.recordEntitlementTransfer.bind(store);
   const purchaseVerificationId = verification.verificationId;
   const notGranted = (
     disposition: 'pending' | 'rejected',
@@ -1612,6 +1497,16 @@ async function transferRestoredPurchase(
     verification,
     request.platformTransactionId,
   );
+  const holderIdentity = {
+    source: 'purchase',
+    playerId: request.playerId,
+    grantId: request.productId,
+    target: request.target,
+    store: input.verifiedStore,
+    ...(request.deploymentTarget === undefined
+      ? {}
+      : { deploymentTarget: request.deploymentTarget }),
+  } as const;
   const outcome = await withEntitlementEvidenceLocks(
     store,
     [createEntitlementEvidenceKey({
@@ -1627,162 +1522,128 @@ async function transferRestoredPurchase(
           readonly alreadyProcessed: boolean;
         }
     > => {
-      const first = await findEntitlementTransactionByEvidenceVerificationId(store, {
-        source: 'purchase',
-        evidenceVerificationId: purchaseVerificationId,
-      });
-      if (first === undefined) {
-        // No grant holds the purchase: it never reached this ledger (an app
-        // closed before verifying, or bought outside the app). The store's
-        // verification is the proof, as for a move.
+      // A lost race for a slot (another isolate shared the purchase between
+      // the read and the write) reads the holders again.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const holders = await listPurchaseHolders(store, purchaseVerificationId);
+        const first = holders.first;
+        if (first === undefined) {
+          // No grant holds the purchase: it never reached this ledger (an app
+          // closed before verifying, or bought outside the app). The store's
+          // verification is the proof, as for a share.
+          const recorded = await recordEntitlementGrantUnchecked(store, {
+            playerId: request.playerId,
+            grantId: product.id,
+            source: 'purchase',
+            idempotencyKey: request.idempotencyKey,
+            grantedAt: context.now(),
+            grant: product.grant,
+            evidenceVerificationId: purchaseVerificationId,
+            payload: {
+              ...payload,
+              ...(platformTransactionId === undefined ? {} : { platformTransactionId }),
+              restoredAcrossAccounts: true,
+            },
+          });
+          if (recorded.status !== 'recorded') {
+            continue;
+          }
+          if (recorded.result.alreadyProcessed) {
+            // The key already held a grant (another isolate wrote it after the
+            // lookup): it is this restore only if it records this purchase.
+            const keyed = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
+            if (
+              keyed === undefined
+              || !matchesEntitlementRetry(keyed, {
+                ...holderIdentity,
+                idempotencyKey: request.idempotencyKey,
+              })
+              || readPurchaseVerificationId(keyed) !== purchaseVerificationId
+            ) {
+              return notGranted('rejected', 'IDEMPOTENCY_KEY_CONFLICT');
+            }
+            if (await isEntitlementGrantReversed(store, keyed.ledgerEntryId)) {
+              return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
+            }
+          }
+          return {
+            status: 'written',
+            ledgerEntryId: recorded.result.ledgerEntryId,
+            alreadyProcessed: recorded.result.alreadyProcessed,
+          };
+        }
+        if (
+          first.source !== 'purchase'
+          || first.grantId !== request.productId
+          || first.payload.target !== request.target
+          || (first.payload.store !== undefined && first.payload.store !== input.verifiedStore)
+        ) {
+          return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
+        }
+        const all = [first, ...holders.shared];
+        const reversed = new Set(
+          (await findEntitlementRevocationsChunked(store, all.map((grant) => grant.ledgerEntryId)))
+            .map((entry) => entry.revokesLedgerEntryId),
+        );
+        if (reversed.has(first.ledgerEntryId)) {
+          // Refunded or revoked: a refund reverses every holder.
+          return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
+        }
+        const own = all.find((grant) => grant.playerId === request.playerId);
+        if (own !== undefined) {
+          return reversed.has(own.ledgerEntryId)
+            ? notGranted('rejected', 'LEDGER_GRANT_REVERSED')
+            : { status: 'held', grant: own };
+        }
+        const active = all.filter((grant) =>
+          !reversed.has(grant.ledgerEntryId) && !isRetainedPurchasePlayerId(grant.playerId)).length;
+        if (active >= policy.maxHolders) {
+          return notGranted('pending', 'PURCHASE_HOLDER_LIMIT_REACHED');
+        }
+        const holderSlot = holders.nextSlot;
+        const holderEvidenceVerificationId = createPurchaseHolderEvidenceVerificationId(
+          purchaseVerificationId,
+          holderSlot,
+        );
         const recorded = await recordEntitlementGrantUnchecked(store, {
           playerId: request.playerId,
           grantId: product.id,
           source: 'purchase',
-          idempotencyKey: request.idempotencyKey,
+          // One key per player and purchase: a player holds it once.
+          idempotencyKey: createPurchaseHolderIdempotencyKey(purchaseVerificationId),
           grantedAt: context.now(),
           grant: product.grant,
-          evidenceVerificationId: purchaseVerificationId,
-          // The first grant of the purchase keeps its platform evidence; only
-          // a move (a later grant) leaves it to the grant it replaces.
+          evidenceVerificationId: holderEvidenceVerificationId,
+          // The store transaction id stays with the first grant (its platform
+          // evidence is unique); a share names the purchase by its
+          // verification id instead.
           payload: {
             ...payload,
-            ...(platformTransactionId === undefined ? {} : { platformTransactionId }),
-            restoredAcrossAccounts: true,
+            evidenceVerificationId: holderEvidenceVerificationId,
+            holderOfEvidenceVerificationId: purchaseVerificationId,
+            holderSlot,
+            sharedFromLedgerEntryId: first.ledgerEntryId,
           },
         });
         if (recorded.status !== 'recorded') {
-          return notGranted('pending', 'PURCHASE_TRANSFER_CONFLICT');
+          // The slot went to another restore; read the holders again.
+          continue;
         }
         if (recorded.result.alreadyProcessed) {
-          // The key already held a grant (another isolate wrote it after the
-          // lookup): it is this restore only if it records this purchase.
+          // This player's share landed meanwhile (another request of it).
           const keyed = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
-          if (
-            keyed === undefined
-            || !matchesEntitlementRetry(keyed, {
-              source: 'purchase',
-              playerId: request.playerId,
-              idempotencyKey: request.idempotencyKey,
-              grantId: request.productId,
-              target: request.target,
-              store: input.verifiedStore,
-              ...(request.deploymentTarget === undefined
-                ? {}
-                : { deploymentTarget: request.deploymentTarget }),
-            })
-            || readPurchaseVerificationId(keyed) !== purchaseVerificationId
-          ) {
+          if (keyed === undefined || readPurchaseVerificationId(keyed) !== purchaseVerificationId) {
             return notGranted('rejected', 'IDEMPOTENCY_KEY_CONFLICT');
           }
-          if (await isEntitlementGrantReversed(store, keyed.ledgerEntryId)) {
-            return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
-          }
+          return { status: 'held', grant: keyed };
         }
         return {
           status: 'written',
           ledgerEntryId: recorded.result.ledgerEntryId,
-          alreadyProcessed: recorded.result.alreadyProcessed,
+          alreadyProcessed: false,
         };
       }
-      const holder = await resolvePurchaseGrantHolder(store, first);
-      const current = holder.grant;
-      if (
-        current.source !== 'purchase'
-        || current.grantId !== request.productId
-        || current.payload.target !== request.target
-        || (current.payload.store !== undefined && current.payload.store !== input.verifiedStore)
-      ) {
-        return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
-      }
-      if (holder.reversal !== undefined) {
-        // Refunded, revoked, or a move whose receiving grant is unreadable.
-        return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
-      }
-      if (current.playerId === request.playerId) {
-        return { status: 'held', grant: current };
-      }
-      const nowIso = context.now();
-      const nowMs = Date.parse(nowIso);
-      const recent = holder.transfers.filter((transfer) => {
-        const at = Date.parse(transfer.revokedAt);
-        // An unreadable time counts against the limit.
-        return !Number.isFinite(at) || !Number.isFinite(nowMs) || nowMs - at < policy.windowMs;
-      }).length;
-      if (recent >= policy.maxTransfersPerWindow) {
-        return notGranted('pending', 'PURCHASE_TRANSFER_RATE_LIMITED');
-      }
-      const transferSequence = holder.transfers.length + 1;
-      const transferEvidenceVerificationId = createPurchaseTransferEvidenceVerificationId(
-        purchaseVerificationId,
-        transferSequence,
-      );
-      // The request's key names an earlier grant of this player when the
-      // purchase comes back to it: the new grant takes a key of its own.
-      const earlierGrant = await findEntitlementTransactionByIdempotency(store, {
-        source: 'purchase',
-        playerId: request.playerId,
-        idempotencyKey: request.idempotencyKey,
-        grantId: request.productId,
-        target: request.target,
-      });
-      const grantIdempotencyKey = earlierGrant === undefined
-        ? request.idempotencyKey
-        : `${request.idempotencyKey}#transfer:${String(transferSequence)}`;
-      const link = {
-        transferEvidenceVerificationId,
-        transferOfEvidenceVerificationId: purchaseVerificationId,
-        transferSequence,
-      };
-      try {
-        const result = await recordTransfer({
-          revocation: {
-            playerId: current.playerId,
-            revokesLedgerEntryId: current.ledgerEntryId,
-            idempotencyKey: `transfer:${transferEvidenceVerificationId}`,
-            reason: 'transfer',
-            revokedAt: nowIso,
-            payload: {
-              target: request.target,
-              store: input.verifiedStore,
-              productId: request.productId,
-              ...link,
-            },
-          },
-          grant: {
-            playerId: request.playerId,
-            grantId: product.id,
-            source: 'purchase',
-            idempotencyKey: grantIdempotencyKey,
-            grantedAt: nowIso,
-            grant: product.grant,
-            evidenceVerificationId: transferEvidenceVerificationId,
-            // The store transaction id stays with the first grant (its
-            // platform evidence is unique); the move names the purchase by
-            // its verification id instead.
-            payload: {
-              ...withoutPlatformTransactionId(payload),
-              ...link,
-              evidenceVerificationId: transferEvidenceVerificationId,
-              transferredFromLedgerEntryId: current.ledgerEntryId,
-            },
-          },
-        });
-        return {
-          status: 'written',
-          ledgerEntryId: result.ledgerEntryId,
-          alreadyProcessed: result.alreadyProcessed,
-        };
-      } catch (error) {
-        if (
-          error instanceof EntitlementTransferConflictError
-          || error instanceof EvidenceAlreadyProcessedError
-        ) {
-          // Another restore or a refund moved first; the next attempt sees it.
-          return notGranted('pending', 'PURCHASE_TRANSFER_CONFLICT');
-        }
-        throw error;
-      }
+      return notGranted('pending', 'PURCHASE_HOLDER_CONFLICT');
     },
   );
   if (outcome.status === 'answer') {
@@ -1795,7 +1656,7 @@ async function transferRestoredPurchase(
       ledgerEntryId: outcome.grant.ledgerEntryId,
       alreadyProcessed: true,
       ...(finalization === undefined ? {} : { finalization }),
-      ...(isPurchaseTransferGrant(outcome.grant) ? { transferred: true } : {}),
+      ...(isRestoredAcrossPlayers(outcome.grant) ? { restoredAcrossPlayers: true } : {}),
     });
   }
   const finalization = await finalizePurchaseGrant(context.purchaseGrantFinalizer, {
@@ -1813,14 +1674,8 @@ async function transferRestoredPurchase(
     ledgerEntryId: outcome.ledgerEntryId,
     alreadyProcessed: outcome.alreadyProcessed,
     ...(finalization === undefined ? {} : { finalization }),
-    transferred: true,
+    restoredAcrossPlayers: true,
   });
-}
-
-function withoutPlatformTransactionId(payload: EntitlementLedgerPayload): EntitlementLedgerPayload {
-  const { platformTransactionId: _platformTransactionId, ...rest } = payload;
-  void _platformTransactionId;
-  return rest;
 }
 
 async function finalizeExistingPurchaseGrant(

@@ -158,8 +158,9 @@ const sameKey = createStarterRestorePurchases({
   },
 });
 assert.deepEqual(await sameKey.restore(), { outcome: 'restored', granted: 1 });
-// A purchase the backend moved from an earlier guest (a reinstall, a new device) says so.
-const movedHere = createStarterRestorePurchases({
+// A purchase the backend granted from another guest of the store account says so,
+// and one at the holder limit says the purchase is in use on the most devices.
+const restoredHere = createStarterRestorePurchases({
   gateway: gateway('google-play', signedIn),
   monetizationRecovery: {
     commerceReconciler: {
@@ -173,10 +174,15 @@ const movedHere = createStarterRestorePurchases({
         const emit = listener as (event: unknown) => void;
         emit({
           type: 'verify-result',
-          record: { idempotencyKey: 'moved-1' },
-          response: { verified: true, alreadyProcessed: false, transferred: true, ledgerEntryId: 'le' },
+          record: { idempotencyKey: 'restored-here-1' },
+          response: {
+            verified: true,
+            alreadyProcessed: false,
+            restoredAcrossPlayers: true,
+            ledgerEntryId: 'le',
+          },
         });
-        emit({ type: 'transition', record: { idempotencyKey: 'moved-1', state: 'granted' } });
+        emit({ type: 'transition', record: { idempotencyKey: 'restored-here-1', state: 'granted' } });
         emit({
           type: 'verify-result',
           record: { idempotencyKey: 'refused-1' },
@@ -187,10 +193,49 @@ const movedHere = createStarterRestorePurchases({
     },
   },
 });
-const movedResult = await movedHere.restore();
-assert.deepEqual(movedResult, { outcome: 'restored', granted: 1, moved: 1 });
-assert.equal(restoreOutcomeText('en', movedResult), 'Restored to this device (1 confirmed)');
-assert.equal(restoreOutcomeText('ko', movedResult), '이 기기로 구매를 복원했습니다 (1건 확인)');
+const restoredHereResult = await restoredHere.restore();
+assert.deepEqual(restoredHereResult, { outcome: 'restored', granted: 1, restoredHere: 1 });
+assert.equal(restoreOutcomeText('en', restoredHereResult), 'Restored to this device (1 confirmed)');
+assert.equal(
+  restoreOutcomeText('ko', restoredHereResult),
+  '이 기기로 구매를 복원했습니다 (1건 확인)',
+);
+const atLimit = createStarterRestorePurchases({
+  gateway: gateway('app-store', signedIn),
+  monetizationRecovery: {
+    commerceReconciler: {
+      subscribe(listener: (event: { type: string; stage?: string }) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never,
+    async restorePurchases() {
+      for (const listener of listeners) {
+        (listener as (event: unknown) => void)({
+          type: 'verify-result',
+          record: { idempotencyKey: 'limit-1' },
+          response: {
+            verified: false,
+            alreadyProcessed: false,
+            disposition: 'pending',
+            reason: 'PURCHASE_HOLDER_LIMIT_REACHED',
+          },
+        });
+      }
+      return [summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'pending')];
+    },
+  },
+});
+const atLimitResult = await atLimit.restore();
+assert.deepEqual(atLimitResult, { outcome: 'incomplete', granted: 0, atHolderLimit: 1 });
+assert.equal(
+  restoreOutcomeText('en', atLimitResult),
+  'This purchase is already in use on the maximum number of devices',
+);
+assert.equal(
+  restoreOutcomeText('ko', atLimitResult),
+  '이 구매는 이미 허용된 최대 기기 수에서 사용 중입니다',
+);
 assert.equal(
   restoreOutcomeText('en', { outcome: 'restored', granted: 1 }),
   'Purchases restored (1 confirmed)',

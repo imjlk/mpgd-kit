@@ -20,7 +20,8 @@ export type GameMessageKey =
   | 'restorePurchases'
   | 'restoreWorking'
   | 'restoreDone'
-  | 'restoreMoved'
+  | 'restoreToDevice'
+  | 'restoreHolderLimit'
   | 'restoreNothing'
   | 'restoreIncomplete'
   | 'restorePartial'
@@ -49,7 +50,8 @@ const messages = {
     restorePurchases: 'Restore purchases',
     restoreWorking: 'Restoring purchases...',
     restoreDone: 'Purchases restored ({count} confirmed)',
-    restoreMoved: 'Restored to this device ({count} confirmed)',
+    restoreToDevice: 'Restored to this device ({count} confirmed)',
+    restoreHolderLimit: 'This purchase is already in use on the maximum number of devices',
     restoreNothing: 'No new purchases to restore',
     restoreIncomplete: 'Some purchases are not confirmed yet. Try again later.',
     restorePartial: 'Purchases restored ({count}); others are not confirmed yet. Try again later.',
@@ -77,7 +79,8 @@ const messages = {
     restorePurchases: '구매 복원',
     restoreWorking: '구매 복원 중...',
     restoreDone: '구매 복원 완료 ({count}건 확인)',
-    restoreMoved: '이 기기로 구매를 복원했습니다 ({count}건 확인)',
+    restoreToDevice: '이 기기로 구매를 복원했습니다 ({count}건 확인)',
+    restoreHolderLimit: '이 구매는 이미 허용된 최대 기기 수에서 사용 중입니다',
     restoreNothing: '새로 복원할 구매가 없습니다',
     restoreIncomplete: '아직 확인되지 않은 구매가 있습니다. 나중에 다시 시도하세요.',
     restorePartial: '{count}건 복원, 아직 확인되지 않은 구매가 있습니다. 나중에 다시 시도하세요.',

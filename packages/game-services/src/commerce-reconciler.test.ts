@@ -857,7 +857,7 @@ const fullClientHistory = [
   assertEqual(
     h.backend.requests[1]?.intent,
     'restore',
-    'a purchase the journal never started is sent as a restore (RFC "Restore transfers")',
+    'a purchase the journal never started is sent as a restore (RFC "Restore sharing")',
   );
   assertEqual(
     h.backend.requests[0]?.intent,

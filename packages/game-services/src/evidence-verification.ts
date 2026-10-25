@@ -40,12 +40,12 @@ export type EvidenceVerificationDecision =
        * binding (Google Play `obfuscatedAccountId` / `obfuscatedProfileId`,
        * StoreKit `appAccountToken`) names another account than the
        * requesting player's, or none: the player reinstalled or moved to a
-       * new device and is a new guest (RFC "Restore transfers"). Every other
+       * new device and is a new guest (RFC "Restore sharing"). Every other
        * check passed. The reference verifiers answer it only for a request
-       * with `intent: 'restore'` of a non-consumable; the backend then moves
-       * the grant under its `restoreTransfers` policy, or answers `rejected`
-       * with `reason` (the binding mismatch) when the policy refuses. Fields
-       * are those of `verified`.
+       * with `intent: 'restore'` of a non-consumable; the backend then grants
+       * the player its own share under its `restoreSharing` policy, or
+       * answers `rejected` with `reason` (the binding mismatch) when the
+       * policy refuses. Fields are those of `verified`.
        */
       readonly status: 'restorable';
       readonly reason: string;

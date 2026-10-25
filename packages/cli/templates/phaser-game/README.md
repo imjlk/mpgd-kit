@@ -570,10 +570,12 @@ is bound to the server player, so without a server session (see Guest identity)
 the button says to connect to the game server instead of restoring; keep it reachable from the game's own
 store or settings screen when you replace the lobby.
 
-A reinstall on Android, a new device, a logout, or (by default) 180 days away
-make a new guest, and the store then returns the old guest's non-consumables
-bound to the old one. The kit's reference Worker moves a verified restore of
-such a non-consumable to the new guest (a restore transfer; at most three moves
-per purchase in 30 days), and the control then says **Restored to this device**.
-Consumables never move. See "Reinstalls and new devices" in the kit's
-`docs/CLOUDFLARE_WORKER_DEPLOY.md` before selling non-consumables.
+A reinstall on Android, a new device, a second device, a logout, or (by
+default) 180 days away make a new guest, and the store then returns the
+purchase's non-consumables bound to the guest that bought them. The kit's
+reference Worker grants a verified restore of such a non-consumable to the new
+guest as well (restore sharing; earlier devices keep it, up to five guests per
+purchase by default), and the control then says **Restored to this device**;
+past the limit it says the purchase is already in use on the maximum number of
+devices. Consumables are never shared. See "Reinstalls and new devices" in the
+kit's `docs/CLOUDFLARE_WORKER_DEPLOY.md` before selling non-consumables.

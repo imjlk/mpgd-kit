@@ -507,9 +507,9 @@ async function verifyAppStorePurchase(
   );
   // A restored non-consumable bound to an earlier player's appAccountToken
   // (a new device, an erased device, a logout) is reported, not refused,
-  // when every other check passes: the backend's restore transfer policy
-  // decides (RFC "Restore transfers"). The client's StoreKit-verified JWS is
-  // required, so a transaction id alone never moves a purchase.
+  // when every other check passes: the backend's restore sharing policy
+  // decides (RFC "Restore sharing"). The client's StoreKit-verified JWS is
+  // required, so a transaction id alone never shares a purchase.
   const foreignBinding = rejection === 'APP_STORE_ACCOUNT_TOKEN_MISMATCH'
     && input.request.intent === 'restore'
     && input.product.type === 'non_consumable'

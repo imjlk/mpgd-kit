@@ -2,11 +2,9 @@ import { readFile } from 'node:fs/promises';
 
 import {
   createGameServicesBackend,
-  createPurchaseTransferEvidenceVerificationId,
-  EntitlementTransferConflictError,
   EvidenceAlreadyProcessedError,
-  findPurchaseGrantByEvidenceVerificationId,
   listActiveEntitlementTransactions,
+  listPurchaseHolders,
   readPurchaseLedgerStatuses,
   revokeEntitlementGrant,
   type EntitlementLedgerGrant,
@@ -172,7 +170,6 @@ try {
 
   // Commerce v2 C2: revoke entries (migration 0006) and the ledger status read.
   await applyMigration(db, '0006_entitlement_revocations.sql');
-  await applyMigration(db, '0011_entitlement_transfers.sql');
   const activeBefore = await readPurchaseLedgerStatuses(store, {
     ledgerEntryIds: [recorded.ledgerEntryId, 'ledger-historical-purchase', 'missing'],
     playerId: grant.playerId,
@@ -286,7 +283,7 @@ try {
     'entitlement reads subtract the reversed grant',
   );
 
-  await runRestoreTransferScenario(db, store);
+  await runRestoreSharingScenario(db, store);
 } finally {
   await miniflare.dispose();
 }
@@ -360,32 +357,28 @@ async function insertHistoricalEntitlement(
 
 function toD1ExecScript(migration: string): string {
   return migration
-    .split('\n')
-    .filter((line) => !line.trimStart().startsWith('--'))
-    .join('\n')
-    .split(';')
+    .split(/\n\s*\n/u)
     .map((statement) => statement.replace(/\s+/gu, ' ').trim())
     .filter((statement) => statement.length > 0)
-    .map((statement) => `${statement};`)
     .join('\n');
 }
 
 /**
- * Restore transfers on D1 (migration 0011): a reinstall's restore moves the
- * non-consumable, retries are idempotent, a refund follows the move, a
- * grant moves once even when two isolates race, and the rate limit holds.
+ * Restore sharing on D1: no table of its own (unique evidence ids and keys
+ * on the grants), so the holder cap must hold when isolates race, a refund
+ * must reach every holder, and retries must be idempotent per guest.
  */
-async function runRestoreTransferScenario(
+async function runRestoreSharingScenario(
   db: D1Database,
   store: ReturnType<typeof createD1GameServicesStore>,
 ): Promise<void> {
-  const verificationId = 'google-play:product:d1-transfer-digest';
+  const verificationId = 'google-play:product:d1-sharing-digest';
   const verifier: GameServicesEvidenceVerifier = {
     async verifyPurchase({ request }) {
       const verified = {
         verificationId,
         verifiedAt: '2030-01-01T00:00:00.000Z',
-        platformEvidenceId: 'GPA.d1-transfer',
+        platformEvidenceId: 'GPA.d1-sharing',
       };
       return request.playerId === 'd1-buyer'
         ? { status: 'verified', ...verified }
@@ -395,11 +388,10 @@ async function runRestoreTransferScenario(
       return { status: 'rejected', reason: 'UNUSED' };
     },
   };
-  let nowMs = Date.parse('2030-01-01T00:00:00.000Z');
   const backendFor = (ledger: ReturnType<typeof createD1GameServicesStore>) =>
     createGameServicesBackend({
       catalog: {
-        version: 'd1-transfer',
+        version: 'd1-sharing',
         products: [
           {
             id: 'REMOVE_ADS',
@@ -409,253 +401,82 @@ async function runRestoreTransferScenario(
           },
         ],
       },
-      placements: { version: 'd1-transfer', placements: [] },
+      placements: { version: 'd1-sharing', placements: [] },
       store: ledger,
-      now: () => new Date(nowMs).toISOString(),
       evidenceVerifier: verifier,
-      restoreTransfers: { mode: 'move', maxTransfersPerWindow: 3 },
+      restoreSharing: { mode: 'share', maxHolders: 3 },
     });
   const request = (playerId: string, intent: 'purchase' | 'restore'): VerifyPurchaseRequest => ({
     target: 'android',
     playerId,
     productId: 'REMOVE_ADS',
-    platformTransactionId: 'GPA.d1-transfer',
-    idempotencyKey: `d1-transfer:${playerId}`,
+    platformTransactionId: 'GPA.d1-sharing',
+    idempotencyKey: `d1-sharing:${playerId}`,
     purchasedAt: '2030-01-01T00:00:00.000Z',
     intent,
   });
   const backend = backendFor(store);
   const bought = await backend.purchases.verifyPurchase(request('d1-buyer', 'purchase'));
   assertEqual(bought.verified, true, 'D1 grants the buyer');
-  nowMs += 1000;
-  const moved = await backend.purchases.verifyPurchase(request('d1-new-guest', 'restore'));
-  assertEqual(moved.transferred, true, 'D1 moves the restored non-consumable');
-  const replay = await backend.purchases.verifyPurchase(request('d1-new-guest', 'restore'));
-  assertEqual(replay.alreadyProcessed, true, 'a D1 restore retry answers the moved grant');
-  assertEqual(replay.ledgerEntryId, moved.ledgerEntryId, 'the retry names the same grant');
-  const [transfer] = await store.findEntitlementRevocations?.({
-    ledgerEntryIds: [bought.ledgerEntryId ?? ''],
-  }) ?? [];
-  assertEqual(transfer?.reason, 'transfer', 'D1 reads the transfer as a revoke entry');
+  const shared = await backend.purchases.verifyPurchase(request('d1-guest-1', 'restore'));
+  assertEqual(shared.restoredAcrossPlayers, true, 'D1 shares the restored non-consumable');
+  const replay = await backend.purchases.verifyPurchase({
+    ...request('d1-guest-1', 'restore'),
+    idempotencyKey: 'd1-sharing:another-key',
+  });
+  assertEqual(
+    replay.ledgerEntryId,
+    shared.ledgerEntryId,
+    'a D1 retry of the guest answers its share',
+  );
   assertEqual(
     (await readPurchaseLedgerStatuses(store, {
       playerId: 'd1-buyer',
       ledgerEntryIds: [bought.ledgerEntryId ?? ''],
     })).statuses[0]?.status,
-    'reversed',
-    "the old guest's grant reads as reversed",
-  );
-  assertEqual(
-    (await findPurchaseGrantByEvidenceVerificationId(store, verificationId))?.playerId,
-    'd1-new-guest',
-    'D1 follows the move to the current holder',
+    'active',
+    'the buyer keeps its grant on D1',
   );
 
-  // The store write itself: a replay is answered, a second move of one grant is refused.
-  const evidence = createPurchaseTransferEvidenceVerificationId(verificationId, 1);
-  const replayTransfer = {
-    revocation: {
-      playerId: 'd1-buyer',
-      revokesLedgerEntryId: bought.ledgerEntryId ?? '',
-      idempotencyKey: `transfer:${evidence}`,
-      reason: 'transfer',
-      revokedAt: transfer?.revokedAt ?? '',
-      payload: { transferEvidenceVerificationId: evidence },
-    },
-    grant: {
-      playerId: 'd1-new-guest',
-      grantId: 'REMOVE_ADS',
-      source: 'purchase',
-      idempotencyKey: 'd1-transfer:d1-new-guest',
-      grantedAt: transfer?.revokedAt ?? '',
-      payload: { transferredFromLedgerEntryId: bought.ledgerEntryId ?? '' },
-      evidenceVerificationId: evidence,
-    },
-  } as const;
-  const replayed = await store.recordEntitlementTransfer?.(replayTransfer);
-  assertEqual(replayed?.alreadyProcessed, true, 'D1 answers a replayed transfer');
-  assertEqual(replayed?.ledgerEntryId, moved.ledgerEntryId, 'the replay names the moved grant');
-  let secondMoveRefused = false;
-  try {
-    await store.recordEntitlementTransfer?.({
-      ...replayTransfer,
-      grant: {
-        ...replayTransfer.grant,
-        playerId: 'd1-third',
-        idempotencyKey: 'd1-third',
-        evidenceVerificationId: createPurchaseTransferEvidenceVerificationId(verificationId, 9),
-      },
-      revocation: {
-        ...replayTransfer.revocation,
-        idempotencyKey: 'transfer:other',
-        payload: {
-          transferEvidenceVerificationId: createPurchaseTransferEvidenceVerificationId(
-            verificationId,
-            9,
-          ),
-        },
-      },
-    });
-  } catch (error) {
-    secondMoveRefused = error instanceof EntitlementTransferConflictError;
-  }
-  assertEqual(secondMoveRefused, true, 'D1 moves a grant once');
-  const strays = await db
-    .prepare("SELECT COUNT(*) AS count FROM entitlement_transactions WHERE player_id = 'd1-third'")
-    .first<{ count: number }>();
-  assertEqual(strays?.count, 0, 'a refused D1 transfer writes no grant');
-
-  // A refund written straight to the store for the moved grant answers its
-  // transfer entry instead of reversing it twice; reason transfer is refused.
-  const directRefund = await store.recordEntitlementRevocation?.({
-    playerId: 'd1-buyer',
-    revokesLedgerEntryId: bought.ledgerEntryId ?? '',
-    idempotencyKey: 'd1-direct-refund',
-    reason: 'refund',
-    revokedAt: '2030-01-03T00:00:00.000Z',
-    payload: {},
-  });
-  assertEqual(
-    directRefund?.ledgerEntryId,
-    transfer?.ledgerEntryId,
-    'a moved grant answers its transfer',
-  );
-  assertEqual(directRefund?.alreadyProcessed, true, 'the moved grant is not reversed twice');
-  // A key a transfer entry took answers that entry, as in the in-memory store.
-  const sameKey = await store.recordEntitlementRevocation?.({
-    ...replayTransfer.revocation,
-    reason: 'refund',
-  });
-  assertEqual(sameKey?.ledgerEntryId, transfer?.ledgerEntryId, 'a transfer key is not reused');
-  let transferReasonRefused = false;
-  try {
-    await store.recordEntitlementRevocation?.({
-      ...replayTransfer.revocation,
-      idempotencyKey: 'x',
-    });
-  } catch {
-    transferReasonRefused = true;
-  }
-  assertEqual(transferReasonRefused, true, 'only the transfer write writes reason transfer');
-  const revokeRows = await db
-    .prepare('SELECT COUNT(*) AS count FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?')
-    .bind(bought.ledgerEntryId ?? '')
-    .first<{ count: number }>();
-  assertEqual(revokeRows?.count, 0, 'no refund row lands on a moved grant');
-
-  // A transfer whose key a revoke entry of the same player already took (one
-  // key space across both tables, as in the in-memory store) is refused.
-  const otherGrant = await store.recordEntitlementGrant({
-    playerId: 'd1-new-guest',
-    grantId: 'REMOVE_ADS',
-    source: 'purchase',
-    idempotencyKey: 'd1-other-purchase',
-    grantedAt: '2030-01-02T00:00:00.000Z',
-    payload: { target: 'android' },
-  });
-  await store.recordEntitlementRevocation?.({
-    playerId: 'd1-new-guest',
-    revokesLedgerEntryId: otherGrant.ledgerEntryId,
-    idempotencyKey: 'd1-shared-key',
-    reason: 'refund',
-    revokedAt: '2030-01-02T00:00:00.000Z',
-    payload: {},
-  });
-  let sharedKeyRefused = false;
-  try {
-    await store.recordEntitlementTransfer?.({
-      revocation: {
-        playerId: 'd1-new-guest',
-        revokesLedgerEntryId: moved.ledgerEntryId ?? '',
-        idempotencyKey: 'd1-shared-key',
-        reason: 'transfer',
-        revokedAt: '2030-01-02T00:00:00.000Z',
-        payload: { transferEvidenceVerificationId: 'mpgd-transfer:77:shared' },
-      },
-      grant: {
-        playerId: 'd1-shared-taker',
-        grantId: 'REMOVE_ADS',
-        source: 'purchase',
-        idempotencyKey: 'd1-shared-taker',
-        grantedAt: '2030-01-02T00:00:00.000Z',
-        payload: { transferredFromLedgerEntryId: moved.ledgerEntryId ?? '' },
-        evidenceVerificationId: 'mpgd-transfer:77:shared',
-      },
-    });
-  } catch (error) {
-    sharedKeyRefused = error instanceof EntitlementTransferConflictError;
-  }
-  assertEqual(sharedKeyRefused, true, 'a transfer key a revoke entry took is a conflict');
-
-  // Two isolates race to move the same holder: one wins, one waits.  // Two isolates race to move the same holder: one wins, one waits.
-  nowMs += 1000;
-  const [left, right] = await Promise.all([
-    backendFor(createD1GameServicesStore(db)).purchases.verifyPurchase(
-      request('d1-left', 'restore'),
+  // Three isolates race for the last free slot: one share lands, the cap holds.
+  const answers = await Promise.all(
+    ['d1-guest-2', 'd1-guest-3', 'd1-guest-4'].map((playerId) =>
+      backendFor(createD1GameServicesStore(db)).purchases.verifyPurchase(
+        request(playerId, 'restore'),
+      ),
     ),
-    backendFor(createD1GameServicesStore(db)).purchases.verifyPurchase(
-      request('d1-right', 'restore'),
-    ),
-  ]);
-  const holders = (await listActiveEntitlementTransactions(store)).filter(
-    (entry) => entry.grantId === 'REMOVE_ADS',
   );
-  assertEqual(holders.length, 1, 'one holder at a time on D1');
   assertEqual(
-    [left, right].filter((answer) => answer.verified).length >= 1,
-    true,
-    'at least one racing restore is granted',
+    answers.filter((answer) => answer.verified).length,
+    1,
+    'one racing restore takes the last slot',
   );
+  assertEqual(
+    answers.filter((answer) => answer.reason === 'PURCHASE_HOLDER_LIMIT_REACHED').length,
+    2,
+    'the others answer the holder limit',
+  );
+  const holders = await listPurchaseHolders(store, verificationId);
+  assertEqual(holders.shared.length, 2, 'D1 keeps two shares next to the first grant');
 
-  // A refund that names the first grant reverses the current holder.
+  // A refund naming the first grant revokes every holder.
   const refund = await revokeEntitlementGrant(store, {
     playerId: 'd1-buyer',
     revokesLedgerEntryId: bought.ledgerEntryId ?? '',
-    idempotencyKey: 'google-play:voided:d1-transfer',
+    idempotencyKey: 'google-play:voided:d1-sharing',
     reason: 'refund',
-    revokedAt: new Date(nowMs).toISOString(),
+    revokedAt: '2030-01-03T00:00:00.000Z',
     payload: { target: 'android' },
+    evidenceVerificationId: `${verificationId}:revoke`,
   });
-  assertEqual(refund.status, 'revoked', 'the refund follows the move on D1');
+  assertEqual(refund.status, 'revoked', 'the refund applies on D1');
   assertEqual(
     (await listActiveEntitlementTransactions(store)).some((entry) => entry.grantId === 'REMOVE_ADS'),
     false,
-    'a refunded purchase has no holder',
+    'a refund on D1 revokes every holder',
   );
   const afterRefund = await backend.purchases.verifyPurchase(request('d1-late', 'restore'));
-  assertEqual(afterRefund.reason, 'LEDGER_GRANT_REVERSED', 'a refunded purchase never moves');
-
-  // The store write refuses to move a refunded grant and leaves no grant row.
-  const refundedHolder = await findPurchaseGrantByEvidenceVerificationId(store, verificationId);
-  let refundedMoveRefused = false;
-  try {
-    await store.recordEntitlementTransfer?.({
-      revocation: {
-        playerId: refundedHolder?.playerId ?? '',
-        revokesLedgerEntryId: refundedHolder?.ledgerEntryId ?? '',
-        idempotencyKey: 'transfer:refunded',
-        reason: 'transfer',
-        revokedAt: new Date(nowMs).toISOString(),
-        payload: { transferEvidenceVerificationId: 'mpgd-transfer:99:refunded' },
-      },
-      grant: {
-        playerId: 'd1-refund-taker',
-        grantId: 'REMOVE_ADS',
-        source: 'purchase',
-        idempotencyKey: 'd1-refund-taker',
-        grantedAt: new Date(nowMs).toISOString(),
-        payload: { transferredFromLedgerEntryId: refundedHolder?.ledgerEntryId ?? '' },
-        evidenceVerificationId: 'mpgd-transfer:99:refunded',
-      },
-    });
-  } catch (error) {
-    refundedMoveRefused = error instanceof EntitlementTransferConflictError;
-  }
-  assertEqual(refundedMoveRefused, true, 'D1 refuses to move a refunded grant');
-  const takerRows = await db
-    .prepare("SELECT COUNT(*) AS count FROM entitlement_transactions WHERE player_id = 'd1-refund-taker'")
-    .first<{ count: number }>();
-  assertEqual(takerRows?.count, 0, 'the refused move rolled its grant back');
+  assertEqual(afterRefund.reason, 'LEDGER_GRANT_REVERSED', 'a refunded purchase is never shared');
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

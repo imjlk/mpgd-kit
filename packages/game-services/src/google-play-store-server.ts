@@ -326,7 +326,7 @@ export async function retryGooglePlayPurchaseFinalization(input: {
     ? payload.platformTransactionId
     : await createGooglePlayTokenPurchaseKey(input.purchaseToken);
   const purchasedAt = payload.purchasedAt;
-  // A grant a restore transfer wrote is acknowledged as the purchase it records.
+  // A grant restore sharing wrote is acknowledged as the purchase it records.
   const evidenceVerificationId = readPurchaseVerificationId(grant);
   if (
     productType === undefined
