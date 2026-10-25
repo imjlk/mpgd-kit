@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
@@ -35,12 +35,38 @@ export interface NativeReleaseIdentityInput {
   readonly metadata: TargetReleaseMetadata | undefined;
   readonly environment: NodeJS.ProcessEnv;
   readonly required: boolean;
+  /**
+   * `stamped`: the reserved version numbers are written into the staged copy
+   * of the shell by `stampNativeReleaseVersions` before packaging, so the
+   * game-owned source only has to keep every version assignment readable.
+   * The package ID / bundle ID are always checked against the source.
+   * Defaults to `source`, where the source must already hold the values.
+   */
+  readonly versionSource?: NativeVersionSource;
+}
+
+export type NativeVersionSource = 'source' | 'stamped';
+
+/** `MPGD_NATIVE_VERSION_STAMP=1` stamps the reserved numbers into the staged shell. */
+export const nativeVersionStampEnvironmentName = 'MPGD_NATIVE_VERSION_STAMP';
+
+export function resolveNativeVersionSource(environment: NodeJS.ProcessEnv): NativeVersionSource {
+  const value = environment[nativeVersionStampEnvironmentName]?.trim();
+  if (value === undefined || value === '' || value === '0') {
+    return 'source';
+  }
+  if (value === '1') {
+    return 'stamped';
+  }
+  throw new Error(`${nativeVersionStampEnvironmentName} must be 1 or 0, received ${value}.`);
 }
 
 /**
  * Checks the game-owned Capacitor shell before a production build. The actual
- * Gradle/Xcode values remain the source of truth; the target tool does not
- * silently rewrite a product identity during release packaging.
+ * Gradle/Xcode values remain the source of truth for the product identity;
+ * the target tool never rewrites a package or bundle ID. Version numbers are
+ * either read from the source (`versionSource: 'source'`) or stamped into the
+ * staged copy from the release reservation (`'stamped'`) and checked there.
  */
 export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): void {
   const expected = resolveExpectedNativeIdentity(
@@ -51,10 +77,16 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
   );
 
   if (expected === undefined) {
+    if (input.versionSource === 'stamped') {
+      throw new Error(
+        `${nativeVersionStampEnvironmentName}=1 requires the reserved native version numbers.`,
+      );
+    }
     return;
   }
 
   assertNativeVersionMatchesGameVersion(expected, input.environment, input.required);
+  const checkVersions = input.versionSource !== 'stamped';
 
   if (expected.kind === 'android') {
     const candidates = [
@@ -64,7 +96,7 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
     if (candidates.length !== 1) {
       throw new Error('Android native release requires exactly one Gradle app build file.');
     }
-    assertAndroidIdentity(candidates[0] ?? '', expected);
+    assertAndroidIdentity(candidates[0] ?? '', expected, checkVersions);
     assertAndroidAppliedScripts(candidates[0] ?? '', join(input.shellApp, 'android'));
     if (input.required) {
       const name = requireValue(input.metadata?.displayName, 'Android target metadata displayName');
@@ -74,7 +106,11 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
     return;
   }
 
-  assertIosIdentity(join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj'), expected);
+  assertIosIdentity(
+    join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj'),
+    expected,
+    checkVersions,
+  );
   if (input.required) {
     const name = requireValue(input.metadata?.displayName, 'iOS target metadata displayName');
     assertIosReleaseDisplayName(input.shellApp, name);
@@ -88,6 +124,248 @@ export function runNativeSyncWithIdentityCheck(
 ): void {
   synchronize();
   assertNativeReleaseIdentity(input);
+}
+
+/**
+ * Writes the reserved version numbers into a staged copy of the shell
+ * (never the game-owned source): Android `versionCode`/`versionName` in the
+ * app Gradle file, iOS `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` in the
+ * App target's Release build settings. Run it after the source passed
+ * `assertNativeReleaseIdentity` with `versionSource: 'stamped'`, then check
+ * the stage with `versionSource: 'source'`; the signed-artifact inspections
+ * compare the emitted numbers with the same reservation afterwards.
+ */
+export function stampNativeReleaseVersions(input: {
+  readonly platform: 'android' | 'ios';
+  readonly stagedShellApp: string;
+  readonly environment: NodeJS.ProcessEnv;
+}): void {
+  if (input.platform === 'android') {
+    const versionCode = requirePositiveInteger(
+      optional(input.environment.MPGD_TARGET_VERSION_CODE),
+      'MPGD_TARGET_VERSION_CODE',
+    );
+    const versionName = requireFinalSemVer(
+      optional(input.environment.MPGD_TARGET_VERSION_NAME),
+      'MPGD_TARGET_VERSION_NAME',
+    );
+    const candidates = [
+      join(input.stagedShellApp, 'android/app/build.gradle'),
+      join(input.stagedShellApp, 'android/app/build.gradle.kts'),
+    ].filter((file) => existsSync(file));
+    if (candidates.length !== 1) {
+      throw new Error('Android native release requires exactly one Gradle app build file.');
+    }
+    const file = candidates[0] ?? '';
+    writeFileSync(
+      file,
+      stampAndroidGradleVersions(
+        readFileSync(file, 'utf8'),
+        {
+          versionCode,
+          versionName,
+        },
+        file,
+      ),
+    );
+    return;
+  }
+  const marketingVersion = requireFinalSemVer(
+    optional(input.environment.MPGD_TARGET_MARKETING_VERSION),
+    'MPGD_TARGET_MARKETING_VERSION',
+  );
+  const buildNumber = requirePositiveInteger(
+    optional(input.environment.MPGD_TARGET_BUILD_NUMBER),
+    'MPGD_TARGET_BUILD_NUMBER',
+  );
+  const file = join(input.stagedShellApp, 'ios/App/App.xcodeproj/project.pbxproj');
+  writeFileSync(
+    file,
+    stampIosProjectVersions(
+      readRequiredFile(file, 'iOS Xcode project configuration'),
+      { marketingVersion, buildNumber },
+      file,
+    ),
+  );
+}
+
+/** Replaces every literal `versionCode`/`versionName` assignment of an app Gradle file. */
+export function stampAndroidGradleVersions(
+  source: string,
+  versions: { readonly versionCode: string; readonly versionName: string },
+  file: string,
+): string {
+  const end = '(?=\\s*(?:;|\\r?\\n|\\}|$))';
+  const code = new RegExp(`(\\bversionCode\\s*(?:=\\s*)?)\\d+${end}`, 'gu');
+  const name = new RegExp(`(\\bversionName\\s*(?:=\\s*)?)(?:"[^"']+"|'[^"']+')${end}`, 'gu');
+  // Matching runs on a copy whose comments are blanked, as the identity check
+  // reads the source without comments: a commented-out assignment is never
+  // stamped, and a trailing comment does not hide the real one.
+  const masked = blankComments(source);
+  const codeEdits = [...masked.matchAll(code)].map((match) => ({
+    start: (match.index ?? 0) + (match[1]?.length ?? 0),
+    end: (match.index ?? 0) + match[0].length,
+    text: versions.versionCode,
+  }));
+  const nameEdits = [...masked.matchAll(name)].map((match) => ({
+    start: (match.index ?? 0) + (match[1]?.length ?? 0) + 1,
+    end: (match.index ?? 0) + match[0].length - 1,
+    text: versions.versionName,
+  }));
+  if (codeEdits.length === 0 || nameEdits.length === 0) {
+    throw new Error(
+      `Native version stamping found no literal versionCode and versionName in ${file}.`,
+    );
+  }
+  const edits = [...codeEdits, ...nameEdits];
+  return applyTextEdits(source, edits);
+}
+
+/**
+ * Sets `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in the App target's
+ * Release build settings, which take precedence over the project level and
+ * any xcconfig file, adding them when the target inherits them.
+ */
+export function stampIosProjectVersions(
+  source: string,
+  versions: { readonly marketingVersion: string; readonly buildNumber: string },
+  file: string,
+): string {
+  const { appTarget } = findIosBlocks(source, file);
+  if (appTarget === undefined) {
+    throw new Error(`Native release preflight could not find the App target in ${file}.`);
+  }
+  const listId = readPbxReference(
+    appTarget,
+    /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u,
+    'the App target build configuration list',
+    file,
+  );
+  const releaseId = readPbxReference(
+    readPbxObject(source, listId, file),
+    /\b([A-F0-9]+)\s*\/\*\s*Release\s*\*\//u,
+    'App target Release build configuration',
+    file,
+  );
+  const marker = source.match(
+    new RegExp(`\\b${releaseId}\\s*\\/\\*\\s*[^*]+\\s*\\*\\/\\s*=\\s*\\{`, 'u'),
+  );
+  if (marker?.index === undefined) {
+    throw new Error(
+      `Native release preflight could not find Xcode object ${releaseId} in ${file}.`,
+    );
+  }
+  const objectOpen = source.indexOf('{', marker.index);
+  const objectBody = readBracedBlock(source, objectOpen, `Xcode object ${releaseId}`, file);
+  const settingsIndex = objectBody.search(/\bbuildSettings\s*=\s*\{/u);
+  if (settingsIndex === -1) {
+    throw new Error(
+      `Native release preflight could not find App target Release build settings in ${file}.`,
+    );
+  }
+  const settingsOpen = objectOpen + 1 + objectBody.indexOf('{', settingsIndex);
+  const settings = readBracedBlock(source, settingsOpen, 'App target Release build settings', file);
+  const masked = blankComments(settings);
+  const edits: TextEdit[] = [];
+  const additions: string[] = [];
+  for (const [key, value] of [
+    ['MARKETING_VERSION', versions.marketingVersion],
+    ['CURRENT_PROJECT_VERSION', versions.buildNumber],
+  ] as const) {
+    const assignment = new RegExp(`((?:^|[\\s{;])["']?${key}["']?\\s*=\\s*)[^;]+;`, 'gu');
+    const matches = [...masked.matchAll(assignment)];
+    for (const match of matches) {
+      edits.push({
+        start: (match.index ?? 0) + (match[1]?.length ?? 0),
+        end: (match.index ?? 0) + match[0].length - 1,
+        text: value,
+      });
+    }
+    if (matches.length === 0) {
+      additions.push(`${key} = ${value};`);
+    }
+  }
+  const indentation = /\n([ \t]*)\S/u.exec(settings)?.[1] ?? '\t\t\t\t';
+  const stamped = `${additions.map((line) => `\n${indentation}${line}`).join('')}${
+    applyTextEdits(settings, edits)}`;
+  return `${source.slice(0, settingsOpen + 1)}${stamped}${
+    source.slice(settingsOpen + 1 + settings.length)}`;
+}
+
+interface TextEdit {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+function applyTextEdits(source: string, edits: readonly TextEdit[]): string {
+  let result = source;
+  for (const edit of [...edits].sort((left, right) => right.start - left.start)) {
+    result = `${result.slice(0, edit.start)}${edit.text}${result.slice(edit.end)}`;
+  }
+  return result;
+}
+
+/** A same-length copy with comment bodies replaced by spaces, so offsets map onto the source. */
+function blankComments(source: string): string {
+  const stripped = stripComments(source);
+  if (stripped.length === source.length) {
+    return source;
+  }
+  let result = '';
+  let quote: '"' | "'" | undefined;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index] ?? '';
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+        result += character;
+      } else {
+        result += character === '\r' ? character : ' ';
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        result += '  ';
+        index += 1;
+      } else {
+        result += character === '\n' || character === '\r' ? character : ' ';
+      }
+      continue;
+    }
+    if (quote !== undefined) {
+      result += character;
+      if (character === '\\') {
+        result += next ?? '';
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      blockComment = true;
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    }
+    result += character;
+  }
+  return result;
 }
 
 interface AndroidIdentity {
@@ -153,7 +431,11 @@ function resolveExpectedNativeIdentity(
   };
 }
 
-function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
+function assertAndroidIdentity(
+  file: string,
+  expected: AndroidIdentity,
+  checkVersions: boolean,
+): void {
   const source = stripComments(readRequiredFile(file, 'Android Gradle configuration'));
 
   const code = maskGradleStrings(source);
@@ -189,15 +471,28 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   const codePattern = new RegExp(`\\bversionCode\\s*(?:=\\s*)?(\\d+)${end}`, 'u');
   const namePattern = new RegExp(`\\bversionName\\s*(?:=\\s*)?["']([^"']+)["']${end}`, 'u');
   assertAndroidSetting(source, 'applicationId', appIdPattern, expected.packageId, file);
-  assertAndroidSetting(source, 'versionCode', codePattern, expected.versionCode, file);
-  assertAndroidSetting(source, 'versionName', namePattern, expected.versionName, file);
+  assertAndroidSetting(
+    source,
+    'versionCode',
+    codePattern,
+    checkVersions ? expected.versionCode : undefined,
+    file,
+  );
+  assertAndroidSetting(
+    source,
+    'versionName',
+    namePattern,
+    checkVersions ? expected.versionName : undefined,
+    file,
+  );
 }
 
+/** `expected: undefined` only requires every assignment to be a readable literal (stamping). */
 function assertAndroidSetting(
   source: string,
   key: string,
   expression: RegExp,
-  expected: string,
+  expected: string | undefined,
   file: string,
 ): void {
   const mentions = countGradleIdentityWrites(source, key);
@@ -307,15 +602,25 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
   inspect(appBuild, false, dirname(appBuild));
 }
 
-function assertIosIdentity(file: string, expected: IosIdentity): void {
+function assertIosIdentity(file: string, expected: IosIdentity, checkVersions: boolean): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
   assertIosReleaseProductName(source);
   assertIosReleaseInfoPlistExpansion(source);
   assertIosReleasePackagingSettings(source);
   const releaseSettings = readIosAppReleaseSettings(source, file);
   assertIosSetting(releaseSettings, 'PRODUCT_BUNDLE_IDENTIFIER', expected.bundleId, file);
-  assertIosSetting(releaseSettings, 'MARKETING_VERSION', expected.marketingVersion, file);
-  assertIosSetting(releaseSettings, 'CURRENT_PROJECT_VERSION', expected.buildNumber, file);
+  assertIosSetting(
+    releaseSettings,
+    'MARKETING_VERSION',
+    checkVersions ? expected.marketingVersion : undefined,
+    file,
+  );
+  assertIosSetting(
+    releaseSettings,
+    'CURRENT_PROJECT_VERSION',
+    checkVersions ? expected.buildNumber : undefined,
+    file,
+  );
   const plistRelative = readIosReleaseInfoPlist(source);
   const plist = join(dirname(dirname(file)), plistRelative);
   assertIosReleasePlistIdentity(readRequiredFile(plist, 'iOS Release Info.plist'));
@@ -324,7 +629,7 @@ function assertIosIdentity(file: string, expected: IosIdentity): void {
 function assertIosSetting(
   settings: IosReleaseBuildSettings,
   key: 'PRODUCT_BUNDLE_IDENTIFIER' | 'MARKETING_VERSION' | 'CURRENT_PROJECT_VERSION',
-  expected: string,
+  expected: string | undefined,
   file: string,
 ): void {
   const expression = new RegExp(`(?:^|[\\s{;])["']?${key}["']?\\s*=\\s*([^;]+);`, 'u');
@@ -332,6 +637,19 @@ function assertIosSetting(
   const conditional = new RegExp(conditionalPattern, 'u');
   const target = stripComments(settings.target.values);
   const project = stripComments(settings.project.values);
+  if (expected === undefined && key !== 'PRODUCT_BUNDLE_IDENTIFIER') {
+    // Stamping writes an unconditional value into the App target's Release
+    // settings, which overrides the project level and any xcconfig. A
+    // conditional assignment at either level is rejected rather than relying
+    // on how Xcode orders it against that value, and so are duplicates.
+    if (conditional.test(target) || conditional.test(project)) {
+      throw new Error(`Native release preflight does not support conditional ${key} in ${file}.`);
+    }
+    if (readSettingValues(target, expression).length > 1) {
+      throw new Error(`Native release preflight has ambiguous App Release ${key} in ${file}.`);
+    }
+    return;
+  }
   const targetRaw = readSettingValues(target, expression);
   if (targetRaw.length > 1) {
     throw new Error(`Native release preflight has ambiguous App Release ${key} in ${file}.`);
@@ -362,11 +680,14 @@ function assertIosSetting(
 function assertSettingValues(
   values: readonly string[],
   expression: RegExp,
-  expected: string,
+  expected: string | undefined,
   file: string,
 ): void {
   if (values.length === 0) {
     throw new Error(`Native release preflight could not find ${expression.source} in ${file}.`);
+  }
+  if (expected === undefined) {
+    return;
   }
 
   if (values.some((value) => value !== expected)) {

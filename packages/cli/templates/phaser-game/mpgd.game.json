@@ -8,6 +8,9 @@
   "ui": {
     "textSelection": "disabled"
   },
+  "native": {
+    "orientation": "landscape"
+  },
   "acceptance": {
     "gameplay": {
       "schemaVersion": 1,

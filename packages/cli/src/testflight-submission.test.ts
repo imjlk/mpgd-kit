@@ -88,6 +88,8 @@ interface MockState {
   groupFailure?: 'network' | 'compliance';
   appBundleId?: string;
   uploadVisible?: boolean;
+  internalBuildState?: string;
+  betaDetailMalformed?: boolean;
 }
 
 function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJsonRunner } {
@@ -178,6 +180,19 @@ function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJ
         operations: [],
       };
     }
+    if (command.startsWith('builds build-beta-detail')) {
+      assert.deepEqual(args.slice(3), ['--build-id', 'build-1']);
+      if (state.betaDetailMalformed) {
+        return { data: [] };
+      }
+      return {
+        data: {
+          type: 'buildBetaDetails',
+          id: 'detail-1',
+          attributes: { internalBuildState: state.internalBuildState ?? 'READY_FOR_BETA_TESTING' },
+        },
+      };
+    }
     if (command.startsWith('builds add-groups')) {
       if (state.groupFailure !== undefined) {
         throw new ReleaseProcessError(
@@ -248,6 +263,37 @@ try {
   assert.equal(
     (await submitVerifiedIosBuildWithRunner(input, complianceGroup.run)).status,
     'action-required',
+  );
+  for (const [internalBuildState, status] of [
+    ['IN_BETA_TESTING', 'testflight-ready'],
+    ['PROCESSING', 'processing'],
+    ['MISSING_EXPORT_COMPLIANCE', 'action-required'],
+    ['IN_EXPORT_COMPLIANCE_REVIEW', 'action-required'],
+    ['PROCESSING_EXCEPTION', 'failed'],
+    ['EXPIRED', 'failed'],
+    ['SOMETHING_NEW', 'unknown'],
+  ] as const) {
+    const betaState = mock({ processingState: 'VALID', internalBuildState });
+    const result = await submitVerifiedIosBuildWithRunner(input, betaState.run);
+    assert.equal(result.status, status, internalBuildState);
+    // A build testers cannot install yet is never added to the group.
+    assert.equal(
+      betaState.state.commands.some((command) => command.startsWith('builds add-groups')),
+      status === 'testflight-ready',
+      internalBuildState,
+    );
+  }
+  const missingCompliance = await submitVerifiedIosBuildWithRunner(
+    input,
+    mock({ processingState: 'VALID', internalBuildState: 'MISSING_EXPORT_COMPLIANCE' }).run,
+  );
+  assert.match(missingCompliance.detail ?? '', /ITSAppUsesNonExemptEncryption/u);
+  assert.equal(
+    (await submitVerifiedIosBuildWithRunner(
+      input,
+      mock({ processingState: 'VALID', betaDetailMalformed: true }).run,
+    )).status,
+    'unknown',
   );
   const failed = mock({ processingState: 'FAILED' });
   assert.equal((await submitVerifiedIosBuildWithRunner(input, failed.run)).status, 'failed');

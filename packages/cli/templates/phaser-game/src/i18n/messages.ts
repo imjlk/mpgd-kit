@@ -16,7 +16,15 @@ export type GameMessageKey =
   | 'rewardPending'
   | 'rewardUnavailable'
   | 'analytics'
-  | 'bootError';
+  | 'bootError'
+  | 'restorePurchases'
+  | 'restoreWorking'
+  | 'restoreDone'
+  | 'restoreNothing'
+  | 'restoreIncomplete'
+  | 'restorePartial'
+  | 'restoreNeedsSession'
+  | 'restoreFailed';
 
 const messages = {
   en: {
@@ -36,6 +44,14 @@ const messages = {
     rewardUnavailable: 'Rewarded ads unavailable on this target',
     analytics: 'Analytics events: {count}',
     bootError: 'Failed to start game',
+    restorePurchases: 'Restore purchases',
+    restoreWorking: 'Restoring purchases...',
+    restoreDone: 'Purchases restored ({count} confirmed)',
+    restoreNothing: 'No new purchases to restore',
+    restoreIncomplete: 'Some purchases are not confirmed yet. Try again later.',
+    restorePartial: 'Purchases restored ({count}); others are not confirmed yet. Try again later.',
+    restoreNeedsSession: 'Sign in to restore purchases',
+    restoreFailed: 'Could not restore purchases. Try again later.',
   },
   ko: {
     title: '__GAME_TITLE__',
@@ -54,6 +70,14 @@ const messages = {
     rewardUnavailable: '이 타깃에서는 리워드 광고를 사용할 수 없음',
     analytics: '애널리틱스 이벤트: {count}',
     bootError: '게임 시작 실패',
+    restorePurchases: '구매 복원',
+    restoreWorking: '구매 복원 중...',
+    restoreDone: '구매 복원 완료 ({count}건 확인)',
+    restoreNothing: '새로 복원할 구매가 없습니다',
+    restoreIncomplete: '아직 확인되지 않은 구매가 있습니다. 나중에 다시 시도하세요.',
+    restorePartial: '{count}건 복원, 아직 확인되지 않은 구매가 있습니다. 나중에 다시 시도하세요.',
+    restoreNeedsSession: '구매를 복원하려면 로그인하세요',
+    restoreFailed: '구매를 복원하지 못했습니다. 나중에 다시 시도하세요.',
   },
 } satisfies Record<Locale, Record<GameMessageKey, string>>;
 

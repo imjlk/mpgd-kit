@@ -344,6 +344,40 @@ installing the App target into an archive, or link a game-owned helper target
 implicitly through the App frameworks phase. Remove those unsupported build
 customizations before initializing or packaging a production shell.
 
+#### Store-facing shell settings
+
+The initializer writes these into a newly generated native project only; a
+native build checks an existing (preserved) shell against them, printing
+warnings and failing a `production` build on errors, so a shell made earlier
+needs the same edits by hand:
+
+- **Export compliance (iOS).** `ITSAppUsesNonExemptEncryption` = `false` in
+  `Info.plist` (kept when the game already set it) and `arm64` instead of the
+  template's 32-bit `armv7` in `UIRequiredDeviceCapabilities`. Missing keys
+  are warnings.
+- **Design orientation.** `native.orientation` in `mpgd.game.json`
+  (`portrait`, `landscape` or `any`; the Phaser template uses `landscape`, the
+  lite template `any`)
+  sets the iPhone `UISupportedInterfaceOrientations` and the Android launcher
+  activity's `android:screenOrientation` (`portrait`, `sensorLandscape`, or
+  none for `any`). iPad keeps all four orientations: Apple deprecated
+  `UIRequiresFullScreen` in iPadOS 26 and asks iPad apps to support every
+  orientation ([TN3192](https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key));
+  the runtime orientation policy (`orientationPolicy` in `src/main.ts`)
+  letterboxes or asks the player to rotate. New Android projects also get
+  `android:appCategory="game"`, because Android 16 ignores orientation locks on
+  tablets and foldables for apps targeting API 36 unless they are games
+  ([behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16)).
+  A shell that contradicts a configured orientation fails a production build;
+  without `native.orientation` nothing is enforced.
+- **iOS devices.** The App Store offers the app on iPhone and iPad
+  (`TARGETED_DEVICE_FAMILY = "1,2"`) unless the ios target in
+  `mpgd.targets.json` sets `"metadata": { "iosDeviceFamily": "iphone" }`
+  (`"1"`). An iPad build needs iPad screenshots in App Store Connect and iPad
+  QA (see [the mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md)). A
+  shell whose App target disagrees with a configured family fails a
+  production build.
+
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the
 existing kit target scripts:

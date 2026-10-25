@@ -103,9 +103,11 @@ loading compatibility. The root project toolchain remains TypeScript 7 RC.
 - [x] pnpm build:ait succeeds
 - [x] artifacts/release-manifest.json generated
 
-Note: Android builds a release AAB by default. iOS performs cap sync by default;
-set `MPGD_RUN_IOS_ARCHIVE=1` on a runner with a compatible iOS platform installed
-to run xcodebuild archive.
+Note: staging builds an unsigned Android AAB or an iOS Capacitor sync by default.
+Select the native build with `MPGD_NATIVE_BUILD_MODE` (`signed-archive` or
+`store-export` for production); the older `MPGD_RUN_IOS_ARCHIVE=1` flag remains
+for staging only. See [native deployment](./NATIVE_DEPLOYMENT.md) and the
+[mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md).
 
 ## Phase 6 - Backend Skeleton
 
@@ -281,3 +283,21 @@ to run xcodebuild archive.
 - [x] Phaser starters include HTML legal/support/terms sources and `mpgd legal build/check`
 - [x] Phaser starters include a TypeScript Cloudflare Pages host that bundles to `_worker.js`
 - [x] Pages host routes bridge JSON, bridge oRPC, optional game-services service binding proxy, and static assets
+
+## Phase 24 - Mobile Store Launch (Google Play and App Store)
+
+See the [mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md).
+
+- [x] `mpgd deploy run` stamps reserved native version numbers into the staged shell
+- [x] iOS export compliance key, `arm64` capability, and TestFlight internal build state check
+- [x] Design orientation (`mpgd.game.json` `native.orientation`) and iOS device family in generated shells
+- [x] App-level iOS privacy manifest in kit shells
+- [x] Android advertising ID declaration, AdMob ID checks, `app-ads.txt` on the legal site
+- [x] Restore Purchases in the Phaser and lite templates
+- [x] Credential patterns in the generated `.gitignore`
+- [x] Store privacy disclosures guide and privacy policy template with SDK, retention, and deletion sections
+- [ ] Sandbox purchases against production backends, refunds and voided purchases, server-side acknowledgement retry (L2)
+- [ ] Server-issued identity and account deletion in app and on the web (L3)
+- [ ] Play closed/open/production tracks, staged rollout, release notes, first-upload draft status
+- [ ] Crash reporting and dSYM / mapping upload
+- [ ] Catalog sync to Play and App Store Connect products

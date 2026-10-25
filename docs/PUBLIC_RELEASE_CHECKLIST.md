@@ -1,6 +1,8 @@
 # Public Release Checklist
 
 Use this before making the repository public or announcing a package release.
+It is about publishing **the kit**. To ship a game to Google Play and the App
+Store, use the [mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md).
 
 ## Current Public Repo Status
 
@@ -81,19 +83,19 @@ pnpm smoke:target reddit
 - [ ] Confirm GitHub repository settings: branch protection, default branch, Actions permissions, issue/discussion settings, and repository topics.
 - [ ] Confirm npm publishing settings: package access, local initial publish for new packages, OIDC trusted publishing, provenance policy, and Sampo release automation permissions. Use token-based publishing only for the initial registration or a documented fallback path.
 - [ ] Confirm Cloudflare Worker settings: account id, API token, D1 database binding, and whether `MPGD_STORE` should stay `memory` for demo-only deploys.
-- [ ] Confirm Android release settings: package id, Google Play app, billing products, AdMob app/placement ids, signing keystore, and Play Games leaderboard ids.
-- [ ] Confirm iOS release settings: bundle id, App Store app, StoreKit products, AdMob app/placement ids, signing credentials, and Game Center leaderboard ids.
+- [ ] Confirm Android release settings: package id, Google Play app, billing products, AdMob app/placement ids, and signing keystore. (The kit does not integrate Play Games Services leaderboards.)
+- [ ] Confirm iOS release settings: bundle id, App Store app, StoreKit products, AdMob app/placement ids, and signing credentials. (The kit does not integrate Game Center.)
 - [ ] Confirm Apps in Toss release settings: app id, Toss product ids, Toss ad placement ids, review metadata, and release credentials.
 - [ ] Confirm Microsoft Store release settings: Partner Center app reservation, PWA manifest/icons, PWABuilder package output, Store listing metadata, age ratings, and whether Digital Goods API commerce is intentionally disabled. Use Microsoft's PWA Store and Digital Goods API docs as the policy source before enabling Store commerce.
 - [ ] Confirm Reddit Devvit release settings: app name, test subreddit, Devvit login state, Redis usage, and whether playtest/upload/publish are intentionally local-only.
 - [ ] Confirm placeholder IDs in `packages/catalog/catalog.json`, `packages/catalog/placements.json`, and `apps/game-services-worker/wrangler.toml` are either intentionally sample-only or replaced.
-- [ ] Confirm README/docs distinguish the bundled Google Play one-time-product, AdMob SSV, and Apps in Toss verifier boundaries from game-owned API authentication, configuration, durable callback storage, rotating public-key state, and runtime mTLS/login or reward-authority adapters. State that StoreKit/App Store Server API, Google Play subscriptions, and Devvit payment/reward verification are not bundled yet.
+- [ ] Confirm README/docs distinguish the bundled Google Play one-time-product, AdMob SSV, and Apps in Toss verifier boundaries from game-owned API authentication, configuration, durable callback storage, rotating public-key state, and runtime mTLS/login or reward-authority adapters. State that StoreKit/App Store Server API verification of one-time products is bundled (`@mpgd/game-services/app-store-server`), while subscriptions on either store, store refund/voided-purchase notifications, and Devvit payment/reward verification are not bundled yet.
 - [ ] Confirm emulator smoke results are attached or explicitly skipped for the public release.
 
 ## Release Artifacts
 
-- [ ] For Android, run `pnpm build:android && pnpm smoke:target android`.
-- [ ] For iOS, run `pnpm build:ios && pnpm smoke:target ios`.
+- [ ] For Android, run `pnpm build:target android staging && pnpm smoke:target android`. A `production` build (`pnpm build:android`) also needs `MPGD_NATIVE_BUILD_MODE=signed-archive`, the upload key, and the release version variables ([native deployment](./NATIVE_DEPLOYMENT.md)).
+- [ ] For iOS, run `pnpm build:target ios staging && pnpm smoke:target ios` (a Capacitor sync). A `production` build (`pnpm build:ios`) also needs `MPGD_NATIVE_BUILD_MODE=signed-archive` or `store-export`, `MPGD_IOS_TEAM_ID`, and signing ([native deployment](./NATIVE_DEPLOYMENT.md)).
 - [ ] For Microsoft Store, run `pnpm build:microsoft-store && pnpm smoke:target microsoft-store`, complete `examples/phaser-starter/mpgd.microsoft-store.json` with valid desktop PNG screenshots (maximum 50 MB and at least 1366 x 768 in either orientation), and run `pnpm exec mpgd target preflight microsoft-store --targets-file examples/phaser-starter/mpgd.targets.json --submission-file mpgd.microsoft-store.json --kit-path .`.
 - [ ] Deploy the exact preflighted Microsoft Store PWA and manifest icons, then run `pnpm exec mpgd target generate-package microsoft-store --targets-file examples/phaser-starter/mpgd.targets.json --pwa-url <public-https-url> --manifest-url <public-manifest-url> --package-version <modern-version> --classic-version <lower-classic-version>`. Confirm the command verifies the deployed manifest and every icon before and after generation, preserve the generated provenance evidence, inspect the downloaded ZIP with the package acceptance flow, and only then upload accepted packages to Partner Center.
 - [ ] Copy the PWABuilder packages under `examples/phaser-starter/release-input/microsoft-store`; then run `pnpm exec mpgd target accept-package microsoft-store --targets-file examples/phaser-starter/mpgd.targets.json --packages <game-relative package paths>` on Windows and attach `examples/phaser-starter/release-output/microsoft-store/package-acceptance.json`. Optionally pass `--appcert <path-to-appcert.exe>` to run the recommended WACK check and attach its reports.
@@ -105,6 +107,6 @@ pnpm smoke:target reddit
 ## Known Starter Limits
 
 - The Game Services Worker is deployable, but the default config is a starter profile. Production persistence requires a D1 binding and `MPGD_STORE = "d1"`.
-- Platform SDK callbacks are treated as evidence only. Google Play one-time products can use the shared verifier/finalizer with a game-owned authenticated API client, AdMob-backed rewards can use the SSV verifier with deployment-owned callback and key stores, and Apps in Toss deployments should supply mTLS/login and reward-authority implementations behind the public verifier ports. Production grants still need App Store, Google Play subscription, and Devvit payment/reward backend verification.
+- Platform SDK callbacks are treated as evidence only. Google Play one-time products can use the shared verifier/finalizer with a game-owned authenticated API client, AdMob-backed rewards can use the SSV verifier with deployment-owned callback and key stores, and Apps in Toss deployments should supply mTLS/login and reward-authority implementations behind the public verifier ports. App Store one-time products use the bundled App Store Server API verifier. Production grants still need Google Play and App Store subscription verification, refund and voided-purchase handling, and Devvit payment/reward backend verification.
 - Catalog and ad placement IDs are sample defaults until replaced by a game-specific release configuration.
 - Emulator smoke checks install, launch, crash-free startup, screenshot capture, and embedded target config evidence. Target gameplay coverage is available through the optional manifest-driven `gameplay:e2e` contract; each game must still provide its own automation and state-inspection driver before treating that evidence as a release gate.
