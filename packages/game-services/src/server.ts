@@ -1651,13 +1651,39 @@ async function transferRestoredPurchase(
             restoredAcrossAccounts: true,
           },
         });
-        return recorded.status === 'recorded'
-          ? {
-              status: 'written',
-              ledgerEntryId: recorded.result.ledgerEntryId,
-              alreadyProcessed: recorded.result.alreadyProcessed,
-            }
-          : notGranted('pending', 'PURCHASE_TRANSFER_CONFLICT');
+        if (recorded.status !== 'recorded') {
+          return notGranted('pending', 'PURCHASE_TRANSFER_CONFLICT');
+        }
+        if (recorded.result.alreadyProcessed) {
+          // The key already held a grant (another isolate wrote it after the
+          // lookup): it is this restore only if it records this purchase.
+          const keyed = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
+          if (
+            keyed === undefined
+            || !matchesEntitlementRetry(keyed, {
+              source: 'purchase',
+              playerId: request.playerId,
+              idempotencyKey: request.idempotencyKey,
+              grantId: request.productId,
+              target: request.target,
+              store: input.verifiedStore,
+              ...(request.deploymentTarget === undefined
+                ? {}
+                : { deploymentTarget: request.deploymentTarget }),
+            })
+            || readPurchaseVerificationId(keyed) !== purchaseVerificationId
+          ) {
+            return notGranted('rejected', 'IDEMPOTENCY_KEY_CONFLICT');
+          }
+          if (await isEntitlementGrantReversed(store, keyed.ledgerEntryId)) {
+            return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
+          }
+        }
+        return {
+          status: 'written',
+          ledgerEntryId: recorded.result.ledgerEntryId,
+          alreadyProcessed: recorded.result.alreadyProcessed,
+        };
       }
       const holder = await resolvePurchaseGrantHolder(store, first);
       const current = holder.grant;

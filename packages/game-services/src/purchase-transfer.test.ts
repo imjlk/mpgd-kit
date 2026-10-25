@@ -406,6 +406,47 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   );
 }
 
+// A key another isolate filled with a different purchase after the lookup is a
+// conflict, never a restore that grants nothing.
+{
+  const inner = createInMemoryGameServicesStore();
+  await inner.recordEntitlementGrant({
+    playerId: 'player-b',
+    grantId: 'HINT_PACK_5',
+    source: 'purchase',
+    idempotencyKey: 'play-token-sha256:player-b',
+    grantedAt: '2030-01-01T00:00:00.000Z',
+    payload: { target: 'android', productId: 'HINT_PACK_5' },
+  });
+  const store: GameServicesStore = {
+    recordEntitlementGrant: (input) => inner.recordEntitlementGrant(input),
+    // The lookups miss the key, as a lookup before the other isolate's write does.
+    findEntitlementTransactionByIdempotency: async () => undefined,
+    findEntitlementTransactionByEvidenceVerificationId: (input) =>
+      inner.findEntitlementTransactionByEvidenceVerificationId(input),
+    getEntitlementTransaction: (id) => inner.getEntitlementTransaction(id),
+    listEntitlementTransactions: async () => [],
+    findEntitlementRevocations: (input) => inner.findEntitlementRevocations(input),
+    recordEntitlementTransfer: (input) => inner.recordEntitlementTransfer(input),
+    recordLeaderboardScore: (input, options) => inner.recordLeaderboardScore(input, options),
+    getLeaderboardTransaction: (id) => inner.getLeaderboardTransaction(id),
+    listLeaderboardTransactions: () => inner.listLeaderboardTransactions(),
+  };
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreTransfers: { mode: 'move' },
+  });
+  assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-b')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'rejected',
+    reason: 'IDEMPOTENCY_KEY_CONFLICT',
+  });
+}
+
 // Rate limit: at most N moves per purchase in the window; later restores wait for it.
 {
   const store = createInMemoryGameServicesStore();
