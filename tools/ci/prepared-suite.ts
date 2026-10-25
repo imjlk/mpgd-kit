@@ -87,6 +87,7 @@ export const preparedGroups = Object.freeze({
     'smoke:app-store-purchase',
     'smoke:game-services:prepared',
     'smoke:game-services:worker:prepared',
+    'smoke:game-identity:worker:prepared',
   ],
 });
 
@@ -98,6 +99,9 @@ export function resolvePreparedScript(script: string, checked: boolean): string 
   if (checked && script === 'smoke:game-services:worker:prepared') {
     // CI's prepare job already ran the worker's check through pnpm check.
     return 'smoke:game-services:worker:checked';
+  }
+  if (checked && script === 'smoke:game-identity:worker:prepared') {
+    return 'smoke:game-identity:worker:checked';
   }
   return script;
 }

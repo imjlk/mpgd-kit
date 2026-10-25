@@ -1,0 +1,357 @@
+import assert from 'node:assert/strict';
+
+import type { ServerGuestSessionCredentials } from '@mpgd/game-services/guest-session';
+
+import { deriveAppAccountToken, deriveObfuscatedAccountId } from './accountBinding.js';
+import {
+  createGuestIdentityService,
+  defaultIdentityServiceConfig,
+  type GuestIdentityService,
+  type IdentityResult,
+} from './identityService.js';
+import type { IdentityStore } from './store.js';
+
+const minute = 60 * 1000;
+const day = 24 * 60 * minute;
+
+/**
+ * The guest identity behaviour every store must give the service: issue,
+ * rotation inside a stable family, expiry, replay detection, the retry
+ * grace, revocation, the per-installation limit, the account bindings, and
+ * the purge. `createStore` returns an empty store each call.
+ */
+export async function runGuestIdentityConformance(createStore: () => Promise<IdentityStore>): Promise<void> {
+  const start = Date.parse('2030-01-01T00:00:00.000Z');
+
+  async function setup() {
+    let clock = start;
+    const ended: string[] = [];
+    const logs: string[] = [];
+    const store = await createStore();
+    const service = createGuestIdentityService({
+      store,
+      now: () => clock,
+      endNotificationSession: async (sessionId) => {
+        ended.push(sessionId);
+      },
+      log: (message) => logs.push(message),
+    });
+    return {
+      service,
+      store,
+      ended,
+      logs,
+      advance(ms: number) {
+        clock += ms;
+      },
+      now: () => clock,
+    };
+  }
+
+  // Issue: a new player and family, opaque prefixed tokens, the family as the session id.
+  {
+    const { service } = await setup();
+    const first = value(await service.issueGuest({ installationId: 'install-00000001' }));
+    assert.match(first.serverUserId, /^p_[0-9a-f]{32}$/u);
+    assert.match(first.sessionId, /^s_[0-9a-f]{32}$/u);
+    assert.equal(first.sessionFamilyId, first.sessionId);
+    assert.equal(first.identityLevel, 'guest');
+    assert.match(first.accessToken, /^mpgd_at_[A-Za-z0-9_-]{43}$/u);
+    assert.match(first.refreshToken, /^mpgd_rt_[A-Za-z0-9_-]{43}$/u);
+    assert.equal(
+      first.accessExpiresAt,
+      new Date(start + defaultIdentityServiceConfig.accessTokenTtlMs).toISOString(),
+    );
+    const second = value(await service.issueGuest({ installationId: 'install-00000001' }));
+    assert.notEqual(second.serverUserId, first.serverUserId);
+    assert.notEqual(second.sessionFamilyId, first.sessionFamilyId);
+    assert.deepEqual(await service.authenticate(`Bearer ${first.accessToken}`), {
+      playerId: first.serverUserId,
+      sessionId: first.sessionFamilyId,
+      installationId: 'install-00000001',
+      expiresAt: new Date(start + defaultIdentityServiceConfig.refreshIdleMs).toISOString(),
+    });
+    // The scheme is case-insensitive; anything else is no principal.
+    assert.equal(
+      (await service.authenticate(`bearer ${first.accessToken}`))?.playerId,
+      first.serverUserId,
+    );
+    for (const header of [
+      first.accessToken,
+      `Bearer ${first.refreshToken}`,
+      'Bearer mpgd_at_x',
+      undefined,
+      42,
+    ]) {
+      assert.equal(await service.authenticate(header), undefined);
+    }
+    for (const installationId of ['short', 'has space 0000', 'x'.repeat(129), undefined, 7]) {
+      assert.deepEqual(await service.issueGuest({ installationId }), {
+        ok: false,
+        error: 'INVALID_REQUEST',
+      });
+    }
+  }
+
+  // Rotation keeps the player and the family; the refresh token is single use.
+  {
+    const { service, advance, ended } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-rotate-1' }));
+    advance(10 * minute);
+    const rotated = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    assert.equal(rotated.serverUserId, issued.serverUserId);
+    assert.equal(rotated.sessionFamilyId, issued.sessionFamilyId);
+    assert.equal(rotated.sessionId, issued.sessionId);
+    assert.notEqual(rotated.refreshToken, issued.refreshToken);
+    assert.notEqual(rotated.accessToken, issued.accessToken);
+    // The family's end slides with each refresh.
+    assert.equal(
+      (await service.authenticate(`Bearer ${rotated.accessToken}`))?.expiresAt,
+      new Date(start + 10 * minute + defaultIdentityServiceConfig.refreshIdleMs).toISOString(),
+    );
+    // The previous access token stays valid until it expires (a refresh ahead of expiry).
+    assert.equal(
+      (await service.authenticate(`Bearer ${issued.accessToken}`))?.playerId,
+      issued.serverUserId,
+    );
+    advance(5 * minute);
+    assert.equal(await service.authenticate(`Bearer ${issued.accessToken}`), undefined);
+    assert.equal(
+      (await service.authenticate(`Bearer ${rotated.accessToken}`))?.playerId,
+      issued.serverUserId,
+    );
+    const again = value(await service.refresh({ refreshToken: rotated.refreshToken }));
+    assert.equal(again.sessionFamilyId, issued.sessionFamilyId);
+    assert.deepEqual(ended, []);
+  }
+
+  // Replay: an invalidated refresh token revokes the whole family (RFC 9700 4.14.2).
+  {
+    const { service, advance, ended, logs } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-replay-1' }));
+    const rotated = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    advance(defaultIdentityServiceConfig.refreshRetryGraceMs + 1);
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+    assert.equal(logs.length, 1);
+    assert.equal(
+      logs.some((line) => line.includes(issued.refreshToken)),
+      false,
+    );
+    // Both parties are out: the current token and every access token of the family.
+    assert.deepEqual(await service.refresh({ refreshToken: rotated.refreshToken }), rejected);
+    assert.equal(await service.authenticate(`Bearer ${rotated.accessToken}`), undefined);
+    assert.equal(await service.authenticate(`Bearer ${issued.accessToken}`), undefined);
+    // A second replay changes nothing more.
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+  }
+
+  // An older token (two rotations back) is a replay too, even inside the grace window.
+  {
+    const { service, ended } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-replay-2' }));
+    const second = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    const third = value(await service.refresh({ refreshToken: second.refreshToken }));
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+    assert.deepEqual(await service.refresh({ refreshToken: third.refreshToken }), rejected);
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+  }
+
+  // Retry grace: a client that lost the rotation's answer retries the old
+  // token while its successor is unused; the unused successor is then dead.
+  {
+    const { service, advance, ended } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-retry-1' }));
+    const lost = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    advance(defaultIdentityServiceConfig.refreshRetryGraceMs / 2);
+    const retried = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    assert.equal(retried.sessionFamilyId, issued.sessionFamilyId);
+    assert.notEqual(retried.refreshToken, lost.refreshToken);
+    // The window counts from the first rotation: a later retry is a replay.
+    advance(defaultIdentityServiceConfig.refreshRetryGraceMs / 2 + 1);
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+  }
+  {
+    const { service, ended } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-retry-2' }));
+    const lost = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    value(await service.refresh({ refreshToken: issued.refreshToken }));
+    // The successor the retry replaced is a replay when it shows up.
+    assert.deepEqual(await service.refresh({ refreshToken: lost.refreshToken }), rejected);
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+  }
+  {
+    // With the grace off, the first retry is a replay.
+    const store = await createStore();
+    const service = createGuestIdentityService({
+      store,
+      now: () => start,
+      config: { refreshRetryGraceMs: 0 },
+      log: () => undefined,
+    });
+    const issued = value(await service.issueGuest({ installationId: 'install-retry-3' }));
+    value(await service.refresh({ refreshToken: issued.refreshToken }));
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+  }
+
+  // Two refreshes racing with one token: one rotates, the other is read again as a retry.
+  {
+    const { service } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-race-1' }));
+    const answers = await Promise.all([
+      service.refresh({ refreshToken: issued.refreshToken }),
+      service.refresh({ refreshToken: issued.refreshToken }),
+    ]);
+    const winners = answers.filter((answer) => answer.ok);
+    assert.ok(winners.length >= 1);
+    const last = winners.at(-1);
+    assert.ok(last?.ok);
+    assert.equal(last.value.sessionFamilyId, issued.sessionFamilyId);
+  }
+
+  // Expiry: access tokens after their lifetime, families after the inactivity window.
+  {
+    const { service, advance } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-expiry-1' }));
+    advance(defaultIdentityServiceConfig.accessTokenTtlMs);
+    assert.equal(await service.authenticate(`Bearer ${issued.accessToken}`), undefined);
+    advance(
+      defaultIdentityServiceConfig.refreshIdleMs - defaultIdentityServiceConfig.accessTokenTtlMs - 1,
+    );
+    const kept = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    advance(defaultIdentityServiceConfig.refreshIdleMs);
+    assert.deepEqual(await service.refresh({ refreshToken: kept.refreshToken }), rejected);
+  }
+
+  // Logout revokes the family, once; unknown and malformed tokens are not errors.
+  {
+    const { service, ended } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-logout-1' }));
+    const rotated = value(await service.refresh({ refreshToken: issued.refreshToken }));
+    await service.revoke({ refreshToken: rotated.refreshToken });
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+    assert.equal(await service.authenticate(`Bearer ${rotated.accessToken}`), undefined);
+    assert.deepEqual(await service.refresh({ refreshToken: rotated.refreshToken }), rejected);
+    await service.revoke({ refreshToken: rotated.refreshToken });
+    await service.revoke({ refreshToken: 'mpgd_rt_' + 'A'.repeat(43) });
+    await service.revoke({ refreshToken: 'nope' });
+    await service.revoke({ refreshToken: undefined });
+    assert.deepEqual(ended, [issued.sessionFamilyId]);
+    for (const refreshToken of ['nope', undefined, 'mpgd_rt_' + 'A'.repeat(43)]) {
+      assert.deepEqual(await service.refresh({ refreshToken }), rejected);
+    }
+  }
+
+  // A failed endNotificationSession is logged, and the revocation still holds.
+  {
+    const store = await createStore();
+    const logs: string[] = [];
+    const service = createGuestIdentityService({
+      store,
+      now: () => start,
+      endNotificationSession: async () => {
+        throw new TypeError('binding down');
+      },
+      log: (message) => logs.push(message),
+    });
+    const issued = value(await service.issueGuest({ installationId: 'install-logout-2' }));
+    await service.revoke({ refreshToken: issued.refreshToken });
+    assert.deepEqual(logs, ['[identity] endNotificationSession failed: TypeError']);
+    assert.deepEqual(await service.refresh({ refreshToken: issued.refreshToken }), rejected);
+  }
+
+  // At most five guests per installation in a rolling day.
+  {
+    const { service, advance } = await setup();
+    for (let index = 0; index < defaultIdentityServiceConfig.maxGuestsPerInstallationPerDay; index += 1) {
+      value(await service.issueGuest({ installationId: 'install-limit-1' }));
+    }
+    assert.deepEqual(await service.issueGuest({ installationId: 'install-limit-1' }), {
+      ok: false,
+      error: 'RATE_LIMITED',
+    });
+    value(await service.issueGuest({ installationId: 'install-limit-2' }));
+    advance(day);
+    value(await service.issueGuest({ installationId: 'install-limit-1' }));
+  }
+
+  // Account binding is the seam for later, not a provider login.
+  {
+    const { service } = await setup();
+    assert.deepEqual(
+      await service.bindAccount({ refreshToken: 'x', externalProof: 'y', idempotencyKey: 'z' }),
+      {
+        ok: false,
+        error: 'ACCOUNT_BINDING_UNSUPPORTED',
+      },
+    );
+  }
+
+  // Store account bindings: only for a player this service issued.
+  {
+    const { service } = await setup();
+    const issued = value(await service.issueGuest({ installationId: 'install-binding-1' }));
+    assert.equal(
+      await service.resolveObfuscatedAccountId(issued.serverUserId),
+      await deriveObfuscatedAccountId(issued.serverUserId),
+    );
+    assert.equal(
+      await service.resolveAppAccountToken(issued.serverUserId),
+      await deriveAppAccountToken(issued.serverUserId),
+    );
+    for (const playerId of [`p_${'0'.repeat(32)}`, 'android-local-player', '', undefined]) {
+      assert.equal(await service.resolveObfuscatedAccountId(playerId), undefined);
+      assert.equal(await service.resolveAppAccountToken(playerId), undefined);
+    }
+  }
+
+  // Purge: ended families and their tokens go; live ones and players stay.
+  {
+    const { service, advance } = await setup();
+    const kept = value(await service.issueGuest({ installationId: 'install-purge-1' }));
+    const revoked = value(await service.issueGuest({ installationId: 'install-purge-2' }));
+    await service.revoke({ refreshToken: revoked.refreshToken });
+    advance(8 * day);
+    const rotated = value(await service.refresh({ refreshToken: kept.refreshToken }));
+    await service.purge();
+    assert.equal(
+      (await service.authenticate(`Bearer ${rotated.accessToken}`))?.playerId,
+      kept.serverUserId,
+    );
+    value(await service.refresh({ refreshToken: rotated.refreshToken }));
+    // The revoked family is gone: its token is now unknown, still rejected.
+    assert.deepEqual(await service.refresh({ refreshToken: revoked.refreshToken }), rejected);
+    assert.equal(
+      await service.resolveObfuscatedAccountId(revoked.serverUserId),
+      await deriveObfuscatedAccountId(revoked.serverUserId),
+    );
+  }
+
+  // Configuration that cannot work is refused.
+  assert.throws(
+    () =>
+      createGuestIdentityService({ store: {} as IdentityStore, config: { accessTokenTtlMs: 0 } }),
+    /Identity config/u,
+  );
+  assert.throws(
+    () =>
+      createGuestIdentityService({
+        store: {} as IdentityStore,
+        config: { refreshRetryGraceMs: 15 * minute },
+      }),
+    /Identity config/u,
+  );
+}
+
+const rejected = { ok: false, error: 'GUEST_SESSION_REJECTED' };
+
+function value(result: IdentityResult<ServerGuestSessionCredentials>): ServerGuestSessionCredentials {
+  if (!result.ok) {
+    throw new Error(`Expected credentials, got ${result.error}.`);
+  }
+  return result.value;
+}
+
+export type { GuestIdentityService };
