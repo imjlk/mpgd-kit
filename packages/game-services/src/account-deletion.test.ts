@@ -259,7 +259,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       address: { kind: 'fcm-token', value: `token-${player}` },
       permission: 'granted',
       sessionId: `session-${player}`,
-      registeredAt: '2026-10-20T00:00:00.000Z',
+      lastRegisteredAt: '2026-10-20T00:00:00.000Z',
     } as never);
     await store.createSend({
       key: `send-${player}`,
@@ -268,6 +268,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       origin: 'server',
       scheduled: false,
       rows: [],
+      changedAt: '2026-10-20T00:00:00.000Z',
     } as never);
     await store.createScheduleEntry({
       player,

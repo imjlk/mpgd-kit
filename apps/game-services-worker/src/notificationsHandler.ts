@@ -16,7 +16,10 @@ import {
   type NotificationSession,
   type NotificationStore,
 } from '@mpgd/game-services/notifications';
-import { parseDevelopmentNotificationSessionAuthorization } from '@mpgd/game-services';
+import {
+  parseDevelopmentNotificationSessionAuthorization,
+  type PlayerDataEraser,
+} from '@mpgd/game-services';
 import {
   createAitFunctionalMessageDeliveryProvider,
   type CreateAitFunctionalMessageDeliveryProviderOptions,
@@ -337,6 +340,45 @@ function notificationSessionAuthOf(
   return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS === 'true'
     ? { auth: developmentNotificationSessionAuth, development: true }
     : undefined;
+}
+
+/**
+ * The notifications session binding as account deletion uses it: the
+ * session's player, `undefined` without a session binding (and without the
+ * development sessions), or the answer to send (401, 500). Development
+ * sessions apply only on a local development host, as on the session routes.
+ */
+export async function authenticateNotificationPlayer(
+  env: GameServicesNotificationsEnv,
+  request: Request,
+): Promise<{ readonly playerId: string; readonly development: boolean } | Response | undefined> {
+  const sessions = notificationSessionAuthOf(env);
+  if (sessions === undefined) {
+    return undefined;
+  }
+  if (sessions.development && !isLocalDevelopmentHost(new URL(request.url).hostname)) {
+    return json({ error: 'UNAUTHORIZED' }, 401, {});
+  }
+  const session = await authenticate(request, sessions.auth);
+  return session instanceof Response
+    ? session
+    : { playerId: session.player, development: sessions.development };
+}
+
+/**
+ * The memory notification store's account deletion eraser, or `undefined`
+ * on D1 (the Worker's D1 eraser covers those tables) or before the store
+ * exists (it then holds nothing).
+ */
+export function workerNotificationMemoryEraser(
+  env: GameServicesNotificationsEnv,
+): PlayerDataEraser | undefined {
+  if (env.MPGD_STORE === 'd1') {
+    return undefined;
+  }
+  const store = notificationsStateOf(env).memoryStore as Partial<PlayerDataEraser> | undefined;
+  const erase = store?.erasePlayerData;
+  return erase === undefined ? undefined : { erasePlayerData: (input) => erase.call(store, input) };
 }
 
 /**

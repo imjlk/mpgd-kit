@@ -235,6 +235,18 @@ head_sampling_rate = 1
 # MPGD_STORE_SERVER_SUBREQUEST_BUDGET = "300"
 # MPGD_STORE_SERVER_CRON_BUDGET_SECONDS = "15"
 #
+# Account deletion (docs/GAME_SERVICES_BACKEND.md#account-deletion): apply
+# migration 0010_account_deletion.sql and bind the identity Worker's
+# deletePlayer entrypoint. POST /game-services/account/delete authenticates the
+# player through GAME_SERVICES_INGRESS_AUTH (else GAME_SERVICES_NOTIFICATIONS_AUTH)
+# and answers 503 without this binding. The cron above finishes pending
+# erasures and purges purchase records kept for deleted players after five years.
+#
+# [[services]]
+# binding = "GAME_SERVICES_ACCOUNT_DELETION"
+# service = "game-identity"
+# entrypoint = "AccountDeletion"
+#
 # [triggers]
 # Workers Paid only. A free-plan cron has 10 ms of CPU and 50 external subrequests.
 # crons = ["* * * * *"]
