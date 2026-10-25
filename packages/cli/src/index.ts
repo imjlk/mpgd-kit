@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -1306,7 +1307,9 @@ const legalPageSlugs = ['privacy', 'support', 'terms'] as const;
  * Google Play's Data safety form asks for. A missing one is warned about.
  */
 const optionalLegalPageSlugs = ['delete-account'] as const;
-const legalPageFileList = legalPageSlugs.map((slug) => `${slug}.html`).join(', ');
+const legalPageFileList = `${legalPageSlugs.map((slug) => `${slug}.html`).join(', ')}, and optionally ${
+  optionalLegalPageSlugs.map((slug) => `${slug}.html`).join(', ')
+}`;
 
 interface AcceptGameInput {
   readonly gameRoot: string;
@@ -3444,26 +3447,40 @@ function buildLegalSite(input: {
         + 'created with the current kit.',
     );
   }
-  // app-ads.txt is optional: an earlier one is stale once its source is gone.
-  const appAdsOutput = path.join(outDir, 'app-ads.txt');
-  const orphanStat = outputs.some((output) => output.file === appAdsOutput)
-    ? undefined
-    : lstatIfExists(appAdsOutput);
-  const orphanedAppAds = orphanStat !== undefined;
-  if (orphanStat !== undefined) {
-    assertLegalProjectPath('out-dir', appAdsOutput);
-    if (!orphanStat.isFile()) {
-      throw new Error(`Legal site app-ads.txt output is not a regular file: ${appAdsOutput}`);
+  // app-ads.txt and the optional pages are stale once their source is gone.
+  const optionalOutputs = [
+    { file: path.join(outDir, 'app-ads.txt'), source: 'app-ads.txt' },
+    ...optionalLegalPageSlugs.map((slug) => ({
+      file: path.join(outDir, slug, 'index.html'),
+      source: `${slug}.html`,
+    })),
+  ];
+  const orphans = optionalOutputs.filter(({ file }) => {
+    if (outputs.some((output) => output.file === file)) {
+      return false;
     }
-  }
+    const stat = lstatIfExists(file);
+    if (stat === undefined) {
+      return false;
+    }
+    assertLegalProjectPath('out-dir', file);
+    if (!stat.isFile()) {
+      throw new Error(`Legal site output is not a regular file: ${file}`);
+    }
+    return true;
+  });
 
   warnLegalPlaceholders(outputs);
   if (input.check) {
     assertLegalProjectPath('out-dir', outDir);
-    if (orphanedAppAds) {
+    if (orphans.length > 0) {
       throw new Error(
-        'Legal site output is stale. Run "mpgd legal build".\n'
-          + `- ${path.relative(process.cwd(), appAdsOutput)} (no app-ads.txt source)`,
+        [
+          'Legal site output is stale. Run "mpgd legal build".',
+          ...orphans.map(({ file, source }) =>
+            `- ${path.relative(process.cwd(), file)} (no ${source} source)`,
+          ),
+        ].join('\n'),
       );
     }
     const stale = outputs.filter((output) => {
@@ -3491,8 +3508,16 @@ function buildLegalSite(input: {
   }
 
   publishLegalSiteFiles(outDir, outputs);
-  if (orphanedAppAds) {
-    rmSync(appAdsOutput, { force: true });
+  for (const { file } of orphans) {
+    rmSync(file, { force: true });
+    if (path.dirname(file) !== outDir) {
+      // The page's own directory, once empty.
+      try {
+        rmdirSync(path.dirname(file));
+      } catch {
+        // Not empty, or already gone: leave it.
+      }
+    }
   }
 
   return {

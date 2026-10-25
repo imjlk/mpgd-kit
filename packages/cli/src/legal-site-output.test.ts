@@ -230,6 +230,15 @@ await test('builds the account deletion page when its source exists, and warns w
         readonly pages: readonly { readonly slug: string }[];
       };
       assert.deepEqual(rebuilt.pages.map((entry) => entry.slug), ['privacy', 'support', 'terms']);
+      // The page built earlier is gone, with its directory.
+      assert.equal(existsSync(path.join(site, 'delete-account')), false);
+      await runMpgdCli(['legal', 'check']);
+      // An output left without its source is stale for check, and build removes it.
+      mkdirSync(path.join(site, 'delete-account'));
+      writeFileSync(path.join(site, 'delete-account', 'index.html'), page('Left over'));
+      await assert.rejects(runMpgdCli(['legal', 'check']), /no delete-account\.html source/u);
+      await runMpgdCli(['legal', 'build']);
+      assert.equal(existsSync(path.join(site, 'delete-account', 'index.html')), false);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
