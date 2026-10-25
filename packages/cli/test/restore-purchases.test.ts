@@ -111,6 +111,31 @@ const reconcilerFailure = createStarterRestorePurchases({
   },
 });
 assert.deepEqual(await reconcilerFailure.restore(), { outcome: 'failed' });
+// A purchase found, verified and finished within the restore is gone from the
+// recoverable summaries but still counts as restored.
+const settledInPass = createStarterRestorePurchases({
+  gateway: gateway('app-store', signedIn),
+  monetizationRecovery: {
+    commerceReconciler: {
+      subscribe(listener: (event: { type: string; stage?: string }) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never,
+    async restorePurchases() {
+      for (const listener of listeners) {
+        for (const state of ['purchased', 'verifying', 'granted', 'finishing', 'finished']) {
+          (listener as (event: unknown) => void)({
+            type: 'transition',
+            record: { idempotencyKey: 'restored-1', state },
+          });
+        }
+      }
+      return [summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'granted')];
+    },
+  },
+});
+assert.deepEqual(await settledInPass.restore(), { outcome: 'restored', granted: 2 });
 assert.equal(listeners.size, 0, 'the restore stops listening');
 assert.deepEqual(
   await createStarterRestorePurchases({

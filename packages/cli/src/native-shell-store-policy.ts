@@ -412,27 +412,61 @@ export function inspectAndroidManifestOrientation(
   return issues;
 }
 
+/**
+ * The activity the launcher opens: one whose own intent filter has the
+ * LAUNCHER category, or the `android:targetActivity` of a launcher
+ * `<activity-alias>` (an arrangement the shell initializer accepts).
+ */
 function findAndroidLauncherActivity(
   manifest: string,
 ): { readonly start: number; readonly tag: string } | undefined {
+  const elements = readAndroidActivityElements(manifest, 'activity');
+  const direct = elements.find((element) => element.launcher);
+  if (direct !== undefined) {
+    return { start: direct.start, tag: direct.tag };
+  }
+  const alias = readAndroidActivityElements(manifest, 'activity-alias')
+    .find((element) => element.launcher);
+  const target = alias === undefined
+    ? undefined
+    : readXmlAttribute(alias.tag, 'android:targetActivity');
+  if (target === undefined) {
+    return undefined;
+  }
+  const simpleName = (name: string): string => name.slice(name.lastIndexOf('.') + 1);
+  const named = elements.filter(
+    (element) => readXmlAttribute(element.tag, 'android:name') === target,
+  );
+  const match = named.length > 0
+    ? named
+    : elements.filter((element) =>
+      simpleName(readXmlAttribute(element.tag, 'android:name') ?? '') === simpleName(target));
+  return match.length === 1 && match[0] !== undefined
+    ? { start: match[0].start, tag: match[0].tag }
+    : undefined;
+}
+
+function readAndroidActivityElements(
+  manifest: string,
+  element: 'activity' | 'activity-alias',
+): readonly { readonly start: number; readonly tag: string; readonly launcher: boolean }[] {
   const masked = maskXmlComments(manifest);
-  // `<activity` followed by whitespace, `/` or `>`: never `<activity-alias`.
-  const openings = /<activity(?=[\s/>])(?:"[^"]*"|'[^']*'|[^>"'])*?(\/?)>/gu;
+  // The element name followed by whitespace, `/` or `>`, so `activity` never matches `activity-alias`.
+  const openings = new RegExp(`<${element}(?=[\\s/>])(?:"[^"]*"|'[^']*'|[^>"'])*?(\\/?)>`, 'gu');
+  const found: { start: number; tag: string; launcher: boolean }[] = [];
   for (const opening of masked.matchAll(openings)) {
     const start = opening.index ?? 0;
     const tagEnd = start + opening[0].length;
+    const tag = manifest.slice(start, tagEnd);
     if (opening[1] === '/') {
+      found.push({ start, tag, launcher: false });
       continue;
     }
-    const close = masked.indexOf('</activity>', tagEnd);
-    if (close === -1) {
-      return undefined;
-    }
-    if (/android\.intent\.category\.LAUNCHER/u.test(masked.slice(tagEnd, close))) {
-      return { start, tag: manifest.slice(start, tagEnd) };
-    }
+    const close = masked.indexOf(`</${element}>`, tagEnd);
+    const body = close === -1 ? '' : masked.slice(tagEnd, close);
+    found.push({ start, tag, launcher: /android\.intent\.category\.LAUNCHER/u.test(body) });
   }
-  return undefined;
+  return found;
 }
 
 function maskXmlComments(xml: string): string {

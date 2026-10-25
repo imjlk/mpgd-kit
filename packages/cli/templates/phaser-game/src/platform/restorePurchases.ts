@@ -12,6 +12,9 @@ import { resolveStarterCommercePlayerId } from './commerceAccountBinding';
  */
 const accountBoundStores: ReadonlySet<string> = new Set(['app-store', 'google-play']);
 
+/** Reconciler states of a purchase the backend ledger has granted. */
+const settledStates: ReadonlySet<string> = new Set(['granted', 'finishing', 'finished']);
+
 export type StarterRestoreOutcome =
   /** `granted`: purchases the backend ledger granted in this pass (0 when nothing new). */
   | { readonly outcome: 'restored'; readonly granted: number }
@@ -65,8 +68,13 @@ export function createStarterRestorePurchases(input: {
     // resume pass, so it makes the result unconfirmed rather than failed.
     let resyncFailed = false;
     let readFailed = false;
+    // A purchase found, verified and finished within this pass is no longer
+    // recoverable afterwards, so the summaries miss it; its transitions do not.
+    const settledKeys = new Set<string>();
     const unsubscribe = recovery.commerceReconciler?.subscribe((event) => {
-      if (event.type === 'failure' && event.stage === 'restore') {
+      if (event.type === 'transition' && settledStates.has(event.record.state)) {
+        settledKeys.add(event.record.idempotencyKey);
+      } else if (event.type === 'failure' && event.stage === 'restore') {
         resyncFailed = true;
       } else if (event.type === 'failure' && event.stage === 'available') {
         readFailed = true;
@@ -78,7 +86,12 @@ export function createStarterRestorePurchases(input: {
       if (resyncFailed) {
         return { outcome: 'failed' };
       }
-      const granted = summaries.filter((summary) => summary.status === 'granted').length;
+      for (const summary of summaries) {
+        if (summary.status === 'granted') {
+          settledKeys.add(summary.idempotencyKey);
+        }
+      }
+      const granted = settledKeys.size;
       // A purchase the backend has not settled yet (verify unreachable, still
       // pending at the store, waiting on an operator) is reported as such,
       // never as "nothing to restore".

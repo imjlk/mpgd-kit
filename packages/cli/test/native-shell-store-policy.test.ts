@@ -314,6 +314,23 @@ try {
     /android:exported="true"\n {12}android:screenOrientation="portrait">/u,
   );
   assert.deepEqual(inspectAndroidManifestOrientation(orientedSiblings, 'portrait'), []);
+  // A launcher <activity-alias> orients its target activity.
+  const aliased = manifest
+    .replace(/\n {12}<intent-filter>\n[\s\S]*? {12}<\/intent-filter>/u, '')
+    .replace(
+      '    </application>',
+      '        <activity-alias android:name=".Launcher" android:targetActivity=".MainActivity" android:exported="true">\n'
+        + '            <intent-filter><action android:name="android.intent.action.MAIN" />'
+        + '<category android:name="android.intent.category.LAUNCHER" /></intent-filter>\n'
+        + '        </activity-alias>\n    </application>',
+    );
+  const orientedAlias = applyAndroidManifestOrientation(aliased, 'landscape');
+  assert.match(
+    orientedAlias,
+    /android:name="\.MainActivity"\n {12}android:exported="true"\n {12}android:screenOrientation="sensorLandscape">/u,
+  );
+  assert.deepEqual(inspectAndroidManifestOrientation(orientedAlias, 'landscape'), []);
+  assert.equal(inspectAndroidManifestOrientation(aliased, 'landscape')[0]?.level, 'error');
   // A `>` or `/>` inside an attribute value does not end the tag.
   const quoted = manifest.replace(
     '        <activity\n',
@@ -394,6 +411,16 @@ try {
       ['error'],
       'a shell with AdMob needs its application ID',
     );
+    // The release source set may carry the production application ID.
+    mkdirSync(path.join(gameShell, 'android/app/src/release'), { recursive: true });
+    writeFileSync(
+      path.join(gameShell, 'android/app/src/release/AndroidManifest.xml'),
+      '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+        + '<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-0000000000000000~0000000000" />'
+        + '<uses-permission android:name="com.google.android.gms.permission.AD_ID" />'
+        + '</application></manifest>',
+    );
+    assert.deepEqual(inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell }), []);
     writeFileSync(path.join(game, 'mpgd.game.json'), '{"native":');
     assert.throws(
       () => inspectNativeStorePolicy({ platform: 'android', shellApp: gameShell, gameRoot: game }),

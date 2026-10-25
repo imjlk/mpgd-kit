@@ -67,10 +67,14 @@ export function inspectNativeStorePolicy(input: {
     return [];
   }
   const manifestSource = readFileSync(manifest, 'utf8');
+  // Gradle merges the release source set's manifest over the main one; the
+  // AdMob application ID or the advertising ID line may live there.
+  const releaseManifest = join(input.shellApp, 'android/app/src/release/AndroidManifest.xml');
+  const releaseSource = existsSync(releaseManifest) ? readFileSync(releaseManifest, 'utf8') : '';
   return [
     ...inspectAndroidManifestOrientation(manifestSource, orientation),
     ...inspectAndroidManifestAds(
-      manifestSource,
+      `${manifestSource}\n${releaseSource}`,
       usesAds,
       usesAds ? readGameAdvertisingIdPolicy(gameConfigJson) : 'declared',
     ),
