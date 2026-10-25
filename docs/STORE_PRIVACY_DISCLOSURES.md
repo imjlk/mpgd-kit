@@ -52,11 +52,14 @@ Notes:
     leaderboard entries, rewarded-ad records, notification tokens, settings
     and consent records, and whatever server data the game adds.
   - What is kept, why, and for how long: purchase records (product, store
-    transaction and order ids, dates) for **5 years** from the purchase, for
-    the Korean E-Commerce Act's payment and supply record retention (decree
-    art. 6(1)) and to stop the same store purchase from being used twice;
-    kept separately and without the player id, then purged. Server logs
-    for the host's log retention.
+    transaction and order ids, dates) for **5 years** from the purchase or
+    its last refund, whichever is later, for payment and supply record
+    obligations (the kit's default follows Korea's E-Commerce Act decree
+    art. 6(1); confirm with counsel whether and how it applies to the
+    game's developer) and to stop the same store purchase from being used
+    twice; kept separately and without the player id, then purged. Kept
+    records are detached, not anonymous: the store's order id still
+    identifies the purchase. Server logs for the host's log retention.
   For App Privacy, Apple asks no separate deletion question; the in-app
   entry and the privacy policy's deletion section cover the guideline.
 - **App Store tracking.** The kit does no tracking and never shows the App

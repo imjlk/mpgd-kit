@@ -586,8 +586,9 @@ order id, to be revoked by hand.
   the identity Worker's `deletePlayer` entrypoint before players can delete
   their accounts: without the binding `POST /game-services/account/delete`
   answers `503`, and without the migration it answers `500`. The cron
-  finishes pending erasures and purges purchase records kept for deleted
-  players after five years
+  (required: without the trigger pending erasures never finish and kept
+  records are never purged) finishes pending erasures and purges purchase
+  records kept for deleted players after five years
   ([account deletion](GAME_SERVICES_BACKEND.md#account-deletion)). Support
   tooling deletes a player through the `GameServicesAccountDeletion`
   entrypoint (`deletePlayerAccount({ playerId })`).

@@ -1023,7 +1023,7 @@ acknowledge or consume completes and retries it from its cron; see the
 
 Google Play requires an app that lets players create an account to let them
 delete the account and its data in the app and through a web link, and to
-say what is kept and for how long
+say what is kept, why, and the retention period
 ([Play account deletion requirements](https://support.google.com/googleplay/android-developer/answer/13327111)).
 App Store Review Guideline 5.1.1(v) requires deletion to start in the app,
 and Apple's
@@ -1043,7 +1043,9 @@ The player comes from the request's session, never from the body:
   `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`, a development
   session. No session binding at all answers `503 ACCOUNT_DELETION_NOT_CONFIGURED`.
 - A body that names another `playerId` answers `403 PLAYER_ID_MISMATCH`;
-  no session `401`; a body over 4 KiB or not a JSON object `400`.
+  no session `401` (also a development session off a local host); a session
+  binding that throws or answers no player `500 AUTHENTICATION_FAILED`; a
+  body over 4 KiB or not a JSON object `400`.
 - `GAME_SERVICES_ACCOUNT_DELETION` must be bound to the identity Worker's
   `deletePlayer({ playerId })` entrypoint (revoke every session family and
   delete the guest record; idempotent). Without it the route answers `503`
@@ -1071,8 +1073,9 @@ on `createGameServicesRuntime(...).accountDeletion`.
    erasure `identity-deleted`.
 4. Erase again, each store on its own with three attempts: a request that
    was already running during step 1 may have written rows.
-5. Clear the pending erasure and write the audit entry
-   (`account_deletion_audit`: deletion id, times, counts, no player id).
+5. When every store completed, clear the pending erasure; in any case
+   write the audit entry (`account_deletion_audit`: deletion id, times,
+   counts, no player id).
 
 A failure in steps 1 to 3 answers the retryable error. After step 3 the
 player can no longer authenticate, so a store that still fails leaves the
@@ -1095,10 +1098,16 @@ exists, and is discarded after an hour.
 
 The cron purges the kept purchase records once five years have passed since
 the grant and since any revocation of it
-(`purgeExpiredRetainedPurchaseRecords`).
+(`purgeExpiredRetainedPurchaseRecords`). The cron is required: without a
+`[triggers] crons` entry (Workers Paid) pending erasures never finish and
+kept records are never purged.
 
-Retention decision and sources (read 2026-10-25; the official texts are at
-[law.go.kr](https://www.law.go.kr), quoted here from its current versions):
+Retention decision and sources. The texts were read on 2026-10-25 through a
+mirror of the current law.go.kr versions (law.go.kr renders articles in the
+browser); verify them on law.go.kr:
+[전자상거래법](https://www.law.go.kr/법령/전자상거래등에서의소비자보호에관한법률),
+[its enforcement decree](https://www.law.go.kr/법령/전자상거래등에서의소비자보호에관한법률시행령),
+[개인정보 보호법](https://www.law.go.kr/법령/개인정보보호법).
 
 - Act on Consumer Protection in Electronic Commerce, art. 6 (거래기록의 보존):
   a business keeps transaction records, and may keep them and the
@@ -1120,8 +1129,11 @@ Retention decision and sources (read 2026-10-25; the official texts are at
   records; this was not checked further against the statute. A game that
   wants proof for complaints about earlier sends decides that with counsel.
 
-Whether a game's developer is the merchant of record is a legal question for
-the game: on Google Play and the App Store the store processes the payment,
+This is the kit's default, not legal advice: whether and how the Act applies
+to a game's developer is a question for the game and its counsel, and kept
+records are detached, not anonymous (the store's order id still identifies
+the purchase). Whether a game's developer is the merchant of record is part
+of that question: on Google Play and the App Store the store processes the payment,
 and the kit keeps the supply record (what was granted, when, for which store
 transaction). Games that sell outside a store add their own payment records.
 
