@@ -333,8 +333,9 @@ async function sweepVoidedPurchases(input: {
     );
   }
   const cursorAtStart = lastEnd ?? oldest;
-  // The overlap is re-read only from a caught-up cursor (a run behind starts
-  // exactly where the last one stopped), so a backlog pays for it once.
+  // A run left in state 2 starts exactly at the cursor; otherwise (caught up,
+  // or state 1) the overlap before it is re-read, so a backlog pays for it
+  // once per clean stop.
   let openingStart = oldest;
   if (lastEnd !== undefined) {
     openingStart = behind === 2 ? lastEnd : lastEnd - voidedSweepOverlapMs;
@@ -358,9 +359,11 @@ async function sweepVoidedPurchases(input: {
   };
   /** Moves the cursor past a finished (or skipped) slice; true once caught up. */
   const finishSlice = async (sliceEnd: number): Promise<boolean> => {
+    const nextCursor = Math.max(sliceEnd, cursorAtStart);
+    // Counted only once written, so a failed write never reports progress.
+    await input.cursors.write(voidedSweepCursor, nextCursor, new Date(nowMs));
     slices += 1;
-    cursorNow = Math.max(sliceEnd, cursorAtStart);
-    await input.cursors.write(voidedSweepCursor, cursorNow, new Date(nowMs));
+    cursorNow = nextCursor;
     if (sliceEnd < nowMs) {
       return false;
     }
