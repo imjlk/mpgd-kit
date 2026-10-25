@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Delete Your __GAME_TITLE__ Account</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+
+      body {
+        margin: 0;
+        background: Canvas;
+        color: CanvasText;
+      }
+
+      main {
+        box-sizing: border-box;
+        margin: 0 auto;
+        max-width: 760px;
+        padding: 48px 24px;
+      }
+
+      h1,
+      h2 {
+        line-height: 1.2;
+      }
+
+      a {
+        color: LinkText;
+      }
+
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin: 0 0 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav aria-label="Legal pages">
+        <a href="/privacy/">Privacy</a>
+        <a href="/support/">Support</a>
+        <a href="/terms/">Terms</a>
+        <a href="/delete-account/" aria-current="page">Delete account</a>
+      </nav>
+      <!--
+        Google Play: enter this page's URL (https://<your legal site>/delete-account/)
+        in Play Console > App content > Data safety > "Delete account URL".
+        The page must name the app as the store listing does, let players
+        request deletion without reinstalling the game, and say what is
+        deleted and what is kept and for how long. Starting point, not legal
+        advice: replace every REPLACE marker in square brackets (mpgd legal
+        build and check warn while any remain).
+      -->
+      <h1>Delete Your __GAME_TITLE__ Account</h1>
+      <p>
+        This page explains how to delete your __GAME_TITLE__ account and the
+        data linked to it. __GAME_TITLE__ is published by [REPLACE: developer
+        name exactly as shown on the store listing].
+      </p>
+      <h2>In the Game</h2>
+      <ol>
+        <li>Open __GAME_TITLE__ and go to [REPLACE: menu path, for example the lobby's Delete account button].</li>
+        <li>Tap <strong>Delete account</strong>, read what is deleted, and tap <strong>Delete permanently</strong>.</li>
+        <li>The account is deleted right away and the game signs you out.</li>
+      </ol>
+      <h2>Without the Game</h2>
+      <p>
+        If you no longer have the game installed, you do not need to reinstall
+        it. Send a deletion request to
+        [REPLACE: support email address or request form URL] with the subject
+        "Delete my account" and [REPLACE: what you need to find the account,
+        for example the player ID shown in the game's settings or the store
+        order number of a purchase]. We delete the account within
+        [REPLACE: period, for example 30 days] and confirm by reply.
+      </p>
+      <h2>What Is Deleted</h2>
+      <ul>
+        <li>Your player account and every sign-in session on every device.</li>
+        <li>Game progress stored on our server, scores, and leaderboard entries.</li>
+        <li>Rewarded-ad records.</li>
+        <li>Notification tokens, notification settings, and your consent records for advertising messages.</li>
+      </ul>
+      <h2>What We Keep, and for How Long</h2>
+      <ul>
+        <li>
+          <strong>Purchase records</strong> (the product, the store's order or
+          transaction number, and the date) for 5 years from the purchase, as
+          Korean e-commerce law requires for payment and supply records. They
+          are kept separately and no longer contain your player ID, and they
+          also stop the same store purchase from being used twice. They are
+          deleted after the 5 years.
+        </li>
+        <li>[REPLACE: anything else the game keeps, such as support messages, with the period.]</li>
+      </ul>
+      <h2>Purchases</h2>
+      <p>
+        Deleting your account does not refund purchases, and items bought on
+        the deleted account cannot be moved to a new account. To ask for a
+        refund, contact Google Play or Apple. [REPLACE: subscriptions, if the
+        game sells any: cancel them in the store first, because billing
+        continues through the store.]
+      </p>
+      <h2>Contact</h2>
+      <p>[REPLACE: support email or form, and the data protection contact if required.]</p>
+    </main>
+  </body>
+</html>

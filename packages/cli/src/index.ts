@@ -1301,6 +1301,11 @@ const gameCommand = defineI18n({
 const defaultLegalDir = 'legal';
 const defaultLegalOutDir = 'artifacts/legal-site';
 const legalPageSlugs = ['privacy', 'support', 'terms'] as const;
+/**
+ * Built when its source exists: the account deletion request page whose URL
+ * Google Play's Data safety form asks for. A missing one is warned about.
+ */
+const optionalLegalPageSlugs = ['delete-account'] as const;
 const legalPageFileList = legalPageSlugs.map((slug) => `${slug}.html`).join(', ');
 
 interface AcceptGameInput {
@@ -1971,6 +1976,13 @@ const legalCommand = defineI18n({
         });
 
         console.info(`Built legal site: ${result.outDir}`);
+        if (result.deleteAccountPath !== undefined) {
+          console.info(
+            `Account deletion page: ${result.deleteAccountPath} on the legal site. Enter its full URL `
+              + 'in Play Console > App content > Data safety > Delete account URL, and link it from '
+              + 'the privacy policy.',
+          );
+        }
       },
     }),
     check: defineI18n({
@@ -3406,6 +3418,8 @@ function resolveLegalCommandOptions(values: Record<string, unknown>): {
 
 interface BuildLegalSiteResult {
   readonly outDir: string;
+  /** The deletion page's path on the site, when its source exists. */
+  readonly deleteAccountPath?: string;
 }
 
 function buildLegalSite(input: {
@@ -3418,6 +3432,18 @@ function buildLegalSite(input: {
   assertLegalProjectPath('legal-dir', legalDir);
   assertLegalProjectPath('out-dir', outDir);
   const outputs = createLegalSiteOutputs(legalDir, outDir);
+  const deleteAccountBuilt = outputs.some((output) =>
+    output.file === path.join(outDir, 'delete-account', 'index.html'),
+  );
+  const deleteAccountResult = deleteAccountBuilt ? { deleteAccountPath: '/delete-account/' } : {};
+  if (!deleteAccountBuilt) {
+    console.warn(
+      `No ${path.join(path.relative(process.cwd(), legalDir) || '.', 'delete-account.html')}: Google Play `
+        + 'needs a web page where players request account deletion without reinstalling the game '
+        + '(Play Console > App content > Data safety). Copy legal/delete-account.html from a game '
+        + 'created with the current kit.',
+    );
+  }
   // app-ads.txt is optional: an earlier one is stale once its source is gone.
   const appAdsOutput = path.join(outDir, 'app-ads.txt');
   const orphanStat = outputs.some((output) => output.file === appAdsOutput)
@@ -3460,6 +3486,7 @@ function buildLegalSite(input: {
 
     return {
       outDir,
+      ...deleteAccountResult,
     };
   }
 
@@ -3470,6 +3497,7 @@ function buildLegalSite(input: {
 
   return {
     outDir,
+    ...deleteAccountResult,
   };
 }
 
@@ -3481,7 +3509,16 @@ function createLegalSiteOutputs(
   assertLegalProjectPath('out-dir', outDir);
 
   const sourceRoot = toTemplatePath(path.relative(process.cwd(), legalDir) || '.');
-  const outputs = legalPageSlugs.map((slug) => {
+  const optionalSlugs = optionalLegalPageSlugs.filter((slug) => {
+    const sourceFile = path.join(legalDir, `${slug}.html`);
+    if (lstatIfExists(sourceFile) === undefined) {
+      return false;
+    }
+    assertLegalProjectPath('legal-dir', sourceFile);
+    return true;
+  });
+  const slugs: readonly string[] = [...legalPageSlugs, ...optionalSlugs];
+  const outputs = slugs.map((slug) => {
     const sourceFile = path.join(legalDir, `${slug}.html`);
     // existsSync and readFileSync follow a page symlink. Check the file
     // itself, not only the legal directory, immediately before reading it.
@@ -3518,9 +3555,7 @@ function createLegalSiteOutputs(
       file: path.join(outDir, '_redirects'),
       content: [
         '/ /support/ 302',
-        '/privacy /privacy/ 301',
-        '/support /support/ 301',
-        '/terms /terms/ 301',
+        ...slugs.map((slug) => `/${slug} /${slug}/ 301`),
         '',
       ].join('\n'),
     },
@@ -3528,7 +3563,7 @@ function createLegalSiteOutputs(
       file: path.join(outDir, 'legal-site.json'),
       content: `${JSON.stringify({
         version: 1,
-        pages: legalPageSlugs.map((slug) => ({
+        pages: slugs.map((slug) => ({
           slug,
           path: `/${slug}/`,
           source: `${sourceRoot}/${slug}.html`,
