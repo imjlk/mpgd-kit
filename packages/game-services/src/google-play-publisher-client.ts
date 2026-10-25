@@ -138,12 +138,15 @@ function readVoidedPurchasesPage(body: unknown): GooglePlayVoidedPurchasesPage {
     throw new Error('Google Play Publisher returned an invalid voided purchases page.');
   }
   const voidedPurchases: GooglePlayVoidedPurchase[] = [];
+  let droppedEntries = 0;
   for (const entry of entries as readonly unknown[]) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      droppedEntries += 1;
       continue;
     }
     const item = entry as Readonly<Record<string, unknown>>;
     if (typeof item.purchaseToken !== 'string' || item.purchaseToken.length === 0) {
+      droppedEntries += 1;
       continue;
     }
     voidedPurchases.push({
@@ -162,6 +165,7 @@ function readVoidedPurchasesPage(body: unknown): GooglePlayVoidedPurchasesPage {
   return {
     voidedPurchases,
     ...(typeof nextPageToken === 'string' && nextPageToken.length > 0 ? { nextPageToken } : {}),
+    ...(droppedEntries === 0 ? {} : { droppedEntries }),
   };
 }
 

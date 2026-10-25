@@ -1,15 +1,17 @@
-import { revokeEntitlementGrant } from './commerce-ledger.js';
+import { createGooglePlayTokenPurchaseKey } from '@mpgd/platform/commerce';
+
+import {
+  findPurchaseGrantByEvidenceVerificationId,
+  isEntitlementGrantReversed,
+  revokeEntitlementGrant,
+} from './commerce-ledger.js';
 import type { GameServicesPurchaseGrantFinalizer } from './evidence-verification.js';
 import {
   createGooglePlayProductVerificationId,
   googlePlayProductPurchaseEvidenceSchema,
 } from './google-play-purchase.js';
 import type { GameServicesStore } from './server.js';
-import type {
-  EntitlementRevocationReason,
-  ProductGrantTransaction,
-  PurchaseGrantFinalization,
-} from './types.js';
+import type { EntitlementRevocationReason, PurchaseGrantFinalization } from './types.js';
 
 /**
  * Server-side Google Play upkeep that does not wait for the game client:
@@ -41,6 +43,8 @@ export interface GooglePlayVoidedPurchase {
 export interface GooglePlayVoidedPurchasesPage {
   readonly voidedPurchases: readonly GooglePlayVoidedPurchase[];
   readonly nextPageToken?: string;
+  /** Entries of the page the client could not read (no purchase token); reported, never revoked. */
+  readonly droppedEntries?: number;
 }
 
 export interface GooglePlayVoidedPurchasesClient {
@@ -69,6 +73,12 @@ export type GooglePlayVoidedPurchaseOutcome =
 
 /** Google keeps voided purchases for 30 days. */
 export const googlePlayVoidedPurchasesWindowMs = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Kept off the oldest edge of that window: Google refuses a `startTime` older
+ * than 30 days at the time it receives the request, which is a little after
+ * the caller's clock read.
+ */
+export const googlePlayVoidedPurchasesWindowSlackMs = 60_000;
 
 /**
  * Appends the `revoke` entry for one voided purchase. The grant is found by
@@ -90,7 +100,7 @@ export async function revokeGooglePlayVoidedPurchase(input: {
     input.packageName,
     voided.purchaseToken,
   );
-  const grant = await findPurchaseGrant(input.store, verificationId);
+  const grant = await findPurchaseGrantByEvidenceVerificationId(input.store, verificationId);
   if (grant === undefined || grant.payload.target !== 'android') {
     return { status: 'grant_not_found' };
   }
@@ -133,28 +143,42 @@ export interface SweepGooglePlayVoidedPurchasesInput {
   readonly client: GooglePlayVoidedPurchasesClient;
   readonly store: GameServicesStore;
   readonly packageName: string;
-  /** Clamped to Google's 30-day window. */
+  /** Raised to Google's 30-day window, measured from `now` (`clamped` reports it). */
   readonly startTimeMillis: number;
   readonly endTimeMillis: number;
   readonly signal: AbortSignal;
-  /** Pages read before the sweep stops as incomplete; 10 by default. */
+  /**
+   * Pages read before the sweep stops as incomplete; 10 by default. A window
+   * that does not fit is not finished by repeating it (the listing does not
+   * shrink as grants are revoked): raise the cap or split the window into
+   * shorter ones.
+   */
   readonly maxPages?: number;
   /** Asked before every page and voided purchase; `false` stops the sweep as incomplete. */
   readonly shouldContinue?: (next: 'page' | 'purchase') => boolean;
+  /** The clock, for the revocation time of a void without one and the 30-day window. */
   readonly now?: () => string;
+  /** Every voided purchase's outcome; the purchase token is left out so it can be logged. */
   readonly onOutcome?: (
-    voided: GooglePlayVoidedPurchase,
-    outcome: GooglePlayVoidedPurchaseOutcome,
+    voided: Omit<GooglePlayVoidedPurchase, 'purchaseToken'>,
+    outcome: GooglePlayVoidedPurchaseOutcome | { readonly status: 'error'; readonly reason: string },
   ) => void;
 }
 
 export interface GooglePlayVoidedPurchasesSweep {
-  /** Every page in the window was read; the caller may advance its cursor to `endTimeMillis`. */
+  /**
+   * Every page in the window was read; the caller may advance its cursor to
+   * `endTimeMillis`. Entries counted in `failed` are not retried by reading
+   * the window again: they need an operator (see `onOutcome`).
+   */
   readonly complete: boolean;
+  /** The requested start was older than Google keeps and was raised: voids before it are gone. */
+  readonly clamped: boolean;
   readonly pages: number;
   readonly revoked: number;
   readonly alreadyProcessed: number;
   readonly notFound: number;
+  /** Ledger refusals, unreadable entries, and per-entry store errors. */
   readonly failed: number;
 }
 
@@ -172,20 +196,28 @@ export async function sweepGooglePlayVoidedPurchases(
   if (!Number.isSafeInteger(maxPages) || maxPages < 1) {
     throw new RangeError('maxPages must be a positive integer.');
   }
-  const endTimeMillis = Math.floor(input.endTimeMillis);
-  const startTimeMillis = Math.max(
-    Math.floor(input.startTimeMillis),
-    endTimeMillis - googlePlayVoidedPurchasesWindowMs + 60_000,
-  );
-  if (!Number.isSafeInteger(endTimeMillis) || startTimeMillis > endTimeMillis) {
+  const requestedStart = input.startTimeMillis;
+  const endTimeMillis = input.endTimeMillis;
+  const nowMillis = input.now === undefined ? Date.now() : Date.parse(input.now());
+  if (
+    !Number.isSafeInteger(requestedStart)
+    || !Number.isSafeInteger(endTimeMillis)
+    || !Number.isFinite(nowMillis)
+  ) {
+    throw new RangeError('The voided purchases window must be integer milliseconds.');
+  }
+  const oldest = nowMillis - googlePlayVoidedPurchasesWindowMs + googlePlayVoidedPurchasesWindowSlackMs;
+  const startTimeMillis = Math.max(requestedStart, oldest);
+  if (startTimeMillis > endTimeMillis) {
     throw new RangeError('The voided purchases window is empty or invalid.');
   }
+  const clamped = startTimeMillis > requestedStart;
   const shouldContinue = input.shouldContinue ?? (() => true);
   const totals = { pages: 0, revoked: 0, alreadyProcessed: 0, notFound: 0, failed: 0 };
   let pageToken: string | undefined;
   do {
     if (totals.pages >= maxPages || !shouldContinue('page')) {
-      return { complete: false, ...totals };
+      return { complete: false, clamped, ...totals };
     }
     const page = await input.client.listVoidedPurchases({
       packageName: input.packageName,
@@ -195,16 +227,32 @@ export async function sweepGooglePlayVoidedPurchases(
       signal: input.signal,
     });
     totals.pages += 1;
+    totals.failed += page.droppedEntries ?? 0;
     for (const voided of page.voidedPurchases) {
       if (!shouldContinue('purchase')) {
-        return { complete: false, ...totals };
+        return { complete: false, clamped, ...totals };
       }
-      const outcome = await revokeGooglePlayVoidedPurchase({
-        store: input.store,
-        packageName: input.packageName,
-        voided,
-        ...(input.now === undefined ? {} : { now: input.now }),
-      });
+      const { purchaseToken: _token, ...loggable } = voided;
+      let outcome: GooglePlayVoidedPurchaseOutcome;
+      try {
+        outcome = await revokeGooglePlayVoidedPurchase({
+          store: input.store,
+          packageName: input.packageName,
+          voided,
+          ...(input.now === undefined ? {} : { now: input.now }),
+        });
+      } catch (error) {
+        if (input.signal.aborted) {
+          throw error;
+        }
+        // One entry's store failure does not hide the rest of the window.
+        totals.failed += 1;
+        input.onOutcome?.(loggable, {
+          status: 'error',
+          reason: error instanceof Error ? error.name : 'unknown error',
+        });
+        continue;
+      }
       if (outcome.status === 'revoked') {
         totals[outcome.alreadyProcessed ? 'alreadyProcessed' : 'revoked'] += 1;
       } else if (outcome.status === 'grant_not_found') {
@@ -212,13 +260,13 @@ export async function sweepGooglePlayVoidedPurchases(
       } else {
         totals.failed += 1;
       }
-      input.onOutcome?.(voided, outcome);
+      input.onOutcome?.(loggable, outcome);
     }
     pageToken = page.nextPageToken === undefined || page.nextPageToken.length === 0
       ? undefined
       : page.nextPageToken;
   } while (pageToken !== undefined);
-  return { complete: true, ...totals };
+  return { complete: true, clamped, ...totals };
 }
 
 /**
@@ -244,22 +292,23 @@ export async function retryGooglePlayPurchaseFinalization(input: {
   if (grant === undefined || grant.source !== 'purchase' || grant.payload.target !== 'android') {
     return { status: 'abandoned', reason: 'GOOGLE_PLAY_FINALIZATION_GRANT_NOT_FOUND' };
   }
-  const reversals = await input.store.findEntitlementRevocations?.({
-    ledgerEntryIds: [grant.ledgerEntryId],
-  });
-  if (reversals !== undefined && reversals.length > 0) {
+  if (await isEntitlementGrantReversed(input.store, grant.ledgerEntryId)) {
     return { status: 'abandoned', reason: 'GOOGLE_PLAY_FINALIZATION_GRANT_REVERSED' };
   }
   const payload = grant.payload;
   const productType = readOneTimeProductType(payload.productType);
   const platformProductId = payload.platformProductId;
-  const platformTransactionId = payload.platformTransactionId;
+  // An orderless purchase (Google omitted the order id) was recorded without
+  // one; the boundary matches it by token, as the client's token key does.
+  const platformTransactionId = typeof payload.platformTransactionId === 'string'
+      && payload.platformTransactionId.length > 0
+    ? payload.platformTransactionId
+    : await createGooglePlayTokenPurchaseKey(input.purchaseToken);
   const purchasedAt = payload.purchasedAt;
   const evidenceVerificationId = grant.evidenceVerificationId ?? payload.evidenceVerificationId;
   if (
     productType === undefined
     || typeof platformProductId !== 'string' || platformProductId.length === 0
-    || typeof platformTransactionId !== 'string' || platformTransactionId.length === 0
     || typeof purchasedAt !== 'string' || purchasedAt.length === 0
     || typeof evidenceVerificationId !== 'string'
     || grant.grant === undefined
@@ -298,7 +347,7 @@ export async function retryGooglePlayPurchaseFinalization(input: {
     id: grant.grantId,
     type: productType,
     grant: grant.grant,
-    platformProductIds: { [deploymentTarget ?? 'android']: platformProductId },
+    platformProductIds: { android: platformProductId },
   };
   const finalizationInput = {
     request,
@@ -313,7 +362,61 @@ export async function retryGooglePlayPurchaseFinalization(input: {
   if (input.finalizer.supportsPurchaseGrant?.(finalizationInput) === false) {
     return { status: 'abandoned', reason: 'GOOGLE_PLAY_FINALIZATION_UNSUPPORTED' };
   }
-  return input.finalizer.finalizePurchaseGrant({ ...finalizationInput, signal: input.signal });
+  const result = await finalizeWithin(
+    input.finalizer,
+    finalizationInput,
+    input.signal,
+    input.timeoutMs,
+  );
+  if (result.status === 'pending' && result.reason === 'GOOGLE_PLAY_FINALIZATION_EVIDENCE_MISMATCH') {
+    // The boundary is configured for another package than the grant: no
+    // retry can succeed.
+    return { status: 'abandoned', reason: result.reason };
+  }
+  return result;
+}
+
+/**
+ * Runs the finalizer within `timeoutMs` like the purchase path does: the
+ * provider signal is aborted at the deadline and the retry answers pending,
+ * even when a provider call ignores the abort.
+ */
+async function finalizeWithin(
+  finalizer: GameServicesPurchaseGrantFinalizer,
+  input: Omit<Parameters<GameServicesPurchaseGrantFinalizer['finalizePurchaseGrant']>[0], 'signal'>,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<PurchaseGrantFinalization> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError('timeoutMs must be a positive integer.');
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal.reason);
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) {
+    abort();
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      finalizer.finalizePurchaseGrant({ ...input, signal: controller.signal }),
+      new Promise<PurchaseGrantFinalization>((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve({
+            status: 'pending',
+            alreadyCompleted: false,
+            reason: 'GOOGLE_PLAY_FINALIZATION_TIMEOUT',
+          });
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    signal.removeEventListener('abort', abort);
+  }
 }
 
 function readOneTimeProductType(input: unknown): 'consumable' | 'non_consumable' | undefined {
@@ -335,21 +438,4 @@ function readMillis(input: unknown): number | undefined {
 function readCode(input: unknown): number | undefined {
   const value = typeof input === 'string' && /^[0-9]{1,3}$/u.test(input) ? Number(input) : input;
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
-
-async function findPurchaseGrant(
-  store: GameServicesStore,
-  evidenceVerificationId: string,
-): Promise<ProductGrantTransaction | undefined> {
-  const grant = store.findEntitlementTransactionByEvidenceVerificationId === undefined
-    ? (await store.listEntitlementTransactions()).find((transaction) => {
-        return transaction.source === 'purchase'
-          && (transaction.evidenceVerificationId
-            ?? transaction.payload.evidenceVerificationId) === evidenceVerificationId;
-      })
-    : await store.findEntitlementTransactionByEvidenceVerificationId({
-        source: 'purchase',
-        evidenceVerificationId,
-      });
-  return grant?.source === 'purchase' ? grant : undefined;
 }
