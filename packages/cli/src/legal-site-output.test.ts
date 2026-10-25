@@ -286,6 +286,15 @@ await test('serves app-ads.txt from the AdMob publisher ID or a game-owned file'
       await assert.rejects(runMpgdCli(['legal', 'check']), /stale/u);
       await runMpgdCli(['legal', 'build']);
       assert.match(readFileSync(appAds, 'utf8'), /example\.com, 42, RESELLER/u);
+      // Without any source the old file is stale and the next build removes it.
+      rmSync(path.join(project, 'legal', 'app-ads.txt'));
+      writeFileSync(path.join(project, 'mpgd.game.json'), '{}');
+      await assert.rejects(runMpgdCli(['legal', 'check']), /no app-ads\.txt source/u);
+      await runMpgdCli(['legal', 'build']);
+      assert.equal(existsSync(appAds), false);
+      await runMpgdCli(['legal', 'check']);
+      writeFileSync(path.join(project, 'mpgd.game.json'), '{"ads":');
+      await assert.rejects(runMpgdCli(['legal', 'build']), /mpgd\.game\.json is not valid JSON/u);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -3418,9 +3419,19 @@ function buildLegalSite(input: {
   assertLegalProjectPath('legal-dir', legalDir);
   assertLegalProjectPath('out-dir', outDir);
   const outputs = createLegalSiteOutputs(legalDir, outDir);
+  // app-ads.txt is optional: an earlier one is stale once its source is gone.
+  const appAdsOutput = path.join(outDir, 'app-ads.txt');
+  const orphanedAppAds = !outputs.some((output) => output.file === appAdsOutput)
+    && lstatIfExists(appAdsOutput) !== undefined;
 
   if (input.check) {
     assertLegalProjectPath('out-dir', outDir);
+    if (orphanedAppAds) {
+      throw new Error(
+        'Legal site output is stale. Run "mpgd legal build".\n'
+          + `- ${path.relative(process.cwd(), appAdsOutput)} (no app-ads.txt source)`,
+      );
+    }
     const stale = outputs.filter((output) => {
       assertLegalProjectPath('out-dir', output.file);
       if (!existsSync(output.file)) {
@@ -3445,6 +3456,10 @@ function buildLegalSite(input: {
   }
 
   publishLegalSiteFiles(outDir, outputs);
+  if (orphanedAppAds) {
+    assertLegalProjectPath('out-dir', appAdsOutput);
+    unlinkSync(appAdsOutput);
+  }
 
   return {
     outDir,
@@ -3475,17 +3490,7 @@ function createLegalSiteOutputs(
     };
   });
 
-  const ownAppAds = path.join(legalDir, 'app-ads.txt');
-  if (existsSync(ownAppAds)) {
-    assertLegalProjectPath('legal-dir', ownAppAds);
-  }
-  const gameConfigFile = path.join(process.cwd(), 'mpgd.game.json');
-  const appAdsTxt = resolveAppAdsTxt({
-    ...(existsSync(ownAppAds) ? { ownFile: readFileSync(ownAppAds, 'utf8') } : {}),
-    ...(existsSync(gameConfigFile)
-      ? { gameConfig: JSON.parse(readFileSync(gameConfigFile, 'utf8')) as unknown }
-      : {}),
-  });
+  const appAdsTxt = readLegalAppAdsTxt(legalDir);
 
   return [
     ...outputs,
@@ -3524,6 +3529,46 @@ function createLegalSiteOutputs(
       }, null, 2)}\n`,
     },
   ];
+}
+
+/**
+ * `app-ads.txt` for the legal site root: `<legal-dir>/app-ads.txt`, else the
+ * AdMob line for `ads.admob.publisherId` in the project's `mpgd.game.json`
+ * (the project root is the working directory, as for the legal sources).
+ */
+function readLegalAppAdsTxt(legalDir: string): string | undefined {
+  const ownAppAds = path.join(legalDir, 'app-ads.txt');
+  const ownExists = lstatIfExists(ownAppAds) !== undefined;
+  if (ownExists) {
+    assertLegalProjectPath('legal-dir', ownAppAds);
+  }
+  const gameConfigFile = path.join(process.cwd(), 'mpgd.game.json');
+  let gameConfig: unknown;
+  if (lstatIfExists(gameConfigFile) !== undefined) {
+    assertLegalProjectPath('mpgd.game.json', gameConfigFile);
+    try {
+      gameConfig = JSON.parse(readFileSync(gameConfigFile, 'utf8')) as unknown;
+    } catch (error) {
+      throw new Error(
+        `mpgd.game.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return resolveAppAdsTxt({
+    ...(ownExists ? { ownFile: readFileSync(ownAppAds, 'utf8') } : {}),
+    ...(gameConfig === undefined ? {} : { gameConfig }),
+  });
+}
+
+function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function normalizeLegalHtml(content: string, sourceFile: string): string {

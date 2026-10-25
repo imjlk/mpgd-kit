@@ -405,6 +405,31 @@ iOS 13.6.0. Its Android default uses a dynamic patch selector; set
 `playServicesAdsVersion = '25.4.0'` in the game-owned `variables.gradle` to
 keep release builds reproducible until the plugin adopts a newer tested SDK.
 
+Store declarations that come with AdMob:
+
+- **Advertising ID (Android).** A shell generated without AdMob removes
+  `com.google.android.gms.permission.AD_ID` from the merged manifest
+  (`tools:node="remove"`). After installing AdMob, replace that line with
+  `<uses-permission android:name="com.google.android.gms.permission.AD_ID" />`
+  and answer "yes" to the Play Console advertising ID question; a production
+  build fails while the shell installs AdMob and still removes the permission.
+- **Application IDs.** A production build also fails when the Android
+  `com.google.android.gms.ads.APPLICATION_ID` meta-data or the iOS
+  `GADApplicationIdentifier` is missing (the SDK stops the app at launch), and
+  warns when `SKAdNetworkItems` lacks Google's `cstr6suwn9.skadnetwork`; copy
+  the current list from Google's
+  [SKAdNetwork page](https://developers.google.com/admob/ios/3p-skadnetworks).
+- **app-ads.txt.** Set `ads.admob.publisherId` (`pub-` and 16 digits) in
+  `mpgd.game.json`, or keep a game-owned `legal/app-ads.txt` for mediation
+  lines, and `mpgd legal build` serves it at the legal site's root. The file
+  must sit at the root of the domain in the store listing (Play: developer
+  website; App Store: marketing URL), so serve the legal site from that
+  domain, not a subpath.
+- **App Tracking Transparency.** The kit does no tracking and never shows the
+  ATT prompt. A game that adds tracking (IDFA, cross-app attribution) must add
+  `NSUserTrackingUsageDescription` and request ATT before it tracks, and answer
+  the App Store privacy questions accordingly.
+
 ```ts
 import { createCapacitorPlatformGateway } from '@mpgd/adapter-capacitor';
 import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/admob';

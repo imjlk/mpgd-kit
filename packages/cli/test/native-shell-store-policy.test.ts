@@ -509,6 +509,23 @@ try {
     /INTERNET" \/>\n {4}<uses-permission android:name="com\.google\.android\.gms\.permission\.AD_ID" tools:node="remove" \/>\n<\/manifest>/u,
   );
   assert.equal(applyAndroidManifestAdId(removed, false), removed, 'idempotent');
+  const reference = readFileSync(
+    path.join(referenceShell, 'android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  );
+  assert.equal(
+    applyAndroidManifestAdId(reference, false),
+    reference,
+    'an existing removal stays in place',
+  );
+  // `uses-permission-sdk-23` is a different element.
+  assert.equal(
+    readAndroidAdIdDeclaration(manifest.replace(
+      '</manifest>',
+      '    <uses-permission-sdk-23 android:name="com.google.android.gms.permission.AD_ID" />\n</manifest>',
+    )),
+    'absent',
+  );
   const declared = applyAndroidManifestAdId(removed, true);
   assert.equal(readAndroidAdIdDeclaration(declared), 'declared');
   assert.equal((declared.match(/AD_ID/gu) ?? []).length, 1, 'the removal is replaced');
@@ -531,7 +548,8 @@ try {
     inspectAndroidManifestAds(applyAndroidManifestAdId(withAppId, false), true).map(
       (issue) => issue.level,
     ),
-    ['warning'],
+    ['error'],
+    'AdMob with the advertising ID removed fails a production build',
   );
   // A commented-out declaration does not count.
   assert.equal(
@@ -570,7 +588,13 @@ try {
 // The pinned Capacitor CLI's own native templates: what `cap add` generates.
 {
   const assets = path.join(referenceShell, 'node_modules/@capacitor/cli/assets');
-  if (existsSync(path.join(assets, 'ios-spm-template.tar.gz'))) {
+  const templatesPresent = existsSync(path.join(assets, 'ios-spm-template.tar.gz'))
+    && existsSync(path.join(assets, 'android-template.tar.gz'));
+  assert.ok(
+    templatesPresent || process.env.CI === undefined,
+    `CI must test the Capacitor CLI templates in ${assets}.`,
+  );
+  if (templatesPresent) {
     const extracted = mkdtempSync(path.join(tmpdir(), 'mpgd-capacitor-template-'));
     try {
       for (const [archive, directory] of [

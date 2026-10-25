@@ -776,7 +776,7 @@ export function shellUsesAdMob(shellPackage: unknown): boolean {
 
 function adIdPermissions(manifest: string): readonly RegExpExecArray[] {
   const masked = maskXmlComments(manifest);
-  return [...masked.matchAll(/<uses-permission\b[^>]*?\/?>(?:\s*<\/uses-permission>)?/gu)]
+  return [...masked.matchAll(/<uses-permission(?=[\s/>])[^>]*?\/?>(?:\s*<\/uses-permission>)?/gu)]
     .filter((match) => readXmlAttribute(match[0], 'android:name') === androidAdIdPermission);
 }
 
@@ -797,6 +797,9 @@ export function readAndroidAdIdDeclaration(manifest: string): 'declared' | 'remo
  * otherwise, so the Play Console advertising ID answer matches the binary.
  */
 export function applyAndroidManifestAdId(manifest: string, usesAds: boolean): string {
+  if (readAndroidAdIdDeclaration(manifest) === (usesAds ? 'declared' : 'removed')) {
+    return manifest;
+  }
   let next = manifest;
   for (const permission of [...adIdPermissions(manifest)].reverse()) {
     const start = permission.index ?? 0;
@@ -836,15 +839,18 @@ export function inspectAndroidManifestAds(
     if (!hasAppId) {
       issues.push({
         level: 'error',
-        message: 'The shell installs AdMob but AndroidManifest.xml has no '
+        message: 'The shell installs AdMob but android/app/src/main/AndroidManifest.xml has no '
           + 'com.google.android.gms.ads.APPLICATION_ID meta-data; the app crashes at launch.',
       });
     }
     if (declaration === 'removed') {
       issues.push({
-        level: 'warning',
-        message: `AndroidManifest.xml removes ${androidAdIdPermission} although the shell shows `
-          + 'AdMob ads; answer the Play Console advertising ID question accordingly.',
+        level: 'error',
+        message: `AndroidManifest.xml removes ${androidAdIdPermission} although the shell installs `
+          + 'AdMob: ads get a zeroed advertising ID on Android 13+ and the Play Console answer no '
+          + 'longer matches. Replace the tools:node="remove" line with '
+          + `<uses-permission android:name="${androidAdIdPermission}" />, or keep it only for a `
+          + 'deliberate no-ad-ID policy (for example a child-directed game) and declare that.',
       });
     }
   } else if (declaration !== 'removed') {
