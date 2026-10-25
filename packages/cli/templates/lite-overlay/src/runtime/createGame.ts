@@ -1,6 +1,7 @@
 import { bindGameAudio } from '@mpgd/game-runtime/audio';
 import type { CanvasSurface, LiteShell } from '@mpgd/lite-shell';
 
+import { mountRestorePurchasesButton } from '../lite/restorePurchasesButton';
 import { createTapGame } from '../lite/tapGame';
 import type { StarterContext } from './gameContext';
 
@@ -30,6 +31,7 @@ export function createStarterGame(input: {
     },
   });
   const shell = createTapGame({ mount, title: '__GAME_TITLE__' });
+  const disposeRestorePurchases = mountRestorePurchasesButton(mount, input.context);
   let disposed = false;
   const dispose = (): void => {
     if (disposed) {
@@ -39,6 +41,7 @@ export function createStarterGame(input: {
     globalThis.removeEventListener('pagehide', onPageHide);
     audio.dispose();
     input.context.gameRuntime.dispose();
+    disposeRestorePurchases();
     shell.dispose();
   };
   const onPageHide = (event: PageTransitionEvent): void => {
