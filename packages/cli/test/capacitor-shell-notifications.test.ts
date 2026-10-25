@@ -27,6 +27,10 @@ import {
   planCapacitorShellStarter,
 } from '../src/capacitor-shell-starter.js';
 import {
+  applyAndroidManifestAdId,
+  applyAndroidManifestOrientation,
+} from '../src/native-shell-store-policy.js';
+import {
   capacitorGatewayRegistersNotifications,
   notificationsCapacitorSupportFiles,
   notificationsCapacitorTemplateSupportFiles,
@@ -1007,6 +1011,31 @@ try {
   assert.equal(crlf.replaceAll('\r\n', '').includes('\n'), false);
   const bare = '<manifest xmlns:android="a">\n    <application android:label="Game" />\n</manifest>\n';
   assert.equal(applyAndroidManifestAdvertisingRenderer(bare), bare);
+}
+
+// AR1's renderer and L1's store policy edit the same newly generated
+// manifest, in that order: both survive, the tools namespace is bound once,
+// and applying both again changes nothing.
+{
+  const template = readFileSync(
+    path.join(kitRoot, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  ).replace(/\s*<uses-permission[^>]*SCHEDULE_EXACT_ALARM[^>]*\/>/u, '');
+  const once = (manifest: string): string =>
+    applyAndroidManifestAdId(
+      applyAndroidManifestOrientation(
+        applyAndroidManifestAdvertisingRenderer(applyAndroidManifestInexactAlarms(manifest)),
+        'landscape',
+      ),
+      false,
+    );
+  const final = once(template);
+  assert.ok(androidManifestRendersAdvertising(final));
+  assert.ok(androidManifestRemovesExactAlarm(final));
+  assert.equal(final.match(/xmlns:tools=/gu)?.length, 1);
+  assert.match(final, /android:screenOrientation="(?:sensorLandscape|landscape|userLandscape)"/u);
+  assert.match(final, /com\.google\.android\.gms\.permission\.AD_ID"[^>]*tools:node="remove"/u);
+  assert.equal(once(final), final, 'idempotent');
 }
 
 console.info('Capacitor shell notifications checks passed.');

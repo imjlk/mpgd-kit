@@ -132,7 +132,8 @@ production` prints what it lacks and fails on contradictions
       `dev.mpgd.capacitor.AdvertisingMessagingService` and removes the
       messaging plugin's service, `notifications/deployment.json` sets
       `shellRendersAdvertising: true`, and the Capacitor provider gets
-      `advertisingRenderer` (a newly generated shell has all three;
+      `advertisingRenderer` (a shell newly generated with `--providers notifications`
+      has all three, and `mpgd target build` does not check them;
       [Firebase notifications](./FIREBASE_NOTIFICATIONS.md#3-android)).
       Without them the backend sends Android installations no advertising
       under the Korean rules.
