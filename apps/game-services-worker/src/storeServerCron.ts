@@ -1,5 +1,7 @@
 import {
   createGooglePlayPublisherClient,
+  googlePlayVoidedPurchasesWindowMs,
+  googlePlayVoidedPurchasesWindowSlackMs,
   retryGooglePlayPurchaseFinalization,
   sweepGooglePlayVoidedPurchases,
   type GameServicesPurchaseGrantFinalizer,
@@ -60,7 +62,10 @@ export interface StoreServerCronReport {
   readonly finalized: number;
   readonly abandoned: number;
   readonly sweep?: {
+    /** Caught up to the run's start; otherwise the next run continues. */
     readonly complete: boolean;
+    /** Slices finished (and moved past) in this run. */
+    readonly slices: number;
     readonly revoked: number;
     readonly alreadyProcessed: number;
     readonly notFound: number;
@@ -69,13 +74,27 @@ export interface StoreServerCronReport {
   readonly operations: number;
 }
 
-/** Cursor names in `store_server_cursors`. */
+/** Cursor names in `store_server_cursors`: the end of the last finished slice, and its length. */
 export const voidedSweepCursor = 'google-play-voided:end';
-export const voidedSweepRunCursor = 'google-play-voided:run';
+export const voidedSweepSliceCursor = 'google-play-voided:slice-ms';
 
 /** Re-read this much of the last complete window: Google records voids with some lag. */
 const voidedSweepOverlapMs = 15 * 60 * 1000;
 const finalizationTimeoutMs = 15_000;
+/** Owed finalizations one run takes at most. */
+const finalizationRetryBatch = 20;
+/**
+ * Window slice of the voided purchases sweep: a week, halved down to a
+ * minute while a slice does not fit in one run, and back once caught up.
+ */
+const voidedSweepSliceMs = 7 * 24 * 60 * 60 * 1000;
+const voidedSweepMinSliceMs = 60_000;
+const voidedSweepMaxPagesPerSlice = 5;
+/** Voided Purchases API pages one run reads; Google allows 30 queries in 30 seconds. */
+const voidedSweepMaxPagesPerRun = 20;
+const voidedSweepTimeoutMs = 30_000;
+/** Kept inside Google's 30 days on top of the package's own slack, for a run's duration. */
+const voidedSweepClockMarginMs = 5 * 60 * 1000;
 /** D1 reads and writes, token-service calls, and Play requests assumed per item. */
 const operationsPerRetry = 8;
 const operationsPerVoidedPage = 2;
@@ -132,7 +151,11 @@ export async function runScheduledStoreServer(
     ...(sweep === undefined ? {} : { sweep }),
     operations: budgetAtStart - remaining,
   };
-  if (report.retried > 0 || (sweep !== undefined && sweep.revoked > 0)) {
+  if (
+    report.retried > 0
+    || report.abandoned > 0
+    || (sweep !== undefined && (sweep.revoked > 0 || sweep.failed > 0 || !sweep.complete))
+  ) {
     console.log('Store server cron:', JSON.stringify(report));
   }
   return report;
@@ -149,7 +172,7 @@ async function retryOwedFinalizations(input: {
   if (!input.take(1)) {
     return;
   }
-  const due = await input.outbox.due({ nowMs: input.now(), limit: 20 });
+  const due = await input.outbox.due({ nowMs: input.now(), limit: finalizationRetryBatch });
   for (const row of due) {
     if (!input.take(operationsPerRetry)) {
       return;
@@ -226,46 +249,94 @@ async function sweepVoidedPurchases(input: {
     return undefined;
   }
   const nowMs = input.now();
-  const lastRun = await input.cursors.read(voidedSweepRunCursor);
-  if (lastRun !== undefined && nowMs - lastRun < intervalMinutes * 60_000) {
+  const lastEnd = await input.cursors.read(voidedSweepCursor);
+  // Caught up within the interval: nothing to do yet. A run that stopped
+  // behind (a backlog, a budget) is continued on the next trigger.
+  if (lastEnd !== undefined && nowMs - lastEnd < intervalMinutes * 60_000) {
     return undefined;
   }
-  const lastEnd = await input.cursors.read(voidedSweepCursor);
-  // The first sweep reads Google's whole 30-day window; later ones overlap
-  // the last complete window so a void recorded late is still read.
-  const startTimeMillis = lastEnd === undefined ? 0 : lastEnd - voidedSweepOverlapMs;
-  const sweep = await sweepGooglePlayVoidedPurchases({
-    client: input.play.voidedPurchases,
-    store: input.store,
-    packageName: input.play.packageName,
-    startTimeMillis,
-    endTimeMillis: nowMs,
-    signal: AbortSignal.timeout(30_000),
-    maxPages: 5,
-    shouldContinue: (next) =>
-      input.take(next === 'page' ? operationsPerVoidedPage : operationsPerVoidedPurchase),
-    onOutcome: (voided, outcome) => {
-      if (outcome.status === 'conflict' || outcome.status === 'invalid') {
-        console.error(
-          'Google Play voided purchase not applied:',
-          outcome.reason,
-          voided.orderId ?? 'no order id',
-        );
+  // Google keeps 30 days and filters on when it recorded the void. The first
+  // sweep starts at the oldest edge; later ones overlap the last complete
+  // slice so a void recorded late is still read.
+  const oldest = nowMs - googlePlayVoidedPurchasesWindowMs + googlePlayVoidedPurchasesWindowSlackMs
+    + voidedSweepClockMarginMs;
+  let sliceStart = Math.max(
+    lastEnd === undefined ? oldest : lastEnd - voidedSweepOverlapMs,
+    oldest,
+  );
+  let sliceMs = (await input.cursors.read(voidedSweepSliceCursor)) ?? voidedSweepSliceMs;
+  const totals = { revoked: 0, alreadyProcessed: 0, notFound: 0, failed: 0 };
+  let slices = 0;
+  let pages = 0;
+  let complete = false;
+  // The window is read in slices, each finished before the cursor moves past
+  // it, so a backlog larger than one run's budget is worked through over
+  // several runs instead of re-reading the same first pages. A slice that
+  // cannot be finished in one run is halved for the next.
+  for (;;) {
+    const sliceEnd = Math.min(sliceStart + sliceMs, nowMs);
+    const sweep = await sweepGooglePlayVoidedPurchases({
+      client: input.play.voidedPurchases,
+      store: input.store,
+      packageName: input.play.packageName,
+      startTimeMillis: sliceStart,
+      endTimeMillis: sliceEnd,
+      signal: AbortSignal.timeout(voidedSweepTimeoutMs),
+      maxPages: voidedSweepMaxPagesPerSlice,
+      now: () => new Date(input.now()).toISOString(),
+      shouldContinue: (next) => {
+        if (next === 'page') {
+          if (pages >= voidedSweepMaxPagesPerRun || !input.take(operationsPerVoidedPage)) {
+            return false;
+          }
+          pages += 1;
+          return true;
+        }
+        return input.take(operationsPerVoidedPurchase);
+      },
+      onOutcome: (voided, outcome) => {
+        if (
+          outcome.status === 'conflict'
+          || outcome.status === 'invalid'
+          || outcome.status === 'error'
+        ) {
+          // The order id identifies the purchase in Play Console; the token is never logged.
+          console.error(
+            'Google Play voided purchase not applied:',
+            outcome.reason,
+            voided.orderId ?? 'no order id',
+          );
+        }
+      },
+    });
+    totals.revoked += sweep.revoked;
+    totals.alreadyProcessed += sweep.alreadyProcessed;
+    totals.notFound += sweep.notFound;
+    totals.failed += sweep.failed;
+    if (!sweep.complete) {
+      if (slices === 0 && sliceMs > voidedSweepMinSliceMs) {
+        sliceMs = Math.max(Math.floor(sliceMs / 2), voidedSweepMinSliceMs);
+        await input.cursors.write(voidedSweepSliceCursor, sliceMs, new Date(nowMs));
       }
-    },
-  });
-  const runAt = new Date(nowMs);
-  await input.cursors.write(voidedSweepRunCursor, nowMs, runAt);
-  if (sweep.complete) {
-    await input.cursors.write(voidedSweepCursor, nowMs, runAt);
+      console.error(
+        'Google Play voided purchases sweep stopped before',
+        new Date(sliceEnd).toISOString(),
+        '; it continues on the next run.',
+      );
+      break;
+    }
+    slices += 1;
+    await input.cursors.write(voidedSweepCursor, sliceEnd, new Date(nowMs));
+    if (sliceEnd >= nowMs) {
+      complete = true;
+      if (sliceMs < voidedSweepSliceMs) {
+        await input.cursors.write(voidedSweepSliceCursor, voidedSweepSliceMs, new Date(nowMs));
+      }
+      break;
+    }
+    sliceStart = sliceEnd;
   }
-  return {
-    complete: sweep.complete,
-    revoked: sweep.revoked,
-    alreadyProcessed: sweep.alreadyProcessed,
-    notFound: sweep.notFound,
-    failed: sweep.failed,
-  };
+  return { complete, slices, ...totals };
 }
 
 /**

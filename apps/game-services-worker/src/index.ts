@@ -83,10 +83,15 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
    * to its own subrequest budget; one failing never skips the other.
    */
   override async scheduled(controller: ScheduledController): Promise<void> {
-    await Promise.all([
+    const [notifications] = await Promise.allSettled([
       runScheduledNotifications(this.env, { cron: controller.cron }),
       runStoreServer(this.env, controller.cron),
     ]);
+    // Both runs finish before the event ends; a notifications failure is
+    // reported after the store server run, never instead of it.
+    if (notifications.status === 'rejected') {
+      throw notifications.reason;
+    }
   }
 }
 

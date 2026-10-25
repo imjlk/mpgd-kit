@@ -15,7 +15,10 @@ import type {
 /** Play's acknowledgement window. After it, Google refunds and the voided sweep revokes. */
 export const googlePlayAcknowledgementWindowMs = 3 * 24 * 60 * 60 * 1000;
 
-/** Delays before each retry: 1 minute, 5, 15, 1 hour, 3, then every 6 hours. */
+/**
+ * Delay after each failed attempt: 1 minute after the first failure, then 5,
+ * 15, 1 hour, 3, and every 6 hours.
+ */
 const retryDelaysMs = [60_000, 300_000, 900_000, 3_600_000, 10_800_000, 21_600_000] as const;
 
 export function googlePlayFinalizationRetryDelayMs(attempts: number): number {
@@ -50,6 +53,11 @@ export interface GooglePlayFinalizationOutbox {
     readonly playerId: string;
     readonly purchaseToken: string;
     readonly nowMs: number;
+    /**
+     * When Play's three-day window started: Google's purchase completion
+     * time from the verified grant, else `nowMs`.
+     */
+    readonly firstSeenAtMs?: number;
   }): Promise<void>;
   /** The purchase is acknowledged or consumed (or will never be): the token is dropped. */
   forget(ledgerEntryId: string): Promise<void>;
@@ -67,14 +75,20 @@ export interface GooglePlayFinalizationOutbox {
 
 export function createD1GooglePlayFinalizationOutbox(db: D1Database): GooglePlayFinalizationOutbox {
   return {
-    async remember({ ledgerEntryId, playerId, purchaseToken, nowMs }) {
+    async remember({ ledgerEntryId, playerId, purchaseToken, nowMs, firstSeenAtMs }) {
       await db
         .prepare(
           `INSERT OR IGNORE INTO google_play_pending_finalizations (
             ledger_entry_id, player_id, purchase_token, first_seen_at_ms, next_attempt_at_ms, attempts
           ) VALUES (?, ?, ?, ?, ?, 0)`,
         )
-        .bind(ledgerEntryId, playerId, purchaseToken, nowMs, nowMs + retryDelaysMs[0])
+        .bind(
+          ledgerEntryId,
+          playerId,
+          purchaseToken,
+          Math.min(firstSeenAtMs ?? nowMs, nowMs),
+          nowMs + retryDelaysMs[0],
+        )
         .run();
     },
     async forget(ledgerEntryId) {
@@ -196,6 +210,7 @@ export function withGooglePlayFinalizationOutbox(
           playerId: input.request.playerId,
           purchaseToken,
           nowMs: now(),
+          firstSeenAtMs: readCompletionTime(input) ?? now(),
         }), 'remember');
       }
       let result: PurchaseGrantFinalization;
@@ -226,6 +241,13 @@ export function withGooglePlayFinalizationOutbox(
       return result;
     },
   };
+}
+
+/** Google's purchase completion time the verifier recorded, the start of Play's window. */
+function readCompletionTime(input: FinalizePurchaseGrantInput): number | undefined {
+  const value = input.evidencePayload?.googlePlayPurchaseCompletionTime;
+  const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function readPurchaseToken(input: FinalizePurchaseGrantInput): string | undefined {

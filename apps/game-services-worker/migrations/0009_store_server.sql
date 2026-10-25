@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS google_play_pending_finalizations (
 
 CREATE INDEX IF NOT EXISTS idx_google_play_pending_finalizations_due
   ON google_play_pending_finalizations (next_attempt_at_ms);
+-- For a player's data deletion: the rows hold raw purchase tokens.
 CREATE INDEX IF NOT EXISTS idx_google_play_pending_finalizations_player
   ON google_play_pending_finalizations (player_id);
 

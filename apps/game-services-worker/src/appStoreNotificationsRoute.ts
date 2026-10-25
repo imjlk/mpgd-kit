@@ -50,13 +50,20 @@ export function createAppStoreNotificationsFetchHandler(input: {
   const verifier: AppStoreServerNotificationVerifier = {
     async verifyAndDecodeNotification({ signedPayload, environment, bundleId }) {
       // AbortSignal is not structured-cloneable across a service binding;
-      // the binding enforces timeoutMs itself.
-      const result = await input.binding.verifyAppStoreServerNotification({
-        signedPayload,
-        environment,
-        bundleId,
-        timeoutMs,
-      });
+      // the binding enforces timeoutMs itself, and a binding that does not
+      // answer in time is treated as unavailable so Apple redelivers.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const result = await Promise.race([
+        input.binding.verifyAppStoreServerNotification({
+          signedPayload,
+          environment,
+          bundleId,
+          timeoutMs,
+        }),
+        new Promise<{ readonly status: 'unavailable' }>((resolve) => {
+          timer = setTimeout(() => resolve({ status: 'unavailable' }), timeoutMs + bindingGraceMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
       if (result.status === 'unavailable') {
         throw new AppStoreDependencyUnavailableError(
           'The App Store notification verifier is unavailable.',
@@ -75,13 +82,13 @@ export function createAppStoreNotificationsFetchHandler(input: {
       return json({ error: 'METHOD_NOT_ALLOWED' }, 405, { allow: 'POST' });
     }
     const declaredLength = Number(request.headers.get('content-length') ?? '0');
-    if (declaredLength > maxAppStoreServerNotificationBytes + 1024) {
+    if (declaredLength > maxBodyLength) {
       return json({ error: 'PAYLOAD_TOO_LARGE' }, 413);
     }
     let body: unknown;
     try {
       const text = await request.text();
-      if (text.length > maxAppStoreServerNotificationBytes + 1024) {
+      if (text.length > maxBodyLength) {
         return json({ error: 'PAYLOAD_TOO_LARGE' }, 413);
       }
       body = JSON.parse(text);
@@ -95,13 +102,18 @@ export function createAppStoreNotificationsFetchHandler(input: {
         body,
         environment,
         bundleId: input.bundleId,
-        signal: AbortSignal.timeout(timeoutMs + 5_000),
+        signal: AbortSignal.timeout(timeoutMs + bindingGraceMs),
       });
-      if (outcome.status !== 'revoked') {
-        // Apple notifications carry no player data the log needs; the
-        // reason and id are enough to trace a delivery.
-        console.log('App Store notification', environment, outcome.status, outcome.reason);
-      }
+      // The status, reason, and notification id trace a delivery; no player
+      // data is logged.
+      console.log(
+        'App Store notification',
+        environment,
+        outcome.status,
+        outcome.status === 'revoked'
+          ? `${outcome.notificationUUID} alreadyProcessed=${String(outcome.alreadyProcessed)}`
+          : outcome.reason,
+      );
       return json(outcome, appStoreServerNotificationHttpStatus(outcome));
     } catch (error) {
       // A store or binding failure: answer 500 so Apple redelivers (1, 12,
@@ -114,6 +126,11 @@ export function createAppStoreNotificationsFetchHandler(input: {
     }
   };
 }
+
+/** The JSON envelope around the signedPayload, on top of its own limit. */
+const maxBodyLength = maxAppStoreServerNotificationBytes + 1024;
+/** Time past the binding's own timeout before the route stops waiting for it. */
+const bindingGraceMs = 5_000;
 
 function matchEnvironment(pathname: string): AppStoreEnvironment | undefined {
   const normalised = pathname.length > 1 && pathname.endsWith('/')

@@ -1220,9 +1220,13 @@ function createWorkerAppStoreNotificationsFetchHandler(
     return undefined;
   }
   if (bundleId === undefined || bundleId.length === 0) {
-    throw new Error(
-      'GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER requires GAME_SERVICES_APP_STORE_BUNDLE_ID.',
+    // Only this intake closes (Apple retries a 404); purchases, ads, and
+    // notifications keep serving.
+    console.error(
+      'App Store notifications are not mounted: GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER '
+        + 'requires GAME_SERVICES_APP_STORE_BUNDLE_ID.',
     );
+    return undefined;
   }
   return createAppStoreNotificationsFetchHandler({ store, binding, bundleId });
 }

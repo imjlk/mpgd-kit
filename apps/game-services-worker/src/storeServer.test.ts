@@ -150,14 +150,18 @@ try {
       413,
     );
 
-    assert.throws(
-      () =>
-        createWorkerFetchHandler({
-          ...env,
-          GAME_SERVICES_APP_STORE_BUNDLE_ID: ' ',
-        }),
-      /GAME_SERVICES_APP_STORE_BUNDLE_ID/u,
-      'the verifier binding requires the bundle id',
+    const withoutBundle = createWorkerFetchHandler({
+      ...env,
+      MPGD_STORE: 'memory',
+      GAME_SERVICES_APP_STORE_BUNDLE_ID: ' ',
+    });
+    assert.equal(
+      (await withoutBundle(new Request(`${baseUrl}${appStoreNotificationPaths.Production}`, {
+        method: 'POST',
+        body: payload,
+      }))).status,
+      404,
+      'without the bundle id only the App Store intake is closed',
     );
     const withoutBinding = createWorkerFetchHandler({ MPGD_STORE: 'memory' });
     assert.equal(
@@ -340,7 +344,8 @@ try {
       'a finalized purchase leaves the outbox',
     );
     assert.equal(first?.sweep?.complete, true, 'the first sweep reads the whole window');
-    assert.equal(voidedCalls.length, 1);
+    assert.equal(first?.sweep?.slices, 5, 'in week-long slices');
+    assert.equal(voidedCalls.length, 5);
     assert.equal(
       await createD1StoreServerCursors(db).read(voidedSweepCursor),
       start + 120_000,
@@ -362,6 +367,7 @@ try {
     );
     assert.deepEqual(later?.sweep, {
       complete: true,
+      slices: 1,
       revoked: 1,
       alreadyProcessed: 0,
       notFound: 1,
@@ -409,6 +415,48 @@ try {
     );
     assert.equal(starved?.operations, 1, 'the run stops at its subrequest budget');
     assert.equal(starved?.sweep, undefined);
+
+    // A backlog larger than one run's budget is worked through across runs.
+    {
+      await db.exec('DELETE FROM store_server_cursors;');
+      const backlogNow = start + 40 * 24 * 3_600_000;
+      const voids = Array.from({ length: 30 }, (_, index) => ({
+        purchaseToken: `backlog-${index}`,
+        recordedAt: backlogNow - (index + 1) * 23 * 3_600_000,
+      }));
+      const seen = new Set<string>();
+      const backlogClient: GooglePlayVoidedPurchasesClient = {
+        async listVoidedPurchases(input) {
+          const page = voids.filter((entry) =>
+            entry.recordedAt >= input.startTimeMillis && entry.recordedAt <= input.endTimeMillis);
+          for (const entry of page) {
+            seen.add(entry.purchaseToken);
+          }
+          return { voidedPurchases: page.map(({ purchaseToken }) => ({ purchaseToken })) };
+        },
+      };
+      let runs = 0;
+      let lastSweep: Awaited<ReturnType<typeof runScheduledStoreServer>>;
+      do {
+        runs += 1;
+        lastSweep = await runScheduledStoreServer(
+          { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '30' },
+          { cron: '* * * * *' },
+          {
+            googlePlay: { finalizer: boundary, voidedPurchases: backlogClient, packageName },
+            now: () => backlogNow + runs * 60_000,
+          },
+        );
+      } while (lastSweep?.sweep?.complete !== true && runs < 40);
+      assert.equal(lastSweep?.sweep?.complete, true, 'the backlog converges');
+      assert.equal(seen.size, 30, 'every void in Google\u2019s window is read');
+      assert.equal(runs > 1, true, 'over several runs');
+      assert.equal(
+        await createD1StoreServerCursors(db).read('google-play-voided:slice-ms'),
+        7 * 24 * 3_600_000,
+        'the slice grows back once caught up',
+      );
+    }
 
     assert.equal(
       await runScheduledStoreServer({ MPGD_STORE: 'memory' }, {}, dependencies(start)),
