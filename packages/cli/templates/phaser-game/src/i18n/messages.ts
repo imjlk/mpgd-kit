@@ -49,7 +49,7 @@ const messages = {
     restoreDone: 'Purchases restored ({count} confirmed)',
     restoreNothing: 'No new purchases to restore',
     restoreIncomplete: 'Some purchases are not confirmed yet. Try again later.',
-    restorePartial: '{count} purchases restored; others are not confirmed yet. Try again later.',
+    restorePartial: 'Purchases restored ({count}); others are not confirmed yet. Try again later.',
     restoreNeedsSession: 'Sign in to restore purchases',
     restoreFailed: 'Could not restore purchases. Try again later.',
   },

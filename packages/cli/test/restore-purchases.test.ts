@@ -229,7 +229,7 @@ assert.equal(
 assert.match(restoreOutcomeText('en', { outcome: 'incomplete', granted: 0 }), /not confirmed yet/u);
 assert.equal(
   restoreOutcomeText('en', { outcome: 'incomplete', granted: 2 }),
-  '2 purchases restored; others are not confirmed yet. Try again later.',
+  'Purchases restored (2); others are not confirmed yet. Try again later.',
 );
 assert.match(restoreOutcomeText('en', { outcome: 'failed' }), /Could not restore/u);
 
