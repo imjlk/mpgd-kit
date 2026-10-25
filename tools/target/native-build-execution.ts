@@ -9,6 +9,7 @@ import { inspectSignedAndroidBundle } from './native-android-inspection';
 import type { NativeBuildPlan } from './native-build-mode';
 import { createNativeShellStage } from './native-build-stage';
 import { applyCapacitorShellCsp } from './native-shell-csp';
+import { inspectNativeStorePolicy, reportNativeStorePolicy } from './native-store-policy';
 import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
 import { resolveIosSigningPlan } from './native-ios-signing';
 import {
@@ -73,6 +74,10 @@ export async function executeNativeTargetBuild(input: NativeBuildExecutionInput)
   // With stamping the source only has to keep readable version assignments;
   // the reserved numbers are written into the stage and checked there.
   assertNativeReleaseIdentity({ ...identityInput, versionSource });
+  reportNativeStorePolicy(
+    inspectNativeStorePolicy({ platform, shellApp }),
+    profile === 'production',
+  );
   const stage = createNativeShellStage({ shellApp, webDir });
 
   try {

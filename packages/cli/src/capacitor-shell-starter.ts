@@ -33,6 +33,7 @@ import {
   sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from './notifications-starter.js';
+import { applyIosInfoPlistStorePolicy } from './native-shell-store-policy.js';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
@@ -850,6 +851,9 @@ export function materializeCapacitorShellStarter(
         materializeAndroidInexactAlarms(plan.gameRoot);
       }
     }
+    if (platform === 'ios' && generatedNow) {
+      materializeIosStorePolicy(plan.gameRoot);
+    }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
       const relative = `${shellPath}/ios/App/App/Info-Smoke.plist`;
@@ -1014,6 +1018,23 @@ export function applyAndroidManifestBackupPolicy(manifest: string): string {
   return `${manifest.slice(0, root.index)}${rootTag}${
     manifest.slice(root.index + root[0].length, application.index)}${applicationTag}${
     manifest.slice(application.index + application[0].length)}`;
+}
+
+/**
+ * Store-facing Info.plist keys for a freshly generated iOS project only
+ * (`applyIosInfoPlistStorePolicy`); an existing game-owned project is left
+ * alone and the production build reports what it lacks.
+ */
+function materializeIosStorePolicy(gameRoot: string): void {
+  const plistFile = safeDestination(gameRoot, `${shellPath}/ios/App/App/Info.plist`);
+  if (!existsSync(plistFile) || !lstatSync(plistFile).isFile()) {
+    return;
+  }
+  const source = readFileSync(plistFile, 'utf8');
+  const next = applyIosInfoPlistStorePolicy(source);
+  if (next !== source) {
+    writeFileSync(plistFile, next);
+  }
 }
 
 function materializeIosArchiveScheme(gameRoot: string): void {

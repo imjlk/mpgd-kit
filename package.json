@@ -131,7 +131,7 @@
     "smoke:cli-microsoft-store-starter-onboarding": "node tools/run-ttsx.mjs tools/smoke/cli-microsoft-store-starter-onboarding.ts",
     "smoke:cli-notifications-starter": "node tools/run-ttsx.mjs packages/cli/test/notifications-starter.test.ts && node tools/run-ttsx.mjs packages/cli/test/notifications-settings.test.ts && node tools/run-ttsx.mjs packages/cli/test/notifications-backend.test.ts && node tools/run-ttsx.mjs packages/cli/test/game-title-placeholders.test.ts",
     "smoke:cli-notifications-game": "node tools/run-ttsx.mjs tools/smoke/cli-notifications-game.ts",
-    "smoke:cli-capacitor-shell-starter": "node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-starter.test.ts && node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-providers.test.ts && node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-notifications.test.ts",
+    "smoke:cli-capacitor-shell-starter": "node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-starter.test.ts && node tools/run-ttsx.mjs packages/cli/test/native-shell-store-policy.test.ts && node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-providers.test.ts && node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-notifications.test.ts",
     "smoke:cli-deploy-planning": "node tools/run-ttsx.mjs packages/cli/src/deploy-planning.test.ts",
     "smoke:cli-native-deploy-workflow": "node tools/run-ttsx.mjs packages/cli/src/native-deploy-workflow.test.ts",
     "smoke:cli-deploy-process": "node tools/run-ttsx.mjs packages/cli/src/deploy-process.test.ts",

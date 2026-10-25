@@ -409,6 +409,15 @@ try {
   ]);
   const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
   assert.equal(existsSync(cli), true);
+  const generatedPlist = readFileSync(
+    path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist'),
+    'utf8',
+  );
+  assert.match(
+    generatedPlist,
+    /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>\s*<\/dict><\/plist>/u,
+    'a freshly generated iOS project declares exempt-only encryption',
+  );
   const generatedManifest = readFileSync(
     path.join(root, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
     'utf8',
