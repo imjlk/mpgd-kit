@@ -1,4 +1,7 @@
-import { revokeEntitlementGrant } from './commerce-ledger.js';
+import {
+  findPurchaseGrantByEvidenceVerificationId,
+  revokeEntitlementGrant,
+} from './commerce-ledger.js';
 import {
   AppStoreDependencyUnavailableError,
   createAppStoreVerificationId,
@@ -6,7 +9,7 @@ import {
   type AppStoreTransactionPayload,
 } from './app-store-verifier.js';
 import type { GameServicesStore } from './server.js';
-import type { EntitlementRevocationReason, ProductGrantTransaction } from './types.js';
+import type { EntitlementRevocationReason } from './types.js';
 
 /**
  * App Store Server Notifications V2 for one-time purchases: the store-side
@@ -78,19 +81,29 @@ export type AppStoreServerNotificationOutcome =
     }
   /** Verified, but nothing to do: Apple is answered 200 so it stops retrying. */
   | { readonly status: 'ignored'; readonly reason: string; readonly notificationUUID: string }
+  /**
+   * The ledger refused the revocation (its key or authority identity already
+   * reversed another grant). A redelivery cannot fix it, so Apple is answered
+   * 200; the host should log or alert on it.
+   */
+  | { readonly status: 'conflict'; readonly reason: string; readonly notificationUUID: string }
   /** Malformed or not signed by Apple for this app and environment. */
   | { readonly status: 'rejected'; readonly reason: string }
   /** A transient failure: answer non-2xx so Apple redelivers. */
   | { readonly status: 'retry'; readonly reason: string };
 
-/** The largest body accepted; Apple's notifications are a few kilobytes. */
+/**
+ * The longest `signedPayload` string accepted; Apple's notifications are a
+ * few kilobytes. The host bounds the whole request body itself.
+ */
 export const maxAppStoreServerNotificationBytes = 256 * 1024;
 
 const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> = {
   // The customer was refunded for the purchase.
   REFUND: 'refund',
-  // Access through Family Sharing or an organization ended. Shared access is
-  // never granted, so this only matches a grant if the ledger holds one.
+  // Access the customer had through an organization ended. A family member's
+  // FAMILY_SHARED transaction is ignored before the lookup: it shares the
+  // purchaser's original transaction id, and the purchaser keeps the grant.
   REVOKE: 'voided',
 };
 
@@ -102,6 +115,12 @@ const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> =
  * granted, and a subscription transaction are `ignored` (answer 200 so Apple
  * stops retrying). `REFUND_REVERSED` is ignored too: a reversed grant stays
  * reversed until the game re-grants it on its own terms.
+ *
+ * A refund that arrives before its grant is ignored, not retried; the
+ * purchase verifier's default Server API mode reads the transaction's current
+ * status and refuses a revoked one, so a late purchase request is not granted.
+ * A thrown error (a store outage, an abort) is not an outcome: the host must
+ * answer it with a 5xx so Apple redelivers.
  */
 export async function handleAppStoreServerNotification(
   input: HandleAppStoreServerNotificationInput,
@@ -155,6 +174,18 @@ export async function handleAppStoreServerNotification(
   ) {
     return { status: 'rejected', reason: 'APP_STORE_NOTIFICATION_SCOPE_MISMATCH' };
   }
+  if (
+    transaction.inAppOwnershipType !== undefined
+    && transaction.inAppOwnershipType !== 'PURCHASED'
+  ) {
+    // Shared access is never granted (APP_STORE_FAMILY_SHARED_UNSUPPORTED),
+    // so its end must not reverse the purchaser's own grant.
+    return {
+      status: 'ignored',
+      reason: 'APP_STORE_NOTIFICATION_SHARED_ACCESS_IGNORED',
+      notificationUUID,
+    };
+  }
 
   // The grant's identity is the one the purchase verifier recorded:
   // non-consumables by their original transaction, consumables by their own.
@@ -165,7 +196,7 @@ export async function handleAppStoreServerNotification(
       ? transaction.originalTransactionId
       : transaction.transactionId,
   });
-  const grant = await findPurchaseGrant(input.store, grantVerificationId);
+  const grant = await findPurchaseGrantByEvidenceVerificationId(input.store, grantVerificationId);
   if (grant === undefined || grant.payload.target !== 'ios') {
     return {
       status: 'ignored',
@@ -174,9 +205,8 @@ export async function handleAppStoreServerNotification(
     };
   }
 
-  const revokedAt = transaction.revocationDate === undefined
-    ? (input.now ?? (() => new Date().toISOString()))()
-    : new Date(transaction.revocationDate).toISOString();
+  const revokedAt = readTimestamp(transaction.revocationDate)
+    ?? (input.now ?? (() => new Date().toISOString()))();
   const result = await revokeEntitlementGrant(input.store, {
     playerId: grant.playerId,
     revokesLedgerEntryId: grant.ledgerEntryId,
@@ -209,7 +239,9 @@ export async function handleAppStoreServerNotification(
   // the ledger changed underneath; a key or identity conflict is a ledger
   // invariant a redelivery cannot fix. None of them is worth Apple's retry.
   return {
-    status: 'ignored',
+    status: result.status === 'key_conflict' || result.status === 'evidence_already_processed'
+      ? 'conflict'
+      : 'ignored',
     reason: `APP_STORE_NOTIFICATION_${result.status.toUpperCase()}`,
     notificationUUID,
   };
@@ -222,12 +254,21 @@ export function appStoreServerNotificationHttpStatus(
   switch (outcome.status) {
     case 'revoked':
     case 'ignored':
+    case 'conflict':
       return 200;
     case 'rejected':
       return 400;
     case 'retry':
       return 503;
   }
+}
+
+function readTimestamp(value: number | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function readSignedPayload(body: unknown): string | undefined {
@@ -240,18 +281,4 @@ function readSignedPayload(body: unknown): string | undefined {
     && signedPayload.length <= maxAppStoreServerNotificationBytes
     ? signedPayload
     : undefined;
-}
-
-async function findPurchaseGrant(
-  store: GameServicesStore,
-  evidenceVerificationId: string,
-): Promise<ProductGrantTransaction | undefined> {
-  const identity = { source: 'purchase', evidenceVerificationId } as const;
-  const grant = store.findEntitlementTransactionByEvidenceVerificationId === undefined
-    ? (await store.listEntitlementTransactions()).find((transaction) => {
-        return (transaction.evidenceVerificationId
-          ?? transaction.payload.evidenceVerificationId) === evidenceVerificationId;
-      })
-    : await store.findEntitlementTransactionByEvidenceVerificationId(identity);
-  return grant?.source === 'purchase' ? grant : undefined;
 }

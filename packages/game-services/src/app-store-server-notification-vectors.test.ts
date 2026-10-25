@@ -65,6 +65,34 @@ describe('App Store Server Notifications V2 vectors', () => {
     }
   });
 
+  it('verifies a data-less SUMMARY notification so the handler can ignore it with 200', async () => {
+    const result = await verify(summaryNotification);
+    expect(result).toEqual({
+      status: 'verified',
+      notification: {
+        notificationType: 'RENEWAL_EXTENSION',
+        subtype: 'SUMMARY',
+        notificationUUID: '5d1a7c3e-6b24-4c8f-9e0a-2f7b8c9d0e11',
+        signedDate: Date.parse('2026-10-25T02:00:00.000Z'),
+        environment: 'Sandbox',
+        bundleId,
+      },
+    });
+    const outcome = await handleAppStoreServerNotification({
+      store: createInMemoryGameServicesStore(),
+      verifier: verifier(),
+      body: { signedPayload: summaryNotification },
+      environment: 'Sandbox',
+      bundleId,
+      signal: new AbortController().signal,
+    });
+    expect(outcome).toEqual({
+      status: 'ignored',
+      reason: 'APP_STORE_NOTIFICATION_TYPE_UNHANDLED',
+      notificationUUID: '5d1a7c3e-6b24-4c8f-9e0a-2f7b8c9d0e11',
+    });
+  });
+
   it('refuses a chain that does not end at a trusted root, and a tampered payload', async () => {
     expect(await verify(rogueNotification)).toEqual({
       status: 'rejected', reason: 'APP_STORE_SIGNATURE_INVALID',
@@ -483,4 +511,40 @@ const tamperedNotification = [
     'mxibU41SWpvaVMxSlhJbjAucENwRmZNdzVJTVZsWnE1U0R1LUwzclAyVlNNWEl0TFY2RnBEYWVBUDFaX0RkVkI2aXZ3YVpPU',
     'WNxanA1VG05T2NSZ2RITGU1a2JuME5pYTNFRTJZbkEifX0.Afl5HezIG2Di-9aV2UoA5z6Wzf-E6A06s5sSH0imZD0och9WT',
     '99Ohc9dLPcYuc3yNJ5_6LEYM-nEIReZ3NI_Ag',
+].join('');
+const summaryNotification = [
+    'eyJhbGciOiJFUzI1NiIsIng1YyI6WyJNSUlCN2pDQ0FaU2dBd0lCQWdJQkF6QUtCZ2dxaGtqT1BRUURBakJKTVNjd0pRWURW',
+    'UVFEREI1dGNHZGtJSFJsYzNRZ2RISjFjM1JsWkNCcGJuUmxjbTFsWkdsaGRHVXhIakFjQmdOVkJBb01GVzF3WjJRdGEybDBJ',
+    'SFJsYzNRZ2RtVmpkRzl5Y3pBZUZ3MHlOakV3TWpVd01EVTVNRE5hRncwME5qRXdNakF3TURVNU1ETmFNRVF4SWpBZ0JnTlZC',
+    'QU1NR1cxd1oyUWdkR1Z6ZENCMGNuVnpkR1ZrSUhOcFoyNXBibWN4SGpBY0JnTlZCQW9NRlcxd1oyUXRhMmwwSUhSbGMzUWdk',
+    'bVZqZEc5eWN6QlpNQk1HQnlxR1NNNDlBZ0VHQ0NxR1NNNDlBd0VIQTBJQUJBZVF3NHRJcUdqWkJrQ21mMzl4MTVzRDlHRG5x',
+    'bVRRN2JRZ1pBcTZieHcvclNDeDNlZVZsbmtKYnZQeTdVVmZJdW53UHBEMWtaRUlTbXlVQ0ZBMzl0dWpjakJ3TUF3R0ExVWRF',
+    'd0VCL3dRQ01BQXdEZ1lEVlIwUEFRSC9CQVFEQWdlQU1CMEdBMVVkRGdRV0JCUjFBdjJHby84NkFLV3hmd3BiYzR2c1dYakZR',
+    'akFmQmdOVkhTTUVHREFXZ0JRN0hWcGNKY2pNNXRLQ0I5SDhoajhDazNNYlNqQVFCZ29xaGtpRzkyTmtCZ3NCQkFJRkFEQUtC',
+    'Z2dxaGtqT1BRUURBZ05JQURCRkFpQWJkYm9heWpmNkR0ZDhVZlJTcVRLWVFFNlprQ3RjQ3grT1ZEZGRndm9tWVFJaEFMd0Ni',
+    'ejZNUkVmcm1KelN5SDZCYUJtSDE5T3FwTkdOb3NvK3F6d3R6SVJJIiwiTUlJQjhUQ0NBWmVnQXdJQkFnSUJBakFLQmdncWhr',
+    'ak9QUVFEQWpCQk1SOHdIUVlEVlFRRERCWnRjR2RrSUhSbGMzUWdkSEoxYzNSbFpDQnliMjkwTVI0d0hBWURWUVFLREJWdGNH',
+    'ZGtMV3RwZENCMFpYTjBJSFpsWTNSdmNuTXdIaGNOTWpZeE1ESTFNREExT1RBeldoY05ORFl4TURJd01EQTFPVEF6V2pCSk1T',
+    'Y3dKUVlEVlFRRERCNXRjR2RrSUhSbGMzUWdkSEoxYzNSbFpDQnBiblJsY20xbFpHbGhkR1V4SGpBY0JnTlZCQW9NRlcxd1oy',
+    'UXRhMmwwSUhSbGMzUWdkbVZqZEc5eWN6QlpNQk1HQnlxR1NNNDlBZ0VHQ0NxR1NNNDlBd0VIQTBJQUJMbnNUSzRrdjJhZ1M1',
+    'bnlmZTlmV2RrWUdWQzFLalJobWRtMWZUV1dsM0k4MXQ5UFY5YmZIVStLcWJ6U0NEV0Zic0lycXRRRktTZmVxaGFycEFwbkJD',
+    'S2plREIyTUJJR0ExVWRFd0VCL3dRSU1BWUJBZjhDQVFBd0RnWURWUjBQQVFIL0JBUURBZ0VHTUIwR0ExVWREZ1FXQkJRN0hW',
+    'cGNKY2pNNXRLQ0I5SDhoajhDazNNYlNqQWZCZ05WSFNNRUdEQVdnQlFHbjRDL1U0M2NYYzRQNG5MVUw0UFJEbzlIT1RBUUJn',
+    'b3Foa2lHOTJOa0JnSUJCQUlGQURBS0JnZ3Foa2pPUFFRREFnTklBREJGQWlFQXJBUkpYMmZYa2dCTE5nanpsT3NrYjdwVld0',
+    'Mmt3NVQ1QVQ4VVFNbk1Cb01DSUN0b0NBOTErc3VYMENFTFNwSVlJQ3RCWXVFU0ZOeDQ1QzZxekJPZnF2UEgiLCJNSUlCc2pD',
+    'Q0FWbWdBd0lCQWdJQkFUQUtCZ2dxaGtqT1BRUURBakJCTVI4d0hRWURWUVFEREJadGNHZGtJSFJsYzNRZ2RISjFjM1JsWkNC',
+    'eWIyOTBNUjR3SEFZRFZRUUtEQlZ0Y0dka0xXdHBkQ0IwWlhOMElIWmxZM1J2Y25Nd0hoY05Nall4TURJMU1EQTFPVEF6V2hj',
+    'Tk5EWXhNREl3TURBMU9UQXpXakJCTVI4d0hRWURWUVFEREJadGNHZGtJSFJsYzNRZ2RISjFjM1JsWkNCeWIyOTBNUjR3SEFZ',
+    'RFZRUUtEQlZ0Y0dka0xXdHBkQ0IwWlhOMElIWmxZM1J2Y25Nd1dUQVRCZ2NxaGtqT1BRSUJCZ2dxaGtqT1BRTUJCd05DQUFS',
+    'TXFXUThsMm1yK3hRb2cvajdDTGdvaEt6N1BJek10aHBVVHcrVHBjblF1Y3JQbkFibzAwSkg5clVUeURxZDhkN2Q4QVliVHlN',
+    'THJXNit5KzZ1T0t1dG8wSXdRREFQQmdOVkhSTUJBZjhFQlRBREFRSC9NQTRHQTFVZER3RUIvd1FFQXdJQkJqQWRCZ05WSFE0',
+    'RUZnUVVCcCtBdjFPTjNGM09EK0p5MUMrRDBRNlBSemt3Q2dZSUtvWkl6ajBFQXdJRFJ3QXdSQUlnTWRuNXJQNm1UWENta0dI',
+    'amtCd2ZGUDlBRi9ZcTdMd1RrRVFWb08wbzI2c0NJQUZ6c1lyeDJWM3JMZXBNaU00OG5GczNHdDU5WXlKNnZPb3JXOENoNWhZ',
+    'aiJdfQ.eyJub3RpZmljYXRpb25UeXBlIjoiUkVORVdBTF9FWFRFTlNJT04iLCJzdWJ0eXBlIjoiU1VNTUFSWSIsIm5vdGlma',
+    'WNhdGlvblVVSUQiOiI1ZDFhN2MzZS02YjI0LTRjOGYtOWUwYS0yZjdiOGM5ZDBlMTEiLCJ2ZXJzaW9uIjoiMi4wIiwic2lnb',
+    'mVkRGF0ZSI6MTc5Mjg5MzYwMDAwMCwic3VtbWFyeSI6eyJyZXF1ZXN0SWRlbnRpZmllciI6ImIyZjNlNGQ1LTAwMDAtNDAwM',
+    'C04MDAwLTAwMDAwMDAwMDAwMSIsImVudmlyb25tZW50IjoiU2FuZGJveCIsImJ1bmRsZUlkIjoiZGV2Lm1wZ2QudmVjdG9yc',
+    'yIsInByb2R1Y3RJZCI6ImRldi5tcGdkLnZlY3RvcnMubW9udGhseSIsInN0b3JlZnJvbnRDb3VudHJ5Q29kZXMiOlsiS09SI',
+    'l0sInN1Y2NlZWRlZENvdW50IjoxLCJmYWlsZWRDb3VudCI6MH19.3aGqiSj2VEmZcnv7jgUVgrcgjgUvJT595O4axwybg9E-',
+    '3yDNZIwlj6hHk5Fgs_OpoZm8DF8fYrHYROTyYxz8Rw',
 ].join('');

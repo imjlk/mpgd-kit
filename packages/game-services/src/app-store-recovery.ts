@@ -6,6 +6,7 @@ import {
   type AppStoreEnvironment,
 } from './app-store-verifier.js';
 import type { PurchaseVerificationApi } from './client.js';
+import { findPurchaseGrantByEvidenceVerificationId } from './commerce-ledger.js';
 import type { GameServicesEvidenceVerifier } from './evidence-verification.js';
 import type { GameServicesStore } from './server.js';
 import type {
@@ -335,15 +336,7 @@ async function findByVerificationId(
   store: GameServicesStore,
   evidenceVerificationId: string,
 ): Promise<ProductGrantTransaction | undefined> {
-  const identity = { source: 'purchase', evidenceVerificationId } as const;
-  if (store.findEntitlementTransactionByEvidenceVerificationId !== undefined) {
-    return store.findEntitlementTransactionByEvidenceVerificationId(identity);
-  }
-  return (await store.listEntitlementTransactions()).find((transaction) => {
-    return transaction.source === identity.source
-      && (transaction.evidenceVerificationId
-        ?? transaction.payload.evidenceVerificationId) === identity.evidenceVerificationId;
-  });
+  return findPurchaseGrantByEvidenceVerificationId(store, evidenceVerificationId);
 }
 
 function matchesRecovery(

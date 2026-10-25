@@ -94,26 +94,37 @@ export function createAppleServerNotificationVerifier(
       }
       const notification = decoded.value;
       const data = notification.data;
+      // Summary, app-data, and external-purchase notifications carry no
+      // `data`; Apple's verifier already matched their bundle and
+      // environment to this verifier's, and they carry no transaction.
+      const environment = data === undefined
+        ? options.environment
+        : readEnvironment(data.environment);
+      const bundleId = data === undefined ? options.bundleId : data.bundleId;
       if (!nonEmpty(notification.notificationType)
         || !nonEmpty(notification.notificationUUID)
         || !validTimestamp(notification.signedDate)
         || (notification.subtype !== undefined && !nonEmpty(notification.subtype))
-        || data === undefined
-        || (data.environment !== 'Production' && data.environment !== 'Sandbox')
-        || !nonEmpty(data.bundleId)) {
-        // Summary, app-data, and external-purchase notifications carry no
-        // one-time purchase, and are not read here.
+        || environment === undefined
+        || !nonEmpty(bundleId)) {
         return { status: 'rejected', reason: 'APP_STORE_NOTIFICATION_PAYLOAD_INVALID' };
       }
       let transaction: AppStoreTransactionPayload | undefined;
-      if (data.signedTransactionInfo !== undefined) {
+      if (data?.signedTransactionInfo !== undefined) {
         const signedTransaction = data.signedTransactionInfo;
         const decodedTransaction = await verifyWithApple(
           () => verifier.verifyAndDecodeTransaction(signedTransaction),
           input.signal,
         );
         if (decodedTransaction.status === 'rejected') {
-          return decodedTransaction;
+          // Named for the embedded transaction, apart from the payload's own checks.
+          return {
+            status: 'rejected',
+            reason: decodedTransaction.reason.replace(
+              /^APP_STORE_/u,
+              'APP_STORE_NOTIFICATION_TRANSACTION_',
+            ),
+          };
         }
         // A subscription transaction decodes to undefined and is ignored.
         transaction = decodeOneTimeTransaction(decodedTransaction.value);
@@ -125,8 +136,8 @@ export function createAppleServerNotificationVerifier(
           ...(notification.subtype === undefined ? {} : { subtype: notification.subtype }),
           notificationUUID: notification.notificationUUID,
           signedDate: notification.signedDate,
-          environment: data.environment,
-          bundleId: data.bundleId,
+          environment,
+          bundleId,
           ...(transaction === undefined ? {} : { transaction }),
         },
       };
@@ -266,6 +277,10 @@ function decodeOneTimeTransaction(
       ? {}
       : { inAppOwnershipType: decoded.inAppOwnershipType }),
   };
+}
+
+function readEnvironment(value: unknown): AppStoreEnvironment | undefined {
+  return value === 'Production' || value === 'Sandbox' ? value : undefined;
 }
 
 function nonEmpty(value: unknown): value is string {

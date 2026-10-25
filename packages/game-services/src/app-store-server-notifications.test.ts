@@ -280,4 +280,102 @@ function handle(
   );
 }
 
+{
+  // A family member's access ending never reverses the purchaser's grant.
+  const store = createInMemoryGameServicesStore();
+  const grant = await grantFor(store, nonConsumable);
+  const shared = await handle(
+    store,
+    verifierOf(
+      notification({
+        notificationType: 'REVOKE',
+        transaction: {
+          ...nonConsumable,
+          transactionId: '2000000000000099',
+          inAppOwnershipType: 'FAMILY_SHARED',
+        },
+      }),
+    ),
+  );
+  assert.deepEqual(shared, {
+    status: 'ignored',
+    reason: 'APP_STORE_NOTIFICATION_SHARED_ACCESS_IGNORED',
+    notificationUUID: 'uuid-refund-1',
+  });
+  assert.equal(
+    (await store.findEntitlementRevocations({ ledgerEntryIds: [grant.ledgerEntryId] })).length,
+    0,
+    'the purchaser keeps the grant',
+  );
+  const purchaserRefund = await handle(
+    store,
+    verifierOf(
+      notification({
+        notificationUUID: 'uuid-refund-purchaser',
+        transaction: { ...nonConsumable, inAppOwnershipType: 'PURCHASED' },
+      }),
+    ),
+  );
+  assert.equal(purchaserRefund.status, 'revoked', 'the purchaser’s own refund still revokes');
+}
+
+{
+  // Apple's revocationDate beyond Date's range falls back to the clock, and a
+  // store without the evidence index is scanned.
+  const indexed = createInMemoryGameServicesStore();
+  const store: GameServicesStore = {
+    recordEntitlementGrant: (input) => indexed.recordEntitlementGrant(input),
+    getEntitlementTransaction: (id) => indexed.getEntitlementTransaction(id),
+    listEntitlementTransactions: () => indexed.listEntitlementTransactions(),
+    recordEntitlementRevocation: (input) => indexed.recordEntitlementRevocation(input),
+    findEntitlementRevocations: (input) => indexed.findEntitlementRevocations(input),
+    recordLeaderboardScore: (input) => indexed.recordLeaderboardScore(input),
+    getLeaderboardTransaction: (id) => indexed.getLeaderboardTransaction(id),
+    listLeaderboardTransactions: () => indexed.listLeaderboardTransactions(),
+  };
+  const grant = await grantFor(store, consumable);
+  const outcome = await handle(
+    store,
+    verifierOf(
+      notification({
+        transaction: { ...consumable, revocationDate: 9_000_000_000_000_000 },
+      }),
+    ),
+  );
+  assert.equal(outcome.status, 'revoked', 'the grant is found without the index');
+  const [revocation] = await indexed.findEntitlementRevocations({
+    ledgerEntryIds: [grant.ledgerEntryId],
+  });
+  assert.equal(
+    revocation?.revokedAt,
+    '2026-10-24T12:00:00.000Z',
+    'an unrepresentable date uses now',
+  );
+
+  const conflictGrant = await grantFor(store, { ...consumable, transactionId: '2000000000000003' });
+  const conflict = await handle(
+    store,
+    verifierOf(
+      notification({
+        transaction: { ...consumable, transactionId: '2000000000000003' },
+      }),
+    ),
+  );
+  assert.equal(conflict.status, 'conflict', 'a notification key that reversed another grant');
+  assert.equal(appStoreServerNotificationHttpStatus(conflict), 200, 'is not retried by Apple');
+  assert.equal(
+    (await indexed.findEntitlementRevocations({ ledgerEntryIds: [conflictGrant.ledgerEntryId] }))
+      .length,
+    0,
+  );
+
+  assert.deepEqual(
+    await handle(store, verifierOf(notification()), {
+      body: { signedPayload: 'x'.repeat(256 * 1024 + 1) },
+    }),
+    { status: 'rejected', reason: 'APP_STORE_NOTIFICATION_PAYLOAD_INVALID' },
+    'an oversized signedPayload is refused before verification',
+  );
+}
+
 console.log('App Store Server Notifications handler tests passed.');
