@@ -183,9 +183,20 @@ export class LobbyScene extends Phaser.Scene {
    * also start the game.
    */
   private addDeleteAccountEntry(context: StarterContext): void {
-    // No backend yet (a run whose guest sign-in failed at boot gets one later, and the
-    // lobby's next visit shows the entry): read no session, which `once` would pin.
+    // No backend yet: read no session, which `once` would pin. A run whose guest sign-in
+    // failed at boot gets the backend after a later sign-in (`onReady`); add the entry then.
     if (context.gameServices.accountDeletion === undefined) {
+      const onReady = (context.gameServices as { readonly onReady?: (listener: () => void) => () => void })
+        .onReady;
+      if (onReady !== undefined) {
+        const stop = onReady(() => {
+          stop();
+          if (this.scene.isActive()) {
+            this.addDeleteAccountEntry(context);
+          }
+        });
+        this.events.once('shutdown', stop);
+      }
       return;
     }
     // The commerce client's session (`once`), so the entry and the request agree.

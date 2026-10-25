@@ -27,8 +27,11 @@ export const starterGuestCredentialKeys = [
  * session that can ask the identity service for one (the guest session's
  * `requestAccountDeletionConfirmation`), or `undefined` for one that cannot
  * (a development session, whose server needs none). A session the identity
- * service refused (`GUEST_SESSION_REJECTED`, or `GUEST_SESSION_NOT_READY`
- * once a refresh was refused) is `AccountDeletionError('UNAUTHORIZED')`.
+ * service refused (`GUEST_SESSION_REJECTED`, now or in an earlier refresh)
+ * is `AccountDeletionError('UNAUTHORIZED')`; a backend that cannot issue one
+ * (`GUEST_SESSION_UNSUPPORTED`) is `ACCOUNT_DELETION_NOT_CONFIGURED`. Any
+ * other failure (offline, a failed credential save) passes through, a
+ * retryable failure that says nothing about an earlier request.
  */
 export function starterAccountDeletionConfirmation(
   session: { requestAccountDeletionConfirmation?(): Promise<string> } | undefined,
@@ -40,11 +43,11 @@ export function starterAccountDeletionConfirmation(
     try {
       return await session.requestAccountDeletionConfirmation!();
     } catch (error) {
-      if (
-        error instanceof GuestSessionCoordinatorError
-        && (error.code === 'GUEST_SESSION_REJECTED' || error.code === 'GUEST_SESSION_NOT_READY')
-      ) {
+      if (error instanceof GuestSessionCoordinatorError && error.code === 'GUEST_SESSION_REJECTED') {
         throw new AccountDeletionError('UNAUTHORIZED', { cause: error });
+      }
+      if (error instanceof GuestSessionCoordinatorError && error.code === 'GUEST_SESSION_UNSUPPORTED') {
+        throw new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED', { cause: error });
       }
       throw error;
     }
@@ -186,6 +189,9 @@ export function createStarterAccountDeletion(input: {
             return { outcome: 'session-ended', signedOut: await signOut({ keepJournal: true }) };
           }
           return { outcome: 'needs-session' };
+        }
+        if (error instanceof AccountDeletionError && error.code === 'ACCOUNT_DELETION_NOT_CONFIGURED') {
+          return { outcome: 'unavailable' };
         }
         console.error('[delete-account] confirmation', error);
         return { outcome: 'failed', retryable: true };

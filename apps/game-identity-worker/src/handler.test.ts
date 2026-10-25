@@ -151,6 +151,16 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
     401,
   );
   assert.equal(keys.length, 2);
+  // Deletion confirmations are, under their own key.
+  assert.deepEqual(
+    await read(await fetch(post(
+      guestIdentityHttpRoutes.requestAccountDeletionConfirmation,
+      { refreshToken: 'x' },
+      { 'CF-Connecting-IP': '203.0.113.7' },
+    ))),
+    { status: 429, body: { error: 'RATE_LIMITED' } },
+  );
+  assert.equal(keys.at(-1), 'deletion-confirmation:203.0.113.7');
 }
 
 // A store or configuration failure is 503 UNAVAILABLE, logged by name only.

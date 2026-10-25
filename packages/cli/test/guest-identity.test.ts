@@ -459,6 +459,14 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   // Rewarded ads and restore stay off; the client exists so the action coordinator does.
   assert.equal(gated.monetizationRecovery, undefined);
   assert.equal(gated.accountDeletion, undefined);
+  let readyCalls = 0;
+  gated.onReady(() => {
+    readyCalls += 1;
+  });
+  const unsubscribed = gated.onReady(() => {
+    throw new Error('unsubscribed');
+  });
+  unsubscribed();
   assert.ok(gated.client !== undefined);
   // A refusal the action coordinator reads as a plain failure (a throw would latch it).
   assert.deepEqual(
@@ -497,11 +505,13 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.equal(activations, 1);
   assert.ok(gated.monetizationRecovery !== undefined);
   assert.equal(gated.accountDeletion, deletionFor.get('p_server'));
+  assert.equal(readyCalls, 1, 'Delete account hears the services come up');
   assert.equal(await gated.ensureSession?.(), true);
   // A background sign-in naming another player is ignored for the run.
   notify?.('p_other');
   assert.deepEqual(created, ['p_server']);
   assert.equal(activations, 1, 'activated once');
+  assert.equal(readyCalls, 1, 'ready once');
   assert.match(warnings.at(-1) ?? '', /another player/u);
 }
 

@@ -165,10 +165,12 @@ export interface GuestSessionCoordinator {
    * Asks the backend for an account deletion confirmation with the active
    * session's refresh token (queued with refreshes, so it never presents a
    * token a rotation in flight replaces). Fails with
-   * `GUEST_SESSION_NOT_READY` without an active session,
-   * `GUEST_SESSION_REJECTED` when the service refused the session for good
-   * (as `refresh` does, the coordinator then stops using it), and
-   * `GUEST_SESSION_UNSUPPORTED` when the backend cannot issue one.
+   * `GUEST_SESSION_REJECTED` when the service refused the session for good,
+   * now or in an earlier refresh (as `refresh` does, the coordinator then
+   * stops using it), `GUEST_SESSION_NOT_READY` without an active session for
+   * any other reason (not started, a failed credential save),
+   * `GUEST_SESSION_CLOSED` after logout, and `GUEST_SESSION_UNSUPPORTED`
+   * when the backend cannot issue one.
    */
   requestAccountDeletionConfirmation(): Promise<string>;
   logout(): Promise<void>;
@@ -226,6 +228,8 @@ export function createGuestSessionCoordinator(input: {
   let savedFamily: string | undefined;
   const listeners = new Set<(session: ServerGuestSessionView) => void>();
   let status: 'idle' | 'active' | 'failed' | 'closed' = 'idle';
+  /** The identity service refused the session for good (as opposed to a failed save). */
+  let rejected = false;
   let tail: Promise<void> = Promise.resolve();
   let startInFlight: Promise<ServerGuestSessionView> | undefined;
   let refreshInFlight: Promise<ServerGuestSessionView> | undefined;
@@ -272,6 +276,7 @@ export function createGuestSessionCoordinator(input: {
         if (status !== 'closed') {
           status = 'failed';
         }
+        rejected = true;
         throw new GuestSessionCoordinatorError('GUEST_SESSION_REJECTED');
       }
       // Backend exceptions can contain URLs, proofs, or tokens. The public
@@ -442,16 +447,23 @@ export function createGuestSessionCoordinator(input: {
         return { status: result.status };
       });
     },
-    requestAccountDeletionConfirmation() {
+    async requestAccountDeletionConfirmation() {
       assertOpen();
       const request = input.backend.requestAccountDeletionConfirmation?.bind(input.backend);
       if (request === undefined) {
-        return Promise.reject(new GuestSessionCoordinatorError('GUEST_SESSION_UNSUPPORTED'));
+        throw new GuestSessionCoordinatorError('GUEST_SESSION_UNSUPPORTED');
       }
       return enqueue(async () => {
         assertOpen();
+        // Refused earlier (a refresh): say so, not merely "not ready", so the
+        // caller can tell a session that ended on the server from a failed save.
+        if (rejected) {
+          throw new GuestSessionCoordinatorError('GUEST_SESSION_REJECTED');
+        }
         const active = requireCurrent();
         const grant: unknown = await fromBackend(() => request({ refreshToken: active.refreshToken }));
+        // Logged out meanwhile: no confirmation for a closed session.
+        assertOpen();
         if (!isRecord(grant) || typeof grant.confirmation !== 'string' || grant.confirmation.trim() === ''
           || typeof grant.expiresAt !== 'string' || !Number.isFinite(Date.parse(grant.expiresAt))) {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');

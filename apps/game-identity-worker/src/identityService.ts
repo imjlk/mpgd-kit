@@ -220,6 +220,32 @@ export function createGuestIdentityService(input: {
     }
   }
 
+  /**
+   * The successor `refreshToken` retries inside the grace: when it is the
+   * token the family's latest rotation replaced (`presented` is its hash),
+   * within `refreshRetryGraceMs`, and its successor is still current
+   * (unused). `undefined` otherwise. One definition for `refresh` and the
+   * deletion confirmation, so the two never accept different tokens.
+   */
+  async function graceSuccessor(
+    family: IdentitySessionFamily,
+    presented: string,
+    refreshToken: string,
+    at: number,
+  ): Promise<string | undefined> {
+    if (
+      config.refreshRetryGraceMs <= 0
+      || family.previousRefreshHash !== presented
+      || family.rotatedAt === undefined
+      || family.rotationNonce === undefined
+      || at - family.rotatedAt > config.refreshRetryGraceMs
+    ) {
+      return undefined;
+    }
+    const successor = await deriveRefreshToken(refreshToken, family.rotationNonce);
+    return await hashToken(successor) === family.currentRefreshHash ? successor : undefined;
+  }
+
   const rejected = { ok: false, error: 'GUEST_SESSION_REJECTED' } as const;
   const lostRace = () => {
     log('[identity] a refresh lost a race to newer rotations; the family is kept');
@@ -304,22 +330,14 @@ export function createGuestIdentityService(input: {
         // unused (still current) and within the grace window: the client
         // lost the answer, or an abandoned request is still running. Answer
         // the same successor again, so no answer ever invalidates another.
-        if (
-          config.refreshRetryGraceMs > 0
-          && family.previousRefreshHash === presented
-          && family.rotatedAt !== undefined
-          && family.rotationNonce !== undefined
-          && at - family.rotatedAt <= config.refreshRetryGraceMs
-        ) {
-          const successor = await deriveRefreshToken(refreshToken, family.rotationNonce);
-          if (await hashToken(successor) === family.currentRefreshHash) {
-            const { token, access } = await issueAccess(family, at);
-            if (await store.addAccessToken({ now: at, currentRefreshHash: family.currentRefreshHash, access })) {
-              return { ok: true, value: credentials(family, token, successor, access) };
-            }
-            raced = true;
-            continue;
+        const successor = await graceSuccessor(family, presented, refreshToken, at);
+        if (successor !== undefined) {
+          const { token, access } = await issueAccess(family, at);
+          if (await store.addAccessToken({ now: at, currentRefreshHash: family.currentRefreshHash, access })) {
+            return { ok: true, value: credentials(family, token, successor, access) };
           }
+          raced = true;
+          continue;
         }
         if (raced) {
           return lostRace();
@@ -364,13 +382,7 @@ export function createGuestIdentityService(input: {
       // The current token, or a retry of the replaced one (the client lost
       // the rotation's answer), exactly as `refresh` accepts them.
       const current = family.currentRefreshHash === presented
-        || (config.refreshRetryGraceMs > 0
-          && family.previousRefreshHash === presented
-          && family.rotatedAt !== undefined
-          && family.rotationNonce !== undefined
-          && at - family.rotatedAt <= config.refreshRetryGraceMs
-          && await hashToken(await deriveRefreshToken(refreshToken, family.rotationNonce))
-            === family.currentRefreshHash);
+        || await graceSuccessor(family, presented, refreshToken, at) !== undefined;
       if (!current) {
         return rejected;
       }

@@ -17,10 +17,23 @@ import type { StarterContext } from '../runtime/gameContext';
  * (`deleteAccount.ts`). Returns the disposer.
  */
 export function mountDeleteAccountButton(mount: HTMLElement, context: StarterContext): () => void {
-  // No backend (or, in a run whose guest sign-in failed at boot, none yet: the button
-  // shows from the next launch): read no session, which `once` would pin.
+  // No backend yet: read no session, which `once` would pin. A run whose guest sign-in
+  // failed at boot gets the backend after a later sign-in (`onReady`); mount then.
   if (context.gameServices.accountDeletion === undefined) {
-    return () => undefined;
+    const onReady = (context.gameServices as { readonly onReady?: (listener: () => void) => () => void })
+      .onReady;
+    if (onReady === undefined) {
+      return () => undefined;
+    }
+    let dispose = (): void => undefined;
+    const stop = onReady(() => {
+      stop();
+      dispose = mountDeleteAccountButton(mount, context);
+    });
+    return () => {
+      stop();
+      dispose();
+    };
   }
   // The commerce client's session (`once`), so the button and the request agree.
   const session = resolveStarterServerSession({ once: true });

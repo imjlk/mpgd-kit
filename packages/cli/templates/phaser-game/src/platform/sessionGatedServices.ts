@@ -40,6 +40,12 @@ export type StarterSessionGatedServices = GameServicesRuntime & {
    * when the services are up. Absent when the configuration has no client.
    */
   readonly ensureSession?: () => Promise<boolean>;
+  /**
+   * Calls `listener` once the services came up for the signed-in player
+   * (not for the services of an earlier sign-in); returns the unsubscribe.
+   * Delete account uses it to appear in a run that signed in late.
+   */
+  readonly onReady: (listener: () => void) => () => void;
 };
 
 /**
@@ -66,7 +72,7 @@ export type StarterSessionGatedServices = GameServicesRuntime & {
  *   startup recovery, with the action coordinator's). A later sign-in naming another player
  *   (not expected within one run) is ignored with a warning.
  * - `accountDeletion` is `undefined` until then, and the services' after
- *   (read live), so Delete account shows from the lobby's next visit.
+ *   (read live); `onReady` tells Delete account to appear then.
  * - `ensureSession` is present only when the configuration has a client
  *   (a disabled configuration has nothing a sign-in could bring up).
  *
@@ -89,6 +95,7 @@ export function createSessionGatedGameServices(input: {
   const warn = input.warn ?? ((message: string, error?: unknown) => console.warn(message, error ?? ''));
   let inner: GameServicesRuntime | undefined;
   let innerPlayer: string | undefined;
+  const readyListeners = new Set<() => void>();
 
   const activate = (playerId: string): void => {
     if (inner !== undefined) {
@@ -112,6 +119,14 @@ export function createSessionGatedGameServices(input: {
     } catch (error) {
       // The services are up; only the caller's follow-up failed.
       warn('[game-services] the activation callback failed', error);
+    }
+    for (const listener of [...readyListeners]) {
+      readyListeners.delete(listener);
+      try {
+        listener();
+      } catch (error) {
+        warn('[game-services] a ready listener failed', error);
+      }
     }
   };
   input.onPlayer(activate);
@@ -167,6 +182,12 @@ export function createSessionGatedGameServices(input: {
   }
 
   const services = {
+    onReady(listener: () => void) {
+      readyListeners.add(listener);
+      return () => {
+        readyListeners.delete(listener);
+      };
+    },
     ...(input.probe.reason === undefined ? {} : { reason: input.probe.reason }),
     ...(input.probe.baseUrl === undefined ? {} : { baseUrl: input.probe.baseUrl }),
     ...(input.probe.target === undefined ? {} : { target: input.probe.target }),

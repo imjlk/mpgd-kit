@@ -39,8 +39,8 @@ export interface GameIdentityWorkerEnv {
   /** New guests per installation in a rolling day (default 5). */
   readonly IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY?: string;
   /**
-   * Optional Workers Rate Limiting binding for guest issuance, keyed by the
-   * client address (`CF-Connecting-IP`). Its counts are per Cloudflare
+   * Optional Workers Rate Limiting binding for guest issuance and account
+   * deletion confirmations, keyed by the client address (`CF-Connecting-IP`). Its counts are per Cloudflare
    * location and approximate. Recommended for any deployment: the
    * installation id is client-chosen, so the per-installation limit only
    * stops a misbehaving client.
@@ -136,6 +136,7 @@ function resolveConfig(env: GameIdentityWorkerEnv): IdentityServiceConfig {
       1,
       defaultIdentityServiceConfig.maxGuestsPerInstallationPerDay,
     ),
+    // Fixed on purpose: the time between the second tap and the request, not a deployment choice.
     accountDeletionConfirmationTtlMs: defaultIdentityServiceConfig.accountDeletionConfirmationTtlMs,
   };
 }
@@ -216,10 +217,17 @@ export function createIdentityFetchHandler(
           return json({}, 200);
         case 'bindAccount':
           return answer(await service.bindAccount(body));
-        case 'requestAccountDeletionConfirmation':
+        case 'requestAccountDeletionConfirmation': {
+          // Each answer is a D1 write: the same address limiter as guest issuance.
+          const address = request.headers.get('CF-Connecting-IP');
+          if (env.IDENTITY_ISSUE_RATE_LIMITER !== undefined && address !== null
+            && !(await env.IDENTITY_ISSUE_RATE_LIMITER.limit({ key: `deletion-confirmation:${address}` })).success) {
+            return json({ error: 'RATE_LIMITED' }, 429);
+          }
           return answer(
             await service.issueAccountDeletionConfirmation({ refreshToken: body.refreshToken }),
           );
+        }
         default:
           // A route added to the shared contract that this Worker does not serve yet.
           return json({ error: 'UNKNOWN_ENDPOINT' }, 404);

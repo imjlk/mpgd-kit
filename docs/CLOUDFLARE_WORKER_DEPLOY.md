@@ -268,9 +268,10 @@ current refresh token (or, inside the retry grace, the replaced one while its
 successor is unused), lives 5 minutes, is single use, is bound to the
 player, and replaces the family's earlier one; a token the route refuses is
 `401 GUEST_SESSION_REJECTED`, without revoking anything (replays are the
-refresh route's to detect). The
-
-game-owned iOS verifier Worker binds `AppStoreAccountBinding` and calls its
+refresh route's to detect). `IDENTITY_ISSUE_RATE_LIMITER` limits the
+confirmation route per address too. Deleting a player removes its families,
+so they no longer count toward the per-installation guest limit; the address
+limiter is the control that matters there. The game-owned iOS verifier Worker binds `AppStoreAccountBinding` and calls its
 `resolveAppAccountToken({ playerId })` from the App Store verifier's
 `resolveAppAccountToken` (a `null` answer is an unknown player: throw, so the
 purchase is refused). Both values are the same digests the generated game

@@ -323,16 +323,53 @@ const pendingPurchase = {
   });
   assert.ok(confirm !== undefined);
   assert.equal(await confirm(), 'mpgd_dc_ok');
-  for (const code of ['GUEST_SESSION_REJECTED', 'GUEST_SESSION_NOT_READY'] as const) {
+  failure = new GuestSessionCoordinatorError('GUEST_SESSION_REJECTED');
+  await assert.rejects(
+    confirm(),
+    (error: unknown) =>
+      error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED' && error.requestSent,
+  );
+  failure = new GuestSessionCoordinatorError('GUEST_SESSION_UNSUPPORTED');
+  await assert.rejects(
+    confirm(),
+    (error: unknown) => error instanceof AccountDeletionError && error.code === 'ACCOUNT_DELETION_NOT_CONFIGURED',
+  );
+  // Not a refusal (a failed credential save, offline): passed through.
+  for (const code of ['GUEST_SESSION_NOT_READY', 'GUEST_SESSION_BACKEND_FAILED'] as const) {
     failure = new GuestSessionCoordinatorError(code);
-    await assert.rejects(
-      confirm(),
-      (error: unknown) =>
-        error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED' && error.requestSent,
-    );
+    await assert.rejects(confirm(), (error: unknown) => error === failure);
   }
-  failure = new GuestSessionCoordinatorError('GUEST_SESSION_BACKEND_FAILED');
-  await assert.rejects(confirm(), (error: unknown) => error === failure);
+  // In the flow: a failed save after a lost answer is a retryable failure,
+  // never the completed deletion; unsupported is unavailable.
+  resetStarterAccountDeletionForTests();
+  let attempts = 0;
+  const flow = createStarterAccountDeletion({
+    client: {
+      async deleteAccount() {
+        throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { requestSent: true });
+      },
+    },
+    storage: memoryStorage(),
+    requestConfirmation: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return 'mpgd_dc_first';
+      }
+      throw attempts === 2
+        ? new GuestSessionCoordinatorError('GUEST_SESSION_NOT_READY')
+        : new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED');
+    },
+  });
+  const quiet = console.error;
+  console.error = () => undefined;
+  try {
+    assert.deepEqual(await flow.deleteAccount(), { outcome: 'failed', retryable: true });
+    assert.deepEqual(await flow.deleteAccount(), { outcome: 'failed', retryable: true });
+    assert.deepEqual(await flow.deleteAccount(), { outcome: 'unavailable' });
+  } finally {
+    console.error = quiet;
+  }
+  resetStarterAccountDeletionForTests();
 }
 
 // The entry needs a signed-in session; a journal that cannot be cleared is reported.

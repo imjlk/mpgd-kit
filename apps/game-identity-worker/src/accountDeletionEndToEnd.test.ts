@@ -32,7 +32,8 @@ import { createMemoryIdentityStore } from './store.js';
  * Worker's AccountDeletion binding, has the identity Worker delete the
  * player, and erases the game data. Afterwards every token of the deleted
  * player is refused: the access token on both auth bindings, the refresh
- * token (the retry grace included), and the confirmation.
+ * token (the retry grace included), and the confirmation (the store
+ * conformance suite covers single use on its own).
  */
 
 const identityBase = 'https://identity.example.test';
@@ -162,6 +163,16 @@ const firstRefreshToken = player.values.get('mpgd.guest.refresh');
 clock += 16 * 60 * 1000;
 const header = await player.session.getHeaders();
 assert.notEqual(player.values.get('mpgd.guest.refresh'), firstRefreshToken);
+// Control: inside the retry grace the replaced token is still accepted (it gets a
+// confirmation, which the one asked for below replaces).
+const graceAnswer = await identityFetch(
+  new Request(`${identityBase}${guestIdentityHttpRoutes.requestAccountDeletionConfirmation}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ refreshToken: firstRefreshToken }),
+  }),
+);
+assert.equal(graceAnswer.status, 200);
 
 // The access token alone deletes nothing, and neither does another player's confirmation.
 await assert.rejects(
@@ -205,7 +216,7 @@ for (const refreshToken of [player.values.get('mpgd.guest.refresh'), firstRefres
 }
 await assert.rejects(player.coordinator.refresh(), { code: 'GUEST_SESSION_REJECTED' });
 await assert.rejects(player.session.requestAccountDeletionConfirmation?.() ?? Promise.resolve(), {
-  code: 'GUEST_SESSION_NOT_READY',
+  code: 'GUEST_SESSION_REJECTED',
 });
 assert.equal(
   await identityBindings.googlePlayAccountBinding.resolveObfuscatedAccountId({ playerId }),

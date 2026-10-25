@@ -1152,8 +1152,46 @@ function familyBackend() {
     code: 'GUEST_SESSION_REJECTED',
   });
   assert.equal(coordinator.current(), undefined);
+  // Still the refusal, not "not ready", and the backend is not asked again.
+  const asked = presented.length;
   await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_REJECTED',
+  });
+  assert.equal(presented.length, asked);
+  await coordinator.logout();
+  await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_CLOSED',
+  });
+  // A failed credential save is not a refusal: NOT_READY.
+  const failing = credentialFixture();
+  const unsaved = createGuestSessionCoordinator({
+    backend,
+    credentials: failing.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await unsaved.start();
+  failing.failNextSave();
+  await assert.rejects(unsaved.refresh(), { code: 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED' });
+  await assert.rejects(unsaved.requestAccountDeletionConfirmation(), {
     code: 'GUEST_SESSION_NOT_READY',
+  });
+  // A logout while the request runs gets no confirmation.
+  const closing = createGuestSessionCoordinator({
+    backend: {
+      ...backend,
+      async requestAccountDeletionConfirmation() {
+        void closing.logout();
+        return { confirmation: 'mpgd_dc_late', expiresAt: expires };
+      },
+    },
+    credentials: credentialFixture().credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await closing.start();
+  await assert.rejects(closing.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_CLOSED',
   });
 }
 
