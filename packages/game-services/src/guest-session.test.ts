@@ -1001,10 +1001,82 @@ function familyBackend() {
   });
   await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_REJECTED' });
   rejectRefresh = false;
-  await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_BACKEND_FAILED' });
+  // The rejected session is not tried again: no backend call until logout.
+  await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_NOT_READY' });
+  assert.equal(coordinator.current(), undefined);
   // Logout removes the dead token, so a new coordinator issues a new guest.
   await coordinator.logout();
   assert.equal(native.values.get('mpgd.guest.refresh'), undefined);
+}
+
+// A rejection mid-session (refresh, bindAccount) latches too, and an outage does not.
+{
+  const native = credentialFixture();
+  const answers: (() => Promise<ServerGuestSessionCredentials>)[] = [];
+  let refreshCalls = 0;
+  let clock = now();
+  const coordinator = createGuestSessionCoordinator({
+    backend: {
+      async issueGuest() {
+        return session('access-1', 'refresh-1');
+      },
+      async refresh() {
+        refreshCalls += 1;
+        const answer = answers.shift();
+        if (answer === undefined) {
+          throw new Error('no answer');
+        }
+        return answer();
+      },
+      async revoke() {},
+      async bindAccount() {
+        throw new GuestSessionRejectedError();
+      },
+    },
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now: () => clock,
+  });
+  const serverSession = createGuestServerSession(coordinator, { now: () => clock });
+  await coordinator.start();
+  answers.push(async () => {
+    throw new Error('outage');
+  });
+  await assert.rejects(coordinator.refresh(), { code: 'GUEST_SESSION_BACKEND_FAILED' });
+  assert.notEqual(coordinator.current(), undefined);
+  answers.push(async () => {
+    throw new GuestSessionRejectedError();
+  });
+  clock = Date.parse(expires);
+  await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_REJECTED' });
+  assert.equal(coordinator.current(), undefined);
+  // Later reads fail fast instead of sending the dead token again.
+  await assert.rejects(serverSession.getHeaders(), { code: 'GUEST_SESSION_NOT_READY' });
+  await assert.rejects(coordinator.refresh(), { code: 'GUEST_SESSION_NOT_READY' });
+  assert.equal(refreshCalls, 2);
+
+  const bound = createGuestSessionCoordinator({
+    backend: {
+      async issueGuest() {
+        return session('access-1', 'refresh-1');
+      },
+      async refresh() {
+        return session('access-2', 'refresh-2');
+      },
+      async revoke() {},
+      async bindAccount() {
+        throw new GuestSessionRejectedError();
+      },
+    },
+    credentials: credentialFixture().credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await bound.start();
+  await assert.rejects(bound.bindAccount({ externalProof: 'proof', idempotencyKey: 'bind-1' }), {
+    code: 'GUEST_SESSION_REJECTED',
+  });
+  assert.equal(bound.current(), undefined);
 }
 
 // The HTTP backend: routes, bodies, refusals, and the base URL rules.
@@ -1064,6 +1136,33 @@ function familyBackend() {
   answers.push(json({}));
   await backend.revoke({ refreshToken: 'refresh-2' });
   assert.deepEqual(requests.at(-1)?.body, { refreshToken: 'refresh-2' });
+  // A 200 that is not a JSON object never passes, so a revoke is never assumed done.
+  answers.push(() => new Response('<html>captive portal</html>', { status: 200 }));
+  await assert.rejects(backend.revoke({ refreshToken: 'refresh-2' }), /200 INVALID_BODY/u);
+  answers.push(json(null));
+  await assert.rejects(backend.issueGuest({ installationId: 'install-1' }), /200 INVALID_BODY/u);
+  // bindAccount: an outcome passes through (conflict too), a rejected token is a rejection.
+  answers.push(json({ status: 'conflict' }));
+  assert.deepEqual(
+    await backend.bindAccount({ refreshToken: 'refresh-2', externalProof: 'proof', idempotencyKey: 'bind' }),
+    { status: 'conflict' },
+  );
+  answers.push(json({ error: 'GUEST_SESSION_REJECTED' }, 401));
+  await assert.rejects(
+    backend.bindAccount({
+      refreshToken: 'refresh-2',
+      externalProof: 'proof',
+      idempotencyKey: 'bind',
+    }),
+    GuestSessionRejectedError,
+  );
+  // A fetch that followed a redirect regardless is refused.
+  answers.push(() => {
+    const response = json(session('access-x', 'refresh-x'))();
+    Object.defineProperty(response, 'redirected', { value: true });
+    return response;
+  });
+  await assert.rejects(backend.refresh({ refreshToken: 'refresh-3' }), /200 REDIRECTED/u);
   answers.push(json({ error: 'ACCOUNT_BINDING_UNSUPPORTED' }, 501));
   await assert.rejects(
     backend.bindAccount({
@@ -1091,6 +1190,14 @@ function familyBackend() {
       },
     );
   }
+  assert.throws(
+    () =>
+      createGuestSessionHttpBackend({
+        baseUrl: 'https://identity.example.test',
+        timeoutMs: 2 ** 31,
+      }),
+    { code: 'GUEST_SESSION_INVALID_INPUT' },
+  );
   assert.throws(
     () => createGuestSessionHttpBackend({ baseUrl: 'https://identity.example.test', timeoutMs: 0 }),
     {

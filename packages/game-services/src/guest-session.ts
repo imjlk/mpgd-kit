@@ -88,7 +88,10 @@ export type GuestSessionCoordinatorErrorCode =
   /**
    * The identity service refused the refresh token: revoked (logout,
    * replay), expired after inactivity, or unknown. That session cannot come
-   * back; log out (which removes the stored token) and start a new guest.
+   * back: the coordinator stops using it (`current()` is `undefined`, and
+   * `start()`, `refresh()` and `getHeaders()` fail with
+   * `GUEST_SESSION_NOT_READY` without calling the backend). Log out (which
+   * removes the stored token) and start a new coordinator for a new guest.
    */
   | 'GUEST_SESSION_REJECTED'
   | 'GUEST_SESSION_CREDENTIAL_LOAD_FAILED'
@@ -232,13 +235,17 @@ export function createGuestSessionCoordinator(input: {
     try {
       return await operation();
     } catch (error) {
+      if (error instanceof GuestSessionRejectedError) {
+        // The session can never come back: stop using it (current() is
+        // undefined, start() and getHeaders() fail fast) until logout.
+        if (status !== 'closed') {
+          status = 'failed';
+        }
+        throw new GuestSessionCoordinatorError('GUEST_SESSION_REJECTED');
+      }
       // Backend exceptions can contain URLs, proofs, or tokens. The public
       // coordinator surface intentionally exposes only a stable error code.
-      throw new GuestSessionCoordinatorError(
-        error instanceof GuestSessionRejectedError
-          ? 'GUEST_SESSION_REJECTED'
-          : 'GUEST_SESSION_BACKEND_FAILED',
-      );
+      throw new GuestSessionCoordinatorError('GUEST_SESSION_BACKEND_FAILED');
     }
   }
 
@@ -544,7 +551,7 @@ export interface GuestServerSession {
   /**
    * The `Authorization` header. An expired access token is refreshed first,
    * and a failed refresh throws its error (`GUEST_SESSION_BACKEND_FAILED`,
-   * `GUEST_SESSION_OWNERSHIP_CONFLICT`, ...). A token that expires within
+   * `GUEST_SESSION_REJECTED`, `GUEST_SESSION_OWNERSHIP_CONFLICT`, ...). A token that expires within
    * `refreshAheadMs` is answered at once while a refresh runs in the
    * background: once per token, and at most once per
    * `guestServerSessionRefreshAheadIntervalMs`, so a backend whose tokens
@@ -635,7 +642,10 @@ export function createGuestServerSession(
  * `POST` body. `issueGuest` and `refresh` answer `200` with
  * `ServerGuestSessionCredentials`; `revoke` answers `200` with `{}`, also for
  * a token it does not know (RFC 7009 section 2.2); a refusal answers
- * `{ error: GuestIdentityHttpErrorCode }`.
+ * `{ error: GuestIdentityHttpErrorCode }`. `bindAccount` answers `200` with
+ * an `AccountBindingOutcome` (a `conflict` too), or a refusal; the reference
+ * Worker binds nothing yet and answers `ACCOUNT_BINDING_UNSUPPORTED`. A
+ * refresh token any route refuses for good is `GUEST_SESSION_REJECTED`.
  */
 export const guestIdentityHttpRoutes = Object.freeze({
   issueGuest: '/identity/v1/guest',
@@ -693,7 +703,8 @@ export function createGuestSessionHttpBackend(input: {
 }): GuestSessionBackend {
   const base = parseGuestIdentityBaseUrl(input.baseUrl);
   const timeoutMs = input.timeoutMs ?? defaultGuestSessionHttpTimeoutMs;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  // setTimeout fires at once past a signed 32-bit delay.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
     throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
   }
   const fetchImpl = input.fetch ?? ((request: Request) => globalThis.fetch(request));
@@ -711,6 +722,11 @@ export function createGuestSessionHttpBackend(input: {
           signal: controller.signal,
         }),
       );
+      // A fetch that followed a redirect anyway (some polyfills ignore
+      // `manual`) answered from another origin: never trust that answer.
+      if (response.redirected) {
+        throw new GuestSessionHttpError(route, response.status, 'REDIRECTED');
+      }
       let payload: unknown;
       try {
         payload = await response.json();
@@ -723,6 +739,11 @@ export function createGuestSessionHttpBackend(input: {
           : 'UNKNOWN';
         throw new GuestSessionHttpError(route, response.status, code);
       }
+      // A 200 that is not a JSON object (a captive portal's page, a body cut
+      // off by the timeout) is a failure, so a revoke is never assumed done.
+      if (!isRecord(payload)) {
+        throw new GuestSessionHttpError(route, response.status, 'INVALID_BODY');
+      }
       return payload;
     } finally {
       clearTimeout(timer);
@@ -734,26 +755,31 @@ export function createGuestSessionHttpBackend(input: {
       return await post(guestIdentityHttpRoutes.issueGuest, { installationId }) as ServerGuestSessionCredentials;
     },
     async refresh({ refreshToken }) {
-      try {
-        return await post(guestIdentityHttpRoutes.refresh, { refreshToken }) as ServerGuestSessionCredentials;
-      } catch (error) {
-        if (error instanceof GuestSessionHttpError && error.status === 401 && error.code === 'GUEST_SESSION_REJECTED') {
-          throw new GuestSessionRejectedError();
-        }
-        throw error;
-      }
+      return await withRejection(post(guestIdentityHttpRoutes.refresh, { refreshToken })) as ServerGuestSessionCredentials;
     },
     async revoke({ refreshToken }) {
       await post(guestIdentityHttpRoutes.revoke, { refreshToken });
     },
     async bindAccount({ refreshToken, externalProof, idempotencyKey }) {
-      return await post(guestIdentityHttpRoutes.bindAccount, {
+      return await withRejection(post(guestIdentityHttpRoutes.bindAccount, {
         refreshToken,
         externalProof,
         idempotencyKey,
-      }) as AccountBindingOutcome;
+      })) as AccountBindingOutcome;
     },
   };
+}
+
+/** The service's `401 GUEST_SESSION_REJECTED` as `GuestSessionRejectedError`; other failures unchanged. */
+async function withRejection<T>(request: Promise<T>): Promise<T> {
+  try {
+    return await request;
+  } catch (error) {
+    if (error instanceof GuestSessionHttpError && error.status === 401 && error.code === 'GUEST_SESSION_REJECTED') {
+      throw new GuestSessionRejectedError();
+    }
+    throw error;
+  }
 }
 
 function parseGuestIdentityBaseUrl(value: string): URL {
