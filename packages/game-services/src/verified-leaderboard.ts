@@ -141,11 +141,20 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
   constructor(private readonly now: () => string = () => new Date().toISOString()) {}
 
   /**
-   * Account deletion: removes every attempt and board entry of the
-   * participant (the reference recorder's participant id is the player id);
-   * answers how many rows went.
+   * Account deletion (a `PlayerDataEraser` of `@mpgd/game-services`):
+   * removes every attempt and board entry whose participant id is the
+   * player id (the id the reference recorder uses). This module stays
+   * import-free, so the erasure input is typed structurally.
    */
-  eraseParticipant(participantId: string): number {
+  async erasePlayerData(input: {
+    readonly playerId: string;
+    readonly retainedPlayerId: string;
+  }): Promise<{ readonly deleted: number; readonly retained: number }> {
+    const participantId = input.playerId;
+    if (typeof participantId !== 'string' || participantId.length === 0
+      || participantId.startsWith('deleted:')) {
+      throw new Error('Player data erasure needs the player id of a player.');
+    }
     let removed = 0;
     for (const [key, stored] of [...this.attemptsById]) {
       if (stored.attempt.participantId === participantId) {
@@ -158,7 +167,7 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
         removed += 1;
       }
     }
-    return removed;
+    return { deleted: removed, retained: 0 };
   }
 
   async recordVerifiedAttempt(

@@ -37,6 +37,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./account-deletion": {
+      "types": "./dist/account-deletion.d.ts",
+      "default": "./dist/account-deletion.js"
+    },
     "./admob-client-reward": {
       "types": "./dist/admob-client-reward.d.ts",
       "default": "./dist/admob-client-reward.js"

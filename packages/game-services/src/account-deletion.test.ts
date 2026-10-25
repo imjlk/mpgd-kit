@@ -68,6 +68,18 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     grantedAt: '2026-10-21T00:00:00.000Z',
     payload: { target: 'android', platformImpressionId: 'impression-1' },
   });
+  const adRevocation = await store.recordEntitlementRevocation({
+    playerId: 'player-1',
+    revokesLedgerEntryId: (await store.findEntitlementTransactionByIdempotency({
+      source: 'ad_reward',
+      playerId: 'player-1',
+      idempotencyKey: 'rewarded-ad:android:player-1:CONTINUE_AFTER_FAIL:run-3',
+    }))?.ledgerEntryId ?? '',
+    idempotencyKey: 'support:revoke-reward',
+    reason: 'admin',
+    revokedAt: '2026-10-22T00:00:00.000Z',
+    payload: {},
+  });
   await store.recordEntitlementGrant({
     source: 'admin',
     playerId: 'player-1',
@@ -105,9 +117,21 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     playerId: 'player-1',
     retainedPlayerId: 'deleted:deletion-1',
   });
-  // Ad reward, admin grant, and the score are deleted; two purchases, the
-  // revocation, and the note are kept.
-  assert.deepEqual(result, { deleted: 3, retained: 4 });
+  // The ad reward and its revocation, the admin grant, and the score are
+  // deleted; two purchases, the refund's revocation, and the note are kept.
+  assert.deepEqual(result, { deleted: 4, retained: 4 });
+  // The ad reward's revocation went with it: replaying its key now needs a grant.
+  await assert.rejects(
+    store.recordEntitlementRevocation({
+      playerId: 'player-1',
+      revokesLedgerEntryId: adRevocation.ledgerEntryId,
+      idempotencyKey: 'support:revoke-reward',
+      reason: 'admin',
+      revokedAt: '2026-10-22T00:00:00.000Z',
+      payload: {},
+    }),
+    /unknown grant/u,
+  );
 
   const grants = await store.listEntitlementTransactions();
   assert.equal(
@@ -224,23 +248,64 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       topic: 'daily-ready',
       at: '2026-10-20T00:00:00.000Z',
     });
+    await store.putEndpoint({
+      provider: 'fcm',
+      installationId: `installation-${player}`,
+      player,
+      address: { kind: 'fcm-token', value: `token-${player}` },
+      permission: 'granted',
+      sessionId: `session-${player}`,
+      registeredAt: '2026-10-20T00:00:00.000Z',
+    } as never);
+    await store.createSend({
+      key: `send-${player}`,
+      fingerprint: 'fingerprint',
+      request: { idempotencyKey: `send-${player}`, player, topic: 'daily-ready' },
+      origin: 'server',
+      scheduled: false,
+      rows: [],
+    } as never);
+    await store.createScheduleEntry({
+      player,
+      id: 'reminder:daily',
+      dueAt: '2026-10-21T00:00:00.000Z',
+      item: { kind: 'reminder' },
+    } as never);
   }
   const before = store.inspect();
   assert.equal(before.consent.length, 2);
-  assert.equal(store.erasePlayer('player-1'), 4);
+  assert.equal(before.endpoints.length, 2);
+  assert.equal(before.sends.length, 2);
+  assert.equal(before.schedule.length, 2);
+  assert.deepEqual(
+    await store.erasePlayerData({ playerId: 'player-1', retainedPlayerId: 'deleted:deletion-1' }),
+    { deleted: 7, retained: 0 },
+  );
   const after = store.inspect();
+  assert.deepEqual(
+    after.sends.map((send) => send.request.player),
+    ['player-2'],
+  );
   for (const rows of [
     after.consent,
     after.platformRegistrations,
     after.noticesGiven,
     after.history,
+    after.endpoints,
+    after.schedule,
   ]) {
     assert.deepEqual(
       rows.map((row) => row.player),
       ['player-2'],
     );
   }
-  assert.equal(store.erasePlayer('player-1'), 0);
+  assert.deepEqual(
+    await store.erasePlayerData({ playerId: 'player-1', retainedPlayerId: 'deleted:deletion-2' }),
+    { deleted: 0, retained: 0 },
+  );
+  await assert.rejects(
+    store.erasePlayerData({ playerId: 'deleted:deletion-1', retainedPlayerId: 'deleted:x' }),
+  );
 }
 
 // --- The in-memory verified leaderboard -------------------------------------
@@ -272,13 +337,14 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     });
   }
   // Two attempts and the board entry of player-1.
-  assert.equal(leaderboard.eraseParticipant('player-1'), 3);
+  const erasure = { playerId: 'player-1', retainedPlayerId: 'deleted:deletion-1' };
+  assert.deepEqual(await leaderboard.erasePlayerData(erasure), { deleted: 3, retained: 0 });
   const snapshot = await leaderboard.getSnapshot({ leaderboardId: 'speedrun' });
   assert.deepEqual(
     snapshot?.entries.map((entry) => entry.participantId),
     ['player-2'],
   );
-  assert.equal(leaderboard.eraseParticipant('player-1'), 0);
+  assert.deepEqual(await leaderboard.erasePlayerData(erasure), { deleted: 0, retained: 0 });
 }
 
 // --- The deletion service ----------------------------------------------------
@@ -326,6 +392,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       requestedAt: '2026-10-25T00:00:00.000Z',
       completedAt: '2026-10-25T00:00:01.000Z',
       identity: 'deleted',
+      complete: true,
       deleted: 8,
       retained: 4,
     },
@@ -359,10 +426,15 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     identityFailing.deletePlayerAccount({ playerId: 'player-1' }),
     AccountDeletionError,
   );
-  await assert.rejects(
-    createAccountDeletionService({ erasers: [] }).deletePlayerAccount({ playerId: '' }),
-    AccountDeletionError,
-  );
+  for (const playerId of ['', 'deleted:deletion-1']) {
+    // A `deleted:` id names kept records of another deletion, never a player.
+    await assert.rejects(
+      createAccountDeletionService({ erasers: [], identity: null }).deletePlayerAccount({
+        playerId,
+      }),
+      (error: unknown) => error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED',
+    );
+  }
 
   // Without an identity service (local development) the audit says so; an
   // audit failure never fails a completed deletion.
@@ -374,6 +446,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   try {
     const local = createAccountDeletionService({
       erasers: [],
+      identity: null,
       audit: () => Promise.reject(new Error('audit table missing')),
       createDeletionId: () => 'deletion-2',
     });
@@ -386,6 +459,41 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   }
   assert.equal(errors.length, 1);
   assert.equal(JSON.stringify(errors).includes('player-1'), false);
+
+  // Once the identity is deleted the player cannot retry: a failing second
+  // pass is tried three times, then reported in the audit entry only.
+  let passes = 0;
+  const secondPassAudits: AccountDeletionAuditEntry[] = [];
+  const flaky = createAccountDeletionService({
+    erasers: [
+      {
+        async erasePlayerData() {
+          passes += 1;
+          if (passes > 1) {
+            throw new Error('D1_ERROR');
+          }
+          return { deleted: 1, retained: 0 };
+        },
+      },
+    ],
+    identity: { deletePlayer: async () => undefined },
+    audit: async (entry) => {
+      secondPassAudits.push(entry);
+    },
+  });
+  const secondPassErrors: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    secondPassErrors.push(args);
+  };
+  try {
+    assert.equal((await flaky.deletePlayerAccount({ playerId: 'player-1' })).status, 'deleted');
+  } finally {
+    console.error = consoleError;
+  }
+  assert.equal(passes, 4);
+  assert.equal(secondPassErrors.length, 3);
+  assert.equal(secondPassAudits[0]?.complete, false);
+  assert.equal(secondPassAudits[0]?.deleted, 1);
 }
 
 // --- The client --------------------------------------------------------------
@@ -435,6 +543,8 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   );
   await failure(404, { error: 'UNKNOWN_ENDPOINT' }, 'ACCOUNT_DELETION_NOT_CONFIGURED');
   await failure(500, { error: 'ACCOUNT_DELETION_FAILED' }, 'ACCOUNT_DELETION_FAILED');
+  await failure(429, { error: 'RATE_LIMITED' }, 'ACCOUNT_DELETION_FAILED');
+  await failure(400, { error: 'BAD_REQUEST' }, 'ACCOUNT_DELETION_REJECTED');
   await failure(200, { status: 'pending' }, 'ACCOUNT_DELETION_UNREACHABLE');
 
   const before = requests.length;

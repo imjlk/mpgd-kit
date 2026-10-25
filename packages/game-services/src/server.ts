@@ -28,6 +28,7 @@ import {
   RevocationKeyConflictError,
 } from './commerce-ledger.js';
 import {
+  assertPlayerDataErasureInput,
   createRetainedLedgerEntryId,
   detachRetainedLedgerPayload,
   type PlayerDataErasureInput,
@@ -495,7 +496,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
   }
 
   async erasePlayerData(input: PlayerDataErasureInput): Promise<PlayerDataErasureResult> {
-    const { playerId, retainedPlayerId } = input;
+    const { playerId, retainedPlayerId } = assertPlayerDataErasureInput(input);
     let deleted = 0;
     let retained = 0;
     const grants = [...this.entitlementTransactionsById.values()]
@@ -510,13 +511,15 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       }
       const ledgerEntryId = createRetainedLedgerEntryId();
       keptGrantIds.set(grant.ledgerEntryId, ledgerEntryId);
-      this.rememberEntitlementTransaction({
-        ...grant,
-        ledgerEntryId,
-        playerId: retainedPlayerId,
-        idempotencyKey: ledgerEntryId,
-        payload: detachRetainedLedgerPayload(grant.payload),
-      });
+      this.rememberEntitlementTransaction(
+        assertProductGrantTransaction({
+          ...grant,
+          ledgerEntryId,
+          playerId: retainedPlayerId,
+          idempotencyKey: ledgerEntryId,
+          payload: detachRetainedLedgerPayload(grant.payload),
+        }),
+      );
       retained += 1;
     }
     const keptRevocationIds = new Map<string, string>();

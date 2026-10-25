@@ -1,4 +1,9 @@
 import {
+  assertPlayerDataErasureInput,
+  type PlayerDataErasureInput,
+  type PlayerDataErasureResult,
+} from '../account-deletion.js';
+import {
   normalizeNotificationTimestamp,
   type NotificationConsentRecord,
   type NotificationDeferralReason,
@@ -578,13 +583,13 @@ export interface InMemoryNotificationStore extends NotificationStore {
   /** A deep copy of every row, read synchronously. */
   inspect(): InMemoryNotificationStoreState;
   /**
-   * Account deletion: removes every row of `player` (consent records,
-   * endpoints, platform registrations, notices given, sends, delivery
-   * history, and schedule entries); answers how many. Nothing is kept: no
+   * Account deletion (a `PlayerDataEraser`): removes every row of the player
+   * (consent records, endpoints, platform registrations, notices given,
+   * sends, delivery history, and schedule entries). Nothing is kept: no
    * notification data is under a legal retention period. The Worker's D1
    * deployment erases these tables in its own batch.
    */
-  erasePlayer(player: string): number;
+  erasePlayerData(input: PlayerDataErasureInput): Promise<PlayerDataErasureResult>;
 }
 
 /**
@@ -617,12 +622,20 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
     ]);
 
   return {
-    erasePlayer(player) {
+    async erasePlayerData(input) {
+      const player = assertPlayerDataErasureInput(input).playerId;
       let removed = 0;
       const keep = <Row>(rows: Row[], belongs: (row: Row) => boolean): void => {
-        const kept = rows.filter((row) => !belongs(row));
-        removed += rows.length - kept.length;
-        rows.splice(0, rows.length, ...kept);
+        let kept = 0;
+        for (const row of rows) {
+          if (belongs(row)) {
+            removed += 1;
+          } else {
+            rows[kept] = row;
+            kept += 1;
+          }
+        }
+        rows.length = kept;
       };
       keep(consent, (row) => row.player === player);
       keep(endpoints, (endpoint) => endpoint.player === player);
@@ -646,7 +659,7 @@ export function createInMemoryNotificationStore(): InMemoryNotificationStore {
           removed += 1;
         }
       }
-      return removed;
+      return { deleted: removed, retained: 0 };
     },
     inspect() {
       return copy({

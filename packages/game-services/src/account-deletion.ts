@@ -70,6 +70,13 @@ export interface AccountDeletionAuditEntry {
   readonly completedAt: string;
   /** `not-configured` only where no identity service exists (local development). */
   readonly identity: 'deleted' | 'not-configured';
+  /**
+   * `false` when the second erasure pass still failed after the identity
+   * was deleted: rows a request wrote during the first pass may remain under
+   * the deleted player's id. An operator finds them by that id's absence
+   * from the identity service; the player can no longer retry.
+   */
+  readonly complete: boolean;
   readonly deleted: number;
   readonly retained: number;
 }
@@ -78,7 +85,11 @@ export interface AccountDeletionReceipt {
   readonly status: 'deleted';
   readonly deletionId: string;
   readonly completedAt: string;
-  /** Purchase ledger rows kept, detached from the player, for the retention period. */
+  /**
+   * Purchase ledger rows (grants, the revocations reversing them, and their
+   * notes) this request kept, detached from the player, for the retention
+   * period. A retry after a partial failure counts only what it kept itself.
+   */
   readonly retainedPurchaseRecords: number;
 }
 
@@ -89,8 +100,13 @@ export type AccountDeletionErrorCode =
   | 'PLAYER_ID_MISMATCH'
   /** This server has no authentication or identity service for deletion. */
   | 'ACCOUNT_DELETION_NOT_CONFIGURED'
-  /** The server failed part way; every step is idempotent, so retrying is safe. */
+  /**
+   * The server failed before the identity was deleted (or answered 5xx/429);
+   * every step is idempotent, so retrying is safe.
+   */
   | 'ACCOUNT_DELETION_FAILED'
+  /** The server refused the request as malformed (another 4xx); retrying does not help. */
+  | 'ACCOUNT_DELETION_REJECTED'
   /** The request did not reach the server or its answer was not read. */
   | 'ACCOUNT_DELETION_UNREACHABLE';
 
@@ -113,15 +129,22 @@ export interface AccountDeletionService {
   /**
    * Erases the player's data, deletes the identity, then erases again: the
    * second pass removes what a request that was already running wrote
-   * during the first. Safe to retry after any failure.
+   * during the first. A failure before the identity is deleted rejects with
+   * a retryable `ACCOUNT_DELETION_FAILED`; once the identity is deleted the
+   * player cannot retry, so the second pass is tried three times and a
+   * failure is reported in the audit entry (`complete: false`) and the log,
+   * never to the player.
    */
   deletePlayerAccount(input: { readonly playerId: string }): Promise<AccountDeletionReceipt>;
 }
 
 export function createAccountDeletionService(input: {
   readonly erasers: readonly PlayerDataEraser[];
-  /** Required outside local development; without it sessions would survive the deletion. */
-  readonly identity?: AccountDeletionIdentity;
+  /**
+   * The identity service. `null` only for local development without one:
+   * the player's sessions then survive the deletion.
+   */
+  readonly identity: AccountDeletionIdentity | null;
   /** Records the audit entry. A failure is logged and does not fail the deletion. */
   readonly audit?: (entry: AccountDeletionAuditEntry) => Promise<void>;
   readonly now?: () => string;
@@ -141,31 +164,44 @@ export function createAccountDeletionService(input: {
   };
   return {
     async deletePlayerAccount({ playerId }) {
-      if (typeof playerId !== 'string' || playerId.length === 0) {
+      if (typeof playerId !== 'string' || playerId.length === 0 || isRetainedPlayerId(playerId)) {
+        // A `deleted:` id names kept records, never a player who can sign in.
         throw new AccountDeletionError('UNAUTHORIZED');
       }
       const deletionId = createDeletionId();
       const requestedAt = now();
       const erasure = { playerId, retainedPlayerId: `${retainedPlayerIdPrefix}${deletionId}` };
       let first: PlayerDataErasureResult;
-      let second: PlayerDataErasureResult;
       try {
         first = await eraseAll(erasure);
-        if (input.identity !== undefined) {
+        if (input.identity !== null) {
           await input.identity.deletePlayer({ playerId });
         }
-        second = await eraseAll(erasure);
       } catch (error) {
         throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: error });
+      }
+      let second: PlayerDataErasureResult | undefined;
+      for (let attempt = 0; attempt < secondPassAttempts && second === undefined; attempt += 1) {
+        try {
+          second = await eraseAll(erasure);
+        } catch (error) {
+          console.error(
+            'Account deletion second erasure pass failed:',
+            deletionId,
+            `attempt ${attempt + 1} of ${secondPassAttempts}`,
+            error instanceof Error ? error.name : 'unknown error',
+          );
+        }
       }
       const completedAt = now();
       const entry: AccountDeletionAuditEntry = {
         deletionId,
         requestedAt,
         completedAt,
-        identity: input.identity === undefined ? 'not-configured' : 'deleted',
-        deleted: first.deleted + second.deleted,
-        retained: first.retained + second.retained,
+        identity: input.identity === null ? 'not-configured' : 'deleted',
+        complete: second !== undefined,
+        deleted: first.deleted + (second?.deleted ?? 0),
+        retained: first.retained + (second?.retained ?? 0),
       };
       try {
         await input.audit?.(entry);
@@ -188,9 +224,26 @@ export function createAccountDeletionService(input: {
   };
 }
 
+const secondPassAttempts = 3;
+
 /** The player id stored on a deleted player's kept purchase records. */
 export function isRetainedPlayerId(playerId: string): boolean {
   return playerId.startsWith(retainedPlayerIdPrefix);
+}
+
+/** Refuses an erasure input whose ids could re-erase another deletion's kept records. */
+export function assertPlayerDataErasureInput(input: PlayerDataErasureInput): PlayerDataErasureInput {
+  if (
+    typeof input.playerId !== 'string'
+    || input.playerId.length === 0
+    || isRetainedPlayerId(input.playerId)
+    || typeof input.retainedPlayerId !== 'string'
+    || !isRetainedPlayerId(input.retainedPlayerId)
+    || input.retainedPlayerId.length <= retainedPlayerIdPrefix.length
+  ) {
+    throw new Error('Player data erasure needs a player id and a deleted:<id> retained player id.');
+  }
+  return input;
 }
 
 /** A fresh id for a kept ledger row; it carries nothing of the player's ids. */
@@ -286,7 +339,9 @@ export function createAccountDeletionClient(input: {
         throw new AccountDeletionError('ACCOUNT_DELETION_NOT_CONFIGURED');
       }
       throw new AccountDeletionError(
-        response.status >= 500 ? 'ACCOUNT_DELETION_FAILED' : 'ACCOUNT_DELETION_UNREACHABLE',
+        response.status >= 500 || response.status === 429
+          ? 'ACCOUNT_DELETION_FAILED'
+          : 'ACCOUNT_DELETION_REJECTED',
       );
     },
   };
