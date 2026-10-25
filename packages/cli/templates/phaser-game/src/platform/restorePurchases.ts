@@ -16,12 +16,17 @@ const accountBoundStores: ReadonlySet<string> = new Set(['app-store', 'google-pl
 /** Reconciler states of a purchase the backend ledger has granted. */
 const settledStates: ReadonlySet<string> = new Set(['granted', 'finishing', 'finished']);
 
+type RestoreRecovery = Pick<RecoverableMonetizationClient, 'restorePurchases' | 'commerceReconciler'>;
+
 export type StarterRestoreOutcome =
   /** `granted`: purchases the backend ledger granted in this pass (0 when nothing new). */
   | { readonly outcome: 'restored'; readonly granted: number }
   /** Some purchases are still unconfirmed; `granted` were confirmed in this pass. */
   | { readonly outcome: 'incomplete'; readonly granted: number }
+  /** No server session can bind the purchases (no identity service configured). */
   | { readonly outcome: 'needs-session' }
+  /** The guest sign-in failed again (offline, an outage); the control is a retry. */
+  | { readonly outcome: 'needs-connection' }
   | { readonly outcome: 'failed' }
   | { readonly outcome: 'unavailable' };
 
@@ -45,18 +50,39 @@ export interface StarterRestorePurchases {
  */
 export function createStarterRestorePurchases(input: {
   readonly gateway: Pick<PlatformGateway, 'commerce' | 'identity'>;
-  readonly monetizationRecovery?: Pick<
-    RecoverableMonetizationClient,
-    'restorePurchases' | 'commerceReconciler'
-  >;
+  /**
+   * The recovery client, or a getter for it: a run whose guest sign-in
+   * failed at boot has none until a later sign-in (`ensureSession`).
+   */
+  readonly monetizationRecovery?:
+    | RestoreRecovery
+    | (() => RestoreRecovery | undefined);
+  /**
+   * Signs in now if the run is not signed in yet (the session-gated game
+   * services' `ensureSession`); a restore then tries once more before
+   * answering `needs-connection`, which the control shows as a retry.
+   */
+  readonly ensureSession?: () => Promise<boolean>;
 }): StarterRestorePurchases {
   const commerce = input.gateway.commerce;
-  const recovery = input.monetizationRecovery;
-  const available = commerce !== undefined && recovery !== undefined;
+  const source = input.monetizationRecovery;
+  const recoveryNow = (): RestoreRecovery | undefined =>
+    typeof source === 'function' ? source() : source;
+  // Shown while the run can still sign in, so the player has a retry, never a dead control.
+  const available = commerce !== undefined && (recoveryNow() !== undefined || input.ensureSession !== undefined);
   let running: Promise<StarterRestoreOutcome> | undefined;
   const run = async (): Promise<StarterRestoreOutcome> => {
-    if (commerce === undefined || recovery === undefined) {
+    if (commerce === undefined) {
       return { outcome: 'unavailable' };
+    }
+    if (input.ensureSession !== undefined && !(await input.ensureSession())) {
+      return { outcome: 'needs-connection' };
+    }
+    const recovery = recoveryNow();
+    if (recovery === undefined) {
+      return input.ensureSession === undefined
+        ? { outcome: 'unavailable' }
+        : { outcome: 'needs-connection' };
     }
     if (accountBoundStores.has(commerce.store)
       && await resolveStarterCommercePlayerId(input.gateway) === undefined) {
@@ -132,6 +158,8 @@ export function restoreOutcomeText(locale: Locale, result: StarterRestoreOutcome
         : t(locale, 'restorePartial', { count: result.granted });
     case 'needs-session':
       return t(locale, 'restoreNeedsSession');
+    case 'needs-connection':
+      return t(locale, 'restoreNeedsConnection');
     default:
       return t(locale, 'restoreFailed');
   }

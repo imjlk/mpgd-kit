@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import {
   GuestSessionRejectedError,
+  type GameServicesRuntime,
   type GuestSessionBackend,
   type ServerGuestSessionCredentials,
 } from '@mpgd/game-services';
@@ -14,9 +15,15 @@ import {
   setStarterCommerceServerPlayer,
 } from '../templates/phaser-game/src/platform/commerceAccountBinding.js';
 import {
+  createStarterGuestSignIn,
+  starterGuestSignInRetryDelaysMs,
   starterInstallationIdKey,
   startStarterGuestIdentity,
 } from '../templates/phaser-game/src/platform/guestIdentity.js';
+import {
+  createSessionGatedGameServices,
+  StarterSessionRequiredError,
+} from '../templates/phaser-game/src/platform/sessionGatedServices.js';
 
 // The generated game's guest sign-in against an identity service (the reference
 // Worker's rotation rules, in memory; apps/game-identity-worker tests the Worker itself), and
@@ -297,6 +304,190 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   });
   assert.deepEqual(result, { status: 'failed', code: 'GUEST_SESSION_LOGOUT_UNCERTAIN' });
   assert.equal(other.values.get('mpgd.guest.refresh'), token);
+}
+
+// Launched offline: the sign-in retries in the background with backoff, at
+// once when the network returns, and on demand before a purchase or restore.
+{
+  setStarterCommerceServerPlayer(undefined);
+  let online = false;
+  const flaky: GuestSessionBackend = {
+    async issueGuest(input) {
+      if (!online) {
+        throw new Error('offline');
+      }
+      return backend.issueGuest(input);
+    },
+    async refresh(input) {
+      if (!online) {
+        throw new Error('offline');
+      }
+      return backend.refresh(input);
+    },
+    revoke: (input) => backend.revoke(input),
+    bindAccount: (input) => backend.bindAccount(input),
+  };
+  const timers: { callback: () => void; delayMs: number; cancelled: boolean }[] = [];
+  let fireOnline: (() => void) | undefined;
+  const signIn = createStarterGuestSignIn({
+    identityUrl,
+    credentials: secureStore().credentials,
+    backend: flaky,
+    warn,
+    schedule: (callback, delayMs) => {
+      const timer = { callback, delayMs, cancelled: false };
+      timers.push(timer);
+      return () => {
+        timer.cancelled = true;
+      };
+    },
+    onOnline: (callback) => {
+      fireOnline = callback;
+      return () => {
+        fireOnline = undefined;
+      };
+    },
+  });
+  assert.equal(signIn.configured, true);
+  const heard: string[] = [];
+  signIn.onSignedIn((signedIn) => heard.push(signedIn.playerId));
+  assert.equal(await signIn.ensure(), undefined);
+  // Backoff: one pending retry at a time, growing delays.
+  const fire = async () => {
+    const timer = timers.filter((entry) => !entry.cancelled).at(-1);
+    assert.ok(timer !== undefined);
+    timer.cancelled = true;
+    timer.callback();
+    await signIn.ensure();
+  };
+  await fire();
+  await fire();
+  assert.deepEqual(
+    timers.map((timer) => timer.delayMs),
+    starterGuestSignInRetryDelaysMs.slice(0, 3),
+  );
+  // The network returns: the online event signs in without waiting for the timer.
+  online = true;
+  fireOnline?.();
+  const signedIn = await signIn.ensure();
+  assert.ok(signedIn !== undefined);
+  assert.deepEqual(heard, [signedIn.playerId]);
+  assert.equal(timers.filter((timer) => !timer.cancelled).length, 0, 'no retry is left pending');
+  assert.equal(fireOnline, undefined, 'the online listener is removed');
+  assert.equal(await resolveStarterCommercePlayerId(nativeShell), signedIn.playerId);
+  // Without an identity URL nothing is tried or retried.
+  const off = createStarterGuestSignIn({
+    identityUrl: undefined,
+    credentials: secureStore().credentials,
+    warn,
+  });
+  assert.equal(off.configured, false);
+  assert.equal(await off.ensure(), undefined);
+}
+
+// The session-gated game services: up only for the server player, never the local one.
+{
+  const created: string[] = [];
+  const purchases: string[] = [];
+  const reconciles: string[] = [];
+  const runtimeFor = (playerId: string): GameServicesRuntime => ({
+    mode: 'http',
+    client: {
+      async purchase(input) {
+        purchases.push(`${playerId}:${input.productId}`);
+        return { status: 'granted' } as never;
+      },
+      async claimRewardedAd() {
+        return { status: 'granted' } as never;
+      },
+      async submitLeaderboardScore() {
+        return { submitted: true } as never;
+      },
+    },
+    monetizationRecovery: {
+      async purchase() {
+        return { status: 'granted' } as never;
+      },
+      async claimRewardedAd() {
+        return { status: 'granted' } as never;
+      },
+      async recoverRewardResult() {
+        return { status: 'granted' } as never;
+      },
+      async reconcile() {
+        reconciles.push(playerId);
+        return [];
+      },
+      async restorePurchases() {
+        return [];
+      },
+    },
+  });
+  const signedInAs: { player?: string } = {};
+  let notify: ((playerId: string) => void) | undefined;
+  const gated = createSessionGatedGameServices({
+    probe: { ...runtimeFor('session-pending'), mode: 'http' },
+    ensurePlayer: async () => signedInAs.player,
+    onPlayer: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    create: (playerId) => {
+      created.push(playerId);
+      return runtimeFor(playerId);
+    },
+    warn,
+  });
+  assert.equal(gated.mode, 'http');
+  // Rewarded ads and restore stay off; the client exists so the action coordinator does.
+  assert.equal(gated.monetizationRecovery, undefined);
+  assert.ok(gated.client !== undefined);
+  await assert.rejects(
+    gated.client.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k1' }),
+    StarterSessionRequiredError,
+  );
+  assert.equal(await gated.ensureSession(), false);
+  assert.deepEqual(created, []);
+  // A purchase after the network returned signs in first, then buys for the server player.
+  signedInAs.player = 'p_server';
+  const bought = await gated.client.purchase({
+    productId: 'REMOVE_ADS',
+    source: 'shop',
+    idempotencyKey: 'k2',
+  });
+  assert.equal(bought.status, 'granted');
+  assert.deepEqual(created, ['p_server']);
+  assert.deepEqual(purchases, ['p_server:REMOVE_ADS']);
+  assert.deepEqual(reconciles, ['p_server'], 'startup recovery runs once the player is known');
+  assert.ok(gated.monetizationRecovery !== undefined);
+  assert.equal(await gated.ensureSession(), true);
+  // A background sign-in naming another player is ignored for the run.
+  notify?.('p_other');
+  assert.deepEqual(created, ['p_server']);
+  assert.match(warnings.at(-1) ?? '', /another player/u);
+}
+
+// A background sign-in brings the services up without any call from the game.
+{
+  const created: string[] = [];
+  let notify: ((playerId: string) => void) | undefined;
+  const gated = createSessionGatedGameServices({
+    probe: { mode: 'disabled', reason: 'missing_authoritative_backend' },
+    ensurePlayer: async () => undefined,
+    onPlayer: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    create: (playerId) => {
+      created.push(playerId);
+      return { mode: 'disabled', reason: 'missing_authoritative_backend' };
+    },
+    warn,
+  });
+  assert.equal(gated.client, undefined, 'a disabled configuration has no client to gate');
+  notify?.('p_background');
+  assert.deepEqual(created, ['p_background']);
+  assert.equal(gated.reason, 'missing_authoritative_backend');
 }
 
 setStarterCommerceServerPlayer(undefined);

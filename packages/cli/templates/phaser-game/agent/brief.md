@@ -57,7 +57,10 @@ in as a server-issued guest during bootstrap, before the game services read
 the session: it keeps the refresh token in the device's Keychain or Keystore,
 calls `setStarterServerSession` with `createGuestServerSession(coordinator)`
 (whose `sessionId` is the stable session-family id), and binds StoreKit and
-Google Play purchases to the server player. Without it the native shell's
+Google Play purchases to the server player. A failed boot sign-in is retried
+in the background and before each purchase or restore; the purchase,
+restore, and notification services come up when it succeeds
+(`src/platform/sessionGatedServices.ts`). Without it the native shell's
 local player binds no purchase, and StoreKit and Play refuse with the reason.
 A game with its own identity service sets its session with
 `setStarterServerSession` (`src/platform/serverSession.ts`) before the game

@@ -57,9 +57,11 @@ export type StarterGuestIdentity =
  * past the service's window) is logged out and a new guest is issued in its
  * place: that session cannot come back, and without a linked account its
  * player cannot either. Any other failure (offline, an outage) leaves the
- * stored token alone for the next launch, and until then purchases are
- * refused with the reason (`ACCOUNT_BINDING_REQUIRED` on Google Play, a
- * StoreKit error naming the missing session).
+ * stored token alone for the next attempt (`createStarterGuestSignIn`
+ * retries), and until one succeeds purchases are refused with the reason
+ * (`ACCOUNT_BINDING_REQUIRED` on Google Play, a StoreKit error naming the
+ * missing session). One attempt: the game calls it through
+ * `createStarterGuestSignIn`.
  */
 export async function startStarterGuestIdentity(input: {
   readonly identityUrl: string | undefined;
@@ -117,7 +119,7 @@ export async function startStarterGuestIdentity(input: {
       ? error.code
       : 'GUEST_IDENTITY_FAILED';
     warn(
-      `[identity] Guest sign-in failed (${code}); purchases stay unavailable until the next launch signs in.`,
+      `[identity] Guest sign-in failed (${code}); purchases stay unavailable until a sign-in succeeds.`,
     );
     // Purchases bind to the server player or to nothing: never to the platform's local player.
     setStarterCommerceServerPlayer(() => undefined);
@@ -146,4 +148,137 @@ async function loadInstallationId(
       .join('');
   await credentials.save({ key: starterInstallationIdKey, value: installationId });
   return installationId;
+}
+
+export type StarterSignedIn = Extract<StarterGuestIdentity, { readonly status: 'signed-in' }>;
+
+/** Waits between background sign-in retries after a failure: 5 s, 15 s, 1 min, then every 5 min. */
+export const starterGuestSignInRetryDelaysMs: readonly number[] = Object.freeze([
+  5_000, 15_000, 60_000, 300_000,
+]);
+
+/**
+ * The game's guest sign-in for the whole run: the first attempt at boot, and
+ * when that fails (offline, an outage), more attempts in the background
+ * (`starterGuestSignInRetryDelaysMs`, and at once when the browser reports
+ * `online`) until one succeeds. `ensure()` also tries at once, so a purchase
+ * or restore started after the network returned signs in first. Listeners
+ * hear the first success; the signed-in session never changes after that
+ * within the run.
+ */
+export interface StarterGuestSignIn {
+  /** False without `VITE_MPGD_IDENTITY_URL` or a secure credential store: nothing is ever tried. */
+  readonly configured: boolean;
+  current(): StarterSignedIn | undefined;
+  /** The session, signing in now when there is none (joins an attempt in flight). */
+  ensure(): Promise<StarterSignedIn | undefined>;
+  /** Called once, when the first sign-in succeeds; returns the unsubscribe. */
+  onSignedIn(listener: (signedIn: StarterSignedIn) => void): () => void;
+  /** Stops the background retries. */
+  dispose(): void;
+}
+
+export function createStarterGuestSignIn(input: Parameters<typeof startStarterGuestIdentity>[0] & {
+  /** Tests inject the timer; the game passes nothing. */
+  readonly schedule?: (callback: () => void, delayMs: number) => () => void;
+  /** Subscribes to "the network is back"; defaults to the window `online` event. */
+  readonly onOnline?: (callback: () => void) => () => void;
+}): StarterGuestSignIn {
+  const identityUrl = input.identityUrl?.trim();
+  const configured = identityUrl !== undefined && identityUrl !== '' && input.credentials !== undefined;
+  const schedule = input.schedule ?? ((callback: () => void, delayMs: number) => {
+    const timer = setTimeout(callback, delayMs);
+    return () => clearTimeout(timer);
+  });
+  const listeners = new Set<(signedIn: StarterSignedIn) => void>();
+  let signedIn: StarterSignedIn | undefined;
+  let attempt: Promise<StarterSignedIn | undefined> | undefined;
+  let failures = 0;
+  let cancelRetry: (() => void) | undefined;
+  let disposed = false;
+  let stopOnline: (() => void) | undefined;
+
+  const scheduleRetry = () => {
+    if (disposed || signedIn !== undefined || cancelRetry !== undefined || !configured) {
+      return;
+    }
+    const delays = starterGuestSignInRetryDelaysMs;
+    const delay = delays[Math.min(failures - 1, delays.length - 1)] ?? delays[delays.length - 1] ?? 300_000;
+    cancelRetry = schedule(() => {
+      cancelRetry = undefined;
+      void ensure();
+    }, delay);
+  };
+
+  function ensure(): Promise<StarterSignedIn | undefined> {
+    if (signedIn !== undefined) {
+      return Promise.resolve(signedIn);
+    }
+    if (attempt !== undefined) {
+      return attempt;
+    }
+    if (!configured) {
+      // One attempt reports why (and warns, for a missing secure store); nothing to retry.
+      attempt = startStarterGuestIdentity(input).then(() => undefined);
+      return attempt;
+    }
+    cancelRetry?.();
+    cancelRetry = undefined;
+    attempt = startStarterGuestIdentity(input).then((result) => {
+      attempt = undefined;
+      if (result.status !== 'signed-in') {
+        failures += 1;
+        scheduleRetry();
+        return undefined;
+      }
+      signedIn = result;
+      stopOnline?.();
+      for (const listener of [...listeners]) {
+        try {
+          listener(result);
+        } catch (error) {
+          console.error('[identity] a sign-in listener failed', error);
+        }
+      }
+      listeners.clear();
+      return result;
+    });
+    return attempt;
+  }
+
+  if (configured) {
+    const subscribeOnline = input.onOnline ?? ((callback: () => void) => {
+      if (typeof globalThis.addEventListener !== 'function') {
+        return () => undefined;
+      }
+      globalThis.addEventListener('online', callback);
+      return () => globalThis.removeEventListener('online', callback);
+    });
+    stopOnline = subscribeOnline(() => {
+      if (!disposed && signedIn === undefined) {
+        void ensure();
+      }
+    });
+  }
+
+  return {
+    configured,
+    current: () => signedIn,
+    ensure,
+    onSignedIn(listener) {
+      if (signedIn !== undefined) {
+        return () => undefined;
+      }
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispose() {
+      disposed = true;
+      cancelRetry?.();
+      cancelRetry = undefined;
+      stopOnline?.();
+    },
+  };
 }

@@ -3179,7 +3179,21 @@ function validateTemplateGuestIdentityWiring(): void {
         'createGuestSessionHttpBackend({ baseUrl: identityUrl, timeoutMs: starterGuestIdentityTimeoutMs })',
         'setStarterCommerceServerPlayer(() => serverSession.current()?.playerId)',
         "error.code !== 'GUEST_SESSION_REJECTED'",
+        // A failed boot sign-in is retried in the background and on demand.
+        'export function createStarterGuestSignIn(',
       ],
+    ],
+    [
+      `${root}/src/platform/gameServices.ts`,
+      ['export function createStarterSessionGatedGameServices(', 'create: (playerId) => createStarterGameServices({ ...rest, playerId })'],
+    ],
+    [
+      `${root}/src/scenes/LobbyScene.ts`,
+      ['monetizationRecovery: () => services.monetizationRecovery', 'ensureSession: services.ensureSession'],
+    ],
+    [
+      'packages/cli/templates/lite-overlay/src/lite/restorePurchasesButton.ts',
+      ['monetizationRecovery: () => services.monetizationRecovery', 'ensureSession: services.ensureSession'],
     ],
     [
       `${root}/src/main.ts`,
@@ -3187,6 +3201,8 @@ function validateTemplateGuestIdentityWiring(): void {
         'identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL',
         'credentials: platform.secureCredentials',
         'setStarterServerSession(guestIdentity.serverSession)',
+        'guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession))',
+        'createStarterSessionGatedGameServices({ ...servicesInput, signIn: guestSignIn })',
         'identityLevel: guestIdentity.identityLevel',
       ],
     ],
@@ -3209,12 +3225,12 @@ function validateTemplateGuestIdentityWiring(): void {
   }
   // main.ts must start the identity before the game services read the session once.
   const main = existsSync(`${root}/src/main.ts`) ? readText(`${root}/src/main.ts`) : '';
-  const signIn = main.indexOf('startStarterGuestIdentity(');
+  const signIn = main.indexOf('createStarterGuestSignIn(');
   const setSession = main.indexOf('setStarterServerSession(guestIdentity.serverSession)');
   const services = main.indexOf('createStarterGameServices({');
   if (signIn < 0 || setSession < 0 || services < 0 || signIn > services || setSession > services) {
     failures.push(
-      `${root}/src/main.ts: startStarterGuestIdentity and setStarterServerSession must run before `
+      `${root}/src/main.ts: createStarterGuestSignIn and setStarterServerSession must run before `
         + 'createStarterGameServices.',
     );
   }

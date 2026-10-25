@@ -14,8 +14,13 @@ import type { GameActionReconciliationPort } from '@mpgd/game-runtime/actions';
 import type { PurchasePresentationEvent } from '@mpgd/game-runtime/ads';
 
 import { resolveStarterCommerceProducts } from './commerceProducts';
+import type { StarterGuestSignIn } from './guestIdentity';
 import { createStorageMonetizationOperationStore } from './monetizationJournal';
 import { resolveStarterServerSession } from './serverSession';
+import {
+  createSessionGatedGameServices,
+  type StarterSessionGatedServices,
+} from './sessionGatedServices';
 
 const productCatalog = productCatalogJson as ProductCatalog;
 
@@ -31,7 +36,23 @@ export interface StarterMonetizationPorts {
 }
 
 export type StarterBackendMode = GameServicesRuntimeMode;
-export type StarterGameServices = GameServicesRuntime;
+/**
+ * The game services the scenes read. In a run whose guest sign-in failed at
+ * boot they are session-gated (`ensureSession` present): see
+ * `sessionGatedServices.ts`.
+ */
+export type StarterGameServices = GameServicesRuntime & {
+  readonly ensureSession?: StarterSessionGatedServices['ensureSession'];
+};
+
+interface StarterGameServicesInput {
+  readonly gateway: PlatformGateway;
+  readonly playerId: string;
+  readonly configTarget: string;
+  readonly operationStore?: MonetizationOperationStore;
+  readonly analytics?: AnalyticsSink;
+  readonly analyticsSessionId?: string;
+}
 
 /**
  * Game-services runtime over the commerce v2 reconciler: every purchase is
@@ -40,15 +61,34 @@ export type StarterGameServices = GameServicesRuntime;
  * verified through the backend ledger, with the catalog's kinds and SKUs for
  * the gateway target resolved without a store read.
  */
-export function createStarterGameServices(input: {
-  readonly gateway: PlatformGateway;
-  readonly playerId: string;
-  readonly configTarget: string;
-  readonly operationStore?: MonetizationOperationStore;
-  readonly analytics?: AnalyticsSink;
-  readonly analyticsSessionId?: string;
-}): StarterGameServices {
-  const session = resolveStarterServerSession({ once: true });
+export function createStarterGameServices(input: StarterGameServicesInput): StarterGameServices {
+  return createRuntime(input, resolveStarterServerSession({ once: true }));
+}
+
+/**
+ * The game services of a run whose guest sign-in failed at boot: they come
+ * up for the server player once `signIn` succeeds (in the background, or
+ * when a purchase or restore asks again), and never for the platform's local
+ * placeholder. Set the server session (`setStarterServerSession`) in a
+ * `signIn.onSignedIn` listener registered before this, so the services read it.
+ */
+export function createStarterSessionGatedGameServices(
+  input: Omit<StarterGameServicesInput, 'playerId'> & { readonly signIn: StarterGuestSignIn },
+): StarterGameServices {
+  const { signIn, ...rest } = input;
+  return createSessionGatedGameServices({
+    // Configuration only (mode, target, whether a client exists); never sends a request.
+    probe: createRuntime({ ...rest, playerId: 'session-pending' }, undefined),
+    ensurePlayer: async () => (await signIn.ensure())?.playerId,
+    onPlayer: (listener) => signIn.onSignedIn((signedIn) => listener(signedIn.playerId)),
+    create: (playerId) => createStarterGameServices({ ...rest, playerId }),
+  });
+}
+
+function createRuntime(
+  input: StarterGameServicesInput,
+  session: ReturnType<typeof resolveStarterServerSession>,
+): GameServicesRuntime {
   return createGameServicesRuntime({
     gateway: input.gateway,
     playerId: input.playerId,

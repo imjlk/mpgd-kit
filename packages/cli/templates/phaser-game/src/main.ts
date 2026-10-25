@@ -17,8 +17,12 @@ import { t } from './i18n/messages';
 import { createClientId } from './runtime/id';
 import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
-import { createStarterGameServices, type StarterMonetizationPorts } from './platform/gameServices';
-import { startStarterGuestIdentity } from './platform/guestIdentity';
+import {
+  createStarterGameServices,
+  createStarterSessionGatedGameServices,
+  type StarterMonetizationPorts,
+} from './platform/gameServices';
+import { createStarterGuestSignIn } from './platform/guestIdentity';
 import { setStarterServerSession } from './platform/serverSession';
 import { installPlatform } from './platform/installPlatform';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
@@ -60,24 +64,31 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
         playerId: 'local-player',
         displayName: 'Local Player',
       };
+    // The server-issued guest (VITE_MPGD_IDENTITY_URL): tried at boot, and when that fails,
+    // again in the background and before any purchase or restore (`guestIdentity.ts`).
+    const guestSignIn = createStarterGuestSignIn({
+      identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL,
+      credentials: platform.secureCredentials,
+    });
     const [guestIdentity, platformSession, launchIntent] = await Promise.all([
-      // The server-issued guest (VITE_MPGD_IDENTITY_URL), before the game services read the session.
-      startStarterGuestIdentity({
-        identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL,
-        credentials: platform.secureCredentials,
-      }),
+      guestSignIn.ensure(),
       resolveIdentitySession(platform, platformPlayer.playerId),
       resolveLaunchIntent(platform),
     ]);
-    if (guestIdentity.status === 'signed-in') {
+    // Before the game services read the session: at once, or when a later attempt succeeds
+    // (notifications then come up on their next open; the session-gated services read it).
+    if (guestIdentity !== undefined) {
       setStarterServerSession(guestIdentity.serverSession);
+    } else {
+      guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession));
     }
-    // Signed in, the server player replaces the platform's (on the native shell a local
-    // placeholder) everywhere: scenes, services, and purchases see one player id.
-    const player = guestIdentity.status === 'signed-in'
+    // Signed in at boot, the server player replaces the platform's (on the native shell a local
+    // placeholder) everywhere. Signed in later, the scenes keep this run's boot player (see
+    // README, "Guest identity"); only the purchase and notification services use the server player.
+    const player = guestIdentity !== undefined
       ? { ...platformPlayer, playerId: guestIdentity.playerId }
       : platformPlayer;
-    const identitySession: IdentitySession = guestIdentity.status === 'signed-in'
+    const identitySession: IdentitySession = guestIdentity !== undefined
       ? {
           identityLevel: guestIdentity.identityLevel,
           playerId: guestIdentity.playerId,
@@ -122,15 +133,23 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       onObserverError: (error) => {
         console.error('[game-runtime]', error);
       },
-      createServices: (gateway) =>
-        createStarterGameServices({
+      createServices: (gateway) => {
+        const servicesInput = {
           gateway,
-          playerId: identitySession.playerId ?? player.playerId,
           configTarget: runtime.configTarget,
           ...(options.monetization === undefined ? {} : { operationStore: options.monetization.operationStore }),
           analytics: analyticsSink,
           analyticsSessionId,
-        }),
+        };
+        // Configured but not signed in yet: the services wait for the server player, never
+        // binding purchases or the journal to the platform's local placeholder.
+        return guestIdentity === undefined && guestSignIn.configured
+          ? createStarterSessionGatedGameServices({ ...servicesInput, signIn: guestSignIn })
+          : createStarterGameServices({
+              ...servicesInput,
+              playerId: identitySession.playerId ?? player.playerId,
+            });
+      },
     });
     gameRuntime = ownedRuntime;
     const gameServices = ownedRuntime.services;

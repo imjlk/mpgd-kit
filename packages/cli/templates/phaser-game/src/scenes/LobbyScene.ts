@@ -109,11 +109,12 @@ export class LobbyScene extends Phaser.Scene {
    * Its tap stops propagation so it does not also start the game.
    */
   private addRestorePurchasesButton(context: StarterContext): void {
+    const services = context.gameServices;
     const restore = createStarterRestorePurchases({
       gateway: context.platform,
-      ...(context.gameServices.monetizationRecovery === undefined
-        ? {}
-        : { monetizationRecovery: context.gameServices.monetizationRecovery }),
+      // Read at tap time: a run that signs in late gets its recovery client then.
+      monetizationRecovery: () => services.monetizationRecovery,
+      ...(services.ensureSession === undefined ? {} : { ensureSession: services.ensureSession }),
     });
     if (!restore.available) {
       return;

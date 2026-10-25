@@ -534,11 +534,24 @@ binding, and `setStarterServerSession` sends its access token to the
 game-services Worker, which resolves it through the identity Worker's
 bindings. A session the identity service ended (logout, a replayed refresh
 token, or 180 days without play) is replaced by a new guest; without a linked
-account that player's purchases stay with the old one. Offline at launch,
-the game runs without a server session and purchases are refused until the
-next launch signs in; that launch's game services use the platform player id,
-so a purchase journaled under the server player is recovered on the next
-signed-in launch. A native shell only reaches `https:` origins, so test on a
+account that player's purchases stay with the old one.
+
+Offline at launch, the game starts anyway and keeps trying in the background
+(after 5 s, 15 s, 1 min, then every 5 min, and at once when the device reports
+it is online). A purchase or a Restore Purchases tap signs in first; if that
+still fails, the purchase is refused before any store sheet opens
+(`StarterSessionRequiredError`) and the restore control says it could not
+reach the game server and stays tappable as a retry. The purchase, restore,
+and notification services (`src/platform/sessionGatedServices.ts`) come up
+for the server player as soon as a sign-in succeeds, and run the startup
+purchase recovery then; they are never bound to the platform's local
+placeholder, so no purchase or journal record changes owner. Rewarded ads
+stay off for such a run: an ad watched before the session exists could not
+be claimed. The scenes' `player` and `identitySession` are the boot values
+for the whole run (the platform's player when the boot sign-in failed) and
+the server player from the next launch on: key game-owned save data by
+something that does not change, such as the platform storage itself, not by
+`player.playerId`. A native shell only reaches `https:` origins, so test on a
 device or emulator through an https tunnel to a local Worker. Account linking (Sign in with Apple or Google) is not
 part of the reference Worker yet.
 
