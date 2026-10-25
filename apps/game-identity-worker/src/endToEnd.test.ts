@@ -64,14 +64,17 @@ const androidFinalizer: GameServicesPurchaseGrantFinalizerBinding = {
 };
 let gameServicesEnv: GameServicesWorkerEnv;
 const endedSessions: string[] = [];
+const endAnswers: unknown[] = [];
 const identityEnv = {
   MPGD_STORE: 'memory',
   GAME_SERVICES: {
     async endNotificationSession(input: { readonly sessionId: string }) {
       endedSessions.push(input.sessionId);
-      return asWorkerNotificationRpcResult(() =>
+      const answer = await asWorkerNotificationRpcResult(() =>
         endWorkerNotificationSession(gameServicesEnv, input),
       );
+      endAnswers.push(answer);
+      return answer;
     },
   },
 } as const;
@@ -135,7 +138,7 @@ assert.deepEqual(serverSession.current(), {
 });
 
 async function purchase(playerId: string, idempotencyKey: string): Promise<Response> {
-  const headers = await serverSession.getHeaders().catch(() => ({}));
+  const headers = await serverSession.getHeaders();
   return gameServicesFetch(
     new Request(`${gameServicesBase}/game-services/purchases/verify`, {
       method: 'POST',
@@ -153,7 +156,7 @@ async function purchase(playerId: string, idempotencyKey: string): Promise<Respo
 }
 
 async function consent(): Promise<Response> {
-  const headers = await serverSession.getHeaders().catch(() => ({}));
+  const headers = await serverSession.getHeaders();
   return gameServicesFetch(
     new Request(`${gameServicesBase}/game-services/notifications/consent`, { headers }),
   );
@@ -165,7 +168,10 @@ assert.equal(granted.status, 200, await granted.clone().text());
 assert.equal((await granted.json() as { readonly verified: boolean }).verified, true);
 assert.deepEqual(verifiedPurchases, [guest.serverUserId]);
 // The ingress binding pins the player: the native shell's local player id is refused.
-assert.equal((await purchase('android-local-player', 'e2e-purchase-2')).status, 403);
+const localPlayer = await purchase('android-local-player', 'e2e-purchase-2');
+assert.equal(localPlayer.status, 403);
+assert.equal((await localPlayer.json() as { readonly error: string }).error, 'PLAYER_ID_MISMATCH');
+assert.deepEqual(verifiedPurchases, [guest.serverUserId]);
 // The account binding the Play boundary would ask for is this player's.
 assert.equal(
   await identityBindings.googlePlayAccountBinding.resolveObfuscatedAccountId({ playerId: guest.serverUserId }),
@@ -176,9 +182,11 @@ assert.equal(
 assert.equal((await consent()).status, 200);
 
 // After the access token expires, getHeaders refreshes it and the session continues.
+const firstHeader = await serverSession.getHeaders();
 clock += 16 * 60 * 1000;
 const third = await purchase(guest.serverUserId, 'e2e-purchase-3');
 assert.equal(third.status, 200);
+assert.notDeepEqual(await serverSession.getHeaders(), firstHeader);
 assert.equal(coordinator.current()?.sessionFamilyId, guest.sessionFamilyId);
 assert.equal((await consent()).status, 200);
 
@@ -187,6 +195,8 @@ assert.equal((await consent()).status, 200);
 const lastHeader = await serverSession.getHeaders();
 await coordinator.logout();
 assert.deepEqual(endedSessions, [guest.sessionFamilyId]);
+// The game-services Worker took the end (a failure would only be logged by the identity Worker).
+assert.equal((endAnswers[0] as { readonly ok?: unknown }).ok, true);
 const afterLogout = await gameServicesFetch(
   new Request(`${gameServicesBase}/game-services/notifications/consent`, {
     headers: lastHeader,

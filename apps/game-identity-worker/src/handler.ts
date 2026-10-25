@@ -29,7 +29,11 @@ export interface GameIdentityWorkerEnv {
   readonly IDENTITY_ACCESS_TOKEN_TTL_SECONDS?: string;
   /** Days a session family lives without a refresh (default 180). */
   readonly IDENTITY_REFRESH_IDLE_DAYS?: string;
-  /** Seconds a replaced refresh token may be retried while its successor is unused (default 604800, 7 days; 0 off). */
+  /**
+   * Seconds a replaced refresh token may be retried while its successor is
+   * unused (default 604800, 7 days, but at most half the inactivity window;
+   * 0 off). An explicit value must stay below the inactivity window.
+   */
   readonly IDENTITY_REFRESH_RETRY_GRACE_SECONDS?: string;
   /** New guests per installation in a rolling day (default 5). */
   readonly IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY?: string;
@@ -155,7 +159,8 @@ const refusalStatus: Readonly<Record<IdentityRefusal | 'UNAVAILABLE', number>> =
  * The HTTP routes of `guestIdentityHttpRoutes`. Token answers carry
  * `Cache-Control: no-store` (RFC 6749 section 5.1). A refusal is
  * `{ error }`; a store or configuration failure is `503 UNAVAILABLE`, logged
- * by error name only (never a token).
+ * by error name only (never a token), and a configuration error with the
+ * setting its message names.
  */
 export function createIdentityFetchHandler(
   env: GameIdentityWorkerEnv,
@@ -214,17 +219,18 @@ export function createIdentityFetchHandler(
     } catch (error) {
       // A configuration error's message names the setting; any other error is
       // logged by name only, since a store error could quote a statement.
-      console.error(
-        '[identity] request failed:',
-        error instanceof IdentityConfigurationError
-          ? `${error.name}: ${error.message}`
-          : error instanceof Error
-            ? error.name
-            : 'unknown error',
-      );
+      console.error('[identity] request failed:', describeFailure(error));
       return json({ error: 'UNAVAILABLE' }, 503);
     }
   };
+}
+
+/** A configuration error with its message (it names the setting); anything else by name only. */
+function describeFailure(error: unknown): string {
+  if (error instanceof IdentityConfigurationError) {
+    return `${error.name}: ${error.message}`;
+  }
+  return error instanceof Error ? error.name : 'unknown error';
 }
 
 /** Loopback, `*.localhost`, and `10.0.2.2` (the Android emulator's host), as the game-services Worker reads them. */

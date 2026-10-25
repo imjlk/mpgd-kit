@@ -53,7 +53,8 @@ head_sampling_rate = 1
 # Identity: the reference guest identity Worker (apps/game-identity-worker,
 # service name "game-identity") implements GameServicesIngressAuth,
 # NotificationSessions, GooglePlayAccountBinding, and AppStoreAccountBinding
-# (for the iOS verifier Worker's resolveAppAccountToken); bind them below. See
+# (bound by the iOS verifier Worker for its resolveAppAccountToken, not here);
+# bind the others below. See
 # docs/CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker.
 #
 # Bind a private identity Worker to enable authenticated public snapshot reads.
