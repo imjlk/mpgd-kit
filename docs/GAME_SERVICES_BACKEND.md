@@ -508,6 +508,72 @@ revocation rows before the grants they reverse. The subscription `period`
 entry (`EntitlementLedgerPeriod`) is a validated shape only; nothing writes it
 until a subscription verifier exists.
 
+### Restore transfers
+
+A guest player lives in the device's secure store, so a reinstall on Android,
+a new iOS device, or a logout makes a new guest while the store keeps
+returning the old guest's non-consumables with the old account binding
+(Google Play `obfuscatedAccountId`, StoreKit `appAccountToken`). A **restore
+transfer** moves such a purchase's grant to the restoring player
+([RFC](specs/commerce/commerce-v2-rfc.md#restore-transfers); the cases per
+platform are in
+[CLOUDFLARE_WORKER_DEPLOY.md](CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-transfers)).
+
+- `createGameServicesBackend({ restoreTransfers })` sets the policy:
+  `{ mode: 'move', maxTransfersPerWindow?: 3, windowMs?: 30 days }` or
+  `{ mode: 'refuse' }`, the library default, which answers the binding
+  mismatch as before. The reference Worker moves unless
+  `GAME_SERVICES_RESTORE_TRANSFERS = "refuse"`.
+- The client asks for it: `VerifyPurchaseRequest.intent: 'restore'`. The
+  commerce reconciler sends it for every purchase it discovered from the store
+  (not one this install's journal started); a game-started checkout sends no
+  intent and keeps the binding check. The intent is a request for the
+  policy, never proof.
+- The verifier proves it: the Play boundary and the App Store verifier answer
+  `{ status: 'restorable', reason }` (an `EvidenceVerificationDecision`) for a
+  restore of a non-consumable whose every check passed except the binding
+  (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `GOOGLE_PLAY_PROFILE_MISMATCH`, including
+  a purchase made outside the app with no ids, or
+  `APP_STORE_ACCOUNT_TOKEN_MISMATCH` with the client's verified JWS present).
+  A custom verifier can answer it too; anything else stays `rejected`.
+- The backend moves it: the purchase's current grant is found by following
+  earlier moves from the grant its verification id names
+  (`findPurchaseGrantByEvidenceVerificationId`, which now answers the current
+  holder; `{ followTransfers: false }` answers the first grant). If another
+  player holds it, `GameServicesStore.recordEntitlementTransfer` appends a
+  `revoke` entry with reason `transfer` for that grant and the restoring
+  player's grant together, or neither. The new grant's evidence id names the
+  move (`createPurchaseTransferEvidenceVerificationId(purchaseId, n)`), its
+  payload names the grant it replaces (`transferredFromLedgerEntryId`) and the
+  purchase (`transferOfEvidenceVerificationId`, which finalizers such as the
+  Play acknowledge are keyed by), and the store transaction id stays on the
+  first grant. A purchase no grant holds yet is granted to the restoring
+  player (`restoredAcrossAccounts: true`). The answer is `verified` with
+  `transferred: true`, on retries too.
+- The answers that are not a move: a consumable or a game-started checkout
+  gets the verifier's reason (`rejected`); a refunded or revoked purchase
+  `LEDGER_GRANT_REVERSED`; more than `maxTransfersPerWindow` moves in the
+  window `pending` with `PURCHASE_TRANSFER_RATE_LIMITED`; a lost race with
+  another restore or a refund `pending` with `PURCHASE_TRANSFER_CONFLICT`.
+  A retry by the player who holds it answers that grant
+  (`alreadyProcessed: true`).
+- Refunds follow: `revokeEntitlementGrant` on a grant that moved reverses
+  the grant that holds the purchase now, so the Play voided-purchase sweep and
+  the App Store refund notification reach the current holder. A
+  `recordEntitlementRevocation` of a moved grant answers its transfer entry.
+- Deleted accounts: a moved grant is a fresh grant of the new player that
+  links to the record it replaces, so a deleted player's retained purchase
+  records are never revived for the deleted id; the retained record keeps
+  its content and gains the `transfer` entry.
+
+The memory store and the D1 store (migration
+`0011_entitlement_transfers.sql`, a separate table read with
+`entitlement_revocations` as one revoke list; each table's write refuses a
+grant the other already reversed) implement it; a store without
+`recordEntitlementTransfer` keeps refusing restores across players.
+Subscriptions never move (no subscription verifier yet), and the legacy
+`createAppStoreRecoveryBackend` keeps refusing.
+
 If any target-specific binding is configured, the Worker enters strict
 target-specific mode for purchase routing. Each purchase request is sent only
 to the binding matching its target. A missing match fails closed with
@@ -793,8 +859,9 @@ is configured, a server-issued guest included); without one, only an
 authenticated, non-local platform session binds. A game with its own account
 scheme replaces the module and both resolvers together. A new guest (after
 an Android reinstall, on a new device, or after a logout) does not match the
-binding of its earlier purchases, so their restore is refused until L3c
-([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-durable-purchases-launch-blocker-open-l3c)).
+binding of its earlier purchases; a restored non-consumable then moves to it
+under the backend's [restore transfer](#restore-transfers) policy
+([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-transfers)).
 
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider

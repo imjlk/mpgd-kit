@@ -561,6 +561,46 @@ read, `getPurchaseLedgerStatus({ ledgerEntryIds })`, returns whether each
 grant is active or reversed and by which entry. Entitlement reads subtract
 reversed grants.
 
+A `revoke` entry with reason `transfer` is written only by a
+[restore transfer](#restore-transfers), together with the grant that
+replaces the reversed one.
+
+### Restore transfers {#restore-transfers}
+
+A purchase is bound to the player that bought it (Google Play
+`obfuscatedAccountId`, StoreKit `appAccountToken`). A guest player lives in
+the device's secure store, so a reinstall or a new device makes a new player
+while the store keeps returning the old player's non-consumables with the old
+binding. Under the backend's `restoreTransfers: { mode: 'move' }` policy the
+store's verification of the restored purchase is the proof of ownership, and
+its grant moves to the restoring player:
+
+- **Request.** `VerifyPurchaseRequest.intent: 'restore'`. The reconciler sends
+  it for a purchase it discovered (no journal record of this install started
+  it); a game-started purchase sends none. The intent selects the policy and
+  proves nothing.
+- **Verifier.** A new decision, `{ status: 'restorable', reason, ...verified
+  fields }`: every check passed except the account binding, which names
+  another player or none; `reason` is the binding mismatch. Reference
+  verifiers answer it only for a restore of a non-consumable (the App Store one
+  only with the client's verified JWS); for everything else they reject as
+  before. Ad reward claims treat it as a verifier error.
+- **Ledger.** The purchase's current grant is the one reached from the grant
+  its verification id names by following `transfer` entries. If another player
+  holds it, one store operation (`recordEntitlementTransfer`) appends the
+  `transfer` entry for that grant and the restoring player's grant, whose
+  evidence id names the move (`mpgd-transfer:<n>:<verification id>`, `n` the
+  move's sequence number, so two concurrent moves collide) and whose payload
+  names the replaced grant and the purchase. A grant is reversed once,
+  whether by a refund or a transfer; a refund reverses the current holder.
+- **Answers.** `verified` with `transferred: true` (retries included);
+  `rejected` with the verifier's reason when the policy refuses or the product
+  is not a non-consumable; `rejected` `LEDGER_GRANT_REVERSED` for a refunded
+  purchase; `pending` `PURCHASE_TRANSFER_RATE_LIMITED` past
+  `maxTransfersPerWindow` (default 3) moves in `windowMs` (default 30 days);
+  `pending` `PURCHASE_TRANSFER_CONFLICT` for a lost race.
+- **Never moved.** Consumables and subscriptions.
+
 ## Credit wallet {#credit-wallet}
 
 D-02 frames the first recurring product as a credit-funded membership and

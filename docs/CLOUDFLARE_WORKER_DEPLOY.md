@@ -300,34 +300,70 @@ Not served by the reference Worker: `GAME_SERVICES_NOTIFICATIONS_IDENTITY`
 a guest has none), `VERIFIED_LEADERBOARD_AUTH`, and account linking. Account
 deletion is the next step (L3b).
 
-### Reinstalls and new devices: durable purchases (launch blocker, open: L3c)
+### Reinstalls and new devices: restore transfers
 
 A guest is its refresh token in the device's secure store. When that store
 is gone, the next launch is a **new guest**, and every store purchase the old
 guest made still names the old one: Google Play returns it with the old
-`obfuscatedAccountId`, StoreKit with the old `appAccountToken`. A restored
-non-consumable (the template catalog's `REMOVE_ADS`) is then refused, so the
-player who paid cannot get it back:
+`obfuscatedAccountId`, StoreKit with the old `appAccountToken`.
 
-| Case | Secure store after it | Restore of a non-consumable |
+| Case | Secure store after it | Restore of a non-consumable (`GAME_SERVICES_RESTORE_TRANSFERS` default) |
 |---|---|---|
-| Android: uninstall and reinstall, "Clear storage", or a new device | Gone. The Keystore key and the encrypted file in `getNoBackupFilesDir()` are app-specific storage, which Android removes on uninstall ([app-specific storage](https://developer.android.com/training/data-storage/app-specific)), and that directory is always excluded from Auto Backup, so no restore brings it back ([Auto Backup](https://developer.android.com/identity/data/autobackup)) | Refused: `GOOGLE_PLAY_ACCOUNT_MISMATCH` |
+| Android: uninstall and reinstall, "Clear storage", or a new device | Gone. The Keystore key and the encrypted file in `getNoBackupFilesDir()` are app-specific storage, which Android removes on uninstall ([app-specific storage](https://developer.android.com/training/data-storage/app-specific)), and that directory is always excluded from Auto Backup, so no restore brings it back ([Auto Backup](https://developer.android.com/identity/data/autobackup)) | Moved to the new guest (Play still returns the old `obfuscatedAccountId`) |
 | iOS: delete and reinstall on the same device | Usually kept. Keychain items have historically survived app deletion, but Apple does not document it, and its developer technical support calls it an implementation detail apps should not depend on ([Apple Developer Forums](https://developer.apple.com/forums/thread/36442)). The accessibility class does not change this | Works while the item survives (same guest) |
-| iOS: new device (a backup of another device, Quick Start), or an erased device set up as new | Gone (a device restored from its own backup may get it back). The kit stores the token with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable (`SecureCredentialStorage.swift`), and "Items with this attribute do not migrate to a new device" ([Apple](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly)) | Refused: `APP_STORE_ACCOUNT_TOKEN_MISMATCH`, or `APP_STORE_RECOVERY_IDENTITY_MISMATCH` where App Store recovery finds the grant under the old player |
-| Any platform: logout, or `IDENTITY_REFRESH_IDLE_DAYS` (180 by default) without a refresh | The old family is ended | Refused, as above |
+| iOS: new device (a backup of another device, Quick Start), or an erased device set up as new | Gone (a device restored from its own backup may get it back). The kit stores the token with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable (`SecureCredentialStorage.swift`), and "Items with this attribute do not migrate to a new device" ([Apple](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly)) | Moved to the new guest (StoreKit still returns the old `appAccountToken`) |
+| Any platform: logout, or `IDENTITY_REFRESH_IDLE_DAYS` (180 by default) without a refresh | The old family is ended | Moved, as above |
 
-Consumables are not affected once granted (there is nothing to restore), and
-grants already on the ledger stay with the old player id. No server path
-moves them today: the Play and App Store verifiers refuse a purchase whose
-account binding names another player (the codes above), App Store recovery
-refuses a restore whose ledger grant belongs to another player
-(`APP_STORE_RECOVERY_IDENTITY_MISMATCH`), and a settled lookup refuses one
-(`LEDGER_GRANT_IDENTITY_MISMATCH`).
+The reference Worker moves a restored non-consumable (the template
+catalog's `REMOVE_ADS`) to the new guest: a **restore transfer**
+([GAME_SERVICES_BACKEND.md](GAME_SERVICES_BACKEND.md#restore-transfers),
+[RFC](specs/commerce/commerce-v2-rfc.md#restore-transfers)). Apple's App
+Review Guideline 3.1.1 asks for "a restore mechanism for any restorable
+in-app purchases"
+([App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/#in-app-purchase)),
+StoreKit hands a reinstall or a new device "all transactions ... upon initial
+launch" ([`AppStore.sync()`](https://developer.apple.com/documentation/storekit/appstore/sync())),
+and Google's billing guide expects a player who buys on one device to see the
+item after they "switch devices"
+([Integrate the Google Play Billing Library](https://developer.android.com/google/play/billing/integrate)).
 
-This blocks a launch that sells non-consumables. The follow-up L3c will move
-a verified non-consumable entitlement to the current guest on restore; until
-it lands, do not sell non-consumables, or say plainly in the store copy that
-a reinstall on Android, a new device, or a logout loses them.
+- **What moves.** A purchase the client sends with `intent: 'restore'` (the
+  reconciler does for every purchase the store reported without this install
+  starting it) of a **non-consumable**, which the store verified exactly as a
+  new purchase (purchased, not refunded or revoked, right product and app)
+  except that its account binding names another player or none. The old
+  player's grant is reversed by a `transfer` entry and the new player's grant
+  written in the same ledger operation (one D1 batch), so one player holds the
+  purchase at a time; a refund that arrives later reverses whichever grant
+  holds it then. On the App Store the client's StoreKit-verified JWS is
+  required: a transaction id alone never moves a purchase.
+- **Abuse limits.** At most three moves of one purchase in 30 days; a restore
+  past that answers `pending` (`PURCHASE_TRANSFER_RATE_LIMITED`) and the
+  client's reconciler retries it later. Two guests racing for one purchase:
+  one wins, the other answers `pending` (`PURCHASE_TRANSFER_CONFLICT`) and
+  moves it on its next pass. A purchase the store or the ledger reports
+  refunded or revoked never moves. The ledger keeps every move (player ids and
+  the store's verification id, no other personal data).
+- **What does not move.** Consumables (there is nothing to restore once
+  granted) and subscriptions (no subscription verifier yet). A checkout this
+  client started (`intent` absent or `purchase`) keeps the binding check, so
+  a purchase sheet never takes another player's grant. The legacy App Store
+  recovery backend (`createAppStoreRecoveryBackend`) keeps refusing
+  (`APP_STORE_RECOVERY_IDENTITY_MISMATCH`); the commerce v2 verify path is the
+  one that moves.
+- **Deleted accounts.** A deleted player's retained purchase records are never
+  revived for that id (its identity is gone). A new guest who restores the
+  purchase gets a fresh grant that names the retained record it replaces; the
+  retained record stays as the law keeps it, with the `transfer` entry
+  appended.
+
+Apply `0011_entitlement_transfers.sql` before deploying a Worker version
+with transfers: the D1 store reads and guards both revoke tables, so without
+the table every ledger status read and refund fails. Set
+`GAME_SERVICES_RESTORE_TRANSFERS = "refuse"` to keep refusing restores across
+guests (`GOOGLE_PLAY_ACCOUNT_MISMATCH`, `APP_STORE_ACCOUNT_TOKEN_MISMATCH`);
+then do not sell non-consumables, or say in the store copy that a reinstall on
+Android, a new device, or a logout loses them.
 
 ## Authenticated Snapshot Reads
 
@@ -775,6 +811,9 @@ order id, to be revoked by hand.
   cursors) before deploying a Worker version that has them: without the
   table, the purchase path's outbox write fails (logged, the purchase is
   unaffected) and that purchase gets no server-side acknowledge retry.
+- Apply `0011_entitlement_transfers.sql` (restore transfers) before deploying
+  a Worker version that has them: the D1 store reads the transfer table with
+  every revoke list, so ledger status reads and refunds fail without it.
 - The Worker verifies sample product/ad evidence by default. Real Google Play,
   App Store, and Apps in Toss verification adapters are described in
   [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md). AdMob

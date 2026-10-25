@@ -194,17 +194,21 @@ production` prints what it lacks and fails on contradictions
       and set `VITE_MPGD_IDENTITY_URL` in the game's production build
       ([Guest Identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)).
       A guest who logs out, or stays away longer than the inactivity window
-      (`IDENTITY_REFRESH_IDLE_DAYS`, 180 by default), comes back as a new player without the old purchases until
-      account linking exists; say so in the game's support copy.
-- [ ] **Launch blocker while the game sells non-consumables (open: L3c):**
-      a reinstall on Android, a new device, or a logout makes a new guest,
-      and the store then returns the purchase bound to the old one
-      (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `APP_STORE_ACCOUNT_TOKEN_MISMATCH`),
-      so Restore Purchases cannot give `REMOVE_ADS` back. An iOS reinstall on
-      the same device usually keeps the guest (Keychain items survive app
-      deletion, though Apple does not promise it). L3c moves a verified
-      non-consumable to the current guest on restore
-      ([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-durable-purchases-launch-blocker-open-l3c)).
+      (`IDENTITY_REFRESH_IDLE_DAYS`, 180 by default), comes back as a new player: restored non-consumables follow it (below),
+      consumables and progress do not until account linking exists; say so in
+      the game's support copy.
+- [ ] Before selling non-consumables, apply D1 migration
+      `0011_entitlement_transfers.sql` and keep restore transfers on (the
+      reference Worker's default): a reinstall on Android, a new device, or a
+      logout makes a new guest, the store returns the purchase bound to the
+      old one, and a verified restore moves `REMOVE_ADS` to the new guest (at
+      most three moves per purchase in 30 days). Consumables and
+      subscriptions never move; say in the support copy that consumables and
+      progress stay with the old guest until account linking exists
+      ([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-transfers)).
+      With `GAME_SERVICES_RESTORE_TRANSFERS = "refuse"` the restore is refused
+      (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `APP_STORE_ACCOUNT_TOKEN_MISMATCH`):
+      then do not sell non-consumables.
 - [ ] In-app account deletion and a web deletion URL. Play requires both for
       apps that create accounts
       ([Play account deletion](https://support.google.com/googleplay/android-developer/answer/13327111));
