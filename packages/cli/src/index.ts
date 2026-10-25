@@ -3654,9 +3654,19 @@ function applyLiteTemplateOverlay(
     if (file.relativePath === 'mpgd.targets.json') {
       return [{ ...file, content: liteTemplateTargets(file.content) }];
     }
+    if (file.relativePath === 'mpgd.game.json') {
+      return [{ ...file, content: liteTemplateGameConfig(file.content) }];
+    }
     return [file];
   });
   return [...merged, ...overlay.values()];
+}
+
+/** The lite tap game is orientation-agnostic; the Phaser template's landscape lock does not apply. */
+function liteTemplateGameConfig(content: string): string {
+  const config = JSON.parse(content) as { native?: Record<string, unknown> };
+  config.native = { ...config.native, orientation: 'any' };
+  return `${JSON.stringify(config, null, 2)}\n`;
 }
 
 function liteTemplateTargets(content: string): string {
