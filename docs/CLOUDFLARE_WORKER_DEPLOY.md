@@ -360,7 +360,7 @@ item after they "switch devices"
   it does not take the purchase back until the app is reinstalled (a new
   guest). Account linking (one player across devices) removes this; until
   then, say so in the support copy.
-- **Deleted accounts.** A deleted player's retained purchase records are never
+- **Deleted accounts** (with account deletion, L3b). A deleted player's retained purchase records are never
   revived for that id (its identity is gone). A new guest who restores the
   purchase gets a fresh grant that names the retained record it replaces; the
   retained record stays as the law keeps it, with the `transfer` entry

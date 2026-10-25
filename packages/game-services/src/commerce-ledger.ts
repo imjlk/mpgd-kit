@@ -137,7 +137,13 @@ export type RevokeEntitlementGrantResult =
   /** The notification key already reversed another grant. */
   | { readonly status: 'key_conflict' }
   /** The notification's authority identity already reversed another grant. */
-  | { readonly status: 'evidence_already_processed' };
+  | { readonly status: 'evidence_already_processed' }
+  /**
+   * An admin entry for a grant a restore transfer moved: nothing was
+   * reversed; `holderLedgerEntryId` holds the purchase now (RFC "Restore
+   * transfers"). Store events follow the move instead.
+   */
+  | { readonly status: 'grant_transferred'; readonly holderLedgerEntryId: string };
 
 /**
  * Appends a `revoke` entry for an earlier grant: the write path of store
@@ -178,11 +184,15 @@ async function revokeEntitlementGrantAt(
   }
   try {
     const result = await store.recordEntitlementRevocation(revocation);
-    if (result.alreadyProcessed && grant.source === 'purchase' && revocation.reason !== 'admin') {
+    if (result.alreadyProcessed && grant.source === 'purchase') {
       // The grant moved to another player (a restore transfer) before this
       // store event: the event is about the purchase, so it reverses the
-      // grant that holds it now. An admin entry names its grant and stays on it.
+      // grant that holds it now. An admin entry names its grant: it is told
+      // the grant moved, and reverses nothing.
       const holder = await resolvePurchaseGrantHolder(store, grant);
+      if (holder.grant.ledgerEntryId !== grant.ledgerEntryId && revocation.reason === 'admin') {
+        return { status: 'grant_transferred', holderLedgerEntryId: holder.grant.ledgerEntryId };
+      }
       if (holder.grant.ledgerEntryId !== grant.ledgerEntryId && depth < maxPurchaseTransferChain) {
         return revokeEntitlementGrantAt(
           store,

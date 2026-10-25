@@ -289,9 +289,10 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   });
 }
 
-// A player whose grant a later restore moved away gets it back with the same key
-// (the reconciler derives one key per store purchase), and an admin entry stays
-// on the grant it names.
+// A resend under the key of a grant a later restore moved away (the losing
+// device's journal record) answers that grant as reversed, so two devices of
+// one store account cannot move it back and forth; a new journal record (a new
+// key) of the same player takes it back. An admin entry stays on its grant.
 {
   const store = createInMemoryGameServicesStore();
   const clock = createClock();
@@ -306,39 +307,39 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }));
   const toB = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
   clock.advance(1000);
-  assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-c'))).transferred,
-    true,
-  );
+  const toC = await backend.purchases.verifyPurchase(restoreRequest('player-c'));
+  assert.equal(toC.transferred, true);
   clock.advance(1000);
-  const backToB = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-b')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'rejected',
+    reason: 'LEDGER_GRANT_REVERSED',
+  });
+  assert.equal(
+    (await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId))?.playerId,
+    'player-c',
+  );
+  const backToB = await backend.purchases.verifyPurchase(
+    restoreRequest('player-b', { idempotencyKey: 'player-b-new-journal' }),
+  );
   assert.equal(backToB.verified, true);
   assert.equal(backToB.transferred, true);
   assert.notEqual(backToB.ledgerEntryId, toB.ledgerEntryId);
-  const holder = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId);
-  assert.equal(holder?.playerId, 'player-b');
-  assert.equal(holder?.idempotencyKey, 'play-token-sha256:player-b#transfer:3');
-  // The same key again answers the grant it holds now.
-  const again = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
-  assert.equal(again.alreadyProcessed, true);
-  assert.equal(again.ledgerEntryId, backToB.ledgerEntryId);
-  // A replay of the same key as a purchase (no restore intent) still answers the reversed grant.
-  assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-b', { intent: 'purchase' }))).reason,
-    'LEDGER_GRANT_REVERSED',
-  );
 
-  // An operator's admin entry on a moved grant does not follow the move.
+  // An operator's admin entry on a moved grant reverses nothing and says where it went.
   const admin = await revokeEntitlementGrant(store, {
-    playerId: 'player-b',
-    revokesLedgerEntryId: toB.ledgerEntryId ?? '',
+    playerId: 'player-c',
+    revokesLedgerEntryId: toC.ledgerEntryId ?? '',
     idempotencyKey: 'admin:1',
     reason: 'admin',
     revokedAt: clock.now(),
     payload: {},
   });
-  assert.equal(admin.status, 'revoked');
-  assert.equal(admin.status === 'revoked' ? admin.alreadyProcessed : false, true);
+  assert.deepEqual(admin, {
+    status: 'grant_transferred',
+    holderLedgerEntryId: backToB.ledgerEntryId,
+  });
   assert.deepEqual(
     (await listActiveEntitlementTransactions(store)).map((grant) => grant.ledgerEntryId),
     [backToB.ledgerEntryId],
@@ -387,11 +388,22 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   const retried = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
   assert.equal(retried.alreadyProcessed, true);
   assert.equal(retried.transferred, true, 'a retry still says the purchase was restored here');
-  // The buyer's later verify answers that the purchase is held by another player.
+  assert.equal(grant?.payload.platformTransactionId, 'GPA.1234');
+  // The buyer's later checkout answers that another player holds the purchase;
+  // the buyer's restore (binding matches) moves it back.
   const buyer = await backend.purchases.verifyPurchase(
     restoreRequest('player-a', { intent: 'purchase' }),
   );
   assert.equal(buyer.reason, 'EVIDENCE_ALREADY_PROCESSED');
+  const buyerRestore = await backend.purchases.verifyPurchase(
+    restoreRequest('player-a', { idempotencyKey: 'player-a-restore' }),
+  );
+  assert.equal(buyerRestore.verified, true);
+  assert.equal(buyerRestore.transferred, true);
+  assert.equal(
+    (await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId))?.playerId,
+    'player-a',
+  );
 }
 
 // Rate limit: at most N moves per purchase in the window; later restores wait for it.

@@ -1219,18 +1219,13 @@ async function verifyPurchaseForRetry(
     });
   };
   const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
-  // A restore whose key names this player's earlier grant of a purchase a
-  // later restore moved to another player is not a replay of that grant: it
-  // is verified again and may move the purchase back (RFC "Restore
-  // transfers"). Every other match answers the recorded grant.
-  const movedAwayRetry = existing !== undefined
-    && request.intent === 'restore'
-    && matchesEntitlementRetry(existing, retryIdentity)
-    && context.catalog.products.find((entry) => entry.id === request.productId)?.type
-      === 'non_consumable'
-    && await isPurchaseTransferredAway(context.store, existing);
 
-  if (existing !== undefined && !movedAwayRetry) {
+  // A key names one grant: a resend under the key of a grant a later
+  // restore moved away (the losing device's journal record still in flight)
+  // answers that grant as reversed. Taking the purchase back under it would
+  // let two devices of one store account move it back and forth until the
+  // rate limit locks both; a new install restores under a new player.
+  if (existing !== undefined) {
     return completeExistingRetry(existing);
   }
 
@@ -1280,9 +1275,8 @@ async function verifyPurchaseForRetry(
     ? routedEntry.entry.store
     : resolveCommerceStoreId(request);
 
-  if (verification.status === 'restorable' || (verification.status === 'verified' && movedAwayRetry)) {
-    // A verified restore of a purchase the store binds to another player, or
-    // this player's own purchase whose grant a restore moved away.
+  if (verification.status === 'restorable') {
+    // A verified restore of a purchase the store binds to another player.
     return transferRestoredPurchase(
       request,
       {
@@ -1294,9 +1288,7 @@ async function verifyPurchaseForRetry(
           verified: false,
           alreadyProcessed: false,
           disposition: 'rejected',
-          reason: verification.status === 'restorable'
-            ? verification.reason
-            : 'LEDGER_GRANT_REVERSED',
+          reason: verification.reason,
         }),
       },
       context,
@@ -1358,10 +1350,14 @@ async function verifyPurchaseForRetry(
       existingEvidence !== undefined
       && request.intent === 'restore'
       && product.type === 'non_consumable'
-      && await isPurchaseTransferredAway(context.store, existingEvidence)
+      && (
+        await isPurchaseTransferredAway(context.store, existingEvidence)
+        || (existingEvidence.playerId !== request.playerId && isPurchaseTransferGrant(existingEvidence))
+      )
     ) {
       // The store binds the purchase to this player, but a restore moved its
-      // grant to another one: restoring it here moves it back.
+      // grant to another one (or granted it to another one first, before
+      // this player's grant reached the ledger): restoring it here moves it back.
       return transferRestoredPurchase(
         request,
         {
@@ -1612,6 +1608,10 @@ async function transferRestoredPurchase(
     }),
   });
   const payload = createPurchaseGrantPayload(request, input);
+  const platformTransactionId = resolvePlatformEvidenceId(
+    verification,
+    request.platformTransactionId,
+  );
   const outcome = await withEntitlementEvidenceLocks(
     store,
     [createEntitlementEvidenceKey({
@@ -1643,7 +1643,13 @@ async function transferRestoredPurchase(
           grantedAt: context.now(),
           grant: product.grant,
           evidenceVerificationId: purchaseVerificationId,
-          payload: { ...payload, restoredAcrossAccounts: true },
+          // The first grant of the purchase keeps its platform evidence; only
+          // a move (a later grant) leaves it to the grant it replaces.
+          payload: {
+            ...payload,
+            ...(platformTransactionId === undefined ? {} : { platformTransactionId }),
+            restoredAcrossAccounts: true,
+          },
         });
         return recorded.status === 'recorded'
           ? {
@@ -2206,7 +2212,7 @@ type VerifiedEvidenceDecision = Extract<
  * replacing it (`undefined`), and nothing at all when the verifier suppresses it (`null`).
  */
 function resolvePlatformEvidenceId(
-  verification: VerifiedEvidenceDecision,
+  verification: PurchaseEvidenceDecision | VerifiedEvidenceDecision,
   clientPlatformEvidenceId: string | undefined,
 ): string | undefined {
   if (verification.platformEvidenceId === null) {

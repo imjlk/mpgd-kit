@@ -556,12 +556,16 @@ platform are in
   window `pending` with `PURCHASE_TRANSFER_RATE_LIMITED`; a lost race with
   another restore or a refund `pending` with `PURCHASE_TRANSFER_CONFLICT`.
   A retry by the player who holds it answers that grant
-  (`alreadyProcessed: true`).
+  (`alreadyProcessed: true`); a resend under the key of a grant a later
+  restore moved away answers `LEDGER_GRANT_REVERSED`, so two devices of one
+  store account do not move it back and forth.
 - Refunds follow: `revokeEntitlementGrant` on a grant that moved reverses
   the grant that holds the purchase now, so the Play voided-purchase sweep and
-  the App Store refund notification reach the current holder. A
+  the App Store refund notification reach the current holder. An `admin`
+  revocation of a moved grant reverses nothing and answers
+  `{ status: 'grant_transferred', holderLedgerEntryId }`. A
   `recordEntitlementRevocation` of a moved grant answers its transfer entry.
-- Deleted accounts: a moved grant is a fresh grant of the new player that
+- Deleted accounts (with account deletion, L3b): a moved grant is a fresh grant of the new player that
   links to the record it replaces, so a deleted player's retained purchase
   records are never revived for the deleted id; the retained record keeps
   its content and gains the `transfer` entry.
