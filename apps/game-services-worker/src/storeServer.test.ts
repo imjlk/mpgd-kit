@@ -5,6 +5,7 @@ import {
   createAppStoreVerificationId,
   createGameServicesBackend,
   createGooglePlayProductPurchaseBoundary,
+  createGooglePlayProductVerificationId,
   findEntitlementRevocationsChunked,
   googlePlayProductPurchaseEvidenceSchema,
   type AppStoreServerNotification,
@@ -106,8 +107,16 @@ try {
         body,
       }),
     );
-    const payload = JSON.stringify({ signedPayload: 'signed-payload' });
+    const payload = JSON.stringify({ signedPayload: 'header.payload.signature' });
 
+    const callsBefore = seen.length;
+    assert.equal(
+      (await post(appStoreNotificationPaths.Production, JSON.stringify({ signedPayload: 'not-a-jws' })))
+        .status,
+      400,
+      'a payload that is not a compact JWS is refused',
+    );
+    assert.equal(seen.length, callsBefore, 'before the verifier binding runs');
     const refunded = await post(appStoreNotificationPaths.Production, payload);
     assert.equal(refunded.status, 200, 'a verified refund is answered 200');
     assert.equal((await refunded.json() as { status: string }).status, 'revoked');
@@ -201,6 +210,7 @@ try {
         },
       },
       outbox,
+      'com.example.game',
       () => 1_000_000,
     );
     const input = {
@@ -223,7 +233,10 @@ try {
         platformProductIds: { android: 'coins_100' },
       },
       platformProductId: 'coins_100',
-      evidenceVerificationId: 'google-play:product:outbox',
+      evidenceVerificationId: await createGooglePlayProductVerificationId(
+        'com.example.game',
+        'outbox-token',
+      ),
       ledgerEntryId: ledgerGrant.ledgerEntryId,
       alreadyProcessed: false,
       signal: new AbortController().signal,
@@ -242,6 +255,29 @@ try {
     const [afterError] = await outbox.due({ nowMs: 99_999_999, limit: 10 });
     assert.equal(afterError?.attempts, 2, 'a thrown finalizer is deferred and rethrown');
     assert.equal(afterError?.nextAttemptAtMs, 1_000_000 + 300_000, 'the second retry backs off');
+
+    const otherGrant = await store.recordEntitlementGrant({
+      source: 'purchase',
+      playerId: 'outbox-player',
+      grantId: 'COINS_100',
+      idempotencyKey: 'outbox-replay',
+      grantedAt: '2026-10-24T00:00:00.000Z',
+      payload: { target: 'android' },
+    });
+    await wrapped.finalizePurchaseGrant({
+      ...input,
+      ledgerEntryId: otherGrant.ledgerEntryId,
+      request: {
+        ...input.request,
+        evidence: { ...input.request.evidence, payload: { purchaseToken: 'bogus-token' } },
+      },
+    }).catch(() => undefined);
+    assert.equal(
+      (await outbox.due({ nowMs: 99_999_999, limit: 10 }))
+        .some((row) => row.ledgerEntryId === otherGrant.ledgerEntryId),
+      false,
+      'a token that is not the grant\u2019s own is never kept',
+    );
 
     next = { status: 'completed', action: 'consume', alreadyCompleted: false };
     await wrapped.finalizePurchaseGrant(input);
@@ -299,7 +335,7 @@ try {
         verifyAdReward: async () => ({ status: 'rejected', reason: 'unsupported' }),
       },
       // The Worker composition: the boundary behind the D1 outbox.
-      purchaseGrantFinalizer: withGooglePlayFinalizationOutbox(boundary, outbox),
+      purchaseGrantFinalizer: withGooglePlayFinalizationOutbox(boundary, outbox, packageName),
     });
     const verified = await backend.purchases.verifyPurchase({
       target: 'android',
@@ -524,6 +560,103 @@ try {
         true,
         'an invalid stored slice is clamped, never a zero-length loop',
       );
+    }
+
+    // One void that always fails cannot hold every later one back.
+    {
+      const cursors = createD1StoreServerCursors(db);
+      const stallNow = start + 60 * 24 * 3_600_000;
+      await cursors.write(voidedSweepCursor, stallNow - 10 * 60_000, new Date(stallNow));
+      await cursors.write('google-play-voided:behind', 0, new Date(stallNow));
+      await cursors.write('google-play-voided:stalls', 0, new Date(stallNow));
+      await cursors.write('google-play-voided:slice-ms', 7 * 24 * 3_600_000, new Date(stallNow));
+      const poisonRecordedAt = stallNow - 5 * 60_000;
+      const poisonClient: GooglePlayVoidedPurchasesClient = {
+        async listVoidedPurchases(input) {
+          return {
+            voidedPurchases: input.startTimeMillis <= poisonRecordedAt
+                && poisonRecordedAt <= input.endTimeMillis
+              ? [{ purchaseToken, orderId: 'GPA.poison' }]
+              : [],
+          };
+        },
+      };
+      // Every revocation write fails while the table is away: a store error
+      // on the same void, run after run.
+      await db.exec('ALTER TABLE entitlement_revocations RENAME TO entitlement_revocations_away;');
+      let stallRuns = 0;
+      let stallResult: Awaited<ReturnType<typeof runScheduledStoreServer>>;
+      do {
+        stallRuns += 1;
+        stallResult = await runScheduledStoreServer(
+          { ...cronEnv, MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES: '1' },
+          { cron: '* * * * *' },
+          {
+            googlePlay: { finalizer: boundary, voidedPurchases: poisonClient, packageName },
+            now: () => stallNow + stallRuns * 60_000,
+          },
+        );
+      } while (stallResult?.sweep?.complete !== true && stallRuns < 40);
+      await db.exec('ALTER TABLE entitlement_revocations_away RENAME TO entitlement_revocations;');
+      assert.equal(stallResult?.sweep?.complete, true, 'the sweep moves past the poisoned slice');
+      assert.equal(stallRuns, 30, 'after 30 runs held back by the same store error');
+    }
+
+    // A slow Play finalization leaves the sweep its half of the wall time.
+    {
+      const cursors = createD1StoreServerCursors(db);
+      const slowNow = start + 70 * 24 * 3_600_000;
+      await cursors.write(voidedSweepCursor, slowNow - 2 * 3_600_000, new Date(slowNow));
+      await cursors.write('google-play-voided:behind', 0, new Date(slowNow));
+      const slowGrant = await store.recordEntitlementGrant({
+        source: 'purchase',
+        playerId: 'slow-player',
+        grantId: 'COINS_100',
+        idempotencyKey: 'slow-checkout',
+        grantedAt: '2026-10-01T00:00:00.000Z',
+        grant: { type: 'currency', currency: 'coin', amount: 100 },
+        evidenceVerificationId: await createGooglePlayProductVerificationId(packageName, 'slow-token'),
+        payload: {
+          target: 'android',
+          productType: 'consumable',
+          platformProductId: 'coins_100_android',
+          platformTransactionId: 'GPA.slow',
+          purchasedAt: '2026-10-01T00:00:00.000Z',
+          googlePlayPackageName: packageName,
+        },
+      });
+      await outbox.remember({
+        ledgerEntryId: slowGrant.ledgerEntryId,
+        playerId: 'slow-player',
+        purchaseToken: 'slow-token',
+        nowMs: slowNow - 3_600_000,
+      });
+      let fakeClock = 0;
+      const slowFinalizer = {
+        async finalizePurchaseGrant() {
+          fakeClock += 14_000;
+          return { status: 'pending' as const, alreadyCompleted: false, reason: 'SLOW' };
+        },
+      };
+      const slow = await runScheduledStoreServer(
+        cronEnv,
+        { cron: '* * * * *' },
+        {
+          googlePlay: {
+            finalizer: slowFinalizer,
+            voidedPurchases: {
+              async listVoidedPurchases() {
+                return { voidedPurchases: [] };
+              },
+            },
+            packageName,
+          },
+          now: () => slowNow,
+          clock: () => fakeClock,
+        },
+      );
+      assert.equal(slow?.retried, 1, 'one retry used the retry half of the wall time');
+      assert.equal(slow?.sweep?.complete, true, 'and the sweep still ran');
     }
 
     assert.equal(

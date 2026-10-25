@@ -100,8 +100,10 @@ async function runStoreServer(env: GameServicesWorkerEnv, cron: string): Promise
     await runScheduledStoreServer(env, { cron }, createWorkerStoreServerDependencies(env));
   } catch (error) {
     console.error(
+      // A configuration error (the Play boundary settings); provider errors
+      // are caught inside the run and carry no purchase data.
       'Store server cron failed:',
-      error instanceof Error ? error.name : 'unknown error',
+      error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error',
     );
   }
 }

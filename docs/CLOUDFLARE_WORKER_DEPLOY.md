@@ -498,9 +498,12 @@ Both run from the cron with the in-Worker Play boundary
 (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` with
 `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH`) and a D1 store. Apply
 `0009_store_server.sql` (additive: the owed-finalization table and the sweep
-cursors). A deployment that finalizes through
-`GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` or its verifier binding gets
-neither; that finalizer owns its retries.
+cursors). Both act on grants the in-Worker Play boundary verified (their
+verification id is the purchase token's digest): a grant verified by
+`GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER` keeps the binding's own id, so the
+sweep does not find it and its token is never kept for a retry. A deployment
+that finalizes through `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` or its
+verifier binding gets neither; that finalizer owns its retries and refunds.
 
 - **Owed acknowledges and consumes.** With D1, the in-Worker Play finalizer
   keeps each purchase token in `google_play_pending_finalizations` before it
@@ -540,14 +543,19 @@ crons = ["* * * * *"]
 ```
 
 Each scheduled run retries up to 20 owed finalizations within half of
-`MPGD_STORE_SERVER_SUBREQUEST_BUDGET` (the other half is kept for the sweep),
+`MPGD_STORE_SERVER_SUBREQUEST_BUDGET` and half of the wall budget (the other
+halves are kept for the sweep),
 then sweeps when the interval has passed or a previous run stopped behind,
 and stops at the budget (D1 calls, token-service calls, and Play requests,
 counted by estimate) or the wall budget, which is kept below the cron period.
 The sweep cursor only moves forward; the 15-minute overlap that catches
 late-recorded voids is read on top of the first slice of a run. It is counted apart from
 the notifications run (`MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET`, 1,000 by
-default); together they stay under the Workers Paid cap.
+default); together (1,300 by default) they stay under the Workers Paid cap of
+10,000 subrequests per invocation in effect since 2026-02-11, not under the
+earlier cap of 1,000. A void whose revocation keeps failing on a store error
+holds the sweep for 30 runs, then is skipped with a log line naming its
+order id, to be revoked by hand.
 
 ## Production Notes
 

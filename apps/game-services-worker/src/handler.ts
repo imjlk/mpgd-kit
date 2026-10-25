@@ -1176,9 +1176,14 @@ function withWorkerGooglePlayFinalizationOutbox(
   googlePlay: GameServicesPurchaseGrantFinalizer,
 ): GameServicesPurchaseGrantFinalizer {
   const db = resolveD1Database(env);
-  return db === undefined
+  const packageName = env.GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME?.trim();
+  return db === undefined || packageName === undefined
     ? googlePlay
-    : withGooglePlayFinalizationOutbox(googlePlay, createD1GooglePlayFinalizationOutbox(db));
+    : withGooglePlayFinalizationOutbox(
+        googlePlay,
+        createD1GooglePlayFinalizationOutbox(db),
+        packageName,
+      );
 }
 
 /**

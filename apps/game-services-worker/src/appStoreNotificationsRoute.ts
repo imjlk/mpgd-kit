@@ -85,14 +85,18 @@ export function createAppStoreNotificationsFetchHandler(input: {
     if (declaredLength > maxBodyLength) {
       return json({ error: 'PAYLOAD_TOO_LARGE' }, 413);
     }
+    const text = await readBoundedText(request, maxBodyLength);
+    if (text === undefined) {
+      return json({ error: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
     let body: unknown;
     try {
-      const text = await request.text();
-      if (text.length > maxBodyLength) {
-        return json({ error: 'PAYLOAD_TOO_LARGE' }, 413);
-      }
       body = JSON.parse(text);
     } catch {
+      return json({ status: 'rejected', reason: 'APP_STORE_NOTIFICATION_PAYLOAD_INVALID' }, 400);
+    }
+    if (!looksLikeCompactJws(body)) {
+      // Refused before the verifier binding (and its certificate checks) runs.
       return json({ status: 'rejected', reason: 'APP_STORE_NOTIFICATION_PAYLOAD_INVALID' }, 400);
     }
     try {
@@ -132,6 +136,45 @@ export function createAppStoreNotificationsFetchHandler(input: {
 const maxBodyLength = maxAppStoreServerNotificationBytes + 1024;
 /** Time past the binding's own timeout before the route stops waiting for it. */
 const bindingGraceMs = 5_000;
+
+/** The body as text, or undefined once it passes `limit` bytes (chunked bodies included). */
+async function readBoundedText(request: Request, limit: number): Promise<string | undefined> {
+  const reader = request.body?.getReader();
+  if (reader === undefined) {
+    return '';
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) {
+      break;
+    }
+    size += next.value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined);
+      return undefined;
+    }
+    chunks.push(next.value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/** `{ signedPayload }` holding three base64url segments, the shape of Apple's JWS. */
+function looksLikeCompactJws(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return false;
+  }
+  const signedPayload = (body as Readonly<Record<string, unknown>>).signedPayload;
+  return typeof signedPayload === 'string'
+    && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(signedPayload);
+}
 
 function matchEnvironment(pathname: string): AppStoreEnvironment | undefined {
   const normalised = pathname.length > 1 && pathname.endsWith('/')

@@ -1,7 +1,8 @@
-import type {
-  FinalizePurchaseGrantInput,
-  GameServicesPurchaseGrantFinalizer,
-  PurchaseGrantFinalization,
+import {
+  createGooglePlayProductVerificationId,
+  type FinalizePurchaseGrantInput,
+  type GameServicesPurchaseGrantFinalizer,
+  type PurchaseGrantFinalization,
 } from '@mpgd/game-services';
 
 /**
@@ -183,6 +184,7 @@ export function createD1StoreServerCursors(db: D1Database): StoreServerCursors {
 export function withGooglePlayFinalizationOutbox(
   finalizer: GameServicesPurchaseGrantFinalizer,
   outbox: GooglePlayFinalizationOutbox,
+  packageName: string,
   now: () => number = Date.now,
 ): GameServicesPurchaseGrantFinalizer {
   const record = async (operation: () => Promise<void>, step: string): Promise<void> => {
@@ -203,7 +205,14 @@ export function withGooglePlayFinalizationOutbox(
             finalizer.supportsPurchaseGrant?.(input) ?? true,
         }),
     async finalizePurchaseGrant(input) {
-      const purchaseToken = readPurchaseToken(input);
+      // Only the token the grant was verified with is kept: a replayed
+      // request with another token never reaches the outbox.
+      const candidate = readPurchaseToken(input);
+      const purchaseToken = candidate !== undefined
+          && await createGooglePlayProductVerificationId(packageName, candidate)
+            === input.evidenceVerificationId
+        ? candidate
+        : undefined;
       if (purchaseToken !== undefined) {
         await record(() => outbox.remember({
           ledgerEntryId: input.ledgerEntryId,

@@ -80,6 +80,8 @@ export const voidedSweepCursor = 'google-play-voided:end';
 export const voidedSweepSliceCursor = 'google-play-voided:slice-ms';
 /** 1 while the last sweep stopped behind (continue on the next trigger), 0 once caught up. */
 export const voidedSweepBehindCursor = 'google-play-voided:behind';
+/** Runs in a row whose first slice was held back only by store errors. */
+export const voidedSweepStallCursor = 'google-play-voided:stalls';
 
 /** Re-read this much of the last complete window: Google records voids with some lag. */
 const voidedSweepOverlapMs = 15 * 60 * 1000;
@@ -96,6 +98,8 @@ const voidedSweepMaxPagesPerSlice = 5;
 /** Voided Purchases API pages one run reads; Google allows 30 queries in 30 seconds. */
 const voidedSweepMaxPagesPerRun = 20;
 const voidedSweepTimeoutMs = 30_000;
+/** Runs a slice may be held back by store errors alone before it is skipped (about half an hour). */
+const voidedSweepMaxStalls = 30;
 /** D1 reads and writes, token-service calls, and Play requests assumed per item. */
 const operationsPerRetry = 8;
 const operationsPerVoidedPage = 2;
@@ -134,17 +138,25 @@ export async function runScheduledStoreServer(
     remaining -= operations;
     return 'ok';
   };
-  // Owed finalizations may use half the budget, so the sweep always has the
-  // other half and a slow Play cannot starve it.
+  // Owed finalizations may use half the subrequest budget and half the wall
+  // time, so the sweep always has the other half and a slow Play cannot
+  // starve it.
   const retryBudget = Math.floor(budgetAtStart / 2);
+  const retryDeadline = clock() + (wallSeconds * 1000) / 2;
   let retryUsed = 0;
   const takeForRetry = (operations: number): boolean => {
-    if (retryUsed + operations > retryBudget || take(operations) !== 'ok') {
+    if (
+      retryUsed + operations > retryBudget
+      || clock() >= retryDeadline
+      || take(operations) !== 'ok'
+    ) {
       return false;
     }
     retryUsed += operations;
     return true;
   };
+  const retryTimeLeftMs = () =>
+    Math.max(Math.min(finalizationTimeoutMs, Math.floor(retryDeadline - clock())), 1);
 
   const store = createD1GameServicesStore(db);
   const outbox = createD1GooglePlayFinalizationOutbox(db);
@@ -152,7 +164,15 @@ export async function runScheduledStoreServer(
   const totals = { retried: 0, finalized: 0, abandoned: 0 };
 
   try {
-    await retryOwedFinalizations({ outbox, store, play, now, take: takeForRetry, totals });
+    await retryOwedFinalizations({
+      outbox,
+      store,
+      play,
+      now,
+      take: takeForRetry,
+      timeLeftMs: retryTimeLeftMs,
+      totals,
+    });
   } catch (error) {
     console.error('Google Play finalization retry failed:', describe(error));
   }
@@ -195,6 +215,7 @@ async function retryOwedFinalizations(input: {
   readonly play: NonNullable<StoreServerCronDependencies['googlePlay']>;
   readonly now: () => number;
   readonly take: (operations: number) => boolean;
+  readonly timeLeftMs: () => number;
   readonly totals: { retried: number; finalized: number; abandoned: number };
 }): Promise<void> {
   if (!input.take(1)) {
@@ -229,8 +250,8 @@ async function retryOwedFinalizations(input: {
         store: input.store,
         ledgerEntryId: row.ledgerEntryId,
         purchaseToken: row.purchaseToken,
-        signal: AbortSignal.timeout(finalizationTimeoutMs),
-        timeoutMs: finalizationTimeoutMs,
+        signal: AbortSignal.timeout(input.timeLeftMs()),
+        timeoutMs: input.timeLeftMs(),
       });
     } catch (error) {
       await input.outbox.defer({
@@ -274,7 +295,12 @@ async function sweepVoidedPurchases(input: {
     input.env.MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES,
     60,
   );
-  if (intervalMinutes === 0 || input.take(2) !== 'ok') {
+  if (intervalMinutes === 0) {
+    return undefined;
+  }
+  const opening = input.take(2);
+  if (opening !== 'ok') {
+    console.error('Google Play voided purchases sweep skipped this run:', opening);
     return undefined;
   }
   const nowMs = input.now();
@@ -299,10 +325,13 @@ async function sweepVoidedPurchases(input: {
     );
   }
   const cursorAtStart = lastEnd ?? oldest;
+  // The overlap is re-read only from a caught-up cursor (a run behind starts
+  // exactly where the last one stopped), so a backlog pays for it once.
   let sliceStart = Math.max(
-    lastEnd === undefined ? oldest : lastEnd - voidedSweepOverlapMs,
+    lastEnd === undefined ? oldest : behind === 1 ? lastEnd : lastEnd - voidedSweepOverlapMs,
     oldest,
   );
+  const stalls = (await input.cursors.read(voidedSweepStallCursor)) ?? 0;
   let sliceMs = clampSliceMs(await input.cursors.read(voidedSweepSliceCursor));
   const totals = { revoked: 0, alreadyProcessed: 0, notFound: 0, failed: 0, errored: 0 };
   let slices = 0;
@@ -312,106 +341,149 @@ async function sweepVoidedPurchases(input: {
   // it, so a backlog larger than one run's budget is worked through over
   // several runs instead of re-reading the same first pages. A slice whose
   // voids do not fit in the run's budget is halved for the next run.
-  for (;;) {
-    // The overlap is read on top of the first slice, so every finished slice
-    // moves the cursor forward.
-    const sliceEnd = Math.min(Math.max(sliceStart, cursorAtStart) + sliceMs, nowMs);
-    let stoppedBy: StoreServerTake | 'run-page-cap' | undefined;
-    const sweep = await sweepGooglePlayVoidedPurchases({
-      client: input.play.voidedPurchases,
-      store: input.store,
-      packageName: input.play.packageName,
-      startTimeMillis: sliceStart,
-      endTimeMillis: sliceEnd,
-      signal: AbortSignal.timeout(voidedSweepTimeoutMs),
-      maxPages: voidedSweepMaxPagesPerSlice,
-      now: () => new Date(input.now()).toISOString(),
-      shouldContinue: (next) => {
-        if (next === 'page' && pages >= voidedSweepMaxPagesPerRun) {
-          stoppedBy = 'run-page-cap';
-          return false;
+  try {
+    for (;;) {
+      // The overlap is read on top of the first slice, so every finished slice
+      // moves the cursor forward.
+      const sliceEnd = Math.min(Math.max(sliceStart, cursorAtStart) + sliceMs, nowMs);
+      let stoppedBy: StoreServerTake | 'run-page-cap' | undefined;
+      const sweep = await sweepGooglePlayVoidedPurchases({
+        client: input.play.voidedPurchases,
+        store: input.store,
+        packageName: input.play.packageName,
+        startTimeMillis: sliceStart,
+        endTimeMillis: sliceEnd,
+        signal: AbortSignal.timeout(voidedSweepTimeoutMs),
+        maxPages: voidedSweepMaxPagesPerSlice,
+        now: () => new Date(input.now()).toISOString(),
+        shouldContinue: (next) => {
+          if (next === 'page' && pages >= voidedSweepMaxPagesPerRun) {
+            stoppedBy = 'run-page-cap';
+            return false;
+          }
+          const taken = input.take(
+            next === 'page' ? operationsPerVoidedPage : operationsPerVoidedPurchase,
+          );
+          if (taken !== 'ok') {
+            stoppedBy = taken;
+            return false;
+          }
+          if (next === 'page') {
+            pages += 1;
+          }
+          return true;
+        },
+        onOutcome: (voided, outcome) => {
+          if (outcome.status === 'error') {
+            console.error(
+              'Google Play voided purchase not applied:',
+              outcome.reason,
+              outcome.detail,
+              voided.orderId ?? 'no order id',
+            );
+          } else if (outcome.status === 'conflict' || outcome.status === 'invalid') {
+            // The order id identifies the purchase in Play Console; the token is never logged.
+            console.error(
+              'Google Play voided purchase not applied:',
+              outcome.reason,
+              voided.orderId ?? 'no order id',
+            );
+          }
+        },
+      });
+      totals.revoked += sweep.revoked;
+      totals.alreadyProcessed += sweep.alreadyProcessed;
+      totals.notFound += sweep.notFound;
+      totals.failed += sweep.failed;
+      totals.errored += sweep.errored;
+      if (!sweep.complete) {
+        // Halve only when the slice itself did not fit: its own page cap, or
+        // the budget running out while its voids were applied. A deadline, the
+        // run's page cap, or a store error says nothing about the slice.
+        const sliceTooLarge = sweep.errored === 0
+          && ((stoppedBy === undefined && sweep.pages >= voidedSweepMaxPagesPerSlice)
+            || (stoppedBy === 'budget' && sweep.pages > 0));
+        // Every page was read and only store errors held the slice: after
+        // voidedSweepMaxStalls runs at the same cursor, move on and say so,
+        // so one void that always fails cannot hold every later one back.
+        const onlyErrored = stoppedBy === undefined && sweep.errored > 0
+          && sweep.pages < voidedSweepMaxPagesPerSlice;
+        if (onlyErrored && stalls + 1 >= voidedSweepMaxStalls) {
+          console.error(
+            'Google Play voided purchases: skipping',
+            sweep.errored,
+            'void(s) that failed on',
+            voidedSweepMaxStalls,
+            'runs before',
+            new Date(sliceEnd).toISOString(),
+            '; revoke them by hand (see the order ids logged above).',
+          );
+          await input.cursors.write(voidedSweepStallCursor, 0, new Date(nowMs));
+          slices += 1;
+          await input.cursors.write(
+            voidedSweepCursor,
+            Math.max(sliceEnd, cursorAtStart),
+            new Date(nowMs),
+          );
+          if (sliceEnd >= nowMs) {
+            complete = true;
+            await input.cursors.write(voidedSweepBehindCursor, 0, new Date(nowMs));
+            break;
+          }
+          sliceStart = sliceEnd;
+          continue;
         }
-        const taken = input.take(
-          next === 'page' ? operationsPerVoidedPage : operationsPerVoidedPurchase,
+        if (onlyErrored && slices === 0) {
+          await input.cursors.write(voidedSweepStallCursor, stalls + 1, new Date(nowMs));
+        }
+        if (slices === 0 && sliceTooLarge) {
+          if (sliceMs > voidedSweepMinSliceMs) {
+            sliceMs = Math.max(Math.floor(sliceMs / 2), voidedSweepMinSliceMs);
+            await input.cursors.write(voidedSweepSliceCursor, sliceMs, new Date(nowMs));
+          } else {
+            console.error(
+              'Google Play voided purchases: one minute of voids does not fit in a run; '
+                + 'raise MPGD_STORE_SERVER_SUBREQUEST_BUDGET.',
+            );
+          }
+        }
+        if (behind !== 1) {
+          await input.cursors.write(voidedSweepBehindCursor, 1, new Date(nowMs));
+        }
+        console.error(
+          'Google Play voided purchases sweep stopped before',
+          new Date(sliceEnd).toISOString(),
+          `(${stoppedBy ?? (sweep.errored > 0 ? 'store error' : 'page cap')});`,
+          'it continues on the next run.',
         );
-        if (taken !== 'ok') {
-          stoppedBy = taken;
-          return false;
-        }
-        if (next === 'page') {
-          pages += 1;
-        }
-        return true;
-      },
-      onOutcome: (voided, outcome) => {
-        if (outcome.status === 'error') {
-          console.error(
-            'Google Play voided purchase not applied:',
-            outcome.reason,
-            outcome.detail,
-            voided.orderId ?? 'no order id',
-          );
-        } else if (outcome.status === 'conflict' || outcome.status === 'invalid') {
-          // The order id identifies the purchase in Play Console; the token is never logged.
-          console.error(
-            'Google Play voided purchase not applied:',
-            outcome.reason,
-            voided.orderId ?? 'no order id',
-          );
-        }
-      },
-    });
-    totals.revoked += sweep.revoked;
-    totals.alreadyProcessed += sweep.alreadyProcessed;
-    totals.notFound += sweep.notFound;
-    totals.failed += sweep.failed;
-    totals.errored += sweep.errored;
-    if (!sweep.complete) {
-      // Halve only when the slice itself did not fit: its own page cap, or
-      // the budget running out while its voids were applied. A deadline, the
-      // run's page cap, or a store error says nothing about the slice.
-      const sliceTooLarge = sweep.errored === 0
-        && (sweep.pages >= voidedSweepMaxPagesPerSlice
-          || (stoppedBy === 'budget' && sweep.pages > 0));
-      if (slices === 0 && sliceTooLarge) {
-        if (sliceMs > voidedSweepMinSliceMs) {
-          sliceMs = Math.max(Math.floor(sliceMs / 2), voidedSweepMinSliceMs);
-          await input.cursors.write(voidedSweepSliceCursor, sliceMs, new Date(nowMs));
-        } else {
-          console.error(
-            'Google Play voided purchases: one minute of voids does not fit in a run; '
-              + 'raise MPGD_STORE_SERVER_SUBREQUEST_BUDGET.',
-          );
-        }
+        break;
       }
-      if (behind !== 1) {
-        await input.cursors.write(voidedSweepBehindCursor, 1, new Date(nowMs));
+      if (slices === 0 && stalls > 0) {
+        await input.cursors.write(voidedSweepStallCursor, 0, new Date(nowMs));
       }
-      console.error(
-        'Google Play voided purchases sweep stopped before',
-        new Date(sliceEnd).toISOString(),
-        `(${stoppedBy ?? (sweep.errored > 0 ? 'store error' : 'page cap')});`,
-        'it continues on the next run.',
+      slices += 1;
+      await input.cursors.write(
+        voidedSweepCursor,
+        Math.max(sliceEnd, cursorAtStart),
+        new Date(nowMs),
       );
-      break;
-    }
-    slices += 1;
-    await input.cursors.write(
-      voidedSweepCursor,
-      Math.max(sliceEnd, cursorAtStart),
-      new Date(nowMs),
-    );
-    if (sliceEnd >= nowMs) {
-      complete = true;
-      if (behind !== 0) {
-        await input.cursors.write(voidedSweepBehindCursor, 0, new Date(nowMs));
+      if (sliceEnd >= nowMs) {
+        complete = true;
+        if (behind !== 0) {
+          await input.cursors.write(voidedSweepBehindCursor, 0, new Date(nowMs));
+        }
+        if (sliceMs < voidedSweepSliceMs) {
+          await input.cursors.write(voidedSweepSliceCursor, voidedSweepSliceMs, new Date(nowMs));
+        }
+        break;
       }
-      if (sliceMs < voidedSweepSliceMs) {
-        await input.cursors.write(voidedSweepSliceCursor, voidedSweepSliceMs, new Date(nowMs));
-      }
-      break;
+      sliceStart = sliceEnd;
     }
-    sliceStart = sliceEnd;
+  } catch (error) {
+    if (behind !== 1) {
+      await input.cursors.write(voidedSweepBehindCursor, 1, new Date(nowMs)).catch(() => undefined);
+    }
+    throw error;
   }
   return { complete, slices, ...totals };
 }
