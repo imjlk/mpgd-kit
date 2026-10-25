@@ -768,7 +768,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   );
   assert.ok(
     unmarkedLines.some((line) =>
-      String(line[0]).includes('incomplete and not pending') && line[1] === 'deletion-unmarked',
+      String(line[0]).includes('no sweep will finish it') && line[1] === 'deletion-unmarked',
     ),
   );
   assert.deepEqual(

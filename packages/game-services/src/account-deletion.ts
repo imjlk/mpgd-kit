@@ -58,8 +58,9 @@ export interface PlayerDataEraser {
  * every session family of the player and delete the guest record, so no
  * session authenticates as the player again. Idempotent: an unknown player
  * succeeds. The game-services session bindings must stop accepting the
- * player's access tokens at once too (not when they expire), since the
- * erasure runs right after and assumes nothing new is written. It should delete the record last (or atomically): a failure
+ * player's access tokens at once too (not when they expire): the erasure
+ * runs right after, and only a request authenticated before the call can
+ * still write. It should delete the record last (or atomically): a failure
  * after the sessions are revoked answers the player a retryable error, but
  * the retry can no longer authenticate.
  */
@@ -234,7 +235,7 @@ export function createAccountDeletionService(input: {
   readonly audit?: (entry: AccountDeletionAuditEntry) => Promise<void>;
   readonly now?: () => string;
   readonly createDeletionId?: () => string;
-  /** Waits between second-pass attempts; defaults to a timer. */
+  /** Waits between retry attempts; defaults to a timer. */
   readonly sleep?: (ms: number) => Promise<void>;
 }): AccountDeletionService {
   const now = input.now ?? (() => new Date().toISOString());
@@ -324,9 +325,10 @@ export function createAccountDeletionService(input: {
         retained += result.value.retained;
       }
       if (!complete && (!marked || input.identity === null)) {
-        // Neither the inline pass nor a sweep finishes this one: an operator
-        // can only learn it from this line and the audit entry.
-        console.error('Account deletion erasure incomplete and not pending:', deletionId);
+        // No sweep finishes this one (not marked, or no identity service, so
+        // the entry stays `erasing` and is discarded): an operator can only
+        // learn it from this line and the audit entry.
+        console.error('Account deletion erasure incomplete; no sweep will finish it:', deletionId);
       }
       if (complete) {
         try {

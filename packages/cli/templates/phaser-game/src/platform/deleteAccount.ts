@@ -24,7 +24,8 @@ export const starterGuestCredentialKeys = [
 export type StarterDeleteAccountOutcome =
   /**
    * The server deleted the account. `signedOut` is `false` when this device
-   * could not forget the session's credentials or the purchase journal.
+   * could not forget the session's credentials, the purchase journal, or
+   * the run checkpoint.
    */
   | { readonly outcome: 'deleted'; readonly retainedPurchaseRecords: number; readonly signedOut: boolean }
   /**
@@ -100,7 +101,7 @@ export function createStarterAccountDeletion(input: {
   let running: Promise<StarterDeleteAccountOutcome> | undefined;
 
   /**
-   * Answers whether the credentials (and the journal) were cleared;
+   * Answers whether the credentials, the journal (unless kept), and the run checkpoint were cleared;
    * registered steps only log. An inferred deletion keeps the journal: its
    * open purchases may still need the store's answer if the account exists.
    */

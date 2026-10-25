@@ -489,7 +489,10 @@ export function createD1PendingAccountErasureStore(db: D1Database): PendingAccou
   };
 }
 
-/** Keeps the latest entry per deletion id (a sweep completes an earlier one). */
+/**
+ * One entry per deletion id: a sweep that completes an earlier deletion
+ * updates its completion and adds its counts.
+ */
 export function createD1AccountDeletionAudit(
   db: D1Database,
 ): (entry: AccountDeletionAuditEntry) => Promise<void> {
