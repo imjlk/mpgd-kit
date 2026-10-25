@@ -5,6 +5,7 @@ import {
   accountDeletionEndpoint,
   createAccountDeletionService,
   createGooglePlayProductVerificationId,
+  finishPendingAccountErasures,
   retryGooglePlayPurchaseFinalization,
   type AccountDeletionReceipt,
   type FinalizePurchaseGrantInput,
@@ -228,6 +229,120 @@ try {
   await pending.clear({ deletionId: 'pending-a' });
   await pending.clear({ deletionId: 'pending-b' });
 
+  // --- Many rewarded ads, a cross-player revocation, and the sweep ---------
+  {
+    for (let index = 0; index < 250; index += 1) {
+      await store.recordEntitlementGrant({
+        source: 'ad_reward',
+        playerId: 'player-6',
+        grantId: 'CONTINUE_AFTER_FAIL',
+        idempotencyKey: `rewarded-ad:player-6:${index}`,
+        grantedAt: '2026-10-21T00:00:00.000Z',
+        payload: { target: 'android', platformImpressionId: `bulk-impression-${index}` },
+      });
+    }
+    const adGrant = await store.findEntitlementTransactionByIdempotency?.({
+      source: 'ad_reward',
+      playerId: 'player-6',
+      idempotencyKey: 'rewarded-ad:player-6:0',
+    });
+    await required(store.recordEntitlementRevocation).call(store, {
+      playerId: 'player-6',
+      revokesLedgerEntryId: required(adGrant).ledgerEntryId,
+      idempotencyKey: 'support:revoke-ad',
+      reason: 'admin',
+      revokedAt: '2026-10-22T00:00:00.000Z',
+      payload: {},
+    });
+    // A game-owned writer filed a revocation under player-6 for player-7's
+    // grant, and player-7's note points at it.
+    const other = await store.recordEntitlementGrant({
+      source: 'purchase',
+      playerId: 'player-7',
+      grantId: 'COINS_100',
+      idempotencyKey: 'player-7-purchase',
+      grantedAt: '2026-10-20T00:00:00.000Z',
+      payload: { target: 'ios', store: 'app-store', platformTransactionId: 'tx-7' },
+    });
+    const crossRevocation = await required(store.recordEntitlementRevocation).call(store, {
+      playerId: 'player-6',
+      revokesLedgerEntryId: other.ledgerEntryId,
+      idempotencyKey: 'support:cross',
+      reason: 'admin',
+      revokedAt: '2026-10-22T00:00:00.000Z',
+      payload: {},
+    });
+    await required(store.recordEntitlementNote).call(store, {
+      noteId: 'cross-note',
+      kind: 'refund_reversed',
+      playerId: 'player-7',
+      ledgerEntryId: other.ledgerEntryId,
+      revocationLedgerEntryId: crossRevocation.ledgerEntryId,
+      recordedAt: '2026-10-23T00:00:00.000Z',
+      payload: {},
+    });
+    const bulk = await eraser.erasePlayerData({
+      playerId: 'player-6',
+      retainedPlayerId: 'deleted:deletion-6',
+    });
+    // 250 rewarded-ad grants and the revocation of one, set-based; the
+    // cross-player revocation and the note pointing at it are rewritten.
+    assert.deepEqual(bulk, { deleted: 251, retained: 2 });
+    assert.equal(await countRows(db, 'entitlement_transactions', 'player_id', 'player-6'), 0);
+    const [cross] = (await db
+      .prepare('SELECT * FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?')
+      .bind(other.ledgerEntryId)
+      .all<{ ledger_entry_id: string; player_id: string }>()).results;
+    assert.equal(cross?.player_id, 'deleted:deletion-6');
+    const note = await db.prepare("SELECT * FROM entitlement_notes WHERE note_id = 'cross-note'")
+      .first<{ player_id: string; revocation_ledger_entry_id: string }>();
+    assert.equal(note?.revocation_ledger_entry_id, cross?.ledger_entry_id);
+    assert.equal(note?.player_id, 'deleted:deletion-6');
+  }
+  {
+    // The sweep over the D1 stores finishes an identity-deleted erasure and
+    // completes its audit entry, adding the counts.
+    await seedPlayer(db, 'player-8');
+    await audit({
+      deletionId: 'deletion-8',
+      requestedAt: '2026-10-25T00:00:00.000Z',
+      completedAt: '2026-10-25T00:00:01.000Z',
+      identity: 'deleted',
+      complete: false,
+      deleted: 1,
+      retained: 0,
+    });
+    await pending.put({
+      deletionId: 'deletion-8',
+      playerId: 'player-8',
+      retainedPlayerId: 'deleted:deletion-8',
+      phase: 'identity-deleted',
+      recordedAt: '2026-10-25T00:00:00.000Z',
+      attempts: 0,
+    });
+    const sweep = await finishPendingAccountErasures({
+      erasers: [eraser],
+      pending,
+      audit,
+      now: () => '2026-10-25T00:01:00.000Z',
+    });
+    assert.deepEqual(sweep, { finished: 1, failed: 0, discarded: 0 });
+    assert.equal(await countRows(db, 'notification_endpoints', 'player_id', 'player-8'), 0);
+    const row = await db.prepare("SELECT * FROM account_deletion_audit WHERE deletion_id = 'deletion-8'")
+      .first<{ complete: number; deleted_rows: number; retained_rows: number; requested_at: string }>();
+    assert.deepEqual(
+      { ...row },
+      {
+        ...row,
+        complete: 1,
+        deleted_rows: 13,
+        retained_rows: 4,
+        requested_at: '2026-10-25T00:00:00.000Z',
+      },
+    );
+    assert.deepEqual(await pending.list({ limit: 10 }), []);
+  }
+
   // --- The retention purge -----------------------------------------------------
   // Kept records younger than five years stay; older ones go with their rows.
   assert.equal(
@@ -238,20 +353,50 @@ try {
     db,
     new Date('2031-10-26T00:00:00.000Z'),
   );
-  assert.equal(purged, 4, 'two kept grants each of player-1 and player-4');
+  assert.equal(purged, 6, 'two kept grants each of player-1, player-4, and player-8');
   for (const table of [
     'entitlement_transactions',
     'entitlement_revocations',
     'entitlement_notes',
   ]) {
     assert.equal(
-      (await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE player_id LIKE 'deleted:%'`)
+      // (deletion-6 only kept rows about another player's live grant.)
+      (await db.prepare(`SELECT COUNT(*) AS n FROM ${table}
+          WHERE player_id LIKE 'deleted:%' AND player_id <> 'deleted:deletion-6'`)
         .first<{ n: number }>())?.n,
       0,
       `${table} purged`,
     );
   }
   assert.ok(await countRows(db, 'entitlement_transactions', 'player_id', 'player-2') > 0);
+  // A grant older than the period whose revocation is newer stays until the
+  // revocation is old enough too.
+  {
+    const oldGrant = await store.recordEntitlementGrant({
+      source: 'purchase',
+      playerId: 'deleted:old',
+      grantId: 'COINS_100',
+      idempotencyKey: 'old-grant',
+      grantedAt: '2020-01-01T00:00:00.000Z',
+      payload: { target: 'ios', store: 'app-store', platformTransactionId: 'tx-old' },
+    });
+    await required(store.recordEntitlementRevocation).call(store, {
+      playerId: 'deleted:old',
+      revokesLedgerEntryId: oldGrant.ledgerEntryId,
+      idempotencyKey: 'old-refund',
+      reason: 'refund',
+      revokedAt: '2024-06-01T00:00:00.000Z',
+      payload: {},
+    });
+    assert.equal(
+      await purgeExpiredRetainedPurchaseRecords(db, new Date('2029-01-01T00:00:00.000Z')),
+      0,
+    );
+    assert.equal(
+      await purgeExpiredRetainedPurchaseRecords(db, new Date('2029-06-02T00:00:00.000Z')),
+      1,
+    );
+  }
 
   // --- The route ----------------------------------------------------------------
   const deleted: string[] = [];
@@ -300,6 +445,34 @@ try {
     (await route(new Request(`https://game-services.example${accountDeletionEndpoint}`))).status,
     405,
   );
+  const preflight = await route(
+    new Request(`https://game-services.example${accountDeletionEndpoint}`, { method: 'OPTIONS' }),
+  );
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
+  assert.equal(
+    (await route(new Request(`https://game-services.example${accountDeletionEndpoint}`)))
+      .headers.get('allow'),
+    'POST',
+  );
+  for (const body of ['not json', '[]', JSON.stringify({ pad: 'x'.repeat(5000) })]) {
+    assert.equal(
+      (await post(route, { authorization: 'Bearer player-5-token' }, body)).status,
+      400,
+      body.slice(0, 10),
+    );
+  }
+  const throwingAuth = createWorkerFetchHandler(
+    env({
+      GAME_SERVICES_INGRESS_AUTH: {
+        authenticateGameServicesRequest: () => Promise.reject(new Error('identity down')),
+      },
+    }),
+  );
+  const authFailed = await post(throwingAuth, { authorization: 'Bearer player-5-token' });
+  assert.equal(authFailed.status, 500);
+  assert.deepEqual(await authFailed.json(), { error: 'AUTHENTICATION_FAILED' });
+  assert.equal(await countRows(db, 'leaderboard_transactions', 'player_id', 'player-5'), 1);
   const ok = await post(route, { authorization: 'Bearer player-5-token' });
   assert.equal(ok.status, 200);
   assert.equal(ok.headers.get('Access-Control-Allow-Origin'), '*');

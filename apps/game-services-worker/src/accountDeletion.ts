@@ -86,12 +86,12 @@ export function createAccountDeletionFetchHandler(
     if (body.playerId !== undefined && body.playerId !== principal.playerId) {
       return json({ error: 'PLAYER_ID_MISMATCH' }, 403, input.corsHeaders);
     }
-    const service = input.service(principal);
-    if (service === undefined) {
-      return json({ error: 'ACCOUNT_DELETION_NOT_CONFIGURED' }, 503, input.corsHeaders);
-    }
     let receipt: AccountDeletionReceipt;
     try {
+      const service = input.service(principal);
+      if (service === undefined) {
+        return json({ error: 'ACCOUNT_DELETION_NOT_CONFIGURED' }, 503, input.corsHeaders);
+      }
       receipt = await service.deletePlayerAccount({ playerId: principal.playerId });
     } catch (error) {
       if (error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED') {
@@ -107,11 +107,36 @@ export function createAccountDeletionFetchHandler(
   };
 }
 
+/** The JSON object body (empty is `{}`), read only up to the size limit. */
 async function readBody(request: Request): Promise<Readonly<Record<string, unknown>> | undefined> {
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > maxBodyBytes) {
+  const declared = Number(request.headers.get('content-length') ?? '0');
+  if (!Number.isFinite(declared) || declared > maxBodyBytes) {
     return undefined;
   }
+  const bytes: Uint8Array[] = [];
+  let size = 0;
+  if (request.body !== null) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > maxBodyBytes) {
+        await reader.cancel();
+        return undefined;
+      }
+      bytes.push(value);
+    }
+  }
+  const joined = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of bytes) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const text = new TextDecoder().decode(joined);
   if (text.trim().length === 0) {
     return {};
   }
@@ -235,47 +260,67 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
     async erasePlayerData(input) {
       const { playerId, retainedPlayerId } = assertPlayerDataErasureInput(input);
       const session = db.withSession('first-primary');
+      // Purchase grants are rewritten row by row; every other grant of the
+      // player (one per rewarded ad, possibly thousands) goes in set-based
+      // statements, so the batch does not grow with them.
+      const purchaseGrants = `SELECT ledger_entry_id FROM entitlement_transactions
+        WHERE player_id = ?1 AND source = 'purchase'`;
+      const otherGrants = `SELECT ledger_entry_id FROM entitlement_transactions
+        WHERE player_id = ?1 AND source <> 'purchase'`;
+      const allGrants = 'SELECT ledger_entry_id FROM entitlement_transactions WHERE player_id = ?1';
+      // Revocations and notes about the player's purchase grants, and those a
+      // game-owned writer filed under the player for another player's grant.
+      const revocationsWhere = `revokes_ledger_entry_id IN (${purchaseGrants})
+        OR (player_id = ?1 AND revokes_ledger_entry_id NOT IN (${allGrants}))`;
       const grants = (await session
-        .prepare('SELECT * FROM entitlement_transactions WHERE player_id = ?')
+        .prepare("SELECT * FROM entitlement_transactions WHERE player_id = ?1 AND source = 'purchase'")
         .bind(playerId)
         .all<GrantRow>()).results;
-      const playerGrants = `SELECT ledger_entry_id FROM entitlement_transactions WHERE player_id = ?`;
       const revocations = (await session
-        .prepare(`SELECT * FROM entitlement_revocations
-          WHERE player_id = ? OR revokes_ledger_entry_id IN (${playerGrants})`)
-        .bind(playerId, playerId)
+        .prepare(`SELECT * FROM entitlement_revocations WHERE ${revocationsWhere}`)
+        .bind(playerId)
         .all<RevocationRow>()).results;
       const notes = (await session
         .prepare(`SELECT * FROM entitlement_notes
-          WHERE player_id = ? OR ledger_entry_id IN (${playerGrants})`)
-        .bind(playerId, playerId)
+          WHERE ledger_entry_id IN (${purchaseGrants})
+            OR revocation_ledger_entry_id IN (
+              SELECT ledger_entry_id FROM entitlement_revocations WHERE ${revocationsWhere}
+            )
+            OR (player_id = ?1 AND ledger_entry_id NOT IN (${allGrants}))`)
+        .bind(playerId)
         .all<NoteRow>()).results;
       const pendingFinalizations = (await session
         .prepare(`SELECT * FROM google_play_pending_finalizations
-          WHERE player_id = ? OR ledger_entry_id IN (${playerGrants})`)
-        .bind(playerId, playerId)
+          WHERE ledger_entry_id IN (${purchaseGrants})`)
+        .bind(playerId)
         .all<PendingFinalizationRow>()).results;
 
-      const grantIds = new Set(grants.map((grant) => grant.ledger_entry_id));
       const keptGrantIds = new Map<string, string>();
       for (const grant of grants) {
-        if (grant.source === 'purchase') {
-          keptGrantIds.set(grant.ledger_entry_id, createRetainedLedgerEntryId());
-        }
+        keptGrantIds.set(grant.ledger_entry_id, createRetainedLedgerEntryId());
       }
-      // A revocation or note is kept with the grant it is about: a kept grant
-      // of this player, or (only through a game-owned writer) another
+      // A selected revocation or note is kept with the grant it is about: a
+      // kept purchase grant, or (only through a game-owned writer) another
       // player's grant, which stays.
-      const keptGrantOf = (ledgerEntryId: string): string | undefined =>
-        keptGrantIds.get(ledgerEntryId) ?? (grantIds.has(ledgerEntryId) ? undefined : ledgerEntryId);
+      const keptGrantOf = (ledgerEntryId: string): string =>
+        keptGrantIds.get(ledgerEntryId) ?? ledgerEntryId;
       const keptRevocationIds = new Map<string, string>();
       for (const revocation of revocations) {
-        if (keptGrantOf(revocation.revokes_ledger_entry_id) !== undefined) {
-          keptRevocationIds.set(revocation.ledger_entry_id, createRetainedLedgerEntryId());
-        }
+        keptRevocationIds.set(revocation.ledger_entry_id, createRetainedLedgerEntryId());
       }
 
-      const statements: D1PreparedStatement[] = [];
+      const statements: D1PreparedStatement[] = [
+        session.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${otherGrants})`)
+          .bind(playerId),
+        session.prepare(`DELETE FROM entitlement_revocations
+            WHERE revokes_ledger_entry_id IN (${otherGrants})`)
+          .bind(playerId),
+        // Their Play finalization rows, if any, go by the foreign key's cascade.
+        session.prepare(`DELETE FROM entitlement_transactions
+            WHERE player_id = ?1 AND source <> 'purchase'`)
+          .bind(playerId),
+      ];
+      const setBasedCount = statements.length;
       for (const note of notes) {
         statements.push(session.prepare('DELETE FROM entitlement_notes WHERE note_id = ?').bind(note.note_id));
       }
@@ -322,7 +367,7 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
       for (const revocation of revocations) {
         const ledgerEntryId = keptRevocationIds.get(revocation.ledger_entry_id);
         const revokes = keptGrantOf(revocation.revokes_ledger_entry_id);
-        if (ledgerEntryId === undefined || revokes === undefined) {
+        if (ledgerEntryId === undefined) {
           continue;
         }
         statements.push(session.prepare(`INSERT INTO entitlement_revocations (
@@ -342,9 +387,6 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
       }
       for (const note of notes) {
         const grant = keptGrantOf(note.ledger_entry_id);
-        if (grant === undefined) {
-          continue;
-        }
         const revocation = note.revocation_ledger_entry_id === null
           ? null
           : (keptRevocationIds.get(note.revocation_ledger_entry_id) ?? note.revocation_ledger_entry_id);
@@ -366,9 +408,6 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
         // Kept until the cron acknowledges or consumes the purchase within
         // Play's three-day window; the row (with the raw token) then goes.
         const grant = keptGrantOf(row.ledger_entry_id);
-        if (grant === undefined) {
-          continue;
-        }
         statements.push(session.prepare(`INSERT INTO google_play_pending_finalizations (
             ledger_entry_id, player_id, purchase_token, first_seen_at_ms, next_attempt_at_ms,
             attempts, last_reason
@@ -387,13 +426,14 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
         statements.push(session.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).bind(playerId));
       }
       const results = await session.batch(statements);
-      const deletedByPlayerRows = results
-        .slice(byPlayerStart)
-        .reduce((total, result) => total + (result.meta.changes ?? 0), 0);
-      const deletedLedgerRows = grants.length - keptGrantIds.size
-        + revocations.length - keptRevocationIds.size
-        + notes.filter((note) => keptGrantOf(note.ledger_entry_id) === undefined).length;
-      return { deleted: deletedByPlayerRows + deletedLedgerRows, retained };
+      const changes = (from: number, to: number): number =>
+        results.slice(from, to).reduce((total, result) => total + (result.meta.changes ?? 0), 0);
+      // Every selected ledger row is kept (rewritten); deleted rows are the
+      // set-based and by-player statements' changes.
+      return {
+        deleted: changes(0, setBasedCount) + changes(byPlayerStart, results.length),
+        retained,
+      };
     },
   };
 }
@@ -502,21 +542,26 @@ export async function purgeExpiredRetainedPurchaseRecords(
   const cutoff = new Date(now);
   cutoff.setUTCFullYear(cutoff.getUTCFullYear() - retainedPurchaseRecordYears);
   const cutoffText = cutoff.toISOString();
+  // A range over the player index: every id that starts with the prefix.
+  const prefixStart = retainedPlayerIdPrefix;
+  const prefixEnd = `${retainedPlayerIdPrefix.slice(0, -1)}${
+    String.fromCharCode(retainedPlayerIdPrefix.charCodeAt(retainedPlayerIdPrefix.length - 1) + 1)
+  }`;
   const expired = `SELECT g.ledger_entry_id FROM entitlement_transactions g
-    WHERE substr(g.player_id, 1, ${retainedPlayerIdPrefix.length}) = '${retainedPlayerIdPrefix}'
+    WHERE g.player_id >= ?2 AND g.player_id < ?3
       AND g.granted_at < ?1
       AND NOT EXISTS (
         SELECT 1 FROM entitlement_revocations r
         WHERE r.revokes_ledger_entry_id = g.ledger_entry_id AND r.revoked_at >= ?1
       )`;
   const results = await db.batch([
-    db.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${expired})`).bind(cutoffText),
+    db.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${expired})`).bind(cutoffText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM google_play_pending_finalizations WHERE ledger_entry_id IN (${expired})`)
-      .bind(cutoffText),
+      .bind(cutoffText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM entitlement_revocations WHERE revokes_ledger_entry_id IN (${expired})`)
-      .bind(cutoffText),
+      .bind(cutoffText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM entitlement_transactions WHERE ledger_entry_id IN (${expired})`)
-      .bind(cutoffText),
+      .bind(cutoffText, prefixStart, prefixEnd),
   ]);
   return results[3]?.meta.changes ?? 0;
 }

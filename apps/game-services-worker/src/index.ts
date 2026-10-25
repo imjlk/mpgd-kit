@@ -68,21 +68,6 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
     return asWorkerNotificationRpcResult(() => deliverWorkerNotification(this.env, input));
   }
 
-  /**
-   * Deletes a player's account for support tooling (a web deletion request
-   * handled by an operator), like the player's own
-   * `POST /game-services/account/delete`. Any Worker with this binding can
-   * delete any player. Rejects when `GAME_SERVICES_ACCOUNT_DELETION` is not
-   * bound.
-   */
-  async deletePlayerAccount(input: { readonly playerId: string }) {
-    const service = createWorkerAccountDeletionService(this.env);
-    if (service === undefined) {
-      throw new Error('ACCOUNT_DELETION_NOT_CONFIGURED: bind GAME_SERVICES_ACCOUNT_DELETION.');
-    }
-    return service.deletePlayerAccount({ playerId: input.playerId });
-  }
-
   /** The identity Worker ends a session: the endpoints it registered are unbound. */
   async endNotificationSession(input: { readonly sessionId: string }) {
     return asWorkerNotificationRpcResult(() => endWorkerNotificationSession(this.env, input));
@@ -112,6 +97,24 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
     if (notifications.status === 'rejected') {
       throw notifications.reason;
     }
+  }
+}
+
+/**
+ * Account deletion for support tooling (a web deletion request an operator
+ * handles), like the player's own `POST /game-services/account/delete`. A
+ * named entrypoint of its own, so only a Worker bound to
+ * `entrypoint = "GameServicesAccountDeletion"` can delete players; Workers
+ * bound to the default entrypoint (for example to send notifications)
+ * cannot. Rejects when `GAME_SERVICES_ACCOUNT_DELETION` is not bound.
+ */
+export class GameServicesAccountDeletion extends WorkerEntrypoint<GameServicesWorkerEnv> {
+  async deletePlayerAccount(input: { readonly playerId: string }) {
+    const service = createWorkerAccountDeletionService(this.env);
+    if (service === undefined) {
+      throw new Error('ACCOUNT_DELETION_NOT_CONFIGURED: bind GAME_SERVICES_ACCOUNT_DELETION.');
+    }
+    return service.deletePlayerAccount({ playerId: input.playerId });
   }
 }
 

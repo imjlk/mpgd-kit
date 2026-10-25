@@ -241,6 +241,9 @@ head_sampling_rate = 1
 # player through GAME_SERVICES_INGRESS_AUTH (else GAME_SERVICES_NOTIFICATIONS_AUTH)
 # and answers 503 without this binding. The cron above finishes pending
 # erasures and purges purchase records kept for deleted players after five years.
+# Support tooling deletes a player (a web request handled by an operator) through
+# this Worker's own entrypoint: bind service = "mpgd-game-services" with
+# entrypoint = "GameServicesAccountDeletion" and call deletePlayerAccount({ playerId }).
 #
 # [[services]]
 # binding = "GAME_SERVICES_ACCOUNT_DELETION"
