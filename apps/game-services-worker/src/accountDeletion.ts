@@ -203,16 +203,6 @@ type NoteRow = {
   payload_json: string;
 };
 
-type PendingFinalizationRow = {
-  ledger_entry_id: string;
-  player_id: string;
-  purchase_token: string;
-  first_seen_at_ms: number;
-  next_attempt_at_ms: number;
-  attempts: number;
-  last_reason: string | null;
-};
-
 /**
  * Every table of the reference migrations that keys a player, with how the
  * erasure treats it. `retained` rows are rewritten detached from the player
@@ -296,12 +286,6 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
             AND ledger_entry_id NOT IN (${otherGrants})`)
         .bind(playerId)
         .all<NoteRow>()).results;
-      const pendingFinalizations = (await session
-        .prepare(`SELECT * FROM google_play_pending_finalizations
-          WHERE ledger_entry_id IN (${purchaseGrants})
-            OR (player_id = ?1 AND ledger_entry_id NOT IN (${allGrants}))`)
-        .bind(playerId)
-        .all<PendingFinalizationRow>()).results;
 
       const keptGrantIds = new Map<string, string>();
       for (const grant of grants) {
@@ -318,6 +302,10 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
       }
 
       const statements: D1PreparedStatement[] = [
+        // The owed Play finalizations are moved to the rewritten grants before
+        // the old grants go: their keys point at the new ids until those are
+        // inserted later in this transaction.
+        session.prepare('PRAGMA defer_foreign_keys = true'),
         session.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${otherGrants})`)
           .bind(playerId),
         session.prepare(`DELETE FROM entitlement_revocations
@@ -328,16 +316,28 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
             WHERE player_id = ?1 AND source <> 'purchase'`)
           .bind(playerId),
       ];
+      const setBasedStart = 1;
       const setBasedCount = statements.length;
       for (const note of notes) {
         statements.push(session.prepare('DELETE FROM entitlement_notes WHERE note_id = ?').bind(note.note_id));
       }
-      for (const row of pendingFinalizations) {
+      // By grant id, not from a read: a finalization the purchase path wrote
+      // after the reads above moves too, instead of going with the old grant
+      // by the cascade. Kept until the cron acknowledges or consumes the
+      // purchase within Play's three-day window; the row (with the raw
+      // token) then goes.
+      for (const [oldId, newId] of keptGrantIds) {
         statements.push(
-          session.prepare('DELETE FROM google_play_pending_finalizations WHERE ledger_entry_id = ?')
-            .bind(row.ledger_entry_id),
+          session.prepare(`UPDATE google_play_pending_finalizations
+              SET ledger_entry_id = ?, player_id = ? WHERE ledger_entry_id = ?`)
+            .bind(newId, retainedPlayerId, oldId),
         );
       }
+      // One filed under the player for another player's grant.
+      statements.push(
+        session.prepare('UPDATE google_play_pending_finalizations SET player_id = ? WHERE player_id = ?')
+          .bind(retainedPlayerId, playerId),
+      );
       for (const revocation of revocations) {
         statements.push(
           session.prepare('DELETE FROM entitlement_revocations WHERE ledger_entry_id = ?')
@@ -412,23 +412,6 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
         ));
         retained += 1;
       }
-      for (const row of pendingFinalizations) {
-        // Kept until the cron acknowledges or consumes the purchase within
-        // Play's three-day window; the row (with the raw token) then goes.
-        const grant = keptGrantOf(row.ledger_entry_id);
-        statements.push(session.prepare(`INSERT INTO google_play_pending_finalizations (
-            ledger_entry_id, player_id, purchase_token, first_seen_at_ms, next_attempt_at_ms,
-            attempts, last_reason
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(
-          grant,
-          retainedPlayerId,
-          row.purchase_token,
-          row.first_seen_at_ms,
-          row.next_attempt_at_ms,
-          row.attempts,
-          row.last_reason,
-        ));
-      }
       const byPlayerStart = statements.length;
       for (const [table, column] of deletedByPlayer) {
         statements.push(session.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).bind(playerId));
@@ -439,7 +422,7 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
       // Every selected ledger row is kept (rewritten); deleted rows are the
       // set-based and by-player statements' changes.
       return {
-        deleted: changes(0, setBasedCount) + changes(byPlayerStart, results.length),
+        deleted: changes(setBasedStart, setBasedCount) + changes(byPlayerStart, results.length),
         retained,
       };
     },

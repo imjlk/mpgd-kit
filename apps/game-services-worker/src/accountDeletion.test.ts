@@ -371,6 +371,43 @@ try {
     assert.deepEqual(await pending.list({ limit: 10 }), []);
   }
 
+  // --- An owed Play finalization written while the erasure runs ----------
+  {
+    await seedPlayer(db, 'player-9');
+    const playGrant = await db.prepare(`SELECT ledger_entry_id FROM entitlement_transactions
+        WHERE player_id = 'player-9' AND json_extract(payload_json, '$.store') = 'google-play'`)
+      .first<{ ledger_entry_id: string }>();
+    await db.prepare('DELETE FROM google_play_pending_finalizations WHERE player_id = ?')
+      .bind('player-9')
+      .run();
+    // The purchase path's outbox write lands between the eraser's reads and its batch.
+    const racing = {
+      withSession(constraint: string) {
+        const session = db.withSession(constraint as never);
+        return {
+          prepare: (query: string) => session.prepare(query),
+          async batch(statements: D1PreparedStatement[]) {
+            await db.prepare(`INSERT INTO google_play_pending_finalizations (
+                ledger_entry_id, player_id, purchase_token, first_seen_at_ms, next_attempt_at_ms, attempts
+              ) VALUES (?, 'player-9', 'token-racing', 0, 0, 0)`)
+              .bind(required(playGrant ?? undefined).ledger_entry_id)
+              .run();
+            return session.batch(statements);
+          },
+        };
+      },
+    } as unknown as D1Database;
+    await createD1PlayerDataEraser(racing).erasePlayerData({
+      playerId: 'player-9',
+      retainedPlayerId: 'deleted:deletion-9',
+    });
+    const moved = await db.prepare(`SELECT f.player_id, t.source FROM google_play_pending_finalizations f
+        JOIN entitlement_transactions t ON t.ledger_entry_id = f.ledger_entry_id
+        WHERE f.purchase_token = 'token-racing'`)
+      .first<{ player_id: string; source: string }>();
+    assert.deepEqual({ ...moved }, { player_id: 'deleted:deletion-9', source: 'purchase' });
+  }
+
   // --- The retention purge -----------------------------------------------------
   // Kept records younger than five years stay; older ones go with their rows.
   assert.equal(
@@ -381,7 +418,7 @@ try {
     db,
     new Date('2031-10-26T00:00:00.000Z'),
   );
-  assert.equal(purged, 6, 'two kept grants each of player-1, player-4, and player-8');
+  assert.equal(purged, 8, 'two kept grants each of player-1, player-4, player-8, and player-9');
   for (const table of [
     'entitlement_transactions',
     'entitlement_revocations',

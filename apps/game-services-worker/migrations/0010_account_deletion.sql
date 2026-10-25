@@ -26,8 +26,9 @@ CREATE TABLE IF NOT EXISTS account_deletion_pending (
 
 -- The erasure finds a player's rows by these player indexes; the other
 -- player-keyed tables already lead an index or key with the player id.
+-- Also the retention purge's range over deleted:<id> players by grant date.
 CREATE INDEX IF NOT EXISTS idx_entitlement_transactions_player
-  ON entitlement_transactions (player_id);
+  ON entitlement_transactions (player_id, granted_at);
 CREATE INDEX IF NOT EXISTS idx_leaderboard_transactions_player
   ON leaderboard_transactions (player_id);
 CREATE INDEX IF NOT EXISTS idx_admob_ssv_callbacks_player
