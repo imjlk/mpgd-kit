@@ -209,7 +209,7 @@ const gateway = createCapacitorPlatformGateway({ ..., providers: [notifications]
 ```
 
 <!--
-@link src/notifications-provider.ts#createCapacitorNotificationProvider Android omits advertising from remote purposes, waits for channels before register, refuses a token when channels cannot be created, ignores a dismiss, confirms an iOS schedule by content, and keeps a Doze-deferred alarm visible to cancellation.
+@link src/notifications-provider.ts#createCapacitorNotificationProvider Android declares advertising like the FCM registry and registers rendersAdvertising with the shell's renderer, waits for channels before register, refuses a token when channels cannot be created, ignores a dismiss, confirms an iOS schedule by content, and keeps a Doze-deferred alarm visible to cancellation.
 @evidence ../../docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor An Android FCM notification message cannot carry the opt-out action, and a killed-app tap is only in connectionOptions.notificationResponse.
 -->
 Create it once, early in startup: it registers its native listeners when it
@@ -321,14 +321,26 @@ is created, which is how a cold-start open reaches it.
     send names the category in `apns.payload.aps.category`.
   - The action opens the `optOutRoute` of the advertising topic the push names
     in its `topic` data key; without that key it opens nothing.
-  - An Android FCM notification message cannot carry actions, so an Android
-    advertising push needs the shell to render it natively with the action,
-    which is not built yet (a follow-up after C1). Android `remote.purposes`
-    still lists `advertising` so the provider pairs with the standard FCM
-    registry, but `validateNotificationTopicCatalog` refuses a catalog that
-    maps an advertising topic to `android`: the push would arrive without the
-    opt-out action the Korean rules require (see the RFC's advertising
-    rules). The kit's starter maps its sample advertising topic to iOS only.
+  - An Android FCM notification message cannot carry actions, so the shell
+    renders Android advertising pushes itself (AR1): the backend sends them
+    as data messages, and `dev.mpgd.capacitor.AdvertisingMessagingService`
+    from `@mpgd/capacitor-game-services`, declared as the shell's messaging
+    service in place of the messaging plugin's, posts them with the action.
+    Pass `advertisingRenderer: readCapacitorAdvertisingPushRenderer`: on
+    Android, with a catalog that maps an advertising topic, the provider
+    reads it once and registers `rendersAdvertising: true` when that service
+    is installed, and it announces its registration once the read answers,
+    so an app update that adds or removes the renderer reaches the backend
+    at its first start (once a player is signed in). Under the Korean rules the backend sends Android
+    advertising only to such an installation, and
+    `validateNotificationTopicCatalog` accepts an
+    advertising topic mapped to `android` only when the deployment sets
+    `shellRendersAdvertising: true`. Both taps open the game through the
+    messaging plugin as any push does; the plugin reports the action as a
+    `tap` with `mpgd.action: advertising-opt-out` in its data, which the
+    provider reads as the opt-out action. A read that fails or takes more
+    than five seconds counts as no renderer. The manifest lines are in the
+    [Firebase setup guide](../../docs/FIREBASE_NOTIFICATIONS.md#3-android).
 - **Settings.** Neither plugin opens the notification settings, so the
   provider takes an `openSettings` opener; without one `permission.settings`
   is `false` and `openSettings` answers `unavailable`.

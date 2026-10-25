@@ -1325,7 +1325,8 @@ export function createNotificationConformanceBackend(
         ...(serverPermission === undefined ? {} : { serverPermission }),
         ...(recipient.endpoint === undefined
           ? {}
-          : { endpointPermission: recipient.endpoint.permission }),
+          // The fixture's device shows the actions a push carries.
+          : { endpointPermission: recipient.endpoint.permission, endpointShowsActions: true }),
         history: sent,
         at,
         ...(recipient.timeZone === undefined ? {} : { timeZone: recipient.timeZone }),

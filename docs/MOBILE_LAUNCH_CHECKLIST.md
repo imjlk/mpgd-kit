@@ -127,6 +127,16 @@ production` prints what it lacks and fails on contradictions
       The kit never shows the ATT prompt; add it only if the game tracks.
 - [ ] Push: Xcode Push Notifications capability, Firebase files, AppDelegate
       forwarding ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md)).
+- [ ] Android advertising push (only if a topic is `advertising` and maps
+      to `android`): the manifest declares the kit's
+      `dev.mpgd.capacitor.AdvertisingMessagingService` and removes the
+      messaging plugin's service, `notifications/deployment.json` sets
+      `shellRendersAdvertising: true`, and the Capacitor provider gets
+      `advertisingRenderer` (a shell newly generated with `--providers notifications`
+      has all three, and `mpgd target build` does not check them;
+      [Firebase notifications](./FIREBASE_NOTIFICATIONS.md#3-android)).
+      Without them the backend sends Android installations no advertising
+      under the Korean rules.
 
 ## 4. Backend
 
@@ -266,6 +276,13 @@ App Store Connect:
 - [ ] Korea: advertising messages need the 광고성 정보 수신동의 consent and
       "(광고)" prefix the notifications runtime enforces; GRAC rating and
       loot-box odds disclosure if the game sells random items.
+- [ ] Android advertising push on a device, on the **minified release
+      build** you ship: it shows the "(광고)" label, the sender and the free
+      opt-out line, and a 수신거부 button that opens the opt-out screen (warm
+      and cold start); nothing shows in the foreground or after 21:00 KST
+      without night consent; ordinary pushes and token refreshes still
+      reach the game ([notifications live test](./NOTIFICATIONS_LIVE_TEST.md#android-advertising),
+      including its required "Minified release" step).
 
 ## Related
 

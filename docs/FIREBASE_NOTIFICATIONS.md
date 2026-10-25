@@ -83,18 +83,46 @@ initializer refuses a game or shell that lists it; remove it first.
    is missing).
 4. An Android FCM notification message cannot carry action buttons, so an
    Android advertising push would arrive without the opt-out action the
-   Korean rules require (a settings path in the body is not enough).
-   Rendering them natively in the shell is a planned follow-up; until then
-   map no advertising topic to `android`. The catalog validator refuses
-   that mapping, and the notifications service will not start on a catalog
-   that has it. The client still declares `advertising` so it pairs with
-   the standard FCM registry. The starter's sample `events` topic is
-   mapped to iOS only.
+   Korean rules require (a settings path in the body is not enough). The
+   shell renders them itself: the backend sends advertising to an Android
+   installation as a data message, and the kit's messaging service posts
+   it with the action. Declare it in place of the messaging plugin's
+   service, inside `<application>` of
+   `android/app/src/main/AndroidManifest.xml` (the manifest root needs
+   `xmlns:tools="http://schemas.android.com/tools"`):
+
+   ```xml
+   <service android:name="dev.mpgd.capacitor.AdvertisingMessagingService" android:exported="false">
+       <intent-filter>
+           <action android:name="com.google.firebase.MESSAGING_EVENT" />
+       </intent-filter>
+       <meta-data android:name="dev.mpgd.notifications.advertising_renderer" android:value="true" />
+   </service>
+   <service android:name="io.capawesome.capacitorjs.plugins.firebase.messaging.MessagingService" tools:node="remove" />
+   ```
+
+   Android hands a messaging event to one service, so the plugin's own is
+   removed; the kit's forwards every other message, and every new token, to
+   the plugin. A shell project the initializer generates gets these lines,
+   and it warns about an existing project that lacks them. Then set
+   `shellRendersAdvertising: true` in `notifications/deployment.json`: the
+   catalog validator accepts an advertising topic mapped to `android` only
+   with it (the starter's sample `events` topic is mapped there, on the
+   `mpgd-advertising` channel). Under the Korean rules the backend sends
+   Android advertising only to an installation whose app registered the
+   renderer, so a build of your app from before this step receives none;
+   the app registers the renderer at its first start after the update (once
+   a player is signed in, and when the game passes `advertisingRenderer` to
+   the provider, as the starter does). Advertising pushes use
+   the same small icon and color as Firebase's own
+   (`com.google.firebase.messaging.default_notification_icon` and
+   `default_notification_color`), else the app icon.
 
 <!--
-@link ../packages/catalog/src/notification-topics.ts#validateNotificationTopicCatalog An advertising topic must not map to android until the shell renders the opt-out action.
-@link ../adapters/capacitor/src/notifications-provider.ts#createCapacitorNotificationProvider Android still declares advertising so it pairs with the standard FCM registry.
-@evidence docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor Map no advertising topic to Android until the shell renders the opt-out action.
+@link ../packages/catalog/src/notification-topics.ts#validateNotificationTopicCatalog An advertising topic maps to android only when the deployment sets shellRendersAdvertising.
+@link ../adapters/capacitor/src/notifications-provider.ts#createCapacitorNotificationProvider Android registers rendersAdvertising when the shell renders advertising.
+@link ../adapters/capacitor/src/notifications-renderer.ts#readCapacitorAdvertisingPushRenderer Reads whether the shell's messaging service is the kit's renderer.
+@evidence docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor Android advertising rendering (AR1).
 -->
 
 ## 4. iOS
@@ -185,7 +213,9 @@ half (`pnpm notifications:live`).
   two on Android 13+ (a dismissed dialog counts none), the screen offers only
   *Open system settings*.
 - A push that arrives with the app in the foreground is shown (it needs
-  `presentationOptions`).
+  `presentationOptions`). An Android advertising push is the exception: the
+  shell renders it only in the background, and in the foreground the game
+  gets a `received` event and nothing is shown.
 - A push sent through the Worker's `deliverNotification` for a `service`
   topic arrives with the app in the background, and a tap opens the topic's
   route (cold and warm starts). Verify cold starts on iOS in particular:

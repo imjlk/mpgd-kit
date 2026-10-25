@@ -29,6 +29,7 @@ export {
 } from './notifications-sdk.js';
 export {
   capacitorAdvertisingActionTypeId,
+  capacitorAdvertisingRendererTimeoutMs,
   capacitorIosMaxPendingLocalNotifications,
   capacitorLocalNotificationId,
   capacitorNotificationChannelId,
@@ -56,6 +57,10 @@ export {
   openCapacitorNotificationSettings,
   type CapacitorNotificationSettingsPlugin,
 } from './notifications-settings.js';
+export {
+  readCapacitorAdvertisingPushRenderer,
+  type CapacitorAdvertisingPushRendererPlugin,
+} from './notifications-renderer.js';
 export type {
   CapacitorNotificationServiceProvider,
   CapacitorNotificationsV2Service,

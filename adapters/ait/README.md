@@ -170,3 +170,7 @@ native storage fails. Entries whose durable write failed are not evicted; other 
 bounded at 256. This fallback does not survive host termination, never grants eligibility,
 and does not replace durable storage or the server ledger. The observer stops blocking after three
 seconds, and a late observer rejection is ignored.
+
+### Avoiding a duplicate promotion finalization
+
+A game-owned host wrapper may attach `authorityConfirmation` to a granted promotion result after its observer has received and validated a successful game-authority finalization response. The adapter passes this optional metadata through; it does not create, validate, persist, or trust the acknowledgement. Keep it bounded, short lived, single-use and scoped to the current account, campaign, claim and receipt. The game validates that complete correlation and the returned state before omitting its duplicate finalization. SDK success alone is insufficient. Missing, stale or invalid acknowledgements, interrupted observers and legacy hosts must use the existing idempotent finalization/recovery path. Do not send this client metadata to the server as grant evidence.

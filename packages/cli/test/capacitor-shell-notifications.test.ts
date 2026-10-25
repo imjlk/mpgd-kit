@@ -13,12 +13,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  androidAdvertisingRendererEntries,
+  androidAdvertisingRendererMetaData,
+  androidAdvertisingRendererService,
+  androidAdvertisingRendererWarning,
   androidInexactAlarmPermission,
   androidManifestRemovesExactAlarm,
+  androidManifestRendersAdvertising,
+  androidMessagingPluginService,
+  applyAndroidManifestAdvertisingRenderer,
   applyAndroidManifestInexactAlarms,
   applyCapacitorShellStarter,
   planCapacitorShellStarter,
 } from '../src/capacitor-shell-starter.js';
+import {
+  applyAndroidManifestAdId,
+  applyAndroidManifestOrientation,
+} from '../src/native-shell-store-policy.js';
 import {
   capacitorGatewayRegistersNotifications,
   notificationsCapacitorSupportFiles,
@@ -160,6 +171,11 @@ try {
     );
     assert.ok(
       plan.warnings.some((warning) => /notification settings screen is not added/u.test(warning)),
+    );
+    // No Android project yet: nothing to warn about the renderer.
+    assert.equal(
+      plan.warnings.some((warning) => /advertising renderer/u.test(warning)),
+      false,
     );
 
     applyCapacitorShellStarter(plan);
@@ -684,6 +700,16 @@ try {
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /has no openCapacitorNotificationSettings/u,
     );
+    // One that has the opener but predates the advertising renderer read (AR1).
+    writeFileSync(
+      types,
+      'export declare function loadCapacitorNotificationSdks(): void;\n'
+        + 'export declare function openCapacitorNotificationSettings(): Promise<void>;\n',
+    );
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /has no readCapacitorAdvertisingPushRenderer/u,
+    );
     // A subpath that re-exports the opener with `export *` still passes.
     writeFileSync(types, "export * from './notifications-settings.js';\n");
     writeFileSync(
@@ -858,6 +884,162 @@ try {
       ),
     ),
   );
+}
+
+// The Android manifest declares the kit's advertising renderer as the one
+// Firebase messaging service and removes the messaging plugin's (AR1).
+{
+  const plain = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '    <application android:label="Game">',
+    '        <activity android:name=".MainActivity" />',
+    '    </application>',
+    '</manifest>',
+    '',
+  ].join('\n');
+  assert.equal(androidManifestRendersAdvertising(plain), false);
+  const rendered = applyAndroidManifestAdvertisingRenderer(plain);
+  assert.ok(androidManifestRendersAdvertising(rendered));
+  assert.match(
+    rendered,
+    /<manifest xmlns:tools="http:\/\/schemas\.android\.com\/tools" xmlns:android=/u,
+  );
+  for (const line of androidAdvertisingRendererEntries) {
+    assert.ok(rendered.includes(`        ${line}\n`), line);
+  }
+  // Inside <application>, after what it had.
+  assert.ok(
+    rendered.indexOf('.MainActivity') < rendered.indexOf(androidAdvertisingRendererService),
+  );
+  assert.ok(rendered.indexOf(androidMessagingPluginService) < rendered.indexOf('</application>'));
+  assert.equal(applyAndroidManifestAdvertisingRenderer(rendered), rendered, 'idempotent');
+  // A game-owned manifest without it gets every step it needs as a warning.
+  const warned = androidAdvertisingRendererWarning(plain);
+  assert.ok(warned);
+  for (const step of [
+    androidAdvertisingRendererService,
+    androidMessagingPluginService,
+    'readCapacitorAdvertisingPushRenderer',
+    'shellRendersAdvertising',
+  ]) {
+    assert.ok(warned.includes(step), step);
+  }
+  assert.equal(androidAdvertisingRendererWarning(rendered), undefined);
+  // The names the Android library reads.
+  assert.equal(androidAdvertisingRendererService, 'dev.mpgd.capacitor.AdvertisingMessagingService');
+  assert.equal(androidAdvertisingRendererMetaData, 'dev.mpgd.notifications.advertising_renderer');
+  const library = readFileSync(
+    path.join(
+      kitRoot,
+      'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/AdvertisingPushRenderer.java',
+    ),
+    'utf8',
+  );
+  assert.ok(library.includes(`"${androidAdvertisingRendererMetaData}"`));
+  assert.ok(existsSync(path.join(
+    kitRoot,
+    'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/AdvertisingMessagingService.java',
+  )));
+  // Each part is needed: the plugin's service left in, the meta-data, or a comment.
+  assert.equal(
+    androidManifestRendersAdvertising(
+      rendered.replace(/\s*<service[^>]*tools:node="remove" \/>/u, ''),
+    ),
+    false,
+  );
+  assert.equal(
+    androidManifestRendersAdvertising(rendered.replace(/\s*<meta-data[^>]*\/>/u, '')),
+    false,
+  );
+  assert.equal(
+    androidManifestRendersAdvertising(
+      plain.replace(
+        '</application>',
+        `<!-- ${androidAdvertisingRendererEntries.join('')} -->\n    </application>`,
+      ),
+    ),
+    false,
+  );
+  // A part already there is not added again; an incomplete renderer is left alone.
+  const removalOnly = plain.replace(
+    '</application>',
+    `    <service android:name='${androidMessagingPluginService}' tools:node='remove' />\n    </application>`,
+  ).replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ');
+  const completed = applyAndroidManifestAdvertisingRenderer(removalOnly);
+  assert.ok(androidManifestRendersAdvertising(completed));
+  assert.equal(completed.split(androidMessagingPluginService).length - 1, 1);
+  const rendererOnly = rendered.replace(/\s*<service[^>]*tools:node="remove" \/>/u, '');
+  const restored = applyAndroidManifestAdvertisingRenderer(rendererOnly);
+  assert.ok(androidManifestRendersAdvertising(restored));
+  assert.equal(restored.split(androidAdvertisingRendererService).length - 1, 1);
+  const incomplete = rendered.replace(/\s*<meta-data[^>]*\/>/u, '');
+  assert.equal(applyAndroidManifestAdvertisingRenderer(incomplete), incomplete);
+  // An incomplete renderer without the removal gets only the removal.
+  const incompleteAlone = incomplete.replace(/\s*<service[^>]*tools:node="remove" \/>/u, '');
+  const removalAdded = applyAndroidManifestAdvertisingRenderer(incompleteAlone);
+  assert.equal(removalAdded.split(androidAdvertisingRendererService).length - 1, 1);
+  assert.equal(removalAdded.split(androidMessagingPluginService).length - 1, 1);
+  assert.ok(androidAdvertisingRendererWarning(removalAdded));
+  // Mismatched quotes do not count as the attribute.
+  assert.equal(
+    androidManifestRendersAdvertising(
+      completed.replace(
+        `android:name='${androidMessagingPluginService}'`,
+        `android:name="${androidMessagingPluginService}'`,
+      ),
+    ),
+    false,
+  );
+  // A self-closed renderer is not completed by another service's body.
+  const selfClosedRenderer = plain.replace(
+    '</application>',
+    [
+      `    <service android:name="${androidAdvertisingRendererService}" />`,
+      '        <service android:name=".Other">',
+      '            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>',
+      `            <meta-data android:name="${androidAdvertisingRendererMetaData}" android:value="true" />`,
+      '        </service>',
+      `        <service android:name="${androidMessagingPluginService}" tools:node="remove" />`,
+      '    </application>',
+    ].join('\n'),
+  );
+  assert.equal(androidManifestRendersAdvertising(selfClosedRenderer), false);
+  // CRLF is kept, and a manifest without an <application> body is left alone.
+  const crlf = applyAndroidManifestAdvertisingRenderer(plain.replaceAll('\n', '\r\n'));
+  assert.ok(androidManifestRendersAdvertising(crlf));
+  assert.equal(crlf.replaceAll('\r\n', '').includes('\n'), false);
+  const bare = '<manifest xmlns:android="a">\n    <application android:label="Game" />\n</manifest>\n';
+  assert.equal(applyAndroidManifestAdvertisingRenderer(bare), bare);
+}
+
+// AR1's renderer and L1's store policy edit the same newly generated
+// manifest, in that order: both survive, the tools namespace is bound once,
+// and applying both again changes nothing.
+{
+  const template = readFileSync(
+    path.join(kitRoot, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  )
+    .replace(/\s*<uses-permission[^>]*SCHEDULE_EXACT_ALARM[^>]*\/>/u, '')
+    // L1 must write its AD_ID line itself, after AR1's entries.
+    .replace(/\s*<uses-permission[^>]*permission\.AD_ID[^>]*\/>/u, '');
+  const once = (manifest: string): string =>
+    applyAndroidManifestAdId(
+      applyAndroidManifestOrientation(
+        applyAndroidManifestAdvertisingRenderer(applyAndroidManifestInexactAlarms(manifest)),
+        'landscape',
+      ),
+      false,
+    );
+  const final = once(template);
+  assert.ok(androidManifestRendersAdvertising(final));
+  assert.ok(androidManifestRemovesExactAlarm(final));
+  assert.equal(final.match(/xmlns:tools=/gu)?.length, 1);
+  assert.match(final, /android:screenOrientation="sensorLandscape"/u);
+  assert.equal(final.match(/permission\.AD_ID/gu)?.length, 1);
+  assert.match(final, /com\.google\.android\.gms\.permission\.AD_ID"[^>]*tools:node="remove"/u);
+  assert.equal(once(final), final, 'idempotent');
 }
 
 console.info('Capacitor shell notifications checks passed.');

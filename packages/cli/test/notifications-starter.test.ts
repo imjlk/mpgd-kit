@@ -321,13 +321,35 @@ assert.equal(
   settingsRoute,
 );
 // No advertising topic reaches Apps in Toss or Devvit, which cannot carry
-// it, or Android, whose FCM pushes cannot carry the opt-out action yet.
+// it. Android gets it because the shell the CLI generates renders it with
+// the opt-out action, which the deployment declares (AR1).
 const advertisingTopics = validation.catalog.topics.filter(
   (entry) => entry.purpose === 'advertising',
 );
 assert.ok(advertisingTopics.length > 0);
 for (const topic of advertisingTopics) {
-  assert.deepEqual(Object.keys(topic.targets ?? {}).sort(), ['ios'], topic.id);
+  assert.deepEqual(Object.keys(topic.targets ?? {}).sort(), ['android', 'ios'], topic.id);
+  assert.equal(topic.targets?.['android']?.['channelId'], 'mpgd-advertising', topic.id);
 }
+assert.equal(deployment.shellRendersAdvertising, true);
+// Without the declaration the starter catalog is refused, so a game that
+// drops the renderer must drop the android mapping too.
+const { shellRendersAdvertising: _renders, ...withoutRenderer } = deployment;
+assert.ok(
+  validateNotificationTopicCatalog(catalog, {
+    targetProviders: Object.fromEntries(
+      Object.entries(referenceNotificationTargetProviders).map(([target, provider]) => [
+        target,
+        referenceNotificationProviders[provider],
+      ]),
+    ),
+    deployment: withoutRenderer,
+  }).issues.some((issue) => /maps to android only when the shell renders it/u.test(issue.message)),
+);
+// The template's Capacitor provider passes the renderer read.
+assert.match(
+  byPath(phaser, 'src/platform/capacitorNotifications.ts'),
+  /advertisingRenderer: readCapacitorAdvertisingPushRenderer,/u,
+);
 
 console.info('Notifications starter checks passed.');

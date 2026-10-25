@@ -268,6 +268,30 @@ what to do, what to observe, and where.
 | Foreground | Run the driver again with the app in front. | The push is shown while the game is open (it needs `presentationOptions`, see the [Firebase setup](FIREBASE_NOTIFICATIONS.md#1-the-plugins)). |
 | Notices (optional) | `pnpm notifications:live run --player live-1 --advertising 1` | `advertising-notice PASS`: the consent result notice is listed, recorded as shown, and gone. This records advertising consent for the test player. |
 
+### Android advertising
+
+An Android advertising push is a data message the shell renders with the
+opt-out action (수신거부). The game the initializer generated declares the
+kit's renderer in its Android manifest and `shellRendersAdvertising` in
+`notifications/deployment.json`, and maps the starter's `events` topic to
+Android. For repeatable runs also remove `frequency` from `events`, as for
+`daily-ready` in [section 1](#1-the-game). Under the Korean rules an
+advertising push without night consent is held from 21:00 to 08:00 Asia/Seoul,
+so run this between 08:00 and 21:00 Seoul time, or also turn on night
+consent (야간 광고성 정보 수신동의) in the settings screen.
+
+| Step | Do | Observe |
+| --- | --- | --- |
+| Renderer | Nothing: the provider reads it when the app starts, and registers after the grant. | Worker log: `POST .../endpoints 200`. The WebView console (`chrome://inspect`) shows no failed advertising renderer read. With a D1 store, the endpoint's `endpoint_json` has `"rendersAdvertising":true`. |
+| Advertising consent | Turn on 광고성 정보 수신동의 in the settings screen. | Worker log: `POST .../consent 200`. |
+| Send | `pnpm notifications:live run --player live-1 --topic events --fire-in 15`, then send the app to the background before the driver's wait ends. | `scheduler PASS`. A notification on the 광고성 정보 (Promotions) channel: the title and body start with `(광고)`, the body names the sender and ends with the free opt-out line, and it has a 수신거부 button. |
+| Opt-out action | Tap 수신거부. Repeat with the app killed (cold start). | The game opens at the topic's `optOutRoute` (`/?entry=notification-settings`), and the notification leaves the shade. |
+| Body | Send again and tap the body. | The game opens at the topic's route (`/?entry=events`). |
+| Foreground | Send again with the game in front. | No notification is shown, whatever `presentationOptions` says: the renderer shows advertising only in the background, and the game gets a `received` event. |
+| Old shell | Optional: install a build without the renderer (remove the two manifest entries) over the current one, start it once, and send again. | `scheduler PASS` (a refused reminder is spent, not held), but nothing reaches FCM: the gate answers `purpose-unsupported` for that installation, which re-registered without the renderer at its start. Nothing is shown. |
+| Expiry | Optional: with the device offline and no night consent, start the driver so the reminder fires shortly before 21:00 Seoul time (it waits `--fire-in` seconds first), then reconnect after 21:00. | Nothing is shown: FCM drops it after `android.ttl`, and the shell would not show it after `mpgd.expiresAt`. |
+| Minified release (required before a release with `minifyEnabled true`) | Build the app's release variant with `minifyEnabled true` (`./gradlew :app:assembleRelease`, signed for the device), install it, and run the steps above again: a token refresh (clear the app's data, or reinstall), a `daily-ready` push, and an `events` push. | The `daily-ready` push arrives and opens the game, the `events` push shows its 수신거부 button, and logcat shows no `MpgdAdvertisingPush` warning that the messaging plugin's entry points are missing. The kit's service reaches the plugin by name; `@mpgd/capacitor-game-services` ships keep rules for those members (`consumer-rules.pro`), and this step proves they reached the build. |
+
 Each `run` uses new reminder keys. A run that stops, or a local run with
 `--no-scheduler`, cancels the reminders it set and unregisters an endpoint
 it registered, so no push arrives later. If you kept the topic's quiet

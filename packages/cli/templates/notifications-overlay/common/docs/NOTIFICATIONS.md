@@ -40,12 +40,18 @@ left for you.
    `mpgd target init capacitor --providers notifications` to install the two
    plugins into the game-owned shell. Never install
    `@capacitor/push-notifications` next to them.
-6. Advertising on Android: the sample `events` topic is mapped to iOS only.
-   An Android FCM notification cannot carry the opt-out action that the
-   Korean rules require on every advertising push (a settings path in the
-   text does not replace it), and the kit does not render Android
-   advertising natively yet. Do not add an `android` mapping to an
-   advertising topic until it does.
+6. Advertising on Android: an Android FCM notification cannot carry the
+   opt-out action that the Korean rules require on every advertising push
+   (a settings path in the text does not replace it), so the shell renders
+   advertising pushes itself. `mpgd target init capacitor --providers
+   notifications` declares the kit's renderer
+   (`dev.mpgd.capacitor.AdvertisingMessagingService`) in a newly generated
+   Android project; for an existing one it prints the manifest lines to add.
+   `notifications/deployment.json` sets `shellRendersAdvertising: true`,
+   which lets the sample `events` topic map to `android`. The backend sends
+   advertising only to an Android installation whose shell registered the
+   renderer, so an older build of your app receives none. Remove the
+   `android` mapping (and the setting) if you ship a shell without it.
 7. Apps in Toss: register each functional-message template in the console and
    add its code to the topic's `targets.ait` mapping
    (`{ "templateSetCode": "...", "agreement": "required" }`). Apps in Toss
