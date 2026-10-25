@@ -197,7 +197,7 @@ export function stampAndroidGradleVersions(
 ): string {
   const end = '(?=\\s*(?:;|\\r?\\n|\\}|$))';
   const code = new RegExp(`(\\bversionCode\\s*(?:=\\s*)?)\\d+${end}`, 'gu');
-  const name = new RegExp(`(\\bversionName\\s*(?:=\\s*)?["'])[^"']+["']${end}`, 'gu');
+  const name = new RegExp(`(\\bversionName\\s*(?:=\\s*)?)(?:"[^"']+"|'[^"']+')${end}`, 'gu');
   // Matching runs on a copy whose comments are blanked, as the identity check
   // reads the source without comments: a commented-out assignment is never
   // stamped, and a trailing comment does not hide the real one.
@@ -208,7 +208,7 @@ export function stampAndroidGradleVersions(
     text: versions.versionCode,
   }));
   const nameEdits = [...masked.matchAll(name)].map((match) => ({
-    start: (match.index ?? 0) + (match[1]?.length ?? 0),
+    start: (match.index ?? 0) + (match[1]?.length ?? 0) + 1,
     end: (match.index ?? 0) + match[0].length - 1,
     text: versions.versionName,
   }));
@@ -639,10 +639,14 @@ function assertIosSetting(
   const project = stripComments(settings.project.values);
   if (expected === undefined && key !== 'PRODUCT_BUNDLE_IDENTIFIER') {
     // Stamping writes an unconditional value into the App target's Release
-    // settings, which overrides the project level and any xcconfig; only a
-    // conditional target-level assignment would still win for its SDK.
-    if (conditional.test(target)) {
+    // settings, which overrides the project level and any xcconfig. A
+    // conditional assignment at either level is rejected rather than relying
+    // on how Xcode orders it against that value, and so are duplicates.
+    if (conditional.test(target) || conditional.test(project)) {
       throw new Error(`Native release preflight does not support conditional ${key} in ${file}.`);
+    }
+    if (readSettingValues(target, expression).length > 1) {
+      throw new Error(`Native release preflight has ambiguous App Release ${key} in ${file}.`);
     }
     return;
   }

@@ -990,7 +990,7 @@ function verifyVersionStamping(root: string): void {
   assert.equal(resolveNativeVersionSource({ MPGD_NATIVE_VERSION_STAMP: '1' }), 'stamped');
   assert.throws(
     () => resolveNativeVersionSource({ MPGD_NATIVE_VERSION_STAMP: 'yes' }),
-    /must be 1 or 0/u,
+    /must be 1 or 0, received yes/u,
   );
   for (const [platform, environment, metadata] of [
     ['android', androidReserved, { packageId: 'dev.example.game' }],
@@ -1059,6 +1059,24 @@ function verifyVersionStamping(root: string): void {
     'build.gradle',
   );
   assert.match(commented, /\/\/ versionCode 9\r\n/u);
+  const urls = stampAndroidGradleVersions(
+    [
+      'repositories { maven { url "https://example.invalid/m2" } }',
+      "def note = '/* not a comment'",
+      'defaultConfig {',
+      '  versionCode 1',
+      "  versionName '1.0'",
+      '}',
+      'versionName "1.0\'',
+    ].join('\n'),
+    { versionCode: '43', versionName: '1.5.0' },
+    'build.gradle',
+  );
+  assert.match(urls, /url "https:\/\/example\.invalid\/m2"/u);
+  assert.match(urls, /versionCode 43\n/u);
+  assert.match(urls, /versionName '1\.5\.0'\n/u);
+  // A mismatched quote pair is not a literal the tool rewrites.
+  assert.match(urls, /versionName "1\.0'$/u);
   assert.match(commented, /versionCode 43 \/\/ bumped/u);
   assert.match(commented, /\/\* versionName "9\.9\.9" \*\//u);
   assert.match(commented, /versionName "1\.5\.0" \/\* display/u);
@@ -1154,6 +1172,28 @@ function verifyVersionStamping(root: string): void {
   assert.throws(
     () => assertNativeReleaseIdentity({ ...iosStampInput, versionSource: 'stamped' }),
     /does not support conditional MARKETING_VERSION/u,
+  );
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
+    inherited.replace(
+      'MARKETING_VERSION = 1.4.0;',
+      'MARKETING_VERSION = 1.4.0;\n    "MARKETING_VERSION[sdk=iphoneos*]" = 2.0.0;',
+    ),
+  );
+  assert.throws(
+    () => assertNativeReleaseIdentity({ ...iosStampInput, versionSource: 'stamped' }),
+    /does not support conditional MARKETING_VERSION/u,
+  );
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
+    inherited.replace(
+      'MARKETING_VERSION = "$(inherited)";',
+      'MARKETING_VERSION = 1.0;\n    MARKETING_VERSION = 1.1;',
+    ),
+  );
+  assert.throws(
+    () => assertNativeReleaseIdentity({ ...iosStampInput, versionSource: 'stamped' }),
+    /ambiguous App Release MARKETING_VERSION/u,
   );
   writeShellFiles(root);
   // Debug and other targets keep their own numbers.

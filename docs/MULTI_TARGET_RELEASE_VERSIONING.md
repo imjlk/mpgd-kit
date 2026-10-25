@@ -121,9 +121,10 @@ With stamping on (you can also set it for a manual `mpgd target build`):
    numbers. On Android every `versionCode`/`versionName` assignment must
    still be a literal the tool can rewrite (the committed `versionCode 1`
    is fine). On iOS the numbers may be missing, inherited or set in an
-   xcconfig, but a conditional target-level assignment such as
-   `MARKETING_VERSION[sdk=iphoneos*]` is rejected. The package ID, bundle
-   ID, suffix and setter rules still apply.
+   xcconfig, but a conditional assignment such as
+   `MARKETING_VERSION[sdk=iphoneos*]` at the target or project level, or a
+   duplicate assignment in the App target's Release settings, is rejected.
+   The package ID, bundle ID, suffix and setter rules still apply.
 2. The reserved numbers are written into the build's staged copy of the
    shell, never into the game checkout: every literal `versionCode` /
    `versionName` of the app Gradle file, and `MARKETING_VERSION` /
