@@ -113,9 +113,9 @@ export function createStarterAccountDeletion(input: {
         : [() => input.storage.save({ key: journalKey, value: null })]),
     ];
     // The starter's own run checkpoint (PlayScene); a game's saves register a step.
-    const clearRun = (): Promise<void> => input.storage.save({ key: starterRunKey, value: null });
+    required.push(() => input.storage.save({ key: starterRunKey, value: null }));
     let cleared = true;
-    for (const step of [...required, clearRun, ...signOutSteps]) {
+    for (const step of [...required, ...signOutSteps]) {
       try {
         await withTimeout(step);
       } catch (error) {

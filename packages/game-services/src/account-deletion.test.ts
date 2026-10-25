@@ -459,16 +459,52 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       return { deleted: 0, retained: 0 };
     },
   };
+  let identityCalls = 0;
   const identityFailing = createAccountDeletionService({
     erasers: [countingEraser],
-    identity: { deletePlayer: () => Promise.reject(new Error('identity unavailable')) },
+    identity: {
+      deletePlayer: () => {
+        identityCalls += 1;
+        return Promise.reject(new Error('identity unavailable'));
+      },
+    },
     pending: identityPending,
     now: () => '2026-10-25T00:00:00.000Z',
+    sleep: async () => undefined,
   });
-  await assert.rejects(
-    identityFailing.deletePlayerAccount({ playerId: 'player-1' }),
-    (error: unknown) => error instanceof AccountDeletionError && error.retryable,
-  );
+  const identityConsoleError = console.error;
+  console.error = () => undefined;
+  try {
+    await assert.rejects(
+      identityFailing.deletePlayerAccount({ playerId: 'player-1' }),
+      (error: unknown) => error instanceof AccountDeletionError && error.retryable,
+    );
+  } finally {
+    console.error = identityConsoleError;
+  }
+  assert.equal(identityCalls, 3, 'the identity call is tried three times');
+  // An identity call whose answer was lost (it committed) succeeds when
+  // tried again, and the deletion goes on.
+  let lostCalls = 0;
+  console.error = () => undefined;
+  try {
+    const lostAnswer = await createAccountDeletionService({
+      erasers: [countingEraser],
+      identity: {
+        deletePlayer: () => {
+          lostCalls += 1;
+          return lostCalls === 1 ? Promise.reject(new Error('timeout')) : Promise.resolve();
+        },
+      },
+      pending: createInMemoryPendingAccountErasureStore(),
+      sleep: async () => undefined,
+    }).deletePlayerAccount({ playerId: 'player-1' });
+    assert.equal(lostAnswer.status, 'deleted');
+  } finally {
+    console.error = identityConsoleError;
+  }
+  assert.equal(identityErasures, 1);
+  identityErasures = 0;
   assert.deepEqual(
     (await identityPending.list({ limit: 10 })).map((entry) => entry.phase),
     ['erasing'],
@@ -678,7 +714,8 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   } finally {
     console.error = consoleError;
   }
-  assert.equal(scrubbed.length, 3);
+  // Three attempts, and the erasure left neither finished nor pending (no identity service).
+  assert.equal(scrubbed.length, 4);
   assert.equal(JSON.stringify(scrubbed).includes('player-1'), false);
   assert.match(String(scrubbed[0]?.[2]), /row \[player\] locked/u);
 }

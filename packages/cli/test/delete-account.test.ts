@@ -137,6 +137,7 @@ const pendingPurchase = {
   assert.equal(calls, 1);
   assert.deepEqual([...credentials.values.keys()], ['unrelated']);
   assert.equal(storage.values.get(defaultMonetizationJournalKey), null);
+  assert.equal(storage.values.get('starter-run'), null, 'the run checkpoint is cleared');
   assert.equal(await deletion.hasPendingPurchase(), false);
   assert.deepEqual(steps, ['notifications.unregister']);
 }

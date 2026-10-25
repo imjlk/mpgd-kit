@@ -246,7 +246,7 @@ const deletedByPlayer: readonly (readonly [table: string, column: string])[] = [
 /**
  * The D1 erasure: one batch (a transaction) over every player table. The
  * ledger rows are read first and rewritten by id, so a row written between
- * the read and the batch is left for the second pass instead of being
+ * the read and the batch is left for the pending erasure's sweep instead of being
  * half-handled; a revocation written meanwhile for a grant being rewritten
  * fails the batch (the grant's foreign key), which the caller retries.
  */

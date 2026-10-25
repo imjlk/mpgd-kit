@@ -75,7 +75,7 @@ export interface AccountDeletionAuditEntry {
   /** `not-configured` only where no identity service exists (local development). */
   readonly identity: 'deleted' | 'not-configured';
   /**
-   * `false` when a store's second erasure pass still failed after the
+   * `false` when a store's erasure still failed after the
    * identity was deleted: the erasure stays pending (with the player id)
    * until `finishPendingAccountErasures` completes it and records a
    * `complete: true` entry under the same `deletionId`.
@@ -257,13 +257,33 @@ export function createAccountDeletionService(input: {
       };
       try {
         await input.pending.put(pendingErasure);
-        if (input.identity !== null) {
-          await input.identity.deletePlayer({ playerId });
-        }
       } catch (error) {
-        // Nothing is erased yet and the player most likely still exists and
-        // retries; an `erasing` entry left behind is only discarded when stale.
         throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: error });
+      }
+      const identity = input.identity;
+      if (identity !== null) {
+        // Retried here (it is idempotent): a call that committed but whose
+        // answer was lost succeeds the next time, and the player, whose
+        // sessions may already be gone, could not retry it.
+        let lastError: unknown;
+        const deleted = await retry(
+          () => identity.deletePlayer({ playerId }),
+          sleep,
+          (error, attempt) => {
+            lastError = error;
+            logFailure(
+              `Account deletion identity call failed (attempt ${attempt} of ${secondPassAttempts}):`,
+              deletionId,
+              playerId,
+              error,
+            );
+          },
+        );
+        if (deleted === undefined) {
+          // Nothing is erased yet and the player most likely still exists and
+          // retries; an `erasing` entry left behind is only discarded when stale.
+          throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: lastError });
+        }
       }
       // Without an identity service (local development) the player still
       // exists, so the entry stays `erasing` and no sweep erases it.
@@ -302,7 +322,7 @@ export function createAccountDeletionService(input: {
         deleted += result.value.deleted;
         retained += result.value.retained;
       }
-      if (!complete && !marked) {
+      if (!complete && (!marked || input.identity === null)) {
         // Neither the inline pass nor a sweep finishes this one: an operator
         // can only learn it from this line and the audit entry.
         console.error('Account deletion erasure incomplete and not pending:', deletionId);
@@ -459,20 +479,6 @@ const secondPassAttempts = 3;
 /** Sweep attempts after which a failing pending erasure is logged as needing an operator. */
 const pendingErasureAlertAttempts = 10;
 const secondPassBackoffMs = [100, 400] as const;
-
-async function eraseAll(
-  erasers: readonly PlayerDataEraser[],
-  erasure: PlayerDataErasureInput,
-): Promise<PlayerDataErasureResult> {
-  let deleted = 0;
-  let retained = 0;
-  for (const eraser of erasers) {
-    const result = await eraser.erasePlayerData(erasure);
-    deleted += result.deleted;
-    retained += result.retained;
-  }
-  return { deleted, retained };
-}
 
 /** Runs `operation` up to three times with a short backoff; `undefined` when all failed. */
 async function retry<Value>(
