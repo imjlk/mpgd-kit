@@ -57,7 +57,9 @@ export interface PlayerDataEraser {
  * The identity service's part (implemented by the identity Worker): revoke
  * every session family of the player and delete the guest record, so no
  * session authenticates as the player again. Idempotent: an unknown player
- * succeeds. It should delete the record last (or atomically): a failure
+ * succeeds. The game-services session bindings must stop accepting the
+ * player's access tokens at once too (not when they expire), since the
+ * erasure runs right after and assumes nothing new is written. It should delete the record last (or atomically): a failure
  * after the sessions are revoked answers the player a retryable error, but
  * the retry can no longer authenticate.
  */
@@ -141,15 +143,17 @@ export class AccountDeletionError extends Error {
 
 export interface AccountDeletionService {
   /**
-   * Erases the player's data, records the erasure as pending, deletes the
-   * identity, marks the pending erasure `identity-deleted`, then erases
-   * again: the second pass removes what a request that was already running
-   * wrote during the first. A failure before the identity is deleted rejects
-   * with a retryable `ACCOUNT_DELETION_FAILED`. Once the identity is deleted
-   * the player cannot retry, so each store's second pass is tried three
-   * times with a short backoff; a store that still fails leaves the erasure
-   * pending for `finishPendingAccountErasures` (the Worker's cron) and is
-   * reported in the audit entry (`complete: false`), never to the player.
+   * Records the erasure as pending, deletes the identity (no session
+   * authenticates as the player any more, so nothing new is written), marks
+   * the pending erasure `identity-deleted`, then erases every store. A
+   * failure before the identity is deleted rejects with a retryable
+   * `ACCOUNT_DELETION_FAILED` and has erased nothing, so a misconfigured
+   * identity service never leaves a live account stripped of its data. Once
+   * the identity is deleted the player cannot retry, so each store is tried
+   * three times with a short backoff; a store that still fails leaves the
+   * erasure pending for `finishPendingAccountErasures` (the Worker's cron)
+   * and is reported in the audit entry (`complete: false`), never to the
+   * player.
    */
   deletePlayerAccount(input: { readonly playerId: string }): Promise<AccountDeletionReceipt>;
 }
@@ -169,9 +173,9 @@ export interface PendingAccountErasure extends PlayerDataErasureInput {
    * older than `staleErasingPendingMs` instead of erasing a live player.
    * Residual gap: an identity call that committed but whose answer was lost
    * (or a process that died before the mark) leaves an `erasing` entry, and
-   * rows a request wrote during the first pass then stay under the deleted
-   * id. Closing it needs the identity service to answer whether a player
-   * exists, which the binding does not offer yet.
+   * the player's data then stays under the deleted id. Closing it needs the
+   * identity service to answer whether a player exists, which the binding
+   * does not offer yet.
    */
   readonly phase: 'erasing' | 'identity-deleted';
   /** Sweep attempts so far. */
@@ -251,16 +255,14 @@ export function createAccountDeletionService(input: {
         phase: 'erasing',
         attempts: 0,
       };
-      let first: PlayerDataErasureResult;
       try {
-        first = await eraseAll(input.erasers, erasure);
         await input.pending.put(pendingErasure);
         if (input.identity !== null) {
           await input.identity.deletePlayer({ playerId });
         }
       } catch (error) {
-        // The player most likely still exists and retries; an `erasing`
-        // entry left behind is never erased, only discarded when stale.
+        // Nothing is erased yet and the player most likely still exists and
+        // retries; an `erasing` entry left behind is only discarded when stale.
         throw new AccountDeletionError('ACCOUNT_DELETION_FAILED', { cause: error });
       }
       // Without an identity service (local development) the player still
@@ -277,10 +279,9 @@ export function createAccountDeletionService(input: {
               error,
             ),
         ) !== undefined;
-      // Each store's second pass on its own, so one failing store does not
-      // stop the others.
-      let deleted = first.deleted;
-      let retained = first.retained;
+      // Each store on its own, so one failing store does not stop the others.
+      let deleted = 0;
+      let retained = 0;
       let complete = true;
       for (const eraser of input.erasers) {
         const result = await retry(
@@ -288,7 +289,7 @@ export function createAccountDeletionService(input: {
           sleep,
           (error, attempt) =>
             logFailure(
-              `Account deletion second erasure pass failed (attempt ${attempt} of ${secondPassAttempts}):`,
+              `Account deletion erasure failed (attempt ${attempt} of ${secondPassAttempts}):`,
               deletionId,
               playerId,
               error,
@@ -304,7 +305,7 @@ export function createAccountDeletionService(input: {
       if (!complete && !marked) {
         // Neither the inline pass nor a sweep finishes this one: an operator
         // can only learn it from this line and the audit entry.
-        console.error('Account deletion second pass incomplete and not pending:', deletionId);
+        console.error('Account deletion erasure incomplete and not pending:', deletionId);
       }
       if (complete) {
         try {
@@ -383,7 +384,7 @@ export async function finishPendingAccountErasures(input: {
       }
       continue;
     }
-    // Every store on its own, as in the inline second pass.
+    // Every store on its own, as in the inline erasure.
     let deleted = 0;
     let retained = 0;
     let erased = true;
@@ -404,6 +405,13 @@ export async function finishPendingAccountErasures(input: {
     }
     if (!erased) {
       failed += 1;
+      if (erasure.attempts + 1 >= pendingErasureAlertAttempts) {
+        console.error(
+          'Pending account erasure keeps failing; it needs an operator:',
+          erasure.deletionId,
+          `${erasure.attempts + 1} sweep attempts`,
+        );
+      }
       try {
         await input.pending.put({ ...erasure, attempts: erasure.attempts + 1, attemptedAt: at });
       } catch (error) {
@@ -448,6 +456,8 @@ export async function finishPendingAccountErasures(input: {
 }
 
 const secondPassAttempts = 3;
+/** Sweep attempts after which a failing pending erasure is logged as needing an operator. */
+const pendingErasureAlertAttempts = 10;
 const secondPassBackoffMs = [100, 400] as const;
 
 async function eraseAll(

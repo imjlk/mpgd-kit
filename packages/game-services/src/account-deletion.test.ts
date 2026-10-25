@@ -393,12 +393,11 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     status: 'deleted',
     deletionId: 'deletion-1',
     completedAt: '2026-10-25T00:00:01.000Z',
-    retainedPurchaseRecords: 4,
+    retainedPurchaseRecords: 2,
   });
-  // Erase, delete the identity, then erase what an in-flight request wrote.
+  // The identity goes first (no session writes anything after it), then
+  // every store is erased.
   assert.deepEqual(calls, [
-    'games:player-1:deleted:deletion-1',
-    'notifications:player-1:deleted:deletion-1',
     'identity:player-1',
     'games:player-1:deleted:deletion-1',
     'notifications:player-1:deleted:deletion-1',
@@ -415,8 +414,8 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
       completedAt: '2026-10-25T00:00:01.000Z',
       identity: 'deleted',
       complete: true,
-      deleted: 8,
-      retained: 4,
+      deleted: 4,
+      retained: 2,
     },
   ]);
   assert.equal(
@@ -425,16 +424,22 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     'the audit entry has no player id',
   );
 
-  // A failing first pass is retryable and nothing after it runs.
+  // A pending store that fails is retryable, and nothing after it runs.
   const failingPending = createInMemoryPendingAccountErasureStore();
   const failing = createAccountDeletionService({
-    erasers: [{ erasePlayerData: () => Promise.reject(new Error('D1_ERROR')) }],
+    erasers: [
+      {
+        erasePlayerData: () => {
+          throw new Error('nothing is erased before the identity is deleted');
+        },
+      },
+    ],
     identity: {
       deletePlayer: () => {
-        throw new Error('identity must not run after a failed erasure');
+        throw new Error('identity must not run without a pending erasure');
       },
     },
-    pending: failingPending,
+    pending: { ...failingPending, put: () => Promise.reject(new Error('D1_ERROR')) },
   });
   await assert.rejects(failing.deletePlayerAccount({ playerId: 'player-1' }), (error: unknown) => {
     assert.ok(error instanceof AccountDeletionError);
@@ -468,7 +473,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     (await identityPending.list({ limit: 10 })).map((entry) => entry.phase),
     ['erasing'],
   );
-  assert.equal(identityErasures, 1);
+  assert.equal(identityErasures, 0, 'a failed identity deletion erased nothing');
   assert.deepEqual(
     await finishPendingAccountErasures({
       erasers: [countingEraser],
@@ -485,7 +490,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
     }),
     { finished: 0, failed: 0, discarded: 1 },
   );
-  assert.equal(identityErasures, 1, 'a sweep never erases an erasing entry');
+  assert.equal(identityErasures, 0, 'a sweep never erases an erasing entry');
   assert.deepEqual(await identityPending.list({ limit: 10 }), []);
   for (const playerId of ['', 'deleted:deletion-1']) {
     // A `deleted:` id names kept records of another deletion, never a player.
@@ -529,8 +534,8 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   assert.equal(errors.length, 1);
   assert.equal(JSON.stringify(errors).includes('player-1'), false);
 
-  // Once the identity is deleted the player cannot retry: each store's
-  // second pass is tried three times with a backoff; a store that recovers
+  // Once the identity is deleted the player cannot retry: each store is
+  // tried three times with a backoff; a store that recovers
   // counts, one that does not leaves the erasure pending for the sweep.
   const waits: number[] = [];
   const sleep = async (ms: number): Promise<void> => {
@@ -542,7 +547,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   const recovering: PlayerDataEraser = {
     async erasePlayerData() {
       recoveringPasses += 1;
-      if (recoveringPasses === 2) {
+      if (recoveringPasses === 1) {
         throw new Error('D1_ERROR: transient');
       }
       return { deleted: 1, retained: 1 };
@@ -551,7 +556,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   const broken: PlayerDataEraser = {
     async erasePlayerData() {
       brokenPasses += 1;
-      if (brokenPasses > 1 && !brokenRecovered) {
+      if (!brokenRecovered) {
         throw new Error('D1_ERROR: unavailable');
       }
       return { deleted: 1, retained: 0 };
@@ -578,15 +583,15 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   } finally {
     console.error = consoleError;
   }
-  // recovering: first pass, a failed attempt, a good one; broken: first pass, three failed.
-  assert.equal(recoveringPasses, 3);
-  assert.equal(brokenPasses, 4);
+  // recovering: a failed attempt, then a good one; broken: three failed.
+  assert.equal(recoveringPasses, 2);
+  assert.equal(brokenPasses, 3);
   assert.deepEqual(waits, [100, 100, 400]);
   assert.equal(secondPassErrors.length, 4);
   assert.equal(JSON.stringify(secondPassErrors).includes('player-1'), false);
   assert.deepEqual(
     { complete: secondPassAudits[0]?.complete, deleted: secondPassAudits[0]?.deleted },
-    { complete: false, deleted: 3 },
+    { complete: false, deleted: 1 },
   );
   const [left] = await sweepPending.list({ limit: 10 });
   assert.deepEqual(
@@ -659,7 +664,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
         {
           async erasePlayerData() {
             scrubPasses += 1;
-            if (scrubPasses > 1) {
+            if (scrubPasses > 0) {
               throw new Error('D1_ERROR: row player-1 locked');
             }
             return { deleted: 0, retained: 0 };
@@ -697,7 +702,7 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   const failsAfterFirst: PlayerDataEraser = {
     async erasePlayerData() {
       failSecond += 1;
-      if (failSecond > 1) {
+      if (failSecond > 0) {
         throw new Error('D1_ERROR');
       }
       return { deleted: 1, retained: 0 };

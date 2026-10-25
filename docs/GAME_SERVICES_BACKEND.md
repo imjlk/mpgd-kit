@@ -1067,23 +1067,27 @@ on `createGameServicesRuntime(...).accountDeletion`.
 
 `createAccountDeletionService` (D1: migration `0010_account_deletion.sql`):
 
-1. Erase every store (one D1 batch, a transaction).
-2. Record a pending erasure (it holds the player id), phase `erasing`.
-3. Have the identity service delete the player; then mark the pending
+1. Record a pending erasure (it holds the player id), phase `erasing`.
+2. Have the identity service delete the player (every session stops
+   authenticating, so nothing new is written); then mark the pending
    erasure `identity-deleted`.
-4. Erase again, each store on its own with three attempts: a request that
-   was already running during step 1 may have written rows.
-5. When every store completed, clear the pending erasure; in any case
+3. Erase every store, each on its own with three attempts (D1: one batch,
+   a transaction).
+4. When every store completed, clear the pending erasure; in any case
    write the audit entry (`account_deletion_audit`: deletion id, times,
    counts, no player id).
 
-A failure in steps 1 to 3 answers the retryable error. After step 3 the
-player can no longer authenticate, so a store that still fails leaves the
-erasure pending and the audit entry says `complete: false`; the Worker's
-cron erases it again (`finishPendingAccountErasures`) and completes the
-audit entry. An `erasing` entry (the identity call failed or the request
-died first) is never erased by the cron, since its player most likely still
-exists, and is discarded after an hour.
+A failure in steps 1 and 2 answers the retryable error and has erased
+nothing, so a misconfigured identity binding never leaves a live account
+stripped. After step 2 the player can no longer authenticate, so a store
+that still fails leaves the erasure pending and the audit entry says
+`complete: false`; the Worker's cron erases it again
+(`finishPendingAccountErasures`) and completes the audit entry. An
+`erasing` entry (the identity call failed or the request died first) is
+never erased by the cron, since its player most likely still exists, and
+is discarded after an hour. The identity Worker's `authenticateGameServicesRequest`
+and `authenticateNotificationSession` must refuse a deleted player's access
+tokens at once, not when they expire.
 
 ### What is deleted and what is kept
 
@@ -1151,10 +1155,14 @@ transaction). Games that sell outside a store add their own payment records.
 
 ### Residual gaps
 
-- A request that started before the identity was deleted and commits after
-  the second pass (a verify waiting on its store, or a notifications cron
-  run that loaded the player first) can leave a row under the deleted
-  player's id. The second pass makes the window short; nothing sweeps it.
+- A request that was authenticated before the identity was deleted and
+  commits after the erasure (a verify waiting on its store, or a
+  notifications cron run that loaded the player first) can leave a row
+  under the deleted player's id; nothing sweeps it. So can an AdMob SSV
+  callback Google delivers late (`admob_ssv_callbacks` has no purge).
+- The five-year period is the package constant `retainedPurchaseRecordYears`;
+  a game that needs another period changes it in its fork, with the
+  starter's copy and legal pages.
 - An identity call that committed but whose answer was lost leaves an
   `erasing` pending entry, which the cron discards rather than erases.
   Closing it needs the identity service to answer whether a player exists.
