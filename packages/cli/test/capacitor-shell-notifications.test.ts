@@ -1020,7 +1020,10 @@ try {
   const template = readFileSync(
     path.join(kitRoot, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
     'utf8',
-  ).replace(/\s*<uses-permission[^>]*SCHEDULE_EXACT_ALARM[^>]*\/>/u, '');
+  )
+    .replace(/\s*<uses-permission[^>]*SCHEDULE_EXACT_ALARM[^>]*\/>/u, '')
+    // L1 must write its AD_ID line itself, after AR1's entries.
+    .replace(/\s*<uses-permission[^>]*permission\.AD_ID[^>]*\/>/u, '');
   const once = (manifest: string): string =>
     applyAndroidManifestAdId(
       applyAndroidManifestOrientation(
@@ -1033,7 +1036,8 @@ try {
   assert.ok(androidManifestRendersAdvertising(final));
   assert.ok(androidManifestRemovesExactAlarm(final));
   assert.equal(final.match(/xmlns:tools=/gu)?.length, 1);
-  assert.match(final, /android:screenOrientation="(?:sensorLandscape|landscape|userLandscape)"/u);
+  assert.match(final, /android:screenOrientation="sensorLandscape"/u);
+  assert.equal(final.match(/permission\.AD_ID/gu)?.length, 1);
   assert.match(final, /com\.google\.android\.gms\.permission\.AD_ID"[^>]*tools:node="remove"/u);
   assert.equal(once(final), final, 'idempotent');
 }
