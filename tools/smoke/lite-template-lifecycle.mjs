@@ -14,12 +14,14 @@ for (const relativePath of [
     const handlers = new Map();
     let disposals = 0;
     let restoreDisposals = 0;
+    let deleteAccountDisposals = 0;
     const dispose = () => { disposals += 1; };
     const context = {
       document: { getElementById: () => ({ style: {} }) },
       bindGameAudio: () => ({ dispose }),
       createTapGame: () => shell,
       mountRestorePurchasesButton: () => () => { restoreDisposals += 1; },
+      mountDeleteAccountButton: () => () => { deleteAccountDisposals += 1; },
       addEventListener: (type, handler) => handlers.set(type, handler),
       removeEventListener: (type, handler) => {
         if (handlers.get(type) === handler) handlers.delete(type);
@@ -40,11 +42,15 @@ for (const relativePath of [
     if (source.includes('mountRestorePurchasesButton')) {
       assert.equal(restoreDisposals, 1, `${relativePath}: unload removes the Restore Purchases button`);
     }
+    if (source.includes('mountDeleteAccountButton')) {
+      assert.equal(deleteAccountDisposals, 1, `${relativePath}: unload removes the Delete account button`);
+    }
     assert.equal(handlers.has('pagehide'), false);
     game.dispose();
     onPageHide({ persisted: false });
     assert.equal(disposals, 3, `${relativePath}: disposal must be idempotent`);
     assert.ok(restoreDisposals <= 1, `${relativePath}: the button disposer runs once`);
+    assert.ok(deleteAccountDisposals <= 1, `${relativePath}: the delete button disposer runs once`);
   }
 }
 for (const relativePath of [
