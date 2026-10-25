@@ -429,6 +429,61 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   );
 }
 
+// An admin revocation and a refund that both land between a share's read and
+// its write leave no live holder: the share ends too.
+{
+  const inner = createInMemoryGameServicesStore();
+  let interleave: (() => Promise<void>) | undefined;
+  const store: GameServicesStore = {
+    recordEntitlementGrant: async (input) => {
+      if (input.evidenceVerificationId?.startsWith('mpgd-holder:') === true && interleave !== undefined) {
+        const run = interleave;
+        interleave = undefined;
+        await run();
+      }
+      return inner.recordEntitlementGrant(input);
+    },
+    findEntitlementTransactionByIdempotency: (input) =>
+      inner.findEntitlementTransactionByIdempotency(input),
+    findEntitlementTransactionByEvidenceVerificationId: (input) =>
+      inner.findEntitlementTransactionByEvidenceVerificationId(input),
+    getEntitlementTransaction: (id) => inner.getEntitlementTransaction(id),
+    listEntitlementTransactions: () => inner.listEntitlementTransactions(),
+    recordEntitlementRevocation: (input) => inner.recordEntitlementRevocation(input),
+    findEntitlementRevocations: (input) => inner.findEntitlementRevocations(input),
+    recordLeaderboardScore: (input, options) => inner.recordLeaderboardScore(input, options),
+    getLeaderboardTransaction: (id) => inner.getLeaderboardTransaction(id),
+    listLeaderboardTransactions: () => inner.listLeaderboardTransactions(),
+  };
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share' },
+  });
+  const bought = await backend.purchases.verifyPurchase(
+    restoreRequest('player-a', { intent: 'purchase' }),
+  );
+  interleave = async () => {
+    const revoke = (reason: 'admin' | 'refund', idempotencyKey: string) => revokeEntitlementGrant(inner, {
+      playerId: 'player-a',
+      revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+      idempotencyKey,
+      reason,
+      revokedAt: '2030-01-02T00:00:00.000Z',
+      payload: {},
+    });
+    await revoke('admin', 'admin:race');
+    await revoke('refund', 'app-store:notification:race');
+  };
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-b'))).reason,
+    'LEDGER_GRANT_REVERSED',
+  );
+  assert.deepEqual(await listActiveEntitlementTransactions(inner), [], 'no holder survives');
+}
+
 // Consumables are never shared, even under the share policy.
 {
   const store = createInMemoryGameServicesStore();

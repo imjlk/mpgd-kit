@@ -555,8 +555,8 @@ platform are in
 - The answers that are not a share: a consumable or a game-started checkout
   gets the verifier's reason (`rejected`); a purchase a store event ended
   (refund, chargeback, voided purchase on any holder) `LEDGER_GRANT_REVERSED`,
-  also for a share that lands while that refund fans out (it is revoked right
-  after its write); a purchase `maxHolders` players hold `pending`
+  also for a share that lands while that refund fans out, or after every
+  other holder was revoked (it is revoked right after its write); a purchase `maxHolders` players hold `pending`
   with `PURCHASE_HOLDER_LIMIT_REACHED` (nobody is evicted); three lost races
   in a row `pending` with `PURCHASE_HOLDER_CONFLICT`. A player who already
   holds it gets its grant back (`alreadyProcessed: true`); a resend under the

@@ -1658,24 +1658,44 @@ async function shareRestoredPurchase(
         // fanned out before the share existed: it then ends the share too.
         // A refund writes its first entry before it reads the holders, so
         // either it sees this share or this read sees its entry.
+        // A refund that met only admin-revoked grants leaves no entry of its
+        // own; the share then ends with them, as a purchase no holder keeps
+        // is never shared again.
         const written = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
         const ended = await findPurchaseWideRevocation(
           store,
           written === undefined ? all : [...all, written],
         );
-        if (ended !== undefined) {
-          if (written !== undefined && ended.revokesLedgerEntryId !== written.ledgerEntryId) {
-            await revokeEntitlementGrant(store, {
-              playerId: written.playerId,
-              revokesLedgerEntryId: written.ledgerEntryId,
-              idempotencyKey: ended.idempotencyKey,
-              reason: ended.reason,
-              revokedAt: ended.revokedAt,
-              payload: ended.payload,
-              ...(ended.evidenceVerificationId === undefined
-                ? {}
-                : { evidenceVerificationId: `${ended.evidenceVerificationId}#${written.ledgerEntryId}` }),
-            });
+        const priorReversed = new Set(
+          (await findEntitlementRevocationsChunked(store, all.map((grant) => grant.ledgerEntryId)))
+            .map((entry) => entry.revokesLedgerEntryId),
+        );
+        const abandoned = all.every((grant) => priorReversed.has(grant.ledgerEntryId));
+        if (ended !== undefined || abandoned) {
+          if (written !== undefined && ended?.revokesLedgerEntryId !== written.ledgerEntryId) {
+            await revokeEntitlementGrant(store, ended === undefined
+              ? {
+                  playerId: written.playerId,
+                  revokesLedgerEntryId: written.ledgerEntryId,
+                  idempotencyKey: `mpgd-holder-closed:${purchaseVerificationId}`,
+                  reason: 'admin',
+                  revokedAt: context.now(),
+                  payload: { holderOfEvidenceVerificationId: purchaseVerificationId },
+                }
+              : {
+                  playerId: written.playerId,
+                  revokesLedgerEntryId: written.ledgerEntryId,
+                  idempotencyKey: ended.idempotencyKey,
+                  reason: ended.reason,
+                  revokedAt: ended.revokedAt,
+                  payload: ended.payload,
+                  ...(ended.evidenceVerificationId === undefined
+                    ? {}
+                    : {
+                        evidenceVerificationId:
+                          `${ended.evidenceVerificationId}#${written.ledgerEntryId}`,
+                      }),
+                });
           }
           return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
         }
