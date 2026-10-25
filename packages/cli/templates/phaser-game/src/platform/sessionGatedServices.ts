@@ -1,4 +1,27 @@
-import type { GameServicesClient, GameServicesRuntime } from '@mpgd/game-services';
+import type {
+  GameServicesClient,
+  GameServicesPurchaseResult,
+  GameServicesRewardedAdResult,
+  GameServicesRuntime,
+} from '@mpgd/game-services';
+
+/** The diagnostic of a purchase refused because the run is not signed in yet (retryable). */
+export const starterSessionRequiredCode = 'STARTER_SESSION_REQUIRED';
+
+function sessionRequiredPurchase(): GameServicesPurchaseResult {
+  return {
+    status: 'failed',
+    purchase: {
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: starterSessionRequiredCode, retryable: true },
+    },
+  };
+}
+
+function sessionRequiredReward(): GameServicesRewardedAdResult {
+  return { status: 'unavailable', reward: { status: 'unavailable', rewardGranted: false } };
+}
 
 /** A purchase, restore, or reward claim was asked for before the guest sign-in succeeded. */
 export class StarterSessionRequiredError extends Error {
@@ -27,9 +50,13 @@ export type StarterSessionGatedServices = GameServicesRuntime & {
  * is known (`create`), never with the platform's local placeholder:
  *
  * - `client` is present from the start, so the game action coordinator
- *   exists for the run. Its calls sign in first (`ensurePlayer`) and fail with
- *   `StarterSessionRequiredError` before any store UI opens when that still
- *   fails.
+ *   exists for the run. A purchase or reward claim signs in first
+ *   (`ensurePlayer`); when that still fails it answers a plain refusal
+ *   before any store UI opens (`failed` with the retryable diagnostic
+ *   `STARTER_SESSION_REQUIRED`; a reward `unavailable`), never a thrown
+ *   error, which would latch the action coordinator into
+ *   `reconciliation-required` for the rest of the run. A leaderboard
+ *   submission throws `StarterSessionRequiredError`.
  * - `monetizationRecovery` is `undefined` until then: rewarded ads stay off
  *   (the runtime shows none without it, so no ad is watched for a reward that
  *   could not be claimed), and the Restore Purchases control signs in first
@@ -74,7 +101,7 @@ export function createSessionGatedGameServices(input: {
       inner = input.create(playerId);
       innerPlayer = playerId;
     } catch (error) {
-      // Stays gated: purchases keep answering StarterSessionRequiredError, never a raw error.
+      // Stays gated: purchases keep answering the session refusal, never a raw error.
       warn('[game-services] the services could not be created after sign-in', error);
       return;
     }
@@ -99,6 +126,16 @@ export function createSessionGatedGameServices(input: {
     }
     return inner;
   };
+  const readyClientOrUndefined = async (): Promise<GameServicesClient | undefined> => {
+    try {
+      return await readyClient();
+    } catch (error) {
+      if (error instanceof StarterSessionRequiredError) {
+        return undefined;
+      }
+      throw error;
+    }
+  };
   const readyClient = async (): Promise<GameServicesClient> => {
     const client = (await ready()).client;
     if (client === undefined) {
@@ -110,8 +147,14 @@ export function createSessionGatedGameServices(input: {
   let client: GameServicesClient | undefined;
   if (input.probe.client !== undefined) {
     client = {
-      purchase: async (purchase, options) => (await readyClient()).purchase(purchase, options),
-      claimRewardedAd: async (reward, options) => (await readyClient()).claimRewardedAd(reward, options),
+      purchase: async (purchase, options) => {
+        const ready = await readyClientOrUndefined();
+        return ready === undefined ? sessionRequiredPurchase() : ready.purchase(purchase, options);
+      },
+      claimRewardedAd: async (reward, options) => {
+        const ready = await readyClientOrUndefined();
+        return ready === undefined ? sessionRequiredReward() : ready.claimRewardedAd(reward, options);
+      },
       submitLeaderboardScore: async (score) => (await readyClient()).submitLeaderboardScore(score),
     };
     // Read live: the reconciler of the services created after sign-in.

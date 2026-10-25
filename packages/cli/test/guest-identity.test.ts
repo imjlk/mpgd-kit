@@ -22,6 +22,7 @@ import {
 } from '../templates/phaser-game/src/platform/guestIdentity.js';
 import {
   createSessionGatedGameServices,
+  starterSessionRequiredCode,
   StarterSessionRequiredError,
 } from '../templates/phaser-game/src/platform/sessionGatedServices.js';
 
@@ -454,8 +455,24 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   // Rewarded ads and restore stay off; the client exists so the action coordinator does.
   assert.equal(gated.monetizationRecovery, undefined);
   assert.ok(gated.client !== undefined);
+  // A refusal the action coordinator reads as a plain failure (a throw would latch it).
+  assert.deepEqual(
+    await gated.client.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k1' }),
+    {
+      status: 'failed',
+      purchase: {
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: starterSessionRequiredCode, retryable: true },
+      },
+    },
+  );
+  assert.equal(
+    (await gated.client.claimRewardedAd({ placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'r1' })).status,
+    'unavailable',
+  );
   await assert.rejects(
-    gated.client.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k1' }),
+    gated.client.submitLeaderboardScore({} as never),
     StarterSessionRequiredError,
   );
   assert.equal(await gated.ensureSession?.(), false);
@@ -506,9 +523,9 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     },
     warn,
   });
-  await assert.rejects(
-    gated.client?.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k3' }) ?? Promise.resolve(),
-    StarterSessionRequiredError,
+  assert.equal(
+    (await gated.client?.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k3' }))?.status,
+    'failed',
   );
   assert.match(warnings.at(-1) ?? '', /could not be created/u);
 }

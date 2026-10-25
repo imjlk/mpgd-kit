@@ -539,8 +539,9 @@ account that player's purchases stay with the old one.
 Offline at launch, the game starts anyway and keeps trying in the background
 (after 5 s, 15 s, 1 min, then every 5 min, and at once when the device reports
 it is online). A purchase or a Restore Purchases tap signs in first; if that
-still fails, the purchase is refused before any store sheet opens
-(`StarterSessionRequiredError`) and the restore control says it could not
+still fails, the purchase is refused before any store sheet opens (it
+answers `failed` with the retryable diagnostic `STARTER_SESSION_REQUIRED`,
+which the game action coordinator treats as a plain failure) and the restore control says it could not
 reach the game server and stays tappable as a retry. The purchase, restore,
 and notification services (`src/platform/sessionGatedServices.ts`) come up
 for the server player as soon as a sign-in succeeds, and run the startup
