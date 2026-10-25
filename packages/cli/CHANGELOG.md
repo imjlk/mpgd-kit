@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.57.0 — 2026-10-25
+
+### Added
+
+- [dd51d8e9](https://github.com/imjlk/mpgd-kit/commit/dd51d8e9a6d994b1c2cefcd5adaf90e304953a6d) A game created with `--providers notifications` runs the notifications runtime on Reddit. The generated Devvit server serves the runtime's backend (`createDevvitNotificationsBackendBridgeHandler`) over the notifications service its scheduler tasks already run, and the Reddit gateway builder sets `createDevvitNotificationsBackend` as the starter's hosted backend (`setStarterHostedNotificationBackend` in `src/platform/notificationBackend.ts`, used only for that config target and created on first use). The settings screen then shows the reminder switches on Reddit once the player is logged in; advertising and night consent stay off there, since Devvit delivers `service` and `requested` topics only. The kit's and the template's Devvit server bridges take the backend handler as `notificationsBackend` and answer `NOTIFICATIONS_CONFIGURATION_REQUIRED` without it. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.20.5, @mpgd/adapter-browser@0.11.8, @mpgd/adapter-capacitor@0.12.5, @mpgd/adapter-devvit@0.14.0, @mpgd/adapter-verse8@0.7.9, @mpgd/analytics@0.5.1, @mpgd/bridge@0.16.0, @mpgd/capacitor-play-billing@0.3.9, @mpgd/capacitor-storekit@0.3.9, @mpgd/catalog@0.10.8, @mpgd/game-runtime@0.8.2, @mpgd/game-services@0.28.1, @mpgd/i18n@0.6.22, @mpgd/platform@0.28.0, @mpgd/target-config@0.23.8
+
 ## 0.56.0 — 2026-10-24
 
 ### Patch changes
