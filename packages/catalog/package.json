@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/catalog",
-  "version": "0.10.7",
+  "version": "0.10.8",
   "description": "Product catalog and ad placement configuration schemas for mpgd games.",
   "license": "MIT",
   "repository": {
