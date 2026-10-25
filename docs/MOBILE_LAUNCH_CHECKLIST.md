@@ -196,6 +196,15 @@ production` prints what it lacks and fails on contradictions
       A guest who logs out, or stays away longer than the inactivity window
       (180 days), comes back as a new player without the old purchases until
       account linking exists; say so in the game's support copy.
+- [ ] **Launch blocker while the game sells non-consumables (open: L3c):**
+      a reinstall on Android, a new device, or a logout makes a new guest,
+      and the store then returns the purchase bound to the old one
+      (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `APP_STORE_ACCOUNT_TOKEN_MISMATCH`),
+      so Restore Purchases cannot give `REMOVE_ADS` back. An iOS reinstall on
+      the same device usually keeps the guest (Keychain items survive app
+      deletion, though Apple does not promise it). L3c moves a verified
+      non-consumable to the current guest on restore
+      ([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-durable-purchases-launch-blocker-open-l3c)).
 - [ ] In-app account deletion and a web deletion URL. Play requires both for
       apps that create accounts
       ([Play account deletion](https://support.google.com/googleplay/android-developer/answer/13327111));

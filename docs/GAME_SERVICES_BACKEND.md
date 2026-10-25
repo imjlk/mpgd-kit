@@ -791,7 +791,10 @@ The player is the server session's (`setStarterCommerceServerPlayer`, which
 the generated game's `guestIdentity.ts` sets when `VITE_MPGD_IDENTITY_URL`
 is configured, a server-issued guest included); without one, only an
 authenticated, non-local platform session binds. A game with its own account
-scheme replaces the module and both resolvers together.
+scheme replaces the module and both resolvers together. A new guest (after
+an Android reinstall, on a new device, or after a logout) does not match the
+binding of its earlier purchases, so their restore is refused until L3c
+([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-durable-purchases-launch-blocker-open-l3c)).
 
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider

@@ -300,6 +300,35 @@ Not served by the reference Worker: `GAME_SERVICES_NOTIFICATIONS_IDENTITY`
 a guest has none), `VERIFIED_LEADERBOARD_AUTH`, and account linking. Account
 deletion is the next step (L3b).
 
+### Reinstalls and new devices: durable purchases (launch blocker, open: L3c)
+
+A guest is its refresh token in the device's secure store. When that store
+is gone, the next launch is a **new guest**, and every store purchase the old
+guest made still names the old one: Google Play returns it with the old
+`obfuscatedAccountId`, StoreKit with the old `appAccountToken`. A restored
+non-consumable (the template catalog's `REMOVE_ADS`) is then refused, so the
+player who paid cannot get it back:
+
+| Case | Secure store after it | Restore of a non-consumable |
+|---|---|---|
+| Android: uninstall and reinstall, "Clear storage", or a new device | Gone. The Keystore key and the encrypted file in `getNoBackupFilesDir()` are app-specific storage, which Android removes on uninstall ([app-specific storage](https://developer.android.com/training/data-storage/app-specific)), and that directory is always excluded from Auto Backup, so no restore brings it back ([Auto Backup](https://developer.android.com/identity/data/autobackup)) | Refused: `GOOGLE_PLAY_ACCOUNT_MISMATCH` |
+| iOS: delete and reinstall on the same device | Usually kept. Keychain items have historically survived app deletion, but Apple does not document it, and its developer technical support calls it an implementation detail apps should not depend on ([Apple Developer Forums](https://developer.apple.com/forums/thread/36442)). The accessibility class does not change this | Works while the item survives (same guest) |
+| iOS: new device (a backup of another device, Quick Start), or an erased device | Gone. The kit stores the token with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable (`SecureCredentialStorage.swift`), and "Items with this attribute do not migrate to a new device" ([Apple](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly)) | Refused: `APP_STORE_ACCOUNT_TOKEN_MISMATCH` |
+| Any platform: logout, or 180 days without a refresh | The old family is ended | Refused, as above |
+
+Consumables are not affected once granted (there is nothing to restore), and
+grants already on the ledger stay with the old player id. No server path
+moves them today: the Play and App Store verifiers refuse a purchase whose
+account binding names another player (the codes above), App Store recovery
+refuses a restore whose ledger grant belongs to another player
+(`APP_STORE_RECOVERY_IDENTITY_MISMATCH`), and a settled lookup refuses one
+(`LEDGER_GRANT_IDENTITY_MISMATCH`).
+
+This blocks a launch that sells non-consumables. The follow-up L3c will move
+a verified non-consumable entitlement to the current guest on restore; until
+it lands, do not sell non-consumables, or say plainly in the store copy that
+a reinstall on Android, a new device, or a logout loses them.
+
 ## Authenticated Snapshot Reads
 
 Bind a private identity Worker that implements

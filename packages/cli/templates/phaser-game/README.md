@@ -567,3 +567,10 @@ non-consumable such as `REMOVE_ADS`. On the App Store and Google Play a purchase
 is bound to the server player, so without a server session (see Guest identity)
 the button says to connect to the game server instead of restoring; keep it reachable from the game's own
 store or settings screen when you replace the lobby.
+
+Until the kit's follow-up L3c lands, a restore only finds purchases made by
+the same guest. A reinstall on Android, a new device, a logout, or 180 days
+away make a new guest, and the store then returns the old guest's
+non-consumables, which the backend refuses (an iOS reinstall on the same
+device usually keeps the guest). See "Reinstalls and new devices" in the
+kit's `docs/CLOUDFLARE_WORKER_DEPLOY.md` before selling non-consumables.
