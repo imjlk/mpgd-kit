@@ -1,0 +1,5 @@
+---
+npm/@mpgd/capacitor-game-services: minor (Added)
+---
+
+An Android renderer for advertising pushes with the opt-out action (AR1). `dev.mpgd.capacitor.AdvertisingMessagingService` is a Firebase messaging service a shell declares in place of the one `@capacitor-firebase/messaging` declares: it posts an advertising push the backend sent as a data message (`mpgd.render: advertising`) on its channel with the "수신거부" action, drops one that arrives after its expiry, leaves one that arrives in the foreground to the plugin as a received notification, and hands every other message and every new token to the plugin unchanged. Tapping the body or the action opens the app through the messaging plugin's notification-open path; the action marks the open with `mpgd.action: advertising-opt-out`. `getAdvertisingPushRenderer()` answers `{ installed }` on Android: whether the shell's messaging service declares the `dev.mpgd.notifications.advertising_renderer` meta-data. The library compiles against `com.google.firebase:firebase-messaging` without shipping it, and its consumer ProGuard rules keep R8 quiet in shells without Firebase.
