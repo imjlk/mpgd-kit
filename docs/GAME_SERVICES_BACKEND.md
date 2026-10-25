@@ -1057,15 +1057,19 @@ The player comes from the request's session, never from the body:
   binding that throws or answers a malformed session `500 AUTHENTICATION_FAILED`; a
   body over 4 KiB or not a JSON object `400`.
 - `GAME_SERVICES_ACCOUNT_DELETION` must be bound to the identity Worker's
-  `deletePlayer({ playerId })` entrypoint (revoke every session family and
-  delete the guest record; idempotent). Without it the route answers `503`
+  `AccountDeletion` entrypoint: `deletePlayer({ playerId })` deletes the
+  guest with every session family and token (idempotent), so the player's
+  tokens are refused at once on both auth entrypoints and on refresh
+  ([guest identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)). Without it the route answers `503`
   outside local development, rather than erase data while the sessions
   stay alive.
 - A session's access token alone cannot delete the account. The request
   carries a deletion confirmation in `X-MPGD-Account-Deletion-Confirmation`
   (`accountDeletionConfirmationHeader`): a short-lived, single-use value the
   identity Worker issues to the holder of the session's refresh token after
-  the player's second tap. Before erasing anything the route has the same
+  the player's second tap (`POST /identity/v1/account-deletion-confirmation`;
+  the guest session's `requestAccountDeletionConfirmation`, which the
+  starter calls). Before erasing anything the route has the same
   binding check and consume it
   (`verifyAccountDeletionConfirmation({ playerId, confirmation })` answers
   `{ confirmed }`); a missing, expired, reused, or other player's

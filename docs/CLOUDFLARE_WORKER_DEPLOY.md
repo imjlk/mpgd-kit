@@ -150,7 +150,9 @@ rotates the refresh token inside the same family; `POST /identity/v1/revoke`
 ends the family (and answers `200` for a token it does not know, as
 [RFC 7009 section 2.2](https://www.rfc-editor.org/rfc/rfc7009#section-2.2)
 asks); `POST /identity/v1/bind-account` answers `501
-ACCOUNT_BINDING_UNSUPPORTED`, the seam for Sign in with Apple or Google later.
+ACCOUNT_BINDING_UNSUPPORTED`, the seam for Sign in with Apple or Google later;
+`POST /identity/v1/account-deletion-confirmation` (`{ refreshToken }`)
+answers `{ confirmation, expiresAt }` for account deletion (below).
 Token answers carry `Cache-Control: no-store`
 ([RFC 6749 section 5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1)).
 The token model follows
@@ -190,7 +192,7 @@ for a public client:
   a new guest, without the old player's purchases, until account linking
   exists.
 - Only SHA-256 hashes of tokens are stored. Every table carries `player_id`,
-  so deleting a player (L3b) is one key across all of them.
+  so deleting a player is one key across all of them.
 - New guests are limited to `IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY` (5)
   per installation in D1. The installation id is client-chosen, so that limit
   only stops a misbehaving client: bind the optional
@@ -210,6 +212,10 @@ pnpm --dir apps/game-identity-worker exec wrangler d1 create game-identity
 pnpm --dir apps/game-identity-worker exec wrangler d1 migrations apply game-identity --remote
 pnpm --dir apps/game-identity-worker run deploy
 ```
+
+Migrations: `0001_guest_identity.sql` (players, families, tokens) and
+`0002_account_deletion.sql` (deletion confirmations); `migrations apply`
+applies both.
 
 `MPGD_STORE = "memory"` serves only local development hosts (loopback,
 `*.localhost`, `10.0.2.2`): sessions would vanish with each isolate. A native
@@ -239,12 +245,31 @@ entrypoint = "NotificationSessions"
 binding = "GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING"
 service = "game-identity"
 entrypoint = "GooglePlayAccountBinding"
+
+[[services]]
+binding = "GAME_SERVICES_ACCOUNT_DELETION"
+service = "game-identity"
+entrypoint = "AccountDeletion"
 ```
 
 `GameServicesIngressAuth` answers `{ playerId }` for a live access token,
 `NotificationSessions` answers `{ playerId, sessionId, installationId,
 expiresAt }` (the family's end), and `GooglePlayAccountBinding` answers the
-player's `obfuscatedAccountId` (`null` for a player it did not issue). The
+player's `obfuscatedAccountId` (`null` for a player it did not issue).
+`AccountDeletion` serves the game-services deletion route
+([account deletion](GAME_SERVICES_BACKEND.md#account-deletion)):
+`verifyAccountDeletionConfirmation({ playerId, confirmation })` answers
+`{ confirmed }` and uses a confirmed one up, and `deletePlayer({ playerId })`
+deletes the player with every family and token in one transaction
+(idempotent; an unknown player is not an error), so its access token fails
+both auth entrypoints and its refresh tokens are unknown to `refresh`, the
+retry grace included, at once. A confirmation is issued only to the
+current refresh token (or, inside the retry grace, the replaced one while its
+successor is unused), lives 5 minutes, is single use, is bound to the
+player, and replaces the family's earlier one; a token the route refuses is
+`401 GUEST_SESSION_REJECTED`, without revoking anything (replays are the
+refresh route's to detect). The
+
 game-owned iOS verifier Worker binds `AppStoreAccountBinding` and calls its
 `resolveAppAccountToken({ playerId })` from the App Store verifier's
 `resolveAppAccountToken` (a `null` answer is an unknown player: throw, so the
@@ -297,8 +322,7 @@ and verifier calls.
 
 Not served by the reference Worker: `GAME_SERVICES_NOTIFICATIONS_IDENTITY`
 (`resolveNotificationRecipient` maps a player to an Apps in Toss user key, and
-a guest has none), `VERIFIED_LEADERBOARD_AUTH`, and account linking. Account
-deletion is the next step (L3b).
+a guest has none), `VERIFIED_LEADERBOARD_AUTH`, and account linking.
 
 ### Reinstalls and new devices: durable purchases (launch blocker, open: L3c)
 
@@ -777,7 +801,8 @@ order id, to be revoked by hand.
   unaffected) and that purchase gets no server-side acknowledge retry.
 - Apply `0010_account_deletion.sql` (the deletion audit, the pending
   erasures, and player indexes) and bind `GAME_SERVICES_ACCOUNT_DELETION` to
-  the identity Worker's `deletePlayer` entrypoint before players can delete
+  the identity Worker's `AccountDeletion` entrypoint (its migration
+  `0002_account_deletion.sql` applied) before players can delete
   their accounts: without the binding `POST /game-services/account/delete`
   answers `503`, and without the migration it answers `500`. The cron
   (required: without the trigger pending erasures never finish and kept

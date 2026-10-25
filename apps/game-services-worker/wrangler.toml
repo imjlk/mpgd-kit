@@ -52,8 +52,9 @@ head_sampling_rate = 1
 
 # Identity: the reference guest identity Worker (apps/game-identity-worker,
 # service name "game-identity") implements GameServicesIngressAuth,
-# NotificationSessions, GooglePlayAccountBinding, and AppStoreAccountBinding
-# (bound by the iOS verifier Worker for its resolveAppAccountToken, not here);
+# NotificationSessions, GooglePlayAccountBinding, AccountDeletion, and
+# AppStoreAccountBinding (bound by the iOS verifier Worker for its
+# resolveAppAccountToken, not here);
 # bind the others below. See
 # docs/CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker.
 #
@@ -246,9 +247,13 @@ head_sampling_rate = 1
 #
 # Account deletion (docs/GAME_SERVICES_BACKEND.md#account-deletion): apply
 # migration 0010_account_deletion.sql and bind the identity Worker's
-# deletePlayer entrypoint. POST /game-services/account/delete authenticates the
-# player through GAME_SERVICES_INGRESS_AUTH (else GAME_SERVICES_NOTIFICATIONS_AUTH)
-# and answers 503 without this binding. The cron above is required: it runs
+# AccountDeletion entrypoint (deletePlayer, verifyAccountDeletionConfirmation;
+# the identity Worker applies its migration 0002_account_deletion.sql).
+# POST /game-services/account/delete authenticates the player through
+# GAME_SERVICES_INGRESS_AUTH (else GAME_SERVICES_NOTIFICATIONS_AUTH), requires
+# the confirmation the identity Worker issued to the session's refresh token
+# (header X-MPGD-Account-Deletion-Confirmation), and answers 503 without this
+# binding. The cron above is required: it runs
 # each deletion's final pass (until then the pending erasure keeps the player
 # id), finishes failed erasures, and purges purchase records kept for deleted
 # players after five years.
