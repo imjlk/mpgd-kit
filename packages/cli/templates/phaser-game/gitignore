@@ -18,3 +18,14 @@ apps/*/.env
 .DS_Store
 *.log
 *.ait
+# Signing and store credentials stay out of Git (use mise or CI secrets).
+# google-services.json and GoogleService-Info.plist are committed on
+# purpose: Firebase documents them as non-secret, and release builds run from
+# a pinned Git checkout that needs them.
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+*.keystore
+*.jks
+*.pepk
