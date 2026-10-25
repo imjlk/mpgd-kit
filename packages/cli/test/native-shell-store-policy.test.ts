@@ -23,6 +23,7 @@ import {
   iosAppPrivacyManifestFile,
   iosAppPrivacyManifestXml,
   readAndroidAdIdDeclaration,
+  readGameAdvertisingIdPolicy,
   readGameNativeOrientation,
   readIosAppReleaseDeviceFamily,
   readIosDeviceFamily,
@@ -551,6 +552,27 @@ try {
     ['error'],
     'AdMob with the advertising ID removed fails a production build',
   );
+  assert.deepEqual(
+    inspectAndroidManifestAds(applyAndroidManifestAdId(withAppId, false), true, 'removed'),
+    [],
+    'unless the game records a no-advertising-ID policy',
+  );
+  assert.equal(
+    readGameAdvertisingIdPolicy({ ads: { admob: { advertisingId: 'removed' } } }),
+    'removed',
+  );
+  assert.equal(readGameAdvertisingIdPolicy(undefined), 'declared');
+  assert.throws(
+    () => readGameAdvertisingIdPolicy({ ads: { admob: { advertisingId: 'off' } } }),
+    /must be/u,
+  );
+  // A mixed manifest is normalised in both directions.
+  const mixed = removed.replace(
+    '</manifest>',
+    '    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />\n</manifest>',
+  );
+  assert.equal((applyAndroidManifestAdId(mixed, false).match(/AD_ID/gu) ?? []).length, 1);
+  assert.equal(readAndroidAdIdDeclaration(applyAndroidManifestAdId(mixed, false)), 'removed');
   // A commented-out declaration does not count.
   assert.equal(
     readAndroidAdIdDeclaration(manifest.replace(

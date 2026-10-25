@@ -163,7 +163,7 @@ function assertNoLegalSymlink(root: string, target: string, label: string): void
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`${label} must be inside the project root: ${target}`);
   }
-  const verb = label === 'legal-dir' ? 'read legal sources' : 'write legal site output';
+  const verb = label === 'out-dir' ? 'write legal site output' : 'read legal sources';
   let current = root;
   for (const part of relative.split(path.sep)) {
     if (part === '' || part === '.') {

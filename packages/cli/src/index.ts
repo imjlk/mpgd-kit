@@ -3423,6 +3423,12 @@ function buildLegalSite(input: {
   const appAdsOutput = path.join(outDir, 'app-ads.txt');
   const orphanedAppAds = !outputs.some((output) => output.file === appAdsOutput)
     && lstatIfExists(appAdsOutput) !== undefined;
+  if (orphanedAppAds) {
+    assertLegalProjectPath('out-dir', appAdsOutput);
+    if (!lstatSync(appAdsOutput).isFile()) {
+      throw new Error(`Legal site app-ads.txt output is not a regular file: ${appAdsOutput}`);
+    }
+  }
 
   if (input.check) {
     assertLegalProjectPath('out-dir', outDir);
@@ -3457,7 +3463,6 @@ function buildLegalSite(input: {
 
   publishLegalSiteFiles(outDir, outputs);
   if (orphanedAppAds) {
-    assertLegalProjectPath('out-dir', appAdsOutput);
     unlinkSync(appAdsOutput);
   }
 
@@ -3564,7 +3569,8 @@ function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
   try {
     return lstatSync(file);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
       return undefined;
     }
     throw error;

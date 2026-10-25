@@ -10,6 +10,7 @@ import {
   inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
   inspectIosProjectDeviceFamily,
+  readGameAdvertisingIdPolicy,
   readGameNativeOrientation,
   readIosDeviceFamily,
   shellUsesAdMob,
@@ -33,9 +34,10 @@ export function inspectNativeStorePolicy(input: {
   const gameConfig = input.gameRoot === undefined
     ? undefined
     : join(input.gameRoot, 'mpgd.game.json');
-  const orientation = gameConfig !== undefined && existsSync(gameConfig)
-    ? readGameNativeOrientation(readJson(gameConfig))
+  const gameConfigJson = gameConfig !== undefined && existsSync(gameConfig)
+    ? readJson(gameConfig)
     : undefined;
+  const orientation = readGameNativeOrientation(gameConfigJson);
   const shellPackage = join(input.shellApp, 'package.json');
   const usesAds = existsSync(shellPackage) && shellUsesAdMob(readJson(shellPackage));
   if (input.platform === 'ios') {
@@ -67,7 +69,11 @@ export function inspectNativeStorePolicy(input: {
   const manifestSource = readFileSync(manifest, 'utf8');
   return [
     ...inspectAndroidManifestOrientation(manifestSource, orientation),
-    ...inspectAndroidManifestAds(manifestSource, usesAds),
+    ...inspectAndroidManifestAds(
+      manifestSource,
+      usesAds,
+      readGameAdvertisingIdPolicy(gameConfigJson),
+    ),
   ];
 }
 

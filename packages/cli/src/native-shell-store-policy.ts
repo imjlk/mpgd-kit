@@ -797,7 +797,8 @@ export function readAndroidAdIdDeclaration(manifest: string): 'declared' | 'remo
  * otherwise, so the Play Console advertising ID answer matches the binary.
  */
 export function applyAndroidManifestAdId(manifest: string, usesAds: boolean): string {
-  if (readAndroidAdIdDeclaration(manifest) === (usesAds ? 'declared' : 'removed')) {
+  if (adIdPermissions(manifest).length === 1
+    && readAndroidAdIdDeclaration(manifest) === (usesAds ? 'declared' : 'removed')) {
     return manifest;
   }
   let next = manifest;
@@ -827,9 +828,28 @@ export function applyAndroidManifestAdId(manifest: string, usesAds: boolean): st
   return `${head.trimEnd()}${newline}    ${element}${newline}${next.slice(close)}`;
 }
 
+/**
+ * `ads.admob.advertisingId` in `mpgd.game.json`: `removed` records a
+ * deliberate no-advertising-ID policy (for example a child-directed game)
+ * for a shell that installs AdMob; anything else expects the permission.
+ */
+export function readGameAdvertisingIdPolicy(gameConfig: unknown): 'declared' | 'removed' {
+  const ads = isRecord(gameConfig) ? gameConfig.ads : undefined;
+  const admob = isRecord(ads) ? ads.admob : undefined;
+  const value = isRecord(admob) ? admob.advertisingId : undefined;
+  if (value === undefined || value === 'declared') {
+    return 'declared';
+  }
+  if (value === 'removed') {
+    return 'removed';
+  }
+  throw new Error("mpgd.game.json ads.admob.advertisingId must be 'declared' or 'removed'.");
+}
+
 export function inspectAndroidManifestAds(
   manifest: string,
   usesAds: boolean,
+  advertisingIdPolicy: 'declared' | 'removed' = 'declared',
 ): readonly NativeShellPolicyIssue[] {
   const issues: NativeShellPolicyIssue[] = [];
   const declaration = readAndroidAdIdDeclaration(manifest);
@@ -843,14 +863,15 @@ export function inspectAndroidManifestAds(
           + 'com.google.android.gms.ads.APPLICATION_ID meta-data; the app crashes at launch.',
       });
     }
-    if (declaration === 'removed') {
+    if (declaration === 'removed' && advertisingIdPolicy !== 'removed') {
       issues.push({
         level: 'error',
         message: `AndroidManifest.xml removes ${androidAdIdPermission} although the shell installs `
           + 'AdMob: ads get a zeroed advertising ID on Android 13+ and the Play Console answer no '
           + 'longer matches. Replace the tools:node="remove" line with '
-          + `<uses-permission android:name="${androidAdIdPermission}" />, or keep it only for a `
-          + 'deliberate no-ad-ID policy (for example a child-directed game) and declare that.',
+          + `<uses-permission android:name="${androidAdIdPermission}" />, or, for a deliberate `
+          + 'no-advertising-ID policy (for example a child-directed game), set '
+          + 'ads.admob.advertisingId to "removed" in mpgd.game.json.',
       });
     }
   } else if (declaration !== 'removed') {

@@ -412,7 +412,10 @@ Store declarations that come with AdMob:
   (`tools:node="remove"`). After installing AdMob, replace that line with
   `<uses-permission android:name="com.google.android.gms.permission.AD_ID" />`
   and answer "yes" to the Play Console advertising ID question; a production
-  build fails while the shell installs AdMob and still removes the permission.
+  build fails while the shell installs AdMob and still removes the permission,
+  unless `mpgd.game.json` records a deliberate no-advertising-ID policy with
+  `"ads": { "admob": { "advertisingId": "removed" } }` (for example a
+  child-directed game).
 - **Application IDs.** A production build also fails when the Android
   `com.google.android.gms.ads.APPLICATION_ID` meta-data or the iOS
   `GADApplicationIdentifier` is missing (the SDK stops the app at launch), and
@@ -421,7 +424,9 @@ Store declarations that come with AdMob:
   [SKAdNetwork page](https://developers.google.com/admob/ios/3p-skadnetworks).
 - **app-ads.txt.** Set `ads.admob.publisherId` (`pub-` and 16 digits) in
   `mpgd.game.json`, or keep a game-owned `legal/app-ads.txt` for mediation
-  lines, and `mpgd legal build` serves it at the legal site's root. The file
+  lines, and `mpgd legal build` serves it at the legal site's root (and
+  removes an earlier `app-ads.txt` from the output once neither source
+  exists). The file
   must sit at the root of the domain in the store listing (Play: developer
   website; App Store: marketing URL), so serve the legal site from that
   domain, not a subpath.
