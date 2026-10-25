@@ -34,6 +34,7 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
   let gameRuntime: GamePlatformRuntime | undefined;
   let locale: Locale = 'en';
   let disposeMicrosoftStorePwa: (() => void) | undefined;
+  let disposeGuestSignIn: (() => void) | undefined;
 
   try {
     if (__APP_TARGET__ === 'ait') {
@@ -70,11 +71,14 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL,
       credentials: platform.secureCredentials,
     });
-    const [guestIdentity, platformSession, launchIntent] = await Promise.all([
+    disposeGuestSignIn = () => guestSignIn.dispose();
+    const [bootSignIn, platformSession, launchIntent] = await Promise.all([
       guestSignIn.ensure(),
       resolveIdentitySession(platform, platformPlayer.playerId),
       resolveLaunchIntent(platform),
     ]);
+    // A background retry may have won while the other boot reads were pending.
+    const guestIdentity = guestSignIn.current() ?? bootSignIn;
     // Before the game services read the session: at once, or when a later attempt succeeds
     // (notifications then come up on their next open; the session-gated services read it).
     if (guestIdentity !== undefined) {
@@ -109,10 +113,16 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       sessionId: analyticsSessionId,
       sink: analyticsSink,
     });
+    const sessionGated = guestIdentity === undefined && guestSignIn.configured;
     const ownedRuntime = createGamePlatformRuntime({
       gateway: platform,
       initialLifecycleState: document.visibilityState === 'hidden' ? 'inactive' : 'active',
       canShow: (placement) => {
+        // A run that booted before its sign-in shows no rewarded ad: the runtime's late
+        // reward evidence recovery is bound at boot, which had no recovery client.
+        if (placement.format === 'rewarded' && sessionGated) {
+          return false;
+        }
         const enabled = placement.format === 'rewarded'
           ? runtime.config.features.rewardedAds
           : runtime.config.features.interstitialAds;
@@ -143,7 +153,7 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
         };
         // Configured but not signed in yet: the services wait for the server player, never
         // binding purchases or the journal to the platform's local placeholder.
-        return guestIdentity === undefined && guestSignIn.configured
+        return sessionGated
           ? createStarterSessionGatedGameServices({ ...servicesInput, signIn: guestSignIn })
           : createStarterGameServices({
               ...servicesInput,
@@ -153,6 +163,15 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
     });
     gameRuntime = ownedRuntime;
     const gameServices = ownedRuntime.services;
+    if (sessionGated) {
+      // After the gated services' own listener: the startup recovery the boot ran without a
+      // player, and the action coordinator's reconciliation with it.
+      guestSignIn.onSignedIn(() => {
+        void ownedRuntime.reconcile().catch((error: unknown) => {
+          console.error('[game-services] recovery after sign-in failed', error);
+        });
+      });
+    }
     try {
       await ownedRuntime.reconcile();
     } catch (error) {
@@ -190,6 +209,7 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
     });
   } catch (error) {
     gameRuntime?.dispose();
+    disposeGuestSignIn?.();
     disposeMicrosoftStorePwa?.();
     renderBootstrapError(error, locale);
     console.error('[bootstrap]', error);

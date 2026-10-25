@@ -288,6 +288,15 @@ assert.equal(slowCalls, 2);
   assert.equal(ensureCalls, 2);
   assert.match(restoreOutcomeText('en', { outcome: 'needs-connection' }), /Tap to try again/u);
 }
+// Signed in, but the configuration has no recovery client: unavailable, not a retry.
+{
+  const disabled = createStarterRestorePurchases({
+    gateway: gateway('app-store', signedIn),
+    monetizationRecovery: () => undefined,
+    ensureSession: async () => true,
+  });
+  assert.deepEqual(await disabled.restore(), { outcome: 'unavailable' });
+}
 
 assert.equal(
   restoreOutcomeText('en', { outcome: 'restored', granted: 0 }),

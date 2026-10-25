@@ -80,9 +80,8 @@ export function createStarterRestorePurchases(input: {
     }
     const recovery = recoveryNow();
     if (recovery === undefined) {
-      return input.ensureSession === undefined
-        ? { outcome: 'unavailable' }
-        : { outcome: 'needs-connection' };
+      // Signed in (or nothing to sign in), and still no recovery client: nothing a retry would change.
+      return { outcome: 'unavailable' };
     }
     if (accountBoundStores.has(commerce.store)
       && await resolveStarterCommercePlayerId(input.gateway) === undefined) {

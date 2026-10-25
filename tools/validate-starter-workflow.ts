@@ -3228,6 +3228,16 @@ function validateTemplateGuestIdentityWiring(): void {
   const signIn = main.indexOf('createStarterGuestSignIn(');
   const setSession = main.indexOf('setStarterServerSession(guestIdentity.serverSession)');
   const services = main.indexOf('createStarterGameServices({');
+  // The late session setter is registered before the runtime creates the gated services.
+  const lateSession = main.indexOf(
+    'guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession))',
+  );
+  const runtime = main.indexOf('createGamePlatformRuntime({');
+  if (lateSession < 0 || runtime < 0 || lateSession > runtime) {
+    failures.push(
+      `${root}/src/main.ts: the late setStarterServerSession listener must precede createGamePlatformRuntime.`,
+    );
+  }
   if (signIn < 0 || setSession < 0 || services < 0 || signIn > services || setSession > services) {
     failures.push(
       `${root}/src/main.ts: createStarterGuestSignIn and setStarterServerSession must run before `

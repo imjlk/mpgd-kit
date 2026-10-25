@@ -12,8 +12,11 @@ export class StarterSessionRequiredError extends Error {
 
 /** The game services of a run that booted before its guest sign-in succeeded. */
 export type StarterSessionGatedServices = GameServicesRuntime & {
-  /** Signs in now if needed (once more before a purchase or restore); `true` when the services are up. */
-  ensureSession(): Promise<boolean>;
+  /**
+   * Signs in now if needed (once more before a purchase or restore); `true`
+   * when the services are up. Absent when the configuration has no client.
+   */
+  readonly ensureSession?: () => Promise<boolean>;
 };
 
 /**
@@ -31,9 +34,12 @@ export type StarterSessionGatedServices = GameServicesRuntime & {
  *   (the runtime shows none without it, so no ad is watched for a reward that
  *   could not be claimed), and the Restore Purchases control signs in first
  *   through `ensureSession`.
- * - When the player becomes known, the services are created once and their
- *   startup recovery runs. A later sign-in naming another player (not
- *   expected within one run) is ignored with a warning.
+ * - When the player becomes known, the services are created once; the
+ *   caller runs the game runtime's `reconcile()` then (the startup recovery,
+ *   with the action coordinator's). A later sign-in naming another player
+ *   (not expected within one run) is ignored with a warning.
+ * - `ensureSession` is present only when the configuration has a client
+ *   (a disabled configuration has nothing a sign-in could bring up).
  *
  * `probe` is a runtime built from the same configuration with a placeholder
  * player; only its `mode`, `reason`, `baseUrl`, `target`, and whether it has
@@ -59,12 +65,13 @@ export function createSessionGatedGameServices(input: {
       }
       return;
     }
-    innerPlayer = playerId;
-    inner = input.create(playerId);
-    // The startup recovery the boot could not run without a player.
-    void inner.monetizationRecovery?.reconcile().catch((error: unknown) => {
-      warn('[game-services] recovery after sign-in failed', error);
-    });
+    try {
+      inner = input.create(playerId);
+      innerPlayer = playerId;
+    } catch (error) {
+      // Stays gated: purchases keep answering StarterSessionRequiredError, never a raw error.
+      warn('[game-services] the services could not be created after sign-in', error);
+    }
   };
   input.onPlayer(activate);
 
@@ -106,15 +113,20 @@ export function createSessionGatedGameServices(input: {
     ...(input.probe.reason === undefined ? {} : { reason: input.probe.reason }),
     ...(input.probe.baseUrl === undefined ? {} : { baseUrl: input.probe.baseUrl }),
     ...(input.probe.target === undefined ? {} : { target: input.probe.target }),
-    ...(client === undefined ? {} : { client }),
-    async ensureSession() {
-      try {
-        await ready();
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    ...(client === undefined
+      ? {}
+      : {
+          client,
+          // Only a configuration with a client can come up; a disabled one offers nothing to retry.
+          async ensureSession() {
+            try {
+              await ready();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        }),
   } as StarterSessionGatedServices;
   // Read live: `undefined` until the player is known, so rewarded ads stay off until then.
   Object.defineProperties(services, {

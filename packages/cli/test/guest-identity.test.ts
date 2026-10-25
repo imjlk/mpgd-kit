@@ -366,6 +366,10 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     timers.map((timer) => timer.delayMs),
     starterGuestSignInRetryDelaysMs.slice(0, 3),
   );
+  // Failed attempts a player starts (a purchase, a restore tap) do not lengthen the backoff.
+  assert.equal(await signIn.ensure(), undefined);
+  assert.equal(await signIn.ensure(), undefined);
+  assert.equal(timers.at(-1)?.delayMs, starterGuestSignInRetryDelaysMs[2]);
   // The network returns: the online event signs in without waiting for the timer.
   online = true;
   fireOnline?.();
@@ -375,6 +379,10 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.equal(timers.filter((timer) => !timer.cancelled).length, 0, 'no retry is left pending');
   assert.equal(fireOnline, undefined, 'the online listener is removed');
   assert.equal(await resolveStarterCommercePlayerId(nativeShell), signedIn.playerId);
+  // A listener registered after the sign-in (a retry won the race with the boot) hears it at once.
+  const lateHeard: string[] = [];
+  signIn.onSignedIn((late) => lateHeard.push(late.playerId));
+  assert.deepEqual(lateHeard, [signedIn.playerId]);
   // Without an identity URL nothing is tried or retried.
   const off = createStarterGuestSignIn({
     identityUrl: undefined,
@@ -446,7 +454,7 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     gated.client.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k1' }),
     StarterSessionRequiredError,
   );
-  assert.equal(await gated.ensureSession(), false);
+  assert.equal(await gated.ensureSession?.(), false);
   assert.deepEqual(created, []);
   // A purchase after the network returned signs in first, then buys for the server player.
   signedInAs.player = 'p_server';
@@ -458,13 +466,45 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.equal(bought.status, 'granted');
   assert.deepEqual(created, ['p_server']);
   assert.deepEqual(purchases, ['p_server:REMOVE_ADS']);
-  assert.deepEqual(reconciles, ['p_server'], 'startup recovery runs once the player is known');
+  // The startup recovery is the game runtime's reconcile (main.ts), not the gated services'.
+  assert.deepEqual(reconciles, []);
   assert.ok(gated.monetizationRecovery !== undefined);
-  assert.equal(await gated.ensureSession(), true);
+  assert.equal(await gated.ensureSession?.(), true);
   // A background sign-in naming another player is ignored for the run.
   notify?.('p_other');
   assert.deepEqual(created, ['p_server']);
   assert.match(warnings.at(-1) ?? '', /another player/u);
+}
+
+// Services that cannot be created after sign-in stay gated with the stable error.
+{
+  const gated = createSessionGatedGameServices({
+    probe: {
+      mode: 'http',
+      client: {
+        async purchase() {
+          return { status: 'granted' } as never;
+        },
+        async claimRewardedAd() {
+          return { status: 'granted' } as never;
+        },
+        async submitLeaderboardScore() {
+          return { submitted: true } as never;
+        },
+      },
+    },
+    ensurePlayer: async () => 'p_broken',
+    onPlayer: () => () => undefined,
+    create: () => {
+      throw new Error('storage unavailable');
+    },
+    warn,
+  });
+  await assert.rejects(
+    gated.client?.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k3' }) ?? Promise.resolve(),
+    StarterSessionRequiredError,
+  );
+  assert.match(warnings.at(-1) ?? '', /could not be created/u);
 }
 
 // A background sign-in brings the services up without any call from the game.
@@ -485,6 +525,7 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     warn,
   });
   assert.equal(gated.client, undefined, 'a disabled configuration has no client to gate');
+  assert.equal(gated.ensureSession, undefined, 'and nothing a sign-in could bring up');
   notify?.('p_background');
   assert.deepEqual(created, ['p_background']);
   assert.equal(gated.reason, 'missing_authoritative_backend');

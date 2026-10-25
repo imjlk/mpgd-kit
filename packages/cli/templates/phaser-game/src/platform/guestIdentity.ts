@@ -172,7 +172,7 @@ export interface StarterGuestSignIn {
   current(): StarterSignedIn | undefined;
   /** The session, signing in now when there is none (joins an attempt in flight). */
   ensure(): Promise<StarterSignedIn | undefined>;
-  /** Called once, when the first sign-in succeeds; returns the unsubscribe. */
+  /** Called once, when the first sign-in succeeds (at once when it already has); returns the unsubscribe. */
   onSignedIn(listener: (signedIn: StarterSignedIn) => void): () => void;
   /** Stops the background retries. */
   dispose(): void;
@@ -193,7 +193,8 @@ export function createStarterGuestSignIn(input: Parameters<typeof startStarterGu
   const listeners = new Set<(signedIn: StarterSignedIn) => void>();
   let signedIn: StarterSignedIn | undefined;
   let attempt: Promise<StarterSignedIn | undefined> | undefined;
-  let failures = 0;
+  /** Failed background attempts: on-demand ones (a purchase, a restore tap) do not lengthen the backoff. */
+  let backgroundFailures = 0;
   let cancelRetry: (() => void) | undefined;
   let disposed = false;
   let stopOnline: (() => void) | undefined;
@@ -203,14 +204,18 @@ export function createStarterGuestSignIn(input: Parameters<typeof startStarterGu
       return;
     }
     const delays = starterGuestSignInRetryDelaysMs;
-    const delay = delays[Math.min(failures - 1, delays.length - 1)] ?? delays[delays.length - 1] ?? 300_000;
+    const delay = delays[Math.min(backgroundFailures, delays.length - 1)] ?? 300_000;
     cancelRetry = schedule(() => {
       cancelRetry = undefined;
-      void ensure();
+      void attemptNow(true);
     }, delay);
   };
 
   function ensure(): Promise<StarterSignedIn | undefined> {
+    return attemptNow(false);
+  }
+
+  function attemptNow(background: boolean): Promise<StarterSignedIn | undefined> {
     if (signedIn !== undefined) {
       return Promise.resolve(signedIn);
     }
@@ -227,7 +232,9 @@ export function createStarterGuestSignIn(input: Parameters<typeof startStarterGu
     attempt = startStarterGuestIdentity(input).then((result) => {
       attempt = undefined;
       if (result.status !== 'signed-in') {
-        failures += 1;
+        if (background) {
+          backgroundFailures += 1;
+        }
         scheduleRetry();
         return undefined;
       }
@@ -266,7 +273,9 @@ export function createStarterGuestSignIn(input: Parameters<typeof startStarterGu
     current: () => signedIn,
     ensure,
     onSignedIn(listener) {
+      // Already signed in (a retry won the race with the caller): heard at once.
       if (signedIn !== undefined) {
+        listener(signedIn);
         return () => undefined;
       }
       listeners.add(listener);
