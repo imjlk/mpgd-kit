@@ -13,11 +13,12 @@ import type { StarterContext } from '../runtime/gameContext';
  * only from the backend ledger (`restorePurchases.ts`). Returns the disposer.
  */
 export function mountRestorePurchasesButton(mount: HTMLElement, context: StarterContext): () => void {
+  const services = context.gameServices;
   const restore = createStarterRestorePurchases({
     gateway: context.platform,
-    ...(context.gameServices.monetizationRecovery === undefined
-      ? {}
-      : { monetizationRecovery: context.gameServices.monetizationRecovery }),
+    // Read at tap time: a run that signs in late gets its recovery client then.
+    monetizationRecovery: () => services.monetizationRecovery,
+    ...(services.ensureSession === undefined ? {} : { ensureSession: services.ensureSession }),
   });
   if (!restore.available) {
     return () => undefined;

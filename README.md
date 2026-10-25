@@ -236,6 +236,12 @@ public JSON endpoints, `/rpc/*` oRPC procedures, `/health`, and
 definitions, idempotent attempt decisions, optional bounded numeric metrics,
 and retained ranked entries.
 
+`apps/game-identity-worker` is the reference guest identity Worker: it issues
+server-side guest sessions (rotating refresh tokens, short-lived access
+tokens, replay detection) and serves the game-services Worker's identity
+bindings, so mobile store purchases bind to a server player
+([Guest Identity Worker](docs/CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker)).
+
 Verse8 rewarded ads use `@verse8/ads` only to collect a correlated
 `requestId`. The adapter ignores client-reported reward values, and
 `@mpgd/adapter-verse8/server` consumes `/ads/verify` before the catalog-backed

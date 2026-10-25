@@ -87,6 +87,7 @@ export const preparedGroups = Object.freeze({
     'smoke:app-store-purchase',
     'smoke:game-services:prepared',
     'smoke:game-services:worker:prepared',
+    'smoke:game-identity:worker:prepared',
   ],
 });
 
@@ -95,9 +96,9 @@ export function resolvePreparedScript(script: string, checked: boolean): string 
     // The worker gets its own build/test below, not a second workspace test.
     return 'test:workspaces:prepared';
   }
-  if (checked && script === 'smoke:game-services:worker:prepared') {
-    // CI's prepare job already ran the worker's check through pnpm check.
-    return 'smoke:game-services:worker:checked';
+  if (checked && /^smoke:[a-z0-9-]+:worker:prepared$/u.test(script)) {
+    // CI's prepare job already ran each worker's check through pnpm check.
+    return script.replace(/:prepared$/u, ':checked');
   }
   return script;
 }

@@ -508,6 +508,55 @@ backends require both a non-production authority mode and an explicit
 `allowLocalBackend` opt-in, so they cannot manufacture successful production
 purchase, rewarded-ad, or leaderboard ledger results.
 
+### Guest identity
+
+Store purchases on Android and iOS are bound to the player of a server
+session: Google Play's `obfuscatedAccountId` and StoreKit's `appAccountToken`
+are derived from that player's id (`src/platform/commerceAccountBinding.ts`),
+and the backend checks them before it grants. The native shell's local player
+(`android-local-player` / `ios-local-player`) is the same on every install, so
+it binds nothing: Play refuses with `ACCOUNT_BINDING_REQUIRED` and StoreKit
+throws an error naming the missing session.
+
+Point the game at the kit's reference guest identity Worker
+(`apps/game-identity-worker` in mpgd-kit, deployed per
+`docs/CLOUDFLARE_WORKER_DEPLOY.md`):
+
+```sh
+VITE_MPGD_IDENTITY_URL=https://identity.example.com
+```
+
+`src/platform/guestIdentity.ts` then signs the player in during bootstrap: a
+server-issued guest on the first launch, kept with a rotating refresh token in
+the device's Keychain or Keystore, and the same guest on later launches. The
+server player becomes the game services' `playerId` and the purchases'
+binding, and `setStarterServerSession` sends its access token to the
+game-services Worker, which resolves it through the identity Worker's
+bindings. A session the identity service ended (logout, a replayed refresh
+token, or 180 days without play by default) is replaced by a new guest; without a linked
+account that player's purchases stay with the old one.
+
+Offline at launch, the game starts anyway and keeps trying in the background
+(after 5 s, 15 s, 1 min, then every 5 min, and at once when the device reports
+it is online). A purchase or a Restore Purchases tap signs in first; if that
+still fails, the purchase is refused before any store sheet opens (it
+answers `failed` with the retryable diagnostic `STARTER_SESSION_REQUIRED`,
+which the game action coordinator treats as a plain failure; retry with a
+new idempotency key, as for any failed purchase) and the restore control says it could not
+reach the game server and stays tappable as a retry. The purchase, restore,
+and notification services (`src/platform/sessionGatedServices.ts`) come up
+for the server player as soon as a sign-in succeeds, and run the startup
+purchase recovery then; they are never bound to the platform's local
+placeholder, so no purchase or journal record changes owner. Rewarded ads
+stay off for such a run: an ad watched before the session exists could not
+be claimed. The scenes' `player` and `identitySession` are the boot values
+for the whole run (the platform's player when the boot sign-in failed) and
+the server player from the next launch on: key game-owned save data by
+something that does not change, such as the platform storage itself, not by
+`player.playerId`. A native shell only reaches `https:` origins, so test on a
+device or emulator through an https tunnel to a local Worker. Account linking (Sign in with Apple or Google) is not
+part of the reference Worker yet.
+
 ### Restore Purchases
 
 The lobby (Phaser) or a corner button (lite) shows **Restore purchases** on
@@ -517,6 +566,13 @@ the store resynchronizes (StoreKit `AppStore.sync()`; Google Play re-reads owned
 items) and every purchase is verified through the backend ledger before anything
 is granted. App Review expects this control while the catalog sells a
 non-consumable such as `REMOVE_ADS`. On the App Store and Google Play a purchase
-is bound to the signed-in player, so without an authenticated session the button
-says to sign in instead of restoring; keep it reachable from the game's own
+is bound to the server player, so without a server session (see Guest identity)
+the button says to connect to the game server instead of restoring; keep it reachable from the game's own
 store or settings screen when you replace the lobby.
+
+Until the kit's follow-up L3c lands, a restore only finds purchases made by
+the same guest. A reinstall on Android, a new device, a logout, or (by default) 180 days
+away make a new guest, and the store then returns the old guest's
+non-consumables, which the backend refuses (an iOS reinstall on the same
+device usually keeps the guest). See "Reinstalls and new devices" in the
+kit's `docs/CLOUDFLARE_WORKER_DEPLOY.md` before selling non-consumables.

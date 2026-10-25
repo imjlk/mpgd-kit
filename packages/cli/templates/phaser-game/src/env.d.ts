@@ -20,6 +20,12 @@ interface ImportMetaEnv {
   readonly VITE_MPGD_GAME_SERVICES_TARGET?: string;
   readonly VITE_MPGD_GAME_SERVICES_TRANSPORT?: string;
   /**
+   * The guest identity service (the kit's reference Worker,
+   * `apps/game-identity-worker`): an https URL, or http on a local
+   * development host. See `src/platform/guestIdentity.ts`.
+   */
+  readonly VITE_MPGD_IDENTITY_URL?: string;
+  /**
    * Local development only: `<playerId>` or `<playerId>.<installationId>`
    * for an unauthenticated notifications session (see `serverSession.ts`).
    */

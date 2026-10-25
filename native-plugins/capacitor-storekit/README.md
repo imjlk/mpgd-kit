@@ -146,8 +146,11 @@ C3): the service provider is registered for every catalog product whose
 `platformProductIds.ios` names an App Store product id (subscriptions are
 skipped), and `getAppAccountToken` is the reference binding in
 `src/platform/commerceAccountBinding.ts`, a UUID (version 5 layout) over the
-SHA-256 of `mpgd-commerce-account:<playerId>` for the authenticated player;
-a guest session throws, so no sheet opens without a binding. The backend's
+SHA-256 of `mpgd-commerce-account:<playerId>` for the server session's
+player (the generated game's `guestIdentity.ts` signs in a server-issued
+guest when `VITE_MPGD_IDENTITY_URL` is set) or an authenticated platform
+player; the native shell's local player throws an error naming the missing
+server session, so no sheet opens without a binding. The backend's
 `resolveAppAccountToken` must derive the same UUID, or both are replaced
 together.
 

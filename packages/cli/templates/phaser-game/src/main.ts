@@ -17,7 +17,13 @@ import { t } from './i18n/messages';
 import { createClientId } from './runtime/id';
 import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
-import { createStarterGameServices, type StarterMonetizationPorts } from './platform/gameServices';
+import {
+  createStarterGameServices,
+  createStarterSessionGatedGameServices,
+  type StarterMonetizationPorts,
+} from './platform/gameServices';
+import { createStarterGuestSignIn } from './platform/guestIdentity';
+import { setStarterServerSession } from './platform/serverSession';
 import { installPlatform } from './platform/installPlatform';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
@@ -28,6 +34,7 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
   let gameRuntime: GamePlatformRuntime | undefined;
   let locale: Locale = 'en';
   let disposeMicrosoftStorePwa: (() => void) | undefined;
+  let disposeGuestSignIn: (() => void) | undefined;
 
   try {
     if (__APP_TARGET__ === 'ait') {
@@ -53,15 +60,45 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       runtime: runtime.config.runtime,
       orientationPolicy,
     });
-    const player =
+    const platformPlayer =
       (await platform.identity.getPlayer()) ?? {
         playerId: 'local-player',
         displayName: 'Local Player',
       };
-    const [identitySession, launchIntent] = await Promise.all([
-      resolveIdentitySession(platform, player.playerId),
+    // The server-issued guest (VITE_MPGD_IDENTITY_URL): tried at boot, and when that fails,
+    // again in the background and before any purchase or restore (`guestIdentity.ts`).
+    const guestSignIn = createStarterGuestSignIn({
+      identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL,
+      credentials: platform.secureCredentials,
+    });
+    disposeGuestSignIn = () => guestSignIn.dispose();
+    const [bootSignIn, platformSession, launchIntent] = await Promise.all([
+      guestSignIn.ensure(),
+      resolveIdentitySession(platform, platformPlayer.playerId),
       resolveLaunchIntent(platform),
     ]);
+    // A background retry may have won while the other boot reads were pending.
+    const guestIdentity = guestSignIn.current() ?? bootSignIn;
+    // Before the game services read the session: at once, or when a later attempt succeeds
+    // (notifications then come up on their next open; the session-gated services read it).
+    if (guestIdentity !== undefined) {
+      setStarterServerSession(guestIdentity.serverSession);
+    } else {
+      guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession));
+    }
+    // Signed in at boot, the server player replaces the platform's (on the native shell a local
+    // placeholder) everywhere. Signed in later, the scenes keep this run's boot player (see
+    // README, "Guest identity"); only the purchase and notification services use the server player.
+    const player = guestIdentity !== undefined
+      ? { ...platformPlayer, playerId: guestIdentity.playerId }
+      : platformPlayer;
+    const identitySession: IdentitySession = guestIdentity !== undefined
+      ? {
+          identityLevel: guestIdentity.identityLevel,
+          playerId: guestIdentity.playerId,
+          trustLevel: 'server-verified',
+        }
+      : platformSession;
     locale = resolveTargetMpgdLocale({
       capabilities: runtime.capabilities,
       ...(platform.gameSettings?.getLocale === undefined ? {} : { preferredLocales: [platform.gameSettings.getLocale()] }),
@@ -76,10 +113,16 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       sessionId: analyticsSessionId,
       sink: analyticsSink,
     });
+    const sessionGated = guestIdentity === undefined && guestSignIn.configured;
     const ownedRuntime = createGamePlatformRuntime({
       gateway: platform,
       initialLifecycleState: document.visibilityState === 'hidden' ? 'inactive' : 'active',
       canShow: (placement) => {
+        // A run that booted before its sign-in shows no rewarded ad: the runtime's late
+        // reward evidence recovery is bound at boot, which had no recovery client.
+        if (placement.format === 'rewarded' && sessionGated) {
+          return false;
+        }
         const enabled = placement.format === 'rewarded'
           ? runtime.config.features.rewardedAds
           : runtime.config.features.interstitialAds;
@@ -100,15 +143,32 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       onObserverError: (error) => {
         console.error('[game-runtime]', error);
       },
-      createServices: (gateway) =>
-        createStarterGameServices({
+      createServices: (gateway) => {
+        const servicesInput = {
           gateway,
-          playerId: identitySession.playerId ?? player.playerId,
           configTarget: runtime.configTarget,
           ...(options.monetization === undefined ? {} : { operationStore: options.monetization.operationStore }),
           analytics: analyticsSink,
           analyticsSessionId,
-        }),
+        };
+        // Configured but not signed in yet: the services wait for the server player, never
+        // binding purchases or the journal to the platform's local placeholder.
+        return sessionGated
+          ? createStarterSessionGatedGameServices({
+              ...servicesInput,
+              signIn: guestSignIn,
+              // The startup recovery the boot ran without a player, with the action coordinator's.
+              onActivated: () => {
+                void gameRuntime?.reconcile().catch((error: unknown) => {
+                  console.error('[game-services] recovery after sign-in failed', error);
+                });
+              },
+            })
+          : createStarterGameServices({
+              ...servicesInput,
+              playerId: identitySession.playerId ?? player.playerId,
+            });
+      },
     });
     gameRuntime = ownedRuntime;
     const gameServices = ownedRuntime.services;
@@ -149,6 +209,7 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
     });
   } catch (error) {
     gameRuntime?.dispose();
+    disposeGuestSignIn?.();
     disposeMicrosoftStorePwa?.();
     renderBootstrapError(error, locale);
     console.error('[bootstrap]', error);

@@ -1,0 +1,59 @@
+"$schema" = "../../node_modules/wrangler/config-schema.json"
+name = "game-identity"
+main = "src/index.ts"
+compatibility_date = "2026-07-04"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+# Local development only: sessions live in one isolate and vanish with it.
+# A deployment sets "d1" and binds DB below.
+MPGD_STORE = "memory"
+# Token lifetimes (defaults shown). The access token is short-lived; each
+# refresh rotates the refresh token and extends the family by the idle window.
+# IDENTITY_ACCESS_TOKEN_TTL_SECONDS = "900"
+# IDENTITY_REFRESH_IDLE_DAYS = "180"
+# A replaced refresh token may be retried while its successor is unused (a
+# lost answer, an app suspended mid-request), up to this long; 0 is strict
+# RFC 9700 rotation.
+# IDENTITY_REFRESH_RETRY_GRACE_SECONDS = "604800"
+# IDENTITY_MAX_GUESTS_PER_INSTALLATION_PER_DAY = "5"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Production persistence: create a D1 database, uncomment this, set
+# MPGD_STORE = "d1", and apply migrations/0001_guest_identity.sql.
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "game-identity"
+# database_id = "<replace-with-wrangler-d1-create-output>"
+
+# Per-address limit on new guests (Workers Rate Limiting; Wrangler 4.36+).
+# Recommended for any deployment: the installation id is client-chosen, so the
+# D1 per-installation limit only stops a misbehaving client, not an abuser.
+# Counts are per Cloudflare location and approximate. namespace_id must be a
+# positive integer unique in the account.
+#
+# [[ratelimits]]
+# name = "IDENTITY_ISSUE_RATE_LIMITER"
+# namespace_id = "1001"
+#   [ratelimits.simple]
+#   limit = 10
+#   period = 60
+
+# Ends a revoked session's notification devices at once on the game-services
+# Worker (endNotificationSession). The two Workers bind each other: deploy
+# this Worker first without this binding, then the game-services Worker with
+# its identity bindings, then this one again with it.
+#
+# [[services]]
+# binding = "GAME_SERVICES"
+# service = "mpgd-game-services"
+
+# Purge ended families and expired tokens hourly (bounded batches per run;
+# a backlog continues on the next run).
+# [triggers]
+# crons = ["17 * * * *"]

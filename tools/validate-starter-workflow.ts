@@ -343,6 +343,7 @@ validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validatePhaserTemplateSafeAreaContract();
 validateTemplateServerSessionAgentGuidance();
+validateTemplateGuestIdentityWiring();
 validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
@@ -846,6 +847,11 @@ function validatePhaserTemplateCommerceWiring(): void {
     }
     if (readText(examplePath) !== readText(templatePath)) {
       failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
+    }
+    // The lite starter carries the same modules (the purchase binding among them).
+    const litePath = `examples/lite-starter/${relativePath}`;
+    if (!existsSync(litePath) || readText(litePath) !== readText(templatePath)) {
+      failures.push(`${litePath}: must stay in parity with ${templatePath}.`);
     }
   }
 
@@ -3156,6 +3162,92 @@ function readJson(path: string): unknown {
     );
 
     return null;
+  }
+}
+
+/**
+ * Guest identity (L3a): the generated game signs in to the guest identity
+ * Worker before its game services read the server session, binds store
+ * purchases to that server player, and its agent notes name the variable.
+ */
+function validateTemplateGuestIdentityWiring(): void {
+  const root = 'packages/cli/templates/phaser-game';
+  const lateSessionListener = 'guestSignIn.onSignedIn((later) => setStarterServerSession(later.serverSession))';
+  const expectations = [
+    [
+      `${root}/src/platform/guestIdentity.ts`,
+      [
+        'createGuestSessionHttpBackend({ baseUrl: identityUrl, timeoutMs: starterGuestIdentityTimeoutMs })',
+        'setStarterCommerceServerPlayer(() => serverSession.current()?.playerId)',
+        "error.code !== 'GUEST_SESSION_REJECTED'",
+        // A failed boot sign-in is retried in the background and on demand.
+        'export function createStarterGuestSignIn(',
+      ],
+    ],
+    [
+      `${root}/src/platform/gameServices.ts`,
+      ['export function createStarterSessionGatedGameServices(', 'create: (playerId) => createStarterGameServices({ ...rest, playerId })'],
+    ],
+    [
+      `${root}/src/scenes/LobbyScene.ts`,
+      ['monetizationRecovery: () => services.monetizationRecovery', 'ensureSession: services.ensureSession'],
+    ],
+    [
+      'packages/cli/templates/lite-overlay/src/lite/restorePurchasesButton.ts',
+      ['monetizationRecovery: () => services.monetizationRecovery', 'ensureSession: services.ensureSession'],
+    ],
+    [
+      `${root}/src/main.ts`,
+      [
+        'identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL',
+        'credentials: platform.secureCredentials',
+        'setStarterServerSession(guestIdentity.serverSession)',
+        lateSessionListener,
+        'signIn: guestSignIn,',
+        'onActivated: () => {',
+        'void gameRuntime?.reconcile()',
+        'identityLevel: guestIdentity.identityLevel',
+      ],
+    ],
+    [`${root}/src/env.d.ts`, ['readonly VITE_MPGD_IDENTITY_URL?: string;']],
+    [`${root}/agent/brief.md`, ['VITE_MPGD_IDENTITY_URL', 'guestIdentity.ts']],
+    [
+      'packages/cli/templates/lite-overlay/agent/brief.md',
+      ['VITE_MPGD_IDENTITY_URL', 'guestIdentity.ts'],
+    ],
+  ] as const;
+  for (const [path, requiredTexts] of expectations) {
+    if (!existsSync(path)) {
+      failures.push(`${path}: required for guest identity wiring.`);
+      continue;
+    }
+    const content = readText(path);
+    for (const requiredText of requiredTexts) {
+      assertIncludesText(content, requiredText, `${path}: guest identity wiring.`);
+    }
+  }
+  // main.ts must start the identity before the game services read the session once.
+  const main = existsSync(`${root}/src/main.ts`) ? readText(`${root}/src/main.ts`) : '';
+  const signIn = main.indexOf('createStarterGuestSignIn(');
+  const setSession = main.indexOf('setStarterServerSession(guestIdentity.serverSession)');
+  const services = main.indexOf('createStarterGameServices({');
+  // The late session setter is registered before the runtime creates the gated services.
+  const lateSession = main.indexOf(lateSessionListener);
+  const runtime = main.indexOf('createGamePlatformRuntime({');
+  if (runtime < 0) {
+    failures.push(
+      `${root}/src/main.ts: createGamePlatformRuntime({ not found for the guest identity ordering check.`,
+    );
+  } else if (lateSession > runtime) {
+    failures.push(
+      `${root}/src/main.ts: the late setStarterServerSession listener must precede createGamePlatformRuntime.`,
+    );
+  }
+  if (signIn < 0 || setSession < 0 || services < 0 || signIn > services || setSession > services) {
+    failures.push(
+      `${root}/src/main.ts: createStarterGuestSignIn and setStarterServerSession must run before `
+        + 'createStarterGameServices.',
+    );
   }
 }
 

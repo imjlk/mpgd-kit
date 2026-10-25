@@ -27,9 +27,9 @@ await test('typed suite entry lists groups and rejects unknown groups through th
   assert.match(rejected.stderr, /Unknown prepared test group/);
 });
 
-await test('prepared groups retain all 63 commands exactly once', () => {
+await test('prepared groups retain all 64 commands exactly once', () => {
   const scripts = Object.values(preparedGroups).flat();
-  assert.equal(scripts.length, 63);
+  assert.equal(scripts.length, 64);
   assert.ok(preparedGroups.cli.includes('smoke:cli-asset-pack-publish'));
   assert.ok(preparedGroups.cli.includes('smoke:cli-asset-pack-target'));
   assert.ok(preparedGroups.cli.includes('test:template-tools'));
@@ -57,6 +57,10 @@ await test('worker checks and tests run once in both local and CI paths', () => 
   assert.equal(
     resolvePreparedScript('smoke:game-services:worker:prepared', true),
     'smoke:game-services:worker:checked',
+  );
+  assert.equal(
+    resolvePreparedScript('smoke:game-identity:worker:prepared', true),
+    'smoke:game-identity:worker:checked',
   );
 });
 
@@ -114,7 +118,10 @@ await test('prepared workspace tests run mutating builds first, then the disjoin
   assert.ok(second.length > 0);
   assert.ok(!second.includes('mpgd-kit'));
   assert.ok(!second.includes('@mpgd/app-game-services-worker'));
+  assert.ok(!second.includes('@mpgd/app-game-identity-worker'));
   assert.ok(first.every((name) => !second.includes(name)));
-  const all = selectedNames("--filter '!@mpgd/app-game-services-worker' --filter '!{.}'");
+  const all = selectedNames(
+    "--filter '!@mpgd/app-game-services-worker' --filter '!@mpgd/app-game-identity-worker' --filter '!{.}'",
+  );
   assert.deepEqual([...first, ...second].sort(), all.sort());
 });
