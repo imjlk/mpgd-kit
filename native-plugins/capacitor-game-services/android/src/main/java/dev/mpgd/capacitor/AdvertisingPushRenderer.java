@@ -107,15 +107,26 @@ public final class AdvertisingPushRenderer {
         return true;
     }
 
-    /** Plain reflection, so a JVM unit test can call it. */
     static boolean pluginEntryPointsResolve() {
+        return pluginEntryPoints() != null;
+    }
+
+    /**
+     * The messaging plugin's static {@code onNewToken(String)} and
+     * {@code onMessageReceived(RemoteMessage)}, in that order, or
+     * {@code null} when either does not resolve. The one definition of the
+     * forwarding contract, which {@link AdvertisingMessagingService} calls
+     * through; plain reflection, so a JVM unit test can call it.
+     */
+    static java.lang.reflect.Method[] pluginEntryPoints() {
         try {
             Class<?> plugin = Class.forName(MESSAGING_PLUGIN_CLASS);
-            plugin.getMethod("onNewToken", String.class);
-            plugin.getMethod("onMessageReceived", Class.forName(REMOTE_MESSAGE_CLASS));
-            return true;
+            return new java.lang.reflect.Method[] {
+                plugin.getMethod("onNewToken", String.class),
+                plugin.getMethod("onMessageReceived", Class.forName(REMOTE_MESSAGE_CLASS)),
+            };
         } catch (ReflectiveOperationException | LinkageError error) {
-            return false;
+            return null;
         }
     }
 

@@ -84,12 +84,12 @@ public class AdvertisingMessagingService extends FirebaseMessagingService {
             if (resolved) {
                 return;
             }
-            try {
-                Class<?> plugin = Class.forName(AdvertisingPushRenderer.MESSAGING_PLUGIN_CLASS);
-                onNewToken = plugin.getMethod("onNewToken", String.class);
-                onMessageReceived = plugin.getMethod("onMessageReceived", RemoteMessage.class);
-            } catch (ReflectiveOperationException | LinkageError error) {
-                Log.w(TAG, "@capacitor-firebase/messaging entry points not found.", error);
+            java.lang.reflect.Method[] entryPoints = AdvertisingPushRenderer.pluginEntryPoints();
+            if (entryPoints == null) {
+                Log.w(TAG, "@capacitor-firebase/messaging entry points not found.");
+            } else {
+                onNewToken = entryPoints[0];
+                onMessageReceived = entryPoints[1];
             }
             resolved = true;
         }
