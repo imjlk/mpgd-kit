@@ -284,12 +284,12 @@ consent (야간 광고성 정보 수신동의) in the settings screen.
 | --- | --- | --- |
 | Renderer | Nothing: the provider reads it when the app starts, and registers after the grant. | Worker log: `POST .../endpoints 200`. The WebView console (`chrome://inspect`) shows no failed advertising renderer read. With a D1 store, the endpoint's `endpoint_json` has `"rendersAdvertising":true`. |
 | Advertising consent | Turn on 광고성 정보 수신동의 in the settings screen. | Worker log: `POST .../consent 200`. |
-| Send | `pnpm notifications:live run --player live-1 --topic events`, then send the app to the background before the driver's wait ends. | `scheduler PASS`. A notification on the 광고성 정보 (Promotions) channel: the title and body start with `(광고)`, the body names the sender and ends with the free opt-out line, and it has a 수신거부 button. |
+| Send | `pnpm notifications:live run --player live-1 --topic events --fire-in 15`, then send the app to the background before the driver's wait ends. | `scheduler PASS`. A notification on the 광고성 정보 (Promotions) channel: the title and body start with `(광고)`, the body names the sender and ends with the free opt-out line, and it has a 수신거부 button. |
 | Opt-out action | Tap 수신거부. Repeat with the app killed (cold start). | The game opens at the topic's `optOutRoute` (`/?entry=notification-settings`), and the notification leaves the shade. |
 | Body | Send again and tap the body. | The game opens at the topic's route (`/?entry=events`). |
-| Foreground | Send again with the game in front. | No notification is shown, as for a notification message; the game gets a `received` event. |
-| Old shell | Optional: install a build without the renderer (remove the two manifest entries), let it register, and send again. | `scheduler` fails (nothing sent): the gate answers `purpose-unsupported` for that installation, and the Worker log shows no FCM call. Nothing is shown. |
-| Expiry | Optional: with the device offline, send at 20:59 Seoul time without night consent, then reconnect after 21:00. | Nothing is shown: FCM drops it after `android.ttl`, and the shell would not show it after `mpgd.expiresAt`. |
+| Foreground | Send again with the game in front. | No notification is shown, whatever `presentationOptions` says: the renderer shows advertising only in the background, and the game gets a `received` event. |
+| Old shell | Optional: install a build without the renderer (remove the two manifest entries) over the current one, start it once, and send again. | `scheduler PASS` (a refused reminder is spent, not held), but nothing reaches FCM: the gate answers `purpose-unsupported` for that installation, which re-registered without the renderer at its start. Nothing is shown. |
+| Expiry | Optional: with the device offline and no night consent, start the driver so the reminder fires shortly before 21:00 Seoul time (it waits `--fire-in` seconds first), then reconnect after 21:00. | Nothing is shown: FCM drops it after `android.ttl`, and the shell would not show it after `mpgd.expiresAt`. |
 
 Each `run` uses new reminder keys. A run that stops, or a local run with
 `--no-scheduler`, cancels the reminders it set and unregisters an endpoint

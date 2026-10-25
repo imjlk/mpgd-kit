@@ -1115,7 +1115,8 @@ player's account would deliver that player's notifications to the device.
     `notificationShellRenderedAdvertisingTargets` (`android`), so an iOS
     device that claimed it still gets the notification message it shows.
     Each registration writes it anew, so a shell that loses the renderer
-    loses the claim at its next registration.
+    loses the claim at its next registration, which the Capacitor provider
+    announces at the app's first start after the update.
 - **Unbinding.** An authenticated unbind, or the end of the session that
   registered the installation, removes the endpoint from the player.
   - The identity service ends a session by calling the backend at logout or
@@ -1955,13 +1956,13 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `default_notification_icon` and `default_notification_color` meta-data
     name (else the app icon), and the collapse key as its tag, so a replay
     replaces it. A push that arrives at or after `mpgd.expiresAt` is not
-    shown, and a posted one is taken off the shade then. One without a
+    shown, and a posted one is taken off the shade then (Android 8+). One without a
     title, body, or topic, or with an expiry that is not a number, is
     dropped. A push that arrives while the app is in the foreground (an
     unlocked screen and a foreground process, as Firebase Messaging
-    decides for a notification message) is handed to the plugin instead,
-    as Android does with a notification message: the game gets a
-    `received` event and no notification is shown. Android drops a post
+    decides for a notification message) is handed to the plugin instead:
+    the game gets a `received` event and no notification is shown, whatever
+    the plugin's `presentationOptions`. Android drops a post
     silently when notifications are off or the channel is missing or
     turned off; the renderer logs those.
   - **Opening.** The body and the action open the launcher activity with
@@ -1982,14 +1983,18 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     `advertisingRenderer` input (`readCapacitorAdvertisingPushRenderer`),
     only on Android with a catalog that maps advertising, and registers
     `rendersAdvertising: true` when it answers true. A read that fails or
-    takes longer than five seconds counts as no renderer; a shell built
-    with an older plugin answers `UNIMPLEMENTED`. A shell update reaches
-    the backend with the device's next registration (a token, permission,
-    or session change, or the seven-day refresh).
-  - **Gating.** The backend sends Android advertising only to an
-    installation whose latest registration claims the renderer; under `kr`
-    any other Android installation is `suppressed: purpose-unsupported`
-    for advertising ([Policy gate](#policy-gate)). A game opts in with the
+    takes longer than five seconds counts as no renderer and is reported;
+    a shell built with an older plugin answers `UNIMPLEMENTED`, which is
+    not. Once the read answers, the provider announces its registration
+    (`endpoint-changed`), and the runtime sends it when it differs from the
+    last one it sent, so an app update that adds or removes the renderer
+    reaches the backend at its first start.
+  - **Gating.** Under `kr` the backend sends Android advertising only to
+    an installation whose latest registration claims the renderer; any
+    other Android installation is `suppressed: purpose-unsupported` for
+    advertising ([Policy gate](#policy-gate)). Under `none` such an
+    installation gets the notification message, as the gate needs no
+    action there. A game opts in with the
     deployment's `shellRendersAdvertising`, which the catalog validator
     requires before it accepts an Android advertising mapping.
   - **Wiring.** `mpgd target init capacitor --providers notifications`

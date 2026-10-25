@@ -209,7 +209,7 @@ const gateway = createCapacitorPlatformGateway({ ..., providers: [notifications]
 ```
 
 <!--
-@link src/notifications-provider.ts#createCapacitorNotificationProvider Android omits advertising from remote purposes, waits for channels before register, refuses a token when channels cannot be created, ignores a dismiss, confirms an iOS schedule by content, and keeps a Doze-deferred alarm visible to cancellation.
+@link src/notifications-provider.ts#createCapacitorNotificationProvider Android declares advertising like the FCM registry and registers rendersAdvertising with the shell's renderer, waits for channels before register, refuses a token when channels cannot be created, ignores a dismiss, confirms an iOS schedule by content, and keeps a Doze-deferred alarm visible to cancellation.
 @evidence ../../docs/specs/notifications/notifications-v2-rfc.md#profile-capacitor An Android FCM notification message cannot carry the opt-out action, and a killed-app tap is only in connectionOptions.notificationResponse.
 -->
 Create it once, early in startup: it registers its native listeners when it
@@ -329,8 +329,11 @@ is created, which is how a cold-start open reaches it.
     Pass `advertisingRenderer: readCapacitorAdvertisingPushRenderer`: on
     Android, with a catalog that maps an advertising topic, the provider
     reads it once and registers `rendersAdvertising: true` when that service
-    is installed. The backend sends Android advertising only to such an
-    installation, and `validateNotificationTopicCatalog` accepts an
+    is installed, and it announces its registration once the read answers,
+    so an app update that adds or removes the renderer reaches the backend
+    at its first start. Under the Korean rules the backend sends Android
+    advertising only to such an installation, and
+    `validateNotificationTopicCatalog` accepts an
     advertising topic mapped to `android` only when the deployment sets
     `shellRendersAdvertising: true`. Both taps open the game through the
     messaging plugin as any push does; the plugin reports the action as a

@@ -33,7 +33,8 @@ To try `@mpgd/adapter-capacitor/notifications` here (see the
   existing one that lacks it.
 - To render Android advertising pushes with the opt-out action, declare the
   kit's messaging service in place of the messaging plugin's, inside
-  `<application>` of `android/app/src/main/AndroidManifest.xml`:
+  `<application>` of `android/app/src/main/AndroidManifest.xml` (the
+  manifest root already binds `xmlns:tools`):
 
   ```xml
   <service android:name="dev.mpgd.capacitor.AdvertisingMessagingService" android:exported="false">

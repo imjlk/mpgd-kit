@@ -104,9 +104,10 @@ initializer refuses a game or shell that lists it; remove it first.
    `shellRendersAdvertising: true` in `notifications/deployment.json`: the
    catalog validator accepts an advertising topic mapped to `android` only
    with it (the starter's sample `events` topic is mapped there, on the
-   `mpgd-advertising` channel). The backend sends Android advertising only
-   to an installation whose app registered the renderer, so a build of
-   your app from before this step receives none. Advertising pushes use
+   `mpgd-advertising` channel). Under the Korean rules the backend sends
+   Android advertising only to an installation whose app registered the
+   renderer, so a build of your app from before this step receives none;
+   the app registers the renderer at its first start after the update. Advertising pushes use
    the same small icon and color as Firebase's own
    (`com.google.firebase.messaging.default_notification_icon` and
    `default_notification_color`), else the app icon.
@@ -205,7 +206,9 @@ half (`pnpm notifications:live`).
   two on Android 13+ (a dismissed dialog counts none), the screen offers only
   *Open system settings*.
 - A push that arrives with the app in the foreground is shown (it needs
-  `presentationOptions`).
+  `presentationOptions`). An Android advertising push is the exception: the
+  shell renders it only in the background, and in the foreground the game
+  gets a `received` event and nothing is shown.
 - A push sent through the Worker's `deliverNotification` for a `service`
   topic arrives with the app in the background, and a tap opens the topic's
   route (cold and warm starts). Verify cold starts on iOS in particular:
