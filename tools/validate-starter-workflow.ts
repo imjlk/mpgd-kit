@@ -3204,6 +3204,7 @@ function validateTemplateGuestIdentityWiring(): void {
         'setStarterServerSession(guestIdentity.serverSession)',
         lateSessionListener,
         'signIn: guestSignIn,',
+        'onActivated: () => {',
         'void gameRuntime?.reconcile()',
         'identityLevel: guestIdentity.identityLevel',
       ],

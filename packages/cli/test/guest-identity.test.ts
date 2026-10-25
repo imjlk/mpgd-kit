@@ -513,6 +513,27 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.match(warnings.at(-1) ?? '', /could not be created/u);
 }
 
+// A throwing activation callback does not undo the services it followed.
+{
+  let notify: ((playerId: string) => void) | undefined;
+  const gated = createSessionGatedGameServices({
+    probe: { mode: 'disabled', reason: 'missing_authoritative_backend' },
+    ensurePlayer: async () => undefined,
+    onPlayer: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    create: () => ({ mode: 'http' }),
+    onActivated: () => {
+      throw new Error('reconcile wiring failed');
+    },
+    warn,
+  });
+  notify?.('p_up');
+  assert.equal(gated.mode, 'http', 'the services are up');
+  assert.match(warnings.at(-1) ?? '', /activation callback failed/u);
+}
+
 // A background sign-in brings the services up without any call from the game.
 {
   const created: string[] = [];

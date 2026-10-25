@@ -73,10 +73,16 @@ export function createSessionGatedGameServices(input: {
     try {
       inner = input.create(playerId);
       innerPlayer = playerId;
-      input.onActivated?.();
     } catch (error) {
       // Stays gated: purchases keep answering StarterSessionRequiredError, never a raw error.
       warn('[game-services] the services could not be created after sign-in', error);
+      return;
+    }
+    try {
+      input.onActivated?.();
+    } catch (error) {
+      // The services are up; only the caller's follow-up failed.
+      warn('[game-services] the activation callback failed', error);
     }
   };
   input.onPlayer(activate);
