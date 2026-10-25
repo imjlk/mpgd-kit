@@ -331,8 +331,8 @@ try {
   );
   assert.deepEqual(inspectAndroidManifestOrientation(orientedAlias, 'landscape'), []);
   assert.equal(inspectAndroidManifestOrientation(aliased, 'landscape')[0]?.level, 'error');
-  // A fully qualified target matches a relative activity name; an unrelated
-  // package with the same simple name does not.
+  // A fully qualified or dotless target matches a relative activity name; a
+  // differently named class (including a dot-boundary near miss) does not.
   const qualified = aliased.replace(
     'android:targetActivity=".MainActivity"',
     'android:targetActivity="dev.example.puzzle.MainActivity"',
@@ -347,6 +347,27 @@ try {
         aliased.replace(
           'android:targetActivity=".MainActivity"',
           'android:targetActivity="com.other.Main"',
+        ),
+        'portrait',
+      ),
+    /no launcher activity/u,
+  );
+  assert.match(
+    applyAndroidManifestOrientation(
+      aliased.replace(
+        'android:targetActivity=".MainActivity"',
+        'android:targetActivity="MainActivity"',
+      ),
+      'portrait',
+    ),
+    /android:screenOrientation="portrait"/u,
+  );
+  assert.throws(
+    () =>
+      applyAndroidManifestOrientation(
+        aliased.replace(
+          'android:targetActivity=".MainActivity"',
+          'android:targetActivity="dev.example.SubMainActivity"',
         ),
         'portrait',
       ),

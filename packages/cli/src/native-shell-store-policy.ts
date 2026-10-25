@@ -436,7 +436,10 @@ function findAndroidLauncherActivity(
   // Exact name, or a relative `.Main` against a fully qualified `pkg.Main`.
   const sameClass = (name: string): boolean => name === target
     || (target.startsWith('.') && name.endsWith(target))
-    || (name.startsWith('.') && target.endsWith(name));
+    || (name.startsWith('.') && target.endsWith(name))
+    // A dotless name is relative to the namespace too (`MainActivity`).
+    || (!name.includes('.') && name !== '' && target.endsWith(`.${name}`))
+    || (!target.includes('.') && name.endsWith(`.${target}`));
   const match = elements.filter((element) =>
     sameClass(readXmlAttribute(element.tag, 'android:name') ?? ''),
   );
