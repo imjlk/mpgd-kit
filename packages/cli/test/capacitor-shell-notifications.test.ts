@@ -16,6 +16,7 @@ import {
   androidAdvertisingRendererEntries,
   androidAdvertisingRendererMetaData,
   androidAdvertisingRendererService,
+  androidAdvertisingRendererWarning,
   androidInexactAlarmPermission,
   androidManifestRemovesExactAlarm,
   androidManifestRendersAdvertising,
@@ -166,6 +167,11 @@ try {
     );
     assert.ok(
       plan.warnings.some((warning) => /notification settings screen is not added/u.test(warning)),
+    );
+    // No Android project yet: nothing to warn about the renderer.
+    assert.equal(
+      plan.warnings.some((warning) => /advertising renderer/u.test(warning)),
+      false,
     );
 
     applyCapacitorShellStarter(plan);
@@ -904,6 +910,18 @@ try {
   );
   assert.ok(rendered.indexOf(androidMessagingPluginService) < rendered.indexOf('</application>'));
   assert.equal(applyAndroidManifestAdvertisingRenderer(rendered), rendered, 'idempotent');
+  // A game-owned manifest without it gets every step it needs as a warning.
+  const warned = androidAdvertisingRendererWarning(plain);
+  assert.ok(warned);
+  for (const step of [
+    androidAdvertisingRendererService,
+    androidMessagingPluginService,
+    'readCapacitorAdvertisingPushRenderer',
+    'shellRendersAdvertising',
+  ]) {
+    assert.ok(warned.includes(step), step);
+  }
+  assert.equal(androidAdvertisingRendererWarning(rendered), undefined);
   // The names the Android library reads.
   assert.equal(androidAdvertisingRendererService, 'dev.mpgd.capacitor.AdvertisingMessagingService');
   assert.equal(androidAdvertisingRendererMetaData, 'dev.mpgd.notifications.advertising_renderer');

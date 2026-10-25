@@ -3204,7 +3204,25 @@ export function applyAndroidManifestAdvertisingRenderer(manifest: string): strin
   }
   const head = `${manifest.slice(0, root.index)}${rootTag}${manifest.slice(root.index + root[0].length, close)}`;
   const entries = missing.map((line) => `${newline}        ${line}`).join('');
-  return `${head.trimEnd()}${newline}${entries}${newline}    ${manifest.slice(close)}`;
+  return `${head.trimEnd()}${entries}${newline}    ${manifest.slice(close)}`;
+}
+
+/**
+ * The initializer's warning for a game-owned Android manifest without the
+ * kit's advertising renderer: the manifest lines, the provider wiring, and
+ * the deployment switch. `undefined` when the manifest has the renderer.
+ */
+export function androidAdvertisingRendererWarning(manifest: string): string | undefined {
+  if (androidManifestRendersAdvertising(manifest)) {
+    return undefined;
+  }
+  return `${shellPath}/android/app/src/main/AndroidManifest.xml does not declare the kit's advertising `
+    + 'renderer, so under the Korean rules this shell receives no advertising push (the backend '
+    + 'sends Android advertising only to a shell that shows the opt-out action). To render them, '
+    + `add inside <application> (with xmlns:tools on <manifest>): ${androidAdvertisingRendererEntries.join(' ')}; `
+    + 'pass advertisingRenderer: readCapacitorAdvertisingPushRenderer to the Capacitor provider; '
+    + 'and set shellRendersAdvertising: true in notifications/deployment.json before mapping an '
+    + 'advertising topic to android (see docs/NOTIFICATIONS.md).';
 }
 
 function materializeAndroidAdvertisingRenderer(gameRoot: string): void {
@@ -3514,13 +3532,11 @@ function planNotificationsProvider(input: {
         + `${androidInexactAlarmPermission} to the manifest.`,
     );
   }
-  if (androidManifest !== undefined && !androidManifestRendersAdvertising(androidManifest)) {
-    warnings.push(
-      `${shellPath}/android/app/src/main/AndroidManifest.xml does not declare the kit's advertising `
-        + 'renderer, so this shell receives no advertising push (the backend sends Android '
-        + 'advertising only to a shell that shows the opt-out action). To render them, add inside '
-        + `<application> (with xmlns:tools on <manifest>): ${androidAdvertisingRendererEntries.join(' ')}`,
-    );
+  const rendererWarning = androidManifest === undefined
+    ? undefined
+    : androidAdvertisingRendererWarning(androidManifest);
+  if (rendererWarning !== undefined) {
+    warnings.push(rendererWarning);
   }
   if (readExisting(safeDestination(gameRoot, `${shellPath}/android/app/google-services.json`)) === undefined) {
     warnings.push(
