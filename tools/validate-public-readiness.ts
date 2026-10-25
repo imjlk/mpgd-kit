@@ -135,7 +135,7 @@ const manualGateMessages = {
   sampleProducts:
     'Sample product catalog IDs are present; confirm they are intentional starter IDs or replace them with store product IDs.',
   d1Placeholder:
-    'Cloudflare Worker D1 database_id is a placeholder; create/bind D1 before production deploy or keep the Worker documented as memory-only starter.',
+    'Cloudflare Worker D1 database_id is a placeholder (game-services or identity Worker); create/bind D1 before production deploy or keep the Worker documented as memory-only starter.',
   mockPaths:
     'Mock/demo-only platform paths are visible; confirm known limitations explain that real store/ad verification is not bundled yet.',
   githubSettings:
@@ -377,7 +377,11 @@ function errorMessage(error: unknown): string {
 function collectManualReleaseGates(): void {
   const adPlacements = readFileIfExists('packages/catalog/placements.json');
   const productCatalog = readFileIfExists('packages/catalog/catalog.json');
-  const workerConfig = readFileIfExists('apps/game-services-worker/wrangler.toml');
+  // Both Workers ship D1 migrations and a placeholder database id.
+  const workerConfig = [
+    readFileIfExists('apps/game-services-worker/wrangler.toml'),
+    readFileIfExists('apps/game-identity-worker/wrangler.toml'),
+  ].join('\n');
   const aitBridge = readFileIfExists('apps/target-ait/src/aitBridge.ts');
   const i18nMessages = [
     readFileIfExists('packages/i18n/messages/en.json'),
