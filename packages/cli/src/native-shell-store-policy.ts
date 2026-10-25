@@ -48,7 +48,7 @@ export function inspectIosInfoPlistStorePolicy(plist: string): readonly NativeSh
       message: 'iOS Info.plist has no ITSAppUsesNonExemptEncryption: App Store Connect will ask '
         + 'the export-compliance question for every build and TestFlight holds the build until '
         + 'it is answered. Add <key>ITSAppUsesNonExemptEncryption</key><false/> when the game '
-        + 'uses only HTTPS/OS encryption (see docs/MOBILE_LAUNCH_CHECKLIST.md).',
+        + 'uses only HTTPS/OS encryption (see docs/TESTFLIGHT_INTERNAL_SUBMISSION.md).',
     });
   }
   const capabilities = readPlistTopLevelValue(plist, 'UIRequiredDeviceCapabilities');

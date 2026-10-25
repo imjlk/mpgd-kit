@@ -760,7 +760,8 @@ export async function releaseNativeSubmissionLease(input: {
   });
 }
 
-function allowedSubmissionTransition(
+/** Exported for tests: the checkpoint status moves a store submission may make. */
+export function allowedSubmissionTransition(
   from: NativeSubmissionStatus,
   to: NativeSubmissionStatus,
 ): boolean {
@@ -789,7 +790,8 @@ function allowedSubmissionTransition(
       'failed',
       'action-required',
     ],
-    'action-required': ['processing', 'testflight-ready', 'unknown'],
+    // A build waiting on an operator answer can still expire or fail processing.
+    'action-required': ['processing', 'testflight-ready', 'unknown', 'failed'],
   };
   return allowed[from]?.includes(to) ?? false;
 }

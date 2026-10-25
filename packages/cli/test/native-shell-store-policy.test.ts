@@ -141,10 +141,7 @@ try {
   // The kit's reference shell ships the policy.
   assert.deepEqual(
     inspectIosInfoPlistStorePolicy(
-      readFileSync(
-        new URL('../../../apps/mobile-capacitor/ios/App/App/Info.plist', import.meta.url),
-        'utf8',
-      ),
+      readFileSync(path.join(referenceShell, 'ios/App/App/Info.plist'), 'utf8'),
     ),
     [],
   );

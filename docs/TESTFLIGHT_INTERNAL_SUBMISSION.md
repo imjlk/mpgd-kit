@@ -46,7 +46,8 @@ build-beta-detail view --build-id <id>` (App Store Connect
 `action-required`, `PROCESSING_EXCEPTION` and `EXPIRED` are `failed`, and an
 unknown state is `unknown`; none of them is added to the group. Only a build
 in `READY_FOR_BETA_TESTING` or `IN_BETA_TESTING` whose membership in the
-internal group is confirmed by a read is marked `testflight-ready`. Store processing can take longer than one CLI invocation;
+internal group is confirmed by a read is marked `testflight-ready`.
+Store processing can take longer than one CLI invocation;
 persist the upload ID supplied to `onUploadCommitted` alongside the immutable
 record's artifact SHA-256, then resume with `resumeUploadId` and
 `resumeArtifactSha256`. Resume verifies that upload under the same app, version,
