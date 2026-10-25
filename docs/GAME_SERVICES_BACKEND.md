@@ -503,8 +503,9 @@ entry when `playerId` is named); the reconciler reads it in chunks of at most
 `playerId` to match the principal like every grant route.
 `listActiveEntitlementTransactions` subtracts reversed grants for entitlement
 reads. The D1 migration `0006_entitlement_revocations.sql` keeps the grant
-row referenced (`ON DELETE RESTRICT`): a deletion request removes a player's
-revocation rows before the grants they reverse. The subscription `period`
+row referenced (`ON DELETE RESTRICT`); an account deletion rewrites a purchase
+grant and the revocations that reverse it together (see
+[Account deletion](#account-deletion)). The subscription `period`
 entry (`EntitlementLedgerPeriod`) is a validated shape only; nothing writes it
 until a subscription verifier exists.
 
@@ -1017,6 +1018,140 @@ the same Play boundary (which re-reads the provider state first); a reversed
 grant is never finalized. The Worker keeps the token in D1 until the
 acknowledge or consume completes and retries it from its cron; see the
 [Worker runbook](CLOUDFLARE_WORKER_DEPLOY.md#store-refunds-and-play-finalization).
+
+## Account deletion
+
+Google Play requires an app that lets players create an account to let them
+delete the account and its data in the app and through a web link, and to
+say what is kept and for how long
+([Play account deletion requirements](https://support.google.com/googleplay/android-developer/answer/13327111)).
+App Store Review Guideline 5.1.1(v) requires deletion to start in the app,
+and Apple's
+[account deletion guidance](https://developer.apple.com/support/offering-account-deletion-in-your-app/)
+says automatically created ("guest") accounts are included, that deactivation
+is not enough, and that the app says what is kept. The kit's server-issued
+guest player is such an account.
+
+### The route
+
+`POST /game-services/account/delete` deletes the signed-in player's account.
+The player comes from the request's session, never from the body:
+
+- `GAME_SERVICES_INGRESS_AUTH` (`authenticateGameServicesRequest`), else the
+  notifications session binding (`GAME_SERVICES_NOTIFICATIONS_AUTH`), else,
+  on a local development host with
+  `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS`, a development
+  session. No session binding at all answers `503 ACCOUNT_DELETION_NOT_CONFIGURED`.
+- A body that names another `playerId` answers `403 PLAYER_ID_MISMATCH`;
+  no session `401`; a body over 4 KiB or not a JSON object `400`.
+- `GAME_SERVICES_ACCOUNT_DELETION` must be bound to the identity Worker's
+  `deletePlayer({ playerId })` entrypoint (revoke every session family and
+  delete the guest record; idempotent). Without it the route answers `503`
+  outside local development, rather than erase data while the sessions
+  stay alive.
+- Success is `200 { status: 'deleted', deletionId, completedAt,
+  retainedPurchaseRecords }`; a failure before the identity is deleted is
+  `500 { error: 'ACCOUNT_DELETION_FAILED', retryable: true }`, and every
+  step is idempotent, so the client retries.
+
+Support tooling (a web request handled by an operator) calls
+`deletePlayerAccount({ playerId })` on the Worker's separate
+`GameServicesAccountDeletion` entrypoint; Workers bound to the default
+entrypoint cannot delete players. The client is
+`createAccountDeletionClient` (`@mpgd/game-services/account-deletion`), also
+on `createGameServicesRuntime(...).accountDeletion`.
+
+### Order of work
+
+`createAccountDeletionService` (D1: migration `0010_account_deletion.sql`):
+
+1. Erase every store (one D1 batch, a transaction).
+2. Record a pending erasure (it holds the player id), phase `erasing`.
+3. Have the identity service delete the player; then mark the pending
+   erasure `identity-deleted`.
+4. Erase again, each store on its own with three attempts: a request that
+   was already running during step 1 may have written rows.
+5. Clear the pending erasure and write the audit entry
+   (`account_deletion_audit`: deletion id, times, counts, no player id).
+
+A failure in steps 1 to 3 answers the retryable error. After step 3 the
+player can no longer authenticate, so a store that still fails leaves the
+erasure pending and the audit entry says `complete: false`; the Worker's
+cron erases it again (`finishPendingAccountErasures`) and completes the
+audit entry. An `erasing` entry (the identity call failed or the request
+died first) is never erased by the cron, since its player most likely still
+exists, and is discarded after an hour.
+
+### What is deleted and what is kept
+
+| Data | Action |
+| --- | --- |
+| Purchase grants (`source: 'purchase'`), the revocations reversing them, their notes | **Kept 5 years**, detached: new random ledger ids and idempotency keys, player id replaced by `deleted:<deletionId>`, `playerId` payload key removed. The store transaction stays (store, product, platform transaction and order ids, token digest, the store's account binding), so a dispute can be answered from the player's store receipt, and the same store purchase can never be granted again. |
+| An owed Play acknowledge or consume (`google_play_pending_finalizations`) | Kept under the detached grant until the cron completes it within Play's three-day window; the row (with the raw token) is then deleted as usual. |
+| Rewarded-ad and admin grants, their revocations and notes, AdMob SSV callbacks | Deleted: no payment is involved. |
+| Leaderboard scores, verified leaderboard attempts and entries (participant id = player id) | Deleted. |
+| Notification endpoints, consent records, notices given, platform registrations, reminders, sends, delivery history | Deleted. |
+| The guest record and every session (identity Worker) | Deleted by `deletePlayer`. |
+
+The cron purges the kept purchase records once five years have passed since
+the grant and since any revocation of it
+(`purgeExpiredRetainedPurchaseRecords`).
+
+Retention decision and sources (read 2026-10-25; the official texts are at
+[law.go.kr](https://www.law.go.kr), quoted here from its current versions):
+
+- Act on Consumer Protection in Electronic Commerce, art. 6 (거래기록의 보존):
+  a business keeps transaction records, and may keep them and the
+  identifying information they need even after a consumer withdraws
+  consent to the use of personal information. Enforcement Decree art. 6(1)
+  sets the periods: contracts and withdrawals of offers 5 years, **payment
+  and supply of goods 5 years**, consumer complaints and disputes 3 years,
+  advertising 6 months (decree as in force from 2026-07-21).
+- Personal Information Protection Act art. 21: personal information is
+  destroyed without delay once its purpose is achieved, unless another law
+  requires keeping it, and what is kept for that reason is stored
+  separately (in force from 2026-09-11). The detached rows are that
+  separate storage.
+- Notification consent records are deleted, not kept: their purpose (deciding
+  whether this player may receive advertising messages) ends with the account,
+  the notifications RFC's own compaction keeps only what its rules read, and
+  the advertising rules as the RFC implements them (Network Act art. 50,
+  decree art. 62-3) require notices, not a retention period for consent
+  records; this was not checked further against the statute. A game that
+  wants proof for complaints about earlier sends decides that with counsel.
+
+Whether a game's developer is the merchant of record is a legal question for
+the game: on Google Play and the App Store the store processes the payment,
+and the kit keeps the supply record (what was granted, when, for which store
+transaction). Games that sell outside a store add their own payment records.
+
+### What the player should know
+
+- Purchases are not refunded by deleting the account, and items bought on
+  it cannot be moved to a new account: the store binds each purchase to the
+  account (`obfuscatedAccountId`, `appAccountToken`), so a new guest's
+  restore does not match. Refunds go through the store.
+- A purchase still pending at the store (Play `PENDING`, Ask to Buy) when the
+  account is deleted cannot be granted to anyone afterwards; Google refunds a
+  Play purchase that is not acknowledged within three days, and an App Store
+  one is refunded through Apple. The starter warns before deleting while a
+  purchase is still being processed.
+
+### Residual gaps
+
+- A request that started before the identity was deleted and commits after
+  the second pass (a verify waiting on its store, or a notifications cron
+  run that loaded the player first) can leave a row under the deleted
+  player's id. The second pass makes the window short; nothing sweeps it.
+- An identity call that committed but whose answer was lost leaves an
+  `erasing` pending entry, which the cron discards rather than erases.
+  Closing it needs the identity service to answer whether a player exists.
+- Two deletions of the same player at once may both rewrite the same rows;
+  the evidence keys make the second batch fail (a retryable `500`), and its
+  retry finds nothing left.
+- Purchase records kept under `deleted:` that revoke or annotate another
+  player's grant (only a game-owned writer files those) are not purged by
+  the five-year purge.
 
 ## Production Gaps
 

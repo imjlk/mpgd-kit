@@ -581,6 +581,16 @@ order id, to be revoked by hand.
   cursors) before deploying a Worker version that has them: without the
   table, the purchase path's outbox write fails (logged, the purchase is
   unaffected) and that purchase gets no server-side acknowledge retry.
+- Apply `0010_account_deletion.sql` (the deletion audit, the pending
+  erasures, and player indexes) and bind `GAME_SERVICES_ACCOUNT_DELETION` to
+  the identity Worker's `deletePlayer` entrypoint before players can delete
+  their accounts: without the binding `POST /game-services/account/delete`
+  answers `503`, and without the migration it answers `500`. The cron
+  finishes pending erasures and purges purchase records kept for deleted
+  players after five years
+  ([account deletion](GAME_SERVICES_BACKEND.md#account-deletion)). Support
+  tooling deletes a player through the `GameServicesAccountDeletion`
+  entrypoint (`deletePlayerAccount({ playerId })`).
 - The Worker verifies sample product/ad evidence by default. Real Google Play,
   App Store, and Apps in Toss verification adapters are described in
   [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md). AdMob

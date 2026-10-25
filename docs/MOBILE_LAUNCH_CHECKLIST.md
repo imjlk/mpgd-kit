@@ -183,12 +183,28 @@ production` prints what it lacks and fails on contradictions
 - [ ] A signed-in session for purchases: StoreKit and Play purchases are bound
       to the authenticated player, so a guest cannot buy or restore. The
       template's Restore Purchases control says so **(open: L3, identity)**.
-- [ ] In-app account deletion and a web deletion URL. Play requires both for
-      apps that create accounts
+- [ ] Account deletion. Play requires deletion in the app and through a
+      web link for apps that create accounts
       ([Play account deletion](https://support.google.com/googleplay/android-developer/answer/13327111));
-      the App Store requires in-app deletion (guideline 5.1.1(v))
-      **(open: L3)**. Put the URL into the privacy policy and the Play Data
-      safety form.
+      the App Store requires in-app deletion (guideline 5.1.1(v)), guest
+      accounts included
+      ([Apple](https://developer.apple.com/support/offering-account-deletion-in-your-app/)).
+      The kit provides the route, the starter's Delete account entry, and the
+      web page ([account deletion](./GAME_SERVICES_BACKEND.md#account-deletion)):
+      - [ ] Apply migration `0010_account_deletion.sql` and bind
+            `GAME_SERVICES_ACCOUNT_DELETION` to the identity Worker's
+            `deletePlayer` entrypoint; the route answers `503` without it.
+            The cron finishes pending erasures and purges kept purchase
+            records after five years.
+      - [ ] Fill in `legal/delete-account.html` (every `[REPLACE: …]`: the
+            developer name as on the store listing, the in-game path, how a
+            player without the game asks, and your processing time), run
+            `pnpm exec mpgd legal build`, and deploy the site.
+      - [ ] Play Console → App content → Data safety → Delete account URL:
+            `https://<legal site>/delete-account/`.
+      - [ ] Decide how support handles a web request (the operator calls the
+            Worker's `GameServicesAccountDeletion` entrypoint) and how a
+            player without a player ID or order number is identified.
 
 ## 6. Legal pages and privacy answers
 
