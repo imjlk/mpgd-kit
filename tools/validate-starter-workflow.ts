@@ -3171,7 +3171,7 @@ function validateTemplateGuestIdentityWiring(): void {
     [
       `${root}/src/platform/guestIdentity.ts`,
       [
-        'createGuestSessionHttpBackend({ baseUrl: identityUrl })',
+        'timeoutMs: starterGuestIdentityTimeoutMs',
         'setStarterCommerceServerPlayer(() => serverSession.current()?.playerId)',
         "error.code !== 'GUEST_SESSION_REJECTED'",
       ],
@@ -3204,10 +3204,12 @@ function validateTemplateGuestIdentityWiring(): void {
   // main.ts must start the identity before the game services read the session once.
   const main = existsSync(`${root}/src/main.ts`) ? readText(`${root}/src/main.ts`) : '';
   const signIn = main.indexOf('startStarterGuestIdentity(');
+  const setSession = main.indexOf('setStarterServerSession(guestIdentity.serverSession)');
   const services = main.indexOf('createStarterGameServices({');
-  if (signIn < 0 || services < 0 || signIn > services) {
+  if (signIn < 0 || setSession < 0 || services < 0 || signIn > services || setSession > services) {
     failures.push(
-      `${root}/src/main.ts: startStarterGuestIdentity must run before createStarterGameServices.`,
+      `${root}/src/main.ts: startStarterGuestIdentity and setStarterServerSession must run before `
+        + 'createStarterGameServices.',
     );
   }
 }

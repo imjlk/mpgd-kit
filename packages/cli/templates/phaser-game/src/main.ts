@@ -73,8 +73,13 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       resolveLaunchIntent(platform),
     ]);
     // Signed in, the server player replaces the platform's (on the native shell a local placeholder).
+    // `player` stays the platform's (its display name); the services and scenes use this player id.
     const identitySession: IdentitySession = guestIdentity.status === 'signed-in'
-      ? { identityLevel: 'guest', playerId: guestIdentity.playerId, trustLevel: 'server-verified' }
+      ? {
+          identityLevel: guestIdentity.identityLevel,
+          playerId: guestIdentity.playerId,
+          trustLevel: 'server-verified',
+        }
       : platformSession;
     locale = resolveTargetMpgdLocale({
       capabilities: runtime.capabilities,

@@ -226,5 +226,57 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.equal(other.values.get(starterInstallationIdKey), 'install-template-0002');
 }
 
+// The secure store fails: no session, nothing binds, and the failure is reported, not thrown.
+{
+  setStarterCommerceServerPlayer(undefined);
+  const broken: SecureCredentialStore = {
+    async load() {
+      return null;
+    },
+    async save() {
+      throw new Error('keychain unavailable');
+    },
+    async remove() {},
+  };
+  assert.deepEqual(
+    await startStarterGuestIdentity({ identityUrl, credentials: broken, backend, warn }),
+    {
+      status: 'failed',
+      code: 'GUEST_IDENTITY_FAILED',
+    },
+  );
+  assert.equal(await resolveStarterCommercePlayerId(authenticatedShell), undefined);
+}
+
+// An ended session whose revoke fails during replacement: the dead token stays, and the launch fails.
+{
+  const other = secureStore();
+  const signedIn = await startStarterGuestIdentity({
+    identityUrl,
+    credentials: other.credentials,
+    backend,
+    warn,
+  });
+  assert.ok(signedIn.status === 'signed-in');
+  assert.equal(signedIn.identityLevel, 'guest');
+  const token = other.values.get('mpgd.guest.refresh');
+  assert.ok(token !== undefined);
+  await backend.revoke({ refreshToken: token });
+  const revokeFails: GuestSessionBackend = {
+    ...backend,
+    async revoke() {
+      throw new Error('offline');
+    },
+  };
+  const result = await startStarterGuestIdentity({
+    identityUrl,
+    credentials: other.credentials,
+    backend: revokeFails,
+    warn,
+  });
+  assert.deepEqual(result, { status: 'failed', code: 'GUEST_SESSION_LOGOUT_UNCERTAIN' });
+  assert.equal(other.values.get('mpgd.guest.refresh'), token);
+}
+
 setStarterCommerceServerPlayer(undefined);
 console.info('Template guest identity passed.');

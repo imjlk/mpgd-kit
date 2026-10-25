@@ -11,6 +11,13 @@ import type { SecureCredentialStore } from '@mpgd/platform';
 
 import { setStarterCommerceServerPlayer } from './commerceAccountBinding';
 
+/**
+ * How long one identity request may hold the boot: 5 seconds. Offline, the
+ * game starts after one timeout (three on the rare path that replaces an
+ * ended session) and runs without a server session.
+ */
+export const starterGuestIdentityTimeoutMs = 5_000;
+
 /** Where the installation id is kept, next to the refresh token in the device's secure store. */
 export const starterInstallationIdKey = 'mpgd.guest.installation';
 
@@ -26,6 +33,8 @@ export type StarterGuestIdentity =
   | {
       readonly status: 'signed-in';
       readonly playerId: string;
+      /** `guest` until a later account linking makes the session `authenticated`. */
+      readonly identityLevel: 'guest' | 'authenticated';
       readonly coordinator: GuestSessionCoordinator;
       readonly serverSession: GuestServerSession;
     }
@@ -72,7 +81,8 @@ export async function startStarterGuestIdentity(input: {
     return { status: 'unavailable' };
   }
   try {
-    const backend = input.backend ?? createGuestSessionHttpBackend({ baseUrl: identityUrl });
+    const backend = input.backend
+      ?? createGuestSessionHttpBackend({ baseUrl: identityUrl, timeoutMs: starterGuestIdentityTimeoutMs });
     const installationId = await loadInstallationId(credentials, input.createInstallationId);
     const start = async () => {
       const coordinator = createGuestSessionCoordinator({ backend, credentials, installationId });
@@ -97,6 +107,7 @@ export async function startStarterGuestIdentity(input: {
     return {
       status: 'signed-in',
       playerId: started.view.serverUserId,
+      identityLevel: started.view.identityLevel,
       coordinator: started.coordinator,
       serverSession,
     };
