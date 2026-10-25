@@ -14,7 +14,8 @@ import { setStarterCommerceServerPlayer } from './commerceAccountBinding';
 /**
  * How long one identity request may hold the boot: 5 seconds. Offline, the
  * game starts after one timeout (three on the rare path that replaces an
- * ended session) and runs without a server session.
+ * ended session) and runs without a server session. The limit stays on the
+ * coordinator's later requests too (refreshes in play), which are small.
  */
 export const starterGuestIdentityTimeoutMs = 5_000;
 
@@ -138,7 +139,11 @@ async function loadInstallationId(
   if (stored !== null && /^[A-Za-z0-9_-]{8,128}$/u.test(stored)) {
     return stored;
   }
-  const installationId = create?.() ?? crypto.randomUUID();
+  // randomUUID needs a secure context; getRandomValues does not.
+  const installationId = create?.() ?? globalThis.crypto.randomUUID?.()
+    ?? [...globalThis.crypto.getRandomValues(new Uint8Array(16))]
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
   await credentials.save({ key: starterInstallationIdKey, value: installationId });
   return installationId;
 }

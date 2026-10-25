@@ -848,6 +848,12 @@ function validatePhaserTemplateCommerceWiring(): void {
     if (readText(examplePath) !== readText(templatePath)) {
       failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
     }
+    // The lite starter's copy of the purchase binding decides which player a purchase binds to too.
+    const litePath = `examples/lite-starter/${relativePath}`;
+    if (relativePath === 'src/platform/commerceAccountBinding.ts'
+      && (!existsSync(litePath) || readText(litePath) !== readText(templatePath))) {
+      failures.push(`${litePath}: must stay in parity with ${templatePath}.`);
+    }
   }
 
   const requiredWiring: Readonly<Record<string, readonly string[]>> = {
@@ -3171,7 +3177,7 @@ function validateTemplateGuestIdentityWiring(): void {
     [
       `${root}/src/platform/guestIdentity.ts`,
       [
-        'timeoutMs: starterGuestIdentityTimeoutMs',
+        'createGuestSessionHttpBackend({ baseUrl: identityUrl, timeoutMs: starterGuestIdentityTimeoutMs })',
         'setStarterCommerceServerPlayer(() => serverSession.current()?.playerId)',
         "error.code !== 'GUEST_SESSION_REJECTED'",
       ],
@@ -3182,6 +3188,7 @@ function validateTemplateGuestIdentityWiring(): void {
         'identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL',
         'credentials: platform.secureCredentials',
         'setStarterServerSession(guestIdentity.serverSession)',
+        'identityLevel: guestIdentity.identityLevel',
       ],
     ],
     [`${root}/src/env.d.ts`, ['readonly VITE_MPGD_IDENTITY_URL?: string;']],

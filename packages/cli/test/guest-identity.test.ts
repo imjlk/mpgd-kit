@@ -228,8 +228,30 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
 
 // The secure store fails: no session, nothing binds, and the failure is reported, not thrown.
 {
-  setStarterCommerceServerPlayer(undefined);
+  // A player bound from an earlier sign-in must not survive the failure.
+  setStarterCommerceServerPlayer(() => 'p_stale');
   const broken: SecureCredentialStore = {
+    async load({ key }) {
+      return key === starterInstallationIdKey ? 'install-template-0003' : null;
+    },
+    async save({ key }) {
+      // The installation id is stored; the refresh token, after the server issued a guest, is not.
+      if (key === 'mpgd.guest.refresh') {
+        throw new Error('keychain unavailable');
+      }
+    },
+    async remove() {},
+  };
+  assert.deepEqual(
+    await startStarterGuestIdentity({ identityUrl, credentials: broken, backend, warn }),
+    {
+      status: 'failed',
+      code: 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED',
+    },
+  );
+  assert.equal(await resolveStarterCommercePlayerId(authenticatedShell), undefined);
+  // An installation id that cannot be stored fails before any request.
+  const noStore: SecureCredentialStore = {
     async load() {
       return null;
     },
@@ -239,13 +261,12 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     async remove() {},
   };
   assert.deepEqual(
-    await startStarterGuestIdentity({ identityUrl, credentials: broken, backend, warn }),
+    await startStarterGuestIdentity({ identityUrl, credentials: noStore, backend, warn }),
     {
       status: 'failed',
       code: 'GUEST_IDENTITY_FAILED',
     },
   );
-  assert.equal(await resolveStarterCommercePlayerId(authenticatedShell), undefined);
 }
 
 // An ended session whose revoke fails during replacement: the dead token stays, and the launch fails.

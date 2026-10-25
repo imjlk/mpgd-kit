@@ -245,8 +245,15 @@ entrypoint = "AppStoreAccountBinding"
 ```
 
 ```ts
+// AppStoreDependencyUnavailableError from @mpgd/game-services/app-store-verifier
 resolveAppAccountToken: async ({ playerId }) => {
-  const token = await env.GAME_IDENTITY_APP_STORE.resolveAppAccountToken({ playerId });
+  let token: string | null;
+  try {
+    token = await env.GAME_IDENTITY_APP_STORE.resolveAppAccountToken({ playerId });
+  } catch {
+    // An identity Worker outage leaves the purchase pending (retried), not refused.
+    throw new AppStoreDependencyUnavailableError('The identity Worker is unavailable.');
+  }
   if (token === null) {
     throw new Error('Unknown player.');
   }

@@ -55,25 +55,28 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
       runtime: runtime.config.runtime,
       orientationPolicy,
     });
-    const player =
+    const platformPlayer =
       (await platform.identity.getPlayer()) ?? {
         playerId: 'local-player',
         displayName: 'Local Player',
       };
-    // The server-issued guest (VITE_MPGD_IDENTITY_URL), before the game services read the session.
-    const guestIdentity = await startStarterGuestIdentity({
-      identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL,
-      credentials: platform.secureCredentials,
-    });
+    const [guestIdentity, platformSession, launchIntent] = await Promise.all([
+      // The server-issued guest (VITE_MPGD_IDENTITY_URL), before the game services read the session.
+      startStarterGuestIdentity({
+        identityUrl: import.meta.env.VITE_MPGD_IDENTITY_URL,
+        credentials: platform.secureCredentials,
+      }),
+      resolveIdentitySession(platform, platformPlayer.playerId),
+      resolveLaunchIntent(platform),
+    ]);
     if (guestIdentity.status === 'signed-in') {
       setStarterServerSession(guestIdentity.serverSession);
     }
-    const [platformSession, launchIntent] = await Promise.all([
-      resolveIdentitySession(platform, player.playerId),
-      resolveLaunchIntent(platform),
-    ]);
-    // Signed in, the server player replaces the platform's (on the native shell a local placeholder).
-    // `player` stays the platform's (its display name); the services and scenes use this player id.
+    // Signed in, the server player replaces the platform's (on the native shell a local
+    // placeholder) everywhere: scenes, services, and purchases see one player id.
+    const player = guestIdentity.status === 'signed-in'
+      ? { ...platformPlayer, playerId: guestIdentity.playerId }
+      : platformPlayer;
     const identitySession: IdentitySession = guestIdentity.status === 'signed-in'
       ? {
           identityLevel: guestIdentity.identityLevel,
