@@ -165,8 +165,9 @@ head_sampling_rate = 1
 # (obfuscatedAccountId) or the App Store (appAccountToken) binds to an earlier
 # guest moves the grant to the restoring guest, at most three times per
 # purchase in 30 days (docs/GAME_SERVICES_BACKEND.md#restore-transfers). On by
-# default; apply migration 0011_entitlement_transfers.sql first. "refuse"
-# turns it off.
+# default. Apply migration 0011_entitlement_transfers.sql first, also with
+# "refuse": the D1 store reads it for every ledger status read and refund.
+# "refuse" turns moves off.
 # GAME_SERVICES_RESTORE_TRANSFERS = "refuse"
 #
 # [[services]]

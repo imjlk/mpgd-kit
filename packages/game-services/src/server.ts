@@ -1219,8 +1219,18 @@ async function verifyPurchaseForRetry(
     });
   };
   const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+  // A restore whose key names this player's earlier grant of a purchase a
+  // later restore moved to another player is not a replay of that grant: it
+  // is verified again and may move the purchase back (RFC "Restore
+  // transfers"). Every other match answers the recorded grant.
+  const movedAwayRetry = existing !== undefined
+    && request.intent === 'restore'
+    && matchesEntitlementRetry(existing, retryIdentity)
+    && context.catalog.products.find((entry) => entry.id === request.productId)?.type
+      === 'non_consumable'
+    && await isPurchaseTransferredAway(context.store, existing);
 
-  if (existing !== undefined) {
+  if (existing !== undefined && !movedAwayRetry) {
     return completeExistingRetry(existing);
   }
 
@@ -1270,8 +1280,9 @@ async function verifyPurchaseForRetry(
     ? routedEntry.entry.store
     : resolveCommerceStoreId(request);
 
-  if (verification.status === 'restorable') {
-    // A verified restore of a purchase the store binds to another player.
+  if (verification.status === 'restorable' || (verification.status === 'verified' && movedAwayRetry)) {
+    // A verified restore of a purchase the store binds to another player, or
+    // this player's own purchase whose grant a restore moved away.
     return transferRestoredPurchase(
       request,
       {
@@ -1283,7 +1294,9 @@ async function verifyPurchaseForRetry(
           verified: false,
           alreadyProcessed: false,
           disposition: 'rejected',
-          reason: verification.reason,
+          reason: verification.status === 'restorable'
+            ? verification.reason
+            : 'LEDGER_GRANT_REVERSED',
         }),
       },
       context,
@@ -1672,6 +1685,18 @@ async function transferRestoredPurchase(
         purchaseVerificationId,
         transferSequence,
       );
+      // The request's key names an earlier grant of this player when the
+      // purchase comes back to it: the new grant takes a key of its own.
+      const earlierGrant = await findEntitlementTransactionByIdempotency(store, {
+        source: 'purchase',
+        playerId: request.playerId,
+        idempotencyKey: request.idempotencyKey,
+        grantId: request.productId,
+        target: request.target,
+      });
+      const grantIdempotencyKey = earlierGrant === undefined
+        ? request.idempotencyKey
+        : `${request.idempotencyKey}#transfer:${String(transferSequence)}`;
       const link = {
         transferEvidenceVerificationId,
         transferOfEvidenceVerificationId: purchaseVerificationId,
@@ -1696,7 +1721,7 @@ async function transferRestoredPurchase(
             playerId: request.playerId,
             grantId: product.id,
             source: 'purchase',
-            idempotencyKey: request.idempotencyKey,
+            idempotencyKey: grantIdempotencyKey,
             grantedAt: nowIso,
             grant: product.grant,
             evidenceVerificationId: transferEvidenceVerificationId,

@@ -505,7 +505,45 @@ async function runRestoreTransferScenario(
     .first<{ count: number }>();
   assertEqual(strays?.count, 0, 'a refused D1 transfer writes no grant');
 
-  // Two isolates race to move the same holder: one wins, one waits.
+  // A refund written straight to the store for the moved grant answers its
+  // transfer entry instead of reversing it twice; reason transfer is refused.
+  const directRefund = await store.recordEntitlementRevocation?.({
+    playerId: 'd1-buyer',
+    revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+    idempotencyKey: 'd1-direct-refund',
+    reason: 'refund',
+    revokedAt: '2030-01-03T00:00:00.000Z',
+    payload: {},
+  });
+  assertEqual(
+    directRefund?.ledgerEntryId,
+    transfer?.ledgerEntryId,
+    'a moved grant answers its transfer',
+  );
+  assertEqual(directRefund?.alreadyProcessed, true, 'the moved grant is not reversed twice');
+  // A key a transfer entry took answers that entry, as in the in-memory store.
+  const sameKey = await store.recordEntitlementRevocation?.({
+    ...replayTransfer.revocation,
+    reason: 'refund',
+  });
+  assertEqual(sameKey?.ledgerEntryId, transfer?.ledgerEntryId, 'a transfer key is not reused');
+  let transferReasonRefused = false;
+  try {
+    await store.recordEntitlementRevocation?.({
+      ...replayTransfer.revocation,
+      idempotencyKey: 'x',
+    });
+  } catch {
+    transferReasonRefused = true;
+  }
+  assertEqual(transferReasonRefused, true, 'only the transfer write writes reason transfer');
+  const revokeRows = await db
+    .prepare('SELECT COUNT(*) AS count FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?')
+    .bind(bought.ledgerEntryId ?? '')
+    .first<{ count: number }>();
+  assertEqual(revokeRows?.count, 0, 'no refund row lands on a moved grant');
+
+  // Two isolates race to move the same holder: one wins, one waits.  // Two isolates race to move the same holder: one wins, one waits.
   nowMs += 1000;
   const [left, right] = await Promise.all([
     backendFor(createD1GameServicesStore(db)).purchases.verifyPurchase(
@@ -542,6 +580,38 @@ async function runRestoreTransferScenario(
   );
   const afterRefund = await backend.purchases.verifyPurchase(request('d1-late', 'restore'));
   assertEqual(afterRefund.reason, 'LEDGER_GRANT_REVERSED', 'a refunded purchase never moves');
+
+  // The store write refuses to move a refunded grant and leaves no grant row.
+  const refundedHolder = await findPurchaseGrantByEvidenceVerificationId(store, verificationId);
+  let refundedMoveRefused = false;
+  try {
+    await store.recordEntitlementTransfer?.({
+      revocation: {
+        playerId: refundedHolder?.playerId ?? '',
+        revokesLedgerEntryId: refundedHolder?.ledgerEntryId ?? '',
+        idempotencyKey: 'transfer:refunded',
+        reason: 'transfer',
+        revokedAt: new Date(nowMs).toISOString(),
+        payload: { transferEvidenceVerificationId: 'mpgd-transfer:99:refunded' },
+      },
+      grant: {
+        playerId: 'd1-refund-taker',
+        grantId: 'REMOVE_ADS',
+        source: 'purchase',
+        idempotencyKey: 'd1-refund-taker',
+        grantedAt: new Date(nowMs).toISOString(),
+        payload: { transferredFromLedgerEntryId: refundedHolder?.ledgerEntryId ?? '' },
+        evidenceVerificationId: 'mpgd-transfer:99:refunded',
+      },
+    });
+  } catch (error) {
+    refundedMoveRefused = error instanceof EntitlementTransferConflictError;
+  }
+  assertEqual(refundedMoveRefused, true, 'D1 refuses to move a refunded grant');
+  const takerRows = await db
+    .prepare("SELECT COUNT(*) AS count FROM entitlement_transactions WHERE player_id = 'd1-refund-taker'")
+    .first<{ count: number }>();
+  assertEqual(takerRows?.count, 0, 'the refused move rolled its grant back');
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

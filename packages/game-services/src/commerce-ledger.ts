@@ -178,10 +178,10 @@ async function revokeEntitlementGrantAt(
   }
   try {
     const result = await store.recordEntitlementRevocation(revocation);
-    if (result.alreadyProcessed && grant.source === 'purchase') {
+    if (result.alreadyProcessed && grant.source === 'purchase' && revocation.reason !== 'admin') {
       // The grant moved to another player (a restore transfer) before this
-      // reversal: the store event is about the purchase, so it reverses the
-      // grant that holds it now.
+      // store event: the event is about the purchase, so it reverses the
+      // grant that holds it now. An admin entry names its grant and stays on it.
       const holder = await resolvePurchaseGrantHolder(store, grant);
       if (holder.grant.ledgerEntryId !== grant.ledgerEntryId && depth < maxPurchaseTransferChain) {
         return revokeEntitlementGrantAt(

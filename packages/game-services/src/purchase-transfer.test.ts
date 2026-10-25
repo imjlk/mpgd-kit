@@ -289,6 +289,62 @@ assert.throws(() => resolvePurchaseRestoreTransferPolicy({ mode: 'other' as 'mov
   });
 }
 
+// A player whose grant a later restore moved away gets it back with the same key
+// (the reconciler derives one key per store purchase), and an admin entry stays
+// on the grant it names.
+{
+  const store = createInMemoryGameServicesStore();
+  const clock = createClock();
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    now: clock.now,
+    evidenceVerifier: createStoreVerifier(),
+    restoreTransfers: { mode: 'move' },
+  });
+  await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }));
+  const toB = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  clock.advance(1000);
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-c'))).transferred,
+    true,
+  );
+  clock.advance(1000);
+  const backToB = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  assert.equal(backToB.verified, true);
+  assert.equal(backToB.transferred, true);
+  assert.notEqual(backToB.ledgerEntryId, toB.ledgerEntryId);
+  const holder = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId);
+  assert.equal(holder?.playerId, 'player-b');
+  assert.equal(holder?.idempotencyKey, 'play-token-sha256:player-b#transfer:3');
+  // The same key again answers the grant it holds now.
+  const again = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  assert.equal(again.alreadyProcessed, true);
+  assert.equal(again.ledgerEntryId, backToB.ledgerEntryId);
+  // A replay of the same key as a purchase (no restore intent) still answers the reversed grant.
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-b', { intent: 'purchase' }))).reason,
+    'LEDGER_GRANT_REVERSED',
+  );
+
+  // An operator's admin entry on a moved grant does not follow the move.
+  const admin = await revokeEntitlementGrant(store, {
+    playerId: 'player-b',
+    revokesLedgerEntryId: toB.ledgerEntryId ?? '',
+    idempotencyKey: 'admin:1',
+    reason: 'admin',
+    revokedAt: clock.now(),
+    payload: {},
+  });
+  assert.equal(admin.status, 'revoked');
+  assert.equal(admin.status === 'revoked' ? admin.alreadyProcessed : false, true);
+  assert.deepEqual(
+    (await listActiveEntitlementTransactions(store)).map((grant) => grant.ledgerEntryId),
+    [backToB.ledgerEntryId],
+  );
+}
+
 // Consumables never move, even under the move policy.
 {
   const store = createInMemoryGameServicesStore();

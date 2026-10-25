@@ -358,8 +358,8 @@ item after they "switch devices"
   appended.
 
 Apply `0011_entitlement_transfers.sql` before deploying a Worker version
-with transfers: the D1 store reads and guards both revoke tables, so without
-the table every ledger status read and refund fails. Set
+with transfers, with `"refuse"` too: the D1 store reads and guards both revoke
+tables, so without the table every ledger status read and refund fails. Set
 `GAME_SERVICES_RESTORE_TRANSFERS = "refuse"` to keep refusing restores across
 guests (`GOOGLE_PLAY_ACCOUNT_MISMATCH`, `APP_STORE_ACCOUNT_TOKEN_MISMATCH`);
 then do not sell non-consumables, or say in the store copy that a reinstall on

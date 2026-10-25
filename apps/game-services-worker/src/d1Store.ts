@@ -228,10 +228,14 @@ class D1GameServicesStore implements GameServicesStore {
       throw new Error('Transfer entries are written by recordEntitlementTransfer.');
     }
     const ledgerEntryId = createRevocationLedgerEntryId(revocation);
+    // The insert and the read-backs share one primary session, so a transfer
+    // committed just before is seen (as in recordEntitlementGrant).
+    const session = this.db.withSession('first-primary');
 
-    // A grant a transfer moved (migration 0011) is not reversed a second time:
-    // the insert is skipped and the transfer entry answered below.
-    const result = await this.db
+    // A grant a transfer moved (migration 0011), or a key a transfer entry of
+    // this player took, is not written a second time: the insert is skipped
+    // and the existing entry answered below, as the in-memory store does.
+    const result = await session
       .prepare(
         `INSERT OR IGNORE INTO entitlement_revocations (
           ledger_entry_id,
@@ -245,7 +249,8 @@ class D1GameServicesStore implements GameServicesStore {
         )
         SELECT ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (
-          SELECT 1 FROM entitlement_transfers WHERE revokes_ledger_entry_id = ?
+          SELECT 1 FROM entitlement_transfers
+          WHERE revokes_ledger_entry_id = ? OR (player_id = ? AND idempotency_key = ?)
         )`,
       )
       .bind(
@@ -258,26 +263,35 @@ class D1GameServicesStore implements GameServicesStore {
         JSON.stringify(revocation.payload),
         revocation.evidenceVerificationId ?? null,
         revocation.revokesLedgerEntryId,
+        revocation.playerId,
+        revocation.idempotencyKey,
       )
       .run();
 
-    const byKey = await this.db
+    const byKey = await session
       .prepare(
         `SELECT * FROM entitlement_revocations
          WHERE player_id = ? AND idempotency_key = ?`,
       )
       .bind(revocation.playerId, revocation.idempotencyKey)
       .first<RevocationRow>();
-    if (byKey !== null) {
-      if (byKey.revokes_ledger_entry_id !== revocation.revokesLedgerEntryId) {
+    const transferByKey = byKey === null
+      ? await session
+        .prepare('SELECT * FROM entitlement_transfers WHERE player_id = ? AND idempotency_key = ?')
+        .bind(revocation.playerId, revocation.idempotencyKey)
+        .first<TransferRow>()
+      : null;
+    const keyed = byKey ?? transferByKey;
+    if (keyed !== null) {
+      if (keyed.revokes_ledger_entry_id !== revocation.revokesLedgerEntryId) {
         throw new RevocationKeyConflictError();
       }
       return assertEntitlementLedgerResult({
-        ledgerEntryId: byKey.ledger_entry_id,
-        alreadyProcessed: result.meta.changes === 0,
+        ledgerEntryId: keyed.ledger_entry_id,
+        alreadyProcessed: byKey === null || result.meta.changes === 0,
       });
     }
-    const byGrant = await this.db
+    const byGrant = await session
       .prepare('SELECT * FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?')
       .bind(revocation.revokesLedgerEntryId)
       .first<RevocationRow>();
@@ -287,7 +301,7 @@ class D1GameServicesStore implements GameServicesStore {
         alreadyProcessed: true,
       });
     }
-    const transfer = await this.db
+    const transfer = await session
       .prepare('SELECT * FROM entitlement_transfers WHERE revokes_ledger_entry_id = ?')
       .bind(revocation.revokesLedgerEntryId)
       .first<TransferRow>();
