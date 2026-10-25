@@ -58,7 +58,7 @@ export function resolveNativeVersionSource(environment: NodeJS.ProcessEnv): Nati
   if (value === '1') {
     return 'stamped';
   }
-  throw new Error(`${nativeVersionStampEnvironmentName} must be 1 or 0.`);
+  throw new Error(`${nativeVersionStampEnvironmentName} must be 1 or 0, received ${value}.`);
 }
 
 /**
@@ -197,24 +197,28 @@ export function stampAndroidGradleVersions(
 ): string {
   const end = '(?=\\s*(?:;|\\r?\\n|\\}|$))';
   const code = new RegExp(`(\\bversionCode\\s*(?:=\\s*)?)\\d+${end}`, 'gu');
-  const name = new RegExp(`(\\bversionName\\s*(?:=\\s*)?(["']))[^"']+\\2${end}`, 'gu');
-  let codeWrites = 0;
-  let nameWrites = 0;
-  const stamped = source
-    .replace(code, (_match, prefix: string) => {
-      codeWrites += 1;
-      return `${prefix}${versions.versionCode}`;
-    })
-    .replace(name, (_match, prefix: string, quote: string) => {
-      nameWrites += 1;
-      return `${prefix}${versions.versionName}${quote}`;
-    });
-  if (codeWrites === 0 || nameWrites === 0) {
+  const name = new RegExp(`(\\bversionName\\s*(?:=\\s*)?["'])[^"']+["']${end}`, 'gu');
+  // Matching runs on a copy whose comments are blanked, as the identity check
+  // reads the source without comments: a commented-out assignment is never
+  // stamped, and a trailing comment does not hide the real one.
+  const masked = blankComments(source);
+  const codeEdits = [...masked.matchAll(code)].map((match) => ({
+    start: (match.index ?? 0) + (match[1]?.length ?? 0),
+    end: (match.index ?? 0) + match[0].length,
+    text: versions.versionCode,
+  }));
+  const nameEdits = [...masked.matchAll(name)].map((match) => ({
+    start: (match.index ?? 0) + (match[1]?.length ?? 0),
+    end: (match.index ?? 0) + match[0].length - 1,
+    text: versions.versionName,
+  }));
+  if (codeEdits.length === 0 || nameEdits.length === 0) {
     throw new Error(
       `Native version stamping found no literal versionCode and versionName in ${file}.`,
     );
   }
-  return stamped;
+  const edits = [...codeEdits, ...nameEdits];
+  return applyTextEdits(source, edits);
 }
 
 /**
@@ -261,20 +265,107 @@ export function stampIosProjectVersions(
   }
   const settingsOpen = objectOpen + 1 + objectBody.indexOf('{', settingsIndex);
   const settings = readBracedBlock(source, settingsOpen, 'App target Release build settings', file);
-  let stamped = settings;
+  const masked = blankComments(settings);
+  const edits: TextEdit[] = [];
+  const additions: string[] = [];
   for (const [key, value] of [
     ['MARKETING_VERSION', versions.marketingVersion],
     ['CURRENT_PROJECT_VERSION', versions.buildNumber],
   ] as const) {
     const assignment = new RegExp(`((?:^|[\\s{;])["']?${key}["']?\\s*=\\s*)[^;]+;`, 'gu');
-    if (new RegExp(assignment.source, 'u').test(stamped)) {
-      stamped = stamped.replace(assignment, (_match, prefix: string) => `${prefix}${value};`);
-    } else {
-      const indentation = /\n([ \t]*)\S/u.exec(stamped)?.[1] ?? '\t\t\t\t';
-      stamped = `\n${indentation}${key} = ${value};${stamped}`;
+    const matches = [...masked.matchAll(assignment)];
+    for (const match of matches) {
+      edits.push({
+        start: (match.index ?? 0) + (match[1]?.length ?? 0),
+        end: (match.index ?? 0) + match[0].length - 1,
+        text: value,
+      });
+    }
+    if (matches.length === 0) {
+      additions.push(`${key} = ${value};`);
     }
   }
-  return `${source.slice(0, settingsOpen + 1)}${stamped}${source.slice(settingsOpen + 1 + settings.length)}`;
+  const indentation = /\n([ \t]*)\S/u.exec(settings)?.[1] ?? '\t\t\t\t';
+  const stamped = `${additions.map((line) => `\n${indentation}${line}`).join('')}${
+    applyTextEdits(settings, edits)}`;
+  return `${source.slice(0, settingsOpen + 1)}${stamped}${
+    source.slice(settingsOpen + 1 + settings.length)}`;
+}
+
+interface TextEdit {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+function applyTextEdits(source: string, edits: readonly TextEdit[]): string {
+  let result = source;
+  for (const edit of [...edits].sort((left, right) => right.start - left.start)) {
+    result = `${result.slice(0, edit.start)}${edit.text}${result.slice(edit.end)}`;
+  }
+  return result;
+}
+
+/** A same-length copy with comment bodies replaced by spaces, so offsets map onto the source. */
+function blankComments(source: string): string {
+  const stripped = stripComments(source);
+  if (stripped.length === source.length) {
+    return source;
+  }
+  let result = '';
+  let quote: '"' | "'" | undefined;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index] ?? '';
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+        result += character;
+      } else {
+        result += character === '\r' ? character : ' ';
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        result += '  ';
+        index += 1;
+      } else {
+        result += character === '\n' || character === '\r' ? character : ' ';
+      }
+      continue;
+    }
+    if (quote !== undefined) {
+      result += character;
+      if (character === '\\') {
+        result += next ?? '';
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      blockComment = true;
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    }
+    result += character;
+  }
+  return result;
 }
 
 interface AndroidIdentity {
@@ -546,6 +637,15 @@ function assertIosSetting(
   const conditional = new RegExp(conditionalPattern, 'u');
   const target = stripComments(settings.target.values);
   const project = stripComments(settings.project.values);
+  if (expected === undefined && key !== 'PRODUCT_BUNDLE_IDENTIFIER') {
+    // Stamping writes an unconditional value into the App target's Release
+    // settings, which overrides the project level and any xcconfig; only a
+    // conditional target-level assignment would still win for its SDK.
+    if (conditional.test(target)) {
+      throw new Error(`Native release preflight does not support conditional ${key} in ${file}.`);
+    }
+    return;
+  }
   const targetRaw = readSettingValues(target, expression);
   if (targetRaw.length > 1) {
     throw new Error(`Native release preflight has ambiguous App Release ${key} in ${file}.`);
