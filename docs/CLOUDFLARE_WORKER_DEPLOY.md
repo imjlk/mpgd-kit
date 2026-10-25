@@ -166,8 +166,10 @@ for a public client:
   stolen copy, and the server cannot tell which.
 - One exception keeps mobile guests from being lost: the token replaced by
   the latest rotation may be presented again while its successor has never
-  been used, up to `IDENTITY_REFRESH_RETRY_GRACE_SECONDS` (7 days, at most half
-  the inactivity window; `0` is strict rotation). A phone that lost the
+  been used, up to `IDENTITY_REFRESH_RETRY_GRACE_SECONDS` (default 7 days, or
+  half the inactivity window if that is shorter; `0` is strict rotation; an
+  explicit value must stay below the inactivity window, or every route
+  answers `503` and the log names the setting). A phone that lost the
   rotation's answer, or that the OS suspended mid-request, keeps the old token
   and presents it at its next launch; strict detection would end that guest for
   good. The cost is that a stolen copy of that one token stays usable until the
@@ -191,15 +193,18 @@ for a public client:
 
 ```sh
 pnpm --dir apps/game-identity-worker exec wrangler d1 create game-identity
-# put the database_id into apps/game-identity-worker/wrangler.toml, uncomment
-# [[d1_databases]], and set MPGD_STORE = "d1"
+# In apps/game-identity-worker/wrangler.toml: uncomment [[d1_databases]] and put
+# the database_id there (keep binding = "DB"), set MPGD_STORE = "d1", uncomment
+# [[ratelimits]] (Wrangler 4.36+; a namespace_id unique in the account; period
+# 10 or 60), and uncomment [triggers] for the daily purge.
 pnpm --dir apps/game-identity-worker exec wrangler d1 migrations apply game-identity --remote
 pnpm --dir apps/game-identity-worker run deploy
 ```
 
 `MPGD_STORE = "memory"` serves only local development hosts (loopback,
 `*.localhost`, `10.0.2.2`): sessions would vanish with each isolate. The daily
-cron in its `wrangler.toml` purges ended families and expired tokens.
+cron purges ended families (after 7 days) and expired tokens; without it they
+accumulate.
 
 **Bind the game-services Worker to it.** The entrypoint names are the ones
 its `wrangler.toml` examples use:
@@ -229,7 +234,25 @@ game-owned iOS verifier Worker binds `AppStoreAccountBinding` and calls its
 `resolveAppAccountToken({ playerId })` from the App Store verifier's
 `resolveAppAccountToken` (a `null` answer is an unknown player: throw, so the
 purchase is refused). Both values are the same digests the generated game
-derives on the device (`src/platform/commerceAccountBinding.ts`).
+derives on the device (`src/platform/commerceAccountBinding.ts`). In the iOS
+verifier Worker:
+
+```toml
+[[services]]
+binding = "GAME_IDENTITY_APP_STORE"   # any name the verifier reads
+service = "game-identity"
+entrypoint = "AppStoreAccountBinding"
+```
+
+```ts
+resolveAppAccountToken: async ({ playerId }) => {
+  const token = await env.GAME_IDENTITY_APP_STORE.resolveAppAccountToken({ playerId });
+  if (token === null) {
+    throw new Error('Unknown player.');
+  }
+  return token;
+},
+```
 
 The identity Worker binds back to end a revoked family's notification
 session at once:
@@ -246,8 +269,9 @@ The two Workers bind each other, so deploy the identity Worker first without
 the identity Worker again with `GAME_SERVICES`. Without it, a revoked family's
 devices are unbound when its `expiresAt` passes. Each service-binding call
 counts toward a request's limit of 32 Worker invocations
-([service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/));
-an authenticated game-services request uses one.
+([service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/)):
+the ingress authentication is one, and a purchase adds its account binding
+and verifier calls.
 
 Not served by the reference Worker: `GAME_SERVICES_NOTIFICATIONS_IDENTITY`
 (`resolveNotificationRecipient` maps a player to an Apps in Toss user key, and
@@ -263,7 +287,7 @@ verified `{ participantId }` or `undefined`:
 ```toml
 [[services]]
 binding = "VERIFIED_LEADERBOARD_AUTH"
-service = "game-identity"
+service = "game-leaderboard-auth"
 ```
 
 The binding enables the read-only route while keeping participant scope out of
