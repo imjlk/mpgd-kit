@@ -227,6 +227,35 @@ describe('Capacitor notifications provider: Android advertising rendering', () =
     }
   });
 
+  it('announces nothing extra without the renderer input, or on iOS', async () => {
+    for (const options of [{ platform: 'android' as const }, { platform: 'ios' as const, renderer: async () => true }]) {
+      const sdks = createFakeNotificationSdks({ platform: options.platform, now: () => '2026-10-25T03:00:00Z' });
+      sdks.osState = 'granted';
+      sdks.issueEndpoint({ kind: 'fcm-token', value: 'token-1' });
+      sdks.emitPush('tokenReceived', { token: 'token-1' });
+      createCapacitorNotificationProvider({
+        platform: options.platform,
+        topics: [service],
+        ...(sdks.push === undefined ? {} : { push: sdks.push }),
+        app: sdks.app,
+      });
+      sdks.restart();
+      const provider = createCapacitorNotificationProvider({
+        platform: options.platform,
+        topics: [advertising, service],
+        ...(sdks.push === undefined ? {} : { push: sdks.push }),
+        ...(sdks.local === undefined ? {} : { local: sdks.local }),
+        app: sdks.app,
+        ...('renderer' in options ? { advertisingRenderer: options.renderer } : {}),
+      });
+      await settle();
+      await settle();
+      const events: NotificationEvent[] = [];
+      provider.subscribe((event) => events.push(event));
+      expect(events).toEqual([]);
+    }
+  });
+
   it('opens the declared opt-out screen from the renderer action, which the plugin reports as a tap', () => {
     const { sdks, provider } = setup({ renderer: async () => true });
     const events: NotificationEvent[] = [];

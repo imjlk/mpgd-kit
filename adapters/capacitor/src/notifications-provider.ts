@@ -786,24 +786,40 @@ export function createCapacitorNotificationProvider(
   // when it changes. Once the read answers, the current registration is
   // announced; the runtime sends it only when it differs from the last one
   // it sent, so an app update reaches the backend at its first start.
-  if (rendererAsked && configurationIssue === undefined) {
+  if (rendererAsked && configurationIssue === undefined && push !== undefined) {
     const generation = tokenGeneration;
-    void rendererRead
-      .then(async () => {
+    void (async () => {
+      await rendererRead;
+      let token: string;
+      try {
+        token = (await push.getToken()).token;
+      } catch (error) {
+        // No token yet: `tokenReceived` announces the first one. A shell
+        // that cannot answer at all is reported, as `register()` does.
+        if (isConfigurationFailure(error)) {
+          reportError(error);
+        }
+        return;
+      }
+      if (typeof token !== 'string' || token === '' || generation !== tokenGeneration) {
+        return;
+      }
+      try {
         await ensureChannels();
-        const token = push === undefined ? undefined : (await push.getToken()).token;
-        if (typeof token !== 'string' || token === '' || generation !== tokenGeneration) {
-          return;
-        }
-        const registration = await registrationOf(token);
-        // A `tokenReceived` meanwhile announced its own, which is newer.
+      } catch {
+        // `ensureChannels` reported it; the foreground retry publishes this
+        // token once the channels exist.
         if (generation === tokenGeneration) {
-          dispatch({ type: 'endpoint-changed', registration });
+          retainedToken = { token, generation };
         }
-      })
-      // No token yet, or no channel: `tokenReceived` and the foreground
-      // retry announce it later.
-      .catch(() => undefined);
+        return;
+      }
+      const registration = await registrationOf(token);
+      // A `tokenReceived` meanwhile announced its own, which is newer.
+      if (generation === tokenGeneration) {
+        dispatch({ type: 'endpoint-changed', registration });
+      }
+    })().catch(reportError);
   }
 
   // Local reminder operations run one at a time: each reads the pending list

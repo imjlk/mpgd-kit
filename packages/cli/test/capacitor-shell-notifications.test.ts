@@ -971,6 +971,12 @@ try {
   assert.equal(restored.split(androidAdvertisingRendererService).length - 1, 1);
   const incomplete = rendered.replace(/\s*<meta-data[^>]*\/>/u, '');
   assert.equal(applyAndroidManifestAdvertisingRenderer(incomplete), incomplete);
+  // An incomplete renderer without the removal gets only the removal.
+  const incompleteAlone = incomplete.replace(/\s*<service[^>]*tools:node="remove" \/>/u, '');
+  const removalAdded = applyAndroidManifestAdvertisingRenderer(incompleteAlone);
+  assert.equal(removalAdded.split(androidAdvertisingRendererService).length - 1, 1);
+  assert.equal(removalAdded.split(androidMessagingPluginService).length - 1, 1);
+  assert.ok(androidAdvertisingRendererWarning(removalAdded));
   // Mismatched quotes do not count as the attribute.
   assert.equal(
     androidManifestRendersAdvertising(

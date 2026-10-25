@@ -107,7 +107,9 @@ initializer refuses a game or shell that lists it; remove it first.
    `mpgd-advertising` channel). Under the Korean rules the backend sends
    Android advertising only to an installation whose app registered the
    renderer, so a build of your app from before this step receives none;
-   the app registers the renderer at its first start after the update. Advertising pushes use
+   the app registers the renderer at its first start after the update (once
+   a player is signed in, and when the game passes `advertisingRenderer` to
+   the provider, as the starter does). Advertising pushes use
    the same small icon and color as Firebase's own
    (`com.google.firebase.messaging.default_notification_icon` and
    `default_notification_color`), else the app icon.

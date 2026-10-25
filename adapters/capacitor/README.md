@@ -331,7 +331,7 @@ is created, which is how a cold-start open reaches it.
     reads it once and registers `rendersAdvertising: true` when that service
     is installed, and it announces its registration once the read answers,
     so an app update that adds or removes the renderer reaches the backend
-    at its first start. Under the Korean rules the backend sends Android
+    at its first start (once a player is signed in). Under the Korean rules the backend sends Android
     advertising only to such an installation, and
     `validateNotificationTopicCatalog` accepts an
     advertising topic mapped to `android` only when the deployment sets
