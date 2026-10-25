@@ -496,6 +496,43 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     fcm.calls.map((call) => call.idempotencyKey),
     ['ad-1:renderer'],
   );
+  // On a provider that serves ios alone the claim is dropped and every
+  // endpoint shows the category's action itself.
+  const iosStore = createInMemoryNotificationStore();
+  const ios = createNotificationService({
+    store: iosStore,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['ios'] },
+    ]),
+    catalog: vectorCatalog([events]),
+    deployment: { advertisingRules: 'kr', advertisingSender: { contact: '02-000-0000' } },
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await ios.registerEndpoint(session('p-1', 'phone'), {
+    registration: {
+      provider: 'fcm',
+      address: {
+        kind: 'fcm-token',
+        value: 'tok-phone',
+        permission: 'granted',
+        rendersAdvertising: true,
+      },
+    },
+  });
+  assert.deepEqual(
+    (await iosStore.getEndpoint({ provider: 'fcm', installationId: 'phone' }))?.address,
+    { kind: 'fcm-token', value: 'tok-phone' },
+  );
+  await ios.recordConsent(session('p-1', 'phone'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.deepEqual(
+    await ios.deliver({ idempotencyKey: 'ad-ios', player: 'p-1', topic: 'events' }),
+    { status: 'delivered', alreadyProcessed: false },
+  );
 }
 
 // Queue dispatch: the gate runs when the job runs; a lost job is replayed after the lease.

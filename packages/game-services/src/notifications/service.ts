@@ -543,14 +543,20 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   // Recipients (gate step 2).
 
   /**
-   * The catalog target of a device endpoint: the one its registration named,
-   * else the provider's only target (a registration on a single-target
-   * provider may leave it out).
+   * The catalog target of a device endpoint, as `topicFor` reads it: the one
+   * its registration named while the provider still serves it, else the
+   * provider's only target (a registration on a single-target provider may
+   * leave it out).
    */
   const endpointTargetOf = (
     provider: RegisteredNotificationProvider,
     target: string | undefined,
-  ): string | undefined => target ?? (provider.targets.length === 1 ? provider.targets[0] : undefined);
+  ): string | undefined =>
+    target !== undefined && provider.targets.includes(target)
+      ? target
+      : provider.targets.length === 1
+        ? provider.targets[0]
+        : undefined;
   /**
    * Whether a device endpoint shows the actions a push carries: on a target
    * whose pushes need the shell to render advertising (Android), only when
