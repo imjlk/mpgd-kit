@@ -6,8 +6,6 @@ import {
   restoreOutcomeText,
   type StarterRestoreOutcome,
 } from '../platform/restorePurchases';
-
-type StarterRestoreFailure = Extract<StarterRestoreOutcome, { readonly outcome: 'failed' }>;
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
 
 export class LobbyScene extends Phaser.Scene {
@@ -148,7 +146,7 @@ export class LobbyScene extends Phaser.Scene {
           event.stopPropagation();
           status.setText(t(locale, 'restoreWorking'));
           void restore.restore()
-            .catch((): StarterRestoreFailure => ({ outcome: 'failed' }))
+            .catch((): StarterRestoreOutcome => ({ outcome: 'failed' }))
             .then((result) => {
               if (status.active) {
                 status.setText(restoreOutcomeText(locale, result));

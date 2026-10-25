@@ -58,12 +58,18 @@ export function createStarterRestorePurchases(input: {
       && await resolveStarterCommercePlayerId(input.gateway) === undefined) {
       return { outcome: 'needs-session' };
     }
-    // The reconciler reports a failed store resync as a `restore` failure
-    // event, not a rejection; only this restore emits that stage.
+    // The reconciler reports store failures as events, not rejections. A
+    // failed resync (`restore`) is only this restore's; a failed read of the
+    // store's purchases (`available`, the whole restore on stores without a
+    // resync such as Google Play) may also come from a concurrent startup or
+    // resume pass, so it makes the result unconfirmed rather than failed.
     let resyncFailed = false;
+    let readFailed = false;
     const unsubscribe = recovery.commerceReconciler?.subscribe((event) => {
       if (event.type === 'failure' && event.stage === 'restore') {
         resyncFailed = true;
+      } else if (event.type === 'failure' && event.stage === 'available') {
+        readFailed = true;
       }
     });
     try {
@@ -76,7 +82,7 @@ export function createStarterRestorePurchases(input: {
       // A purchase the backend has not settled yet (verify unreachable, still
       // pending at the store, waiting on an operator) is reported as such,
       // never as "nothing to restore".
-      if (summaries.some((summary) => summary.status === 'pending'
+      if (readFailed || summaries.some((summary) => summary.status === 'pending'
         || summary.status === 'action-required' || summary.status === 'failed')) {
         return { outcome: 'incomplete', granted };
       }

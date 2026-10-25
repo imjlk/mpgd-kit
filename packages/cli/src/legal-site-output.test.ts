@@ -286,6 +286,13 @@ await test('serves app-ads.txt from the AdMob publisher ID or a game-owned file'
         console.warn = originalWarn;
       }
       assert.equal(warnings.length, 1);
+      console.warn = (message: string) => warnings.push(message);
+      try {
+        await runMpgdCli(['legal', 'check']);
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.equal(warnings.length, 2, 'legal check warns too');
       assert.match(warnings[0] ?? '', /privacy[/\\]index\.html/u);
       assert.equal(
         readFileSync(appAds, 'utf8'),

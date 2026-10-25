@@ -3431,6 +3431,7 @@ function buildLegalSite(input: {
     }
   }
 
+  warnLegalPlaceholders(outputs);
   if (input.check) {
     assertLegalProjectPath('out-dir', outDir);
     if (orphanedAppAds) {
@@ -3462,7 +3463,6 @@ function buildLegalSite(input: {
     };
   }
 
-  warnLegalPlaceholders(outputs);
   publishLegalSiteFiles(outDir, outputs);
   if (orphanedAppAds) {
     rmSync(appAdsOutput, { force: true });

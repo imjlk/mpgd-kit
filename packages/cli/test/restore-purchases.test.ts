@@ -141,7 +141,8 @@ for (const status of ['pending', 'action-required'] as const) {
     { outcome: 'incomplete', granted: 1 },
   );
 }
-// Failures of other passes (a startup scan, an app-resume pass) are not this restore's.
+// A failed store read (Google Play has no resync, so it is the whole restore) leaves
+// the result unconfirmed rather than failed: it may come from another pass.
 const unrelated = createStarterRestorePurchases({
   gateway: gateway('app-store', signedIn),
   monetizationRecovery: {
@@ -159,7 +160,11 @@ const unrelated = createStarterRestorePurchases({
     },
   },
 });
-assert.deepEqual(await unrelated.restore(), { outcome: 'restored', granted: 0 });
+assert.deepEqual(
+  await unrelated.restore(),
+  { outcome: 'incomplete', granted: 0 },
+  'a failed store read is never "nothing to restore"',
+);
 
 // A failure is reported, not thrown; a second tap joins the running restore.
 const originalError = console.error;
