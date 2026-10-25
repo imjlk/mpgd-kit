@@ -67,7 +67,9 @@ public class AdvertisingMessagingService extends FirebaseMessagingService {
         resolve();
         Method method = token ? onNewToken : onMessageReceived;
         if (method == null) {
-            Log.w(TAG, "@capacitor-firebase/messaging is not installed; the push reaches no plugin.");
+            Log.w(TAG, token
+                ? "@capacitor-firebase/messaging is not installed; the new FCM token reaches no plugin."
+                : "@capacitor-firebase/messaging is not installed; the message reaches no plugin.");
             return;
         }
         try {

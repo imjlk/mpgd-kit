@@ -64,6 +64,13 @@ export const capacitorNotificationDataKeys = Object.freeze({
   action: 'mpgd.action',
 } as const);
 
+/**
+ * How long a registration waits for the Android advertising renderer read;
+ * a read that takes longer counts as no renderer, so registrations never
+ * stall on it.
+ */
+export const capacitorAdvertisingRendererTimeoutMs = 5_000;
+
 /** iOS keeps at most 64 pending local notifications per app. */
 export const capacitorIosMaxPendingLocalNotifications = 64;
 
@@ -117,8 +124,10 @@ export interface CreateCapacitorNotificationProviderInput {
    * installation only when its registration says `rendersAdvertising`, which
    * the provider sets when this answers true. It is read once, when the
    * provider is created, and only when the catalog maps an advertising
-   * topic to Android; a failure reads as false. Ignored on iOS, which shows
-   * the opt-out category's action itself.
+   * topic to Android. A failure, or no answer within
+   * `capacitorAdvertisingRendererTimeoutMs`, reads as false; a shell whose
+   * plugin lacks the method (`UNIMPLEMENTED`) is not reported as an error.
+   * Ignored on iOS, which shows the opt-out category's action itself.
    */
   readonly advertisingRenderer?: () => Promise<boolean>;
   /**
@@ -292,10 +301,20 @@ export function createCapacitorNotificationProvider(
       && input.advertisingRenderer !== undefined
       && mappedTopics.some((topic) => topic.purpose === 'advertising')
     ? (async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          rendersAdvertising = (await input.advertisingRenderer?.()) === true;
+          const read = Promise.resolve().then(() => input.advertisingRenderer?.());
+          const late = new Promise<false>((resolve) => {
+            timer = setTimeout(() => resolve(false), capacitorAdvertisingRendererTimeoutMs);
+          });
+          rendersAdvertising = (await Promise.race([read, late])) === true;
         } catch (error) {
-          reportError(error);
+          // A shell built before the renderer answers UNIMPLEMENTED: it has none.
+          if ((error as { readonly code?: unknown } | null)?.code !== 'UNIMPLEMENTED') {
+            reportError(error);
+          }
+        } finally {
+          clearTimeout(timer);
         }
       })()
     : Promise.resolve();

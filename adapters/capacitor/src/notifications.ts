@@ -29,6 +29,7 @@ export {
 } from './notifications-sdk.js';
 export {
   capacitorAdvertisingActionTypeId,
+  capacitorAdvertisingRendererTimeoutMs,
   capacitorIosMaxPendingLocalNotifications,
   capacitorLocalNotificationId,
   capacitorNotificationChannelId,

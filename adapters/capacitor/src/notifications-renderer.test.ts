@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { NotificationEvent, NotificationTopicDeclaration } from '@mpgd/platform/notifications';
 
 import { createFakeNotificationSdks } from '../test/notifications-sdk-fixture.js';
-import { createCapacitorNotificationProvider } from './notifications-provider.js';
+import {
+  capacitorAdvertisingRendererTimeoutMs,
+  createCapacitorNotificationProvider,
+} from './notifications-provider.js';
 import { readCapacitorAdvertisingPushRenderer } from './notifications-renderer.js';
 
 const advertising: NotificationTopicDeclaration = {
@@ -21,6 +24,10 @@ const service: NotificationTopicDeclaration = {
   route: '/?entry=friend-challenge',
   mapping: {},
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const settle = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -111,6 +118,32 @@ describe('Capacitor notifications provider: Android advertising rendering', () =
     const { errors } = setup({ renderer: async () => Promise.reject(new Error('not implemented')) });
     await settle();
     expect(errors).toEqual([new Error('not implemented')]);
+  });
+
+  it('does not report a shell without the method, and registers without the claim', async () => {
+    const unimplemented = Object.assign(new Error('not implemented on android'), { code: 'UNIMPLEMENTED' });
+    const { sdks, provider, errors } = setup({ renderer: async () => Promise.reject(unimplemented) });
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'token-1' });
+    await settle();
+    expect((await provider.register?.())?.address).toEqual({
+      kind: 'fcm-token',
+      value: 'token-1',
+      permission: 'granted',
+    });
+    expect(errors).toEqual([]);
+  });
+
+  it('stops waiting for a renderer read that never answers', async () => {
+    vi.useFakeTimers();
+    const { sdks, provider } = setup({ renderer: () => new Promise<boolean>(() => undefined) });
+    sdks.issueEndpoint({ kind: 'fcm-token', value: 'token-1' });
+    const registration = provider.register?.();
+    await vi.advanceTimersByTimeAsync(capacitorAdvertisingRendererTimeoutMs);
+    expect((await registration)?.address).toEqual({
+      kind: 'fcm-token',
+      value: 'token-1',
+      permission: 'granted',
+    });
   });
 
   it('announces a token again once the renderer read answers', async () => {

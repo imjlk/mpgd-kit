@@ -120,6 +120,19 @@ public final class AdvertisingPushRenderer {
             Log.w(TAG, "Dropped an advertising push: the app has no launcher activity to open.");
             return;
         }
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        // Android drops these posts without an error, so say why here.
+        if (!manager.areNotificationsEnabled()) {
+            Log.w(TAG, "Dropped an advertising push: the player turned notifications off.");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager.getNotificationChannel(push.channel) == null) {
+            // The provider creates the catalog's channels before it registers
+            // a token; a channel that is gone was deleted since, and posting
+            // without it would show nothing.
+            Log.w(TAG, "Dropped an advertising push: its channel " + push.channel + " does not exist.");
+            return;
+        }
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, push.channel)
             .setSmallIcon(smallIcon(context))
             .setContentTitle(push.title)
@@ -141,13 +154,9 @@ public final class AdvertisingPushRenderer {
             builder.setTimeoutAfter(Math.max(1L, push.expiresAt - System.currentTimeMillis()));
         }
         try {
-            NotificationManagerCompat.from(context).notify(
-                push.tag,
-                AdvertisingPush.NOTIFICATION_ID,
-                builder.build()
-            );
+            manager.notify(push.tag, AdvertisingPush.NOTIFICATION_ID, builder.build());
         } catch (SecurityException error) {
-            // Android 13+ without POST_NOTIFICATIONS: nothing can be shown.
+            // Some builds throw instead of dropping when POST_NOTIFICATIONS is missing.
             Log.w(TAG, "Dropped an advertising push: notifications are not permitted.", error);
         }
     }
