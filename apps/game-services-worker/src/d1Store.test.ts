@@ -543,6 +543,50 @@ async function runRestoreTransferScenario(
     .first<{ count: number }>();
   assertEqual(revokeRows?.count, 0, 'no refund row lands on a moved grant');
 
+  // A transfer whose key a revoke entry of the same player already took (one
+  // key space across both tables, as in the in-memory store) is refused.
+  const otherGrant = await store.recordEntitlementGrant({
+    playerId: 'd1-new-guest',
+    grantId: 'REMOVE_ADS',
+    source: 'purchase',
+    idempotencyKey: 'd1-other-purchase',
+    grantedAt: '2030-01-02T00:00:00.000Z',
+    payload: { target: 'android' },
+  });
+  await store.recordEntitlementRevocation?.({
+    playerId: 'd1-new-guest',
+    revokesLedgerEntryId: otherGrant.ledgerEntryId,
+    idempotencyKey: 'd1-shared-key',
+    reason: 'refund',
+    revokedAt: '2030-01-02T00:00:00.000Z',
+    payload: {},
+  });
+  let sharedKeyRefused = false;
+  try {
+    await store.recordEntitlementTransfer?.({
+      revocation: {
+        playerId: 'd1-new-guest',
+        revokesLedgerEntryId: moved.ledgerEntryId ?? '',
+        idempotencyKey: 'd1-shared-key',
+        reason: 'transfer',
+        revokedAt: '2030-01-02T00:00:00.000Z',
+        payload: { transferEvidenceVerificationId: 'mpgd-transfer:77:shared' },
+      },
+      grant: {
+        playerId: 'd1-shared-taker',
+        grantId: 'REMOVE_ADS',
+        source: 'purchase',
+        idempotencyKey: 'd1-shared-taker',
+        grantedAt: '2030-01-02T00:00:00.000Z',
+        payload: { transferredFromLedgerEntryId: moved.ledgerEntryId ?? '' },
+        evidenceVerificationId: 'mpgd-transfer:77:shared',
+      },
+    });
+  } catch (error) {
+    sharedKeyRefused = error instanceof EntitlementTransferConflictError;
+  }
+  assertEqual(sharedKeyRefused, true, 'a transfer key a revoke entry took is a conflict');
+
   // Two isolates race to move the same holder: one wins, one waits.  // Two isolates race to move the same holder: one wins, one waits.
   nowMs += 1000;
   const [left, right] = await Promise.all([

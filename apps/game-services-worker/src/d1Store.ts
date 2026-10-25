@@ -377,7 +377,8 @@ class D1GameServicesStore implements GameServicesStore {
                   AND player_id = ?
                   AND source = 'purchase'
                   AND NOT EXISTS (
-                    SELECT 1 FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?
+                    SELECT 1 FROM entitlement_revocations
+                    WHERE revokes_ledger_entry_id = ? OR (player_id = ? AND idempotency_key = ?)
                   )
               ),
               ?,
@@ -392,6 +393,8 @@ class D1GameServicesStore implements GameServicesStore {
             revocation.revokesLedgerEntryId,
             revocation.playerId,
             revocation.revokesLedgerEntryId,
+            revocation.playerId,
+            revocation.idempotencyKey,
             revocation.idempotencyKey,
             revocation.revokedAt,
             JSON.stringify(revocation.payload),
@@ -430,13 +433,21 @@ class D1GameServicesStore implements GameServicesStore {
         throw new Error('Entitlement transfer references an unknown grant.');
       }
       const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+      // The moved grant reversed in either table, or the transfer's key taken
+      // by a revoke entry of the same player (one key space, as in memory).
       const reversed = await session
         .prepare(
-          `SELECT 1 AS found FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?
+          `SELECT 1 AS found FROM entitlement_revocations
+           WHERE revokes_ledger_entry_id = ? OR (player_id = ? AND idempotency_key = ?)
            UNION ALL
            SELECT 1 AS found FROM entitlement_transfers WHERE revokes_ledger_entry_id = ?`,
         )
-        .bind(revocation.revokesLedgerEntryId, revocation.revokesLedgerEntryId)
+        .bind(
+          revocation.revokesLedgerEntryId,
+          revocation.playerId,
+          revocation.idempotencyKey,
+          revocation.revokesLedgerEntryId,
+        )
         .first<{ found: number }>();
       if (
         moved.player_id !== revocation.playerId
