@@ -50,6 +50,12 @@ head_sampling_rate = 1
 # database_name = "mpgd-game-services"
 # database_id = "<replace-with-wrangler-d1-create-output>"
 
+# Identity: the reference guest identity Worker (apps/game-identity-worker,
+# service name "game-identity") implements GameServicesIngressAuth,
+# NotificationSessions, GooglePlayAccountBinding, and AppStoreAccountBinding
+# (for the iOS verifier Worker's resolveAppAccountToken); bind them below. See
+# docs/CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker.
+#
 # Bind a private identity Worker to enable authenticated public snapshot reads.
 # The service must implement authenticateVerifiedLeaderboardSnapshot({ authorization }).
 
@@ -204,7 +210,8 @@ head_sampling_rate = 1
 # Apps in Toss functional messages (the ait target): the partner API client
 # certificate, the provider settings (a var, under [vars]), and the identity
 # service that answers a player's Toss user key (any entrypoint with
-# resolveNotificationRecipient; the name below is an example).
+# resolveNotificationRecipient; the name below is an example). The reference
+# guest identity Worker does not serve it: a guest has no Toss user key.
 #
 # MPGD_AIT_NOTIFICATIONS = { recipientKey = "toss-user" }
 #
