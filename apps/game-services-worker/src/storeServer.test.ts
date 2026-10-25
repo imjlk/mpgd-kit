@@ -753,6 +753,34 @@ try {
       assert.equal(seen.size, 60, 'every void in the overlap is read');
     }
 
+    // A cursor ahead of the clock (a clock step back) completes and stays put.
+    {
+      const cursors = createD1StoreServerCursors(db);
+      const skewNow = start + 80 * 24 * 3_600_000;
+      const ahead = skewNow + 30 * 60_000;
+      await cursors.write(voidedSweepCursor, ahead, new Date(skewNow));
+      await cursors.write('google-play-voided:behind', 2, new Date(skewNow));
+      const skewed = await runScheduledStoreServer(
+        cronEnv,
+        { cron: '* * * * *' },
+        {
+          googlePlay: {
+            finalizer: boundary,
+            voidedPurchases: {
+              async listVoidedPurchases() {
+                return { voidedPurchases: [] };
+              },
+            },
+            packageName,
+          },
+          now: () => skewNow,
+        },
+      );
+      assert.equal(skewed?.sweep?.complete, true, 'nothing newer than the clock to read');
+      assert.equal(await cursors.read(voidedSweepCursor), ahead, 'the cursor never moves back');
+      assert.equal(await cursors.read('google-play-voided:behind'), 0);
+    }
+
     // A slow Play finalization leaves the sweep its half of the wall time.
     {
       const cursors = createD1StoreServerCursors(db);
