@@ -33,7 +33,7 @@ export function mountRestorePurchasesButton(mount: HTMLElement, context: Starter
   const status = document.createElement('p');
   status.setAttribute('role', 'status');
   status.style.cssText = 'position:absolute;bottom:44px;left:8px;margin:0;padding:4px 8px;'
-    + 'color:#d6dee8;font:13px system-ui,sans-serif;border-radius:6px;';
+    + 'color:#d6dee8;font:13px system-ui,sans-serif;border-radius:6px;pointer-events:none;';
   status.setAttribute('aria-live', 'polite');
   // In the accessibility tree from the start (empty), so its updates are announced.
   const show = (text: string): void => {

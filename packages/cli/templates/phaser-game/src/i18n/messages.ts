@@ -22,6 +22,7 @@ export type GameMessageKey =
   | 'restoreDone'
   | 'restoreNothing'
   | 'restoreIncomplete'
+  | 'restorePartial'
   | 'restoreNeedsSession'
   | 'restoreFailed';
 
@@ -48,6 +49,7 @@ const messages = {
     restoreDone: 'Purchases restored ({count} confirmed)',
     restoreNothing: 'No new purchases to restore',
     restoreIncomplete: 'Some purchases are not confirmed yet. Try again later.',
+    restorePartial: '{count} purchases restored; others are not confirmed yet. Try again later.',
     restoreNeedsSession: 'Sign in to restore purchases',
     restoreFailed: 'Could not restore purchases. Try again later.',
   },
@@ -73,6 +75,7 @@ const messages = {
     restoreDone: '구매 복원 완료 ({count}건 확인)',
     restoreNothing: '새로 복원할 구매가 없습니다',
     restoreIncomplete: '아직 확인되지 않은 구매가 있습니다. 나중에 다시 시도하세요.',
+    restorePartial: '{count}건 복원, 아직 확인되지 않은 구매가 있습니다. 나중에 다시 시도하세요.',
     restoreNeedsSession: '구매를 복원하려면 로그인하세요',
     restoreFailed: '구매를 복원하지 못했습니다. 나중에 다시 시도하세요.',
   },

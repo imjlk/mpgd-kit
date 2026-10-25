@@ -226,7 +226,11 @@ assert.equal(
   restoreOutcomeText('ko', { outcome: 'needs-session' }),
   '구매를 복원하려면 로그인하세요',
 );
-assert.match(restoreOutcomeText('en', { outcome: 'incomplete', granted: 1 }), /not confirmed yet/u);
+assert.match(restoreOutcomeText('en', { outcome: 'incomplete', granted: 0 }), /not confirmed yet/u);
+assert.equal(
+  restoreOutcomeText('en', { outcome: 'incomplete', granted: 2 }),
+  '2 purchases restored; others are not confirmed yet. Try again later.',
+);
 assert.match(restoreOutcomeText('en', { outcome: 'failed' }), /Could not restore/u);
 
 console.info('Starter Restore Purchases passed.');

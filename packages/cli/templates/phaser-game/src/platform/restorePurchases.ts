@@ -113,7 +113,9 @@ export function restoreOutcomeText(locale: Locale, result: StarterRestoreOutcome
         ? t(locale, 'restoreNothing')
         : t(locale, 'restoreDone', { count: result.granted });
     case 'incomplete':
-      return t(locale, 'restoreIncomplete');
+      return result.granted === 0
+        ? t(locale, 'restoreIncomplete')
+        : t(locale, 'restorePartial', { count: result.granted });
     case 'needs-session':
       return t(locale, 'restoreNeedsSession');
     default:
