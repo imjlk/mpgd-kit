@@ -1975,11 +1975,15 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     cold-start buffering work as for every push. The plugin reports both as
     `tap`; the provider reads `mpgd.action` as the opt-out action and opens
     the topic's declared `optOutRoute`. Keys that start with `mpgd.` never
-    reach an open's `data`. The kit's plugin clears the notification when
+    reach an open's `data`. The launcher activity is exported, so another
+    app can start it with the same extras: the most it can do is open the
+    declared opt-out screen, which must not withdraw consent without the
+    player's own tap there. The kit's plugin clears the notification when
     such an open arrives, because an action does not dismiss it.
   - **Declaring.** `getAdvertisingPushRenderer()` in
     `@mpgd/capacitor-game-services` answers whether the resolved messaging
-    service declares the meta-data. The provider reads it once through its
+    service declares the meta-data and the messaging plugin's entry points
+    resolve, so a plugin release that renamed them reads as no renderer. The provider reads it once through its
     `advertisingRenderer` input (`readCapacitorAdvertisingPushRenderer`),
     only on Android with a catalog that maps advertising, and registers
     `rendersAdvertising: true` when it answers true. A read that fails or

@@ -83,12 +83,43 @@ public final class AdvertisingPushRenderer {
         return true;
     }
 
+    /** The messaging plugin's entry points the kit's service forwards to. */
+    static final String MESSAGING_PLUGIN_CLASS =
+        "io.capawesome.capacitorjs.plugins.firebase.messaging.FirebaseMessagingPlugin";
+    static final String REMOTE_MESSAGE_CLASS = "com.google.firebase.messaging.RemoteMessage";
+
     /**
      * Whether the messaging service Firebase Messaging resolves for this app
-     * declares {@link #META_DATA_RENDERER}: Android sends a messaging event
-     * to one service only, so this is the service that receives pushes.
+     * declares {@link #META_DATA_RENDERER} (Android sends a messaging event
+     * to one service only, so this is the service that receives pushes), and
+     * the messaging plugin's entry points it forwards every other message
+     * and token to resolve. A plugin release that renamed them would leave
+     * the shell without its plugin events, so it does not count as a renderer.
      */
     public static boolean isInstalled(Context context) {
+        if (!declaresRenderer(context)) {
+            return false;
+        }
+        if (!pluginEntryPointsResolve()) {
+            Log.w(TAG, "The messaging plugin's entry points do not resolve; no advertising renderer.");
+            return false;
+        }
+        return true;
+    }
+
+    /** Plain reflection, so a JVM unit test can call it. */
+    static boolean pluginEntryPointsResolve() {
+        try {
+            Class<?> plugin = Class.forName(MESSAGING_PLUGIN_CLASS);
+            plugin.getMethod("onNewToken", String.class);
+            plugin.getMethod("onMessageReceived", Class.forName(REMOTE_MESSAGE_CLASS));
+            return true;
+        } catch (ReflectiveOperationException | LinkageError error) {
+            return false;
+        }
+    }
+
+    private static boolean declaresRenderer(Context context) {
         Intent intent = new Intent(MESSAGING_EVENT).setPackage(context.getPackageName());
         ResolveInfo resolved;
         try {

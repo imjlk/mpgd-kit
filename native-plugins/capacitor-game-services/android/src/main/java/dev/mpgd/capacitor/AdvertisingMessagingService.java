@@ -29,9 +29,6 @@ import java.lang.reflect.Method;
  */
 public class AdvertisingMessagingService extends FirebaseMessagingService {
     private static final String TAG = "MpgdAdvertisingPush";
-    /** The messaging plugin's entry points; resolved once. */
-    static final String PLUGIN_CLASS =
-        "io.capawesome.capacitorjs.plugins.firebase.messaging.FirebaseMessagingPlugin";
     private static volatile Method onNewToken;
     private static volatile Method onMessageReceived;
     private static volatile boolean resolved;
@@ -88,7 +85,7 @@ public class AdvertisingMessagingService extends FirebaseMessagingService {
                 return;
             }
             try {
-                Class<?> plugin = Class.forName(PLUGIN_CLASS);
+                Class<?> plugin = Class.forName(AdvertisingPushRenderer.MESSAGING_PLUGIN_CLASS);
                 onNewToken = plugin.getMethod("onNewToken", String.class);
                 onMessageReceived = plugin.getMethod("onMessageReceived", RemoteMessage.class);
             } catch (ReflectiveOperationException | LinkageError error) {

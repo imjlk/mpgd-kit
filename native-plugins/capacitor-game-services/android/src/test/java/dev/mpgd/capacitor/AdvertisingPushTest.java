@@ -143,5 +143,11 @@ public class AdvertisingPushTest {
     public void keepsTheProviderConstants() {
         assertEquals("dev.mpgd.notifications.advertising_renderer", AdvertisingPushRenderer.META_DATA_RENDERER);
         assertEquals("com.google.firebase.MESSAGING_EVENT", AdvertisingPushRenderer.MESSAGING_EVENT);
+        assertEquals(
+            "io.capawesome.capacitorjs.plugins.firebase.messaging.FirebaseMessagingPlugin",
+            AdvertisingPushRenderer.MESSAGING_PLUGIN_CLASS
+        );
+        // Without the plugin on the classpath, the renderer does not count as installed.
+        assertFalse(AdvertisingPushRenderer.pluginEntryPointsResolve());
     }
 }

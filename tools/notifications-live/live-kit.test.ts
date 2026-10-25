@@ -393,7 +393,12 @@ await test('the env file never lands in a repository, through a link, or under a
     const catalog = join(scratch, 'topics.json');
     writeFileSync(catalog, readFileSync(join(overlay, 'topics.json'), 'utf8').replaceAll('__GAME_TITLE__', 'Kit'));
     const deployment = join(scratch, 'deployment.json');
-    writeFileSync(deployment, JSON.stringify({ advertisingRules: 'kr', advertisingSender: { name: 'Kit', contact: '080-000-0000' } }));
+    // The starter catalog maps its advertising topic to android, which needs the starter's renderer switch.
+    writeFileSync(deployment, JSON.stringify({
+      advertisingRules: 'kr',
+      advertisingSender: { name: 'Kit', contact: '080-000-0000' },
+      shellRendersAdvertising: true,
+    }));
     const input = { catalogPath: catalog, deploymentPath: deployment, serviceAccountPath: key, repositoryRoot: repository };
 
     // A directory whose name starts with two dots is still inside.
