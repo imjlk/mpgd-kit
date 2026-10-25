@@ -766,12 +766,13 @@ export interface EvaluateNotificationDeliveryInput {
   readonly endpointPermission?: NotificationPermissionState;
   /**
    * For `addressing: 'device'`: whether this endpoint shows the actions a
-   * notification carries. `false` (an Android installation whose shell does
-   * not render advertising) makes an advertising send under `kr`
-   * `suppressed: purpose-unsupported`, as an entry without `actions` does.
-   * Absent counts as true: the backend passes it for an endpoint on a
-   * target in `notificationShellRenderedAdvertisingTargets`, the only ones
-   * whose pushes can lack the action. Other addressing ignores it.
+   * notification carries. Under `kr` an advertising send to a resolved
+   * device endpoint needs it `true`; `false` or absent (an Android
+   * installation whose shell does not render advertising, or a caller that
+   * did not say) is `suppressed: purpose-unsupported`, as an entry without
+   * `actions` is. The backend passes `true` for an endpoint whose pushes
+   * show the action (iOS, and Android with `rendersAdvertising`). Other
+   * addressing ignores it.
    */
   readonly endpointShowsActions?: boolean;
   /**
@@ -802,7 +803,8 @@ export interface EvaluateNotificationDeliveryInput {
  * 1. the topic is declared (`topic-unknown`), has the `remote` channel
  *    (`channel-unsupported`), and the entry delivers its purpose, advertising
  *    only as free-form content and, under `kr`, with an expiry and the opt-out
- *    action, on an endpoint that shows it (`purpose-unsupported`);
+ *    action, on a device endpoint known to show it (`endpointShowsActions:
+ *    true`; `purpose-unsupported`);
  * 2. the recipient resolves (`unavailable: no-endpoint`), with a link where
  *    the entry needs one (`unavailable: link-missing`);
  * 3. delivery permission is positively `granted`: the send-time host answer on
@@ -861,7 +863,9 @@ export function evaluateNotificationDelivery(
         || (rules === 'kr' && (
           !entry.expiry
           || !entry.actions
-          || (entry.addressing === 'device' && input.endpointShowsActions === false)
+          // Fails closed: a device endpoint must be known to show the action.
+          // An unresolved recipient goes on to answer `no-endpoint`.
+          || (entry.addressing === 'device' && input.recipientResolved && input.endpointShowsActions !== true)
         ))
       )
     )

@@ -563,16 +563,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   /**
    * Whether a device endpoint shows the actions a push carries: where its
    * topic may come from a target that needs the shell to render advertising
-   * (Android), only when its latest registration said the shell does. Gate
-   * step 1 refuses advertising under `kr` to one that does not.
+   * (Android), only when its latest registration said the shell does;
+   * elsewhere (iOS's category) always. Gate step 1 refuses advertising
+   * under `kr` to an endpoint without `true`.
    */
   const endpointActionsOf = (
     provider: RegisteredNotificationProvider,
     endpoint: NotificationStoredEndpoint,
-  ): { readonly endpointShowsActions?: boolean } =>
-    mayNeedShellRendering(provider, endpoint.target)
-      ? { endpointShowsActions: endpoint.address.rendersAdvertising === true }
-      : {};
+  ): { readonly endpointShowsActions: boolean } => ({
+    endpointShowsActions: !mayNeedShellRendering(provider, endpoint.target)
+      || endpoint.address.rendersAdvertising === true,
+  });
   const usable = (endpoint: NotificationStoredEndpoint, at: number): boolean =>
     endpoint.status === 'valid'
     && at - Date.parse(endpoint.lastRegisteredAt) < endpointStaleMs

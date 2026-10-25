@@ -133,6 +133,7 @@ function input(patch: Partial<EvaluateNotificationDeliveryInput> = {}): Evaluate
     recipientResolved: true,
     consent: [],
     endpointPermission: 'granted',
+    endpointShowsActions: true,
     history: [],
     at: noon,
     timeZone: 'Asia/Seoul',
@@ -201,12 +202,16 @@ describe('evaluateNotificationDelivery', () => {
       endpointShowsActions: false,
       consent: [record('delivery-permission', 'granted')],
     }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
-    for (const endpointShowsActions of [true, undefined]) {
-      expect(evaluateNotificationDelivery(input({
-        topic: advertising,
-        ...(endpointShowsActions === undefined ? {} : { endpointShowsActions }),
-      }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
-    }
+    expect(evaluateNotificationDelivery(input({ topic: advertising })))
+      .toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    // It fails closed: a caller that does not say is refused under the Korean rules.
+    const { endpointShowsActions: _shows, ...unsaid } = input({ topic: advertising });
+    expect(evaluateNotificationDelivery(unsaid)).toEqual(unsupported);
+    expect(evaluateNotificationDelivery({ ...unsaid, deployment: { advertisingRules: 'none' } }))
+      .toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    // An unresolved recipient still answers step 2.
+    expect(evaluateNotificationDelivery({ ...unsaid, recipientResolved: false }))
+      .toEqual({ status: 'unavailable', reason: 'no-endpoint' });
   });
 
   it('step 2: answers no-endpoint without a recipient and link-missing without a link where one is needed', () => {

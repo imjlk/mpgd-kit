@@ -1336,12 +1336,17 @@ client's declaration. The steps run in order and the first failure decides:
    channel-unsupported`). The provider's `purposes` include its purpose (or
    `suppressed: purpose-unsupported`). An `advertising` topic also needs
    free-form content and, under the Korean rules, a provider that can carry
-   an expiry and the opt-out action, delivered to an endpoint that shows the
-   action (or `suppressed: purpose-unsupported`). The backend passes
-   `endpointShowsActions: false` for a device endpoint on a target in
-   `notificationShellRenderedAdvertisingTargets` whose latest registration
-   did not claim `rendersAdvertising` (an Android shell without the
-   renderer); absent counts as true, and other addressing ignores it.
+   an expiry and the opt-out action, delivered to a device endpoint known
+   to show the action (or `suppressed: purpose-unsupported`). The check
+   fails closed: a resolved device endpoint needs `endpointShowsActions:
+   true`, and `false` or an absent value is refused. The backend passes
+   `true` for an endpoint whose pushes show the action (iOS, through the
+   `mpgd-advertising` category, and an Android installation whose latest
+   registration claimed `rendersAdvertising`) and `false` for any other
+   endpoint on a target in `notificationShellRenderedAdvertisingTargets`
+   (an Android shell without the renderer). An unresolved recipient goes
+   on to answer `unavailable: no-endpoint` at step 2, and platform-user
+   addressing ignores the input.
 2. **Recipients.** They resolve to every valid endpoint of the player on a
    device provider (see [Device fan-out](#fan-out)), or to the authenticated
    platform identity on a platform-user provider; otherwise `unavailable:
@@ -2274,7 +2279,10 @@ What the kit enforces for `advertising` topics under `kr`:
     [Capacitor](#profile-capacitor), AR1). The catalog validator refuses an
     Android advertising mapping unless the deployment sets
     `shellRendersAdvertising`, and the gate sends it only to an installation
-    that registered the renderer.
+    that registered the renderer. The gate fails closed: under `kr` a
+    device endpoint receives advertising only when the backend says it
+    shows the opt-out action (`endpointShowsActions: true`), so a backend
+    that does not say sends none.
 - **Notices.**
   - A result notice is due within 14 days of a consent, refusal, or
     withdrawal. It gives the sender's name, the act and its date, and the
@@ -2933,9 +2941,13 @@ left open: Android advertising pushes with the opt-out action.
   address, `NotificationDeployment.shellRendersAdvertising`,
   `notificationShellRenderedAdvertisingTargets` (`android`), and the gate
   input `endpointShowsActions` (see [Policy gate](#policy-gate)), with
-  regenerated JSON Schemas. No vector changed: vectors run one fixture
-  profile with no catalog target, and the backend computes the input from
-  the endpoint's target. The service tests cover it.
+  regenerated JSON Schemas. The gate fails closed on it (round 2, after
+  review): under `kr` an advertising send to a device endpoint needs
+  `true`. No vector's expected outcome changed: vectors run one fixture
+  profile with no catalog target, and the conformance fake backend now
+  passes `true` for its fixture device, which shows the actions a push
+  carries, as the service does for iOS. The service tests cover the
+  per-target values.
 - `@mpgd/catalog`: an Android advertising mapping is valid only with
   `shellRendersAdvertising`.
 - `@mpgd/game-services/notifications`: the registration keeps the claim for
