@@ -2,6 +2,12 @@ import Phaser from 'phaser';
 
 import { t } from '../i18n/messages';
 import {
+  createStarterAccountDeletion,
+  deleteAccountConfirmText,
+  deleteAccountOutcomeText,
+  type StarterDeleteAccountOutcome,
+} from '../platform/deleteAccount';
+import {
   createStarterRestorePurchases,
   restoreOutcomeText,
   type StarterRestoreOutcome,
@@ -98,6 +104,7 @@ export class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.addRestorePurchasesButton(context);
+    this.addDeleteAccountEntry(context);
 
     this.input.once('pointerdown', () => this.scene.start('PlayScene'));
     this.input.keyboard?.once('keydown-ENTER', () => this.scene.start('PlayScene'));
@@ -154,5 +161,128 @@ export class LobbyScene extends Phaser.Scene {
             });
         },
       );
+  }
+  /**
+   * Delete account, shown where the game has a game-services backend (App
+   * Store guideline 5.1.1(v) and Google Play require deletion in the app).
+   * The first tap explains what is deleted and kept; only the second,
+   * "Delete permanently", deletes. Taps stop propagation so they do not
+   * also start the game.
+   */
+  private addDeleteAccountEntry(context: StarterContext): void {
+    const deletion = createStarterAccountDeletion({
+      ...(context.gameServices.accountDeletion === undefined
+        ? {}
+        : { client: context.gameServices.accountDeletion }),
+      storage: context.platform.storage,
+      ...(context.platform.secureCredentials === undefined
+        ? {}
+        : { secureCredentials: context.platform.secureCredentials }),
+    });
+    if (!deletion.available) {
+      return;
+    }
+    const locale = context.locale;
+    const swallow = (
+      _pointer: Phaser.Input.Pointer,
+      _x: number,
+      _y: number,
+      event: Phaser.Types.Input.EventData,
+    ): void => {
+      event.stopPropagation();
+    };
+    const entry = this.add
+      .text(944, 16, t(locale, 'deleteAccount'), {
+        color: '#fca5a5',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '16px',
+      })
+      .setOrigin(1, 0)
+      .setPadding(12, 8, 12, 8)
+      .setInteractive({ useHandCursor: true });
+    const panel = this.add.container(0, 0).setVisible(false).setDepth(10);
+    const backdrop = this.add
+      .rectangle(480, 270, 960, 540, 0x020617, 0.92)
+      .setInteractive()
+      .on('pointerdown', swallow);
+    const message = this.add
+      .text(480, 200, '', {
+        align: 'center',
+        color: '#ffffff',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '18px',
+        wordWrap: { width: 760 },
+      })
+      .setOrigin(0.5);
+    const status = this.add
+      .text(480, 470, '', {
+        color: '#d6dee8',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '16px',
+      })
+      .setOrigin(0.5);
+    const confirm = this.add
+      .text(360, 400, t(locale, 'deleteAccountConfirmButton'), {
+        backgroundColor: '#b91c1c',
+        color: '#ffffff',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '20px',
+      })
+      .setOrigin(0.5)
+      .setPadding(16, 10, 16, 10)
+      .setInteractive({ useHandCursor: true });
+    const cancel = this.add
+      .text(600, 400, t(locale, 'deleteAccountCancel'), {
+        color: '#ffffff',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '20px',
+      })
+      .setOrigin(0.5)
+      .setPadding(16, 10, 16, 10)
+      .setInteractive({ useHandCursor: true });
+    panel.add([backdrop, message, status, confirm, cancel]);
+    let deleting = false;
+    entry.on('pointerdown', (...args: Parameters<typeof swallow>) => {
+      swallow(...args);
+      status.setText('');
+      confirm.setVisible(true);
+      cancel.setText(t(locale, 'deleteAccountCancel'));
+      message.setText(deleteAccountConfirmText(locale, false));
+      panel.setVisible(true);
+      void deletion.hasPendingPurchase().then((pending) => {
+        if (pending && message.active) {
+          message.setText(deleteAccountConfirmText(locale, true));
+        }
+      });
+    });
+    cancel.on('pointerdown', (...args: Parameters<typeof swallow>) => {
+      swallow(...args);
+      if (!deleting) {
+        panel.setVisible(false);
+      }
+    });
+    confirm.on('pointerdown', (...args: Parameters<typeof swallow>) => {
+      swallow(...args);
+      if (deleting) {
+        return;
+      }
+      deleting = true;
+      status.setText(t(locale, 'deleteAccountWorking'));
+      void deletion.deleteAccount()
+        .catch((): StarterDeleteAccountOutcome => ({ outcome: 'failed', retryable: true }))
+        .then((result) => {
+          deleting = false;
+          if (!status.active) {
+            return;
+          }
+          status.setText(deleteAccountOutcomeText(locale, result));
+          if (result.outcome === 'deleted' || result.outcome === 'session-ended') {
+            // Signed out: the entry goes; Cancel closes the panel.
+            confirm.setVisible(false);
+            entry.setVisible(false);
+            cancel.setText(t(locale, 'deleteAccountClose'));
+          }
+        });
+    });
   }
 }

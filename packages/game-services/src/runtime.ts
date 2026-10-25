@@ -1,3 +1,4 @@
+import { createAccountDeletionClient, type AccountDeletionClient } from './account-deletion.js';
 import type { AnalyticsSink } from '@mpgd/analytics';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
@@ -38,6 +39,11 @@ export interface GameServicesRuntime {
   readonly target?: GameServicesLedgerTarget;
   readonly client?: GameServicesClient;
   readonly monetizationRecovery?: RecoverableMonetizationClient;
+  /**
+   * The signed-in player's account deletion (`POST /game-services/account/delete`)
+   * with the runtime's headers; present with an authoritative `baseUrl`.
+   */
+  readonly accountDeletion?: AccountDeletionClient;
 }
 
 interface CreateGameServicesRuntimeCommonInput {
@@ -187,6 +193,15 @@ export function createGameServicesRuntime(
     target,
     client: routedClient,
     ...(monetizationRecovery === undefined ? {} : { monetizationRecovery }),
+    ...(baseUrl === undefined
+      ? {}
+      : {
+          accountDeletion: createAccountDeletionClient({
+            baseUrl,
+            ...(input.headers === undefined ? {} : { headers: input.headers }),
+            ...(input.getHeaders === undefined ? {} : { getHeaders: input.getHeaders }),
+          }),
+        }),
   };
 }
 

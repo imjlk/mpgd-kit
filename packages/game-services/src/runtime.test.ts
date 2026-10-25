@@ -747,6 +747,51 @@ for (const refused of [
 
 console.log('GameServices runtime authority smoke test passed.');
 
+// Account deletion rides the runtime's authoritative URL and headers.
+{
+  const remote = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: 'https://game-services.example/',
+    getHeaders: () => ({ authorization: 'Bearer runtime-session' }),
+  });
+  const deletion = requireValue(remote.accountDeletion, 'remote runtime account deletion');
+  const realFetch = globalThis.fetch;
+  const seen: { url: string; authorization: string | undefined }[] = [];
+  globalThis.fetch = (async (url: string, init: { headers: Record<string, string> }) => {
+    seen.push({ url, authorization: init.headers.authorization });
+    return new Response(JSON.stringify({
+      status: 'deleted',
+      deletionId: 'deletion-1',
+      completedAt: '2026-10-25T00:00:00.000Z',
+      retainedPurchaseRecords: 0,
+    }));
+  }) as unknown as typeof fetch;
+  try {
+    assertEqual((await deletion.deleteAccount()).status, 'deleted', 'runtime account deletion');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assertEqual(
+    seen[0]?.url,
+    'https://game-services.example/game-services/account/delete',
+    'deletion URL',
+  );
+  assertEqual(seen[0]?.authorization, 'Bearer runtime-session', 'deletion header');
+  assertEqual(
+    createGameServicesRuntime({
+      gateway: createGateway(),
+      playerId,
+      authorityMode: 'non-production',
+      allowLocalBackend: true,
+      localBackend,
+    }).accountDeletion,
+    undefined,
+    'a local backend has no account deletion',
+  );
+}
+
 function createGateway(target: PlatformGateway['target'] = 'android'): PlatformGateway {
   return createTestGateway({
     target,

@@ -24,7 +24,20 @@ export type GameMessageKey =
   | 'restoreIncomplete'
   | 'restorePartial'
   | 'restoreNeedsSession'
-  | 'restoreFailed';
+  | 'restoreFailed'
+  | 'deleteAccount'
+  | 'deleteAccountConfirm'
+  | 'deleteAccountPendingPurchase'
+  | 'deleteAccountConfirmButton'
+  | 'deleteAccountCancel'
+  | 'deleteAccountClose'
+  | 'deleteAccountWorking'
+  | 'deleteAccountDone'
+  | 'deleteAccountSessionEnded'
+  | 'deleteAccountNeedsSession'
+  | 'deleteAccountUnavailable'
+  | 'deleteAccountFailed'
+  | 'deleteAccountRejected';
 
 const messages = {
   en: {
@@ -52,6 +65,22 @@ const messages = {
     restorePartial: 'Purchases restored ({count}); others are not confirmed yet. Try again later.',
     restoreNeedsSession: 'Sign in to restore purchases',
     restoreFailed: 'Could not restore purchases. Try again later.',
+    deleteAccount: 'Delete account',
+    deleteAccountConfirm:
+      'Delete your account? Your progress, scores, and notification settings are erased and you are signed out. '
+      + 'Purchases are not refunded and cannot be moved to a new account; ask Google Play or the App Store for a refund. '
+      + 'Purchase records are kept for 5 years, as the law requires, without your player ID.',
+    deleteAccountPendingPurchase: 'A purchase is still being processed. Deleting now may lose it.',
+    deleteAccountConfirmButton: 'Delete permanently',
+    deleteAccountCancel: 'Cancel',
+    deleteAccountClose: 'Close',
+    deleteAccountWorking: 'Deleting your account...',
+    deleteAccountDone: 'Your account was deleted and you are signed out.',
+    deleteAccountSessionEnded: 'Your session has ended: your account deletion was completed.',
+    deleteAccountNeedsSession: 'Sign in to delete your account.',
+    deleteAccountUnavailable: 'Account deletion is not available here. Use the deletion page linked from the privacy policy.',
+    deleteAccountFailed: 'Could not delete your account. Try again.',
+    deleteAccountRejected: 'Could not delete your account. Contact support.',
   },
   ko: {
     title: '__GAME_TITLE__',
@@ -78,6 +107,22 @@ const messages = {
     restorePartial: '{count}건 복원, 아직 확인되지 않은 구매가 있습니다. 나중에 다시 시도하세요.',
     restoreNeedsSession: '구매를 복원하려면 로그인하세요',
     restoreFailed: '구매를 복원하지 못했습니다. 나중에 다시 시도하세요.',
+    deleteAccount: '계정 삭제',
+    deleteAccountConfirm:
+      '계정을 삭제할까요? 진행 상황, 점수, 알림 설정이 지워지고 로그아웃됩니다. '
+      + '구매는 환불되지 않으며 새 계정으로 옮길 수 없습니다. 환불은 Google Play 또는 App Store에 요청하세요. '
+      + '구매 기록은 법에 따라 5년 동안 플레이어 ID 없이 보관됩니다.',
+    deleteAccountPendingPurchase: '아직 처리 중인 구매가 있습니다. 지금 삭제하면 이 구매를 잃을 수 있습니다.',
+    deleteAccountConfirmButton: '영구 삭제',
+    deleteAccountCancel: '취소',
+    deleteAccountClose: '닫기',
+    deleteAccountWorking: '계정을 삭제하는 중...',
+    deleteAccountDone: '계정이 삭제되었고 로그아웃되었습니다.',
+    deleteAccountSessionEnded: '세션이 종료되었습니다. 계정 삭제가 완료되었습니다.',
+    deleteAccountNeedsSession: '계정을 삭제하려면 로그인하세요.',
+    deleteAccountUnavailable: '여기서는 계정을 삭제할 수 없습니다. 개인정보처리방침에 연결된 삭제 페이지를 이용하세요.',
+    deleteAccountFailed: '계정을 삭제하지 못했습니다. 다시 시도하세요.',
+    deleteAccountRejected: '계정을 삭제하지 못했습니다. 고객 지원에 문의하세요.',
   },
 } satisfies Record<Locale, Record<GameMessageKey, string>>;
 

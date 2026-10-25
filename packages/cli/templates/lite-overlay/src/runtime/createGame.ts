@@ -1,6 +1,7 @@
 import { bindGameAudio } from '@mpgd/game-runtime/audio';
 import type { CanvasSurface, LiteShell } from '@mpgd/lite-shell';
 
+import { mountDeleteAccountButton } from '../lite/deleteAccountButton';
 import { mountRestorePurchasesButton } from '../lite/restorePurchasesButton';
 import { createTapGame } from '../lite/tapGame';
 import type { StarterContext } from './gameContext';
@@ -32,6 +33,7 @@ export function createStarterGame(input: {
   });
   // Mounted before the game so later overlays (such as a settings dialog) stack above it.
   const disposeRestorePurchases = mountRestorePurchasesButton(mount, input.context);
+  const disposeDeleteAccount = mountDeleteAccountButton(mount, input.context);
   const shell = createTapGame({ mount, title: '__GAME_TITLE__' });
   let disposed = false;
   const dispose = (): void => {
@@ -43,6 +45,7 @@ export function createStarterGame(input: {
     audio.dispose();
     input.context.gameRuntime.dispose();
     disposeRestorePurchases();
+    disposeDeleteAccount();
     shell.dispose();
   };
   const onPageHide = (event: PageTransitionEvent): void => {
