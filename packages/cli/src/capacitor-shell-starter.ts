@@ -34,10 +34,13 @@ import {
   wireCapacitorGatewayNotifications,
 } from './notifications-starter.js';
 import {
+  addIosAppResource,
   applyAndroidManifestOrientation,
   applyIosInfoPlistOrientation,
   applyIosInfoPlistStorePolicy,
   applyIosProjectDeviceFamily,
+  iosAppPrivacyManifestFile,
+  iosAppPrivacyManifestXml,
   readGameNativeOrientation,
   readIosDeviceFamily,
   type IosDeviceFamily,
@@ -1053,16 +1056,35 @@ function materializeIosStorePolicy(gameRoot: string): void {
       writeFileSync(plistFile, next);
     }
   }
-  if (settings.iosDeviceFamily !== undefined) {
-    const projectFile = safeDestination(
-      gameRoot,
-      `${shellPath}/ios/App/App.xcodeproj/project.pbxproj`,
+  const projectFile = safeDestination(
+    gameRoot,
+    `${shellPath}/ios/App/App.xcodeproj/project.pbxproj`,
+  );
+  const source = readFileSync(projectFile, 'utf8');
+  let next = settings.iosDeviceFamily === undefined
+    ? source
+    : applyIosProjectDeviceFamily(source, settings.iosDeviceFamily);
+  // The app-level privacy manifest joins the App group and Resources phase of
+  // the Capacitor-generated layout; any other layout is left to the game and
+  // reported by the build.
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/ios/App/App/${iosAppPrivacyManifestFile}`,
+  );
+  const withManifest = addIosAppResource(next, iosAppPrivacyManifestFile);
+  if (withManifest === undefined) {
+    console.warn(
+      `[mpgd] The generated iOS project has an unexpected layout; add ${iosAppPrivacyManifestFile} `
+        + 'to the App target yourself.',
     );
-    const source = readFileSync(projectFile, 'utf8');
-    const next = applyIosProjectDeviceFamily(source, settings.iosDeviceFamily);
-    if (next !== source) {
-      writeFileSync(projectFile, next);
+  } else {
+    if (!existsSync(manifestFile)) {
+      writeFileSync(manifestFile, iosAppPrivacyManifestXml, { flag: 'wx' });
     }
+    next = withManifest;
+  }
+  if (next !== source) {
+    writeFileSync(projectFile, next);
   }
 }
 

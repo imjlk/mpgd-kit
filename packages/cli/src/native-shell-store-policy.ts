@@ -544,3 +544,168 @@ function readBraced(source: string, open: number): { readonly text: string; read
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+// App privacy manifest.
+
+export const iosAppPrivacyManifestFile = 'PrivacyInfo.xcprivacy';
+
+/**
+ * App-level privacy manifest of a kit shell. The App target's own code
+ * (AppDelegate, SceneDelegate) calls no required-reason API and the kit does
+ * no tracking; Capacitor core and the kit's game-services plugin ship their
+ * own manifests (the plugin declares UserDefaults CA92.1). A game adds the
+ * APIs its own native code uses and, if it wants Xcode's privacy report to
+ * match its App Store privacy answers, the data types it collects
+ * (docs/STORE_PRIVACY_DISCLOSURES.md).
+ */
+export const iosAppPrivacyManifestXml = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+  '<plist version="1.0">',
+  '<dict>',
+  '\t<key>NSPrivacyTracking</key>',
+  '\t<false/>',
+  '\t<key>NSPrivacyTrackingDomains</key>',
+  '\t<array/>',
+  '\t<key>NSPrivacyCollectedDataTypes</key>',
+  '\t<array/>',
+  '\t<key>NSPrivacyAccessedAPITypes</key>',
+  '\t<array/>',
+  '</dict>',
+  '</plist>',
+  '',
+].join('\n');
+
+/**
+ * Adds a file in the App group to the App target's Resources phase of a
+ * Capacitor-generated project. Returns undefined when the project does not
+ * have that layout (an App group with `path = App`, a Resources phase, the
+ * PBXBuildFile/PBXFileReference section markers), so the caller can leave the
+ * project alone. A project that already references the file is returned
+ * unchanged.
+ */
+export function addIosAppResource(project: string, fileName: string): string | undefined {
+  const resourcesPhase = findAppResourcesPhase(project);
+  const group = findAppGroup(project);
+  if (resourcesPhase === undefined || group === undefined
+    || !project.includes('/* End PBXBuildFile section */')
+    || !project.includes('/* End PBXFileReference section */')) {
+    return undefined;
+  }
+  if (resourcesPhase.text.includes(`/* ${fileName} in Resources */`)) {
+    return project;
+  }
+  const fileId = uniquePbxId(project, `${fileName}:file`);
+  const buildId = uniquePbxId(project, `${fileName}:build`);
+  const edits = [
+    {
+      at: project.indexOf('/* End PBXBuildFile section */'),
+      text: `\t\t${buildId} /* ${fileName} in Resources */ = {isa = PBXBuildFile; fileRef = ${fileId} /* ${fileName} */; };\n`,
+    },
+    {
+      at: project.indexOf('/* End PBXFileReference section */'),
+      text: `\t\t${fileId} /* ${fileName} */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = ${fileName}; sourceTree = "<group>"; };\n`,
+    },
+    { at: group.childrenEnd, text: `\t${fileId} /* ${fileName} */,\n\t\t\t` },
+    { at: resourcesPhase.filesEnd, text: `\t${buildId} /* ${fileName} in Resources */,\n\t\t\t` },
+  ].sort((left, right) => right.at - left.at);
+  let next = project;
+  for (const edit of edits) {
+    next = `${next.slice(0, edit.at)}${edit.text}${next.slice(edit.at)}`;
+  }
+  return next;
+}
+
+/** Whether the App target's Resources phase bundles `fileName`. */
+export function iosAppBundlesResource(project: string, fileName: string): boolean {
+  return findAppResourcesPhase(project)?.text.includes(`/* ${fileName} in Resources */`) === true;
+}
+
+export function inspectIosAppPrivacyManifest(project: string): readonly NativeShellPolicyIssue[] {
+  if (iosAppBundlesResource(project, iosAppPrivacyManifestFile)) {
+    return [];
+  }
+  return [{
+    level: 'warning',
+    message: `iOS App target does not bundle an app-level ${iosAppPrivacyManifestFile}; add one `
+      + 'to the App group and its Resources phase (the kit reference shell has one) and declare '
+      + "any required-reason API the game's own native code uses.",
+  }];
+}
+
+function findAppResourcesPhase(
+  project: string,
+): { readonly text: string; readonly filesEnd: number } | undefined {
+  const target = findAppTarget(project);
+  const phases = /\bbuildPhases\s*=\s*\(([^)]*)\)/u.exec(target ?? '')?.[1];
+  if (phases === undefined) {
+    return undefined;
+  }
+  for (const id of phases.replace(/\/\*[^]*?\*\//gu, ' ').split(',')
+    .map((entry) => /^\s*([A-F0-9]+)\b/u.exec(entry)?.[1])
+    .filter((value): value is string => value !== undefined)) {
+    const marker = new RegExp(`\\b${id}\\s*(?:\\/\\*[^*]*\\*\\/)?\\s*=\\s*\\{`, 'u').exec(project);
+    if (marker === null) {
+      continue;
+    }
+    const body = readBraced(project, project.indexOf('{', marker.index));
+    if (!/\bisa\s*=\s*PBXResourcesBuildPhase\s*;/u.test(body.text)) {
+      continue;
+    }
+    const files = /\bfiles\s*=\s*\(/u.exec(body.text);
+    if (files === null) {
+      return undefined;
+    }
+    const listStart = body.start + files.index + files[0].length;
+    const listEnd = project.indexOf(')', listStart);
+    return { text: project.slice(listStart, listEnd), filesEnd: listEnd };
+  }
+  return undefined;
+}
+
+function findAppGroup(project: string): { readonly childrenEnd: number } | undefined {
+  for (const match of project.matchAll(/\b([A-F0-9]+)\s*(?:\/\*[^*]*\*\/)?\s*=\s*\{/gu)) {
+    const body = readBraced(project, project.indexOf('{', match.index ?? 0));
+    if (!/\bisa\s*=\s*PBXGroup\s*;/u.test(body.text)
+      || !/\bpath\s*=\s*"?App"?\s*;/u.test(body.text)) {
+      continue;
+    }
+    const children = /\bchildren\s*=\s*\(/u.exec(body.text);
+    if (children === null) {
+      return undefined;
+    }
+    const listStart = body.start + children.index + children[0].length;
+    return { childrenEnd: project.indexOf(')', listStart) };
+  }
+  return undefined;
+}
+
+function findAppTarget(project: string): string | undefined {
+  for (const match of project.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]*\*\/\s*=\s*\{/gu)) {
+    const body = readBraced(project, project.indexOf('{', match.index ?? 0)).text;
+    if (/\bisa\s*=\s*PBXNativeTarget;/u.test(body) && /\bname\s*=\s*"?App"?\s*;/u.test(body)) {
+      return body;
+    }
+  }
+  return undefined;
+}
+
+/** A deterministic 24-hex object ID that the project does not use yet. */
+function uniquePbxId(project: string, seed: string): string {
+  for (let attempt = 0; ; attempt += 1) {
+    let hash = 0x811c9dc5;
+    const input = `mpgd:${seed}:${attempt}`;
+    let hex = '';
+    for (let round = 0; hex.length < 24; round += 1) {
+      for (const character of `${input}:${round}`) {
+        hash ^= character.charCodeAt(0);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+      }
+      hex += hash.toString(16).toUpperCase().padStart(8, '0');
+    }
+    const id = hex.slice(0, 24);
+    if (!project.includes(id)) {
+      return id;
+    }
+  }
+}

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { readIosReleaseInfoPlist } from '../../packages/cli/src/native-shell-identity.js';
 import {
   inspectAndroidManifestOrientation,
+  inspectIosAppPrivacyManifest,
   inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
   inspectIosProjectDeviceFamily,
@@ -39,7 +40,10 @@ export function inspectNativeStorePolicy(input: {
     }
     const projectSource = readFileSync(project, 'utf8');
     const deviceFamily = readIosDeviceFamily(input.metadata);
-    const issues = [...inspectIosProjectDeviceFamily(projectSource, deviceFamily)];
+    const issues = [
+      ...inspectIosProjectDeviceFamily(projectSource, deviceFamily),
+      ...inspectIosAppPrivacyManifest(projectSource),
+    ];
     const plist = join(dirname(dirname(project)), readIosReleaseInfoPlist(projectSource));
     if (existsSync(plist)) {
       const plistSource = readFileSync(plist, 'utf8');

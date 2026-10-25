@@ -5,14 +5,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  addIosAppResource,
   applyAndroidManifestOrientation,
   applyIosInfoPlistOrientation,
   applyIosInfoPlistStorePolicy,
   applyIosProjectDeviceFamily,
   inspectAndroidManifestOrientation,
+  inspectIosAppPrivacyManifest,
   inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
   inspectIosProjectDeviceFamily,
+  iosAppBundlesResource,
+  iosAppPrivacyManifestFile,
+  iosAppPrivacyManifestXml,
   readGameNativeOrientation,
   readIosAppReleaseDeviceFamily,
   readIosDeviceFamily,
@@ -372,5 +377,50 @@ try {
         'portrait',
       ),
     /no launcher activity/u,
+  );
+}
+
+// App privacy manifest.
+{
+  const project = readFileSync(
+    path.join(referenceShell, 'ios/App/App.xcodeproj/project.pbxproj'),
+    'utf8',
+  );
+  assert.equal(iosAppBundlesResource(project, iosAppPrivacyManifestFile), true);
+  assert.deepEqual(inspectIosAppPrivacyManifest(project), []);
+  assert.equal(addIosAppResource(project, iosAppPrivacyManifestFile), project, 'idempotent');
+  const without = project
+    .split('\n')
+    .filter((line) => !line.includes('PrivacyInfo.xcprivacy'))
+    .join('\n');
+  assert.equal(iosAppBundlesResource(without, iosAppPrivacyManifestFile), false);
+  assert.deepEqual(
+    inspectIosAppPrivacyManifest(without).map((issue) => issue.level),
+    ['warning'],
+  );
+  const added = addIosAppResource(without, iosAppPrivacyManifestFile) ?? '';
+  assert.equal(iosAppBundlesResource(added, iosAppPrivacyManifestFile), true);
+  assert.equal(
+    (added.match(/PrivacyInfo\.xcprivacy/gu) ?? []).length,
+    6,
+    'file, build file, group, phase',
+  );
+  assert.match(
+    added,
+    /\/\* PrivacyInfo\.xcprivacy \*\/ = \{isa = PBXFileReference; lastKnownFileType = text\.xml; path = PrivacyInfo\.xcprivacy; sourceTree = "<group>"; \};/u,
+  );
+  const ids = [...added.matchAll(/\b([A-F0-9]{24}) \/\* PrivacyInfo\.xcprivacy(?: in Resources)? \*\/ = /gu)]
+    .map((match) => match[1]);
+  assert.equal(new Set(ids).size, 2);
+  assert.equal(addIosAppResource(added, iosAppPrivacyManifestFile), added);
+  assert.equal(
+    addIosAppResource('// !$*UTF8*$!\n{ objects = { }; }', iosAppPrivacyManifestFile),
+    undefined,
+  );
+  assert.match(iosAppPrivacyManifestXml, /<key>NSPrivacyTracking<\/key>\n\t<false\/>/u);
+  assert.equal(
+    readFileSync(path.join(referenceShell, 'ios/App/App', iosAppPrivacyManifestFile), 'utf8'),
+    iosAppPrivacyManifestXml,
+    'the reference shell ships the same manifest the initializer writes',
   );
 }

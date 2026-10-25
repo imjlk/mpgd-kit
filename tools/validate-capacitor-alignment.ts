@@ -170,6 +170,16 @@ for (const [key, value] of [
     `The iOS shell Info.plist must declare ${key} for App Store submission`,
   );
 }
+assert.match(
+  xcodeProject,
+  /PrivacyInfo\.xcprivacy in Resources \*\/ = \{isa = PBXBuildFile;/u,
+  'The iOS shell must bundle its app-level privacy manifest',
+);
+assert.match(
+  read('apps/mobile-capacitor/ios/App/App/PrivacyInfo.xcprivacy'),
+  /<key>NSPrivacyTracking<\/key>\s*<false\/>/u,
+  'The kit shell does no tracking',
+);
 const backupDomains = ['root', 'file', 'database', 'sharedpref', 'external'];
 const backupRules = read('apps/mobile-capacitor/android/app/src/main/res/xml/backup_rules.xml');
 const extractionRules = read(
