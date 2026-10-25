@@ -140,6 +140,27 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
 
   constructor(private readonly now: () => string = () => new Date().toISOString()) {}
 
+  /**
+   * Account deletion: removes every attempt and board entry of the
+   * participant (the reference recorder's participant id is the player id);
+   * answers how many rows went.
+   */
+  eraseParticipant(participantId: string): number {
+    let removed = 0;
+    for (const [key, stored] of [...this.attemptsById]) {
+      if (stored.attempt.participantId === participantId) {
+        this.attemptsById.delete(key);
+        removed += 1;
+      }
+    }
+    for (const retained of this.retainedByLeaderboard.values()) {
+      if (retained.delete(participantId)) {
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
   async recordVerifiedAttempt(
     input: RecordVerifiedLeaderboardAttemptRequest,
   ): Promise<RecordVerifiedLeaderboardAttemptResponse> {

@@ -27,6 +27,12 @@ import {
   readPurchaseLedgerStatuses,
   RevocationKeyConflictError,
 } from './commerce-ledger.js';
+import {
+  createRetainedLedgerEntryId,
+  detachRetainedLedgerPayload,
+  type PlayerDataErasureInput,
+  type PlayerDataErasureResult,
+} from './account-deletion.js';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
 import {
   createRejectingGameServicesEvidenceVerifier,
@@ -205,6 +211,14 @@ export interface GameServicesStore {
     ledgerEntryId: string,
   ): Promise<LeaderboardScoreTransaction | undefined>;
   listLeaderboardTransactions(): Promise<readonly LeaderboardScoreTransaction[]>;
+  /**
+   * Account deletion (`./account-deletion`): deletes the player's grants,
+   * revocations, notes, and scores, except purchase grants and what reverses
+   * or annotates them, which are kept detached from the player (new ids,
+   * `retainedPlayerId`, no `playerId` payload key). Idempotent. Optional: the
+   * Worker's D1 deployment erases its tables in one batch instead.
+   */
+  erasePlayerData?(input: PlayerDataErasureInput): Promise<PlayerDataErasureResult>;
 }
 
 export interface EntitlementPlatformEvidenceIdentity {
@@ -478,6 +492,149 @@ export class InMemoryGameServicesStore implements GameServicesStore {
 
   async listLeaderboardTransactions(): Promise<readonly LeaderboardScoreTransaction[]> {
     return this.sortedLeaderboardTransactions();
+  }
+
+  async erasePlayerData(input: PlayerDataErasureInput): Promise<PlayerDataErasureResult> {
+    const { playerId, retainedPlayerId } = input;
+    let deleted = 0;
+    let retained = 0;
+    const grants = [...this.entitlementTransactionsById.values()]
+      .filter((transaction) => transaction.playerId === playerId);
+    const grantIds = new Set(grants.map((grant) => grant.ledgerEntryId));
+    const keptGrantIds = new Map<string, string>();
+    for (const grant of grants) {
+      this.forgetEntitlementTransaction(grant);
+      if (grant.source !== 'purchase') {
+        deleted += 1;
+        continue;
+      }
+      const ledgerEntryId = createRetainedLedgerEntryId();
+      keptGrantIds.set(grant.ledgerEntryId, ledgerEntryId);
+      this.rememberEntitlementTransaction({
+        ...grant,
+        ledgerEntryId,
+        playerId: retainedPlayerId,
+        idempotencyKey: ledgerEntryId,
+        payload: detachRetainedLedgerPayload(grant.payload),
+      });
+      retained += 1;
+    }
+    const keptRevocationIds = new Map<string, string>();
+    for (const revocation of [...this.revocationsByGrant.values()]) {
+      if (revocation.playerId !== playerId && !grantIds.has(revocation.revokesLedgerEntryId)) {
+        continue;
+      }
+      this.revocationsByKey.delete(createRevocationIdempotencyKey(revocation));
+      this.revocationsByGrant.delete(revocation.revokesLedgerEntryId);
+      if (revocation.evidenceVerificationId !== undefined) {
+        this.revocationsByEvidence.delete(revocation.evidenceVerificationId);
+      }
+      // A revocation is kept with the grant it reverses, whoever wrote it.
+      const keptGrantId = keptGrantIds.get(revocation.revokesLedgerEntryId)
+        ?? (this.entitlementTransactionsById.has(revocation.revokesLedgerEntryId)
+          ? revocation.revokesLedgerEntryId
+          : undefined);
+      if (keptGrantId === undefined) {
+        deleted += 1;
+        continue;
+      }
+      const ledgerEntryId = createRetainedLedgerEntryId();
+      keptRevocationIds.set(revocation.ledgerEntryId, ledgerEntryId);
+      const kept = assertEntitlementRevocationTransaction({
+        ...revocation,
+        ledgerEntryId,
+        playerId: retainedPlayerId,
+        revokesLedgerEntryId: keptGrantId,
+        idempotencyKey: ledgerEntryId,
+        payload: detachRetainedLedgerPayload(revocation.payload),
+      });
+      this.revocationsByKey.set(createRevocationIdempotencyKey(kept), kept);
+      this.revocationsByGrant.set(kept.revokesLedgerEntryId, kept);
+      if (kept.evidenceVerificationId !== undefined) {
+        this.revocationsByEvidence.set(kept.evidenceVerificationId, kept);
+      }
+      retained += 1;
+    }
+    for (const note of [...this.notesById.values()]) {
+      if (note.playerId !== playerId && !grantIds.has(note.ledgerEntryId)) {
+        continue;
+      }
+      const keptGrantId = keptGrantIds.get(note.ledgerEntryId)
+        ?? (this.entitlementTransactionsById.has(note.ledgerEntryId) ? note.ledgerEntryId : undefined);
+      if (keptGrantId === undefined) {
+        this.notesById.delete(note.noteId);
+        deleted += 1;
+        continue;
+      }
+      const revocationLedgerEntryId = note.revocationLedgerEntryId === undefined
+        ? undefined
+        : (keptRevocationIds.get(note.revocationLedgerEntryId) ?? note.revocationLedgerEntryId);
+      this.notesById.set(
+        note.noteId,
+        assertEntitlementLedgerNote({
+          noteId: note.noteId,
+          kind: note.kind,
+          playerId: retainedPlayerId,
+          ledgerEntryId: keptGrantId,
+          ...(revocationLedgerEntryId === undefined ? {} : { revocationLedgerEntryId }),
+          recordedAt: note.recordedAt,
+          payload: detachRetainedLedgerPayload(note.payload),
+        }),
+      );
+      retained += 1;
+    }
+    for (const transaction of [...this.leaderboardTransactionsById.values()]) {
+      if (transaction.playerId !== playerId) {
+        continue;
+      }
+      this.leaderboardTransactionsById.delete(transaction.ledgerEntryId);
+      this.leaderboardTransactionsByRun.delete(createLeaderboardRunKey(transaction));
+      deleted += 1;
+    }
+    return { deleted, retained };
+  }
+
+  private forgetEntitlementTransaction(transaction: ProductGrantTransaction): void {
+    this.entitlementTransactionsByKey.delete(createEntitlementIdempotencyKey(transaction));
+    this.entitlementTransactionsById.delete(transaction.ledgerEntryId);
+    if (transaction.evidenceVerificationId !== undefined) {
+      this.entitlementTransactionsByEvidence.delete(
+        createEntitlementEvidenceKey({
+          source: transaction.source,
+          evidenceVerificationId: transaction.evidenceVerificationId,
+        }),
+      );
+    }
+    const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(transaction);
+    if (platformEvidenceIdentity !== undefined) {
+      this.entitlementTransactionsByPlatformEvidence.delete(
+        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
+      );
+    }
+  }
+
+  private rememberEntitlementTransaction(transaction: ProductGrantTransaction): void {
+    this.entitlementTransactionsByKey.set(
+      createEntitlementIdempotencyKey(transaction),
+      transaction,
+    );
+    this.entitlementTransactionsById.set(transaction.ledgerEntryId, transaction);
+    if (transaction.evidenceVerificationId !== undefined) {
+      this.entitlementTransactionsByEvidence.set(
+        createEntitlementEvidenceKey({
+          source: transaction.source,
+          evidenceVerificationId: transaction.evidenceVerificationId,
+        }),
+        transaction,
+      );
+    }
+    const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(transaction);
+    if (platformEvidenceIdentity !== undefined) {
+      this.entitlementTransactionsByPlatformEvidence.set(
+        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
+        transaction,
+      );
+    }
   }
 
   private rankFor(transaction: LeaderboardScoreTransaction): number {
