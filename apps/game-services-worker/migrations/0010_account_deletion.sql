@@ -1,5 +1,5 @@
 -- Account deletion (L3b, docs/GAME_SERVICES_BACKEND.md#account-deletion).
--- Additive: two new tables and the player indexes the erasure reads by.
+-- Additive: two new tables and the indexes the erasure reads by.
 
 -- One row per deletion, with no player id or other personal data.
 CREATE TABLE IF NOT EXISTS account_deletion_audit (
@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS account_deletion_pending (
   attempted_at TEXT
 );
 
--- The erasure finds a player's rows by these; the other player-keyed tables
--- already lead an index or key with the player id.
+-- The erasure finds a player's rows by these player indexes; the other
+-- player-keyed tables already lead an index or key with the player id.
 CREATE INDEX IF NOT EXISTS idx_entitlement_transactions_player
   ON entitlement_transactions (player_id);
 CREATE INDEX IF NOT EXISTS idx_leaderboard_transactions_player

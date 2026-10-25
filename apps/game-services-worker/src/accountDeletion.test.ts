@@ -281,13 +281,41 @@ try {
       recordedAt: '2026-10-23T00:00:00.000Z',
       payload: {},
     });
+    // A mismatched note on one of player-6's rewarded-ad grants pointing at
+    // the cross revocation, and an owed finalization filed under player-6
+    // for player-7's grant.
+    await required(store.recordEntitlementNote).call(store, {
+      noteId: 'mismatched-note',
+      kind: 'refund_reversed',
+      playerId: 'player-6',
+      ledgerEntryId: required(adGrant).ledgerEntryId,
+      revocationLedgerEntryId: crossRevocation.ledgerEntryId,
+      recordedAt: '2026-10-23T00:00:00.000Z',
+      payload: {},
+    });
+    await db.prepare(`INSERT INTO google_play_pending_finalizations (
+        ledger_entry_id, player_id, purchase_token, first_seen_at_ms, next_attempt_at_ms, attempts
+      ) VALUES (?, 'player-6', 'token-cross', 0, 0, 0)`)
+      .bind(other.ledgerEntryId)
+      .run();
     const bulk = await eraser.erasePlayerData({
       playerId: 'player-6',
       retainedPlayerId: 'deleted:deletion-6',
     });
-    // 250 rewarded-ad grants and the revocation of one, set-based; the
-    // cross-player revocation and the note pointing at it are rewritten.
-    assert.deepEqual(bulk, { deleted: 251, retained: 2 });
+    // 250 rewarded-ad grants, the revocation of one, and the mismatched note,
+    // set-based; the cross-player revocation and the note pointing at it are
+    // rewritten.
+    assert.deepEqual(bulk, { deleted: 252, retained: 2 });
+    assert.equal(
+      await db.prepare("SELECT note_id FROM entitlement_notes WHERE note_id = 'mismatched-note'").first(),
+      null,
+    );
+    assert.equal(
+      (await db.prepare('SELECT player_id FROM google_play_pending_finalizations WHERE ledger_entry_id = ?')
+        .bind(other.ledgerEntryId)
+        .first<{ player_id: string }>())?.player_id,
+      'deleted:deletion-6',
+    );
     assert.equal(await countRows(db, 'entitlement_transactions', 'player_id', 'player-6'), 0);
     const [cross] = (await db
       .prepare('SELECT * FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?')

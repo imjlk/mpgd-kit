@@ -101,9 +101,10 @@ export function createAccountDeletionFetchHandler(
       // The cause's name and message (store errors name tables, not players).
       console.error(
         'Account deletion failed:',
-        describe(error instanceof Error && error.cause !== undefined ? error.cause : error)
-          .split(principal.playerId)
-          .join('[player]'),
+        describe(
+          error instanceof Error && error.cause instanceof Error ? error.cause : error,
+          principal.playerId,
+        ),
       );
       return json({ error: 'ACCOUNT_DELETION_FAILED', retryable: true }, 500, input.corsHeaders);
     }
@@ -286,16 +287,19 @@ export function createD1PlayerDataEraser(db: D1Database): PlayerDataEraser {
         .all<RevocationRow>()).results;
       const notes = (await session
         .prepare(`SELECT * FROM entitlement_notes
-          WHERE ledger_entry_id IN (${purchaseGrants})
-            OR revocation_ledger_entry_id IN (
-              SELECT ledger_entry_id FROM entitlement_revocations WHERE ${revocationsWhere}
-            )
-            OR (player_id = ?1 AND ledger_entry_id NOT IN (${allGrants}))`)
+          WHERE (ledger_entry_id IN (${purchaseGrants})
+              OR revocation_ledger_entry_id IN (
+                SELECT ledger_entry_id FROM entitlement_revocations WHERE ${revocationsWhere}
+              )
+              OR (player_id = ?1 AND ledger_entry_id NOT IN (${allGrants})))
+            /* Notes about the player's other grants go with them, set-based. */
+            AND ledger_entry_id NOT IN (${otherGrants})`)
         .bind(playerId)
         .all<NoteRow>()).results;
       const pendingFinalizations = (await session
         .prepare(`SELECT * FROM google_play_pending_finalizations
-          WHERE ledger_entry_id IN (${purchaseGrants})`)
+          WHERE ledger_entry_id IN (${purchaseGrants})
+            OR (player_id = ?1 AND ledger_entry_id NOT IN (${allGrants}))`)
         .bind(playerId)
         .all<PendingFinalizationRow>()).results;
 
@@ -607,6 +611,12 @@ export async function runScheduledAccountDeletion(input: {
   };
 }
 
-function describe(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 200) : 'unknown error';
+/** The error's name and message with `redact` (a player id) scrubbed, then cut short. */
+function describe(error: unknown, redact?: string): string {
+  if (!(error instanceof Error)) {
+    return 'unknown error';
+  }
+  const text = `${error.name}: ${error.message}`;
+  return (redact === undefined || redact.length === 0 ? text : text.split(redact).join('[player]'))
+    .slice(0, 200);
 }
