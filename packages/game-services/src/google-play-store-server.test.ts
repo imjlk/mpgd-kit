@@ -259,6 +259,7 @@ async function grantToken(
     alreadyProcessed: 1,
     notFound: 1,
     failed: 0,
+    errored: 0,
   });
   assert.equal(
     requests[0]?.startTimeMillis,
@@ -301,6 +302,7 @@ async function grantToken(
       alreadyProcessed: 0,
       notFound: 0,
       failed: 0,
+      errored: 0,
     },
     'shouldContinue stops before the next purchase',
   );
@@ -364,7 +366,7 @@ async function grantToken(
       shouldContinue: (next) => next !== 'page',
       now: () => '2026-10-25T00:00:00.000Z',
     }),
-    { complete: false, clamped: false, pages: 0, revoked: 0, alreadyProcessed: 0, notFound: 0, failed: 0 },
+    { complete: false, clamped: false, pages: 0, revoked: 0, alreadyProcessed: 0, notFound: 0, failed: 0, errored: 0 },
   );
 
   // One entry's store error is counted and logged without its token; the rest of the window goes on.
@@ -401,8 +403,11 @@ async function grantToken(
     now: () => '2026-10-25T00:00:00.000Z',
     onOutcome: (voided, outcome) => outcomes.push(JSON.stringify({ voided, outcome })),
   });
-  assert.equal(withErrors.complete, true);
-  assert.equal(withErrors.failed, 3, 'two store errors and one unreadable entry');
+  assert.equal(withErrors.complete, false, 'a store error leaves the window to be read again');
+  assert.equal(withErrors.errored, 2, 'two store errors');
+  assert.equal(withErrors.failed, 1, 'and one unreadable entry, which re-reading cannot fix');
+  assert.equal(outcomes[0]?.includes('GOOGLE_PLAY_VOIDED_STORE_ERROR'), true);
+  assert.equal(outcomes[0]?.includes('D1 is unavailable'), true, 'the detail names the error');
   assert.equal(outcomes.length, 2);
   assert.equal(outcomes.join('').includes('secret'), false, 'no purchase token reaches onOutcome');
   assert.equal(outcomes[0]?.includes('GPA.a'), true);

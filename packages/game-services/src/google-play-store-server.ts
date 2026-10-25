@@ -161,15 +161,24 @@ export interface SweepGooglePlayVoidedPurchasesInput {
   /** Every voided purchase's outcome; the purchase token is left out so it can be logged. */
   readonly onOutcome?: (
     voided: Omit<GooglePlayVoidedPurchase, 'purchaseToken'>,
-    outcome: GooglePlayVoidedPurchaseOutcome | { readonly status: 'error'; readonly reason: string },
+    outcome:
+      | GooglePlayVoidedPurchaseOutcome
+      | {
+          readonly status: 'error';
+          readonly reason: 'GOOGLE_PLAY_VOIDED_STORE_ERROR';
+          /** The error's name and message; store errors carry no purchase token. */
+          readonly detail: string;
+        },
   ) => void;
 }
 
 export interface GooglePlayVoidedPurchasesSweep {
   /**
-   * Every page in the window was read; the caller may advance its cursor to
-   * `endTimeMillis`. Entries counted in `failed` are not retried by reading
-   * the window again: they need an operator (see `onOutcome`).
+   * Every page in the window was read and every entry applied or refused;
+   * the caller may advance its cursor to `endTimeMillis`. A store error on
+   * an entry (`errored`) leaves the sweep incomplete, since reading the window
+   * again retries it. Entries counted in `failed` are not retried that way:
+   * they need an operator (see `onOutcome`).
    */
   readonly complete: boolean;
   /** The requested start was older than Google keeps and was raised: voids before it are gone. */
@@ -178,8 +187,10 @@ export interface GooglePlayVoidedPurchasesSweep {
   readonly revoked: number;
   readonly alreadyProcessed: number;
   readonly notFound: number;
-  /** Ledger refusals, unreadable entries, and per-entry store errors. */
+  /** Ledger refusals and unreadable entries. */
   readonly failed: number;
+  /** Entries a store error kept from being applied; the window must be read again. */
+  readonly errored: number;
 }
 
 /**
@@ -199,12 +210,11 @@ export async function sweepGooglePlayVoidedPurchases(
   const requestedStart = input.startTimeMillis;
   const endTimeMillis = input.endTimeMillis;
   const nowMillis = input.now === undefined ? Date.now() : Date.parse(input.now());
-  if (
-    !Number.isSafeInteger(requestedStart)
-    || !Number.isSafeInteger(endTimeMillis)
-    || !Number.isFinite(nowMillis)
-  ) {
+  if (!Number.isSafeInteger(requestedStart) || !Number.isSafeInteger(endTimeMillis)) {
     throw new RangeError('The voided purchases window must be integer milliseconds.');
+  }
+  if (!Number.isFinite(nowMillis)) {
+    throw new RangeError('now() must return an ISO timestamp.');
   }
   const oldest = nowMillis - googlePlayVoidedPurchasesWindowMs + googlePlayVoidedPurchasesWindowSlackMs;
   const startTimeMillis = Math.max(requestedStart, oldest);
@@ -213,7 +223,14 @@ export async function sweepGooglePlayVoidedPurchases(
   }
   const clamped = startTimeMillis > requestedStart;
   const shouldContinue = input.shouldContinue ?? (() => true);
-  const totals = { pages: 0, revoked: 0, alreadyProcessed: 0, notFound: 0, failed: 0 };
+  const totals = {
+    pages: 0,
+    revoked: 0,
+    alreadyProcessed: 0,
+    notFound: 0,
+    failed: 0,
+    errored: 0,
+  };
   let pageToken: string | undefined;
   do {
     if (totals.pages >= maxPages || !shouldContinue('page')) {
@@ -246,10 +263,13 @@ export async function sweepGooglePlayVoidedPurchases(
           throw error;
         }
         // One entry's store failure does not hide the rest of the window.
-        totals.failed += 1;
+        totals.errored += 1;
         input.onOutcome?.(loggable, {
           status: 'error',
-          reason: error instanceof Error ? error.name : 'unknown error',
+          reason: 'GOOGLE_PLAY_VOIDED_STORE_ERROR',
+          detail: error instanceof Error
+            ? `${error.name}: ${error.message}`.slice(0, 200)
+            : 'unknown error',
         });
         continue;
       }
@@ -266,7 +286,7 @@ export async function sweepGooglePlayVoidedPurchases(
       ? undefined
       : page.nextPageToken;
   } while (pageToken !== undefined);
-  return { complete: true, clamped, ...totals };
+  return { complete: totals.errored === 0, clamped, ...totals };
 }
 
 /**
