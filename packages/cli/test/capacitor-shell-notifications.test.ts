@@ -939,6 +939,34 @@ try {
     ),
     false,
   );
+  // A part already there is not added again; an incomplete renderer is left alone.
+  const removalOnly = plain.replace(
+    '</application>',
+    `    <service android:name='${androidMessagingPluginService}' tools:node='remove' />\n    </application>`,
+  ).replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ');
+  const completed = applyAndroidManifestAdvertisingRenderer(removalOnly);
+  assert.ok(androidManifestRendersAdvertising(completed));
+  assert.equal(completed.split(androidMessagingPluginService).length - 1, 1);
+  const rendererOnly = rendered.replace(/\s*<service[^>]*tools:node="remove" \/>/u, '');
+  const restored = applyAndroidManifestAdvertisingRenderer(rendererOnly);
+  assert.ok(androidManifestRendersAdvertising(restored));
+  assert.equal(restored.split(androidAdvertisingRendererService).length - 1, 1);
+  const incomplete = rendered.replace(/\s*<meta-data[^>]*\/>/u, '');
+  assert.equal(applyAndroidManifestAdvertisingRenderer(incomplete), incomplete);
+  // A self-closed renderer is not completed by another service's body.
+  const selfClosedRenderer = plain.replace(
+    '</application>',
+    [
+      `    <service android:name="${androidAdvertisingRendererService}" />`,
+      '        <service android:name=".Other">',
+      '            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>',
+      `            <meta-data android:name="${androidAdvertisingRendererMetaData}" android:value="true" />`,
+      '        </service>',
+      `        <service android:name="${androidMessagingPluginService}" tools:node="remove" />`,
+      '    </application>',
+    ].join('\n'),
+  );
+  assert.equal(androidManifestRendersAdvertising(selfClosedRenderer), false);
   // CRLF is kept, and a manifest without an <application> body is left alone.
   const crlf = applyAndroidManifestAdvertisingRenderer(plain.replaceAll('\n', '\r\n'));
   assert.ok(androidManifestRendersAdvertising(crlf));

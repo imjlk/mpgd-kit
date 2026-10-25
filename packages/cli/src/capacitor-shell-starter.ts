@@ -3125,48 +3125,75 @@ export const androidAdvertisingRendererEntries: readonly string[] = [
   `<service android:name="${androidMessagingPluginService}" tools:node="remove" />`,
 ];
 
+/** An attribute `name="value"` inside a start tag, in either quote style; `.` in the value is literal. */
+function xmlAttributeLookahead(name: string, value: string): string {
+  const literal = value.replaceAll('.', '\\.');
+  return `(?=[^>]*\\s${name}\\s*=\\s*["']${literal}["'])`;
+}
+
+/** The manifest's `<service>` element for `name`, self-closed or with a body, or `undefined`. */
+function androidServiceElement(code: string, name: string): string | undefined {
+  return new RegExp(
+    `<service\\b${xmlAttributeLookahead('android:name', name)}[^>]*?(?:/>|>[\\s\\S]*?</service>)`,
+    'u',
+  ).exec(code)?.[0];
+}
+
+/** Whether the manifest removes the messaging plugin's own service from the merge. */
+function androidManifestRemovesMessagingPluginService(code: string): boolean {
+  return new RegExp(
+    `<service\\b${xmlAttributeLookahead('android:name', androidMessagingPluginService)}`
+      + `${xmlAttributeLookahead('tools:node', 'remove')}[^>]*>`,
+    'u',
+  ).test(code);
+}
+
 /**
  * Whether an Android manifest declares the kit's advertising renderer as its
- * messaging service, with its meta-data, and removes the plugin's service.
+ * messaging service, with the messaging event and its meta-data, and removes
+ * the plugin's service. Comments do not count.
  */
 export function androidManifestRendersAdvertising(manifest: string): boolean {
   const code = withoutXmlComments(manifest);
-  const escape = (text: string): string => text.replaceAll('.', '\\.');
-  const renderer = new RegExp(
-    `<service\\b[^>]*android:name\\s*=\\s*"${escape(androidAdvertisingRendererService)}"[\\s\\S]*?</service>`,
-    'u',
-  ).exec(code)?.[0];
-  const removed = new RegExp(
-    `<service\\b(?=[^>]*android:name\\s*=\\s*"${escape(androidMessagingPluginService)}")(?=[^>]*tools:node\\s*=\\s*"remove")[^>]*>`,
-    'u',
-  ).test(code);
+  const renderer = androidServiceElement(code, androidAdvertisingRendererService);
   return renderer !== undefined
     && renderer.includes('com.google.firebase.MESSAGING_EVENT')
     && new RegExp(
-      `<meta-data\\b(?=[^>]*android:name\\s*=\\s*"${escape(androidAdvertisingRendererMetaData)}")(?=[^>]*android:value\\s*=\\s*"true")`,
+      `<meta-data\\b${xmlAttributeLookahead('android:name', androidAdvertisingRendererMetaData)}`
+        + `${xmlAttributeLookahead('android:value', 'true')}`,
       'u',
     ).test(renderer)
-    && removed;
+    && androidManifestRemovesMessagingPluginService(code);
 }
 
 /**
  * Declares the kit's advertising renderer as the shell's messaging service
  * inside `<application>` (`androidAdvertisingRendererEntries`), binding the
- * tools namespace on the manifest root when missing. A manifest that
- * already has it, or one this cannot place it in (no `<application>` with a
- * closing tag), is returned unchanged.
+ * tools namespace on the manifest root when missing. Each part is added only
+ * when it is missing, so a manifest that has one keeps it once; a renderer
+ * service that is declared but incomplete is left for the game to fix (the
+ * initializer warns). A manifest this cannot place it in (no `<application>`
+ * with a closing tag) is returned unchanged.
  */
 export function applyAndroidManifestAdvertisingRenderer(manifest: string): string {
   if (androidManifestRendersAdvertising(manifest)) {
     return manifest;
   }
   const code = withoutXmlComments(manifest);
+  const removal = androidAdvertisingRendererEntries.at(-1) ?? '';
+  const missing = [
+    ...(androidServiceElement(code, androidAdvertisingRendererService) === undefined
+      ? androidAdvertisingRendererEntries.slice(0, -1)
+      : []),
+    ...(androidManifestRemovesMessagingPluginService(code) ? [] : [removal]),
+  ];
   const root = /<manifest\b[^>]*?>/u.exec(code);
   const close = code.lastIndexOf('</application>');
   const application = /<application\b[^>]*?>/u.exec(code);
   if (
-    root === null || application === null || close === -1 || root[0].endsWith('/>')
-    || application[0].endsWith('/>') || close < application.index || application.index < root.index
+    missing.length === 0 || root === null || application === null || close === -1
+    || root[0].endsWith('/>') || application[0].endsWith('/>') || close < application.index
+    || application.index < root.index
   ) {
     return manifest;
   }
@@ -3176,9 +3203,7 @@ export function applyAndroidManifestAdvertisingRenderer(manifest: string): strin
     rootTag = rootTag.replace(/^<manifest\b/u, `<manifest xmlns:tools="${androidToolsNamespace}"`);
   }
   const head = `${manifest.slice(0, root.index)}${rootTag}${manifest.slice(root.index + root[0].length, close)}`;
-  const entries = androidAdvertisingRendererEntries
-    .map((line) => `${newline}        ${line}`)
-    .join('');
+  const entries = missing.map((line) => `${newline}        ${line}`).join('');
   return `${head.trimEnd()}${newline}${entries}${newline}    ${manifest.slice(close)}`;
 }
 
