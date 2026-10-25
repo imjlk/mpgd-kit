@@ -1,6 +1,8 @@
 import type { RecoverableMonetizationClient } from '@mpgd/game-services';
+import type { Locale } from '@mpgd/i18n';
 import type { PlatformGateway } from '@mpgd/platform';
 
+import { t } from '../i18n/messages';
 import { resolveStarterCommercePlayerId } from './commerceAccountBinding';
 
 /**
@@ -13,6 +15,8 @@ const accountBoundStores: ReadonlySet<string> = new Set(['app-store', 'google-pl
 export type StarterRestoreOutcome =
   /** `granted`: purchases the backend ledger granted in this pass (0 when nothing new). */
   | { readonly outcome: 'restored'; readonly granted: number }
+  /** Some purchases are still unconfirmed; `granted` were confirmed in this pass. */
+  | { readonly outcome: 'incomplete'; readonly granted: number }
   | { readonly outcome: 'needs-session' }
   | { readonly outcome: 'failed' }
   | { readonly outcome: 'unavailable' };
@@ -54,27 +58,29 @@ export function createStarterRestorePurchases(input: {
       && await resolveStarterCommercePlayerId(input.gateway) === undefined) {
       return { outcome: 'needs-session' };
     }
-    // The reconciler reports a failed store resync or read as an event, not a
-    // rejection, so listen for the duration of this restore.
-    let storeFailed = false;
+    // The reconciler reports a failed store resync as a `restore` failure
+    // event, not a rejection; only this restore emits that stage.
+    let resyncFailed = false;
     const unsubscribe = recovery.commerceReconciler?.subscribe((event) => {
-      if (event.type === 'failure' && (event.stage === 'restore' || event.stage === 'available')) {
-        storeFailed = true;
+      if (event.type === 'failure' && event.stage === 'restore') {
+        resyncFailed = true;
       }
     });
     try {
-      const summaries = await recovery.restorePurchases();
-      if (storeFailed
-        || summaries.some((summary) => summary.kind !== 'rewarded-ad' && summary.status === 'failed')) {
+      const summaries = (await recovery.restorePurchases())
+        .filter((summary) => summary.kind !== 'rewarded-ad');
+      if (resyncFailed) {
         return { outcome: 'failed' };
       }
-      return {
-        outcome: 'restored',
-        // Purchases (not rewarded ads) the backend ledger reports as granted.
-        granted: summaries
-          .filter((summary) => summary.kind !== 'rewarded-ad' && summary.status === 'granted')
-          .length,
-      };
+      const granted = summaries.filter((summary) => summary.status === 'granted').length;
+      // A purchase the backend has not settled yet (verify unreachable, still
+      // pending at the store, waiting on an operator) is reported as such,
+      // never as "nothing to restore".
+      if (summaries.some((summary) => summary.status === 'pending'
+        || summary.status === 'action-required' || summary.status === 'failed')) {
+        return { outcome: 'incomplete', granted };
+      }
+      return { outcome: 'restored', granted };
     } catch (error) {
       console.error('[restore-purchases]', error);
       return { outcome: 'failed' };
@@ -91,4 +97,20 @@ export function createStarterRestorePurchases(input: {
       return running;
     },
   };
+}
+
+/** The player-facing line for a restore outcome, shared by the Phaser lobby and the lite button. */
+export function restoreOutcomeText(locale: Locale, result: StarterRestoreOutcome): string {
+  switch (result.outcome) {
+    case 'restored':
+      return result.granted === 0
+        ? t(locale, 'restoreNothing')
+        : t(locale, 'restoreDone', { count: result.granted });
+    case 'incomplete':
+      return t(locale, 'restoreIncomplete');
+    case 'needs-session':
+      return t(locale, 'restoreNeedsSession');
+    default:
+      return t(locale, 'restoreFailed');
+  }
 }

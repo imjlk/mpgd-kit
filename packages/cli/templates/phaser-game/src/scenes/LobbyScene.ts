@@ -3,8 +3,11 @@ import Phaser from 'phaser';
 import { t } from '../i18n/messages';
 import {
   createStarterRestorePurchases,
+  restoreOutcomeText,
   type StarterRestoreOutcome,
 } from '../platform/restorePurchases';
+
+type StarterRestoreFailure = Extract<StarterRestoreOutcome, { readonly outcome: 'failed' }>;
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
 
 export class LobbyScene extends Phaser.Scene {
@@ -144,26 +147,14 @@ export class LobbyScene extends Phaser.Scene {
         ) => {
           event.stopPropagation();
           status.setText(t(locale, 'restoreWorking'));
-          void restore.restore().then((result) => {
-            if (!status.active) {
-              return;
-            }
-            status.setText(restoreOutcomeText(locale, result));
-          });
+          void restore.restore()
+            .catch((): StarterRestoreFailure => ({ outcome: 'failed' }))
+            .then((result) => {
+              if (status.active) {
+                status.setText(restoreOutcomeText(locale, result));
+              }
+            });
         },
       );
-  }
-}
-
-function restoreOutcomeText(locale: StarterContext['locale'], result: StarterRestoreOutcome): string {
-  switch (result.outcome) {
-    case 'restored':
-      return result.granted === 0
-        ? t(locale, 'restoreNothing')
-        : t(locale, 'restoreDone', { count: result.granted });
-    case 'needs-session':
-      return t(locale, 'restoreNeedsSession');
-    default:
-      return t(locale, 'restoreFailed');
   }
 }

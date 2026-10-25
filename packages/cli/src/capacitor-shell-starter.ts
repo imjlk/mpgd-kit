@@ -1093,8 +1093,9 @@ function materializeIosStorePolicy(gameRoot: string): void {
 /**
  * Orientation of a freshly generated Android project's launcher activity,
  * `android:appCategory="game"`, and the advertising ID permission (declared
- * when the shell installs AdMob, removed otherwise); an existing project is
- * only reported by the production build.
+ * when the shell installs AdMob and mpgd.game.json does not set
+ * `ads.admob.advertisingId` to "removed", removed otherwise); an existing
+ * project is only reported by the production build.
  */
 function materializeAndroidStorePolicy(gameRoot: string): void {
   const manifestFile = safeDestination(

@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import type { MonetizationOperationSummary } from '@mpgd/game-services';
 import type { IdentitySession, PlatformGateway } from '@mpgd/platform';
 
-import { createStarterRestorePurchases } from '../templates/phaser-game/src/platform/restorePurchases.js';
+import {
+  createStarterRestorePurchases,
+  restoreOutcomeText,
+} from '../templates/phaser-game/src/platform/restorePurchases.js';
 
 // The template's Restore Purchases control (Phaser lobby and lite button).
 
@@ -40,7 +43,7 @@ const recovery = {
     calls += 1;
     return [
       summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'granted'),
-      summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'pending'),
+      summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'cancelled'),
       summary('rewarded-ad', 'granted'),
     ];
   },
@@ -118,9 +121,45 @@ assert.deepEqual(
       },
     },
   }).restore(),
-  { outcome: 'failed' },
-  'a purchase the pass failed to settle is a failed restore',
+  { outcome: 'incomplete', granted: 0 },
+  'a purchase the pass failed to settle is not "nothing to restore"',
 );
+for (const status of ['pending', 'action-required'] as const) {
+  assert.deepEqual(
+    await createStarterRestorePurchases({
+      gateway: gateway('app-store', signedIn),
+      monetizationRecovery: {
+        async restorePurchases() {
+          return [
+            summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'granted'),
+            summary('commerce-purchase' as MonetizationOperationSummary['kind'], status),
+            summary('rewarded-ad', 'pending'),
+          ];
+        },
+      },
+    }).restore(),
+    { outcome: 'incomplete', granted: 1 },
+  );
+}
+// Failures of other passes (a startup scan, an app-resume pass) are not this restore's.
+const unrelated = createStarterRestorePurchases({
+  gateway: gateway('app-store', signedIn),
+  monetizationRecovery: {
+    commerceReconciler: {
+      subscribe(listener: (event: { type: string; stage?: string }) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never,
+    async restorePurchases() {
+      for (const listener of listeners) {
+        listener({ type: 'failure', stage: 'available' });
+      }
+      return [];
+    },
+  },
+});
+assert.deepEqual(await unrelated.restore(), { outcome: 'restored', granted: 0 });
 
 // A failure is reported, not thrown; a second tap joins the running restore.
 const originalError = console.error;
@@ -169,5 +208,20 @@ await new Promise<void>((resolve) => {
 release?.();
 await third;
 assert.equal(slowCalls, 2);
+
+assert.equal(
+  restoreOutcomeText('en', { outcome: 'restored', granted: 0 }),
+  'No new purchases to restore',
+);
+assert.equal(
+  restoreOutcomeText('en', { outcome: 'restored', granted: 2 }),
+  'Purchases restored (2 confirmed)',
+);
+assert.equal(
+  restoreOutcomeText('ko', { outcome: 'needs-session' }),
+  '구매를 복원하려면 로그인하세요',
+);
+assert.match(restoreOutcomeText('en', { outcome: 'incomplete', granted: 1 }), /not confirmed yet/u);
+assert.match(restoreOutcomeText('en', { outcome: 'failed' }), /Could not restore/u);
 
 console.info('Starter Restore Purchases passed.');

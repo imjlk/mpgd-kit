@@ -30,8 +30,9 @@ export function createStarterGame(input: {
       console.error('[game-audio]', error);
     },
   });
-  const shell = createTapGame({ mount, title: '__GAME_TITLE__' });
+  // Mounted before the game so later overlays (such as a settings dialog) stack above it.
   const disposeRestorePurchases = mountRestorePurchasesButton(mount, input.context);
+  const shell = createTapGame({ mount, title: '__GAME_TITLE__' });
   let disposed = false;
   const dispose = (): void => {
     if (disposed) {
