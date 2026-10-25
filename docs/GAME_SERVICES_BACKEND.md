@@ -1044,7 +1044,7 @@ The player comes from the request's session, never from the body:
   session. No session binding at all answers `503 ACCOUNT_DELETION_NOT_CONFIGURED`.
 - A body that names another `playerId` answers `403 PLAYER_ID_MISMATCH`;
   no session `401` (also a development session off a local host); a session
-  binding that throws or answers no player `500 AUTHENTICATION_FAILED`; a
+  binding that throws or answers a malformed session `500 AUTHENTICATION_FAILED`; a
   body over 4 KiB or not a JSON object `400`.
 - `GAME_SERVICES_ACCOUNT_DELETION` must be bound to the identity Worker's
   `deletePlayer({ playerId })` entrypoint (revoke every session family and
