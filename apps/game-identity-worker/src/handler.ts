@@ -174,7 +174,7 @@ export function createIdentityFetchHandler(
       return new Response(null, { status: 204, headers: corsHeaders });
     }
     if (request.method !== 'POST') {
-      return json({ error: 'METHOD_NOT_ALLOWED' }, 405);
+      return json({ error: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST, OPTIONS' });
     }
     const body = await readJsonBody(request);
     if (body === undefined) {
@@ -205,8 +205,11 @@ export function createIdentityFetchHandler(
         case 'revoke':
           await service.revoke({ refreshToken: body.refreshToken });
           return json({}, 200);
-        default:
+        case 'bindAccount':
           return answer(await service.bindAccount(body));
+        default:
+          // A route added to the shared contract that this Worker does not serve yet.
+          return json({ error: 'UNKNOWN_ENDPOINT' }, 404);
       }
     } catch (error) {
       // A configuration error's message names the setting; any other error is
@@ -278,10 +281,15 @@ async function readJsonBody(request: Request): Promise<Readonly<Record<string, u
   }
 }
 
-function json(body: unknown, status: number): Response {
+function json(body: unknown, status: number, extraHeaders: Readonly<Record<string, string>> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    headers: {
+      ...corsHeaders,
+      ...extraHeaders,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
   });
 }
 

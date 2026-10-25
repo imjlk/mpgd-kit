@@ -86,7 +86,7 @@ export interface IdentityStore {
   }): Promise<void>;
 }
 
-/** An in-memory store for tests and local development (`IDENTITY_STORE = "memory"`). */
+/** An in-memory store for tests and local development (`MPGD_STORE = "memory"`). */
 export function createMemoryIdentityStore(): IdentityStore {
   const players = new Set<string>();
   const families = new Map<string, IdentitySessionFamily>();

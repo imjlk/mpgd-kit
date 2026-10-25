@@ -78,7 +78,9 @@ const env: GameIdentityWorkerEnv = { MPGD_STORE: 'memory' };
   for (const body of ['not json', '[]', 'null', 'x'.repeat(identityRequestBodyLimitBytes + 1)]) {
     assert.equal((await fetch(post(guestIdentityHttpRoutes.issueGuest, body))).status, 400);
   }
-  assert.equal((await fetch(new Request(`${base}${guestIdentityHttpRoutes.refresh}`))).status, 405);
+  const wrongMethod = await fetch(new Request(`${base}${guestIdentityHttpRoutes.refresh}`));
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
   assert.equal(
     (await fetch(new Request(`${base}/identity/v1/other`, { method: 'POST' }))).status,
     404,
