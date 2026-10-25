@@ -32,6 +32,13 @@ export interface NotificationDeviceAddress {
   readonly kind: 'fcm-token' | 'fcm-installation';
   readonly value: string;
   readonly environment?: 'production' | 'sandbox';
+  /**
+   * The installation's shell renders advertising pushes itself, with the
+   * opt-out action (an Android shell with the kit's renderer). The backend
+   * keeps it only for a target whose pushes need it, and the FCM provider
+   * then sends advertising as a data message the shell renders.
+   */
+  readonly rendersAdvertising?: boolean;
 }
 
 /** Who one delivery goes to: a device endpoint, or a resolved platform identity. */

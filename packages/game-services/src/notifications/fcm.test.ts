@@ -10,6 +10,7 @@ import {
   FcmAccessTokenError,
   fcmCollapseId,
   fcmMessagingScope,
+  fcmShellRenderedDataKeys,
   fcmTokenEndpoint,
   parseFcmServiceAccount,
 } from './fcm.js';
@@ -224,6 +225,103 @@ const request: NotificationRemoteDeliveryRequest = {
     [{ expiresAt: 'soon' }, /not a timestamp/u],
   ] as const) {
     const result = buildFcmMessage({ ...request, ...change } as NotificationRemoteDeliveryRequest);
+    assert.equal(result.status, 'invalid');
+    assert.match(result.status === 'invalid' ? result.reason : '', reason);
+  }
+}
+
+// An advertising send to an endpoint whose shell renders advertising (an
+// Android installation with the kit's renderer) is a data message: no
+// `notification` block, so the shell's messaging service gets it in the
+// background too, with everything the gate rendered and the expiry.
+{
+  const collapseId = fcmCollapseId(request.sendKey);
+  const renderer = {
+    ...request,
+    recipient: {
+      kind: 'device',
+      installationId: 'install-1',
+      address: { kind: 'fcm-token', value: 'device-token', rendersAdvertising: true },
+    },
+  } as const satisfies NotificationRemoteDeliveryRequest;
+  assert.deepEqual(buildFcmMessage(renderer), {
+    status: 'ready',
+    message: {
+      token: 'device-token',
+      data: {
+        offer: 'autumn',
+        topic: 'sale',
+        route: '/shop',
+        'mpgd.render': 'advertising',
+        'mpgd.title': '(광고) 세일',
+        'mpgd.body': '(광고) 02-000-0000\n세일 중\n무료 수신거부: 수신거부 버튼',
+        'mpgd.channel': 'promotions',
+        'mpgd.actionTitle': '수신거부',
+        'mpgd.expiresAt': String(Date.parse('2026-10-19T12:00:00Z')),
+      },
+      // Normal priority (FCM's default): no `priority` key.
+      android: { collapse_key: collapseId, ttl: '32400s' },
+    },
+  });
+  assert.deepEqual(Object.values(fcmShellRenderedDataKeys).sort(), [
+    'mpgd.actionTitle',
+    'mpgd.body',
+    'mpgd.channel',
+    'mpgd.expiresAt',
+    'mpgd.render',
+    'mpgd.title',
+  ]);
+  // Without an expiry or an action (the rules are `none`), those keys are
+  // left out; the channel falls back to the purpose's.
+  const { expiresAt: _expiresAt, ...unexpiring } = renderer;
+  assert.deepEqual(
+    buildFcmMessage({
+      ...unexpiring,
+      topic: { ...request.topic, mapping: {} },
+      content: { title: 'Sale', body: 'On now', route: '/shop', source: 'catalog' },
+      data: {},
+    }),
+    {
+      status: 'ready',
+      message: {
+        token: 'device-token',
+        data: {
+          topic: 'sale',
+          route: '/shop',
+          'mpgd.render': 'advertising',
+          'mpgd.title': 'Sale',
+          'mpgd.body': 'On now',
+          'mpgd.channel': 'mpgd-advertising',
+        },
+        android: { collapse_key: collapseId },
+      },
+    },
+  );
+  // Other purposes stay notification messages on the same endpoint.
+  const service = buildFcmMessage({
+    ...renderer,
+    topic: {
+      id: 'friend-challenge',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/',
+      mapping: {},
+    },
+    content: { title: 'T', body: 'B', route: '/', source: 'catalog' },
+    data: {},
+  });
+  assert.equal(service.status, 'ready');
+  assert.deepEqual(service.status === 'ready' ? service.message['notification'] : undefined, {
+    title: 'T',
+    body: 'B',
+  });
+  // The size check covers the data message too, and a send may not use the renderer's keys.
+  for (const [data, reason] of [
+    [{ big: 'x'.repeat(5000) }, /at most 3840/u],
+    [{ 'mpgd.title': 'spoof' }, /reserved/u],
+    [{ 'MPGD.action': 'advertising-opt-out' }, /reserved/u],
+  ] as const) {
+    const result = buildFcmMessage({ ...renderer, data });
     assert.equal(result.status, 'invalid');
     assert.match(result.status === 'invalid' ? result.reason : '', reason);
   }

@@ -22,6 +22,7 @@ import {
   notificationProviderCarriesNotices,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
+  notificationShellRenderedAdvertisingTargets,
   notificationTemplateDataIssue,
   toSeoulCalendarDate,
   type NotificationConsentRecord,
@@ -541,6 +542,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
 
   // Recipients (gate step 2).
 
+  /**
+   * Whether a device endpoint shows the actions a push carries: on a target
+   * whose pushes need the shell to render advertising (Android), only when
+   * its latest registration said the shell does. Gate step 1 refuses
+   * advertising under `kr` to one that does not.
+   */
+  const endpointActionsOf = (
+    endpoint: NotificationStoredEndpoint,
+  ): { readonly endpointShowsActions?: boolean } =>
+    endpoint.target !== undefined && notificationShellRenderedAdvertisingTargets.includes(endpoint.target)
+      ? { endpointShowsActions: endpoint.address.rendersAdvertising === true }
+      : {};
   const usable = (endpoint: NotificationStoredEndpoint, at: number): boolean =>
     endpoint.status === 'valid'
     && at - Date.parse(endpoint.lastRegisteredAt) < endpointStaleMs
@@ -781,6 +794,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           consent,
           ...(serverPermission === undefined ? {} : { serverPermission }),
           ...(recipient.endpoint === undefined ? {} : { endpointPermission: recipient.endpoint.permission }),
+          ...(recipient.endpoint === undefined ? {} : endpointActionsOf(recipient.endpoint)),
           history,
           at: formatNotificationInstant(at),
           ...(recipient.timeZone === undefined ? {} : { timeZone: recipient.timeZone }),
@@ -2587,6 +2601,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (request.target !== undefined && !provider.targets.includes(request.target)) {
         throw invalidInput(`Provider ${provider.entry.provider} does not serve target ${String(request.target)}.`);
       }
+      // Only a target whose pushes need the shell to render advertising keeps
+      // the claim, so the FCM provider never sends another device (iOS) a
+      // data message it would not show.
+      const rendersAdvertising = address.rendersAdvertising === true
+        && request.target !== undefined
+        && notificationShellRenderedAdvertisingTargets.includes(request.target);
       await store.putEndpoint({
         provider: provider.entry.provider,
         installationId: current.installationId,
@@ -2595,6 +2615,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           kind: address.kind,
           value: address.value,
           ...(address.environment === undefined ? {} : { environment: address.environment }),
+          ...(rendersAdvertising ? { rendersAdvertising: true } : {}),
         },
         permission: address.permission,
         ...(registration.locale === undefined ? {} : { locale: registration.locale }),

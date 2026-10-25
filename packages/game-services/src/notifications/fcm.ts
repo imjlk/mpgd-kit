@@ -1,4 +1,7 @@
-import { referenceNotificationProviders } from '@mpgd/platform/notifications';
+import {
+  notificationAdvertisingOptOutActionId,
+  referenceNotificationProviders,
+} from '@mpgd/platform/notifications';
 
 import {
   fcmInstallationIdRefusal,
@@ -23,9 +26,11 @@ import type { NotificationProviderRegistration } from './registry.js';
  * Android posts to the mapping's `channelId`, else to `mpgd-service`,
  * `mpgd-requested`, or `mpgd-advertising` by purpose. An advertising send
  * names the iOS category `mpgd-advertising`, whose opt-out action the app
- * registers; an Android FCM notification message cannot carry actions, and
- * the Capacitor shell does not render advertising natively yet. An expiry
- * becomes `android.ttl` and the `apns-expiration` header. A replay of the
+ * registers. An Android FCM notification message cannot carry actions, so an
+ * advertising send to an endpoint whose registration says its shell renders
+ * advertising (`rendersAdvertising`) is a data message the shell renders
+ * with the action (`fcmShellRenderedDataKeys`). An expiry becomes
+ * `android.ttl` and the `apns-expiration` header. A replay of the
  * same send key sets `android.collapse_key` and `apns-collapse-id` so a
  * crash after HTTP 200, before the ledger write, does not show a second
  * notification.
@@ -44,6 +49,29 @@ export const fcmAddressKinds = Object.freeze(['fcm-token'] as const);
 export const fcmReservedDataKeys = Object.freeze(['topic', 'route'] as const);
 /** The iOS notification category of advertising, which carries the opt-out action. */
 export const fcmAdvertisingCategory = 'mpgd-advertising';
+/**
+ * The data keys of an advertising push the Android shell renders itself
+ * (RFC "Delivery providers"). An Android FCM notification message cannot
+ * carry actions, so such a push has no `notification` block: the app's
+ * messaging service receives it in the background too and posts it with the
+ * opt-out action. `render` is `fcmShellRenderedAdvertising`; `title` and
+ * `body` are the gate's rendered text, `channel` the Android channel,
+ * `actionTitle` the opt-out action's title when the content carries the
+ * action, and `expiresAt` the expiry in epoch milliseconds, after which the
+ * shell does not show it. The send's `topic` and `route` stay in their own
+ * keys, as on every push. A send's routing data may not use the `mpgd.`
+ * prefix.
+ */
+export const fcmShellRenderedDataKeys = Object.freeze({
+  render: 'mpgd.render',
+  title: 'mpgd.title',
+  body: 'mpgd.body',
+  channel: 'mpgd.channel',
+  actionTitle: 'mpgd.actionTitle',
+  expiresAt: 'mpgd.expiresAt',
+} as const);
+/** The `mpgd.render` value of an advertising push the shell renders. */
+export const fcmShellRenderedAdvertising = 'advertising';
 /**
  * FCM's 4,096-byte limit, less room for what FCM and APNs add on the way
  * (the `aps` wrapper and FCM's own keys), so a message this check passes is
@@ -389,9 +417,34 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
   // instead of showing beside it. Collapse is per token, so two devices of
   // one send do not hide each other.
   const collapseId = fcmCollapseId(request.sendKey);
+  const ttl = expiresAt === undefined ? {} : { ttl: `${Math.floor((expiresAt - at) / 1000)}s` };
+  if (request.topic.purpose === 'advertising' && recipient.address.rendersAdvertising === true) {
+    // A data message without a `notification` block reaches the shell's
+    // messaging service in the background too, which renders it with the
+    // opt-out action. Normal priority, FCM's default for data and
+    // notification messages alike: FCM keeps high priority for urgent,
+    // time-sensitive messages, and advertising is not one. The shell's
+    // renderer checks the expiry again, since arrival decides.
+    const actionTitle = content.actions
+      ?.find((action) => action.id === notificationAdvertisingOptOutActionId)
+      ?.title;
+    const rendered: Record<string, string> = Object.create(null) as Record<string, string>;
+    Object.assign(rendered, data, {
+      [fcmShellRenderedDataKeys.render]: fcmShellRenderedAdvertising,
+      [fcmShellRenderedDataKeys.title]: content.title,
+      [fcmShellRenderedDataKeys.body]: content.body,
+      [fcmShellRenderedDataKeys.channel]: channelId,
+      ...(actionTitle === undefined ? {} : { [fcmShellRenderedDataKeys.actionTitle]: actionTitle }),
+      ...(expiresAt === undefined ? {} : { [fcmShellRenderedDataKeys.expiresAt]: String(expiresAt) }),
+    });
+    return sizedMessage(recipient.address.value, {
+      data: { ...rendered },
+      android: { collapse_key: collapseId, ...ttl },
+    });
+  }
   const android: Record<string, unknown> = {
     collapse_key: collapseId,
-    ...(expiresAt === undefined ? {} : { ttl: `${Math.floor((expiresAt - at) / 1000)}s` }),
+    ...ttl,
     notification: { channel_id: channelId },
   };
   const category = request.topic.purpose === 'advertising' ? fcmAdvertisingCategory : undefined;
@@ -402,12 +455,16 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
     },
     ...(category === undefined ? {} : { payload: { aps: { category } } }),
   };
-  const payload = {
+  return sizedMessage(recipient.address.value, {
     notification,
     data: { ...data },
     android,
     apns,
-  };
+  });
+}
+
+/** The message for `token`, unless its payload is over the size this provider sends. */
+function sizedMessage(token: string, payload: Readonly<Record<string, unknown>>): FcmMessageBuild {
   // Everything but the token counts toward the size FCM and APNs carry.
   const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).length;
   if (payloadBytes > maxPayloadBytes) {
@@ -417,10 +474,7 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
       code: 'INVALID_MESSAGE',
     };
   }
-  return {
-    status: 'ready',
-    message: { token: recipient.address.value, ...payload },
-  };
+  return { status: 'ready', message: { token, ...payload } };
 }
 
 /**
@@ -600,7 +654,7 @@ function isFirebaseProjectId(id: string): boolean {
     && new RegExp(`^(?:${label}(?:\\.${label})*:)?${label}$`, 'u').test(id);
 }
 
-/** FCM's reserved data keys (`from`, `message_type`, and any `google` or `gcm` prefix), `topic` and `route`, and keys a plain object cannot hold. */
+/** FCM's reserved data keys (`from`, `message_type`, and any `google` or `gcm` prefix), `topic` and `route`, the shell renderer's `mpgd.` keys, and keys a plain object cannot hold. */
 function isReservedDataKey(key: string): boolean {
   const lower = key.toLowerCase();
   return key === ''
@@ -614,7 +668,9 @@ function isReservedDataKey(key: string): boolean {
     || key === 'aps'
     || key === 'fcm_options'
     || lower.startsWith('google')
-    || lower.startsWith('gcm');
+    || lower.startsWith('gcm')
+    // The shell renderer's keys (`fcmShellRenderedDataKeys`) and its action marker.
+    || lower.startsWith('mpgd.');
 }
 
 /** The `details` of an FCM error answer. */
