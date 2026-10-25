@@ -552,7 +552,13 @@ export async function purgeExpiredRetainedPurchaseRecords(
         WHERE r.revokes_ledger_entry_id = g.ledger_entry_id AND r.revoked_at >= ?1
       )`;
   const results = await db.batch([
-    db.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${expired})`).bind(cutoffText, prefixStart, prefixEnd),
+    // Also notes about another grant that point at a revocation being purged:
+    // they would hold the revocation's RESTRICT key and fail the batch.
+    db.prepare(`DELETE FROM entitlement_notes WHERE ledger_entry_id IN (${expired})
+        OR revocation_ledger_entry_id IN (
+          SELECT ledger_entry_id FROM entitlement_revocations
+          WHERE revokes_ledger_entry_id IN (${expired})
+        )`).bind(cutoffText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM google_play_pending_finalizations WHERE ledger_entry_id IN (${expired})`)
       .bind(cutoffText, prefixStart, prefixEnd),
     db.prepare(`DELETE FROM entitlement_revocations WHERE revokes_ledger_entry_id IN (${expired})`)

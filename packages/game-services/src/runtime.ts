@@ -197,7 +197,10 @@ export function createGameServicesRuntime(
       ? {}
       : {
           accountDeletion: createAccountDeletionClient({
-            baseUrl,
+            // The deletion route is plain HTTP next to the oRPC handler: an
+            // oRPC URL names the handler's `/rpc` prefix, which the route
+            // does not sit under.
+            baseUrl: input.transport === 'orpc' ? baseUrl.replace(/\/rpc\/?$/u, '') : baseUrl,
             ...(input.headers === undefined ? {} : { headers: input.headers }),
             ...(input.getHeaders === undefined ? {} : { getHeaders: input.getHeaders }),
           }),

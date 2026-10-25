@@ -483,8 +483,38 @@ try {
       await purgeExpiredRetainedPurchaseRecords(db, new Date('2029-01-01T00:00:00.000Z')),
       0,
     );
+    // A note about a live grant that points at the old grant's revocation
+    // goes with that revocation instead of failing the purge.
+    const liveGrant = await store.recordEntitlementGrant({
+      source: 'purchase',
+      playerId: 'deleted:old',
+      grantId: 'COINS_100',
+      idempotencyKey: 'live-grant',
+      grantedAt: '2029-01-01T00:00:00.000Z',
+      payload: { target: 'ios', store: 'app-store', platformTransactionId: 'tx-live' },
+    });
+    const [oldRevocation] = await required(store.findEntitlementRevocations).call(store, {
+      ledgerEntryIds: [oldGrant.ledgerEntryId],
+    });
+    await required(store.recordEntitlementNote).call(store, {
+      noteId: 'cross-linked-note',
+      kind: 'refund_reversed',
+      playerId: 'deleted:old',
+      ledgerEntryId: liveGrant.ledgerEntryId,
+      revocationLedgerEntryId: required(oldRevocation).ledgerEntryId,
+      recordedAt: '2029-01-02T00:00:00.000Z',
+      payload: {},
+    });
     assert.equal(
       await purgeExpiredRetainedPurchaseRecords(db, new Date('2029-06-02T00:00:00.000Z')),
+      1,
+    );
+    assert.equal(
+      await db.prepare("SELECT note_id FROM entitlement_notes WHERE note_id = 'cross-linked-note'").first(),
+      null,
+    );
+    assert.equal(
+      await countRows(db, 'entitlement_transactions', 'ledger_entry_id', liveGrant.ledgerEntryId),
       1,
     );
   }

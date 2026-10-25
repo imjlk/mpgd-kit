@@ -779,6 +779,34 @@ console.log('GameServices runtime authority smoke test passed.');
     'deletion URL',
   );
   assertEqual(seen[0]?.authorization, 'Bearer runtime-session', 'deletion header');
+  // An oRPC runtime's URL names the `/rpc` handler; the route sits beside it.
+  const orpc = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: 'https://game-services.example/rpc',
+    transport: 'orpc',
+    getHeaders: () => ({ authorization: 'Bearer runtime-session' }),
+  });
+  globalThis.fetch = (async (url: string, init: { headers: Record<string, string> }) => {
+    seen.push({ url, authorization: init.headers.authorization });
+    return new Response(JSON.stringify({
+      status: 'deleted',
+      deletionId: 'deletion-2',
+      completedAt: '2026-10-25T00:00:00.000Z',
+      retainedPurchaseRecords: 0,
+    }));
+  }) as unknown as typeof fetch;
+  try {
+    await requireValue(orpc.accountDeletion, 'oRPC runtime account deletion').deleteAccount();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assertEqual(
+    seen[1]?.url,
+    'https://game-services.example/game-services/account/delete',
+    'oRPC deletion URL',
+  );
   assertEqual(
     createGameServicesRuntime({
       gateway: createGateway(),
