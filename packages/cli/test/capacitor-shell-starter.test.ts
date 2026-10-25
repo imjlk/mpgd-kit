@@ -310,6 +310,15 @@ try {
     displayName: options.displayName,
   });
   assert.deepEqual(omittedSelections.changedFiles, [smokePath]);
+  writeFileSync(path.join(root, 'mpgd.game.json'), '{"native":{"orientation":"bad"}}');
+  assert.throws(() => planCapacitorShellStarter(options), /native\.orientation must be/u);
+  writeFileSync(path.join(root, 'mpgd.game.json'), '{"native":{"orientation":"landscape"}}');
+  const validTargets = readFileSync(path.join(root, 'mpgd.targets.json'), 'utf8');
+  const badFamily = JSON.parse(validTargets) as { targets: { ios: { metadata?: object } } };
+  badFamily.targets.ios.metadata = { ...badFamily.targets.ios.metadata, iosDeviceFamily: 'ipad' };
+  writeFileSync(path.join(root, 'mpgd.targets.json'), JSON.stringify(badFamily));
+  assert.throws(() => planCapacitorShellStarter(options), /iosDeviceFamily must be/u);
+  writeFileSync(path.join(root, 'mpgd.targets.json'), validTargets);
   const commands: string[] = [];
   materializeCapacitorShellStarter(repeat, {
     run(command, args, cwd) {
@@ -409,6 +418,15 @@ try {
   ]);
   const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
   assert.equal(existsSync(cli), true);
+  const generatedPlist = readFileSync(
+    path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist'),
+    'utf8',
+  );
+  assert.match(
+    generatedPlist,
+    /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/u,
+    'a freshly generated iOS project declares exempt-only encryption',
+  );
   const generatedManifest = readFileSync(
     path.join(root, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
     'utf8',
@@ -420,6 +438,26 @@ try {
     'a freshly generated Android project opts out of backups and device transfers',
   );
   assert.ok(generatedManifest.includes(` ${toolsNamespace}`), 'the tools namespace is bound');
+  assert.match(
+    generatedManifest,
+    /<uses-permission android:name="com\.google\.android\.gms\.permission\.AD_ID" tools:node="remove" \/>/u,
+    'a shell without AdMob keeps the advertising ID out of the merged manifest',
+  );
+  assert.match(
+    generatedManifest,
+    /android:screenOrientation="sensorLandscape"/u,
+    'mpgd.game.json native.orientation reaches a freshly generated Android project',
+  );
+  assert.match(
+    readFileSync(path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist'), 'utf8'),
+    /<key>UISupportedInterfaceOrientations<\/key>\s*<array>\s*<string>UIInterfaceOrientationLandscapeLeft<\/string>\s*<string>UIInterfaceOrientationLandscapeRight<\/string>\s*<\/array>/u,
+    'and the iPhone orientations of a freshly generated iOS project',
+  );
+  assert.match(
+    generatedManifest,
+    /<application\b[^>]*\sandroid:appCategory="game"[^>]*>/u,
+    'a freshly generated Android project is a game, which keeps its orientation on large screens',
+  );
   const generatedXml = path.join(root, 'apps/mobile-capacitor/android/app/src/main/res/xml');
   assert.equal(
     readFileSync(path.join(generatedXml, 'backup_rules.xml'), 'utf8'),

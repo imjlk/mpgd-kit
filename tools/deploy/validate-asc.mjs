@@ -49,6 +49,8 @@ try {
   assert.match(run(binary, ['--version']), new RegExp(`^${pin.version.replaceAll('.', '\\.')}\\b`, 'u'));
   for (const command of [
     ['builds', 'upload'], ['builds', 'list'], ['builds', 'add-groups'],
+    // TestFlight readiness reads buildBetaDetails.internalBuildState.
+    ['builds', 'build-beta-detail', 'view'],
   ]) {
     const help = run(binary, [...command, '--help']);
     assert.match(help, /--output\s+Output format: json/u);

@@ -33,6 +33,23 @@ import {
   sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from './notifications-starter.js';
+import {
+  addIosAppResource,
+  applyAndroidManifestAdId,
+  applyAndroidManifestOrientation,
+  applyIosInfoPlistOrientation,
+  applyIosInfoPlistStorePolicy,
+  applyIosProjectDeviceFamily,
+  iosAppPrivacyManifestFile,
+  iosAppPrivacyManifestXml,
+  isRecord,
+  readGameAdvertisingIdPolicy,
+  readGameNativeOrientation,
+  readIosDeviceFamily,
+  shellUsesAdMob,
+  type IosDeviceFamily,
+  type NativeShellOrientation,
+} from './native-shell-store-policy.js';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
@@ -293,6 +310,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     'CLI TypeScript version',
   );
   const targetMap = requireObject(targets.targets, 'targets');
+  // Fail before anything is installed or generated when the store-facing
+  // native settings are invalid; they are applied after `cap add`.
+  readNativeShellSettings(gameRoot);
   for (const plugin of capacitorShellProviderPlugins) {
     if (providerIds.includes(plugin.id) && targetMap[plugin.platform] === undefined) {
       throw new Error(
@@ -850,6 +870,10 @@ export function materializeCapacitorShellStarter(
         materializeAndroidInexactAlarms(plan.gameRoot);
         materializeAndroidAdvertisingRenderer(plan.gameRoot);
       }
+      materializeAndroidStorePolicy(plan.gameRoot);
+    }
+    if (platform === 'ios' && generatedNow) {
+      materializeIosStorePolicy(plan.gameRoot);
     }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
@@ -1015,6 +1039,109 @@ export function applyAndroidManifestBackupPolicy(manifest: string): string {
   return `${manifest.slice(0, root.index)}${rootTag}${
     manifest.slice(root.index + root[0].length, application.index)}${applicationTag}${
     manifest.slice(application.index + application[0].length)}`;
+}
+
+/**
+ * Store-facing Info.plist keys for a freshly generated iOS project only
+ * (`applyIosInfoPlistStorePolicy`); an existing game-owned project is left
+ * alone and the production build reports what it lacks.
+ */
+function materializeIosStorePolicy(gameRoot: string): void {
+  const settings = readNativeShellSettings(gameRoot);
+  const plistFile = safeDestination(gameRoot, `${shellPath}/ios/App/App/Info.plist`);
+  if (existsSync(plistFile) && lstatSync(plistFile).isFile()) {
+    const source = readFileSync(plistFile, 'utf8');
+    let next = applyIosInfoPlistStorePolicy(source);
+    if (settings.orientation !== undefined) {
+      next = applyIosInfoPlistOrientation(next, settings.orientation);
+    }
+    if (next !== source) {
+      writeFileSync(plistFile, next);
+    }
+  }
+  const projectFile = safeDestination(
+    gameRoot,
+    `${shellPath}/ios/App/App.xcodeproj/project.pbxproj`,
+  );
+  const source = readFileSync(projectFile, 'utf8');
+  let next = settings.iosDeviceFamily === undefined
+    ? source
+    : applyIosProjectDeviceFamily(source, settings.iosDeviceFamily);
+  // The app-level privacy manifest joins the App group and Resources phase of
+  // the Capacitor-generated layout; any other layout is left to the game and
+  // reported by the build.
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/ios/App/App/${iosAppPrivacyManifestFile}`,
+  );
+  const withManifest = addIosAppResource(next, iosAppPrivacyManifestFile);
+  if (withManifest === undefined) {
+    console.warn(
+      `[mpgd] The generated iOS project has an unexpected layout; add ${iosAppPrivacyManifestFile} `
+        + 'to the App target yourself.',
+    );
+  } else {
+    if (!existsSync(manifestFile)) {
+      writeFileSync(manifestFile, iosAppPrivacyManifestXml, { flag: 'wx' });
+    }
+    next = withManifest;
+  }
+  if (next !== source) {
+    writeFileSync(projectFile, next);
+  }
+}
+
+/**
+ * Orientation of a freshly generated Android project's launcher activity,
+ * `android:appCategory="game"`, and the advertising ID permission (declared
+ * when the shell installs AdMob and mpgd.game.json does not set
+ * `ads.admob.advertisingId` to "removed", removed otherwise); an existing
+ * project is only reported by the production build.
+ */
+function materializeAndroidStorePolicy(gameRoot: string): void {
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/android/app/src/main/AndroidManifest.xml`,
+  );
+  if (!existsSync(manifestFile) || !lstatSync(manifestFile).isFile()) {
+    return;
+  }
+  const source = readFileSync(manifestFile, 'utf8');
+  const settings = readNativeShellSettings(gameRoot);
+  const shellPackageFile = path.join(gameRoot, shellPath, 'package.json');
+  const usesAds = existsSync(shellPackageFile) && shellUsesAdMob(readJsonObject(shellPackageFile));
+  const next = applyAndroidManifestAdId(
+    applyAndroidManifestOrientation(source, settings.orientation ?? 'any'),
+    usesAds && settings.advertisingId !== 'removed',
+  );
+  if (next !== source) {
+    writeFileSync(manifestFile, next);
+  }
+}
+
+/**
+ * The game's design orientation and advertising ID policy (mpgd.game.json)
+ * and iOS device family (ios target metadata).
+ */
+function readNativeShellSettings(gameRoot: string): {
+  readonly orientation?: NativeShellOrientation;
+  readonly iosDeviceFamily?: IosDeviceFamily;
+  readonly advertisingId: 'declared' | 'removed';
+} {
+  const gameConfigFile = path.join(gameRoot, 'mpgd.game.json');
+  const gameConfig = existsSync(gameConfigFile)
+    ? parseJsonObject(readFileSync(gameConfigFile, 'utf8'), 'mpgd.game.json')
+    : undefined;
+  const orientation = readGameNativeOrientation(gameConfig);
+  const advertisingId = readGameAdvertisingIdPolicy(gameConfig);
+  const targets = readJsonObject(path.join(gameRoot, 'mpgd.targets.json'));
+  const ios = isRecord(targets.targets) ? targets.targets.ios : undefined;
+  const iosDeviceFamily = readIosDeviceFamily(isRecord(ios) ? ios.metadata : undefined);
+  return {
+    ...(orientation === undefined ? {} : { orientation }),
+    ...(iosDeviceFamily === undefined ? {} : { iosDeviceFamily }),
+    advertisingId,
+  };
 }
 
 function materializeIosArchiveScheme(gameRoot: string): void {

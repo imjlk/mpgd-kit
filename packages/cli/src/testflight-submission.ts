@@ -311,6 +311,35 @@ async function submitVerifiedIosBuildResolved(
     };
   }
 
+  // processingState VALID does not mean testers can install the build: its
+  // TestFlight internal state can still be processing or waiting for the
+  // export-compliance answer (asc `builds build-beta-detail view`).
+  let internalState: string;
+  try {
+    internalState = readInternalBuildState(await run(
+      ['builds', 'build-beta-detail', 'view', '--build-id', build.id],
+      lookupTimeoutMs,
+    ));
+  } catch (error) {
+    return {
+      ...base,
+      status: 'unknown',
+      ...uploadReference,
+      buildId: build.id,
+      detail: `Build is processed, but its TestFlight state could not be read${failureReason(error)}.`,
+    };
+  }
+  const blocked = classifyInternalBuildState(internalState);
+  if (blocked !== undefined) {
+    return {
+      ...base,
+      status: blocked.status,
+      ...uploadReference,
+      buildId: build.id,
+      ...(blocked.detail === undefined ? {} : { detail: blocked.detail }),
+    };
+  }
+
   try {
     const added = await run(
       ['builds', 'add-groups', '--build-id', build.id, '--group', input.internalGroupId],
@@ -440,6 +469,54 @@ async function lookupBuild(
     throw new Error('asc builds list returned a malformed build.');
   }
   return { id: item.id, processingState: item.attributes.processingState };
+}
+
+function readInternalBuildState(response: unknown): string {
+  if (!isRecord(response) || !isRecord(response.data)
+    || response.data.type !== 'buildBetaDetails'
+    || !isRecord(response.data.attributes)
+    || typeof response.data.attributes.internalBuildState !== 'string'
+    || response.data.attributes.internalBuildState === '') {
+    throw new Error('asc builds build-beta-detail view returned an invalid JSON schema.');
+  }
+  return response.data.attributes.internalBuildState;
+}
+
+/**
+ * App Store Connect `BuildBetaDetail.internalBuildState`: only
+ * READY_FOR_BETA_TESTING and IN_BETA_TESTING let the build reach internal
+ * testers. Returns undefined for those, else the status to report.
+ */
+export function classifyInternalBuildState(state: string): {
+  readonly status: Extract<IosTestFlightStatus, 'processing' | 'action-required' | 'failed' | 'unknown'>;
+  readonly detail?: string;
+} | undefined {
+  switch (state) {
+    case 'READY_FOR_BETA_TESTING':
+    case 'IN_BETA_TESTING':
+      return undefined;
+    case 'PROCESSING':
+      return { status: 'processing' };
+    case 'MISSING_EXPORT_COMPLIANCE':
+      return {
+        status: 'action-required',
+        detail: 'TestFlight is waiting for the export-compliance answer: answer it in App Store '
+          + 'Connect, or ship ITSAppUsesNonExemptEncryption in Info.plist for later builds.',
+      };
+    case 'IN_EXPORT_COMPLIANCE_REVIEW':
+      return {
+        status: 'action-required',
+        detail: 'Apple is reviewing the export-compliance documentation.',
+      };
+    case 'PROCESSING_EXCEPTION':
+    case 'EXPIRED':
+      return { status: 'failed', detail: `TestFlight reported ${state}.` };
+    default:
+      return {
+        status: 'unknown',
+        detail: `TestFlight reported an unknown internal state ${state}.`,
+      };
+  }
 }
 
 function findInternalGroup(response: unknown, groupId: string): boolean {

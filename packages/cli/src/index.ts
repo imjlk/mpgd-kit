@@ -23,7 +23,11 @@ import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import { buildAssetPackTarget } from './asset-pack-target.js';
 import { publishAssetPacks } from './asset-pack-publish.js';
-import { assertLegalProjectPath, publishLegalSiteFiles } from './legal-site-output.js';
+import {
+  assertLegalProjectPath,
+  publishLegalSiteFiles,
+  resolveAppAdsTxt,
+} from './legal-site-output.js';
 import { assertAssetPackTargetPolicy } from '@mpgd/target-config/asset-packs';
 import {
   materializeCapacitorShellStarter,
@@ -3414,9 +3418,28 @@ function buildLegalSite(input: {
   assertLegalProjectPath('legal-dir', legalDir);
   assertLegalProjectPath('out-dir', outDir);
   const outputs = createLegalSiteOutputs(legalDir, outDir);
+  // app-ads.txt is optional: an earlier one is stale once its source is gone.
+  const appAdsOutput = path.join(outDir, 'app-ads.txt');
+  const orphanStat = outputs.some((output) => output.file === appAdsOutput)
+    ? undefined
+    : lstatIfExists(appAdsOutput);
+  const orphanedAppAds = orphanStat !== undefined;
+  if (orphanStat !== undefined) {
+    assertLegalProjectPath('out-dir', appAdsOutput);
+    if (!orphanStat.isFile()) {
+      throw new Error(`Legal site app-ads.txt output is not a regular file: ${appAdsOutput}`);
+    }
+  }
 
+  warnLegalPlaceholders(outputs);
   if (input.check) {
     assertLegalProjectPath('out-dir', outDir);
+    if (orphanedAppAds) {
+      throw new Error(
+        'Legal site output is stale. Run "mpgd legal build".\n'
+          + `- ${path.relative(process.cwd(), appAdsOutput)} (no app-ads.txt source)`,
+      );
+    }
     const stale = outputs.filter((output) => {
       assertLegalProjectPath('out-dir', output.file);
       if (!existsSync(output.file)) {
@@ -3441,6 +3464,9 @@ function buildLegalSite(input: {
   }
 
   publishLegalSiteFiles(outDir, outputs);
+  if (orphanedAppAds) {
+    rmSync(appAdsOutput, { force: true });
+  }
 
   return {
     outDir,
@@ -3471,8 +3497,13 @@ function createLegalSiteOutputs(
     };
   });
 
+  const appAdsTxt = readLegalAppAdsTxt(legalDir);
+
   return [
     ...outputs,
+    ...(appAdsTxt === undefined
+      ? []
+      : [{ file: path.join(outDir, 'app-ads.txt'), content: appAdsTxt }]),
     {
       file: path.join(outDir, '_headers'),
       content: [
@@ -3505,6 +3536,64 @@ function createLegalSiteOutputs(
       }, null, 2)}\n`,
     },
   ];
+}
+
+/**
+ * `app-ads.txt` for the legal site root: `<legal-dir>/app-ads.txt`, else the
+ * AdMob line for `ads.admob.publisherId` in the project's `mpgd.game.json`
+ * (the project root is the working directory, as for the legal sources).
+ */
+function readLegalAppAdsTxt(legalDir: string): string | undefined {
+  const ownAppAds = path.join(legalDir, 'app-ads.txt');
+  const ownExists = lstatIfExists(ownAppAds) !== undefined;
+  if (ownExists) {
+    assertLegalProjectPath('legal-dir', ownAppAds);
+  }
+  const gameConfigFile = path.join(process.cwd(), 'mpgd.game.json');
+  let gameConfig: unknown;
+  if (lstatIfExists(gameConfigFile) !== undefined) {
+    assertLegalProjectPath('mpgd.game.json', gameConfigFile);
+    try {
+      gameConfig = JSON.parse(readFileSync(gameConfigFile, 'utf8')) as unknown;
+    } catch (error) {
+      throw new Error(
+        `mpgd.game.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return resolveAppAdsTxt({
+    ...(ownExists ? { ownFile: readFileSync(ownAppAds, 'utf8') } : {}),
+    ...(gameConfig === undefined ? {} : { gameConfig }),
+  });
+}
+
+function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(file);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * The starter's legal pages mark what only the game owner can write with
+ * `[REPLACE: ...]`. Building with them is allowed (a new game builds its
+ * Pages host at once), but the store listing must not link to them.
+ */
+function warnLegalPlaceholders(outputs: readonly { readonly file: string; readonly content: string }[]): void {
+  const pending = outputs
+    .filter((output) => output.content.includes('[REPLACE:'))
+    .map((output) => path.relative(process.cwd(), output.file));
+  if (pending.length > 0) {
+    console.warn(
+      `Legal pages still contain [REPLACE: ...] markers; fill them in before linking the site from a store listing: ${
+        pending.join(', ')}`,
+    );
+  }
 }
 
 function normalizeLegalHtml(content: string, sourceFile: string): string {
@@ -3565,9 +3654,19 @@ function applyLiteTemplateOverlay(
     if (file.relativePath === 'mpgd.targets.json') {
       return [{ ...file, content: liteTemplateTargets(file.content) }];
     }
+    if (file.relativePath === 'mpgd.game.json') {
+      return [{ ...file, content: liteTemplateGameConfig(file.content) }];
+    }
     return [file];
   });
   return [...merged, ...overlay.values()];
+}
+
+/** The lite tap game is orientation-agnostic; the Phaser template's landscape lock does not apply. */
+function liteTemplateGameConfig(content: string): string {
+  const config = JSON.parse(content) as { native?: Record<string, unknown> };
+  config.native = { ...config.native, orientation: 'any' };
+  return `${JSON.stringify(config, null, 2)}\n`;
 }
 
 function liteTemplateTargets(content: string): string {

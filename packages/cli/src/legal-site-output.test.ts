@@ -16,6 +16,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { runMpgdCli } from './index.js';
+import { admobAppAdsTxtLine, resolveAppAdsTxt } from './legal-site-output.js';
 
 const page = (title: string): string =>
   `<!doctype html>\n<html lang="en"><head><title>${title}</title></head><body><p>${title}</p></body></html>\n`;
@@ -250,3 +251,69 @@ function readPrivacy(project: string): string {
     'utf8',
   );
 }
+
+await test('serves app-ads.txt from the AdMob publisher ID or a game-owned file', async () => {
+  assert.equal(
+    admobAppAdsTxtLine('pub-1234567890123456'),
+    'google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0',
+  );
+  assert.throws(() => admobAppAdsTxtLine('ca-app-pub-1234567890123456'), /pub-0000000000000000/u);
+  assert.equal(resolveAppAdsTxt({}), undefined);
+  assert.equal(resolveAppAdsTxt({ gameConfig: { brand: {} } }), undefined);
+  assert.equal(resolveAppAdsTxt({ ownFile: 'example.com, 1, DIRECT' }), 'example.com, 1, DIRECT\n');
+  assert.throws(() => resolveAppAdsTxt({ ownFile: '  \n' }), /empty/u);
+  assert.throws(
+    () => resolveAppAdsTxt({ gameConfig: { ads: { admob: { publisherId: 7 } } } }),
+    /must be a string/u,
+  );
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-app-ads-'));
+  const project = path.join(root, 'project');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    writeFileSync(
+      path.join(project, 'mpgd.game.json'),
+      JSON.stringify({ ads: { admob: { publisherId: 'pub-1234567890123456' } } }),
+    );
+    const appAds = path.join(project, 'artifacts', 'legal-site', 'app-ads.txt');
+    await inProject(project, async () => {
+      const warnings: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (message: string) => warnings.push(message);
+      try {
+        writeFileSync(path.join(project, 'legal', 'privacy.html'), page('[REPLACE: name] Privacy'));
+        await runMpgdCli(['legal', 'build']);
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.equal(warnings.length, 1);
+      console.warn = (message: string) => warnings.push(message);
+      try {
+        await runMpgdCli(['legal', 'check']);
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.equal(warnings.length, 2, 'legal check warns too');
+      assert.match(warnings[0] ?? '', /privacy[/\\]index\.html/u);
+      assert.equal(
+        readFileSync(appAds, 'utf8'),
+        'google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0\n',
+      );
+      await runMpgdCli(['legal', 'check']);
+      writeFileSync(path.join(project, 'legal', 'app-ads.txt'), 'google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0\nexample.com, 42, RESELLER\n');
+      await assert.rejects(runMpgdCli(['legal', 'check']), /stale/u);
+      await runMpgdCli(['legal', 'build']);
+      assert.match(readFileSync(appAds, 'utf8'), /example\.com, 42, RESELLER/u);
+      // Without any source the old file is stale and the next build removes it.
+      rmSync(path.join(project, 'legal', 'app-ads.txt'));
+      writeFileSync(path.join(project, 'mpgd.game.json'), '{}');
+      await assert.rejects(runMpgdCli(['legal', 'check']), /no app-ads\.txt source/u);
+      await runMpgdCli(['legal', 'build']);
+      assert.equal(existsSync(appAds), false);
+      await runMpgdCli(['legal', 'check']);
+      writeFileSync(path.join(project, 'mpgd.game.json'), '{"ads":');
+      await assert.rejects(runMpgdCli(['legal', 'build']), /mpgd\.game\.json is not valid JSON/u);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

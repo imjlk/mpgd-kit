@@ -1731,6 +1731,22 @@ function validatePhaserTemplateAITWrapper(): void {
       }
     }
 
+    // Signing keys, provisioning profiles, and store API keys never belong in
+    // a game repository (mobile launch checklist).
+    for (const credentialPattern of [
+      '*.p12',
+      '*.p8',
+      '*.mobileprovision',
+      '*.provisionprofile',
+      '*.keystore',
+      '*.jks',
+      '*.pepk',
+    ]) {
+      if (!ignoredPaths.has(credentialPattern)) {
+        failures.push(`${gitignorePath}: must ignore signing credentials (${credentialPattern}).`);
+      }
+    }
+
     if (ignoredPaths.has('apps/target-ait/.granite/')) {
       failures.push(`${gitignorePath}: must not retain the SDK 2 .granite cache path.`);
     }
