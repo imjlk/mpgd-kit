@@ -136,6 +136,28 @@ const settledInPass = createStarterRestorePurchases({
   },
 });
 assert.deepEqual(await settledInPass.restore(), { outcome: 'restored', granted: 2 });
+// The same purchase seen as a transition and as a summary counts once.
+const sameKey = createStarterRestorePurchases({
+  gateway: gateway('app-store', signedIn),
+  monetizationRecovery: {
+    commerceReconciler: {
+      subscribe(listener: (event: { type: string; stage?: string }) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never,
+    async restorePurchases() {
+      for (const listener of listeners) {
+        (listener as (event: unknown) => void)({
+          type: 'transition',
+          record: { idempotencyKey: 'commerce-purchase-granted', state: 'granted' },
+        });
+      }
+      return [summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'granted')];
+    },
+  },
+});
+assert.deepEqual(await sameKey.restore(), { outcome: 'restored', granted: 1 });
 assert.equal(listeners.size, 0, 'the restore stops listening');
 assert.deepEqual(
   await createStarterRestorePurchases({

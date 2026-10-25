@@ -331,6 +331,27 @@ try {
   );
   assert.deepEqual(inspectAndroidManifestOrientation(orientedAlias, 'landscape'), []);
   assert.equal(inspectAndroidManifestOrientation(aliased, 'landscape')[0]?.level, 'error');
+  // A fully qualified target matches a relative activity name; an unrelated
+  // package with the same simple name does not.
+  const qualified = aliased.replace(
+    'android:targetActivity=".MainActivity"',
+    'android:targetActivity="dev.example.puzzle.MainActivity"',
+  );
+  assert.match(
+    applyAndroidManifestOrientation(qualified, 'portrait'),
+    /android:screenOrientation="portrait"/u,
+  );
+  assert.throws(
+    () =>
+      applyAndroidManifestOrientation(
+        aliased.replace(
+          'android:targetActivity=".MainActivity"',
+          'android:targetActivity="com.other.Main"',
+        ),
+        'portrait',
+      ),
+    /no launcher activity/u,
+  );
   // A `>` or `/>` inside an attribute value does not end the tag.
   const quoted = manifest.replace(
     '        <activity\n',

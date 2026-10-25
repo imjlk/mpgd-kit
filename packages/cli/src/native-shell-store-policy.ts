@@ -433,14 +433,13 @@ function findAndroidLauncherActivity(
   if (target === undefined) {
     return undefined;
   }
-  const simpleName = (name: string): string => name.slice(name.lastIndexOf('.') + 1);
-  const named = elements.filter(
-    (element) => readXmlAttribute(element.tag, 'android:name') === target,
+  // Exact name, or a relative `.Main` against a fully qualified `pkg.Main`.
+  const sameClass = (name: string): boolean => name === target
+    || (target.startsWith('.') && name.endsWith(target))
+    || (name.startsWith('.') && target.endsWith(name));
+  const match = elements.filter((element) =>
+    sameClass(readXmlAttribute(element.tag, 'android:name') ?? ''),
   );
-  const match = named.length > 0
-    ? named
-    : elements.filter((element) =>
-      simpleName(readXmlAttribute(element.tag, 'android:name') ?? '') === simpleName(target));
   return match.length === 1 && match[0] !== undefined
     ? { start: match[0].start, tag: match[0].tag }
     : undefined;
@@ -580,9 +579,10 @@ export const iosAppPrivacyManifestFile = 'PrivacyInfo.xcprivacy';
  * App-level privacy manifest of a kit shell. The App target's own code
  * (AppDelegate, SceneDelegate) calls no required-reason API and the kit does
  * no tracking; Capacitor core and the kit's game-services plugin ship their
- * own manifests (the plugin declares UserDefaults CA92.1). A game adds the
- * APIs its own native code uses and, if it wants Xcode's privacy report to
- * match its App Store privacy answers, the data types it collects
+ * own manifests (the plugin declares UserDefaults CA92.1). The collected
+ * data array is empty only because the kit-owned shell code collects
+ * nothing: a game adds the required-reason APIs its own native code uses
+ * and an entry for each data type it collects
  * (docs/STORE_PRIVACY_DISCLOSURES.md).
  */
 export const iosAppPrivacyManifestXml = [
@@ -895,8 +895,9 @@ export function inspectAndroidManifestAds(
     if (!hasAppId) {
       issues.push({
         level: 'error',
-        message: 'The shell installs AdMob but android/app/src/main/AndroidManifest.xml has no '
-          + 'com.google.android.gms.ads.APPLICATION_ID meta-data; the app crashes at launch.',
+        message: 'The shell installs AdMob but neither android/app/src/main/AndroidManifest.xml '
+          + "nor the release source set's manifest has com.google.android.gms.ads.APPLICATION_ID "
+          + 'meta-data; the app crashes at launch.',
       });
     }
     if (declaration === 'removed' && advertisingIdPolicy !== 'removed') {

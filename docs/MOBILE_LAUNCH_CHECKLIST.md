@@ -28,7 +28,11 @@ the stores change their rules, so re-check the linked pages before you submit.
   code must support 16 KB pages on Google Play; from 1 February 2027 updates
   that do not cannot be released ([page sizes](https://developer.android.com/guide/practices/page-sizes)).
   The shell has no native libraries of its own, but AdMob or Firebase may add
-  some: check the AAB with the APK Analyzer. The kit does not check this.
+  some. Check the release AAB's zip alignment with
+  `bundletool dump config --bundle=app-release.aab | grep alignment`
+  (`PAGE_ALIGNMENT_16K` is what you want; `PAGE_ALIGNMENT_4K` means the
+  native libraries are 4 KB aligned) and the libraries' ELF alignment with
+  the APK Analyzer. The kit does not check this.
 
 ## 1. Accounts and keys
 
