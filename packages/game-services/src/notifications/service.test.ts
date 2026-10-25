@@ -548,6 +548,17 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     sessionId: 's-old',
     lastRegisteredAt: '2026-10-19T03:00:00Z',
   });
+  // And one whose stored target (`ios`) the provider no longer serves.
+  await staleStore.putEndpoint({
+    provider: 'fcm',
+    installationId: 'old-ios',
+    player: 'p-2',
+    address: { kind: 'fcm-token', value: 'tok-old-ios' },
+    permission: 'granted',
+    target: 'ios',
+    sessionId: 's-old-ios',
+    lastRegisteredAt: '2026-10-19T03:00:00Z',
+  });
   for (const [targets, expected] of [
     [['ios'], 'delivered'],
     [['web', 'android'], 'suppressed'],
@@ -577,6 +588,20 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
       topic: 'events',
     });
     assert.equal(outcome.status, expected, targets.join(','));
+    if (targets.length === 2) {
+      // The stale `ios` endpoint may read the android mapping here, so its
+      // missing claim keeps advertising away.
+      await stale.recordConsent(session('p-2', 'old-ios'), {
+        kind: 'advertising',
+        state: 'granted',
+        source: 'player',
+        textVersion: 'v1',
+      });
+      assert.deepEqual(
+        await stale.deliver({ idempotencyKey: 'ad-stale-old-ios', player: 'p-2', topic: 'events' }),
+        { status: 'suppressed', reason: 'purpose-unsupported' },
+      );
+    }
   }
 }
 

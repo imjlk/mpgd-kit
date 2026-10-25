@@ -227,6 +227,42 @@ describe('Capacitor notifications provider: Android advertising rendering', () =
     }
   });
 
+  it('reports a shell that cannot answer getToken at the start announcement', async () => {
+    const restarted = (prepare: (sdks: ReturnType<typeof createFakeNotificationSdks>) => void) => {
+      const sdks = createFakeNotificationSdks({ platform: 'android', now: () => '2026-10-25T03:00:00Z' });
+      sdks.osState = 'granted';
+      sdks.issueEndpoint({ kind: 'fcm-token', value: 'token-1' });
+      sdks.emitPush('tokenReceived', { token: 'token-1' });
+      createCapacitorNotificationProvider({
+        platform: 'android',
+        topics: [service],
+        ...(sdks.push === undefined ? {} : { push: sdks.push }),
+        app: sdks.app,
+      });
+      sdks.restart();
+      prepare(sdks);
+      const errors: unknown[] = [];
+      const provider = createCapacitorNotificationProvider({
+        platform: 'android',
+        topics: [advertising, service],
+        ...(sdks.push === undefined ? {} : { push: sdks.push }),
+        ...(sdks.local === undefined ? {} : { local: sdks.local }),
+        app: sdks.app,
+        timeZone: () => 'Asia/Seoul',
+        locale: () => 'ko-KR',
+        onError: (error) => errors.push(error),
+        advertisingRenderer: async () => true,
+      });
+      return { sdks, provider, errors };
+    };
+    const unavailable = Object.assign(new Error('no messaging plugin'), { code: 'UNAVAILABLE' });
+    const silent = restarted((sdks) => sdks.failNext('push.getToken', unavailable));
+    await settle();
+    await settle();
+    expect(silent.errors).toContainEqual(unavailable);
+
+  });
+
   it('announces nothing extra without the renderer input, or on iOS', async () => {
     for (const options of [{ platform: 'android' as const }, { platform: 'ios' as const, renderer: async () => true }]) {
       const sdks = createFakeNotificationSdks({ platform: options.platform, now: () => '2026-10-25T03:00:00Z' });

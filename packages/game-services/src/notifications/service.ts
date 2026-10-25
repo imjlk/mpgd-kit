@@ -495,8 +495,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   // Topics.
 
   /**
-   * The catalog targets a recipient's topic is read from: the target its
-   * registration named while the provider still serves it, else every
+   * The catalog targets from which a recipient's topic is read: the target
+   * its registration named while the provider still serves it, else every
    * target the provider serves, in order.
    */
   const candidateTargetsOf = (

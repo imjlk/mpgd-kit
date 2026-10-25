@@ -806,10 +806,10 @@ export function createCapacitorNotificationProvider(
       }
       try {
         await ensureChannels();
-      } catch {
-        // `ensureChannels` reported it; the foreground retry publishes this
-        // token once the channels exist.
-        if (generation === tokenGeneration) {
+      } catch (error) {
+        reportSetupFailure(error);
+        // The foreground retry publishes this token once the channels exist.
+        if (generation === tokenGeneration && !androidChannelsReady) {
           retainedToken = { token, generation };
         }
         return;
