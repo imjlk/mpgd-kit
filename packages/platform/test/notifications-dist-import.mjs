@@ -60,6 +60,7 @@ const topic = {
   copy: { ko: { title: '주말 이벤트', body: '주말 이벤트가 시작됐어요.' } },
 };
 const kr = { advertisingRules: 'kr', advertisingSender: { contact: '080-1234-5678' } };
+// `null` leaves `endpointShowsActions` out (a default parameter would swallow `undefined`).
 const gate = (consent, at = '2026-10-12T03:00:00Z', deployment = kr, endpointShowsActions = true) =>
   evaluateNotificationDelivery({
     entry: referenceNotificationProviders.fcm,
@@ -68,7 +69,7 @@ const gate = (consent, at = '2026-10-12T03:00:00Z', deployment = kr, endpointSho
     recipientResolved: true,
     consent,
     endpointPermission: 'granted',
-    ...(endpointShowsActions === undefined ? {} : { endpointShowsActions }),
+    ...(endpointShowsActions === null ? {} : { endpointShowsActions }),
     history: [],
     at,
     timeZone: 'Asia/Seoul',
@@ -83,7 +84,11 @@ const advertisingConsent = {
 };
 assert.deepEqual(gate([]), { status: 'suppressed', reason: 'advertising-consent-missing' });
 // Under the Korean rules the gate fails closed on a device endpoint not known to show the opt-out action.
-assert.deepEqual(gate([advertisingConsent], undefined, kr, undefined), {
+assert.deepEqual(gate([advertisingConsent], undefined, kr, null), {
+  status: 'suppressed',
+  reason: 'purpose-unsupported',
+});
+assert.deepEqual(gate([advertisingConsent], undefined, kr, false), {
   status: 'suppressed',
   reason: 'purpose-unsupported',
 });
