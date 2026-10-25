@@ -351,7 +351,32 @@ export interface NotificationDeployment {
   readonly advertisingOptOutLine?: NonEmptyString;
   /** IANA zone for recipients that registered none; Asia/Seoul when absent. */
   readonly timeZone?: NonEmptyString;
+  /**
+   * Whether the game's shell renders advertising pushes itself, with the
+   * opt-out action, on the targets in
+   * `notificationShellRenderedAdvertisingTargets` (Android, through the
+   * kit's messaging service in `@mpgd/capacitor-game-services`). An Android
+   * FCM notification message cannot carry actions, so the catalog validator
+   * refuses an advertising topic mapped to such a target unless this is
+   * true. With it, the backend still sends advertising under `kr` only to an
+   * installation whose registration says it renders it
+   * (`rendersAdvertising`); one that does not is `suppressed:
+   * purpose-unsupported`. Absent means false.
+   */
+  readonly shellRendersAdvertising?: boolean;
 }
+
+/**
+ * Catalog targets whose system-rendered pushes cannot show the advertising
+ * opt-out action: an Android FCM notification message cannot carry actions,
+ * while iOS shows the `mpgd-advertising` category's action. Advertising
+ * reaches such a target only when the deployment sets
+ * `shellRendersAdvertising` and the installation registered
+ * `rendersAdvertising`.
+ */
+export const notificationShellRenderedAdvertisingTargets: readonly string[] = Object.freeze([
+  'android',
+]);
 
 export const notificationDefaultOptOutLine = '무료 수신거부: 수신거부 버튼';
 export const notificationDefaultDeploymentTimeZone = 'Asia/Seoul';
@@ -740,6 +765,17 @@ export interface EvaluateNotificationDeliveryInput {
    */
   readonly endpointPermission?: NotificationPermissionState;
   /**
+   * For `addressing: 'device'`: whether this endpoint shows the actions a
+   * notification carries. Under `kr` an advertising send to a resolved
+   * device endpoint needs it `true`; `false` or absent (an Android
+   * installation whose shell does not render advertising, or a caller that
+   * did not say) is `suppressed: purpose-unsupported`, as an entry without
+   * `actions` is. The backend passes `true` for an endpoint whose pushes
+   * show the action (iOS, and Android with `rendersAdvertising`). Other
+   * addressing ignores it.
+   */
+  readonly endpointShowsActions?: boolean;
+  /**
    * Sends delivered to the recipient, oldest first (the gate sorts a copy of
    * a history out of order, so the order never changes the answer): at least
    * those within the longest limit window and, for a per-send provider, every
@@ -767,7 +803,8 @@ export interface EvaluateNotificationDeliveryInput {
  * 1. the topic is declared (`topic-unknown`), has the `remote` channel
  *    (`channel-unsupported`), and the entry delivers its purpose, advertising
  *    only as free-form content and, under `kr`, with an expiry and the opt-out
- *    action (`purpose-unsupported`);
+ *    action, on a device endpoint known to show it (`endpointShowsActions:
+ *    true`; `purpose-unsupported`);
  * 2. the recipient resolves (`unavailable: no-endpoint`), with a link where
  *    the entry needs one (`unavailable: link-missing`);
  * 3. delivery permission is positively `granted`: the send-time host answer on
@@ -821,7 +858,16 @@ export function evaluateNotificationDelivery(
     !entry.purposes.includes(topic.purpose)
     || (
       topic.purpose === 'advertising'
-      && (entry.content !== 'free-form' || (rules === 'kr' && (!entry.expiry || !entry.actions)))
+      && (
+        entry.content !== 'free-form'
+        || (rules === 'kr' && (
+          !entry.expiry
+          || !entry.actions
+          // Fails closed: a device endpoint must be known to show the action.
+          // An unresolved recipient goes on to answer `no-endpoint`.
+          || (entry.addressing === 'device' && input.recipientResolved && input.endpointShowsActions !== true)
+        ))
+      )
     )
   ) {
     return { status: 'suppressed', reason: 'purpose-unsupported' };
@@ -1834,6 +1880,12 @@ export const notificationTimeFields = {
   NotificationConsentRecord: { at: 'date-time' },
   NotificationNotice: noticeTimeFields,
   RecordNotificationNoticeInput: noticeTimeFields,
+  NotificationBackendBridgeRecordConsentPayload: { record: { at: 'date-time' } },
+  NotificationBackendBridgeRecordConsentResult: { record: { at: 'date-time' } },
+  NotificationBackendBridgeListConsentResult: { records: { at: 'date-time' } },
+  NotificationBackendBridgeListNoticesResult: { notices: noticeTimeFields },
+  NotificationBackendBridgeRecordNoticePayload: { notice: noticeTimeFields },
+  NotificationBackendBridgeSetReminderPayload: { reminder: { fireAt: 'date-time' } },
   NotificationConformanceVector: {
     context: { now: 'date-time' },
     steps: {

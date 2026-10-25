@@ -1,19 +1,37 @@
 import type { GameServicesHeaderResolver } from '@mpgd/game-services';
 
+import {
+  createStarterServerSessionSlot,
+  resolveStarterDevelopmentServerSession,
+} from './developmentServerSession';
+
 /**
  * The game's server-backed session: who is signed in to the game backend,
  * and the `Authorization` header for that session. The starter has none, so
  * `resolveStarterServerSession` returns `undefined`. Set yours with
- * `setStarterServerSession`, over your own session holder and identity
- * service. The commerce client then sends its header. In a game created with
- * `--providers notifications`, the notifications runtime uses the same
- * session and header for the game-services Worker's notification routes.
+ * `setStarterServerSession`. The commerce client then sends its header. In
+ * a game created with `--providers notifications`, the notifications
+ * runtime uses the same session and header for the game-services Worker's
+ * notification routes.
  *
- * `sessionId` must be the stable session-family id: the `sessionId` your
- * identity service answers to the Worker's `authenticateNotificationSession`
- * for this session's header, the same across token refreshes. Do not pass a
- * per-token or rotating id: a `GuestSessionCoordinator` view's `sessionId`
- * may rotate on refresh, so it is not that id.
+ * With a guest-session backend, `createGuestServerSession` from
+ * `@mpgd/game-services` reads a `GuestSessionCoordinator` as this session:
+ *
+ * ```ts
+ * const guest = createGuestSessionCoordinator({ backend, credentials, installationId });
+ * setStarterServerSession(createGuestServerSession(guest));
+ * void guest.start();
+ * ```
+ *
+ * `sessionId` must be the stable session-family id: the same across token
+ * refreshes, and the session your identity service answers to the Worker's
+ * `authenticateNotificationSession` for this session's header. Do not pass
+ * a per-token or rotating id: `createGuestServerSession` answers the
+ * coordinator's `sessionFamilyId`, never a view's `sessionId`, which may
+ * rotate on refresh. With another session holder, pass its family id.
+ *
+ * For local development without an identity service, see
+ * `developmentServerSession.ts`.
  */
 export interface StarterServerSession {
   /**
@@ -29,22 +47,31 @@ export interface StarterServerSession {
   readonly getHeaders: GameServicesHeaderResolver;
 }
 
-let serverSession: StarterServerSession | undefined;
-/** Whether the commerce client read the session already: it reads it once. */
-let readOnce = false;
+/** The game's session, or the development one (see `developmentServerSession.ts`). */
+const slot = createStarterServerSessionSlot<StarterServerSession>({
+  // `import.meta.env.DEV` is false in a normal `vite build`, which drops this branch.
+  development: () =>
+    import.meta.env.DEV
+      ? resolveStarterDevelopmentServerSession({
+          dev: import.meta.env.DEV,
+          mode: import.meta.env.MODE,
+          value: import.meta.env.VITE_MPGD_DEV_NOTIFICATION_SESSION,
+        })
+      : undefined,
+  warn: (message) => console.warn(message),
+});
 
 /**
  * The game's server-backed session; `undefined` until the game sets one with
- * `setStarterServerSession`. `once` marks a reader that keeps what it reads
- * (the commerce client), so a later change warns.
+ * `setStarterServerSession`, unless a development session is on (see
+ * `developmentServerSession.ts`). `once` marks the reader that keeps what
+ * it reads, the commerce client, so a later change warns; it gets only the
+ * game's own session, never the development one.
  */
 export function resolveStarterServerSession(
   options: { readonly once?: boolean } = {},
 ): StarterServerSession | undefined {
-  if (options.once === true) {
-    readOnce = true;
-  }
-  return serverSession;
+  return slot.resolve(options);
 }
 
 /**
@@ -53,14 +80,10 @@ export function resolveStarterServerSession(
  * notification settings and opens read it until a backend exists. Its
  * `current()` may answer `undefined` until the player signs in. A session
  * set after the commerce client was created does not reach that client,
- * which this warns about.
+ * which this warns about. Any call, `undefined` included, turns the
+ * development session off; the first call after the development session
+ * was handed out warns, `undefined` included.
  */
 export function setStarterServerSession(session: StarterServerSession | undefined): void {
-  if (readOnce && session !== undefined && session !== serverSession) {
-    console.warn(
-      '[game-services] setStarterServerSession ran after the commerce client was created; '
-        + "it does not send this session's header. Call it before bootstrap().",
-    );
-  }
-  serverSession = session;
+  slot.set(session);
 }

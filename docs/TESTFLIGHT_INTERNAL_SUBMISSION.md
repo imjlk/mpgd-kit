@@ -4,7 +4,13 @@
 record from `recordNativeReleaseBuild()`. It checks the IPA SHA-256, bundle ID,
 signing team ID, and reserved marketing/build versions before contacting Apple.
 It does not rebuild, re-sign, submit for App Review, or answer export-compliance
-questions.
+questions. Kit shells declare `ITSAppUsesNonExemptEncryption` = false in
+`Info.plist` (the kit only uses HTTPS and OS cryptography, which Apple's
+[export rules](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations)
+exempt), so App Store Connect does not ask the question for each build. A game
+that adds its own non-exempt encryption sets the key to `true` and answers the
+question in App Store Connect. A production build warns when the shell's
+release `Info.plist` lacks the key.
 
 Use the reviewed `asc` 5.5.0 binary whose host-specific SHA-256 is pinned in
 the published CLI's `asc-pin.json`. The caller passes its absolute path and a
@@ -32,9 +38,16 @@ The upload requests checksum verification when Apple provides a source-file
 checksum; its absence is not represented as a successful checksum proof.
 
 Possible result statuses are `uploaded`, `processing`, `testflight-ready`,
-`action-required`, `failed`, and `unknown`. Only a processed build whose
-membership in the internal group is confirmed by a read is marked
-`testflight-ready`. Store processing can take longer than one CLI invocation;
+`action-required`, `failed`, and `unknown`. A processed build (`VALID`) is
+then checked for its TestFlight internal state with `asc builds
+build-beta-detail view --build-id <id>` (App Store Connect
+`buildBetaDetails.internalBuildState`): `PROCESSING` stays `processing`,
+`MISSING_EXPORT_COMPLIANCE` and `IN_EXPORT_COMPLIANCE_REVIEW` are
+`action-required`, `PROCESSING_EXCEPTION` and `EXPIRED` are `failed`, and an
+unknown state is `unknown`; none of them is added to the group. Only a build
+in `READY_FOR_BETA_TESTING` or `IN_BETA_TESTING` whose membership in the
+internal group is confirmed by a read is marked `testflight-ready`.
+Store processing can take longer than one CLI invocation;
 persist the upload ID supplied to `onUploadCommitted` alongside the immutable
 record's artifact SHA-256, then resume with `resumeUploadId` and
 `resumeArtifactSha256`. Resume verifies that upload under the same app, version,

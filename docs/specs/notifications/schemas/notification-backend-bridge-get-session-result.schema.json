@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-get-session-result.schema.json",
+  "title": "NotificationBackendBridgeGetSessionResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeGetSessionResult",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBackendBridgeGetSessionResult": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NotificationBackendBridgeSession"
+              }
+            ],
+            "description": "`null` while the request has no authenticated player (a logged-out Devvit viewer).",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationBackendBridgeSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "Stable for the session's life.",
+            "readOnly": true
+          },
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "id",
+          "player"
+        ],
+        "additionalProperties": false,
+        "description": "The authenticated session a host-served backend answers for."
+      }
+    }
+  }
+}

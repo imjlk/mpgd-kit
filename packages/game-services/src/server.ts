@@ -39,6 +39,7 @@ import {
   assertClaimAdRewardRequest,
   assertClaimAdRewardResponse,
   assertEntitlementLedgerGrant,
+  assertEntitlementLedgerNote,
   assertEntitlementLedgerResult,
   assertEntitlementLedgerRevocation,
   assertEntitlementRevocationTransaction,
@@ -53,6 +54,7 @@ import {
   type ClaimAdRewardRequest,
   type ClaimAdRewardResponse,
   type EntitlementLedgerGrant,
+  type EntitlementLedgerNote,
   type EntitlementLedgerPayload,
   type EntitlementLedgerResult,
   type EntitlementLedgerRevocation,
@@ -183,6 +185,18 @@ export interface GameServicesStore {
   findEntitlementRevocations?(input: {
     readonly ledgerEntryIds: readonly string[];
   }): Promise<readonly EntitlementRevocationTransaction[]>;
+  /**
+   * Keeps a ledger note (a store event that grants nothing), once per
+   * `noteId`: a replay answers `alreadyRecorded: true` and keeps the first.
+   * Optional: a store without it still answers the event, with a log only.
+   */
+  recordEntitlementNote?(
+    input: EntitlementLedgerNote,
+  ): Promise<{ readonly alreadyRecorded: boolean }>;
+  /** The notes about the given grants, oldest first. */
+  findEntitlementNotes?(input: {
+    readonly ledgerEntryIds: readonly string[];
+  }): Promise<readonly EntitlementLedgerNote[]>;
   recordLeaderboardScore(
     input: RecordLeaderboardScoreRequest,
     options?: { readonly recordedAt?: string },
@@ -231,6 +245,7 @@ export class InMemoryGameServicesStore implements GameServicesStore {
   private readonly revocationsByKey = new Map<string, EntitlementRevocationTransaction>();
   private readonly revocationsByGrant = new Map<string, EntitlementRevocationTransaction>();
   private readonly revocationsByEvidence = new Map<string, EntitlementRevocationTransaction>();
+  private readonly notesById = new Map<string, EntitlementLedgerNote>();
   private readonly leaderboardTransactionsByRun = new Map<string, LeaderboardScoreTransaction>();
   private readonly leaderboardTransactionsById = new Map<string, LeaderboardScoreTransaction>();
 
@@ -396,6 +411,29 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     return [...this.revocationsByGrant.values()]
       .filter((revocation) => wanted.has(revocation.revokesLedgerEntryId))
       .sort((left, right) => left.revokedAt.localeCompare(right.revokedAt));
+  }
+
+  async recordEntitlementNote(
+    input: EntitlementLedgerNote,
+  ): Promise<{ readonly alreadyRecorded: boolean }> {
+    const note = assertEntitlementLedgerNote(input);
+    if (this.notesById.has(note.noteId)) {
+      return { alreadyRecorded: true };
+    }
+    if (!this.entitlementTransactionsById.has(note.ledgerEntryId)) {
+      throw new Error('Entitlement note references an unknown grant.');
+    }
+    this.notesById.set(note.noteId, note);
+    return { alreadyRecorded: false };
+  }
+
+  async findEntitlementNotes(input: {
+    readonly ledgerEntryIds: readonly string[];
+  }): Promise<readonly EntitlementLedgerNote[]> {
+    const wanted = new Set(input.ledgerEntryIds);
+    return [...this.notesById.values()]
+      .filter((note) => wanted.has(note.ledgerEntryId))
+      .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
   }
 
   async recordLeaderboardScore(

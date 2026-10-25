@@ -12,6 +12,7 @@ import {
   listNotificationNotices,
   NotificationError,
   notificationBridgeMethods,
+  notificationShellRenderedAdvertisingTargets,
   notificationsProtocol,
   notificationsProtocolVersion,
   referenceNotificationProviders,
@@ -26,6 +27,9 @@ import {
 assert.equal(notificationsProtocolVersion, '2.0.0-draft.1');
 assert.equal(notificationsProtocol, 'mpgd.notifications.v2');
 assert.equal(notificationBridgeMethods.length, 9);
+// The targets whose pushes need the shell to render advertising (AR1).
+assert.deepEqual(notificationShellRenderedAdvertisingTargets, ['android']);
+assert.ok(Object.isFrozen(notificationShellRenderedAdvertisingTargets));
 
 const unsupported = createUnsupportedNotificationCapabilities();
 assert.notEqual(createUnsupportedNotificationCapabilities(), unsupported);
@@ -56,7 +60,8 @@ const topic = {
   copy: { ko: { title: '주말 이벤트', body: '주말 이벤트가 시작됐어요.' } },
 };
 const kr = { advertisingRules: 'kr', advertisingSender: { contact: '080-1234-5678' } };
-const gate = (consent, at = '2026-10-12T03:00:00Z', deployment = kr) =>
+// `null` leaves `endpointShowsActions` out (a default parameter would swallow `undefined`).
+const gate = (consent, at = '2026-10-12T03:00:00Z', deployment = kr, endpointShowsActions = true) =>
   evaluateNotificationDelivery({
     entry: referenceNotificationProviders.fcm,
     deployment,
@@ -64,6 +69,7 @@ const gate = (consent, at = '2026-10-12T03:00:00Z', deployment = kr) =>
     recipientResolved: true,
     consent,
     endpointPermission: 'granted',
+    ...(endpointShowsActions === null ? {} : { endpointShowsActions }),
     history: [],
     at,
     timeZone: 'Asia/Seoul',
@@ -77,6 +83,15 @@ const advertisingConsent = {
   textVersion: 'ad-consent-v1',
 };
 assert.deepEqual(gate([]), { status: 'suppressed', reason: 'advertising-consent-missing' });
+// Under the Korean rules the gate fails closed on a device endpoint not known to show the opt-out action.
+assert.deepEqual(gate([advertisingConsent], undefined, kr, null), {
+  status: 'suppressed',
+  reason: 'purpose-unsupported',
+});
+assert.deepEqual(gate([advertisingConsent], undefined, kr, false), {
+  status: 'suppressed',
+  reason: 'purpose-unsupported',
+});
 assert.deepEqual(gate([advertisingConsent]), {
   status: 'allowed',
   content: {

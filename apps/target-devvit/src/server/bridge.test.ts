@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   bridgeCommerceV2Methods,
+  bridgeNotificationsBackendMethods,
   bridgeNotificationsV2Methods,
   type BridgeRequest,
   type BridgeResponse,
@@ -376,6 +377,56 @@ test('commerce and notifications handlers each serve only their own methods', as
   }
   assert.deepEqual(commerceServed, [...bridgeCommerceV2Methods]);
   assert.deepEqual(notificationsServed, [...bridgeNotificationsV2Methods]);
+});
+
+test('notifications backend methods are served by the backend handler only, and fail closed without it', async () => {
+  for (const handler of [createHandler(new FakeDevvitRedis(), playerId), createHandler(new FakeDevvitRedis(), undefined)]) {
+    for (const method of bridgeNotificationsBackendMethods) {
+      const response = await handler(request(method, { expectedPlayer: playerId }));
+      assertError(response, 'NOTIFICATIONS_CONFIGURATION_REQUIRED');
+      if (response.ok === false) {
+        assert.equal(response.error.retryable, false);
+      }
+    }
+  }
+  const backendServed: string[] = [];
+  const providerServed: string[] = [];
+  const warnings: string[] = [];
+  const handler = createDevvitBridgeHandler({
+    redis: new FakeDevvitRedis(),
+    currentPlayerId: () => playerId,
+    currentDisplayName: async (id) => `u/${id}`,
+    notifications: {
+      async request(input: BridgeRequest): Promise<BridgeResponse> {
+        providerServed.push(input.method);
+        return { id: input.id, ok: true, data: {} };
+      },
+    },
+    notificationsBackend: {
+      async request(input: BridgeRequest): Promise<BridgeResponse> {
+        backendServed.push(input.method);
+        if (input.method === 'notifications.backend.listNotices') {
+          throw new Error('redis exploded');
+        }
+        return { id: input.id, ok: true, data: { served: input.method } };
+      },
+    },
+    warn: (message) => {
+      warnings.push(message);
+    },
+  });
+  for (const method of [...bridgeNotificationsV2Methods, ...bridgeNotificationsBackendMethods]) {
+    await handler(request(method, {}));
+  }
+  assert.deepEqual(providerServed, [...bridgeNotificationsV2Methods]);
+  assert.deepEqual(backendServed, [...bridgeNotificationsBackendMethods]);
+  const failed = await handler(request('notifications.backend.listNotices', {}));
+  assertError(failed, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  if (failed.ok === false) {
+    assert.equal(failed.error.retryable, true);
+    assert.doesNotMatch(failed.error.message, /exploded/u);
+  }
+  assert.equal(warnings.length, 2);
 });
 
 test('a notifications handler that throws answers a retryable error', async () => {

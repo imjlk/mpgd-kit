@@ -13,6 +13,7 @@ for (const exportName of [
   'devvitNotificationSession',
   'createDevvitServerNotificationProvider',
   'createDevvitNotificationsV2BridgeHandler',
+  'createDevvitNotificationsBackendBridgeHandler',
 ]) {
   if (typeof server[exportName] !== 'function') {
     throw new Error(`Missing @mpgd/adapter-devvit/server export: ${exportName}`);

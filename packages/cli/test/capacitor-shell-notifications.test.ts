@@ -1,21 +1,41 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  androidAdvertisingRendererEntries,
+  androidAdvertisingRendererMetaData,
+  androidAdvertisingRendererService,
+  androidAdvertisingRendererWarning,
   androidInexactAlarmPermission,
   androidManifestRemovesExactAlarm,
+  androidManifestRendersAdvertising,
+  androidMessagingPluginService,
+  applyAndroidManifestAdvertisingRenderer,
   applyAndroidManifestInexactAlarms,
   applyCapacitorShellStarter,
   planCapacitorShellStarter,
 } from '../src/capacitor-shell-starter.js';
 import {
+  applyAndroidManifestAdId,
+  applyAndroidManifestOrientation,
+} from '../src/native-shell-store-policy.js';
+import {
   capacitorGatewayRegistersNotifications,
   notificationsCapacitorSupportFiles,
   notificationsCapacitorTemplateSupportFiles,
   notificationsGameDependencies,
+  sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from '../src/notifications-starter.js';
 
@@ -152,6 +172,11 @@ try {
     assert.ok(
       plan.warnings.some((warning) => /notification settings screen is not added/u.test(warning)),
     );
+    // No Android project yet: nothing to warn about the renderer.
+    assert.equal(
+      plan.warnings.some((warning) => /advertising renderer/u.test(warning)),
+      false,
+    );
 
     applyCapacitorShellStarter(plan);
     for (const [gateway, platform] of [
@@ -245,6 +270,208 @@ try {
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /Existing shell @capacitor\/local-notifications is 8\.3\.1 but the game uses 8\.4\.0/u,
     );
+  }
+
+  // A game that keeps its own serverSession.ts (an earlier release's) gets no
+  // developmentServerSession.ts, which nothing in it would import, and a warning.
+  {
+    const root = createGame();
+    roots.push(root);
+    // It names the module in a comment only, which is not an import.
+    const ownSession =
+      "// the game's own session module; see developmentServerSession.ts\nexport {};\n";
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(root, 'src/platform/serverSession.ts'), ownSession);
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(plan.changedFiles.includes('src/platform/serverSession.ts'), false);
+    assert.equal(plan.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+    assert.ok(
+      plan.warnings.some((warning) => /predates development notification sessions/u.test(warning)),
+    );
+    applyCapacitorShellStarter(plan);
+    assert.equal(
+      readFileSync(path.join(root, 'src/platform/serverSession.ts'), 'utf8'),
+      ownSession,
+    );
+    assert.equal(existsSync(path.join(root, 'src/platform/developmentServerSession.ts')), false);
+  }
+
+  // A current serverSession.ts names the module, so a missing one is written back.
+  {
+    const root = createGame();
+    roots.push(root);
+    mkdirSync(path.join(root, 'src/platform'), { recursive: true });
+    writeFileSync(
+      path.join(root, 'src/platform/serverSession.ts'),
+      readTemplate('src/platform/serverSession.ts'),
+    );
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(plan.changedFiles.includes('src/platform/developmentServerSession.ts'), true);
+    assert.equal(
+      plan.warnings.some((warning) => /predates development notification sessions/u.test(warning)),
+      false,
+    );
+  }
+
+  // developmentServerSession.ts imports createDevelopmentServerSession: a game whose
+  // installed @mpgd/game-services provably lacks it is told to upgrade, not given a module
+  // that would not build. A game that keeps its own serverSession.ts gets no module to check.
+  {
+    const installGameServices = (root: string, exportsDevelopmentSession: boolean): void => {
+      const packageRoot = path.join(root, 'node_modules/@mpgd/game-services');
+      mkdirSync(path.join(packageRoot, 'dist'), { recursive: true });
+      writeFileSync(
+        path.join(packageRoot, 'package.json'),
+        JSON.stringify({
+          name: '@mpgd/game-services',
+          version: exportsDevelopmentSession ? '0.28.0' : '0.27.2',
+          exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
+        }),
+      );
+      writeFileSync(
+        path.join(packageRoot, 'dist/index.d.ts'),
+        exportsDevelopmentSession
+          ? "export * from './runtime.js';\nexport * from './development-session.js';\n"
+          : "export * from './runtime.js';\n",
+      );
+      writeFileSync(
+        path.join(packageRoot, 'dist/runtime.d.ts'),
+        'export declare function resolveGameServicesAuthorityMode(profile: string): string;\n',
+      );
+      if (exportsDevelopmentSession) {
+        writeFileSync(
+          path.join(packageRoot, 'dist/development-session.d.ts'),
+          'export declare function createDevelopmentServerSession(input: object): object;\n',
+        );
+      }
+    };
+    const older = createGame();
+    roots.push(older);
+    installGameServices(older, false);
+    assert.throws(
+      () => planCapacitorShellStarter(input(older, ['notifications'])),
+      /imports createDevelopmentServerSession from @mpgd\/game-services; the game's @mpgd\/game-services 0\.27\.2 does not export it\. Upgrade the game's kit packages \(mpgd kit upgrade\) first\./u,
+    );
+    const current = createGame();
+    roots.push(current);
+    installGameServices(current, true);
+    const plan = planCapacitorShellStarter(input(current, ['notifications']));
+    assert.ok(plan.changedFiles.includes('src/platform/developmentServerSession.ts'));
+    const ownSession = createGame();
+    roots.push(ownSession);
+    installGameServices(ownSession, false);
+    mkdirSync(path.join(ownSession, 'src/platform'), { recursive: true });
+    writeFileSync(path.join(ownSession, 'src/platform/serverSession.ts'), 'export {};\n');
+    const kept = planCapacitorShellStarter(input(ownSession, ['notifications']));
+    assert.equal(kept.changedFiles.includes('src/platform/developmentServerSession.ts'), false);
+    // The real package's layout: modules re-export further (client.d.ts from ./operations.js),
+    // which the check follows. The built dist with and without development-session.d.ts.
+    // Like the other CLI smokes that read package dists, it needs `pnpm build:packages` first;
+    // CI's prepared jobs extract the built dists before they run, so there it is required.
+    const realDist = path.join(kitRoot, 'packages/game-services/dist');
+    const realDistBuilt = existsSync(path.join(realDist, 'index.d.ts'));
+    if (!realDistBuilt) {
+      assert.ok(
+        process.env.CI !== 'true',
+        'packages/game-services/dist is missing in CI: the prepared job must extract the built dists.',
+      );
+      console.info(
+        'Skipping the built @mpgd/game-services layout check: run `pnpm build:packages` first to include it.',
+      );
+    }
+    for (const withDevelopmentSession of realDistBuilt ? [true, false] : []) {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, withDevelopmentSession);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      for (const file of readdirSync(realDist)) {
+        if (file.endsWith('.d.ts') && (withDevelopmentSession || file !== 'development-session.d.ts')) {
+          const content = readFileSync(path.join(realDist, file), 'utf8');
+          writeFileSync(
+            path.join(dist, file),
+            file === 'index.d.ts' && !withDevelopmentSession
+              ? content.replace(/^export \* from '\.\/development-session\.js';\n/mu, '')
+              : content,
+          );
+        }
+      }
+      if (withDevelopmentSession) {
+        assert.ok(
+          planCapacitorShellStarter(input(root, ['notifications'])).changedFiles
+            .includes('src/platform/developmentServerSession.ts'),
+        );
+      } else {
+        assert.throws(
+          () => planCapacitorShellStarter(input(root, ['notifications'])),
+          /does not export it/u,
+        );
+      }
+    }
+    // A specifier that names the declaration file itself is followed to it: refused when that
+    // file lacks the export (an unfollowed link would pass instead).
+    {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, false);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      writeFileSync(path.join(dist, 'index.d.ts'), "export * from './session.d.ts';\n");
+      writeFileSync(path.join(dist, 'session.d.ts'), 'export declare function other(): void;\n');
+      assert.throws(
+        () => planCapacitorShellStarter(input(root, ['notifications'])),
+        /does not export it/u,
+      );
+    }
+    // Declarations the check cannot follow are not proof of absence: the build decides.
+    for (const [index, files] of [
+      // A nested barrel that leads to a module the check cannot read.
+      { 'index.d.ts': "export * from './services/index.js';\n", 'services/index.d.ts': "export * from './development-session.js';\n" },
+      // A re-export from another package.
+      { 'index.d.ts': "export * from './runtime.js';\nexport * from '@mpgd/game-services-core';\n", 'runtime.d.ts': 'export {};\n' },
+      // A re-exported module that is not there.
+      { 'index.d.ts': "export * from './gone.js';\n" },
+      // Compact re-exports, followed to the module that names it.
+      { 'index.d.ts': "export*from'./runtime.js';export{x}from'./session.mjs';\n", 'session.d.mts': 'export declare function createDevelopmentServerSession(): void;\n' },
+      // A type-only star re-export from another package.
+      { 'index.d.ts': "export * from './runtime.js';\nexport type * from '@mpgd/game-services-core';\n" },
+    ].entries()) {
+      const root = createGame();
+      roots.push(root);
+      installGameServices(root, false);
+      const dist = path.join(root, 'node_modules/@mpgd/game-services/dist');
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(dist, file)), { recursive: true });
+        writeFileSync(path.join(dist, file), content);
+      }
+      const unfollowed = planCapacitorShellStarter(input(root, ['notifications']));
+      assert.ok(
+        unfollowed.changedFiles.includes('src/platform/developmentServerSession.ts'),
+        String(index),
+      );
+    }
+  }
+
+  // What counts as importing a module: its specifier in a string outside comments.
+  {
+    const name = 'developmentServerSession';
+    for (const source of [
+      "import { a } from './developmentServerSession';",
+      'import {\n  a,\n  b,\n} from "./developmentServerSession.js";',
+      "import './developmentServerSession';",
+      "const m = await import('./developmentServerSession');",
+      "export * from './developmentServerSession.ts';",
+      "import { a } /* ; */ from './developmentServerSession';",
+    ]) {
+      assert.equal(sourceReferencesRelativeModule(source, name), true, source);
+    }
+    for (const source of [
+      '// see developmentServerSession.ts',
+      "// import { a } from './developmentServerSession';",
+      "/*\nimport { a } from './developmentServerSession';\n*/",
+      "import { a } from './developmentServerSession2';",
+      "import { a } from '../developmentServerSession';",
+    ]) {
+      assert.equal(sourceReferencesRelativeModule(source, name), false, source);
+    }
   }
 
   // With the store plugins on an unwired legacy gateway, the gateway gets the
@@ -473,6 +700,16 @@ try {
       () => planCapacitorShellStarter(input(root, ['notifications'])),
       /has no openCapacitorNotificationSettings/u,
     );
+    // One that has the opener but predates the advertising renderer read (AR1).
+    writeFileSync(
+      types,
+      'export declare function loadCapacitorNotificationSdks(): void;\n'
+        + 'export declare function openCapacitorNotificationSettings(): Promise<void>;\n',
+    );
+    assert.throws(
+      () => planCapacitorShellStarter(input(root, ['notifications'])),
+      /has no readCapacitorAdvertisingPushRenderer/u,
+    );
     // A subpath that re-exports the opener with `export *` still passes.
     writeFileSync(types, "export * from './notifications-settings.js';\n");
     writeFileSync(
@@ -647,6 +884,162 @@ try {
       ),
     ),
   );
+}
+
+// The Android manifest declares the kit's advertising renderer as the one
+// Firebase messaging service and removes the messaging plugin's (AR1).
+{
+  const plain = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '    <application android:label="Game">',
+    '        <activity android:name=".MainActivity" />',
+    '    </application>',
+    '</manifest>',
+    '',
+  ].join('\n');
+  assert.equal(androidManifestRendersAdvertising(plain), false);
+  const rendered = applyAndroidManifestAdvertisingRenderer(plain);
+  assert.ok(androidManifestRendersAdvertising(rendered));
+  assert.match(
+    rendered,
+    /<manifest xmlns:tools="http:\/\/schemas\.android\.com\/tools" xmlns:android=/u,
+  );
+  for (const line of androidAdvertisingRendererEntries) {
+    assert.ok(rendered.includes(`        ${line}\n`), line);
+  }
+  // Inside <application>, after what it had.
+  assert.ok(
+    rendered.indexOf('.MainActivity') < rendered.indexOf(androidAdvertisingRendererService),
+  );
+  assert.ok(rendered.indexOf(androidMessagingPluginService) < rendered.indexOf('</application>'));
+  assert.equal(applyAndroidManifestAdvertisingRenderer(rendered), rendered, 'idempotent');
+  // A game-owned manifest without it gets every step it needs as a warning.
+  const warned = androidAdvertisingRendererWarning(plain);
+  assert.ok(warned);
+  for (const step of [
+    androidAdvertisingRendererService,
+    androidMessagingPluginService,
+    'readCapacitorAdvertisingPushRenderer',
+    'shellRendersAdvertising',
+  ]) {
+    assert.ok(warned.includes(step), step);
+  }
+  assert.equal(androidAdvertisingRendererWarning(rendered), undefined);
+  // The names the Android library reads.
+  assert.equal(androidAdvertisingRendererService, 'dev.mpgd.capacitor.AdvertisingMessagingService');
+  assert.equal(androidAdvertisingRendererMetaData, 'dev.mpgd.notifications.advertising_renderer');
+  const library = readFileSync(
+    path.join(
+      kitRoot,
+      'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/AdvertisingPushRenderer.java',
+    ),
+    'utf8',
+  );
+  assert.ok(library.includes(`"${androidAdvertisingRendererMetaData}"`));
+  assert.ok(existsSync(path.join(
+    kitRoot,
+    'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/AdvertisingMessagingService.java',
+  )));
+  // Each part is needed: the plugin's service left in, the meta-data, or a comment.
+  assert.equal(
+    androidManifestRendersAdvertising(
+      rendered.replace(/\s*<service[^>]*tools:node="remove" \/>/u, ''),
+    ),
+    false,
+  );
+  assert.equal(
+    androidManifestRendersAdvertising(rendered.replace(/\s*<meta-data[^>]*\/>/u, '')),
+    false,
+  );
+  assert.equal(
+    androidManifestRendersAdvertising(
+      plain.replace(
+        '</application>',
+        `<!-- ${androidAdvertisingRendererEntries.join('')} -->\n    </application>`,
+      ),
+    ),
+    false,
+  );
+  // A part already there is not added again; an incomplete renderer is left alone.
+  const removalOnly = plain.replace(
+    '</application>',
+    `    <service android:name='${androidMessagingPluginService}' tools:node='remove' />\n    </application>`,
+  ).replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ');
+  const completed = applyAndroidManifestAdvertisingRenderer(removalOnly);
+  assert.ok(androidManifestRendersAdvertising(completed));
+  assert.equal(completed.split(androidMessagingPluginService).length - 1, 1);
+  const rendererOnly = rendered.replace(/\s*<service[^>]*tools:node="remove" \/>/u, '');
+  const restored = applyAndroidManifestAdvertisingRenderer(rendererOnly);
+  assert.ok(androidManifestRendersAdvertising(restored));
+  assert.equal(restored.split(androidAdvertisingRendererService).length - 1, 1);
+  const incomplete = rendered.replace(/\s*<meta-data[^>]*\/>/u, '');
+  assert.equal(applyAndroidManifestAdvertisingRenderer(incomplete), incomplete);
+  // An incomplete renderer without the removal gets only the removal.
+  const incompleteAlone = incomplete.replace(/\s*<service[^>]*tools:node="remove" \/>/u, '');
+  const removalAdded = applyAndroidManifestAdvertisingRenderer(incompleteAlone);
+  assert.equal(removalAdded.split(androidAdvertisingRendererService).length - 1, 1);
+  assert.equal(removalAdded.split(androidMessagingPluginService).length - 1, 1);
+  assert.ok(androidAdvertisingRendererWarning(removalAdded));
+  // Mismatched quotes do not count as the attribute.
+  assert.equal(
+    androidManifestRendersAdvertising(
+      completed.replace(
+        `android:name='${androidMessagingPluginService}'`,
+        `android:name="${androidMessagingPluginService}'`,
+      ),
+    ),
+    false,
+  );
+  // A self-closed renderer is not completed by another service's body.
+  const selfClosedRenderer = plain.replace(
+    '</application>',
+    [
+      `    <service android:name="${androidAdvertisingRendererService}" />`,
+      '        <service android:name=".Other">',
+      '            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>',
+      `            <meta-data android:name="${androidAdvertisingRendererMetaData}" android:value="true" />`,
+      '        </service>',
+      `        <service android:name="${androidMessagingPluginService}" tools:node="remove" />`,
+      '    </application>',
+    ].join('\n'),
+  );
+  assert.equal(androidManifestRendersAdvertising(selfClosedRenderer), false);
+  // CRLF is kept, and a manifest without an <application> body is left alone.
+  const crlf = applyAndroidManifestAdvertisingRenderer(plain.replaceAll('\n', '\r\n'));
+  assert.ok(androidManifestRendersAdvertising(crlf));
+  assert.equal(crlf.replaceAll('\r\n', '').includes('\n'), false);
+  const bare = '<manifest xmlns:android="a">\n    <application android:label="Game" />\n</manifest>\n';
+  assert.equal(applyAndroidManifestAdvertisingRenderer(bare), bare);
+}
+
+// AR1's renderer and L1's store policy edit the same newly generated
+// manifest, in that order: both survive, the tools namespace is bound once,
+// and applying both again changes nothing.
+{
+  const template = readFileSync(
+    path.join(kitRoot, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  )
+    .replace(/\s*<uses-permission[^>]*SCHEDULE_EXACT_ALARM[^>]*\/>/u, '')
+    // L1 must write its AD_ID line itself, after AR1's entries.
+    .replace(/\s*<uses-permission[^>]*permission\.AD_ID[^>]*\/>/u, '');
+  const once = (manifest: string): string =>
+    applyAndroidManifestAdId(
+      applyAndroidManifestOrientation(
+        applyAndroidManifestAdvertisingRenderer(applyAndroidManifestInexactAlarms(manifest)),
+        'landscape',
+      ),
+      false,
+    );
+  const final = once(template);
+  assert.ok(androidManifestRendersAdvertising(final));
+  assert.ok(androidManifestRemovesExactAlarm(final));
+  assert.equal(final.match(/xmlns:tools=/gu)?.length, 1);
+  assert.match(final, /android:screenOrientation="sensorLandscape"/u);
+  assert.equal(final.match(/permission\.AD_ID/gu)?.length, 1);
+  assert.match(final, /com\.google\.android\.gms\.permission\.AD_ID"[^>]*tools:node="remove"/u);
+  assert.equal(once(final), final, 'idempotent');
 }
 
 console.info('Capacitor shell notifications checks passed.');

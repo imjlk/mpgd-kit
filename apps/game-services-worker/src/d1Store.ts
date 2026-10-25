@@ -1,5 +1,6 @@
 import {
   assertEntitlementLedgerGrant,
+  assertEntitlementLedgerNote,
   assertEntitlementLedgerResult,
   assertEntitlementLedgerRevocation,
   assertEntitlementRevocationTransaction,
@@ -11,6 +12,7 @@ import {
   EvidenceAlreadyProcessedError,
   RevocationKeyConflictError,
   type EntitlementLedgerGrant,
+  type EntitlementLedgerNote,
   type EntitlementLedgerResult,
   type EntitlementLedgerRevocation,
   type EntitlementPlatformEvidenceIdentity,
@@ -21,6 +23,16 @@ import {
   type RecordLeaderboardScoreRequest,
   type RecordLeaderboardScoreResponse,
 } from '@mpgd/game-services';
+
+type NoteRow = {
+  note_id: string;
+  kind: EntitlementLedgerNote['kind'];
+  player_id: string;
+  ledger_entry_id: string;
+  revocation_ledger_entry_id: string | null;
+  recorded_at: string;
+  payload_json: string;
+};
 
 type EntitlementRow = {
   ledger_entry_id: string;
@@ -274,6 +286,56 @@ class D1GameServicesStore implements GameServicesStore {
     return revocations.sort((left, right) =>
       left.revokedAt.localeCompare(right.revokedAt)
       || left.ledgerEntryId.localeCompare(right.ledgerEntryId));
+  }
+
+  /** Migration 0009_store_server.sql: entitlement_notes. */
+  async recordEntitlementNote(
+    input: EntitlementLedgerNote,
+  ): Promise<{ readonly alreadyRecorded: boolean }> {
+    const note = assertEntitlementLedgerNote(input);
+    const result = await this.db
+      .prepare(
+        `INSERT OR IGNORE INTO entitlement_notes (
+          note_id, kind, player_id, ledger_entry_id, revocation_ledger_entry_id,
+          recorded_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        note.noteId,
+        note.kind,
+        note.playerId,
+        note.ledgerEntryId,
+        note.revocationLedgerEntryId ?? null,
+        note.recordedAt,
+        JSON.stringify(note.payload),
+      )
+      .run();
+    return { alreadyRecorded: result.meta.changes === 0 };
+  }
+
+  async findEntitlementNotes(input: {
+    readonly ledgerEntryIds: readonly string[];
+  }): Promise<readonly EntitlementLedgerNote[]> {
+    const notes: EntitlementLedgerNote[] = [];
+    for (const chunk of chunkLedgerEntryIds([...new Set(input.ledgerEntryIds)])) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const { results } = await this.db
+        .prepare(`SELECT * FROM entitlement_notes WHERE ledger_entry_id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<NoteRow>();
+      notes.push(...results.map((row) => assertEntitlementLedgerNote({
+        noteId: row.note_id,
+        kind: row.kind,
+        playerId: row.player_id,
+        ledgerEntryId: row.ledger_entry_id,
+        ...(row.revocation_ledger_entry_id === null
+          ? {}
+          : { revocationLedgerEntryId: row.revocation_ledger_entry_id }),
+        recordedAt: row.recorded_at,
+        payload: JSON.parse(row.payload_json) as EntitlementLedgerNote['payload'],
+      })));
+    }
+    return notes.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
   }
 
   async recordLeaderboardScore(

@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 
 import {
   assertNativeReleaseIdentity,
+  resolveNativeVersionSource,
   runNativeSyncWithIdentityCheck,
+  stampAndroidGradleVersions,
+  stampIosProjectVersions,
+  stampNativeReleaseVersions,
 } from './native-release-identity';
 
 const shellRoot = mkdtempSync(join(os.tmpdir(), 'mpgd-native-release-'));
@@ -951,8 +963,247 @@ try {
       }),
     /Native release version mismatch/u,
   );
+  verifyVersionStamping(shellRoot);
 } finally {
   rmSync(shellRoot, { force: true, recursive: true });
+}
+
+/**
+ * Stamping: the source keeps its committed numbers (42 / 1.4.0), the reserved
+ * ones (43 / 1.5.0) are written into a copy, the copy then passes the strict
+ * check, and the source still fails it.
+ */
+function verifyVersionStamping(root: string): void {
+  writeShellFiles(root);
+  const androidReserved = {
+    APP_VERSION: '1.5.0',
+    MPGD_TARGET_VERSION_CODE: '43',
+    MPGD_TARGET_VERSION_NAME: '1.5.0',
+  };
+  const iosReserved = {
+    APP_VERSION: '1.5.0',
+    MPGD_TARGET_BUILD_NUMBER: '43',
+    MPGD_TARGET_MARKETING_VERSION: '1.5.0',
+  };
+  assert.equal(resolveNativeVersionSource({}), 'source');
+  assert.equal(resolveNativeVersionSource({ MPGD_NATIVE_VERSION_STAMP: '0' }), 'source');
+  assert.equal(resolveNativeVersionSource({ MPGD_NATIVE_VERSION_STAMP: '1' }), 'stamped');
+  assert.throws(
+    () => resolveNativeVersionSource({ MPGD_NATIVE_VERSION_STAMP: 'yes' }),
+    /must be 1 or 0, received yes/u,
+  );
+  for (const [platform, environment, metadata] of [
+    ['android', androidReserved, { packageId: 'dev.example.game' }],
+    ['ios', iosReserved, { bundleId: 'dev.example.game' }],
+  ] as const) {
+    const input = { environment, metadata, platform, required: false, shellApp: root };
+    assert.throws(() => assertNativeReleaseIdentity(input), /identity mismatch/u);
+    assert.doesNotThrow(() => assertNativeReleaseIdentity({ ...input, versionSource: 'stamped' }));
+    assert.throws(
+      () =>
+        assertNativeReleaseIdentity({
+          ...input,
+          metadata: platform === 'android'
+            ? { packageId: 'dev.other.game' }
+            : { bundleId: 'dev.other.game' },
+          versionSource: 'stamped',
+        }),
+      /identity mismatch/u,
+    );
+    assert.throws(
+      () =>
+        assertNativeReleaseIdentity({
+          ...input,
+          environment: {},
+          versionSource: 'stamped',
+        }),
+      /requires the reserved native version numbers/u,
+    );
+    const stage = mkdtempSync(join(os.tmpdir(), 'mpgd-native-stamp-'));
+    try {
+      cpSync(root, stage, { recursive: true });
+      stampNativeReleaseVersions({ platform, stagedShellApp: stage, environment });
+      assert.doesNotThrow(() => assertNativeReleaseIdentity({ ...input, shellApp: stage }));
+      assert.throws(() => assertNativeReleaseIdentity(input), /identity mismatch/u);
+    } finally {
+      rmSync(stage, { force: true, recursive: true });
+    }
+  }
+
+  const gradle = stampAndroidGradleVersions(
+    [
+      'android {',
+      '  defaultConfig {',
+      '    applicationId = "dev.example.game"',
+      '    versionCode = 1',
+      "    versionName = '1.0'",
+      '  }',
+      '}',
+    ].join('\n'),
+    { versionCode: '43', versionName: '1.5.0' },
+    'build.gradle.kts',
+  );
+  assert.match(gradle, /versionCode = 43\n/u);
+  assert.match(gradle, /versionName = '1\.5\.0'\n/u);
+  const commented = stampAndroidGradleVersions(
+    [
+      'defaultConfig {',
+      '  applicationId "dev.example.game"',
+      '  // versionCode 9',
+      '  versionCode 1 // bumped by the release tool',
+      '  /* versionName "9.9.9" */',
+      '  versionName "1.0" /* display */',
+      '}',
+    ].join('\r\n'),
+    { versionCode: '43', versionName: '1.5.0' },
+    'build.gradle',
+  );
+  assert.match(commented, /\/\/ versionCode 9\r\n/u);
+  const urls = stampAndroidGradleVersions(
+    [
+      'repositories { maven { url "https://example.invalid/m2" } }',
+      "def note = '/* not a comment'",
+      'defaultConfig {',
+      '  versionCode 1',
+      "  versionName '1.0'",
+      '}',
+      'versionName "1.0\'',
+    ].join('\n'),
+    { versionCode: '43', versionName: '1.5.0' },
+    'build.gradle',
+  );
+  assert.match(urls, /url "https:\/\/example\.invalid\/m2"/u);
+  assert.match(urls, /versionCode 43\n/u);
+  assert.match(urls, /versionName '1\.5\.0'\n/u);
+  // A mismatched quote pair is not a literal the tool rewrites.
+  assert.match(urls, /versionName "1\.0'$/u);
+  assert.match(commented, /versionCode 43 \/\/ bumped/u);
+  assert.match(commented, /\/\* versionName "9\.9\.9" \*\//u);
+  assert.match(commented, /versionName "1\.5\.0" \/\* display/u);
+  assert.throws(
+    () =>
+      stampAndroidGradleVersions(
+        'defaultConfig { applicationId "dev.example.game"\n// versionCode 1\nversionName "1.0"\n}',
+        { versionCode: '43', versionName: '1.5.0' },
+        'build.gradle',
+      ),
+    /no literal versionCode and versionName/u,
+  );
+  assert.throws(
+    () =>
+      stampAndroidGradleVersions(
+        'defaultConfig { applicationId "dev.example.game" }',
+        { versionCode: '43', versionName: '1.5.0' },
+        'build.gradle',
+      ),
+    /no literal versionCode and versionName/u,
+  );
+
+  // A target that inherits its numbers from the project level gets its own
+  // Release settings, which take precedence over the project and xcconfig.
+  writeIosInheritedReleaseSettings(root);
+  const inherited = readFileSync(join(root, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8');
+  const stampedInherited = stampIosProjectVersions(
+    inherited,
+    { marketingVersion: '1.5.0', buildNumber: '43' },
+    'project.pbxproj',
+  );
+  assert.match(stampedInherited, /003 \/\* Release \*\/ = \{[^}]*MARKETING_VERSION = 1\.5\.0;/u);
+  assert.match(stampedInherited, /003 \/\* Release \*\/ = \{[^}]*CURRENT_PROJECT_VERSION = 43;/u);
+  // The project-level Release configuration stays as committed.
+  assert.match(stampedInherited, /006 \/\* Release \*\/ = \{[^}]*CURRENT_PROJECT_VERSION = 42;/u);
+  const withoutTargetVersions = inherited
+    .replace(/\n\s*MARKETING_VERSION = "\$\(inherited\)";/u, '')
+    .replace(/\n\s*CURRENT_PROJECT_VERSION = "\$\(inherited\)";/u, '');
+  const added = stampIosProjectVersions(
+    withoutTargetVersions,
+    { marketingVersion: '1.5.0', buildNumber: '43' },
+    'project.pbxproj',
+  );
+  assert.match(added, /003 \/\* Release \*\/ = \{[^}]*CURRENT_PROJECT_VERSION = 43;/u);
+  assert.match(added, /003 \/\* Release \*\/ = \{[^}]*MARKETING_VERSION = 1\.5\.0;/u);
+  const quoted = stampIosProjectVersions(
+    inherited
+      .replace('MARKETING_VERSION = "$(inherited)";', 'MARKETING_VERSION = "1.0"; /* x; */')
+      .replace(
+        'CURRENT_PROJECT_VERSION = "$(inherited)";',
+        '/* CURRENT_PROJECT_VERSION = 9; */',
+      ),
+    { marketingVersion: '1.5.0', buildNumber: '43' },
+    'project.pbxproj',
+  );
+  assert.match(quoted, /MARKETING_VERSION = 1\.5\.0; \/\* x; \*\//u);
+  assert.match(quoted, /\/\* CURRENT_PROJECT_VERSION = 9; \*\//u);
+  assert.match(quoted, /003 \/\* Release \*\/ = \{[^}]*\n\s*CURRENT_PROJECT_VERSION = 43;/u);
+  // In stamped mode a project that defines no numbers at either level passes
+  // the source check: the stamp adds them to the App target.
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
+    withoutTargetVersions
+      .replace(/\n\s*MARKETING_VERSION = 1\.4\.0;/u, '')
+      .replace(/\n\s*CURRENT_PROJECT_VERSION = 42;/u, ''),
+  );
+  const iosStampInput = {
+    environment: iosReserved,
+    metadata: { bundleId: 'dev.example.game' },
+    platform: 'ios' as const,
+    required: false,
+    shellApp: root,
+  };
+  assert.throws(() => assertNativeReleaseIdentity(iosStampInput), /could not find/u);
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({ ...iosStampInput, versionSource: 'stamped' }),
+  );
+  const bare = mkdtempSync(join(os.tmpdir(), 'mpgd-native-stamp-'));
+  try {
+    cpSync(root, bare, { recursive: true });
+    stampNativeReleaseVersions({ platform: 'ios', stagedShellApp: bare, environment: iosReserved });
+    assert.doesNotThrow(() => assertNativeReleaseIdentity({ ...iosStampInput, shellApp: bare }));
+  } finally {
+    rmSync(bare, { force: true, recursive: true });
+  }
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
+    inherited.replace(
+      'MARKETING_VERSION = "$(inherited)";',
+      'MARKETING_VERSION = "$(inherited)";\n    "MARKETING_VERSION[sdk=iphoneos*]" = 2.0.0;',
+    ),
+  );
+  assert.throws(
+    () => assertNativeReleaseIdentity({ ...iosStampInput, versionSource: 'stamped' }),
+    /does not support conditional MARKETING_VERSION/u,
+  );
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
+    inherited.replace(
+      'MARKETING_VERSION = 1.4.0;',
+      'MARKETING_VERSION = 1.4.0;\n    "MARKETING_VERSION[sdk=iphoneos*]" = 2.0.0;',
+    ),
+  );
+  assert.throws(
+    () => assertNativeReleaseIdentity({ ...iosStampInput, versionSource: 'stamped' }),
+    /does not support conditional MARKETING_VERSION/u,
+  );
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
+    inherited.replace(
+      'MARKETING_VERSION = "$(inherited)";',
+      'MARKETING_VERSION = 1.0;\n    MARKETING_VERSION = 1.1;',
+    ),
+  );
+  assert.throws(
+    () => assertNativeReleaseIdentity({ ...iosStampInput, versionSource: 'stamped' }),
+    /ambiguous App Release MARKETING_VERSION/u,
+  );
+  writeShellFiles(root);
+  // Debug and other targets keep their own numbers.
+  const stampedApp = stampIosProjectVersions(
+    readFileSync(join(root, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8'),
+    { marketingVersion: '1.5.0', buildNumber: '43' },
+    'project.pbxproj',
+  );
+  assert.match(stampedApp, /MARKETING_VERSION = 1\.4\.0-debug;/u);
+  assert.match(stampedApp, /CURRENT_PROJECT_VERSION = 99;/u);
 }
 
 function writeShellFiles(root: string): void {

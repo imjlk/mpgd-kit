@@ -25,7 +25,28 @@ settings page. It answers `{ opened }` as soon as the screen is launched (the
 provider waits for the player to come back), with `opened: false` when the
 system could not open it.
 
-Native CI exercises the shipped storage helpers and the settings screen
+On Android the plugin also renders advertising pushes with the opt-out action
+(notifications v2 RFC, "Capacitor"), because an Android FCM notification
+message cannot carry actions. `dev.mpgd.capacitor.AdvertisingMessagingService`
+is a Firebase messaging service the shell declares in place of the one
+`@capacitor-firebase/messaging` declares (`tools:node="remove"` on
+`io.capawesome.capacitorjs.plugins.firebase.messaging.MessagingService`),
+with the meta-data `dev.mpgd.notifications.advertising_renderer` set to
+`true`. It posts the data messages the backend marks `mpgd.render:
+advertising` on their channel with the "수신거부" action, drops one that
+arrives after its expiry, leaves one that arrives in the foreground to the
+plugin, and hands every other message and every new token to the plugin.
+Both taps open the app through the plugin's notification-open path.
+`getAdvertisingPushRenderer()` answers `{ installed }`: whether the resolved
+messaging service declares the meta-data (pass
+`readCapacitorAdvertisingPushRenderer` from
+`@mpgd/adapter-capacitor/notifications` as the provider's
+`advertisingRenderer`). iOS rejects it as unimplemented. The library compiles
+against `com.google.firebase:firebase-messaging` without shipping it, and its
+consumer ProGuard rules keep R8 quiet in a shell without Firebase.
+
+Native CI exercises the shipped storage helpers, the advertising push reading,
+and the settings screen
 choice with JUnit on Android and small Swift conformance executables on iOS.
 The TypeScript storage smoke covers the JavaScript bridge boundary separately.
 

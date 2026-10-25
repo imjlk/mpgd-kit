@@ -10,6 +10,12 @@ Devvit 0.15.0 is the tested baseline. Its exact first-party packages have a docu
 
 Reddit Devvit Web wrapper for the Phaser game target.
 
+Custom wrappers may enable `permissions.realtime` for multiplayer or live updates.
+The target artifact smoke accepts `true`, `false`, or an omitted field, matching
+the [Devvit configuration contract](https://developers.reddit.com/docs/capabilities/devvit-web/devvit_web_configuration).
+Other types are rejected. The generated wrapper keeps its disabled default;
+this capability does not enable payments or relax their separate readiness checks.
+
 The root `pnpm build:devvit` command delegates the configured game client and
 Devvit server to the official `@devvit/start/vite` plugin. The plugin emits the
 client into `dist/client` and the CommonJS server bundle into

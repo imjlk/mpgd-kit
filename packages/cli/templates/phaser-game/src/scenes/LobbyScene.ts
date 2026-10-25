@@ -1,6 +1,11 @@
 import Phaser from 'phaser';
 
 import { t } from '../i18n/messages';
+import {
+  createStarterRestorePurchases,
+  restoreOutcomeText,
+  type StarterRestoreOutcome,
+} from '../platform/restorePurchases';
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
 
 export class LobbyScene extends Phaser.Scene {
@@ -92,7 +97,62 @@ export class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    this.addRestorePurchasesButton(context);
+
     this.input.once('pointerdown', () => this.scene.start('PlayScene'));
     this.input.keyboard?.once('keydown-ENTER', () => this.scene.start('PlayScene'));
+  }
+
+  /**
+   * Restore Purchases, shown where the target sells through a store. App
+   * Review expects it while the catalog sells a non-consumable (REMOVE_ADS).
+   * Its tap stops propagation so it does not also start the game.
+   */
+  private addRestorePurchasesButton(context: StarterContext): void {
+    const restore = createStarterRestorePurchases({
+      gateway: context.platform,
+      ...(context.gameServices.monetizationRecovery === undefined
+        ? {}
+        : { monetizationRecovery: context.gameServices.monetizationRecovery }),
+    });
+    if (!restore.available) {
+      return;
+    }
+    const locale = context.locale;
+    const status = this.add
+      .text(480, 500, '', {
+        color: '#d6dee8',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '16px',
+      })
+      .setOrigin(0.5);
+    this.add
+      .text(480, 456, t(locale, 'restorePurchases'), {
+        color: '#5eead4',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '20px',
+      })
+      .setOrigin(0.5)
+      .setPadding(16, 10, 16, 10)
+      .setInteractive({ useHandCursor: true })
+      .on(
+        'pointerdown',
+        (
+          _pointer: Phaser.Input.Pointer,
+          _x: number,
+          _y: number,
+          event: Phaser.Types.Input.EventData,
+        ) => {
+          event.stopPropagation();
+          status.setText(t(locale, 'restoreWorking'));
+          void restore.restore()
+            .catch((): StarterRestoreOutcome => ({ outcome: 'failed' }))
+            .then((result) => {
+              if (status.active) {
+                status.setText(restoreOutcomeText(locale, result));
+              }
+            });
+        },
+      );
   }
 }

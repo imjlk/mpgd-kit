@@ -17,6 +17,9 @@ android {
     defaultConfig {
         minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
         targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+        // AdvertisingMessagingService references Firebase Messaging, which
+        // only a shell with @capacitor-firebase/messaging has.
+        consumerProguardFiles 'consumer-rules.pro'
     }
 }
 
@@ -29,5 +32,10 @@ dependencies {
     implementation project(':capacitor-android')
     // Plugin.getActivity() returns an AppCompatActivity; the app provides it.
     compileOnly 'androidx.appcompat:appcompat:1.7.1'
+    // AdvertisingMessagingService extends FirebaseMessagingService. A shell
+    // that declares it has Firebase Messaging through
+    // @capacitor-firebase/messaging (25.0.1 by default); no other shell
+    // loads the class, so the library does not ship the dependency.
+    compileOnly 'com.google.firebase:firebase-messaging:25.0.1'
     testImplementation 'junit:junit:4.13.2'
 }

@@ -53,12 +53,23 @@ export const capacitorAdvertisingActionTypeId = 'mpgd-advertising';
 /**
  * Keys of the push data the provider reads. A send carries the topic and the
  * topic's root-relative route in them; every other string entry reaches the
- * game as the open's untrusted `data`.
+ * game as the open's untrusted `data`, except the transport's keys and the
+ * Android advertising renderer's `mpgd.` keys. `action` is the renderer's
+ * mark on an open from its opt-out action, which the messaging plugin
+ * reports as a `tap` on Android.
  */
 export const capacitorNotificationDataKeys = Object.freeze({
   topic: 'topic',
   route: 'route',
+  action: 'mpgd.action',
 } as const);
+
+/**
+ * How long a registration waits for the Android advertising renderer read;
+ * a read that takes longer counts as no renderer, so registrations never
+ * stall on it.
+ */
+export const capacitorAdvertisingRendererTimeoutMs = 5_000;
 
 /** iOS keeps at most 64 pending local notifications per app. */
 export const capacitorIosMaxPendingLocalNotifications = 64;
@@ -105,6 +116,20 @@ export interface CreateCapacitorNotificationProviderInput {
   readonly channels?: Readonly<Record<string, CapacitorNotificationChannelSettings>>;
   /** The title of the advertising opt-out action; '수신거부' when absent. */
   readonly advertisingOptOutTitle?: string;
+  /**
+   * Android: whether the shell renders advertising pushes itself, with the
+   * opt-out action (`readCapacitorAdvertisingPushRenderer` over
+   * `@mpgd/capacitor-game-services`). An Android FCM notification message
+   * cannot carry actions, so the backend sends advertising to this
+   * installation only when its registration says `rendersAdvertising`, which
+   * the provider sets when this answers true. It is read once, when the
+   * provider is created, and only when the catalog maps an advertising
+   * topic to Android. A failure, or no answer within
+   * `capacitorAdvertisingRendererTimeoutMs`, reads as false and is reported;
+   * a shell whose plugin lacks the method (`UNIMPLEMENTED`) is not.
+   * Ignored on iOS, which shows the opt-out category's action itself.
+   */
+  readonly advertisingRenderer?: () => Promise<boolean>;
   /**
    * Opens the OS notification settings for this app. Neither plugin can, so
    * the shell supplies it (for example a small native method). Without it
@@ -154,7 +179,7 @@ const extraKeys = Object.freeze({
 } as const);
 
 /** Push data keys that are not the game's: the provider's own and the transport's. */
-const reservedDataKey = /^(?:topic|route|from|collapse_key|aps|fcm_options)$|^(?:google|gcm)\./u;
+const reservedDataKey = /^(?:topic|route|from|collapse_key|aps|fcm_options)$|^(?:google|gcm|mpgd)\./u;
 const eventBufferLimit = 64;
 const maxNativeId = 0x7f_ff_ff_ff;
 
@@ -267,6 +292,40 @@ export function createCapacitorNotificationProvider(
       // Reporting must not break the native listener that failed.
     }
   };
+
+  // Android advertising rendering: read once, before any registration
+  // names it. Only an Android catalog with an advertising topic asks.
+  let rendersAdvertising = false;
+  const rendererAsked = platform === 'android'
+    && push !== undefined
+    && input.advertisingRenderer !== undefined
+    && mappedTopics.some((topic) => topic.purpose === 'advertising');
+  const rendererRead: Promise<void> = rendererAsked
+    ? (async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const read = Promise.resolve().then(() => input.advertisingRenderer?.());
+          const late = new Promise<false>((resolve) => {
+            timer = setTimeout(() => {
+              // A native call that never answers would otherwise go unnoticed.
+              reportError(new Error(
+                `The advertising renderer read did not answer within ${capacitorAdvertisingRendererTimeoutMs} ms; `
+                  + 'registering without rendersAdvertising.',
+              ));
+              resolve(false);
+            }, capacitorAdvertisingRendererTimeoutMs);
+          });
+          rendersAdvertising = (await Promise.race([read, late])) === true;
+        } catch (error) {
+          // A shell built before the renderer answers UNIMPLEMENTED: it has none.
+          if ((error as { readonly code?: unknown } | null)?.code !== 'UNIMPLEMENTED') {
+            reportError(error);
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      })()
+    : Promise.resolve();
 
   // Events.
   const listeners = new Set<(event: NotificationEvent) => void>();
@@ -427,13 +486,20 @@ export function createCapacitorNotificationProvider(
       // FCM tokens only: `fcm-installation` addresses are reserved, because
       // FCM HTTP v1 cannot send to a Firebase installation id and the
       // game-services sender refuses them.
-      address: { kind: 'fcm-token', value, permission },
+      address: {
+        kind: 'fcm-token',
+        value,
+        permission,
+        ...(rendersAdvertising ? { rendersAdvertising: true } : {}),
+      },
       ...(locale === undefined || locale === '' ? {} : { locale }),
       ...(timeZone === undefined || timeZone === '' ? {} : { timeZone }),
     };
   };
-  const registrationOf = async (value: string): Promise<NotificationEndpointRegistration> =>
-    registrationWith(value, await readAppState());
+  const registrationOf = async (value: string): Promise<NotificationEndpointRegistration> => {
+    await rendererRead;
+    return registrationWith(value, await readAppState());
+  };
 
   /** The declared topic a push names; the payload is untrusted. */
   const declaredTopicOf = (data: Record<string, unknown>): NotificationTopicDeclaration | undefined => {
@@ -449,10 +515,16 @@ export function createCapacitorNotificationProvider(
     const data = isRecord(notification?.data) ? notification.data : {};
     const declared = declaredTopicOf(data);
     const topicId = declared?.id;
+    // On Android the messaging plugin reports every open as a `tap`; the
+    // advertising renderer marks one from its opt-out action in the data.
+    const action = actionId === 'tap'
+        && data[capacitorNotificationDataKeys.action] === notificationAdvertisingOptOutActionId
+      ? notificationAdvertisingOptOutActionId
+      : actionId;
     // The opt-out action opens the topic's declared opt-out screen, never a
     // route from the payload.
     let route: string | undefined;
-    if (actionId !== notificationAdvertisingOptOutActionId) {
+    if (action !== notificationAdvertisingOptOutActionId) {
       route = safeRoute(data[capacitorNotificationDataKeys.route]);
     } else if (declared?.purpose === 'advertising') {
       route = declared.optOutRoute;
@@ -523,6 +595,7 @@ export function createCapacitorNotificationProvider(
         ? lastObserved
         : undefined;
       const announcedNow = announced !== undefined && androidChannelsReady;
+      const announcedRendering = rendersAdvertising;
       if (announcedNow && announced !== undefined) {
         dispatch({
           type: 'endpoint-changed',
@@ -545,10 +618,12 @@ export function createCapacitorNotificationProvider(
           if (registration === undefined || generation !== tokenGeneration) {
             return;
           }
-          const permission = registration.address.kind === 'fcm-token'
-            ? registration.address.permission
-            : undefined;
-          if (announcedNow && permission === announced) {
+          const address = registration.address.kind === 'fcm-token' ? registration.address : undefined;
+          if (
+            announcedNow
+            && address?.permission === announced
+            && (address.rendersAdvertising === true) === announcedRendering
+          ) {
             return;
           }
           dispatch({ type: 'endpoint-changed', registration });
@@ -706,6 +781,46 @@ export function createCapacitorNotificationProvider(
     ensureChannels().catch(reportSetupFailure);
     ensureActionTypes().catch(reportSetupFailure);
   }
+  // A shell update that adds or removes the renderer changes the
+  // registration without a new token, and Firebase announces a token only
+  // when it changes. Once the read answers, the current registration is
+  // announced; the runtime sends it only when it differs from the last one
+  // it sent, so an app update reaches the backend at its first start.
+  if (rendererAsked && configurationIssue === undefined && push !== undefined) {
+    const generation = tokenGeneration;
+    void (async () => {
+      await rendererRead;
+      let token: string;
+      try {
+        token = (await push.getToken()).token;
+      } catch (error) {
+        // No token yet: `tokenReceived` announces the first one. A shell
+        // that cannot answer at all is reported, as `register()` does.
+        if (isConfigurationFailure(error)) {
+          reportError(error);
+        }
+        return;
+      }
+      if (typeof token !== 'string' || token === '' || generation !== tokenGeneration) {
+        return;
+      }
+      try {
+        await ensureChannels();
+      } catch (error) {
+        reportSetupFailure(error);
+        // The foreground retry publishes this token once the channels exist.
+        if (generation === tokenGeneration && !androidChannelsReady) {
+          retainedToken = { token, generation };
+        }
+        return;
+      }
+      const registration = await registrationOf(token);
+      // A `tokenReceived` meanwhile announced its own, which is newer.
+      if (generation === tokenGeneration) {
+        dispatch({ type: 'endpoint-changed', registration });
+      }
+    })().catch(reportError);
+  }
 
   // Local reminder operations run one at a time: each reads the pending list
   // and decides from it, so two at once could both take the last free slot.
@@ -742,9 +857,9 @@ export function createCapacitorNotificationProvider(
           // `createFcmProviderRegistration` publishes for android and ios.
           // `notificationRegistryMismatch` requires that list exactly; omitting
           // `advertising` on Android makes every standard pairing
-          // `configuration-required`. An Android FCM notification message still
-          // cannot carry the opt-out action: the catalog validator refuses an
-          // advertising topic mapped to `android` until the shell renders it
+          // `configuration-required`. An Android FCM notification message
+          // cannot carry the opt-out action: the backend sends Android
+          // advertising only to a registration with `rendersAdvertising`
           // (RFC "Provider profiles", Capacitor).
           purposes: ['service', 'requested', 'advertising'],
           addressing: 'device',

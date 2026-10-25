@@ -84,10 +84,20 @@ export async function runNotificationStoreConformance(
       timeZone: 'Asia/Seoul',
       target: 'android',
       sessionExpiresAt: at(86_400_000),
-      address: { kind: 'fcm-token', value: 'tok-1', environment: 'production' },
+      address: {
+        kind: 'fcm-token',
+        value: 'tok-1',
+        environment: 'production',
+        rendersAdvertising: true,
+      },
     }),
   );
   equal(stored.status, 'valid', 'endpoints: a new endpoint is valid');
+  deepEqual(
+    (await store.getEndpoint({ provider: 'fcm', installationId: 'i-1' }))?.address,
+    { kind: 'fcm-token', value: 'tok-1', environment: 'production', rendersAdvertising: true },
+    'endpoints: the address round-trips, with the shell-rendered advertising claim',
+  );
   deepEqual(
     await store.getEndpoint({ provider: 'fcm', installationId: 'i-1' }),
     stored,

@@ -9,11 +9,14 @@ import { inspectSignedAndroidBundle } from './native-android-inspection';
 import type { NativeBuildPlan } from './native-build-mode';
 import { createNativeShellStage } from './native-build-stage';
 import { applyCapacitorShellCsp } from './native-shell-csp';
+import { inspectNativeStorePolicy, reportNativeStorePolicy } from './native-store-policy';
 import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
 import { resolveIosSigningPlan } from './native-ios-signing';
 import {
   assertNativeReleaseIdentity,
+  resolveNativeVersionSource,
   runNativeSyncWithIdentityCheck,
+  stampNativeReleaseVersions,
 } from './native-release-identity';
 import type { PlatformTargetConfig } from './schemas';
 
@@ -67,13 +70,28 @@ export async function executeNativeTargetBuild(input: NativeBuildExecutionInput)
     required: profile === 'production',
     shellApp,
   };
-  assertNativeReleaseIdentity(identityInput);
+  const versionSource = resolveNativeVersionSource(environment);
+  // With stamping the source only has to keep readable version assignments;
+  // the reserved numbers are written into the stage and checked there.
+  assertNativeReleaseIdentity({ ...identityInput, versionSource });
+  reportNativeStorePolicy(
+    inspectNativeStorePolicy({
+      platform,
+      shellApp,
+      gameRoot: input.targetPath(target.gameApp),
+      metadata: target.metadata,
+    }),
+    profile === 'production',
+  );
   const stage = createNativeShellStage({ shellApp, webDir });
 
   try {
     input.replaceDirectory(webBundle, stage.webDir);
     applyCapacitorShellCsp(stage.webDir);
     input.ensureCapacitorPlatform(stage.shellApp, platform, environment);
+    if (versionSource === 'stamped') {
+      stampNativeReleaseVersions({ platform, stagedShellApp: stage.shellApp, environment });
+    }
     await stageNativeIconResources(input.generatedIcons, stage.shellApp);
     runNativeSyncWithIdentityCheck({ ...identityInput, shellApp: stage.shellApp }, () => {
       input.run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', platform], environment);

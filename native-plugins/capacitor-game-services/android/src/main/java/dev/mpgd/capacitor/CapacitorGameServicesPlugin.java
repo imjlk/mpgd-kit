@@ -139,6 +139,28 @@ public class CapacitorGameServicesPlugin extends Plugin {
         call.resolve(new JSObject().put("opened", opened));
     }
 
+    /**
+     * Whether this shell renders advertising pushes with the opt-out action:
+     * the messaging service Firebase Messaging resolves declares
+     * {@link AdvertisingPushRenderer#META_DATA_RENDERER}. The Capacitor
+     * notifications provider registers {@code rendersAdvertising} on Android
+     * only when this answers {@code { installed: true }}.
+     */
+    @PluginMethod
+    public void getAdvertisingPushRenderer(PluginCall call) {
+        call.resolve(new JSObject().put("installed", AdvertisingPushRenderer.isInstalled(getContext())));
+    }
+
+    @Override
+    protected void handleOnNewIntent(Intent intent) {
+        super.handleOnNewIntent(intent);
+        // An open from a rendered advertising push, by its body or its
+        // opt-out action, clears that notification; the messaging plugin
+        // reports the open itself. Capacitor passes the launch intent here
+        // on a cold start too.
+        AdvertisingPushRenderer.clearOpened(getContext(), intent);
+    }
+
     /** Starts one settings screen; false when no activity handles it or the device refuses it. */
     private boolean startSettings(NotificationSettingsIntent target) {
         Intent intent = new Intent(target.action);

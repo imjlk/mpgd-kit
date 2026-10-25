@@ -24,13 +24,32 @@ import {
   notificationsCapacitorGateways,
   notificationsCapacitorSupportFiles,
   notificationsCapacitorTemplateSupportFiles,
+  notificationsCapacitorTemplateSupportImporters,
   notificationsGameDependencies,
   notificationsMessagingFirebaseRange,
   notificationsMessagingPlugin,
   notificationsProviderId,
   notificationsShellPlugins,
+  sourceReferencesRelativeModule,
   wireCapacitorGatewayNotifications,
 } from './notifications-starter.js';
+import {
+  addIosAppResource,
+  applyAndroidManifestAdId,
+  applyAndroidManifestOrientation,
+  applyIosInfoPlistOrientation,
+  applyIosInfoPlistStorePolicy,
+  applyIosProjectDeviceFamily,
+  iosAppPrivacyManifestFile,
+  iosAppPrivacyManifestXml,
+  isRecord,
+  readGameAdvertisingIdPolicy,
+  readGameNativeOrientation,
+  readIosDeviceFamily,
+  shellUsesAdMob,
+  type IosDeviceFamily,
+  type NativeShellOrientation,
+} from './native-shell-store-policy.js';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
@@ -291,6 +310,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     'CLI TypeScript version',
   );
   const targetMap = requireObject(targets.targets, 'targets');
+  // Fail before anything is installed or generated when the store-facing
+  // native settings are invalid; they are applied after `cap add`.
+  readNativeShellSettings(gameRoot);
   for (const plugin of capacitorShellProviderPlugins) {
     if (providerIds.includes(plugin.id) && targetMap[plugin.platform] === undefined) {
       throw new Error(
@@ -846,7 +868,12 @@ export function materializeCapacitorShellStarter(
       materializeAndroidBackupPolicy(plan.gameRoot);
       if (plan.notificationPlugins.length > 0) {
         materializeAndroidInexactAlarms(plan.gameRoot);
+        materializeAndroidAdvertisingRenderer(plan.gameRoot);
       }
+      materializeAndroidStorePolicy(plan.gameRoot);
+    }
+    if (platform === 'ios' && generatedNow) {
+      materializeIosStorePolicy(plan.gameRoot);
     }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
@@ -1012,6 +1039,109 @@ export function applyAndroidManifestBackupPolicy(manifest: string): string {
   return `${manifest.slice(0, root.index)}${rootTag}${
     manifest.slice(root.index + root[0].length, application.index)}${applicationTag}${
     manifest.slice(application.index + application[0].length)}`;
+}
+
+/**
+ * Store-facing Info.plist keys for a freshly generated iOS project only
+ * (`applyIosInfoPlistStorePolicy`); an existing game-owned project is left
+ * alone and the production build reports what it lacks.
+ */
+function materializeIosStorePolicy(gameRoot: string): void {
+  const settings = readNativeShellSettings(gameRoot);
+  const plistFile = safeDestination(gameRoot, `${shellPath}/ios/App/App/Info.plist`);
+  if (existsSync(plistFile) && lstatSync(plistFile).isFile()) {
+    const source = readFileSync(plistFile, 'utf8');
+    let next = applyIosInfoPlistStorePolicy(source);
+    if (settings.orientation !== undefined) {
+      next = applyIosInfoPlistOrientation(next, settings.orientation);
+    }
+    if (next !== source) {
+      writeFileSync(plistFile, next);
+    }
+  }
+  const projectFile = safeDestination(
+    gameRoot,
+    `${shellPath}/ios/App/App.xcodeproj/project.pbxproj`,
+  );
+  const source = readFileSync(projectFile, 'utf8');
+  let next = settings.iosDeviceFamily === undefined
+    ? source
+    : applyIosProjectDeviceFamily(source, settings.iosDeviceFamily);
+  // The app-level privacy manifest joins the App group and Resources phase of
+  // the Capacitor-generated layout; any other layout is left to the game and
+  // reported by the build.
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/ios/App/App/${iosAppPrivacyManifestFile}`,
+  );
+  const withManifest = addIosAppResource(next, iosAppPrivacyManifestFile);
+  if (withManifest === undefined) {
+    console.warn(
+      `[mpgd] The generated iOS project has an unexpected layout; add ${iosAppPrivacyManifestFile} `
+        + 'to the App target yourself.',
+    );
+  } else {
+    if (!existsSync(manifestFile)) {
+      writeFileSync(manifestFile, iosAppPrivacyManifestXml, { flag: 'wx' });
+    }
+    next = withManifest;
+  }
+  if (next !== source) {
+    writeFileSync(projectFile, next);
+  }
+}
+
+/**
+ * Orientation of a freshly generated Android project's launcher activity,
+ * `android:appCategory="game"`, and the advertising ID permission (declared
+ * when the shell installs AdMob and mpgd.game.json does not set
+ * `ads.admob.advertisingId` to "removed", removed otherwise); an existing
+ * project is only reported by the production build.
+ */
+function materializeAndroidStorePolicy(gameRoot: string): void {
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/android/app/src/main/AndroidManifest.xml`,
+  );
+  if (!existsSync(manifestFile) || !lstatSync(manifestFile).isFile()) {
+    return;
+  }
+  const source = readFileSync(manifestFile, 'utf8');
+  const settings = readNativeShellSettings(gameRoot);
+  const shellPackageFile = path.join(gameRoot, shellPath, 'package.json');
+  const usesAds = existsSync(shellPackageFile) && shellUsesAdMob(readJsonObject(shellPackageFile));
+  const next = applyAndroidManifestAdId(
+    applyAndroidManifestOrientation(source, settings.orientation ?? 'any'),
+    usesAds && settings.advertisingId !== 'removed',
+  );
+  if (next !== source) {
+    writeFileSync(manifestFile, next);
+  }
+}
+
+/**
+ * The game's design orientation and advertising ID policy (mpgd.game.json)
+ * and iOS device family (ios target metadata).
+ */
+function readNativeShellSettings(gameRoot: string): {
+  readonly orientation?: NativeShellOrientation;
+  readonly iosDeviceFamily?: IosDeviceFamily;
+  readonly advertisingId: 'declared' | 'removed';
+} {
+  const gameConfigFile = path.join(gameRoot, 'mpgd.game.json');
+  const gameConfig = existsSync(gameConfigFile)
+    ? parseJsonObject(readFileSync(gameConfigFile, 'utf8'), 'mpgd.game.json')
+    : undefined;
+  const orientation = readGameNativeOrientation(gameConfig);
+  const advertisingId = readGameAdvertisingIdPolicy(gameConfig);
+  const targets = readJsonObject(path.join(gameRoot, 'mpgd.targets.json'));
+  const ios = isRecord(targets.targets) ? targets.targets.ios : undefined;
+  const iosDeviceFamily = readIosDeviceFamily(isRecord(ios) ? ios.metadata : undefined);
+  return {
+    ...(orientation === undefined ? {} : { orientation }),
+    ...(iosDeviceFamily === undefined ? {} : { iosDeviceFamily }),
+    advertisingId,
+  };
 }
 
 function materializeIosArchiveScheme(gameRoot: string): void {
@@ -3098,6 +3228,157 @@ export function applyAndroidManifestInexactAlarms(manifest: string): string {
   return `${head.trimEnd()}${newline}    ${androidInexactAlarmPermission}${newline}${manifest.slice(close)}`;
 }
 
+/** The kit's messaging service that renders Android advertising pushes with the opt-out action. */
+export const androidAdvertisingRendererService = 'dev.mpgd.capacitor.AdvertisingMessagingService';
+/** The messaging service `@capacitor-firebase/messaging` 8.x declares, which the renderer replaces. */
+export const androidMessagingPluginService = 'io.capawesome.capacitorjs.plugins.firebase.messaging.MessagingService';
+/** The meta-data the renderer's service declares, which `getAdvertisingPushRenderer` reads. */
+export const androidAdvertisingRendererMetaData = 'dev.mpgd.notifications.advertising_renderer';
+
+/**
+ * The manifest entries that make the kit's renderer the shell's one Firebase
+ * messaging service (notifications RFC "Capacitor"). Android hands a
+ * messaging event to one service, so the plugin's own is removed from the
+ * merge; the kit's forwards every message it does not render, and every new
+ * token, to the plugin.
+ */
+const androidAdvertisingRendererServiceEntry: readonly string[] = [
+  `<service android:name="${androidAdvertisingRendererService}" android:exported="false">`,
+  '    <intent-filter>',
+  '        <action android:name="com.google.firebase.MESSAGING_EVENT" />',
+  '    </intent-filter>',
+  `    <meta-data android:name="${androidAdvertisingRendererMetaData}" android:value="true" />`,
+  '</service>',
+];
+const androidMessagingPluginServiceRemoval =
+  `<service android:name="${androidMessagingPluginService}" tools:node="remove" />`;
+/** The renderer's service element, then the removal of the plugin's service. */
+export const androidAdvertisingRendererEntries: readonly string[] = [
+  ...androidAdvertisingRendererServiceEntry,
+  androidMessagingPluginServiceRemoval,
+];
+
+/** `text` as a literal inside a regular expression. */
+function regexLiteral(text: string): string {
+  // Only syntax characters: the `u` flag refuses an escaped `-` or letter.
+  return text.replace(/[.*+?^${}()|[\]\\/]/gu, '\\$&');
+}
+
+/** An attribute `name="value"` (or `'value'`) inside a start tag; both are literal. */
+function xmlAttributeLookahead(name: string, value: string): string {
+  const attribute = `\\s${regexLiteral(name)}\\s*=\\s*`;
+  const literal = regexLiteral(value);
+  return `(?=[^>]*${attribute}(?:"${literal}"|'${literal}'))`;
+}
+
+/** The manifest's `<service>` element for `name`, self-closed or with a body, or `undefined`. */
+function androidServiceElement(code: string, name: string): string | undefined {
+  return new RegExp(
+    `<service\\b${xmlAttributeLookahead('android:name', name)}[^>]*?(?:/>|>[\\s\\S]*?</service>)`,
+    'u',
+  ).exec(code)?.[0];
+}
+
+/** Whether the manifest removes the messaging plugin's own service from the merge. */
+function androidManifestRemovesMessagingPluginService(code: string): boolean {
+  return new RegExp(
+    `<service\\b${xmlAttributeLookahead('android:name', androidMessagingPluginService)}`
+      + `${xmlAttributeLookahead('tools:node', 'remove')}[^>]*>`,
+    'u',
+  ).test(code);
+}
+
+/**
+ * Whether an Android manifest declares the kit's advertising renderer as its
+ * messaging service, with the messaging event and its meta-data, and removes
+ * the plugin's service. Comments do not count.
+ */
+export function androidManifestRendersAdvertising(manifest: string): boolean {
+  const code = withoutXmlComments(manifest);
+  const renderer = androidServiceElement(code, androidAdvertisingRendererService);
+  return renderer !== undefined
+    && renderer.includes('com.google.firebase.MESSAGING_EVENT')
+    && new RegExp(
+      `<meta-data\\b${xmlAttributeLookahead('android:name', androidAdvertisingRendererMetaData)}`
+        + `${xmlAttributeLookahead('android:value', 'true')}`,
+      'u',
+    ).test(renderer)
+    && androidManifestRemovesMessagingPluginService(code);
+}
+
+/**
+ * Declares the kit's advertising renderer as the shell's messaging service
+ * inside `<application>` (`androidAdvertisingRendererEntries`), binding the
+ * tools namespace on the manifest root when missing. Each part is added only
+ * when it is missing, so a manifest that has one keeps it once; a renderer
+ * service that is declared but incomplete is left for the game to fix (the
+ * initializer warns). A manifest this cannot place it in (no `<application>`
+ * with a closing tag) is returned unchanged.
+ */
+export function applyAndroidManifestAdvertisingRenderer(manifest: string): string {
+  if (androidManifestRendersAdvertising(manifest)) {
+    return manifest;
+  }
+  const code = withoutXmlComments(manifest);
+  const missing = [
+    ...(androidServiceElement(code, androidAdvertisingRendererService) === undefined
+      ? androidAdvertisingRendererServiceEntry
+      : []),
+    ...(androidManifestRemovesMessagingPluginService(code) ? [] : [androidMessagingPluginServiceRemoval]),
+  ];
+  const root = /<manifest\b[^>]*?>/u.exec(code);
+  const close = code.lastIndexOf('</application>');
+  const application = /<application\b[^>]*?>/u.exec(code);
+  if (
+    missing.length === 0 || root === null || application === null || close === -1
+    || root[0].endsWith('/>') || application[0].endsWith('/>') || close < application.index
+    || application.index < root.index
+  ) {
+    return manifest;
+  }
+  const newline = manifest.includes('\r\n') ? '\r\n' : '\n';
+  let rootTag = manifest.slice(root.index, root.index + root[0].length);
+  if (!/\sxmlns:tools\s*=/u.test(rootTag)) {
+    rootTag = rootTag.replace(/^<manifest\b/u, `<manifest xmlns:tools="${androidToolsNamespace}"`);
+  }
+  const head = `${manifest.slice(0, root.index)}${rootTag}${manifest.slice(root.index + root[0].length, close)}`;
+  const entries = missing.map((line) => `${newline}        ${line}`).join('');
+  return `${head.trimEnd()}${entries}${newline}    ${manifest.slice(close)}`;
+}
+
+/**
+ * The initializer's warning for a game-owned Android manifest without the
+ * kit's advertising renderer: the manifest lines, the provider wiring, and
+ * the deployment switch. `undefined` when the manifest has the renderer.
+ */
+export function androidAdvertisingRendererWarning(manifest: string): string | undefined {
+  if (androidManifestRendersAdvertising(manifest)) {
+    return undefined;
+  }
+  return `${shellPath}/android/app/src/main/AndroidManifest.xml does not declare the kit's advertising `
+    + 'renderer, so under the Korean rules this shell receives no advertising push (the backend '
+    + 'sends Android advertising only to a shell that shows the opt-out action). To render them, '
+    + `add inside <application> (with xmlns:tools on <manifest>): ${androidAdvertisingRendererEntries.join(' ')}; `
+    + 'pass advertisingRenderer: readCapacitorAdvertisingPushRenderer to the Capacitor provider; '
+    + 'and set shellRendersAdvertising: true in notifications/deployment.json before mapping an '
+    + 'advertising topic to android (see docs/NOTIFICATIONS.md).';
+}
+
+function materializeAndroidAdvertisingRenderer(gameRoot: string): void {
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/android/app/src/main/AndroidManifest.xml`,
+  );
+  if (!existsSync(manifestFile) || !lstatSync(manifestFile).isFile()) {
+    return;
+  }
+  const source = readFileSync(manifestFile, 'utf8');
+  const next = applyAndroidManifestAdvertisingRenderer(source);
+  if (next !== source) {
+    writeFileSync(manifestFile, next);
+  }
+}
+
 function materializeAndroidInexactAlarms(gameRoot: string): void {
   const manifestFile = safeDestination(
     gameRoot,
@@ -3189,10 +3470,10 @@ function planNotificationsProvider(input: {
         + 'packages (mpgd kit upgrade) first.',
     );
   }
-  // The starter's provider module also imports the settings opener, which
-  // an adapter older than this CLI's notifications starter does not have.
-  // The subpath's declared types file (dist/notifications.d.ts today), and
-  // the module it re-exports the opener from.
+  // The starter's provider module also imports the settings opener and the
+  // advertising renderer read, which an adapter older than this CLI's
+  // notifications starter does not have. The subpath's declared types file
+  // (dist/notifications.d.ts today), and the modules it re-exports them from.
   const adapterRoot = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor');
   const declaredTypes = (adapterExports as Readonly<Record<string, unknown>>)['./notifications'];
   const typesPath = typeof declaredTypes === 'object' && declaredTypes !== null
@@ -3200,18 +3481,24 @@ function planNotificationsProvider(input: {
     ? (declaredTypes as { readonly types: string }).types
     : './dist/notifications.d.ts';
   const adapterTypes = readExisting(path.join(adapterRoot, typesPath));
-  const openerTypes = readExisting(
-    path.join(adapterRoot, path.dirname(typesPath), 'notifications-settings.d.ts'),
-  );
-  // Refused only when the declarations show the opener is absent: an
+  const helperTypes = ['notifications-settings.d.ts', 'notifications-renderer.d.ts']
+    .map((file) => readExisting(path.join(adapterRoot, path.dirname(typesPath), file)) ?? '')
+    .join('\n');
+  // Refused only when the declarations show a helper is absent: an
   // `export *` the check cannot follow passes, and the build then decides.
-  if (adapterTypes !== undefined && !/\bexport\s*\*/u.test(adapterTypes)
-    && !`${adapterTypes}\n${openerTypes ?? ''}`.includes('openCapacitorNotificationSettings')) {
-    throw new Error(
-      `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `
-        + 'openCapacitorNotificationSettings, which the notifications starter uses; upgrade the '
-        + "game's kit packages (mpgd kit upgrade) first.",
-    );
+  // The advertising renderer read came after the opener (AR1).
+  for (const helper of [
+    'openCapacitorNotificationSettings',
+    'readCapacitorAdvertisingPushRenderer',
+  ]) {
+    if (adapterTypes !== undefined && !/\bexport\s*\*/u.test(adapterTypes)
+      && !`${adapterTypes}\n${helperTypes}`.includes(helper)) {
+      throw new Error(
+        `The game's @mpgd/adapter-capacitor ${String(adapter.version)} has no `
+          + `${helper}, which the notifications starter uses; upgrade the `
+          + "game's kit packages (mpgd kit upgrade) first.",
+      );
+    }
   }
   // The adapter's other peers (Capacitor core) must accept the game's
   // installed copies too; the plugins get their own message below.
@@ -3340,9 +3627,31 @@ function planNotificationsProvider(input: {
     // Base-template modules they import, missing from a game an earlier release created.
     if (input.templateRoot !== undefined) {
       for (const file of notificationsCapacitorTemplateSupportFiles) {
-        if (readExisting(safeDestination(gameRoot, file)) === undefined) {
-          files.push({ path: file, content: starterFile(input.templateRoot, file) });
+        if (readExisting(safeDestination(gameRoot, file)) !== undefined) {
+          continue;
         }
+        const imported = notificationsCapacitorTemplateSupportImporters[file];
+        const importerSource = imported === undefined
+          ? undefined
+          : readExisting(safeDestination(gameRoot, imported.importer));
+        // A game whose own importer does not import the module would never use it.
+        if (imported !== undefined && importerSource !== undefined
+          && !sourceReferencesRelativeModule(importerSource, path.posix.basename(file, '.ts'))) {
+          warnings.push(imported.warning);
+          continue;
+        }
+        // The file imports a kit export an older installed package lacks.
+        const required = imported?.requires;
+        if (required !== undefined
+          && installedPackageLacksExport(gameRoot, required.packageName, required.exportName)) {
+          const version = installedPackageVersion(gameRoot, required.packageName);
+          throw new Error(
+            `--providers notifications writes ${file}, which imports ${required.exportName} from `
+              + `${required.packageName}; the game's ${required.packageName} ${version} does not export it. `
+              + "Upgrade the game's kit packages (mpgd kit upgrade) first.",
+          );
+        }
+        files.push({ path: file, content: starterFile(input.templateRoot, file) });
       }
     }
     warnings.push(
@@ -3361,6 +3670,12 @@ function planNotificationsProvider(input: {
         + '@capacitor/local-notifications adds; reminders are inexact, so add '
         + `${androidInexactAlarmPermission} to the manifest.`,
     );
+  }
+  const rendererWarning = androidManifest === undefined
+    ? undefined
+    : androidAdvertisingRendererWarning(androidManifest);
+  if (rendererWarning !== undefined) {
+    warnings.push(rendererWarning);
   }
   if (readExisting(safeDestination(gameRoot, `${shellPath}/android/app/google-services.json`)) === undefined) {
     warnings.push(
@@ -3480,4 +3795,114 @@ function requireString(value: unknown, label: string): string {
 
 function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/** Declaration files the export check reads at most: a guard against a pathological graph. */
+const maxDeclarationFilesChecked = 500;
+
+/** The declaration file names TypeScript pairs with a module specifier. */
+function declarationCandidates(base: string): readonly string[] {
+  // A specifier that already names a declaration file is that file.
+  if (/\.d\.[cm]?ts$/u.test(base)) {
+    return [base];
+  }
+  const extension = path.extname(base);
+  const stem = base.slice(0, base.length - extension.length);
+  switch (extension) {
+    case '.js':
+    case '.ts':
+      return [`${stem}.d.ts`];
+    case '.mjs':
+    case '.mts':
+      return [`${stem}.d.mts`];
+    case '.cjs':
+    case '.cts':
+      return [`${stem}.d.cts`];
+    default:
+      return [`${base}.d.ts`, path.join(base, 'index.d.ts')];
+  }
+}
+
+/**
+ * Whether the game's installed `packageName` provably lacks `exportName`:
+ * its root type declarations, and every declaration file they re-export
+ * from through relative specifiers, at any depth, never name it. Anything
+ * the check cannot follow passes, and the game's build then decides, as for
+ * the adapter's settings opener: an uninstalled or unreadable package, a
+ * module it cannot read, or an `export *` from another package.
+ */
+function installedPackageLacksExport(gameRoot: string, packageName: string, exportName: string): boolean {
+  // Only a plain identifier is searched for; anything else is not proof of absence.
+  if (!/^[A-Za-z_$][\w$]*$/u.test(exportName)) {
+    return false;
+  }
+  const packageRoot = path.join(gameRoot, 'node_modules', packageName);
+  const manifest = readInstalledManifest(gameRoot, packageName);
+  if (manifest === undefined) {
+    return false;
+  }
+  const rootExport = typeof manifest.exports === 'object' && manifest.exports !== null
+    ? (manifest.exports as Readonly<Record<string, unknown>>)['.']
+    : undefined;
+  const rootTypes = typeof rootExport === 'object' && rootExport !== null
+    ? (rootExport as { readonly types?: unknown }).types
+    : undefined;
+  const typesPath = typeof rootTypes === 'string' ? rootTypes : manifest.types;
+  if (typeof typesPath !== 'string') {
+    return false;
+  }
+  // Every declaration file the root re-exports from, followed through relative
+  // `export … from` specifiers at any depth; the name is searched as text, so a
+  // named re-export of it counts as well.
+  const relativeFrom = /\bexport\b[^;]*?\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]/gu;
+  const packageStar = /\bexport\s*(?:type\s*)?\*\s*(?:as\s+[\w$]+\s*)?from\s*['"](?!\.{1,2}\/)[^'"]+['"]/u;
+  const nameUsed = new RegExp(`(?<![\\w$])${exportName.replace(/\$/gu, '\\$')}(?![\\w$])`, 'u');
+  const pending = [path.join(packageRoot, typesPath)];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const file = pending.pop() ?? '';
+    if (visited.has(file)) {
+      continue;
+    }
+    visited.add(file);
+    if (visited.size > maxDeclarationFilesChecked) {
+      return false;
+    }
+    let source: string | undefined;
+    try {
+      source = readExisting(file);
+    } catch {
+      source = undefined;
+    }
+    if (source === undefined || packageStar.test(source)) {
+      // A module the check cannot read, or names from another package: do not refuse on a guess.
+      return false;
+    }
+    if (nameUsed.test(source)) {
+      return false;
+    }
+    for (const match of source.matchAll(relativeFrom)) {
+      const candidates = declarationCandidates(path.join(path.dirname(file), match[1] ?? ''));
+      pending.push(candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? file);
+    }
+  }
+  return true;
+}
+
+/** The game's installed `packageName` manifest, or `undefined` when it is missing or unreadable. */
+function readInstalledManifest(gameRoot: string, packageName: string): Record<string, unknown> | undefined {
+  try {
+    const source = readExisting(path.join(gameRoot, 'node_modules', packageName, 'package.json'));
+    return source === undefined
+      ? undefined
+      : parseJsonObject(source, `${packageName}/package.json`);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The installed package's version, for a message. */
+function installedPackageVersion(gameRoot: string, packageName: string): string {
+  const version = readInstalledManifest(gameRoot, packageName)?.version;
+  return typeof version === 'string' ? version : 'unknown';
 }

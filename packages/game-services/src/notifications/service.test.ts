@@ -263,6 +263,348 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   );
 }
 
+// Android advertising (AR1): the service starts on a catalog that maps an
+// advertising topic to android only when the deployment says the shell
+// renders it, and then sends advertising under the Korean rules only to the
+// Android installations that registered the renderer. iOS shows the opt-out
+// category's action itself and never keeps the claim.
+{
+  const registry = createNotificationProviderRegistry([
+    { entry: fcmEntry, delivery: fakeProvider('fcm') },
+  ]);
+  const androidAdvertising = {
+    version: '2026-10-25',
+    defaultLocale: 'ko',
+    topics: [
+      {
+        id: 'events',
+        purpose: 'advertising',
+        channels: ['remote'],
+        route: '/events',
+        optOutRoute: '/settings/notifications',
+        copy: { ko: { title: '이벤트', body: '이벤트가 시작됐어요.' } },
+        targets: { android: { channelId: 'mpgd-advertising' } },
+      },
+    ],
+  };
+  assert.throws(
+    () =>
+      createNotificationServiceCatalog(androidAdvertising, {
+        registry,
+        deployment: { advertisingRules: 'none' },
+      }),
+    /maps to android only when the shell renders it/u,
+  );
+  assert.equal(
+    createNotificationServiceCatalog(androidAdvertising, {
+      registry,
+      deployment: { advertisingRules: 'none', shellRendersAdvertising: true },
+    }).topicsFor('android').length,
+    1,
+  );
+}
+{
+  const fcm = fakeProvider('fcm');
+  const registry = createNotificationProviderRegistry([{ entry: fcmEntry, delivery: fcm }]);
+  const events: NotificationTopicDeclaration = {
+    id: 'events',
+    purpose: 'advertising',
+    channels: ['remote'],
+    route: '/events',
+    optOutRoute: '/settings/notifications',
+    copy: { ko: { title: '이벤트', body: '이벤트가 시작됐어요.' } },
+  };
+  const catalog: NotificationServiceCatalog = {
+    defaultLocale: 'ko',
+    topicsFor: (target) => [
+      { ...events, mapping: target === 'android' ? { channelId: 'mpgd-advertising' } : {} },
+      { ...serviceTopic, mapping: {} },
+    ],
+  };
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry,
+    catalog,
+    deployment: {
+      advertisingRules: 'kr',
+      advertisingSender: { contact: '02-000-0000' },
+      shellRendersAdvertising: true,
+    },
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  for (const [installation, target, rendersAdvertising] of [
+    ['a-old-shell', 'android', undefined],
+    ['b-renderer', 'android', true],
+    ['c-ios', 'ios', true],
+    ['d-false', 'android', false],
+  ] as const) {
+    await service.registerEndpoint(session('p-1', installation), {
+      target,
+      registration: {
+        provider: 'fcm',
+        address: {
+          kind: 'fcm-token',
+          value: `tok-${installation}`,
+          permission: 'granted',
+          ...(rendersAdvertising === undefined ? {} : { rendersAdvertising }),
+        },
+      },
+    });
+  }
+  // Only an Android registration keeps the claim.
+  assert.deepEqual(
+    (await store.listEndpoints({ player: 'p-1', provider: 'fcm' }))
+      .map((endpoint) => [endpoint.installationId, endpoint.address.rendersAdvertising]),
+    [
+      ['a-old-shell', undefined],
+      ['b-renderer', true],
+      ['c-ios', undefined],
+      ['d-false', undefined],
+    ],
+  );
+  await service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.deepEqual(
+    await service.deliver({ idempotencyKey: 'ad-1', player: 'p-1', topic: 'events' }),
+    { status: 'delivered', alreadyProcessed: false },
+  );
+  assert.deepEqual(
+    fcm.calls.map((call) => [call.idempotencyKey, call.recipient]),
+    [
+      [
+        'ad-1:b-renderer',
+        {
+          kind: 'device',
+          installationId: 'b-renderer',
+          address: { kind: 'fcm-token', value: 'tok-b-renderer', rendersAdvertising: true },
+        },
+      ],
+      [
+        'ad-1:c-ios',
+        {
+          kind: 'device',
+          installationId: 'c-ios',
+          address: { kind: 'fcm-token', value: 'tok-c-ios' },
+        },
+      ],
+    ],
+  );
+  // The rendered content carries the label and the opt-out action for the shell.
+  assert.deepEqual(fcm.calls[0]?.content.actions, [
+    { id: 'advertising-opt-out', title: '수신거부', route: '/settings/notifications' },
+  ]);
+  // Other purposes reach every Android installation.
+  await service.deliver({
+    idempotencyKey: 'svc-1',
+    player: 'p-1',
+    topic: 'friend-challenge',
+    templateData: { name: 'Mina' },
+  });
+  assert.deepEqual(
+    fcm.calls.slice(2).map((call) => call.idempotencyKey),
+    ['svc-1:a-old-shell', 'svc-1:b-renderer', 'svc-1:c-ios', 'svc-1:d-false'],
+  );
+  // With only an old shell, the send is suppressed as the gate's step 1 answers.
+  const old = createNotificationService({
+    store: createInMemoryNotificationStore(),
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm') },
+    ]),
+    catalog,
+    deployment: {
+      advertisingRules: 'kr',
+      advertisingSender: { contact: '02-000-0000' },
+      shellRendersAdvertising: true,
+    },
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await old.registerEndpoint(session('p-2', 'a-old-shell'), {
+    target: 'android',
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok-old', permission: 'granted' },
+    },
+  });
+  await old.recordConsent(session('p-2', 'a-old-shell'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.deepEqual(await old.deliver({ idempotencyKey: 'ad-2', player: 'p-2', topic: 'events' }), {
+    status: 'suppressed',
+    reason: 'purpose-unsupported',
+  });
+}
+
+// A provider that serves android alone takes a registration without a
+// target; the endpoint is still an Android one for the advertising rule.
+{
+  const fcm = fakeProvider('fcm');
+  const events: NotificationTopicDeclaration = {
+    id: 'events',
+    purpose: 'advertising',
+    channels: ['remote'],
+    route: '/events',
+    optOutRoute: '/settings/notifications',
+    copy: { ko: { title: '이벤트', body: '이벤트가 시작됐어요.' } },
+    mapping: {},
+  };
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fcm, targets: ['android'] },
+    ]),
+    catalog: vectorCatalog([events]),
+    deployment: {
+      advertisingRules: 'kr',
+      advertisingSender: { contact: '02-000-0000' },
+      shellRendersAdvertising: true,
+    },
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  for (const [installation, rendersAdvertising] of [
+    ['old', false],
+    ['renderer', true],
+  ] as const) {
+    await service.registerEndpoint(session('p-1', installation), {
+      registration: {
+        provider: 'fcm',
+        address: {
+          kind: 'fcm-token',
+          value: `tok-${installation}`,
+          permission: 'granted',
+          rendersAdvertising,
+        },
+      },
+    });
+  }
+  await service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  await service.deliver({ idempotencyKey: 'ad-1', player: 'p-1', topic: 'events' });
+  assert.deepEqual(
+    fcm.calls.map((call) => call.idempotencyKey),
+    ['ad-1:renderer'],
+  );
+  // On a provider that serves ios alone the claim is dropped and every
+  // endpoint shows the category's action itself.
+  const iosStore = createInMemoryNotificationStore();
+  const ios = createNotificationService({
+    store: iosStore,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmEntry, delivery: fakeProvider('fcm'), targets: ['ios'] },
+    ]),
+    catalog: vectorCatalog([events]),
+    deployment: { advertisingRules: 'kr', advertisingSender: { contact: '02-000-0000' } },
+    now: () => '2026-10-19T03:00:00Z',
+  });
+  await ios.registerEndpoint(session('p-1', 'phone'), {
+    registration: {
+      provider: 'fcm',
+      address: {
+        kind: 'fcm-token',
+        value: 'tok-phone',
+        permission: 'granted',
+        rendersAdvertising: true,
+      },
+    },
+  });
+  assert.deepEqual(
+    (await iosStore.getEndpoint({ provider: 'fcm', installationId: 'phone' }))?.address,
+    { kind: 'fcm-token', value: 'tok-phone' },
+  );
+  await ios.recordConsent(session('p-1', 'phone'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.deepEqual(
+    await ios.deliver({ idempotencyKey: 'ad-ios', player: 'p-1', topic: 'events' }),
+    { status: 'delivered', alreadyProcessed: false },
+  );
+  // A stored target the provider no longer serves reads as `topicFor` reads
+  // it: an Android endpoint kept from before reads the ios mapping on an
+  // ios-only provider and delivers, and on a provider that still serves
+  // android among others its missing claim keeps advertising away.
+  const staleStore = createInMemoryNotificationStore();
+  await staleStore.putEndpoint({
+    provider: 'fcm',
+    installationId: 'old-android',
+    player: 'p-1',
+    address: { kind: 'fcm-token', value: 'tok-old-android' },
+    permission: 'granted',
+    target: 'android',
+    sessionId: 's-old',
+    lastRegisteredAt: '2026-10-19T03:00:00Z',
+  });
+  // And one whose stored target (`ios`) the provider no longer serves.
+  await staleStore.putEndpoint({
+    provider: 'fcm',
+    installationId: 'old-ios',
+    player: 'p-2',
+    address: { kind: 'fcm-token', value: 'tok-old-ios' },
+    permission: 'granted',
+    target: 'ios',
+    sessionId: 's-old-ios',
+    lastRegisteredAt: '2026-10-19T03:00:00Z',
+  });
+  for (const [targets, expected] of [
+    [['ios'], 'delivered'],
+    [['web', 'android'], 'suppressed'],
+  ] as const) {
+    const stale = createNotificationService({
+      store: staleStore,
+      registry: createNotificationProviderRegistry([
+        { entry: fcmEntry, delivery: fakeProvider('fcm'), targets },
+      ]),
+      catalog: vectorCatalog([events]),
+      deployment: {
+        advertisingRules: 'kr',
+        advertisingSender: { contact: '02-000-0000' },
+        shellRendersAdvertising: true,
+      },
+      now: () => '2026-10-19T03:00:00Z',
+    });
+    await stale.recordConsent(session('p-1', 'old-android'), {
+      kind: 'advertising',
+      state: 'granted',
+      source: 'player',
+      textVersion: 'v1',
+    });
+    const outcome = await stale.deliver({
+      idempotencyKey: `ad-stale-${targets.join('-')}`,
+      player: 'p-1',
+      topic: 'events',
+    });
+    assert.equal(outcome.status, expected, targets.join(','));
+    if (targets.length === 2) {
+      // The stale `ios` endpoint may read the android mapping here, so its
+      // missing claim keeps advertising away.
+      await stale.recordConsent(session('p-2', 'old-ios'), {
+        kind: 'advertising',
+        state: 'granted',
+        source: 'player',
+        textVersion: 'v1',
+      });
+      assert.deepEqual(
+        await stale.deliver({ idempotencyKey: 'ad-stale-old-ios', player: 'p-2', topic: 'events' }),
+        { status: 'suppressed', reason: 'purpose-unsupported' },
+      );
+    }
+  }
+}
+
 // Queue dispatch: the gate runs when the job runs; a lost job is replayed after the lease.
 {
   const time = clock('2026-10-19T03:00:00Z');

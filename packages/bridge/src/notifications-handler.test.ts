@@ -11,8 +11,11 @@ import {
 import { validNotificationsV2Exchanges } from './fixtures';
 import type { BridgeNotificationsEvent, BridgeRequest, BridgeResponse } from './index';
 import {
+  createNotificationsBackendBridgeHandler,
   createNotificationsV2BridgeHandler,
+  notificationsBackendBridgeHostCodes,
   readBridgeNotificationsHostCode,
+  type NotificationsBackendBridgeServer,
 } from './notifications';
 
 function request(method: string, payload: unknown, id = `${method}:test`): BridgeRequest {
@@ -658,4 +661,230 @@ const minimal: NotificationProvider = {
   assert.equal(other[0]?.sequence, 0);
 }
 
-console.log('notifications v2 bridge handler tests passed');
+// The backend methods: the session comes from the host, never the payload.
+{
+  interface TestSession {
+    readonly id: string;
+    readonly player: string;
+    readonly installation: string;
+  }
+  let current: TestSession | undefined = { id: 'devvit:t2_a', player: 't2_a', installation: 'i-a' };
+  const calls: string[] = [];
+  const failures: unknown[] = [];
+  const record = {
+    kind: 'topic-preference',
+    topic: 'daily',
+    state: 'granted',
+    source: 'player',
+    at: '2026-10-21T00:00:00Z',
+  } as const;
+  const notice = {
+    kind: 'consent-result',
+    record: { kind: 'advertising', state: 'granted', at: '2026-10-21T00:00:00Z', textVersion: '1' },
+    dueBy: '2026-11-20',
+    variant: 'consent-result.advertising.granted',
+  } as const;
+  let failWith: unknown;
+  const served = async <Value>(name: string, session: TestSession, value: Value): Promise<Value> => {
+    calls.push(`${name}:${session.player}:${session.installation}`);
+    if (failWith !== undefined) {
+      throw failWith;
+    }
+    return value;
+  };
+  const backend: NotificationsBackendBridgeServer<TestSession> = {
+    session: () => current,
+    recordConsent: (session) => served('recordConsent', session, record),
+    listConsent: (session) => served('listConsent', session, [record]),
+    registerEndpoint: (session) => served('registerEndpoint', session, undefined),
+    unregisterEndpoint: (session) => served('unregisterEndpoint', session, undefined),
+    setReminder: (session) => served('setReminder', session, 'scheduled' as const),
+    cancelReminder: (session) => served('cancelReminder', session, true),
+    listNotices: (session) => served('listNotices', session, [notice]),
+    recordNotice: (session) => served('recordNotice', session, undefined),
+  };
+  const handler = createNotificationsBackendBridgeHandler({
+    backend,
+    label: 'Test',
+    unexpectedFailureMessage: (method) => `${method} failed on the test host.`,
+    onError: (error) => failures.push(error),
+  });
+  const ok = async (method: string, payload: unknown): Promise<unknown> => {
+    const response = await handler.request(request(method, payload));
+    assert.equal(response.ok, true, JSON.stringify(response));
+    return response.ok ? response.data : undefined;
+  };
+  const player = { expectedPlayer: 't2_a' };
+
+  assert.deepEqual(await ok('notifications.backend.getSession', protocol), {
+    session: { id: 'devvit:t2_a', player: 't2_a' },
+  });
+  assert.deepEqual(await ok('notifications.backend.recordConsent', { ...player, record }), {
+    record,
+  });
+  assert.deepEqual(await ok('notifications.backend.listConsent', player), { records: [record] });
+  assert.deepEqual(await ok('notifications.backend.registerEndpoint', {
+    ...player,
+    registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Asia/Seoul' },
+  }), { registered: true });
+  assert.deepEqual(
+    await ok('notifications.backend.unregisterEndpoint', { ...player, provider: 'devvit' }),
+    {
+      unregistered: true,
+    },
+  );
+  assert.deepEqual(await ok('notifications.backend.setReminder', {
+    ...player,
+    reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-22T00:00:00Z', link: 't3_post' },
+  }), { status: 'scheduled' });
+  assert.deepEqual(await ok('notifications.backend.cancelReminder', { ...player, key: 'daily' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(await ok('notifications.backend.listNotices', player), { notices: [notice] });
+  assert.deepEqual(await ok('notifications.backend.recordNotice', {
+    ...player,
+    notice: { kind: notice.kind, record: { kind: 'advertising', at: notice.record.at }, dueBy: notice.dueBy },
+    channel: 'in-game',
+  }), { recorded: true });
+  // Every call acted for the host's session, with the host's installation.
+  assert.ok(
+    calls.every((call) => call.endsWith(':t2_a:i-a')),
+    JSON.stringify(calls),
+  );
+  assert.equal(calls.length, 8);
+
+  // Another player signed in since the call began: refused before the backend.
+  calls.length = 0;
+  current = { id: 'devvit:t2_b', player: 't2_b', installation: 'i-b' };
+  const changed = errorOf(
+    await handler.request(request('notifications.backend.listConsent', player)),
+  );
+  assert.equal(changed.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(changed.retryable, true);
+  assert.equal(
+    readBridgeNotificationsHostCode(changed.message),
+    notificationsBackendBridgeHostCodes.sessionChanged,
+  );
+  // Naming the other player in the payload never acts for it: the host's player decides.
+  const named = errorOf(
+    await handler.request(request('notifications.backend.listConsent', { expectedPlayer: 't2_c' })),
+  );
+  assert.equal(
+    readBridgeNotificationsHostCode(named.message),
+    notificationsBackendBridgeHostCodes.sessionChanged,
+  );
+  assert.deepEqual(calls, []);
+
+  // Signed out: the session read answers null, every call is refused.
+  current = undefined;
+  assert.deepEqual(await ok('notifications.backend.getSession', protocol), { session: null });
+  const signedOut = errorOf(await handler.request(request('notifications.backend.setReminder', {
+    ...player,
+    reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-22T00:00:00Z' },
+  })));
+  assert.equal(signedOut.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(
+    readBridgeNotificationsHostCode(signedOut.message),
+    notificationsBackendBridgeHostCodes.signedOut,
+  );
+  assert.deepEqual(calls, []);
+  // Expected refusals are not reported.
+  assert.deepEqual(failures, []);
+
+  // An invalid payload is the caller's: refused, not reported.
+  current = { id: 'devvit:t2_a', player: 't2_a', installation: 'i-a' };
+  const invalid = errorOf(await handler.request(request('notifications.backend.recordConsent', {
+    ...player,
+    record: { ...record, state: 'maybe' },
+  })));
+  assert.equal(invalid.code, 'NOTIFICATIONS_INVALID_INPUT');
+  assert.deepEqual(failures, []);
+  assert.deepEqual(calls, []);
+
+  // A backend failure keeps its notifications code; anything else keeps its text on the host.
+  failWith = new NotificationError('NOTIFICATIONS_INVALID_INPUT', { message: 'fireAt is too far ahead.' });
+  const refused = errorOf(
+    await handler.request(request('notifications.backend.cancelReminder', { ...player, key: 'k' })),
+  );
+  assert.equal(refused.code, 'NOTIFICATIONS_INVALID_INPUT');
+  assert.equal(refused.message, 'fireAt is too far ahead.');
+  failWith = new Error('redis said something internal');
+  const unexpected = errorOf(
+    await handler.request(request('notifications.backend.listNotices', player)),
+  );
+  assert.equal(unexpected.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(unexpected.retryable, true);
+  assert.equal(unexpected.message, 'notifications.backend.listNotices failed on the test host.');
+  assert.equal(failures.length, 2);
+  failWith = undefined;
+
+  // An answer outside the contract is the backend's configuration.
+  const brokenFailures: unknown[] = [];
+  const broken = createNotificationsBackendBridgeHandler({
+    backend: { ...backend, setReminder: async () => 'sent' as never },
+    onError: (error) => brokenFailures.push(error),
+  });
+  const brokenAnswer = errorOf(await broken.request(request('notifications.backend.setReminder', {
+    ...player,
+    reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-22T00:00:00Z' },
+  })));
+  assert.equal(brokenAnswer.code, 'NOTIFICATIONS_CONFIGURATION_REQUIRED');
+  assert.equal(brokenAnswer.retryable, false);
+  assert.equal(
+    brokenAnswer.message,
+    'The notifications backend answered notifications.backend.setReminder outside the contract.',
+  );
+  // The validator's text reaches the host's log through the cause, not the game.
+  assert.equal(brokenFailures.length, 1);
+  assert.match(String(((brokenFailures[0] as Error).cause as Error).message), /status/u);
+  // A failure shaped as a platform failure with another code keeps its flag, not its text.
+  failWith = new PlatformOperationError({ code: 'STORAGE_FAILED', message: 'redis host 10.0.0.1 refused', retryable: false });
+  const platformFailure = errorOf(
+    await handler.request(request('notifications.backend.listNotices', player)),
+  );
+  assert.equal(platformFailure.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(platformFailure.retryable, false);
+  assert.equal(
+    platformFailure.message,
+    'notifications.backend.listNotices failed on the test host.',
+  );
+  failWith = undefined;
+  // Without a message of its own the handler still keeps the text on the host.
+  const plain = createNotificationsBackendBridgeHandler({
+    backend: {
+      ...backend,
+      listConsent: async () => {
+        throw new Error('internal detail');
+      },
+    },
+  });
+  const plainFailure = errorOf(
+    await plain.request(request('notifications.backend.listConsent', player)),
+  );
+  assert.equal(plainFailure.message, 'notifications.backend.listConsent failed on the host.');
+  // A session read that throws is a host failure, not a signed-out answer.
+  const throwing = createNotificationsBackendBridgeHandler({
+    backend: {
+      ...backend,
+      session: () => {
+        throw new Error('context unavailable');
+      },
+    },
+  });
+  const throwingRead = errorOf(
+    await throwing.request(request('notifications.backend.getSession', protocol)),
+  );
+  assert.equal(throwingRead.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(throwingRead.message, 'notifications.backend.getSession failed on the host.');
+  assert.equal(
+    errorOf(await handler.request(request('notifications.backend.getSession', {}))).code,
+    'NOTIFICATIONS_INVALID_INPUT',
+  );
+  // A provider method is not a backend method.
+  assert.equal(
+    errorOf(await handler.request(request('notifications.v2.getPermission', { topics: ['a'] }))).code,
+    'UNSUPPORTED_METHOD',
+  );
+}
+
+console.log('notifications v2 and backend bridge handler tests passed');

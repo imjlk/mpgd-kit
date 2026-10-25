@@ -468,10 +468,32 @@ assert.equal(
   true,
   'a host-template provider cannot carry the advertising label even if it lists the purpose',
 );
+// An Android FCM notification message cannot carry the opt-out action, so an
+// advertising topic maps to android only when the deployment says the shell
+// renders advertising itself; whatever the rules, without it the mapping is refused.
+const androidRefusal = 'topics[0].targets.android: an advertising topic maps to android only when '
+  + 'the shell renders it with the opt-out action, which an FCM notification message on android '
+  + "cannot carry; wire the kit's advertising renderer into the shell and set shellRendersAdvertising "
+  + 'in the deployment';
 assert.deepEqual(issuesOf(catalogWith({ ...advertising, targets: { android: {} } })), [
-  'topics[0].targets.android: an advertising topic must not map to android until the shell '
-    + 'renders the opt-out action; an Android FCM notification message cannot carry it',
+  androidRefusal,
 ]);
+assert.deepEqual(
+  issuesOf(catalogWith({ ...advertising, targets: { android: {} } }), {
+    ...plainDeployment,
+    shellRendersAdvertising: false,
+  }),
+  [androidRefusal],
+);
+assert.deepEqual(
+  issuesOf(catalogWith({ ...advertising, targets: { android: {} } }), {
+    ...plainDeployment,
+    shellRendersAdvertising: true,
+  }),
+  [],
+  'a shell that renders advertising allows the android mapping',
+);
+// An open target is not one whose pushes need the shell: no provider rules apply to it.
 assert.deepEqual(issuesOf(catalogWith({ ...advertising, targets: { ios: {} } })), []);
 
 // Any topic with the remote channel maps only to a provider whose purposes
@@ -931,6 +953,33 @@ assert.ok(
   }).issues.some((issue) =>
     issue.path === 'topics[0].targets.android' && /expiry and the opt-out action/u.test(issue.message)),
   'a provider without an expiry cannot carry advertising under the Korean rules',
+);
+// Under the Korean rules a shell that renders advertising allows the android
+// mapping too, with the notice topic mapped there.
+assert.deepEqual(
+  validateNotificationTopicCatalog(
+    withNotices(
+      'consent-notice',
+      { ...advertising, targets: { android: { channelId: 'mpgd-advertising' } } },
+      noticeTopic,
+    ),
+    { targetProviders, deployment: { ...krDeployment, shellRendersAdvertising: true } },
+  ).issues,
+  [],
+);
+// The switch does not lift the provider's own rules: under the Korean rules
+// an android provider without an expiry still cannot carry advertising.
+assert.ok(
+  validateNotificationTopicCatalog(withNotices(
+    'consent-notice',
+    { ...advertising, targets: { android: {} } },
+    noticeTopic,
+  ), {
+    targetProviders: { android: noExpiry },
+    deployment: { ...krDeployment, shellRendersAdvertising: true },
+  }).issues.some((issue) =>
+    issue.path === 'topics[0].targets.android' && /expiry and the opt-out action/u.test(issue.message)),
+  'shellRendersAdvertising does not lift the provider rules',
 );
 // Under the Korean rules, a target that delivers advertising also delivers its notices.
 assertIssue(

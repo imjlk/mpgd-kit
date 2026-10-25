@@ -10,6 +10,8 @@ output/
 .mpgd/
 .env
 .env.*
+.dev.vars
+.dev.vars.*
 .devvit/
 .granite/
 worktrees/

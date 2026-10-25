@@ -3,6 +3,7 @@ import {
   createCapacitorNotificationServiceProvider,
   loadCapacitorNotificationSdks,
   openCapacitorNotificationSettings,
+  readCapacitorAdvertisingPushRenderer,
 } from '@mpgd/adapter-capacitor/notifications';
 
 import { starterNotificationTopics } from './notifications';
@@ -38,9 +39,8 @@ export async function createStarterCapacitorNotifications(
       ...sdks,
       // Android channel names the player sees in system settings, in the
       // device language. The provider creates a channel only for the topics
-      // mapped to Android; `mpgd-advertising` is named for the day an
-      // advertising topic is mapped there, in a channel of its own the
-      // player can turn off.
+      // mapped to Android; advertising has `mpgd-advertising`, a channel of
+      // its own the player can turn off.
       channels: korean
         ? {
             'mpgd-service': { name: '알림' },
@@ -54,6 +54,11 @@ export async function createStarterCapacitorNotifications(
           },
       advertisingOptOutTitle: korean ? '수신거부' : 'Unsubscribe',
       openSettings: openCapacitorNotificationSettings,
+      // Android: the shell renders advertising pushes with the opt-out
+      // action when its messaging service is the kit's renderer, which
+      // `mpgd target init capacitor --providers notifications` declares; the
+      // backend sends advertising only to such an installation.
+      advertisingRenderer: readCapacitorAdvertisingPushRenderer,
     }),
   ];
 }

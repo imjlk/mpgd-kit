@@ -4,5 +4,6 @@
     "name": "__GAME_TITLE__",
     "contact": "REPLACE-WITH-SENDER-PHONE-OR-ADDRESS"
   },
-  "timeZone": "Asia/Seoul"
+  "timeZone": "Asia/Seoul",
+  "shellRendersAdvertising": true
 }

@@ -45,6 +45,8 @@ export interface TargetReleaseMetadata {
   readonly packageId?: string;
   readonly bundleId?: string;
   readonly sdkMajor?: number;
+  /** capacitor-ios only: `iphone` ships an iPhone-only app (TARGETED_DEVICE_FAMILY "1"). */
+  readonly iosDeviceFamily?: 'universal' | 'iphone';
 }
 
 export interface WebTargetConfig extends BaseTargetConfig {

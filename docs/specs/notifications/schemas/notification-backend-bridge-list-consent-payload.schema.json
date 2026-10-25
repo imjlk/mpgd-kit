@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-backend-bridge-list-consent-payload.schema.json",
+  "title": "NotificationBackendBridgeListConsentPayload",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBackendBridgeCallPayload",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBackendBridgeCallPayload": {
+        "type": "object",
+        "properties": {
+          "expectedPlayer": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "expectedPlayer"
+        ],
+        "additionalProperties": false,
+        "description": "Every backend call but the session read names the player the call began\nfor. The host compares it with its own authenticated player and refuses\nthe call when they differ: it never acts for the named player, so a\npayload cannot reach another player's state."
+      }
+    }
+  }
+}

@@ -125,6 +125,29 @@ describe('Apple signed transaction adapter', () => {
     });
   });
 
+  it('names a JWS of the other environment so a production verifier can retry it in the sandbox', async () => {
+    mocks.verify.mockRejectedValue(new VerificationException(
+      VerificationStatus.INVALID_ENVIRONMENT,
+    ));
+    const verifier = createAppleSignedTransactionVerifier(options);
+    expect(await verifier.verifyAndDecode(input)).toEqual({
+      status: 'rejected', reason: 'APP_STORE_ENVIRONMENT_MISMATCH',
+    });
+  });
+
+  it('passes the ownership type through so family-shared transactions are refused', async () => {
+    mocks.verify.mockResolvedValue({ ...signedPurchase, inAppOwnershipType: 'FAMILY_SHARED' });
+    const verifier = createAppleSignedTransactionVerifier(options);
+    expect(await verifier.verifyAndDecode(input)).toEqual({
+      status: 'verified',
+      payload: { ...signedPurchase, inAppOwnershipType: 'FAMILY_SHARED' },
+    });
+    mocks.verify.mockResolvedValue({ ...signedPurchase, inAppOwnershipType: '' });
+    expect(await verifier.verifyAndDecode(input)).toEqual({
+      status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_INVALID',
+    });
+  });
+
   it('does not accept an oversized JWS or a verification result after cancellation', async () => {
     const verifier = createAppleSignedTransactionVerifier(options);
     expect(await verifier.verifyAndDecode({

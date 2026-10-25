@@ -8,6 +8,18 @@ import {
   assertLocalNotificationEntry,
   assertLocalNotificationRequest,
   assertLocalScheduleResult,
+  assertNotificationBackendBridgeCancelReminderPayload,
+  assertNotificationBackendBridgeGetSessionPayload,
+  assertNotificationBackendBridgeGetSessionResult,
+  assertNotificationBackendBridgeListConsentResult,
+  assertNotificationBackendBridgeListNoticesResult,
+  assertNotificationBackendBridgeRecordConsentPayload,
+  assertNotificationBackendBridgeRecordNoticePayload,
+  assertNotificationBackendBridgeRegisterEndpointPayload,
+  assertNotificationBackendBridgeRegisterEndpointResult,
+  assertNotificationBackendBridgeSetReminderPayload,
+  assertNotificationBackendBridgeSetReminderResult,
+  assertNotificationBackendBridgeUnregisterEndpointPayload,
   assertNotificationBridgeCancelLocalResult,
   assertNotificationBridgeGetCapabilitiesPayload,
   assertNotificationBridgeGetCapabilitiesResult,
@@ -35,6 +47,7 @@ import {
   isNotificationEventEnvelope,
   isNotificationPlaceholderText,
   isNotificationTimestamp,
+  notificationBackendBridgeMethods,
   notificationBridgeMethods,
   notificationDeploymentPlaceholders,
   NotificationError,
@@ -234,6 +247,92 @@ describe('notifications contract', () => {
     }).pending).toHaveLength(1);
     expect(assertNotificationBridgeOpenSettingsResult({ status: 'opened' })).toEqual({ status: 'opened' });
     expect(() => assertNotificationBridgeOpenSettingsResult({ status: 'closed' })).toThrow();
+  });
+
+  it('validates the backend bridge methods apart from the provider methods', () => {
+    expect(notificationBackendBridgeMethods).toEqual([
+      'notifications.backend.getSession',
+      'notifications.backend.recordConsent',
+      'notifications.backend.listConsent',
+      'notifications.backend.registerEndpoint',
+      'notifications.backend.unregisterEndpoint',
+      'notifications.backend.setReminder',
+      'notifications.backend.cancelReminder',
+      'notifications.backend.listNotices',
+      'notifications.backend.recordNotice',
+    ]);
+    expect(Object.isFrozen(notificationBackendBridgeMethods)).toBe(true);
+    expect(notificationBackendBridgeMethods.some((method) =>
+      (notificationBridgeMethods as readonly string[]).includes(method))).toBe(false);
+    expect(assertNotificationBackendBridgeGetSessionPayload({ protocol: notificationsProtocol }))
+      .toEqual({ protocol: notificationsProtocol });
+    expect(assertNotificationBackendBridgeGetSessionResult({ session: null })).toEqual({ session: null });
+    expect(assertNotificationBackendBridgeGetSessionResult({ session: { id: 'devvit:t2_a', player: 't2_a' } })
+      .session?.player).toBe('t2_a');
+    expect(() => assertNotificationBackendBridgeGetSessionResult({ session: { id: '', player: 't2_a' } }))
+      .toThrow();
+    const record = { kind: 'topic-preference', topic: 'daily', state: 'granted', source: 'player', at: '2026-10-12T03:00:00Z' };
+    expect(assertNotificationBackendBridgeRecordConsentPayload({ expectedPlayer: 't2_a', record }).record)
+      .toEqual(record);
+    // The player a call began for is required, and nothing else names a player.
+    expect(() => assertNotificationBackendBridgeRecordConsentPayload({ record })).toThrow();
+    expect(() => assertNotificationBackendBridgeRecordConsentPayload({ expectedPlayer: '', record })).toThrow();
+    expect(() => assertNotificationBackendBridgeRecordConsentPayload({ expectedPlayer: 't2_a', record, player: 't2_b' }))
+      .toThrow();
+    expect(() => assertNotificationBackendBridgeRecordConsentPayload({
+      expectedPlayer: 't2_a',
+      record: { ...record, at: '2026-02-30T03:00:00Z' },
+    })).toThrow(/record\.at must be RFC 3339/u);
+    expect(() => assertNotificationBackendBridgeListConsentResult({ records: [{ ...record, at: '2026-10-12 03:00:00Z' }] }))
+      .toThrow(/records\[0\]\.at must be RFC 3339/u);
+    expect(assertNotificationBackendBridgeRegisterEndpointPayload({
+      expectedPlayer: 't2_a',
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Asia/Seoul' },
+    }).registration.timeZone).toBe('Asia/Seoul');
+    expect(() => assertNotificationBackendBridgeRegisterEndpointPayload({
+      expectedPlayer: 't2_a',
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Mars/Olympus_Mons' },
+    })).toThrow(/Unknown time zone/u);
+    expect(assertNotificationBackendBridgeRegisterEndpointResult({ registered: true })).toEqual({ registered: true });
+    expect(() => assertNotificationBackendBridgeRegisterEndpointResult({ registered: false })).toThrow();
+    expect(() => assertNotificationBackendBridgeUnregisterEndpointPayload({ expectedPlayer: 't2_a', provider: '' }))
+      .toThrow();
+    expect(assertNotificationBackendBridgeSetReminderPayload({
+      expectedPlayer: 't2_a',
+      reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-13T03:00:00Z', link: 't3_post' },
+    }).reminder.link).toBe('t3_post');
+    expect(assertNotificationBackendBridgeSetReminderPayload({
+      expectedPlayer: 't2_a',
+      reminder: { key: 'daily', topic: 'daily', fireAt: '2026-10-13T12:00:00.5+09:00' },
+    }).reminder.fireAt).toBe('2026-10-13T12:00:00.5+09:00');
+    for (const reminder of [
+      { key: '', topic: 'daily', fireAt: '2026-10-13T03:00:00Z' },
+      { key: 'daily', topic: 'daily', fireAt: 'tomorrow' },
+      { key: 'daily', topic: 'daily', fireAt: '2026-04-31T03:00:00Z' },
+      { key: 'daily', topic: 'daily', fireAt: '2026-10-13 03:00:00Z' },
+      { key: 'daily', topic: 'daily', fireAt: '2026-10-13T03:00:00Z', link: '' },
+    ]) {
+      expect(() => assertNotificationBackendBridgeSetReminderPayload({ expectedPlayer: 't2_a', reminder }))
+        .toThrow();
+    }
+    expect(assertNotificationBackendBridgeSetReminderResult({ status: 'capacity-exceeded' }).status)
+      .toBe('capacity-exceeded');
+    expect(() => assertNotificationBackendBridgeSetReminderResult({ status: 'cancelled' })).toThrow();
+    expect(() => assertNotificationBackendBridgeCancelReminderPayload({ expectedPlayer: 't2_a', key: '' })).toThrow();
+    expect(() => assertNotificationBackendBridgeListNoticesResult({
+      notices: [{
+        kind: 'consent-result',
+        record: { kind: 'advertising', state: 'granted', at: '2026-10-12T03:00:00Z', textVersion: 'ads-v1' },
+        dueBy: '2026-02-30',
+        variant: 'consent-result.advertising.granted',
+      }],
+    })).toThrow(/notices\[0\]\.dueBy must be a date that exists/u);
+    const notice = { kind: 'consent-result', record: { kind: 'advertising', at: '2026-10-12T03:00:00Z' }, dueBy: '2026-10-26' };
+    expect(assertNotificationBackendBridgeRecordNoticePayload({ expectedPlayer: 't2_a', notice, channel: 'in-game' })
+      .notice).toEqual(notice);
+    // Only the backend records a pushed notice.
+    expect(() => assertNotificationBackendBridgeRecordNoticePayload({ expectedPlayer: 't2_a', notice, channel: 'push' }))
+      .toThrow();
   });
 
   it('validates events and the bridge event envelope', () => {
@@ -776,6 +875,12 @@ describe('strict notification timestamps', () => {
     }
     expect(covered.sort()).toEqual([
       'LocalNotificationRequest',
+      'NotificationBackendBridgeListConsentResult',
+      'NotificationBackendBridgeListNoticesResult',
+      'NotificationBackendBridgeRecordConsentPayload',
+      'NotificationBackendBridgeRecordConsentResult',
+      'NotificationBackendBridgeRecordNoticePayload',
+      'NotificationBackendBridgeSetReminderPayload',
       'NotificationBridgeListLocalResult',
       'NotificationBridgeScheduleLocalPayload',
       'NotificationConformanceVector',

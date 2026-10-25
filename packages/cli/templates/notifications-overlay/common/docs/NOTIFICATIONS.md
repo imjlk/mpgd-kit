@@ -40,12 +40,18 @@ left for you.
    `mpgd target init capacitor --providers notifications` to install the two
    plugins into the game-owned shell. Never install
    `@capacitor/push-notifications` next to them.
-6. Advertising on Android: the sample `events` topic is mapped to iOS only.
-   An Android FCM notification cannot carry the opt-out action that the
-   Korean rules require on every advertising push (a settings path in the
-   text does not replace it), and the kit does not render Android
-   advertising natively yet. Do not add an `android` mapping to an
-   advertising topic until it does.
+6. Advertising on Android: an Android FCM notification cannot carry the
+   opt-out action that the Korean rules require on every advertising push
+   (a settings path in the text does not replace it), so the shell renders
+   advertising pushes itself. `mpgd target init capacitor --providers
+   notifications` declares the kit's renderer
+   (`dev.mpgd.capacitor.AdvertisingMessagingService`) in a newly generated
+   Android project; for an existing one it prints the manifest lines to add.
+   `notifications/deployment.json` sets `shellRendersAdvertising: true`,
+   which lets the sample `events` topic map to `android`. The backend sends
+   advertising only to an Android installation whose shell registered the
+   renderer, so an older build of your app receives none. Remove the
+   `android` mapping (and the setting) if you ship a shell without it.
 7. Apps in Toss: register each functional-message template in the console and
    add its code to the topic's `targets.ait` mapping
    (`{ "templateSetCode": "...", "agreement": "required" }`). Apps in Toss
@@ -74,10 +80,22 @@ game has both:
   identity service answers to the Worker's `authenticateNotificationSession`
   for this session's header, the same across token refreshes (see the kit's
   `docs/CLOUDFLARE_WORKER_DEPLOY.md`, "Sessions"). Do not pass a per-token
-  or rotating id: a `GuestSessionCoordinator` view's `sessionId` may rotate
-  on refresh, so it is not that id.
+  or rotating id. With a guest-session backend, pass
+  `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it
+  answers the coordinator's `sessionFamilyId` (not a view's `sessionId`,
+  which may rotate on refresh), and refreshes the access token as needed
+  (an expired one before the request, one about to expire in the
+  background).
 
-Without either, it returns `undefined` and the settings screen asks only
+  ```ts
+  // src/main.ts, before bootstrap()
+  const guest = createGuestSessionCoordinator({ backend, credentials, installationId });
+  setStarterServerSession(createGuestServerSession(guest));
+  void guest.start();
+  ```
+
+Without either (on the Vite dev server, a development session counts as a
+session; see "Try it locally"), it returns `undefined` and the settings screen asks only
 for the OS or host permission (and withdraws a Devvit opt-in the game
 rendered). With them, the runtime registers the device for the signed-in
 player, keeps its registration state in the platform storage, and
@@ -92,6 +110,22 @@ game's notifications backend is its Devvit server, which keeps the opt-in,
 the records, and the sends, and the Worker serves no `reddit` target. The
 Worker serves the Android, iOS, and Apps in Toss providers.
 
+On Reddit the runtime runs over the Devvit server instead:
+`src/platform/buildGateways/reddit.ts` sets
+`createDevvitNotificationsBackend` as the hosted backend
+(`setStarterHostedNotificationBackend`), and the generated Devvit server
+serves it with `createDevvitNotificationsBackendBridgeHandler`. No session
+is needed: the server answers for the logged-in Reddit user, and a
+logged-out player is asked to log in first. Once Reddit approves the app
+and `integrations.notifications` is `available`, the settings screen shows
+the reminder switches there; advertising and night consent stay off,
+because Devvit delivers `service` and `requested` topics only. A reminder
+the game schedules on Reddit (`runtime.reminders.set`) needs a post or
+comment to open: pass `link` (the post id, `context.postId` from
+`@devvit/web/client`), or give the topic's `reddit` mapping a default
+`link`; the `mpgd-notifications-dispatch` task sends it through Devvit when
+it is due.
+
 The settings screen shows each
 switch from the latest record, read every time it opens and after every
 change, so a choice made on another device shows. A tap reads the records
@@ -102,3 +136,63 @@ Night consent adds to 광고성 정보 수신동의: the screen offers it only w
 advertising consent is granted, and turning advertising consent off also
 withdraws a granted night consent in the same call (two records, two result
 notices).
+
+## Try it locally
+
+You can see the settings switches record consent before you have an
+identity service, against the kit's game-services Worker on your machine:
+
+1. Fill in `advertisingSender` in `notifications/deployment.json` (the
+   Worker refuses a placeholder). In mpgd-kit, give the Worker this game's
+   catalog and deployment and the development sessions flag in
+   `apps/game-services-worker/.dev.vars` (local variables, never
+   committed), then run it with the memory store, the default in its
+   `wrangler.toml`:
+
+   ```sh
+   cd <mpgd-kit>
+   node - <game>/notifications/topics.json <game>/notifications/deployment.json \
+     > apps/game-services-worker/.dev.vars <<'EOF'
+   const fs = require('node:fs');
+   // One line of JSON in single quotes, with any ' written as \u0027.
+   const value = (file) =>
+     `'${JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8'))).replaceAll("'", '\\u0027')}'`;
+   console.log('MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS=true');
+   console.log(`MPGD_NOTIFICATIONS_CATALOG=${value(process.argv[2])}`);
+   console.log(`MPGD_NOTIFICATIONS_DEPLOYMENT=${value(process.argv[3])}`);
+   EOF
+   pnpm --dir apps/game-services-worker dev --host 127.0.0.1 --port 8787
+   ```
+
+   The Worker logs once that sessions are not authenticated. To send real
+   pushes to a phone or an emulator, follow mpgd-kit's live test runbook
+   (`docs/NOTIFICATIONS_LIVE_TEST.md`) instead of adding the key here: it
+   runs this same Worker, with `pnpm notifications:live env` writing the
+   variables and the Firebase service-account key to a file outside the
+   checkout that you link as `.dev.vars`.
+2. Start this game's dev server with the Worker URL and a development
+   session, `<playerId>` or `<playerId>.<installationId>` (letters, digits,
+   `_`, `-`):
+
+   ```sh
+   VITE_MPGD_GAME_SERVICES_URL=http://127.0.0.1:8787 \
+   VITE_MPGD_DEV_NOTIFICATION_SESSION=player-1 \
+   pnpm dev
+   ```
+
+`src/platform/developmentServerSession.ts` then signs the game in as that
+player with `Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>`,
+which the Worker accepts only with the flag. Anyone can write that header,
+so it authenticates nothing: the session exists only on the Vite dev server
+(`import.meta.env.DEV`) in the `development` mode, and the Worker refuses
+the flag with its D1 store, ignores it once `GAME_SERVICES_NOTIFICATIONS_AUTH`
+is bound, and takes development sessions only on a local host (`localhost`,
+`127.0.0.1`, `[::1]`, `*.localhost`, or `10.0.2.2`, which the Android
+emulator uses for your machine). That check reads the request's host, so
+it protects a deployed Worker, not your network: keep the local Worker on
+loopback, its default. Calling `setStarterServerSession`, even with `undefined`, turns it
+off; the first call after the game used it warns, since the notifications
+backend keeps the session it first read.
+The development session is for the notifications backend only: the
+commerce client keeps the session the game set with `setStarterServerSession`
+(or none), so its requests never carry a development header.

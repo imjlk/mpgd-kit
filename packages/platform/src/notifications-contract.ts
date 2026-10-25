@@ -146,6 +146,17 @@ export type NotificationEndpointAddress =
       readonly environment?: 'production' | 'sandbox';
       /** The device's app-scope permission when this registration was sent. */
       readonly permission: NotificationPermissionState;
+      /**
+       * True when the app renders advertising pushes itself, with the
+       * advertising opt-out action: an Android shell whose messaging service
+       * is the kit's renderer. An Android FCM notification message cannot
+       * carry actions, so under the Korean rules the backend sends
+       * advertising to an Android installation only when its latest
+       * registration says so, as a data message the shell renders. Absent
+       * means false; the backend keeps it only for a target whose pushes
+       * need it (`notificationShellRenderedAdvertisingTargets`).
+       */
+      readonly rendersAdvertising?: boolean;
     }
   /** The server resolves the recipient from the authenticated player. */
   | { readonly kind: 'platform-user' };

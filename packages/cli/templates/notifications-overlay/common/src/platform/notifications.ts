@@ -4,7 +4,9 @@ import type { TargetConfiguredGateway } from '@mpgd/target-config';
 
 import notificationTopicsJson from '../../notifications/topics.json';
 import {
+  createStarterHostedNotificationBackend,
   createStarterWorkerNotificationBackend,
+  resolveStarterHostedNotificationBackend,
   type StarterNotificationBackend,
 } from './notificationBackend';
 import { resolveStarterServerSession } from './serverSession';
@@ -23,9 +25,13 @@ import {
  * The starter topics' purposes follow the notifications RFC (open question 1):
  * `daily-ready` and `streak-at-risk` are `requested` reminders the player
  * turns on, `friend-challenge` is `service`, and `events` is the sample
- * `advertising` topic, mapped to iOS only: an Android FCM push cannot carry
- * the opt-out action the Korean rules require yet. A topic whose copy offers a reward, a benefit, or a
- * promotion is advertising: declare it so, never `requested`.
+ * `advertising` topic. On Android an FCM notification cannot carry the
+ * opt-out action the Korean rules require, so the shell renders advertising
+ * pushes itself (`mpgd target init capacitor --providers notifications`
+ * declares the kit's renderer, and `notifications/deployment.json` sets
+ * `shellRendersAdvertising`); the backend sends one only to an installation
+ * whose shell has the renderer. A topic whose copy offers a reward, a
+ * benefit, or a promotion is advertising: declare it so, never `requested`.
  */
 export const starterNotificationCatalog = notificationTopicsJson as NotificationTopicCatalog;
 
@@ -56,7 +62,11 @@ export type { StarterNotificationBackend } from './notificationBackend';
  * reminder, advertising, or night switch, because nothing could record them.
  *
  * Reddit gets no Worker backend: its notifications backend is the Devvit
- * server, which keeps the opt-in, the records, and the sends. The Worker
+ * server, which keeps the opt-in, the records, and the sends. The runtime
+ * there runs over the backend `buildGateways/reddit.ts` sets
+ * (`createDevvitNotificationsBackend`, through
+ * `setStarterHostedNotificationBackend`), which needs no game session: the
+ * Devvit server answers for the logged-in Reddit user. The Worker
  * serves the Android, iOS, and Apps in Toss providers and binds a device to
  * the session its `Authorization` header names, through its
  * `GAME_SERVICES_NOTIFICATIONS_AUTH` binding to your identity service
@@ -68,6 +78,18 @@ export type { StarterNotificationBackend } from './notificationBackend';
 export function createStarterNotificationBackend(
   platform: TargetConfiguredGateway,
 ): StarterNotificationBackend | undefined {
+  // Only a hosted backend set for this config target; other targets keep the Worker path.
+  const hosted = platform.notificationsV2 === undefined
+    ? undefined
+    : resolveStarterHostedNotificationBackend(platform.configTarget);
+  if (hosted !== undefined) {
+    return createStarterHostedNotificationBackend(platform, {
+      backend: hosted,
+      topics: starterNotificationTopics(platform.configTarget),
+      defaultLocale: starterNotificationCatalog.defaultLocale,
+      log: (message, error) => warnOnce(platform, message, error),
+    });
+  }
   return createStarterWorkerNotificationBackend(platform, {
     baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL,
     mode: import.meta.env.MODE,

@@ -841,6 +841,19 @@ async function digestPurchaseToken(packageName: string, purchaseToken: string): 
   return [...digest].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * The ledger's authority identity of a Play one-time purchase: what
+ * `verifyPurchase` records as `evidenceVerificationId`. Store-side handlers
+ * (voided purchases, RTDN) find the grant of a purchase token with it, so the
+ * raw token never needs to be stored in the ledger.
+ */
+export async function createGooglePlayProductVerificationId(
+  packageName: string,
+  purchaseToken: string,
+): Promise<string> {
+  return createGooglePlayVerificationId(await digestPurchaseToken(packageName, purchaseToken));
+}
+
 function createGooglePlayVerificationId(purchaseTokenDigest: string): string {
   return `google-play:product:${purchaseTokenDigest}`;
 }

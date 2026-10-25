@@ -9,6 +9,7 @@ import { assertReleaseManifest } from '@mpgd/release-manifest';
 import { formatMpgdReleaseId, type PlatformVersionLedger } from '@mpgd/target-config';
 
 import {
+  allowedSubmissionTransition,
   assertNativeSubmissionCheckpoint,
   checkpointNativeSubmission,
   readNativeReleaseStatus,
@@ -688,6 +689,9 @@ process.exit(result.status ?? 1);
     gameId: 'alpha',
     checkpoint: { ...resumedUpload, status: 'testflight-ready', remoteBuildId: 'build-1' },
   });
+  // A TestFlight build waiting for its export-compliance answer can expire.
+  assert.equal(allowedSubmissionTransition('action-required', 'failed'), true);
+  assert.equal(allowedSubmissionTransition('processing', 'action-required'), true);
   const submitted = await readNativeReleaseStatus({
     gameRoot: game,
     gameId: 'alpha',

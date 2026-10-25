@@ -19,4 +19,9 @@ interface ImportMetaEnv {
   readonly VITE_MPGD_GAME_SERVICES_URL?: string;
   readonly VITE_MPGD_GAME_SERVICES_TARGET?: string;
   readonly VITE_MPGD_GAME_SERVICES_TRANSPORT?: string;
+  /**
+   * Local development only: `<playerId>` or `<playerId>.<installationId>`
+   * for an unauthenticated notifications session (see `serverSession.ts`).
+   */
+  readonly VITE_MPGD_DEV_NOTIFICATION_SESSION?: string;
 }

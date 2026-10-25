@@ -86,6 +86,15 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
   'src/platform/buildGateways/capacitorIos.ts': [gatewayImport, gatewayProviders('ios')],
   'src/platform/buildGateways/reddit.ts': [
     {
+      anchor: '  createDevvitCommerceProducts,\n  createDevvitPlatformGateway,\n',
+      replacement: [
+        '  createDevvitCommerceProducts,',
+        '  createDevvitNotificationsBackend,',
+        '  createDevvitPlatformGateway,',
+        '',
+      ].join('\n'),
+    },
+    {
       anchor: "import { createDevvitWebPaymentsClient } from '@mpgd/adapter-devvit/web';\n",
       replacement: [
         'import {',
@@ -98,6 +107,7 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
     {
       anchor: "import type { RuntimeConfig } from '../runtimeDetector';\n",
       replacement: [
+        "import { setStarterHostedNotificationBackend } from '../notificationBackend';",
         "import { starterNotificationTopics } from '../notifications';",
         "import type { RuntimeConfig } from '../runtimeDetector';",
         '',
@@ -123,7 +133,14 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         '  runtime: RuntimeConfig,',
         "): Pick<Parameters<typeof createDevvitPlatformGateway>[0], 'notifications'> {",
         '  const topics = starterNotificationTopics(runtime.configTarget).map((topic) => topic.id);',
-        '  return topics.length === 0 ? {} : { notifications: { topics } };',
+        '  if (topics.length === 0) {',
+        '    return {};',
+        '  }',
+        "  // The runtime's backend is the Devvit server (consent records, reminders, notices for the",
+        '  // logged-in Reddit user), over the same server bridge as the gateway; created on first use.',
+        '  setStarterHostedNotificationBackend(runtime.configTarget, () =>',
+        '    createDevvitNotificationsBackend({ appVersion: runtime.appVersion, buildId: runtime.buildId }));',
+        '  return { notifications: { topics } };',
         '}',
         '',
         'function createCommerceOptions(): DevvitGatewayCommerceOptions | undefined {',
@@ -161,6 +178,7 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         '  createDevvitCommerceBridgeProducts,',
         '  createDevvitCommerceV2BridgeHandler,',
         '  createDevvitNotificationService,',
+        '  createDevvitNotificationsBackendBridgeHandler,',
         '  createDevvitNotificationsV2BridgeHandler,',
         "} from '@mpgd/adapter-devvit/server';",
         '',
@@ -204,7 +222,7 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         ' */',
         'const notificationTopicCatalog = notificationTopicsJson as NotificationTopicCatalog;',
         'const redditNotificationTopics = readRedditNotificationTopics();',
-        "const notificationService: Parameters<typeof handleNotificationTask>[0]['notifications'] =",
+        "const notificationService: ReturnType<typeof createDevvitNotificationService>['service'] | undefined =",
         '  redditNotificationTopics.length === 0 ? undefined : createNotificationService();',
         '// The opt-in is served only with the service that sends; a refused catalog turns both off.',
         'const notificationsBridge = notificationService === undefined',
@@ -214,6 +232,10 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         '      currentUserId: currentPlayerId,',
         '      topics: redditNotificationTopics,',
         '    });',
+        "// The webview runtime's backend: consent records, reminders, and notices for the request's user.",
+        'const notificationsBackend = notificationService === undefined',
+        '  ? undefined',
+        '  : createDevvitNotificationsBackendBridgeHandler({ service: notificationService, context: () => context });',
         'const handleBridgeRequest = createDevvitBridgeHandler({',
         '  redis,',
         '  currentPlayerId,',
@@ -221,6 +243,7 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         '  storageKeyNamespace: gameName,',
         '  ...(commerce === undefined ? {} : { commerce }),',
         '  ...(notificationsBridge === undefined ? {} : { notifications: notificationsBridge }),',
+        '  ...(notificationsBackend === undefined ? {} : { notificationsBackend }),',
         '});',
         '',
       ].join('\n'),
@@ -252,7 +275,7 @@ const commonEdits: Readonly<Record<string, readonly AnchoredEdit[]>> = {
         ' * deployment the service refuses turns notifications off, never the game',
         ' * server.',
         ' */',
-        "function createNotificationService(): Parameters<typeof handleNotificationTask>[0]['notifications'] {",
+        "function createNotificationService(): ReturnType<typeof createDevvitNotificationService>['service'] | undefined {",
         '  try {',
         '    return createDevvitNotificationService({',
         '      redis,',
@@ -533,11 +556,65 @@ export const notificationsCapacitorSupportFiles: readonly string[] = Object.free
 /**
  * Files of the base game template the notifications modules import, which a
  * game created by an earlier CLI release may not have: written from the
- * template when missing, kept when the game has one.
+ * template when missing, kept when the game has one. A file listed in
+ * `notificationsCapacitorTemplateSupportImporters` is written only together
+ * with its importer.
  */
-export const notificationsCapacitorTemplateSupportFiles: readonly string[] = Object.freeze([
+export const notificationsCapacitorTemplateSupportFiles = Object.freeze([
   'src/platform/serverSession.ts',
-]);
+  'src/platform/developmentServerSession.ts',
+] as const);
+
+/**
+ * Template support files only one other support file imports: the importer,
+ * and the warning for a game that keeps its own importer without importing
+ * the file (an earlier `serverSession.ts`). Such a game would never import the
+ * file, and its `@mpgd/game-services` may predate what the file imports, so
+ * the file is not written for it. An importer that imports it gets it back.
+ */
+export const notificationsCapacitorTemplateSupportImporters: Readonly<
+  Partial<Record<
+    (typeof notificationsCapacitorTemplateSupportFiles)[number],
+    {
+      readonly importer: (typeof notificationsCapacitorTemplateSupportFiles)[number];
+      readonly warning: string;
+      /**
+       * A kit export the file imports, which the game's installed package
+       * must have before the file is written (an older package lacks it).
+       */
+      readonly requires?: { readonly packageName: string; readonly exportName: string };
+    }
+  >>
+> = Object.freeze({
+  'src/platform/developmentServerSession.ts': {
+    importer: 'src/platform/serverSession.ts',
+    requires: { packageName: '@mpgd/game-services', exportName: 'createDevelopmentServerSession' },
+    warning: 'src/platform/serverSession.ts predates development notification sessions '
+      + '(VITE_MPGD_DEV_NOTIFICATION_SESSION); to try notifications locally, copy serverSession.ts and '
+      + 'developmentServerSession.ts from the starter template.',
+  },
+});
+
+/**
+ * Whether `source` names the module `./<name>` (with or without `.js` or
+ * `.ts`) as a string outside comments: any static, side-effect, or dynamic
+ * import or re-export of it. A commented-out import does not count.
+ */
+export function sourceReferencesRelativeModule(source: string, name: string): boolean {
+  const specifiers = new Set([`./${name}`, `./${name}.js`, `./${name}.ts`]);
+  let found = false;
+  // One pass over strings and comments, as in capacitorGatewayRegistersNotifications.
+  source.replace(
+    /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
+    (token) => {
+      if (!token.startsWith('/') && specifiers.has(token.slice(1, -1))) {
+        found = true;
+      }
+      return token;
+    },
+  );
+  return found;
+}
 
 /** Whether a Capacitor gateway already registers a notifications provider. */
 export function capacitorGatewayRegistersNotifications(source: string): boolean {

@@ -549,8 +549,8 @@ export function devvitNotificationSession(userId: string): NotificationSession {
 
 /** The Devvit request context fields this session reads (`context` from `@devvit/web/server`). */
 export interface DevvitNotificationSessionContext {
-  /** The logged-in Reddit user of the current request (`context.userId`). */
-  readonly userId?: string | undefined;
+  /** The logged-in Reddit user of the current request (`context.userId`); absent or `null` when logged out. */
+  readonly userId?: string | null | undefined;
 }
 
 /**

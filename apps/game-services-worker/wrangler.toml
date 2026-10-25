@@ -11,6 +11,15 @@ MPGD_STORE = "memory"
 # check. Never set this for a deployment; the Worker refuses to start when it is
 # combined with MPGD_STORE = "d1".
 # MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE = "true"
+# Local-only: without a GAME_SERVICES_NOTIFICATIONS_AUTH binding, the
+# notifications session routes accept
+# "Authorization: Bearer mpgd-dev.<playerId>.<sessionId>.<installationId>",
+# which anyone can write (no authentication). Never set this for a deployment;
+# with MPGD_STORE = "d1" the Worker refuses to build its fetch handler and
+# service, so the first request or RPC fails, and on any other store it takes
+# development sessions only on localhost, 127.0.0.1, [::1], *.localhost, or
+# 10.0.2.2 (the Android emulator); other hosts answer 401.
+# MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"
 # The unverified leaderboard record route (/game-services/leaderboard/record and
 # /rpc/leaderboard/recordScore) is not mounted on the public ingress by default;
 # public requests receive 404 and score writes stay on the service binding RPC.
@@ -93,6 +102,21 @@ head_sampling_rate = 1
 # [[services]]
 # binding = "GAME_SERVICES_IOS_EVIDENCE_VERIFIER"
 # service = "game-evidence-verifier-ios"
+#
+# App Store Server Notifications V2 (refunds): mounts
+# /app-store/notifications/v2 and /app-store/notifications/v2/sandbox, set as
+# the Production and Sandbox Server URLs (Version 2) in App Store Connect. The
+# binding verifies the signedPayload with Apple's library
+# (createAppleServerNotificationVerifier); the bundle id is required with it.
+# See docs/CLOUDFLARE_WORKER_DEPLOY.md#store-refunds-and-play-finalization.
+#
+# Under [vars]:
+# GAME_SERVICES_APP_STORE_BUNDLE_ID = "com.example.game"
+#
+# [[services]]
+# binding = "GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER"
+# service = "game-evidence-verifier-ios"
+# entrypoint = "AppStoreNotificationVerifier"
 #
 # [[services]]
 # binding = "GAME_SERVICES_AIT_EVIDENCE_VERIFIER"
@@ -201,6 +225,15 @@ head_sampling_rate = 1
 # queue = "mpgd-notifications"
 # max_retries = 5
 # dead_letter_queue = "mpgd-notifications-dead"
+#
+# Store server upkeep (with D1 and the in-Worker Play boundary above): apply
+# migration 0009_store_server.sql. The same cron retries owed Play acknowledges
+# and consumes within Play's three-day window and sweeps Play voided purchases
+# (the service account needs financial data access, "View financial reports" in
+# Google's docs). Optional tuning, under [vars]:
+# MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES = "60"
+# MPGD_STORE_SERVER_SUBREQUEST_BUDGET = "300"
+# MPGD_STORE_SERVER_CRON_BUDGET_SECONDS = "15"
 #
 # [triggers]
 # Workers Paid only. A free-plan cron has 10 ms of CPU and 50 external subrequests.

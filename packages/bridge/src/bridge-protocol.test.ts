@@ -15,6 +15,7 @@ import {
 } from '@mpgd/platform/commerce';
 import {
   assertNotificationEventEnvelope,
+  notificationBackendBridgeMethods,
   notificationBridgeMethods,
   notificationsProtocol,
   type NotificationEvent,
@@ -44,6 +45,7 @@ import {
   bridgeCommerceEventProtocol,
   bridgeCommerceV2Methods,
   bridgeEventProtocol,
+  bridgeNotificationsBackendMethods,
   bridgeNotificationsEventProtocol,
   bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
@@ -51,9 +53,11 @@ import {
   createBridgeError,
   createBridgeEventSource,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsBackendUnavailableBridgeError,
   createNotificationsV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
   isBridgeCommerceV2Method,
+  isBridgeNotificationsBackendMethod,
   isBridgeNotificationsV2Method,
   notificationsV2UnavailableBridgeErrorCode,
   type BridgeEvent,
@@ -64,6 +68,8 @@ import {
   type BridgeNotificationsV2Method,
 } from './index';
 import {
+  assertBridgeNotificationsBackendPayload,
+  assertBridgeNotificationsBackendResult,
   assertBridgeNotificationsV2Payload,
   assertBridgeNotificationsV2Result,
   type BridgeNotificationsV2Payload,
@@ -997,6 +1003,66 @@ function assertThrows(callback: () => unknown, message: string): void {
 
   throw new Error(message);
 }
+
+// The notifications backend methods: their own list, apart from the provider methods.
+assertEqual(
+  JSON.stringify(bridgeNotificationsBackendMethods),
+  JSON.stringify(notificationBackendBridgeMethods),
+  'bridge notifications backend methods should equal @mpgd/platform/notifications notificationBackendBridgeMethods',
+);
+for (const method of bridgeNotificationsBackendMethods) {
+  assertEqual(
+    isBridgeNotificationsBackendMethod(method),
+    true,
+    `${method} should be a backend method`,
+  );
+  assertEqual(isBridgeNotificationsV2Method(method), false, `${method} is not a provider method`);
+  assertDoesNotThrow(
+    () => assertBridgeRequest({ ...validBridgeRequest, method }),
+    `${method} should be a bridge method`,
+  );
+  const answer = createNotificationsBackendUnavailableBridgeError(
+    { id: `backend-${method}`, method },
+    'Test transport',
+  );
+  assertDoesNotThrow(
+    () => assertBridgeResponse(answer),
+    `${method} unavailable response should pass`,
+  );
+  if (answer.ok) {
+    throw new Error(`${method} without a backend should fail.`);
+  }
+  assertEqual(
+    answer.error.code,
+    'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    `${method} without a backend`,
+  );
+  assertEqual(answer.error.retryable, false, `${method} without a backend is not retryable`);
+}
+for (const method of bridgeNotificationsV2Methods) {
+  assertEqual(
+    isBridgeNotificationsBackendMethod(method),
+    false,
+    `${method} is not a backend method`,
+  );
+}
+assertThrows(
+  () =>
+    assertBridgeNotificationsBackendPayload(
+      'notifications.v2.getPermission' as 'notifications.backend.getSession',
+      {},
+    ),
+  'a provider method should not reach a backend payload validator',
+);
+assertThrows(
+  () => assertBridgeNotificationsBackendPayload('notifications.backend.listConsent', {}),
+  'a backend call names the player it began for',
+);
+assertDoesNotThrow(
+  () =>
+    assertBridgeNotificationsBackendResult('notifications.backend.getSession', { session: null }),
+  'a signed-out session read passes',
+);
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {

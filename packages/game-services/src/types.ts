@@ -145,6 +145,39 @@ export interface EntitlementLedgerRevocation {
   readonly evidenceVerificationId?: string;
 }
 
+/**
+ * A ledger note: a store event about a grant that changes nothing by itself
+ * and grants nothing (today an App Store `REFUND_REVERSED` after the grant
+ * was revoked). It is kept so support can act on it; a re-grant is a new,
+ * game-owned grant entry.
+ */
+export interface EntitlementLedgerNote {
+  /** Unique per store event, for example `app-store:notification:<notificationUUID>`. */
+  readonly noteId: string;
+  readonly kind: 'refund_reversed';
+  readonly playerId: string;
+  /** The grant the event is about. */
+  readonly ledgerEntryId: string;
+  /** The `revoke` entry the store reversed, when there is one. */
+  readonly revocationLedgerEntryId?: string;
+  readonly recordedAt: string;
+  readonly payload: EntitlementLedgerPayload;
+}
+
+export function assertEntitlementLedgerNote(input: EntitlementLedgerNote): EntitlementLedgerNote {
+  assertRecord(input, 'EntitlementLedgerNote');
+  assertNonEmptyString(input.noteId, 'noteId');
+  if (input.kind !== 'refund_reversed') {
+    throw new Error('kind must be refund_reversed.');
+  }
+  assertNonEmptyString(input.playerId, 'playerId');
+  assertNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
+  assertOptionalNonEmptyString(input.revocationLedgerEntryId, 'revocationLedgerEntryId');
+  assertNonEmptyString(input.recordedAt, 'recordedAt');
+  assertPayload(input.payload);
+  return input;
+}
+
 export interface EntitlementRevocationTransaction extends EntitlementLedgerRevocation {
   readonly ledgerEntryId: string;
 }

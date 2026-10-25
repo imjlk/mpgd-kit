@@ -11,8 +11,10 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import {
   createWorkerFetchHandler,
   createWorkerService,
+  createWorkerStoreServerDependencies,
   type GameServicesWorkerEnv,
 } from './handler.js';
+import { runScheduledStoreServer } from './storeServerCron.js';
 import {
   asWorkerNotificationRpcResult,
   consumeNotificationDispatchBatch,
@@ -74,9 +76,35 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
     await consumeNotificationDispatchBatch(this.env, batch);
   }
 
-  /** The cron trigger: notification purges and the scheduler (reminders, notice pushes, due rows). */
+  /**
+   * The cron trigger: notification purges and the scheduler (reminders,
+   * notice pushes, due rows), and the store server upkeep (owed Play
+   * acknowledges and consumes, the Play voided purchases sweep). Each keeps
+   * to its own subrequest budget; one failing never skips the other.
+   */
   override async scheduled(controller: ScheduledController): Promise<void> {
-    await runScheduledNotifications(this.env, { cron: controller.cron });
+    const [notifications] = await Promise.allSettled([
+      runScheduledNotifications(this.env, { cron: controller.cron }),
+      runStoreServer(this.env, controller.cron),
+    ]);
+    // Both runs finish before the event ends; a notifications failure is
+    // reported after the store server run, never instead of it.
+    if (notifications.status === 'rejected') {
+      throw notifications.reason;
+    }
+  }
+}
+
+async function runStoreServer(env: GameServicesWorkerEnv, cron: string): Promise<void> {
+  try {
+    await runScheduledStoreServer(env, { cron }, createWorkerStoreServerDependencies(env));
+  } catch (error) {
+    console.error(
+      // A configuration error (the Play boundary settings); provider errors
+      // are caught inside the run and carry no purchase data.
+      'Store server cron failed:',
+      error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error',
+    );
   }
 }
 

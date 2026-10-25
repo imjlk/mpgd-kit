@@ -42,9 +42,16 @@ rewarded/interstitial semantics, presentation ownership, evidence registration,
 and fake-SDK conformance vectors. It is also a draft; its scenarios do not yet
 certify adapter behavior.
 
+To ship a game to Google Play and the App Store, follow the
+[mobile launch checklist](MOBILE_LAUNCH_CHECKLIST.md); the
+[store privacy disclosures](STORE_PRIVACY_DISCLOSURES.md) map kit features to
+the Data safety and App Privacy answers.
+
 The [notifications guide](NOTIFICATIONS.md) explains what each target supports,
 the consent flow, the Korean advertising rules, and how to add a topic; the
-[Firebase setup guide](FIREBASE_NOTIFICATIONS.md) covers Android and iOS push.
+[Firebase setup guide](FIREBASE_NOTIFICATIONS.md) covers Android and iOS push,
+and the [live test runbook](NOTIFICATIONS_LIVE_TEST.md) the first run against
+real FCM on an emulator.
 The [notifications v2 RFC](specs/notifications/notifications-v2-rfc.md)
 proposes capability-declared notification providers, server-side consent
 records, one delivery policy gate, reminders, and conformance vectors. Its

@@ -7,6 +7,7 @@ import {
   decodeBridgeStorageLoadData,
   isBridgeNotificationsV2Method,
   type BridgeMethod,
+  type BridgeNotificationsBackendMethod,
   type BridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
@@ -45,6 +46,10 @@ import {
   type CommerceProvider,
 } from '@mpgd/platform/commerce';
 import type { NotificationCapabilities, NotificationProvider } from '@mpgd/platform/notifications';
+import type {
+  NotificationRuntimeBackend,
+  NotificationRuntimeSession,
+} from '@mpgd/platform/notifications-runtime';
 import { withShareIntentCheck } from '@mpgd/platform/routes';
 
 import { assertDevvitOrderEvidence, type DevvitPaidOrder } from './commerce-contract.js';
@@ -174,10 +179,17 @@ export interface DevvitLoginPrompt {
   showLoginPrompt(): void;
 }
 
-export function createDevvitPlatformGateway(
-  input: DevvitPlatformGatewayOptions,
-): PlatformGateway {
-  async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
+/** Where a request goes: the injected bridge, the host's global bridge, the fallback, or the oRPC bridge. */
+type DevvitBridgeTarget = Pick<
+  DevvitPlatformGatewayOptions,
+  'appVersion' | 'buildId' | 'bridge' | 'fallbackBridge' | 'rpcEndpoint'
+>;
+
+/** Sends one request over the bridge the gateway uses; a bridge error rejects as a `DevvitBridgeError`. */
+function createDevvitBridgeRequest(
+  input: DevvitBridgeTarget,
+): <TData>(method: BridgeMethod, payload: unknown) => Promise<TData> {
+  return async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
     const bridge =
       input.bridge ??
       getBridge() ??
@@ -201,7 +213,183 @@ export function createDevvitPlatformGateway(
     }
 
     return response.data as TData;
-  }
+  };
+}
+
+export interface DevvitNotificationsBackendOptions extends DevvitBridgeTarget {
+  /** How long one backend request may take; 15 seconds by default (see `createDevvitNotificationsBackendClient`). */
+  readonly timeoutMs?: number;
+  /**
+   * While the client chunk has not loaded, or no session read has settled
+   * (none answered a signed-in player, and none failed in a way a retry
+   * cannot change), `session()` tries again at most this
+   * often; 5 seconds by default. After a
+   * load the client refuses (options out of range), `session()` does not try
+   * again; the other calls answer `NOTIFICATIONS_INVALID_INPUT`, except
+   * `unregisterEndpoint`, which has nothing to unbind and resolves.
+   */
+  readonly retryIntervalMs?: number;
+  /** The clock the retry interval reads, in milliseconds; `Date.now` by default. */
+  readonly now?: () => number;
+  /** Loads the backend client chunk, when the backend is created; the dynamic import by default. Tests inject it. */
+  readonly load?: () => Promise<DevvitNotificationsBackendClientModule>;
+}
+
+/** What `createDevvitNotificationsBackend` uses from the backend client chunk. */
+export type DevvitNotificationsBackendClientModule = Pick<
+  typeof import('./notifications-backend-client.js'),
+  'createDevvitNotificationsBackendClient'
+>;
+
+/** The notifications runtime's backend on Devvit, with the session read the server answers. */
+export interface DevvitNotificationsBackend extends NotificationRuntimeBackend {
+  /**
+   * Reads the session the Devvit server answers for the request's logged-in
+   * user and announces a new one through `onAuthenticated`; the backend
+   * starts one read when it is created.
+   */
+  refreshSession(): Promise<NotificationRuntimeSession | undefined>;
+}
+
+/**
+ * The notifications runtime's backend for a Reddit game
+ * (`NotificationRuntimeBackend` for `createNotificationRuntime` from
+ * `@mpgd/platform/notifications-runtime`): the Devvit server's notifications
+ * service over the same server bridge as `createDevvitPlatformGateway`,
+ * served by `createDevvitNotificationsBackendBridgeHandler` from
+ * `@mpgd/adapter-devvit/server`.
+ *
+ * Its client and validators load in their own chunk, starting now, and the
+ * backend reads the session as soon as they have loaded. Until the server
+ * has answered for a logged-in user, `session()` is `undefined` and calls
+ * answer `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`; the runtime hears of the
+ * user through `onAuthenticated`. A chunk that fails to load is
+ * `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` too; the next call, or a
+ * `session()` read at most once per `retryIntervalMs`, loads again, and a
+ * session read that failed is retried the same way. Options the client
+ * refuses are not retried from `session()`: calls answer
+ * `NOTIFICATIONS_INVALID_INPUT`, and the refusal is logged once. While the
+ * server answers signed out, `session()` reads again at most once per
+ * `retryIntervalMs`, so a login is picked up whether or not Reddit reloads
+ * the post.
+ * The player is always the one the server answers for; the webview never
+ * names one it chose.
+ */
+export function createDevvitNotificationsBackend(
+  options: DevvitNotificationsBackendOptions,
+): DevvitNotificationsBackend {
+  const request = createDevvitBridgeRequest(options);
+  const importClient = options.load ?? (() => import('./notifications-backend-client.js'));
+  // `defaultDevvitNotificationsBackendRetryIntervalMs` of the client chunk, which this entry does not import.
+  const retryIntervalMs = options.retryIntervalMs ?? 5_000;
+  const now = options.now ?? Date.now;
+  const listeners = new Set<(session: NotificationRuntimeSession) => void>();
+  let client: DevvitNotificationsBackend | undefined;
+  let loading: Promise<DevvitNotificationsBackend> | undefined;
+  /** When the last chunk load started or failed, whichever is later. */
+  let lastLoadAt: number | undefined;
+  /** A load failed in a way another load cannot change (options the client refuses). */
+  let loadRefused = false;
+  const load = (): Promise<DevvitNotificationsBackend> => {
+    if (client !== undefined) {
+      return Promise.resolve(client);
+    }
+    if (loading !== undefined) {
+      return loading;
+    }
+    lastLoadAt = now();
+    const attempt = (async () => {
+      let module: DevvitNotificationsBackendClientModule;
+      try {
+        module = await importClient();
+      } catch (error) {
+        throw new PlatformOperationError({
+          code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+          message: `The Devvit notifications backend client did not load: ${errorMessage(error)}`,
+          retryable: true,
+        });
+      }
+      // Options the client refuses (a timeoutMs out of range) fail as they are, not as a load to retry.
+      const created = module.createDevvitNotificationsBackendClient({
+        request: (method: BridgeNotificationsBackendMethod, payload: unknown) => request<unknown>(method, payload),
+        retryIntervalMs,
+        now,
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      });
+      created.onAuthenticated((session) => {
+        for (const listener of [...listeners]) {
+          try {
+            listener(session);
+          } catch {
+            // One listener failing never keeps the session from the others.
+          }
+        }
+      });
+      client = created;
+      // Read the session now, so the runtime hears of a logged-in user.
+      void created.refreshSession().catch(() => {});
+      return created;
+    })();
+    loading = attempt;
+    attempt.then(
+      () => {
+        loading = undefined;
+      },
+      (error: unknown) => {
+        loading = undefined;
+        lastLoadAt = now();
+        const refused = !(typeof error === 'object' && error !== null
+          && (error as { readonly retryable?: unknown }).retryable === true);
+        if (refused && !loadRefused) {
+          console.error('[notifications] the Devvit notifications backend refused its options.', error);
+        }
+        loadRefused = loadRefused || refused;
+      },
+    );
+    return attempt;
+  };
+  void load().catch(() => {});
+  return {
+    session() {
+      if (client !== undefined) {
+        return client.session();
+      }
+      // The runtime makes no backend call while it sees no session, so a
+      // chunk that failed to load is loaded again from here.
+      // A load another load cannot fix is not retried from here; calls still report it.
+      if (
+        loading === undefined
+        && !loadRefused
+        && (lastLoadAt === undefined || !withinBackendRetryInterval(now() - lastLoadAt, retryIntervalMs))
+      ) {
+        void load().catch(() => {});
+      }
+      return undefined;
+    },
+    onAuthenticated(listener) {
+      const entry = (session: NotificationRuntimeSession): void => listener(session);
+      listeners.add(entry);
+      return () => {
+        listeners.delete(entry);
+      };
+    },
+    refreshSession: async () => (await load()).refreshSession(),
+    recordConsent: async (record) => (await load()).recordConsent(record),
+    listConsent: async () => (await load()).listConsent(),
+    registerEndpoint: async (registration) => (await load()).registerEndpoint(registration),
+    // Nothing was registered before the client loaded, and no session is signed in.
+    unregisterEndpoint: async (input) => client?.unregisterEndpoint(input),
+    setReminder: async (reminder) => (await load()).setReminder(reminder),
+    cancelReminder: async (input) => (await load()).cancelReminder(input),
+    listNotices: async () => (await load()).listNotices(),
+    recordNotice: async (input) => (await load()).recordNotice(input),
+  };
+}
+
+export function createDevvitPlatformGateway(
+  input: DevvitPlatformGatewayOptions,
+): PlatformGateway {
+  const request = createDevvitBridgeRequest(input);
 
   const commerce: CommerceProvider | undefined = input.commerce === undefined
     ? undefined
@@ -648,6 +836,16 @@ function generateRequestId(): string {
   }
 
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Whether `elapsed` milliseconds are still inside the retry interval; a
+ * clock that went backwards (a negative or non-finite difference) counts as
+ * past it. The same rule as the client chunk's `withinRetryInterval`, which
+ * this entry does not import.
+ */
+function withinBackendRetryInterval(elapsed: number, retryIntervalMs: number): boolean {
+  return elapsed >= 0 && elapsed < retryIntervalMs;
 }
 
 function errorMessage(error: unknown): string {

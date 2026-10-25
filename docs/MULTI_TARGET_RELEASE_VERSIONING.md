@@ -111,6 +111,40 @@ The values are also captured in the release manifest. A mismatch fails before
 an artifact is produced; the target tool never silently rewrites a store
 identity.
 
+#### Stamping the reserved version numbers
+
+`mpgd deploy run` sets `MPGD_NATIVE_VERSION_STAMP=1` for its builds, so a
+release does not need a commit of the next `versionCode` or build number.
+With stamping on (you can also set it for a manual `mpgd target build`):
+
+1. The game-owned source is checked as above, except for the version
+   numbers. On Android every `versionCode`/`versionName` assignment must
+   still be a literal the tool can rewrite (the committed `versionCode 1`
+   is fine). On iOS the numbers may be missing, inherited or set in an
+   xcconfig, but a conditional assignment such as
+   `MARKETING_VERSION[sdk=iphoneos*]` at the target or project level, or a
+   duplicate assignment in the App target's Release settings, is rejected.
+   The package ID, bundle ID, suffix and setter rules still apply.
+2. The reserved numbers are written into the build's staged copy of the
+   shell, never into the game checkout: every literal `versionCode` /
+   `versionName` of the app Gradle file, and `MARKETING_VERSION` /
+   `CURRENT_PROJECT_VERSION` in the App target's `Release` build settings
+   (added there when the target does not set them; target settings take
+   precedence over the project level and an xcconfig). Commented-out
+   assignments are left alone.
+3. The staged copy must then pass the strict check against the
+   reservation. For `signed-archive` and `store-export` builds, the signed
+   AAB manifest or the archived app's and IPA's `Info.plist` must carry the
+   same numbers after packaging.
+
+Debug configurations and other Xcode targets are left as committed. The tool
+does not read xcconfig files, so a conditional version assignment inside an
+xcconfig (for example `MARKETING_VERSION[sdk=iphoneos*]`) is not detected;
+keep version numbers out of xcconfig files. Signed builds still catch a
+mismatch when they inspect the archived `Info.plist`. Without
+`MPGD_NATIVE_VERSION_STAMP=1` the source must hold the exact numbers, as
+before.
+
 ### Native build modes and submission evidence
 
 Set `MPGD_NATIVE_BUILD_MODE` explicitly for a production native build. Staging

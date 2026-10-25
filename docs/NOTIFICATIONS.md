@@ -30,7 +30,12 @@ is the practical summary. For Android and iOS also read the
   `createDevvitPlatformGateway`, and the Devvit server passes
   `createDevvitNotificationsV2BridgeHandler({ notifications, currentUserId,
   topics })` to its bridge and runs `createDevvitNotificationService({ redis,
-  notifications, catalog, deployment })` in its scheduler tasks (see the
+  notifications, catalog, deployment })` in its scheduler tasks. For
+  reminders, records, and notices the server also passes
+  `createDevvitNotificationsBackendBridgeHandler({ service, context: () =>
+  context })` as the bridge's `notificationsBackend`, and the game runs
+  `createNotificationRuntime` over `createDevvitNotificationsBackend({
+  appVersion, buildId })` (see the
   [Devvit adapter README](https://github.com/imjlk/mpgd-kit/blob/main/adapters/devvit/README.md#notifications)).
 
 Before every release run `pnpm validate:notifications`. It checks the catalog
@@ -41,13 +46,13 @@ fails until the advertising sender's contact placeholder is replaced.
 
 <!--
 @link ../adapters/capacitor/src/notifications-provider.ts#createCapacitorNotificationProvider Android and iOS remote purposes match the standard FCM registry, including advertising.
-@link ../packages/catalog/src/notification-topics.ts#validateNotificationTopicCatalog An advertising topic must not map to android until the shell renders the opt-out action.
-@evidence specs/notifications/notifications-v2-rfc.md#profile-capacitor Map no advertising topic to Android until the shell renders the opt-out action.
+@link ../packages/catalog/src/notification-topics.ts#validateNotificationTopicCatalog An advertising topic maps to android only when the deployment sets shellRendersAdvertising.
+@evidence specs/notifications/notifications-v2-rfc.md#profile-capacitor Android advertising pushes are rendered by the shell with the opt-out action (AR1).
 -->
 
 | Target | Consent UI | Remote | Local reminders | Opens | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Android (Capacitor) | OS dialog for the app; on Android 13+ two denials leave only settings (a dismissed dialog counts none) | FCM, all three purposes, matching the standard registry. Map no advertising topic to Android until the shell renders the opt-out action; the catalog validator refuses that mapping | yes, inexact | push data `route` | Channels per purpose; an advertising topic, once the shell can render it, gets its own. |
+| Android (Capacitor) | OS dialog for the app; on Android 13+ two denials leave only settings (a dismissed dialog counts none) | FCM, all three purposes, matching the standard registry. Advertising is a data message the shell renders with the opt-out action: it needs the kit's messaging service in the shell and `shellRendersAdvertising` in the deployment, and under the Korean rules reaches only installations that registered the renderer | yes, inexact | push data `route` | Channels per purpose; advertising gets its own (`mpgd-advertising`). |
 | iOS (Capacitor) | OS dialog, once; a denial leaves only settings | FCM (relayed to APNs), all three purposes | yes, at most 64 pending | push data `route` | Advertising pushes carry the opt-out action through the `mpgd-advertising` category. |
 | Apps in Toss | A Toss sheet per topic, from a tap | Functional messages (`service`, `requested`) through the partner API | no | landing URL per console template | No advertising, and functional messages may not carry benefits or retention content: check that a reminder qualifies before mapping it (the starter maps none). Each topic maps `targets.ait` to the console template code and `agreement`. Toss gives no read, so the backend record decides. |
 | Reddit (Devvit) | The game's own toggle, from a tap; the player must be logged in | Devvit notifications (`service`, `requested`), copy pre-approved by Devvit admins | no | the linked post | Gated beta: keep `integrations.notifications` at `approval-required` until Reddit approves the app. Each send needs a post or comment link. |
@@ -130,16 +135,38 @@ Rules the starter's settings screen follows, and your own screen must too:
 > client then sends too. `sessionId` must be the stable session-family id:
 > the `sessionId` the identity service answers to
 > `authenticateNotificationSession` for that header, the same across token
-> refreshes. A `GuestSessionCoordinator` view's `sessionId` may rotate on
-> refresh, so do not pass it as that id. Without a URL or a session (or
+> refreshes. With a guest-session backend, pass
+> `createGuestServerSession(coordinator)` from `@mpgd/game-services`: it
+> answers the coordinator's `sessionFamilyId` (the backend's, or one the
+> coordinator derives and keeps across refreshes and restarts), not a view's
+> `sessionId`, which may rotate on refresh, and refreshes the access token
+> as needed (an expired one before the request, one about to expire in the
+> background). To try the switches before you have an identity
+> service, run the Worker locally with
+> `MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS = "true"` (memory
+> store only, and only on a local host) and start the game's dev server with
+> `VITE_MPGD_DEV_NOTIFICATION_SESSION=<playerId>`: the starter then signs in
+> with an unauthenticated development session (the generated game's
+> `docs/NOTIFICATIONS.md`, "Try it locally", and the
+> [Worker guide](./CLOUDFLARE_WORKER_DEPLOY.md#notifications-v2); the
+> [live test runbook](./NOTIFICATIONS_LIVE_TEST.md) runs the same local
+> Worker to send real pushes). Without a URL or a session (or
 > with a production URL the commerce rule refuses, or no notifications
 > provider) it returns `undefined`, and the settings screen asks for the OS or host
 > permission (and withdraws a Devvit opt-in the game rendered), shows no
 > reminder, advertising, or night switch, and says why. A Reddit game gets
-> no Worker backend either: its notifications backend is the Devvit server.
+> no Worker backend: its notifications backend is the Devvit server, and the
+> starter runs the runtime over it (`createDevvitNotificationsBackend`, set
+> by the Reddit gateway builder), with no game session: the server answers
+> for the logged-in Reddit user. The settings screen then shows the reminder
+> switches on Reddit too, once the player is logged in; advertising and
+> night consent stay off there, because Devvit delivers `service` and
+> `requested` topics only.
 > The runtime compares its provider with the Worker's registry entry for the
 > target (`GET /providers`), and runs without the check when the Worker
-> cannot be reached or lists no entry for the target. The runtime keeps its last registration, push
+> cannot be reached or lists no entry for the target. The Reddit runtime
+> runs without it: its provider and the Devvit server's service come from
+> the same adapter and deployment. The runtime keeps its last registration, push
 > address included, in the platform storage, like other game data. A game
 > created before this release has no `serverSession.ts`; `mpgd target init
 > capacitor --providers notifications` writes one, and its commerce client
@@ -220,7 +247,7 @@ those exceptions, not the guide's.
 | `daily-ready` | `requested` | A reminder the player turns on about their own daily run. |
 | `streak-at-risk` | `requested` | A reminder the player turns on about their own streak. |
 | `friend-challenge` | `service` | Relays a real player's action. |
-| `events` | `advertising` | Sample advertising topic, iOS only: an Android FCM push cannot carry the opt-out action the Korean rules require until the shell renders it natively. |
+| `events` | `advertising` | Sample advertising topic, on iOS and Android. On Android the shell renders it with the opt-out action the Korean rules require (see the [Firebase setup](FIREBASE_NOTIFICATIONS.md#3-android)). |
 | `consent-notice` | `service` | The notice topic; its text is `notices.copy`. |
 
 The purposes of `daily-ready` and `streak-at-risk` were decided for the kit
@@ -295,4 +322,7 @@ invitation to buy.
 The starter's settings model, the CLI wiring, and the catalog are covered by
 the kit's tests, and every provider passes the RFC's conformance vectors with
 fakes. Delivery on a device, Firebase configuration, Apps in Toss templates,
-and Devvit approval are verified by you, per target, before release.
+and Devvit approval are verified by you, per target, before release. The
+[live test runbook](NOTIFICATIONS_LIVE_TEST.md) walks through the first
+Android run: a local Worker sending through FCM to a game on an emulator,
+from the permission dialog to the tap that opens the game.
