@@ -158,7 +158,9 @@ export class LobbyScene extends Phaser.Scene {
 function restoreOutcomeText(locale: StarterContext['locale'], result: StarterRestoreOutcome): string {
   switch (result.outcome) {
     case 'restored':
-      return t(locale, 'restoreDone', { count: result.granted });
+      return result.granted === 0
+        ? t(locale, 'restoreNothing')
+        : t(locale, 'restoreDone', { count: result.granted });
     case 'needs-session':
       return t(locale, 'restoreNeedsSession');
     default:

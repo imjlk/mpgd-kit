@@ -32,15 +32,18 @@ export function mountRestorePurchasesButton(mount: HTMLElement, context: Starter
   status.setAttribute('role', 'status');
   status.style.cssText = 'position:absolute;bottom:44px;left:8px;margin:0;padding:4px 8px;'
     + 'color:#d6dee8;background:#0b1726cc;font:13px system-ui,sans-serif;border-radius:6px;';
-  status.hidden = true;
+  status.setAttribute('aria-live', 'polite');
+  // Rendered from the start (empty) so screen readers announce its updates.
+  status.style.visibility = 'hidden';
   // Taps on the button stay out of the game's own tap handling.
   button.addEventListener('pointerdown', (event) => event.stopPropagation());
   button.addEventListener('click', () => {
-    button.disabled = true;
-    status.hidden = false;
+    // aria-disabled keeps keyboard focus; a second tap joins the running restore.
+    button.setAttribute('aria-disabled', 'true');
+    status.style.visibility = 'visible';
     status.textContent = t(context.locale, 'restoreWorking');
     void restore.restore().then((result) => {
-      button.disabled = false;
+      button.removeAttribute('aria-disabled');
       status.textContent = restoreOutcomeText(context, result);
     });
   });
@@ -54,7 +57,9 @@ export function mountRestorePurchasesButton(mount: HTMLElement, context: Starter
 function restoreOutcomeText(context: StarterContext, result: StarterRestoreOutcome): string {
   switch (result.outcome) {
     case 'restored':
-      return t(context.locale, 'restoreDone', { count: result.granted });
+      return result.granted === 0
+        ? t(context.locale, 'restoreNothing')
+        : t(context.locale, 'restoreDone', { count: result.granted });
     case 'needs-session':
       return t(context.locale, 'restoreNeedsSession');
     default:

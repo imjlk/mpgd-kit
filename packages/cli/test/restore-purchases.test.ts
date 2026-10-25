@@ -88,6 +88,40 @@ assert.deepEqual(
   { outcome: 'restored', granted: 1 },
 );
 
+// A failed store resync is an event of the reconciler, not a rejection.
+const listeners = new Set<(event: { type: string; stage?: string }) => void>();
+const reconcilerFailure = createStarterRestorePurchases({
+  gateway: gateway('app-store', signedIn),
+  monetizationRecovery: {
+    commerceReconciler: {
+      subscribe(listener: (event: { type: string; stage?: string }) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never,
+    async restorePurchases() {
+      for (const listener of listeners) {
+        listener({ type: 'failure', stage: 'restore' });
+      }
+      return [];
+    },
+  },
+});
+assert.deepEqual(await reconcilerFailure.restore(), { outcome: 'failed' });
+assert.equal(listeners.size, 0, 'the restore stops listening');
+assert.deepEqual(
+  await createStarterRestorePurchases({
+    gateway: gateway('app-store', signedIn),
+    monetizationRecovery: {
+      async restorePurchases() {
+        return [summary('commerce-purchase' as MonetizationOperationSummary['kind'], 'failed')];
+      },
+    },
+  }).restore(),
+  { outcome: 'failed' },
+  'a purchase the pass failed to settle is a failed restore',
+);
+
 // A failure is reported, not thrown; a second tap joins the running restore.
 const originalError = console.error;
 console.error = () => undefined;

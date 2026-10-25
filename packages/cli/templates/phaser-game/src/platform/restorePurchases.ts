@@ -11,6 +11,7 @@ import { resolveStarterCommercePlayerId } from './commerceAccountBinding';
 const accountBoundStores: ReadonlySet<string> = new Set(['app-store', 'google-play']);
 
 export type StarterRestoreOutcome =
+  /** `granted`: purchases the backend ledger granted in this pass (0 when nothing new). */
   | { readonly outcome: 'restored'; readonly granted: number }
   | { readonly outcome: 'needs-session' }
   | { readonly outcome: 'failed' }
@@ -36,7 +37,10 @@ export interface StarterRestorePurchases {
  */
 export function createStarterRestorePurchases(input: {
   readonly gateway: Pick<PlatformGateway, 'commerce' | 'identity'>;
-  readonly monetizationRecovery?: Pick<RecoverableMonetizationClient, 'restorePurchases'>;
+  readonly monetizationRecovery?: Pick<
+    RecoverableMonetizationClient,
+    'restorePurchases' | 'commerceReconciler'
+  >;
 }): StarterRestorePurchases {
   const commerce = input.gateway.commerce;
   const recovery = input.monetizationRecovery;
@@ -50,8 +54,20 @@ export function createStarterRestorePurchases(input: {
       && await resolveStarterCommercePlayerId(input.gateway) === undefined) {
       return { outcome: 'needs-session' };
     }
+    // The reconciler reports a failed store resync or read as an event, not a
+    // rejection, so listen for the duration of this restore.
+    let storeFailed = false;
+    const unsubscribe = recovery.commerceReconciler?.subscribe((event) => {
+      if (event.type === 'failure' && (event.stage === 'restore' || event.stage === 'available')) {
+        storeFailed = true;
+      }
+    });
     try {
       const summaries = await recovery.restorePurchases();
+      if (storeFailed
+        || summaries.some((summary) => summary.kind !== 'rewarded-ad' && summary.status === 'failed')) {
+        return { outcome: 'failed' };
+      }
       return {
         outcome: 'restored',
         // Purchases (not rewarded ads) the backend ledger reports as granted.
@@ -62,6 +78,8 @@ export function createStarterRestorePurchases(input: {
     } catch (error) {
       console.error('[restore-purchases]', error);
       return { outcome: 'failed' };
+    } finally {
+      unsubscribe?.();
     }
   };
   return {
