@@ -7,6 +7,7 @@
  */
 import {
   accountDeletionConfirmationHeader,
+  accountDeletionConfirmationMaxLength,
   accountDeletionEndpoint,
   AccountDeletionError,
   assertPlayerDataErasureInput,
@@ -108,7 +109,7 @@ export function createAccountDeletionFetchHandler(
       const verifier = input.confirmation(principal);
       if (verifier !== undefined) {
         const confirmation = request.headers.get(accountDeletionConfirmationHeader);
-        if (confirmation === null || confirmation.length === 0 || confirmation.length > 4096) {
+        if (confirmation === null || confirmation.length === 0 || confirmation.length > accountDeletionConfirmationMaxLength) {
           return json({ error: 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED' }, 403, input.corsHeaders);
         }
         const answer: unknown = await verifier.verifyAccountDeletionConfirmation({

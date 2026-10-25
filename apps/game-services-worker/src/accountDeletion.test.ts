@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 
 import {
+  accountDeletionConfirmationMaxLength,
   accountDeletionEndpoint,
   createAccountDeletionService,
   createGooglePlayProductVerificationId,
@@ -635,7 +636,7 @@ try {
     assert.equal(unconfirmed.status, 403);
     assert.deepEqual(await unconfirmed.json(), { error: 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED' });
   }
-  for (const confirmation of ['', 'x'.repeat(4097)]) {
+  for (const confirmation of ['', 'x'.repeat(accountDeletionConfirmationMaxLength + 1)]) {
     assert.equal(
       (await post(route, {
         authorization: 'Bearer player-5-token',
@@ -691,7 +692,7 @@ try {
   assert.equal(await countRows(db, 'leaderboard_transactions', 'player_id', 'player-5'), 1);
   assert.match(
     preflight.headers.get('Access-Control-Allow-Headers') ?? '',
-    /X-MPGD-Account-Deletion-Confirmation/u,
+    /x-mpgd-account-deletion-confirmation/iu,
   );
   const ok = await post(route, {
     authorization: 'Bearer player-5-token',

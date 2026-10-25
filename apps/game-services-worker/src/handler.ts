@@ -1,5 +1,6 @@
 import type { AdPlacements } from '@mpgd/catalog';
 import {
+  accountDeletionConfirmationHeader,
   createAccountDeletionService,
   createAdRewardEvidenceVerifierRegistry,
   createAppsInTossCommerceEvidenceEntry,
@@ -433,7 +434,7 @@ function buildWorkerFetchHandler(
     corsHeaders: {
       ...corsHeaders,
       'Access-Control-Allow-Headers':
-        `${corsHeaders['Access-Control-Allow-Headers']}, X-MPGD-Account-Deletion-Confirmation`,
+        `${corsHeaders['Access-Control-Allow-Headers']}, ${accountDeletionConfirmationHeader}`,
     },
     authenticate: (request) => authenticateAccountDeletionRequest(env, request),
     service: (principal) => createWorkerAccountDeletionService(env, principal),

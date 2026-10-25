@@ -38,6 +38,12 @@ export const accountDeletionEndpoint = '/game-services/account/delete';
 export const accountDeletionConfirmationHeader = 'x-mpgd-account-deletion-confirmation';
 
 /**
+ * The longest confirmation the server accepts (characters); the identity
+ * service issues shorter ones.
+ */
+export const accountDeletionConfirmationMaxLength = 4096;
+
+/**
  * The identity service's check of a deletion confirmation: bound to the
  * player, unexpired, and not used before; a confirmed token is consumed.
  */
