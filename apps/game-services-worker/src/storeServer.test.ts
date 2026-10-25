@@ -532,8 +532,9 @@ try {
 
       await cursors.write(voidedSweepCursor, behindNow - 3 * 3_600_000, new Date(behindNow));
       await cursors.write('google-play-voided:slice-ms', 3_600_000, new Date(behindNow));
+      // Enough to open the sweep (4), not to read a page (2 more).
       const starvedSweep = await runScheduledStoreServer(
-        { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '3' },
+        { ...cronEnv, MPGD_STORE_SERVER_SUBREQUEST_BUDGET: '5' },
         { cron: '* * * * *' },
         {
           googlePlay: { finalizer: boundary, voidedPurchases: emptyClient, packageName },
@@ -602,6 +603,55 @@ try {
       assert.equal(stallRuns, 30, 'after 30 runs held back by the same store error');
     }
 
+    // A void in the overlap whose revocation failed is read again on the
+    // next run, which starts before the cursor.
+    {
+      const cursors = createD1StoreServerCursors(db);
+      const overlapNow = start + 65 * 24 * 3_600_000;
+      const lastEnd = overlapNow - 61 * 60_000;
+      await cursors.write(voidedSweepCursor, lastEnd, new Date(overlapNow));
+      await cursors.write('google-play-voided:behind', 0, new Date(overlapNow));
+      await cursors.write('google-play-voided:stalls', 0, new Date(overlapNow));
+      const lateGrant = await store.recordEntitlementGrant({
+        source: 'purchase',
+        playerId: 'late-player',
+        grantId: 'COINS_100',
+        idempotencyKey: 'late-checkout',
+        grantedAt: '2026-10-01T00:00:00.000Z',
+        evidenceVerificationId: await createGooglePlayProductVerificationId(packageName, 'late-token'),
+        payload: { target: 'android' },
+      });
+      const recordedAt = lastEnd - 5 * 60_000;
+      const lateClient: GooglePlayVoidedPurchasesClient = {
+        async listVoidedPurchases(input) {
+          return {
+            voidedPurchases: input.startTimeMillis <= recordedAt && recordedAt <= input.endTimeMillis
+              ? [{ purchaseToken: 'late-token', orderId: 'GPA.late' }]
+              : [],
+          };
+        },
+      };
+      const run = (atMs: number) => runScheduledStoreServer(
+        cronEnv,
+        { cron: '* * * * *' },
+        {
+          googlePlay: { finalizer: boundary, voidedPurchases: lateClient, packageName },
+          now: () => atMs,
+        },
+      );
+      await db.exec('ALTER TABLE entitlement_revocations RENAME TO entitlement_revocations_away;');
+      const failed = await run(overlapNow);
+      await db.exec('ALTER TABLE entitlement_revocations_away RENAME TO entitlement_revocations;');
+      assert.equal(failed?.sweep?.errored, 1);
+      assert.equal(await cursors.read('google-play-voided:behind'), 1);
+      const retried = await run(overlapNow + 60_000);
+      assert.equal(retried?.sweep?.revoked, 1, 'the next run reads the overlap again');
+      assert.equal(
+        (await findEntitlementRevocationsChunked(store, [lateGrant.ledgerEntryId])).length,
+        1,
+      );
+    }
+
     // A slow Play finalization leaves the sweep its half of the wall time.
     {
       const cursors = createD1StoreServerCursors(db);
@@ -631,10 +681,34 @@ try {
         purchaseToken: 'slow-token',
         nowMs: slowNow - 3_600_000,
       });
+      const secondSlowGrant = await store.recordEntitlementGrant({
+        source: 'purchase',
+        playerId: 'slow-player',
+        grantId: 'COINS_100',
+        idempotencyKey: 'slow-checkout-2',
+        grantedAt: '2026-10-01T00:00:00.000Z',
+        grant: { type: 'currency', currency: 'coin', amount: 100 },
+        evidenceVerificationId: await createGooglePlayProductVerificationId(packageName, 'slow-token-2'),
+        payload: {
+          target: 'android',
+          productType: 'consumable',
+          platformProductId: 'coins_100_android',
+          platformTransactionId: 'GPA.slow-2',
+          purchasedAt: '2026-10-01T00:00:00.000Z',
+          googlePlayPackageName: packageName,
+        },
+      });
+      await outbox.remember({
+        ledgerEntryId: secondSlowGrant.ledgerEntryId,
+        playerId: 'slow-player',
+        purchaseToken: 'slow-token-2',
+        nowMs: slowNow - 3_600_000,
+      });
       let fakeClock = 0;
       const slowFinalizer = {
         async finalizePurchaseGrant() {
-          fakeClock += 14_000;
+          // Past half of the 15-second wall budget, short of all of it.
+          fakeClock += 8_000;
           return { status: 'pending' as const, alreadyCompleted: false, reason: 'SLOW' };
         },
       };
@@ -655,7 +729,11 @@ try {
           clock: () => fakeClock,
         },
       );
-      assert.equal(slow?.retried, 1, 'one retry used the retry half of the wall time');
+      assert.equal(
+        slow?.retried,
+        1,
+        'the second owed row waits: the retries used their half of the wall time',
+      );
       assert.equal(slow?.sweep?.complete, true, 'and the sweep still ran');
     }
 
