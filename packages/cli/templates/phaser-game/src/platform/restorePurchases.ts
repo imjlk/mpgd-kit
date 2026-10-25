@@ -19,10 +19,14 @@ const settledStates: ReadonlySet<string> = new Set(['granted', 'finishing', 'fin
 type RestoreRecovery = Pick<RecoverableMonetizationClient, 'restorePurchases' | 'commerceReconciler'>;
 
 export type StarterRestoreOutcome =
-  /** `granted`: purchases the backend ledger granted in this pass (0 when nothing new). */
-  | { readonly outcome: 'restored'; readonly granted: number }
+  /**
+   * `granted`: purchases the backend ledger granted in this pass (0 when
+   * nothing new). `moved`: how many of them the backend moved to this player
+   * from an earlier guest (a reinstall or a new device); absent when none.
+   */
+  | { readonly outcome: 'restored'; readonly granted: number; readonly moved?: number }
   /** Some purchases are still unconfirmed; `granted` were confirmed in this pass. */
-  | { readonly outcome: 'incomplete'; readonly granted: number }
+  | { readonly outcome: 'incomplete'; readonly granted: number; readonly moved?: number }
   /** No server session can bind the purchases (no identity service configured). */
   | { readonly outcome: 'needs-session' }
   /** The guest sign-in failed again (offline, an outage); the control is a retry. */
@@ -97,8 +101,14 @@ export function createStarterRestorePurchases(input: {
     // A purchase found, verified and finished within this pass is no longer
     // recoverable afterwards, so the summaries miss it; its transitions do not.
     const settledKeys = new Set<string>();
+    // Purchases the backend moved from an earlier guest of this device's
+    // store account (a reinstall or a new device): "restored to this device".
+    const movedKeys = new Set<string>();
     const unsubscribe = recovery.commerceReconciler?.subscribe((event) => {
-      if (event.type === 'transition' && settledStates.has(event.record.state)) {
+      if (event.type === 'verify-result' && event.response.verified
+        && event.response.transferred === true) {
+        movedKeys.add(event.record.idempotencyKey);
+      } else if (event.type === 'transition' && settledStates.has(event.record.state)) {
         settledKeys.add(event.record.idempotencyKey);
       } else if (event.type === 'failure' && event.stage === 'restore') {
         resyncFailed = true;
@@ -118,14 +128,16 @@ export function createStarterRestorePurchases(input: {
         }
       }
       const granted = settledKeys.size;
+      const moved = [...movedKeys].filter((key) => settledKeys.has(key)).length;
+      const movedCount = moved === 0 ? {} : { moved };
       // A purchase the backend has not settled yet (verify unreachable, still
       // pending at the store, waiting on an operator) is reported as such,
       // never as "nothing to restore".
       if (readFailed || summaries.some((summary) => summary.status === 'pending'
         || summary.status === 'action-required' || summary.status === 'failed')) {
-        return { outcome: 'incomplete', granted };
+        return { outcome: 'incomplete', granted, ...movedCount };
       }
-      return { outcome: 'restored', granted };
+      return { outcome: 'restored', granted, ...movedCount };
     } catch (error) {
       console.error('[restore-purchases]', error);
       return { outcome: 'failed' };
@@ -148,8 +160,11 @@ export function createStarterRestorePurchases(input: {
 export function restoreOutcomeText(locale: Locale, result: StarterRestoreOutcome): string {
   switch (result.outcome) {
     case 'restored':
-      return result.granted === 0
-        ? t(locale, 'restoreNothing')
+      if (result.granted === 0) {
+        return t(locale, 'restoreNothing');
+      }
+      return (result.moved ?? 0) > 0
+        ? t(locale, 'restoreMoved', { count: result.granted })
         : t(locale, 'restoreDone', { count: result.granted });
     case 'incomplete':
       return result.granted === 0
