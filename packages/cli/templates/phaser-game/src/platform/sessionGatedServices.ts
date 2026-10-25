@@ -57,10 +57,10 @@ export type StarterSessionGatedServices = GameServicesRuntime & {
  *   error, which would latch the action coordinator into
  *   `reconciliation-required` for the rest of the run. A leaderboard
  *   submission throws `StarterSessionRequiredError`.
- * - `monetizationRecovery` is `undefined` until then: rewarded ads stay off
- *   (the runtime shows none without it, so no ad is watched for a reward that
- *   could not be claimed), and the Restore Purchases control signs in first
- *   through `ensureSession`.
+ * - `monetizationRecovery` is `undefined` until then, and the Restore
+ *   Purchases control signs in first through `ensureSession`. Rewarded ads
+ *   stay off for the whole run (`main.ts` `canShow`, `PlayScene`): the
+ *   runtime binds its late reward evidence recovery at boot.
  * - When the player becomes known, the services are created once; the
  *   caller runs the game runtime's `reconcile()` from `onActivated` (the
  *   startup recovery, with the action coordinator's). A later sign-in naming another player
