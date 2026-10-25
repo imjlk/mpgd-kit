@@ -77,7 +77,19 @@ export interface VerifyPurchaseRequest {
   readonly idempotencyKey: PurchaseIdempotencyKey;
   readonly purchasedAt: string;
   readonly evidence?: PlatformEvidenceEnvelope;
+  /**
+   * Why the client sends the purchase. `restore` is a purchase the store
+   * reported without this client starting it (a reinstall, a new device, or
+   * Restore Purchases): the backend may then move a verified non-consumable
+   * that the store binds to an earlier player (`restoreTransfers`, RFC
+   * "Restore transfers"). Absent means `purchase`; the intent is a request
+   * for that policy, never proof of ownership.
+   */
+  readonly intent?: VerifyPurchaseIntent;
 }
+
+/** `VerifyPurchaseRequest.intent`. */
+export type VerifyPurchaseIntent = 'purchase' | 'restore';
 
 export interface ClaimAdRewardRequest {
   readonly target: GameServicesAdRewardTarget;
@@ -123,8 +135,13 @@ export interface EntitlementLedgerResult {
   readonly alreadyProcessed: boolean;
 }
 
-/** Why a grant was reversed (RFC "Revocation and expiry entries"). */
-export type EntitlementRevocationReason = 'refund' | 'chargeback' | 'voided' | 'admin';
+/**
+ * Why a grant was reversed (RFC "Revocation and expiry entries"). `transfer`
+ * is written only by `recordEntitlementTransfer`, never by
+ * `recordEntitlementRevocation`: the grant moved to another player on a
+ * verified restore (RFC "Restore transfers").
+ */
+export type EntitlementRevocationReason = 'refund' | 'chargeback' | 'voided' | 'admin' | 'transfer';
 
 /**
  * A `revoke` ledger entry: it references the grant it reverses and never
@@ -143,6 +160,29 @@ export interface EntitlementLedgerRevocation {
   readonly payload: EntitlementLedgerPayload;
   /** The notification's own authority identity, when the handler has one. */
   readonly evidenceVerificationId?: string;
+}
+
+/**
+ * One move of a purchase grant to another player (RFC "Restore transfers"):
+ * a `revoke` entry with reason `transfer` for the grant that moves and a new
+ * grant for the receiving player, written together or not at all. The new
+ * grant's `evidenceVerificationId` names this move
+ * (`createPurchaseTransferEvidenceVerificationId`) and its payload links it
+ * to the grant it replaces; the revocation's payload names the new grant's
+ * evidence id, so the purchase's current holder is found by following the
+ * moves from the first grant.
+ */
+export interface EntitlementLedgerTransfer {
+  readonly revocation: EntitlementLedgerRevocation;
+  readonly grant: EntitlementLedgerGrant;
+}
+
+export interface EntitlementTransferResult {
+  /** The receiving player's grant. */
+  readonly ledgerEntryId: string;
+  /** The `revoke` entry (reason `transfer`) of the grant that moved. */
+  readonly revocationLedgerEntryId: string;
+  readonly alreadyProcessed: boolean;
 }
 
 /**
@@ -233,6 +273,9 @@ export function assertVerifyPurchaseRequest(input: VerifyPurchaseRequest): Verif
     assertRequestString(input.idempotencyKey, 'idempotencyKey');
     assertRequestString(input.purchasedAt, 'purchasedAt');
     assertOptionalEvidenceEnvelope(input.evidence);
+    if (input.intent !== undefined && input.intent !== 'purchase' && input.intent !== 'restore') {
+      throw new Error('intent must be purchase or restore.');
+    }
 
     return input;
   });
@@ -249,6 +292,12 @@ export function assertVerifyPurchaseResponse(
   assertOptionalNonEmptyString(input.reason, 'reason');
   if (input.finalization !== undefined) {
     assertPurchaseGrantFinalization(input.finalization);
+  }
+  if (input.transferred !== undefined && input.transferred !== true) {
+    throw new Error('transferred must be true when present.');
+  }
+  if (input.transferred === true && input.verified !== true) {
+    throw new Error('transferred requires a verified response.');
   }
 
   return input;
@@ -444,6 +493,35 @@ export function assertEntitlementLedgerRevocation(
   assertNonEmptyString(input.revokedAt, 'revokedAt');
   assertPayload(input.payload);
   assertOptionalNonEmptyString(input.evidenceVerificationId, 'evidenceVerificationId');
+
+  return input;
+}
+
+export function assertEntitlementLedgerTransfer(
+  input: EntitlementLedgerTransfer,
+): EntitlementLedgerTransfer {
+  assertRecord(input, 'EntitlementLedgerTransfer');
+  assertEntitlementLedgerRevocation(input.revocation);
+  assertEntitlementLedgerGrant(input.grant);
+  if (input.revocation.reason !== 'transfer') {
+    throw new Error('A transfer revocation must have reason transfer.');
+  }
+  if (input.grant.source !== 'purchase') {
+    throw new Error('Only purchase grants are transferred.');
+  }
+  if (input.grant.evidenceVerificationId === undefined) {
+    throw new Error('A transfer grant must name its evidenceVerificationId.');
+  }
+  if (input.revocation.payload.transferEvidenceVerificationId
+    !== input.grant.evidenceVerificationId) {
+    throw new Error('A transfer revocation must name the evidence id of the grant it moves to.');
+  }
+  if (input.grant.payload.transferredFromLedgerEntryId !== input.revocation.revokesLedgerEntryId) {
+    throw new Error('A transfer grant must name the grant it replaces.');
+  }
+  if (input.grant.playerId === input.revocation.playerId) {
+    throw new Error('A transfer moves a grant to another player.');
+  }
 
   return input;
 }
@@ -670,8 +748,14 @@ function assertPurchaseGrantFinalizationAction(
 }
 
 function assertRevocationReason(input: unknown): asserts input is EntitlementRevocationReason {
-  if (input !== 'refund' && input !== 'chargeback' && input !== 'voided' && input !== 'admin') {
-    throw new Error('reason must be refund, chargeback, voided, or admin.');
+  if (
+    input !== 'refund'
+    && input !== 'chargeback'
+    && input !== 'voided'
+    && input !== 'admin'
+    && input !== 'transfer'
+  ) {
+    throw new Error('reason must be refund, chargeback, voided, admin, or transfer.');
   }
 }
 

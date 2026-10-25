@@ -254,7 +254,7 @@ assert.equal((await listActiveEntitlementTransactions(legacyStore)).length, 3);
 // Validators.
 assert.throws(
   () => assertEntitlementLedgerRevocation({ ...chargeback, reason: 'oops' as 'refund' }),
-  /reason must be refund, chargeback, voided, or admin/u,
+  /reason must be refund, chargeback, voided, admin, or transfer/u,
 );
 assert.throws(
   () =>

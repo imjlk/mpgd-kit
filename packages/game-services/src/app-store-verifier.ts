@@ -496,7 +496,7 @@ async function verifyAppStorePurchase(
     return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_STALE' };
   }
 
-  const rejection = validateTransaction(
+  let rejection = validateTransaction(
     input,
     transaction,
     options.bundleId,
@@ -505,12 +505,34 @@ async function verifyAppStorePurchase(
     nowMs,
     clockSkewMs,
   );
+  // A restored non-consumable bound to an earlier player's appAccountToken
+  // (a new device, an erased device, a logout) is reported, not refused,
+  // when every other check passes: the backend's restore transfer policy
+  // decides (RFC "Restore transfers"). The client's StoreKit-verified JWS is
+  // required, so a transaction id alone never moves a purchase.
+  const foreignBinding = rejection === 'APP_STORE_ACCOUNT_TOKEN_MISMATCH'
+    && input.request.intent === 'restore'
+    && input.product.type === 'non_consumable'
+    && offlineTransaction !== undefined;
+  if (foreignBinding) {
+    rejection = validateTransaction(
+      input,
+      transaction,
+      options.bundleId,
+      environment,
+      undefined,
+      nowMs,
+      clockSkewMs,
+    );
+  }
   if (rejection !== undefined) {
     return { status: 'rejected', reason: rejection };
   }
 
   return {
-    status: 'verified',
+    ...(foreignBinding
+      ? { status: 'restorable' as const, reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH' }
+      : { status: 'verified' as const }),
     verificationId: createVerificationId(transaction),
     verifiedAt: new Date(nowMs).toISOString(),
     payload: {
@@ -721,7 +743,8 @@ function validateTransaction(
   transaction: AppStoreTransactionPayload,
   bundleId: string,
   environment: AppStoreEnvironment,
-  expectedAccountToken: string,
+  /** Undefined skips the account binding check (a restore across players). */
+  expectedAccountToken: string | undefined,
   nowMs: number,
   clockSkewMs: number,
 ): string | undefined {
@@ -751,8 +774,11 @@ function validateTransaction(
     return 'APP_STORE_OWNERSHIP_UNSUPPORTED';
   }
   if (
-    transaction.appAccountToken === undefined
-    || normalizeAppAccountToken(transaction.appAccountToken) !== expectedAccountToken
+    expectedAccountToken !== undefined
+    && (
+      transaction.appAccountToken === undefined
+      || normalizeAppAccountToken(transaction.appAccountToken) !== expectedAccountToken
+    )
   ) {
     return 'APP_STORE_ACCOUNT_TOKEN_MISMATCH';
   }

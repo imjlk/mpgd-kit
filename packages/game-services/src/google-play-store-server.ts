@@ -3,6 +3,7 @@ import { createGooglePlayTokenPurchaseKey } from '@mpgd/platform/commerce';
 import {
   findPurchaseGrantByEvidenceVerificationId,
   isEntitlementGrantReversed,
+  readPurchaseVerificationId,
   revokeEntitlementGrant,
 } from './commerce-ledger.js';
 import type { GameServicesPurchaseGrantFinalizer } from './evidence-verification.js';
@@ -325,7 +326,8 @@ export async function retryGooglePlayPurchaseFinalization(input: {
     ? payload.platformTransactionId
     : await createGooglePlayTokenPurchaseKey(input.purchaseToken);
   const purchasedAt = payload.purchasedAt;
-  const evidenceVerificationId = grant.evidenceVerificationId ?? payload.evidenceVerificationId;
+  // A grant a restore transfer wrote is acknowledged as the purchase it records.
+  const evidenceVerificationId = readPurchaseVerificationId(grant);
   if (
     productType === undefined
     || typeof platformProductId !== 'string' || platformProductId.length === 0
