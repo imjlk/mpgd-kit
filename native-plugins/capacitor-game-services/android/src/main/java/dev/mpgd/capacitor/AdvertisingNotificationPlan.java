@@ -40,10 +40,10 @@ final class AdvertisingNotificationPlan {
     final Map<String, String> actionExtras;
     final int bodyRequestCode;
     final int actionRequestCode;
-    /** Milliseconds the notification may stay in the shade, or {@code null} without an expiry. */
-    final Long timeoutAfterMillis;
+    /** Epoch milliseconds after which the notification leaves the shade, or {@code null}. */
+    final Long expiresAtMillis;
 
-    private AdvertisingNotificationPlan(Kind kind, AdvertisingPush push, long nowMillis) {
+    private AdvertisingNotificationPlan(Kind kind, AdvertisingPush push) {
         this.kind = kind;
         boolean post = kind == Kind.POST;
         this.channelId = post ? push.channel : null;
@@ -56,9 +56,17 @@ final class AdvertisingNotificationPlan {
         this.actionExtras = post ? push.optOutExtras() : null;
         this.bodyRequestCode = post ? push.requestCode(false) : 0;
         this.actionRequestCode = post ? push.requestCode(true) : 0;
-        this.timeoutAfterMillis = post && push.expiresAt != null
-            ? Math.max(1L, push.expiresAt - nowMillis)
-            : null;
+        this.expiresAtMillis = post ? push.expiresAt : null;
+    }
+
+    /**
+     * Milliseconds the notification may stay in the shade when it is posted
+     * at {@code nowMillis} (at least one), or {@code null} without an expiry.
+     * The renderer asks at post time, so the system calls before the post do
+     * not let it outlive its expiry.
+     */
+    Long timeoutAfterMillis(long nowMillis) {
+        return expiresAtMillis == null ? null : Math.max(1L, expiresAtMillis - nowMillis);
     }
 
     /**
@@ -74,20 +82,20 @@ final class AdvertisingNotificationPlan {
         BooleanSupplier foreground
     ) {
         if (!AdvertisingPush.isShellRendered(data)) {
-            return new AdvertisingNotificationPlan(Kind.NOT_OURS, null, nowMillis);
+            return new AdvertisingNotificationPlan(Kind.NOT_OURS, null);
         }
         AdvertisingPush push = AdvertisingPush.parse(data, messageId, collapseKey);
         if (push == null) {
-            return new AdvertisingNotificationPlan(Kind.DROP_MALFORMED, null, nowMillis);
+            return new AdvertisingNotificationPlan(Kind.DROP_MALFORMED, null);
         }
         if (push.isExpired(nowMillis)) {
             // The Korean rules judge arrival: one that arrives too late is not shown.
-            return new AdvertisingNotificationPlan(Kind.DROP_EXPIRED, push, nowMillis);
+            return new AdvertisingNotificationPlan(Kind.DROP_EXPIRED, push);
         }
         if (foreground.getAsBoolean()) {
-            return new AdvertisingNotificationPlan(Kind.HAND_TO_PLUGIN, push, nowMillis);
+            return new AdvertisingNotificationPlan(Kind.HAND_TO_PLUGIN, push);
         }
-        return new AdvertisingNotificationPlan(Kind.POST, push, nowMillis);
+        return new AdvertisingNotificationPlan(Kind.POST, push);
     }
 
     /** Whether the renderer is done with the message, so the plugin does not get it. */

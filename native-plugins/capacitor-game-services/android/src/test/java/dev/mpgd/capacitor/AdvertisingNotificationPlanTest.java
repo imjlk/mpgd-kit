@@ -47,7 +47,10 @@ public class AdvertisingNotificationPlanTest {
         assertEquals("c0ffee", plan.tag);
         assertEquals(AdvertisingPush.NOTIFICATION_ID, plan.notificationId);
         // Taken off the shade when it expires.
-        assertEquals(Long.valueOf(60_000L), plan.timeoutAfterMillis);
+        assertEquals(Long.valueOf(60_000L), plan.timeoutAfterMillis(NOW));
+        // Asked again at post time, it counts from then, and never below 1 ms.
+        assertEquals(Long.valueOf(30_000L), plan.timeoutAfterMillis(NOW + 30_000L));
+        assertEquals(Long.valueOf(1L), plan.timeoutAfterMillis(EXPIRES_AT + 5_000L));
     }
 
     @Test
@@ -110,14 +113,14 @@ public class AdvertisingNotificationPlanTest {
         // A millisecond before, it is shown, for at least a millisecond.
         AdvertisingNotificationPlan last = background(message(), EXPIRES_AT - 1);
         assertEquals(AdvertisingNotificationPlan.Kind.POST, last.kind);
-        assertEquals(Long.valueOf(1L), last.timeoutAfterMillis);
+        assertEquals(Long.valueOf(1L), last.timeoutAfterMillis(EXPIRES_AT - 1));
     }
 
     @Test
     public void withoutAnExpiryItStaysUntilDismissed() {
         Map<String, String> data = message();
         data.remove("mpgd.expiresAt");
-        assertNull(background(data, NOW).timeoutAfterMillis);
+        assertNull(background(data, NOW).timeoutAfterMillis(NOW));
     }
 
     @Test
@@ -134,5 +137,17 @@ public class AdvertisingNotificationPlanTest {
         AdvertisingNotificationPlan malformed = background(untitled, NOW);
         assertEquals(AdvertisingNotificationPlan.Kind.DROP_MALFORMED, malformed.kind);
         assertTrue(malformed.consumed());
+        Map<String, String> badExpiry = message();
+        badExpiry.put("mpgd.expiresAt", "tonight");
+        assertEquals(AdvertisingNotificationPlan.Kind.DROP_MALFORMED, background(badExpiry, NOW).kind);
+    }
+
+    @Test
+    public void aBlankOptOutRouteIsNone() {
+        Map<String, String> data = message();
+        data.put("mpgd.optOutRoute", " ");
+        AdvertisingNotificationPlan plan = background(data, NOW);
+        assertFalse(plan.actionExtras.containsKey("route"));
+        assertFalse(plan.bodyExtras.containsKey("mpgd.optOutRoute"));
     }
 }

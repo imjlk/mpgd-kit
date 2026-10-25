@@ -204,9 +204,10 @@ public final class AdvertisingPushRenderer {
         if (color != null) {
             builder.setColor(color);
         }
-        if (plan.timeoutAfterMillis != null) {
+        Long timeout = plan.timeoutAfterMillis(System.currentTimeMillis());
+        if (timeout != null) {
             // Taken off the shade once it expires (Android 8+).
-            builder.setTimeoutAfter(plan.timeoutAfterMillis);
+            builder.setTimeoutAfter(timeout);
         }
         try {
             manager.notify(plan.tag, plan.notificationId, builder.build());
