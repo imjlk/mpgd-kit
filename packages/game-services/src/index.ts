@@ -18,6 +18,7 @@ export * from './evidence-verification.js';
 export * from './guest-session.js';
 export * from './google-play-purchase.js';
 export * from './google-play-publisher-client.js';
+export * from './google-play-store-server.js';
 export * from './microsoft-store-identity.js';
 export * from './microsoft-store-purchase.js';
 export * from './monetization-operation-store.js';

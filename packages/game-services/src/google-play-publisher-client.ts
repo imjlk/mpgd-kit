@@ -1,4 +1,9 @@
 import type { GooglePlayProductPurchaseClient } from './google-play-purchase.js';
+import type {
+  GooglePlayVoidedPurchase,
+  GooglePlayVoidedPurchasesClient,
+  GooglePlayVoidedPurchasesPage,
+} from './google-play-store-server.js';
 
 const publisherOrigin = 'https://androidpublisher.googleapis.com';
 
@@ -14,7 +19,7 @@ export interface GooglePlayPublisherClientOptions {
  */
 export function createGooglePlayPublisherClient(
   options: GooglePlayPublisherClientOptions,
-): GooglePlayProductPurchaseClient {
+): GooglePlayProductPurchaseClient & GooglePlayVoidedPurchasesClient {
   const requestFetch = options.fetch ?? fetch;
 
   async function request(
@@ -74,7 +79,98 @@ export function createGooglePlayPublisherClient(
         + `/tokens/${pathPart(purchaseToken)}:consume`;
       await discardBody(await request('POST', path, signal));
     },
+    async listVoidedPurchases({
+      packageName,
+      startTimeMillis,
+      endTimeMillis,
+      pageToken,
+      maxResults,
+      signal,
+    }) {
+      // purchases.voidedpurchases.list, in-app products only (type 0, the
+      // default): https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.voidedpurchases/list
+      const query = new URLSearchParams();
+      if (pageToken === undefined) {
+        query.set('startTime', String(readMillis(startTimeMillis, 'startTimeMillis')));
+        query.set('endTime', String(readMillis(endTimeMillis, 'endTimeMillis')));
+      } else {
+        query.set('token', pageToken);
+      }
+      if (maxResults !== undefined) {
+        if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 1000) {
+          throw new RangeError('maxResults must be an integer from 1 to 1000.');
+        }
+        query.set('maxResults', String(maxResults));
+      }
+      const response = await request(
+        'GET',
+        `${purchasePath(packageName)}/voidedpurchases?${query.toString()}`,
+        signal,
+      );
+      let body: unknown;
+      try {
+        body = await readBoundedJson(response);
+      } catch {
+        if (signal.aborted) {
+          throw new DOMException('Google Play Publisher request was cancelled.', 'AbortError');
+        }
+        throw new Error('Google Play Publisher returned invalid voided purchases JSON.');
+      }
+      return readVoidedPurchasesPage(body);
+    },
   };
+}
+
+function readMillis(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${label} must be a non-negative integer of milliseconds.`);
+  }
+  return value;
+}
+
+function readVoidedPurchasesPage(body: unknown): GooglePlayVoidedPurchasesPage {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new Error('Google Play Publisher returned an invalid voided purchases page.');
+  }
+  const record = body as Readonly<Record<string, unknown>>;
+  const entries = record.voidedPurchases ?? [];
+  if (!Array.isArray(entries)) {
+    throw new Error('Google Play Publisher returned an invalid voided purchases page.');
+  }
+  const voidedPurchases: GooglePlayVoidedPurchase[] = [];
+  for (const entry of entries as readonly unknown[]) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      continue;
+    }
+    const item = entry as Readonly<Record<string, unknown>>;
+    if (typeof item.purchaseToken !== 'string' || item.purchaseToken.length === 0) {
+      continue;
+    }
+    voidedPurchases.push({
+      purchaseToken: item.purchaseToken,
+      ...(typeof item.orderId === 'string' ? { orderId: item.orderId } : {}),
+      ...pickMillisOrCode(item, 'voidedTimeMillis'),
+      ...pickMillisOrCode(item, 'purchaseTimeMillis'),
+      ...pickMillisOrCode(item, 'voidedSource'),
+      ...pickMillisOrCode(item, 'voidedReason'),
+    });
+  }
+  const pagination = record.tokenPagination;
+  const nextPageToken = typeof pagination === 'object' && pagination !== null
+    ? (pagination as Readonly<Record<string, unknown>>).nextPageToken
+    : undefined;
+  return {
+    voidedPurchases,
+    ...(typeof nextPageToken === 'string' && nextPageToken.length > 0 ? { nextPageToken } : {}),
+  };
+}
+
+function pickMillisOrCode(
+  item: Readonly<Record<string, unknown>>,
+  key: 'voidedTimeMillis' | 'purchaseTimeMillis' | 'voidedSource' | 'voidedReason',
+): Partial<Record<typeof key, string | number>> {
+  const value = item[key];
+  return typeof value === 'string' || typeof value === 'number' ? { [key]: value } : {};
 }
 
 function purchasePath(packageName: string): string {
