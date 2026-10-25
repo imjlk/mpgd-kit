@@ -28,6 +28,26 @@ import type { EntitlementLedgerPayload } from './types.js';
 /** The public route a signed-in player deletes their own account through. */
 export const accountDeletionEndpoint = '/game-services/account/delete';
 
+/**
+ * The request header carrying the deletion confirmation: a short-lived,
+ * single-use token the identity service issues to the holder of the
+ * session's refresh token after the in-app second step. A bare access
+ * token (15 minutes, sent with every request) is not enough to destroy the
+ * account.
+ */
+export const accountDeletionConfirmationHeader = 'x-mpgd-account-deletion-confirmation';
+
+/**
+ * The identity service's check of a deletion confirmation: bound to the
+ * player, unexpired, and not used before; a confirmed token is consumed.
+ */
+export interface AccountDeletionConfirmationVerifier {
+  verifyAccountDeletionConfirmation(input: {
+    readonly playerId: string;
+    readonly confirmation: string;
+  }): Promise<{ readonly confirmed: boolean }>;
+}
+
 /** How long the detached purchase records are kept (Korean E-Commerce Act decree, art. 6(1)). */
 export const retainedPurchaseRecordYears = 5;
 
@@ -104,6 +124,11 @@ export type AccountDeletionErrorCode =
   | 'UNAUTHORIZED'
   /** The request named another player. */
   | 'PLAYER_ID_MISMATCH'
+  /**
+   * No deletion confirmation, or one the identity service refused (expired,
+   * used, another player's). Get a new one and try again.
+   */
+  | 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED'
   /** This server has no authentication or identity service for deletion. */
   | 'ACCOUNT_DELETION_NOT_CONFIGURED'
   /**
@@ -625,7 +650,10 @@ export interface AccountDeletionClient {
    * `ACCOUNT_DELETION_UNREACHABLE` failure the deletion may have completed:
    * a retry that answers `UNAUTHORIZED` means the session no longer exists.
    */
-  deleteAccount(): Promise<AccountDeletionReceipt>;
+  deleteAccount(input?: {
+    /** The identity service's deletion confirmation (`accountDeletionConfirmationHeader`). */
+    readonly confirmation?: string;
+  }): Promise<AccountDeletionReceipt>;
 }
 
 export function createAccountDeletionClient(input: {
@@ -643,7 +671,10 @@ export function createAccountDeletionClient(input: {
     ? Math.min(input.timeoutMs, 2_147_483_647)
     : defaultAccountDeletionTimeoutMs;
   return {
-    async deleteAccount() {
+    async deleteAccount(request = {}) {
+      const confirmationHeader = request.confirmation === undefined
+        ? {}
+        : { [accountDeletionConfirmationHeader]: request.confirmation };
       const fetcher = input.fetch
         ?? (globalThis as { readonly fetch?: AccountDeletionFetch }).fetch;
       if (fetcher === undefined) {
@@ -687,7 +718,7 @@ export function createAccountDeletionClient(input: {
           const answer = async (): Promise<[AccountDeletionFetchResponse, string]> => {
             const received = await fetcher(url, {
               method: 'POST',
-              headers: { ...headers, 'content-type': 'application/json' },
+              headers: { ...headers, ...confirmationHeader, 'content-type': 'application/json' },
               body: '{}',
               signal: controller.signal,
             });
@@ -725,6 +756,9 @@ function readAnswer(response: AccountDeletionFetchResponse, text: string): Accou
   }
   if (response.status === 403 && code === 'PLAYER_ID_MISMATCH') {
     throw new AccountDeletionError('PLAYER_ID_MISMATCH');
+  }
+  if (response.status === 403 && code === 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED') {
+    throw new AccountDeletionError('ACCOUNT_DELETION_CONFIRMATION_REQUIRED');
   }
   if (code === 'ACCOUNT_DELETION_NOT_CONFIGURED' || response.status === 404) {
     // 404: a server from before this route.

@@ -95,6 +95,16 @@ export function createStarterAccountDeletion(input: {
   readonly journalKey?: string;
   /** Whether a server-backed session is signed in (`resolveStarterServerSession()?.current()`). */
   readonly signedIn?: () => boolean;
+  /**
+   * Asks the identity service for a deletion confirmation (it takes the
+   * session's refresh token, which a stolen access token does not give),
+   * right after the player's second tap. Without it the request carries
+   * none, which only a development server accepts. It throws
+   * `AccountDeletionError('UNAUTHORIZED')` when the identity service refused
+   * the session (which is what a completed deletion looks like after a lost
+   * answer); anything else it throws is a retryable failure.
+   */
+  readonly requestConfirmation?: () => Promise<string>;
 }): StarterAccountDeletion {
   const client = input.client;
   const journalKey = input.journalKey ?? defaultMonetizationJournalKey;
@@ -134,7 +144,25 @@ export function createStarterAccountDeletion(input: {
       return { outcome: 'unavailable' };
     }
     try {
-      const receipt = await client.deleteAccount();
+      let confirmation: string | undefined;
+      try {
+        confirmation = await input.requestConfirmation?.();
+      } catch (error) {
+        // Nothing reached the game server, so only a refused session says
+        // anything about an earlier attempt.
+        if (error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED') {
+          if (error.requestSent && answerLost) {
+            answerLost = false;
+            return { outcome: 'session-ended', signedOut: await signOut({ keepJournal: true }) };
+          }
+          return { outcome: 'needs-session' };
+        }
+        console.error('[delete-account] confirmation', error);
+        return { outcome: 'failed', retryable: true };
+      }
+      const receipt = await client.deleteAccount(
+        confirmation === undefined ? {} : { confirmation },
+      );
       answerLost = false;
       return {
         outcome: 'deleted',
@@ -165,6 +193,9 @@ export function createStarterAccountDeletion(input: {
           return { outcome: 'needs-session' };
         case 'ACCOUNT_DELETION_NOT_CONFIGURED':
           return { outcome: 'unavailable' };
+        case 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED':
+          // Expired or already used; the next tap asks for a new one.
+          return { outcome: 'failed', retryable: true };
         default:
           return { outcome: 'failed', retryable: error.retryable };
       }

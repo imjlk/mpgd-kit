@@ -218,6 +218,82 @@ const pendingPurchase = {
   resetStarterAccountDeletionForTests();
 }
 
+// The confirmation is asked for right before the request and sent with it;
+// a refused one is a retryable failure (the next tap asks for a new one).
+{
+  resetStarterAccountDeletionForTests();
+  const sent: (string | undefined)[] = [];
+  let confirmations = 0;
+  const confirmed = createStarterAccountDeletion({
+    client: {
+      async deleteAccount(request) {
+        sent.push(request?.confirmation);
+        if (sent.length === 1) {
+          throw new AccountDeletionError('ACCOUNT_DELETION_CONFIRMATION_REQUIRED');
+        }
+        return receipt;
+      },
+    },
+    storage: memoryStorage(),
+    requestConfirmation: async () => {
+      confirmations += 1;
+      return `confirmation-${confirmations}`;
+    },
+  });
+  assert.deepEqual(await confirmed.deleteAccount(), { outcome: 'failed', retryable: true });
+  assert.deepEqual(await confirmed.deleteAccount(), {
+    outcome: 'deleted',
+    retainedPurchaseRecords: 2,
+    signedOut: true,
+  });
+  assert.deepEqual(sent, ['confirmation-1', 'confirmation-2']);
+  const consoleError = console.error;
+  console.error = () => undefined;
+  try {
+    assert.deepEqual(
+      await createStarterAccountDeletion({
+        client: { deleteAccount: () => Promise.reject(new Error('must not be called')) },
+        storage: memoryStorage(),
+        requestConfirmation: () => Promise.reject(new Error('identity unreachable')),
+      }).deleteAccount(),
+      { outcome: 'failed', retryable: true },
+    );
+  } finally {
+    console.error = consoleError;
+  }
+  // The identity service refusing the session: no session here, unless an
+  // earlier request's answer was lost (then the deletion completed).
+  resetStarterAccountDeletionForTests();
+  const refusedStorage = memoryStorage();
+  let lostOnce = true;
+  const afterLost = createStarterAccountDeletion({
+    client: {
+      async deleteAccount() {
+        throw new AccountDeletionError('ACCOUNT_DELETION_UNREACHABLE', { requestSent: true });
+      },
+    },
+    storage: refusedStorage,
+    requestConfirmation: async () => {
+      if (lostOnce) {
+        lostOnce = false;
+        return 'confirmation-lost';
+      }
+      throw new AccountDeletionError('UNAUTHORIZED');
+    },
+  });
+  assert.deepEqual(await afterLost.deleteAccount(), { outcome: 'failed', retryable: true });
+  assert.deepEqual(await afterLost.deleteAccount(), { outcome: 'session-ended', signedOut: true });
+  resetStarterAccountDeletionForTests();
+  assert.deepEqual(
+    await createStarterAccountDeletion({
+      client: { deleteAccount: () => Promise.reject(new Error('must not be called')) },
+      storage: memoryStorage(),
+      requestConfirmation: () => Promise.reject(new AccountDeletionError('UNAUTHORIZED')),
+    }).deleteAccount(),
+    { outcome: 'needs-session' },
+  );
+}
+
 // The entry needs a signed-in session; a journal that cannot be cleared is reported.
 {
   assert.equal(

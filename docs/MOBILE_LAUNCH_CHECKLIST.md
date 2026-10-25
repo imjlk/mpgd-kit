@@ -194,6 +194,8 @@ production` prints what it lacks and fails on contradictions
       - [ ] Apply migration `0010_account_deletion.sql` and bind
             `GAME_SERVICES_ACCOUNT_DELETION` to the identity Worker's
             `deletePlayer` entrypoint; the route answers `503` without it.
+            The same binding verifies the deletion confirmation the client
+            sends, so a stolen access token alone cannot delete an account.
             The cron (above) finishes pending erasures and purges kept
             purchase records after five years; without it neither happens.
       - [ ] Fill in `legal/delete-account.html` (every `[REPLACE: …]`: the

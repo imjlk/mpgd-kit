@@ -6,6 +6,7 @@
  * retention purge of the purchase records kept for a deleted player.
  */
 import {
+  accountDeletionConfirmationHeader,
   accountDeletionEndpoint,
   AccountDeletionError,
   assertPlayerDataErasureInput,
@@ -16,6 +17,7 @@ import {
   retainedPlayerIdPrefix,
   retainedPurchaseRecordYears,
   type AccountDeletionAuditEntry,
+  type AccountDeletionConfirmationVerifier,
   type AccountDeletionIdentity,
   type AccountDeletionReceipt,
   type EntitlementLedgerPayload,
@@ -30,7 +32,8 @@ import {
  * family of the player and delete the guest record (idempotent; an unknown
  * player succeeds). Bind it as `GAME_SERVICES_ACCOUNT_DELETION`.
  */
-export interface GameServicesAccountDeletionBinding extends AccountDeletionIdentity {
+export interface GameServicesAccountDeletionBinding
+  extends AccountDeletionIdentity, AccountDeletionConfirmationVerifier {
   deletePlayer(input: { readonly playerId: string }): Promise<unknown>;
 }
 
@@ -55,6 +58,13 @@ export interface AccountDeletionRouteInput {
    */
   service(principal: { readonly development: boolean }):
     | ReturnType<typeof createAccountDeletionService>
+    | undefined;
+  /**
+   * The identity service's check of the deletion confirmation, or
+   * `undefined` where none is required (local development sessions).
+   */
+  confirmation(principal: { readonly development: boolean }):
+    | AccountDeletionConfirmationVerifier
     | undefined;
 }
 
@@ -92,6 +102,25 @@ export function createAccountDeletionFetchHandler(
       const service = input.service(principal);
       if (service === undefined) {
         return json({ error: 'ACCOUNT_DELETION_NOT_CONFIGURED' }, 503, input.corsHeaders);
+      }
+      // A bare access token cannot delete the account: the identity service
+      // must confirm (and consume) a confirmation issued to this player.
+      const verifier = input.confirmation(principal);
+      if (verifier !== undefined) {
+        const confirmation = request.headers.get(accountDeletionConfirmationHeader);
+        if (confirmation === null || confirmation.length === 0 || confirmation.length > 4096) {
+          return json({ error: 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED' }, 403, input.corsHeaders);
+        }
+        const answer: unknown = await verifier.verifyAccountDeletionConfirmation({
+          playerId: principal.playerId,
+          confirmation,
+        });
+        if (
+          typeof answer !== 'object' || answer === null
+          || (answer as { readonly confirmed?: unknown }).confirmed !== true
+        ) {
+          return json({ error: 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED' }, 403, input.corsHeaders);
+        }
       }
       receipt = await service.deletePlayerAccount({ playerId: principal.playerId });
     } catch (error) {

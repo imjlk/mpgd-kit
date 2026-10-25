@@ -552,11 +552,23 @@ try {
         async deletePlayer({ playerId }) {
           deleted.push(playerId);
         },
+        async verifyAccountDeletionConfirmation({ playerId, confirmation }) {
+          // Single use, bound to the player.
+          const confirmed = confirmations.get(confirmation) === playerId;
+          confirmations.delete(confirmation);
+          return { confirmed };
+        },
       },
       ...overrides,
     },
     omit,
   );
+  const confirmations = new Map<string, string>([
+    ['confirm-5a', 'player-5'],
+    ['confirm-5b', 'player-5'],
+    ['confirm-5c', 'player-5'],
+    ['confirm-2', 'player-2'],
+  ]);
   const route = createWorkerFetchHandler(env({}));
   const post = (
     handler: (request: Request) => Promise<Response>,
@@ -609,7 +621,27 @@ try {
   assert.equal(authFailed.status, 500);
   assert.deepEqual(await authFailed.json(), { error: 'AUTHENTICATION_FAILED' });
   assert.equal(await countRows(db, 'leaderboard_transactions', 'player_id', 'player-5'), 1);
-  const ok = await post(route, { authorization: 'Bearer player-5-token' });
+  // A bare access token is not enough: the identity service's confirmation
+  // is required, must be this player's, and is used once.
+  for (const headers of [
+    { authorization: 'Bearer player-5-token' },
+    { authorization: 'Bearer player-5-token', 'x-mpgd-account-deletion-confirmation': 'forged' },
+    { authorization: 'Bearer player-5-token', 'x-mpgd-account-deletion-confirmation': 'confirm-2' },
+  ]) {
+    const unconfirmed = await post(route, headers);
+    assert.equal(unconfirmed.status, 403);
+    assert.deepEqual(await unconfirmed.json(), { error: 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED' });
+  }
+  assert.deepEqual(deleted, [], 'nothing deleted without a confirmation');
+  assert.equal(await countRows(db, 'leaderboard_transactions', 'player_id', 'player-5'), 1);
+  assert.match(
+    preflight.headers.get('Access-Control-Allow-Headers') ?? '',
+    /X-MPGD-Account-Deletion-Confirmation/u,
+  );
+  const ok = await post(route, {
+    authorization: 'Bearer player-5-token',
+    'x-mpgd-account-deletion-confirmation': 'confirm-5a',
+  });
   assert.equal(ok.status, 200);
   assert.equal(ok.headers.get('Access-Control-Allow-Origin'), '*');
   const okReceipt = await ok.json() as AccountDeletionReceipt;
@@ -617,8 +649,19 @@ try {
   assert.equal(okReceipt.retainedPurchaseRecords, 4);
   assert.deepEqual(deleted, ['player-5']);
   assert.equal(await countRows(db, 'notification_endpoints', 'player_id', 'player-5'), 0);
-  // A retry after success deletes nothing more.
-  const retry = await post(route, { authorization: 'Bearer player-5-token' });
+  // The confirmation was used up.
+  assert.equal(
+    (await post(route, {
+      authorization: 'Bearer player-5-token',
+      'x-mpgd-account-deletion-confirmation': 'confirm-5a',
+    })).status,
+    403,
+  );
+  // A retry with a new confirmation after success deletes nothing more.
+  const retry = await post(route, {
+    authorization: 'Bearer player-5-token',
+    'x-mpgd-account-deletion-confirmation': 'confirm-5b',
+  });
   assert.equal((await retry.json() as AccountDeletionReceipt).retainedPurchaseRecords, 0);
 
   // Without the identity binding the route refuses instead of leaving sessions alive.
@@ -637,13 +680,17 @@ try {
     env({
       GAME_SERVICES_ACCOUNT_DELETION: {
         deletePlayer: () => Promise.reject(new Error('identity unavailable')),
+        verifyAccountDeletionConfirmation: async () => ({ confirmed: true }),
       },
     }),
   );
   const consoleError = console.error;
   console.error = () => undefined;
   try {
-    const failed = await post(failing, { authorization: 'Bearer player-5-token' });
+    const failed = await post(failing, {
+      authorization: 'Bearer player-5-token',
+      'x-mpgd-account-deletion-confirmation': 'confirm-5c',
+    });
     assert.equal(failed.status, 500);
     assert.deepEqual(await failed.json(), { error: 'ACCOUNT_DELETION_FAILED', retryable: true });
   } finally {

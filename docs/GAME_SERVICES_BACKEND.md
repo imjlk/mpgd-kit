@@ -1051,6 +1051,17 @@ The player comes from the request's session, never from the body:
   delete the guest record; idempotent). Without it the route answers `503`
   outside local development, rather than erase data while the sessions
   stay alive.
+- A session's access token alone cannot delete the account. The request
+  carries a deletion confirmation in `X-MPGD-Account-Deletion-Confirmation`
+  (`accountDeletionConfirmationHeader`): a short-lived, single-use value the
+  identity Worker issues to the holder of the session's refresh token after
+  the player's second tap. Before erasing anything the route has the same
+  binding check and consume it
+  (`verifyAccountDeletionConfirmation({ playerId, confirmation })` answers
+  `{ confirmed }`); a missing, expired, reused, or other player's
+  confirmation answers `403 ACCOUNT_DELETION_CONFIRMATION_REQUIRED` and
+  deletes nothing. A retry needs a new confirmation. Development sessions
+  skip the check; the operator entrypoint below does not use it.
 - Success is `200 { status: 'deleted', deletionId, completedAt,
   retainedPurchaseRecords }`; a failure before the identity is deleted is
   `500 { error: 'ACCOUNT_DELETION_FAILED', retryable: true }`, and every

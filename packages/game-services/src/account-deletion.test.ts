@@ -972,6 +972,10 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   assert.equal(requests[0]?.headers.authorization, 'Bearer token');
   assert.equal(requests[0]?.headers['content-type'], 'application/json');
   assert.equal(requests[0]?.body, '{}');
+  // The deletion confirmation travels in its own header.
+  await client.deleteAccount({ confirmation: 'confirm-1' });
+  assert.equal(requests[1]?.headers['x-mpgd-account-deletion-confirmation'], 'confirm-1');
+  assert.equal('x-mpgd-account-deletion-confirmation' in (requests[0]?.headers ?? {}), false);
 
   const failure = async (
     status: number,
@@ -989,6 +993,11 @@ import { InMemoryVerifiedLeaderboardService } from './verified-leaderboard.js';
   };
   await failure(401, { error: 'UNAUTHORIZED' }, 'UNAUTHORIZED');
   await failure(403, { error: 'PLAYER_ID_MISMATCH' }, 'PLAYER_ID_MISMATCH');
+  await failure(
+    403,
+    { error: 'ACCOUNT_DELETION_CONFIRMATION_REQUIRED' },
+    'ACCOUNT_DELETION_CONFIRMATION_REQUIRED',
+  );
   await failure(
     503,
     { error: 'ACCOUNT_DELETION_NOT_CONFIGURED' },

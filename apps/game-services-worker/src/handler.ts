@@ -429,9 +429,18 @@ function buildWorkerFetchHandler(
   const notificationsFetch = createNotificationsFetchHandler(env, corsHeaders);
   const appStoreNotificationsFetch = createWorkerAppStoreNotificationsFetchHandler(env, httpStore);
   const accountDeletionFetch = createAccountDeletionFetchHandler({
-    corsHeaders,
+    // The deletion confirmation travels in its own header (browser targets preflight it).
+    corsHeaders: {
+      ...corsHeaders,
+      'Access-Control-Allow-Headers':
+        `${corsHeaders['Access-Control-Allow-Headers']}, X-MPGD-Account-Deletion-Confirmation`,
+    },
     authenticate: (request) => authenticateAccountDeletionRequest(env, request),
     service: (principal) => createWorkerAccountDeletionService(env, principal),
+    // Development sessions run without an identity service, and so without
+    // confirmations; every other deletion needs one.
+    confirmation: (principal) =>
+      principal.development ? undefined : env.GAME_SERVICES_ACCOUNT_DELETION,
   });
 
   return async (request) => {
