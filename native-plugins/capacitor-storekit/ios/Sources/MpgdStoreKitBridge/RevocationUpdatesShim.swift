@@ -51,22 +51,7 @@ public final class RevocationUpdatesShim {
         _ transaction: StoreKit.Transaction,
         jws: String
     ) -> MpgdStoreKitTransaction? {
-        guard let revocationDate = transaction.revocationDate else { return nil }
-        let type: MpgdOneTimeType
-        switch transaction.productType {
-        case .consumable: type = .consumable
-        case .nonConsumable: type = .nonConsumable
-        default: return nil
-        }
-        return MpgdStoreKitTransaction(
-            transactionId: String(transaction.id),
-            originalTransactionId: String(transaction.originalID),
-            productId: transaction.productID,
-            type: type,
-            appAccountToken: transaction.appAccountToken?.uuidString,
-            purchasedAtMillis: transaction.purchaseDate.timeIntervalSince1970 * 1000,
-            revokedAtMillis: revocationDate.timeIntervalSince1970 * 1000,
-            signedTransaction: jws
-        )
+        guard transaction.revocationDate != nil else { return nil }
+        return MpgdStoreKitTransaction(verified: transaction, jws: jws)
     }
 }

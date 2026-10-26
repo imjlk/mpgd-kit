@@ -58,6 +58,7 @@ What the dependency adds to a consumer:
 | Game and shared commerce | logical products, purchase requests, pending state, reconciler, journal | unchanged (`@mpgd/game-services`, `@mpgd/adapter-capacitor`) |
 | mpgd plugin TypeScript | `StoreSdk`, `CommerceProvider`, account filters, evidence | unchanged (`src/*.ts`) |
 | mpgd native policy | which transactions are reported, the 0.3 payload shapes, the finish gate, error codes | `StoreKitTransactionPolicy.swift`, `PlayBillingPolicy.kt` |
+| Read-only compatibility shims (iOS) | the verified transaction lists; revocation events | `RecoveryReadShim.swift`, `RevocationUpdatesShim.swift` |
 | Store-neutral binding | provider selection and check, connection, the single listener, lifecycle | `OpenIapAppleConnection.swift`, `OpenIapPlayConnection.kt` |
 | Capacitor bridge | method parsing, call resolution, events | `CapacitorStoreKitPlugin.swift`, `CapacitorPlayBillingPlugin.kt` |
 | OpenIAP core | StoreKit 2 / Play Billing calls | `OpenIapModule` (Apple), `OpenIapStore` (Google) |
@@ -108,9 +109,9 @@ on this contract:
 | load | `OpenIapModule(factory: OpenIapAppleProviderFactory())`, `initConnection()`, `purchaseUpdatedListener(_, options: dedupeTransactionIOS: false)` | provider must report `apple`; the listener forwards verified one-time purchases as `transactionUpdated` |
 | `getProducts` | `fetchProducts(skus, .inApp)` | 1-100 valid ids; consumable and non-consumable only |
 | `purchase` | `fetchProducts` (one-time check), `requestPurchase(.inApp, appAccountToken, andDangerouslyFinishTransactionAutomatically: false)` | result must match product and token; `userCancelled` → `cancelled`, `deferredPayment` → `pending`, failures after the sheet → `STOREKIT_PURCHASE_UNCERTAIN` |
-| `getTransactions` | `getPendingTransactionsIOS()` + `getAvailablePurchases(onlyIncludeActiveItemsIOS: true)` | unfinished one-time → `unfinished: true`; current non-consumables not already listed → `unfinished: false`; merged by id; never `Transaction.all` |
+| `getTransactions` | none: `RecoveryReadShim` reads `Transaction.unfinished` and `Transaction.currentEntitlements` (below) | unfinished one-time → `unfinished: true`; current non-consumables not already listed → `unfinished: false`; merged by id; unverified entries skipped one by one; no account filter (TypeScript `admit()`); never `Transaction.all` |
 | `sync` | `syncIOS()` (`AppStore.sync`) | user-initiated only; the reconciler's automatic passes never call it |
-| `finishTransaction` | `getPendingTransactionsIOS()`, then `getAvailablePurchases(onlyIncludeActiveItemsIOS: false)`; `finishTransaction(purchase:isConsumable:)` | verified, one-time, not revoked, `appAccountToken` equals the session token; OpenIAP's own `storeId` check still runs |
+| `finishTransaction` | lookup through `RecoveryReadShim` (unfinished, then `Transaction.all`); the finish itself is `finishTransaction(purchase:isConsumable:)` | verified, one-time, not revoked, `appAccountToken` equals the session token; OpenIAP's own `storeId` check still runs |
 | revocations | not delivered by OpenIAP 4.0.5 | `RevocationUpdatesShim` (below) |
 
 ### Android
@@ -141,20 +142,26 @@ on this contract:
    ([`JWSTransactionDecodedPayload.type`](https://developer.apple.com/documentation/appstoreserverapi/type)).
    A missing or subscription claim drops the transaction, as the 0.3 filter
    dropped non-one-time transactions. Upstream request 2.
-3. **Unverified or unreadable transactions fail the whole query.** OpenIAP's
+3. **Unverified transactions (recovery read shim).** OpenIAP's
    `getPendingTransactionsIOS` and `getAvailablePurchases` throw on the first
-   unverified entry (`checkVerified`, line 2335); the 0.3 plugin skipped
-   unverified entries and returned the rest. The plugin now rejects
-   `getTransactions` (and a finish behind it) with
-   `STOREKIT_TRANSACTION_UNVERIFIED`. A verified entry whose JWS has no
-   readable `type` claim fails the query the same way
-   (`STOREKIT_EVIDENCE_INVALID`) instead of being dropped. This fails closed: the game never reads
-   a shortened list as "finished" (its finish recovery reads absence from the
-   list), and the reconciler treats a failed read as retryable. The cost:
-   while StoreKit cannot verify one transaction on a device (tampering, or a
-   device clock StoreKit rejects), verified siblings on that device are not
-   recovered either. **Maintainer decision:** accept this, or ask upstream
-   for a verified-only read (upstream request 3) before shipping.
+   unverified entry (`checkVerified`, line 2335), so one transaction StoreKit
+   cannot verify (tampering, or a device clock StoreKit rejects) would hide
+   every verified transaction on that device from recovery and block
+   finishing them. The 0.3 plugin skipped an unverified entry on its own.
+   `RecoveryReadShim` keeps that: `getTransactions` and the
+   `finishTransaction` lookup read `Transaction.unfinished`,
+   `Transaction.currentEntitlements`, and (for the finish lookup only)
+   `Transaction.all` directly from StoreKit and skip unverified entries one
+   by one. It is read-only: it never purchases or finishes, and it does not
+   filter by account (the TypeScript SDK's `admit()` does, and the L3d
+   restore work relies on native lists carrying every token). The finish
+   itself stays on OpenIAP, whose own `Transaction.unfinished` scan skips
+   unverified entries. These StoreKit sequences do not throw, so there is no
+   failure to report; a rejection still comes only from a provider error,
+   and nothing turns a failure into an empty list. Removal: when the pinned
+   OpenIAP release offers a verified-only read (upstream request 3). Tests:
+   `testAnUnverifiableTransactionIsSkippedNextToVerifiedOnes`,
+   `testAnUnverifiableTransactionDoesNotBlockFinishingAVerifiedOne`.
 4. **Purchase results also reach the listener.** OpenIAP emits the result of
    `requestPurchase` to its update listener (line 607). The same transaction
    now arrives as the `purchase` result and as `transactionUpdated`; the
@@ -232,8 +239,8 @@ on this contract:
     `finishTransaction`" holds for one-time purchases only.
 
 None of these changes recovery, account binding, or refund handling of a
-verified transaction except item 3, which is listed for a maintainer
-decision. No new payment capability (subscriptions, quantity) is enabled.
+verified transaction, so OpenIAP is the default engine on both platforms. No
+new payment capability (subscriptions, quantity) is enabled.
 
 ## Lifecycle
 
@@ -276,7 +283,7 @@ Android SDK 36):
 | `pnpm --dir packages/game-services test:recovery` (reconciler and conformance) | pass, before and after |
 | `pnpm validate:commerce-alignment`, `validate:capacitor-alignment`, `validate:capacitor-fail-closed` | pass (the fail-closed checks now read the Swift and Kotlin sources) |
 | `pnpm smoke:cli-capacitor-shell-starter`, `smoke:native-packed-consumer` | pass |
-| `MPGD_STOREKIT_BRIDGE_TESTS=1 swift test` in `native-plugins/capacitor-storekit` | 16 XCTests pass on the Mac host |
+| `MPGD_STOREKIT_BRIDGE_TESTS=1 swift test` in `native-plugins/capacitor-storekit` | 18 XCTests pass on the Mac host |
 | `swift build --target MpgdCapacitorStoreKit --triple arm64-apple-ios15.0-simulator` | pass |
 | `./gradlew -PmpgdPlayBillingPluginTest=true :mpgd-capacitor-play-billing:testDebugUnitTest :mpgd-capacitor-play-billing:assembleRelease` (reference shell) | 11 JVM tests pass, release AAR built |
 | `pnpm smoke:native-packed-store-plugins ios android` | packed Swift package compiles for the simulator; packed Gradle module assembles a release AAR |
@@ -312,7 +319,8 @@ resolved packages were checked to be the candidates (OpenIAP sources present):
 | Grant then lost reply / app killed | case 3; game `iosCheckout` and `androidCheckout` suites |
 | Pending / Ask to Buy | `deferredPayment` → `pending` (Swift test); existing StoreSdk tests; game suites |
 | iOS unfinished consumable and finished durable | `testListedTransactionsKeepThe03Scope` |
-| iOS query failure | `testQueryFailuresAreNeverAnEmptyList`; case 2 (no empty list, no `finished: false`) |
+| iOS unverifiable transaction next to verified ones | `testAnUnverifiableTransactionIsSkippedNextToVerifiedOnes`, `testAnUnverifiableTransactionDoesNotBlockFinishingAVerifiedOne` |
+| iOS rejected query | case 2 (a rejection is no empty list and no `finished: false`) |
 | iOS lost finish reply | game `iosCheckout` (list check plus a fresh server grant) |
 | iOS revocation | shim; existing StoreSdk revoked-event tests; server re-verification unchanged |
 | Google order id assigned later | Play case 1; reconciler test 46 |
@@ -344,7 +352,6 @@ These were open before the swap and stay release conditions for the game:
 - Whether every `Transaction.updates` iterator receives every update on
   devices (difference 17), checked with a delayed Ask to Buy approval and a
   refund while the app runs.
-- The maintainer decision on difference 3.
 
 ## Rollback
 

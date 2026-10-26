@@ -110,49 +110,67 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
         XCTAssertNil(StoreKitTransactionPolicy.transaction(from: purchase(purchaseToken: "a.!!!.c")))
     }
 
-    // MARK: - getTransactions scope
+    // MARK: - getTransactions scope (RecoveryReadShim entries)
 
-    func testListedTransactionsKeepThe03Scope() throws {
-        let unfinishedConsumable = purchase(id: "11")
-        let unfinishedDurable = purchase(id: "12", productId: "remove_ads", type: "Non-Consumable")
-        let finishedDurable = purchase(id: "13", productId: "starter_pack", type: "Non-Consumable")
-        let subscription = purchase(id: "14", productId: "vip", type: "Auto-Renewable Subscription")
+    private func read(
+        _ id: String,
+        productId: String = "coins_100",
+        type: MpgdOneTimeType = .consumable,
+        token: String? = "6f1c8e2a-4b7d-4c2e-9a1f-0d3b5c7e9f11",
+        revokedAtMillis: Double? = nil
+    ) -> StoreKitTransactionPolicy.ReadEntry {
+        .oneTime(MpgdStoreKitTransaction(
+            transactionId: id,
+            originalTransactionId: id,
+            productId: productId,
+            type: type,
+            appAccountToken: token,
+            purchasedAtMillis: purchasedAtMillis,
+            revokedAtMillis: revokedAtMillis,
+            signedTransaction: jws(type: type == .consumable ? "Consumable" : "Non-Consumable")
+        ))
+    }
+
+    func testListedTransactionsKeepThe03Scope() {
+        let unfinishedConsumable = read("11")
+        let unfinishedDurable = read("12", productId: "remove_ads", type: .nonConsumable)
+        let finishedDurable = read("13", productId: "starter_pack", type: .nonConsumable)
         // currentEntitlements never lists consumables; a bogus one is ignored anyway.
-        let entitledConsumable = purchase(id: "15")
-        let listed = try StoreKitTransactionPolicy.listedTransactions(
-            unfinished: [unfinishedConsumable, unfinishedDurable, subscription],
-            entitlements: [unfinishedDurable, finishedDurable, subscription, entitledConsumable]
+        let entitledConsumable = read("15")
+        let listed = StoreKitTransactionPolicy.listedTransactions(
+            unfinished: [unfinishedConsumable, unfinishedDurable, .notOneTime],
+            entitlements: [unfinishedDurable, finishedDurable, .notOneTime, entitledConsumable]
         )
         XCTAssertEqual(listed.map { $0["transactionId"] as? String }, ["11", "12", "13"])
         XCTAssertEqual(listed.map { $0["unfinished"] as? Bool }, [true, true, false])
     }
 
-    func testAnEmptyStoreListsNothing() throws {
-        XCTAssertTrue(try StoreKitTransactionPolicy.listedTransactions(unfinished: [], entitlements: []).isEmpty)
+    func testAnUnverifiableTransactionIsSkippedNextToVerifiedOnes() {
+        // 0.3 behavior: StoreKit's `.unverified` entry drops out on its own; the
+        // verified siblings stay listed, so recovery is not blocked.
+        let listed = StoreKitTransactionPolicy.listedTransactions(
+            unfinished: [.unverified, read("41"), .unverified],
+            entitlements: [.unverified, read("42", productId: "remove_ads", type: .nonConsumable)]
+        )
+        XCTAssertEqual(listed.map { $0["transactionId"] as? String }, ["41", "42"])
+        XCTAssertEqual(listed.map { $0["unfinished"] as? Bool }, [true, false])
     }
 
-    func testAnUnreadableTransactionFailsTheQueryInsteadOfShorteningIt() {
-        // A verified purchase whose JWS carries no `type` claim must not just
-        // disappear: the game would read a missing consumable as finished.
-        for unreadable in [
-            purchase(id: "31", type: nil),
-            purchase(id: "32", purchaseToken: "2000000000000032"),
-            purchase(id: "33", storeId: "play")
-        ] {
-            XCTAssertEqual(StoreKitTransactionPolicy.classify(unreadable), .unreadable)
-            XCTAssertThrowsError(try StoreKitTransactionPolicy.listedTransactions(
-                unfinished: [purchase(id: "30"), unreadable], entitlements: [])) { error in
-                XCTAssertEqual(error as? StoreKitTransactionPolicy.UnreadableTransaction,
-                               StoreKitTransactionPolicy.UnreadableTransaction(transactionId: unreadable.id))
-                XCTAssertEqual(StoreKitTransactionPolicy.queryFailureCode(error), "STOREKIT_EVIDENCE_INVALID")
-            }
-            XCTAssertThrowsError(try StoreKitTransactionPolicy.listedTransactions(
-                unfinished: [], entitlements: [unreadable]))
-        }
-        XCTAssertEqual(StoreKitTransactionPolicy.classify(purchase(type: "Auto-Renewable Subscription")), .notOneTime)
+    func testListsAreNotFilteredByAccount() {
+        // The TypeScript SDK admits by session token; restore after a
+        // reinstall needs to see transactions bound to an earlier guest.
+        let listed = StoreKitTransactionPolicy.listedTransactions(
+            unfinished: [read("51", token: "0a1c8e2a-4b7d-4c2e-9a1f-0d3b5c7e9f11"), read("52", token: nil)],
+            entitlements: []
+        )
+        XCTAssertEqual(listed.map { $0["transactionId"] as? String }, ["51", "52"])
     }
 
-    func testQueryFailuresAreNeverAnEmptyList() {
+    func testAnEmptyStoreListsNothing() {
+        XCTAssertTrue(StoreKitTransactionPolicy.listedTransactions(unfinished: [], entitlements: []).isEmpty)
+    }
+
+    func testOpenIapFailureCodes() {
         let unverified = PurchaseError(code: .transactionValidationFailed, message: "Transaction verification failed")
         XCTAssertEqual(StoreKitTransactionPolicy.queryFailureCode(unverified), "STOREKIT_TRANSACTION_UNVERIFIED")
         XCTAssertEqual(StoreKitTransactionPolicy.queryFailureCode(
@@ -163,26 +181,36 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
     // MARK: - finishTransaction gate
 
     func testFinishRequiresTheSessionTokenAndNoRevocation() throws {
-        let bound = purchase(id: "21")
         let match = try XCTUnwrap(StoreKitTransactionPolicy.finishable(
-            transactionId: "21", appAccountToken: token.uppercased(), in: [bound]))
-        XCTAssertEqual(match.purchase.id, "21")
+            transactionId: "21", appAccountToken: token.uppercased(), in: [read("21")]))
+        XCTAssertEqual(match.transactionId, "21")
         XCTAssertEqual(match.type, .consumable)
 
         XCTAssertNil(StoreKitTransactionPolicy.finishable(
-            transactionId: "21", appAccountToken: "0a1c8e2a-4b7d-4c2e-9a1f-0d3b5c7e9f11", in: [bound]))
+            transactionId: "21", appAccountToken: "0a1c8e2a-4b7d-4c2e-9a1f-0d3b5c7e9f11", in: [read("21")]))
         XCTAssertNil(StoreKitTransactionPolicy.finishable(
-            transactionId: "22", appAccountToken: token, in: [bound]))
+            transactionId: "22", appAccountToken: token, in: [read("21")]))
         XCTAssertNil(StoreKitTransactionPolicy.finishable(
-            transactionId: "23", appAccountToken: token,
-            in: [purchase(id: "23", revokedAtMillis: 1_700_000_100_000)]))
+            transactionId: "23", appAccountToken: token, in: [read("23", revokedAtMillis: 1_700_000_100_000)]))
         XCTAssertNil(StoreKitTransactionPolicy.finishable(
-            transactionId: "24", appAccountToken: token, in: [purchase(id: "24", token: nil)]))
+            transactionId: "24", appAccountToken: token, in: [read("24", token: nil)]))
         XCTAssertNil(StoreKitTransactionPolicy.finishable(
-            transactionId: "25", appAccountToken: token,
-            in: [purchase(id: "25", type: "Auto-Renewable Subscription")]))
-        XCTAssertNil(StoreKitTransactionPolicy.finishable(
-            transactionId: "26", appAccountToken: token, in: [purchase(id: "26", storeId: "play")]))
+            transactionId: "25", appAccountToken: token, in: [.notOneTime, .unverified]))
+    }
+
+    func testAnUnverifiableTransactionDoesNotBlockFinishingAVerifiedOne() throws {
+        let match = try XCTUnwrap(StoreKitTransactionPolicy.finishable(
+            transactionId: "61", appAccountToken: token, in: [.unverified, read("61"), .unverified]))
+        XCTAssertEqual(match.transactionId, "61")
+        // The OpenIAP finish input carries what OpenIAP finishes by.
+        let input = StoreKitTransactionPolicy.finishInput(match)
+        XCTAssertEqual(input.id, "61")
+        XCTAssertEqual(input.transactionId, "61")
+        XCTAssertEqual(input.productId, "coins_100")
+        XCTAssertEqual(input.storeId, "apple")
+        XCTAssertEqual(input.store, .apple)
+        XCTAssertEqual(input.purchaseToken, match.signedTransaction)
+        XCTAssertEqual(Purchase.purchaseIos(input).storeId, StoreKitTransactionPolicy.appleStoreId)
     }
 
     func testPurchaseResultMustMatchTheRequest() throws {

@@ -74,7 +74,9 @@ checklist later rather than being declared before they work.
    `getAvailablePurchases` throw on the first unverified entry, so one
    unverifiable transaction hides every verified one on that device. An
    option to skip (and report) unverified entries would let apps recover the
-   verified ones while still never trusting the rest.
+   verified ones while still never trusting the rest. mpgd reads
+   `Transaction.unfinished`, `currentEntitlements`, and `all` itself for now
+   (a read-only shim); this option would let it remove that shim.
 4. **Finish result.** `finishTransaction` treats a purchase it cannot find
    as already finished and returns nothing. Returning whether a transaction
    was found and finished would let an id-based API answer precisely.

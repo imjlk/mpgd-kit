@@ -149,13 +149,25 @@ const storeKitPlugin = read(
 );
 assert.match(
   storeKit,
-  /getPendingTransactionsIOS\(\)/u,
+  /StoreKit\.Transaction\.unfinished/u,
   'StoreKit must requery unfinished purchases',
 );
+const storeKitList = storeKitPlugin.split('@objc func getTransactions')[1]
+  ?.split('@objc func sync')[0] ?? '';
 assert.match(
-  storeKit,
-  /onlyIncludeActiveItemsIOS: true/u,
-  'StoreKit must list current entitlements, never the full history, as recoverable',
+  storeKitList,
+  /RecoveryReadShim\.unfinished\(\)[\s\S]*RecoveryReadShim\.currentEntitlements\(\)/u,
+  'StoreKit must list unfinished transactions and current entitlements',
+);
+assert.doesNotMatch(
+  storeKitList,
+  /RecoveryReadShim\.history\(\)|StoreKit\.Transaction\.all|getAvailablePurchases\(/u,
+  'StoreKit must never list the full history as recoverable',
+);
+assert.doesNotMatch(
+  read('native-plugins/capacitor-storekit/ios/Sources/MpgdStoreKitBridge/RecoveryReadShim.swift'),
+  /appAccountToken ==|\.finish\(|purchase\(/u,
+  'The StoreKit read shim stays read-only and leaves account admission to TypeScript',
 );
 assert.match(
   storeKit,

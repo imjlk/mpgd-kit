@@ -26,16 +26,18 @@ import { createCapacitorStoreKitStoreSdk } from './store-sdk.js';
  *
  * - OpenIAP also hands the result of a `purchase` call to its listener, so the
  *   same transaction arrives as the call's result and as `transactionUpdated`.
- * - OpenIAP's query fails as a whole when StoreKit cannot verify one entry;
- *   `getTransactions` and `finishTransaction` now reject instead of skipping.
+ * - `getTransactions` can reject (for example when OpenIAP did not select the
+ *   Apple provider); a rejection must never read as an empty list. An
+ *   unverifiable StoreKit entry is still skipped natively, as in 0.3 (Swift
+ *   `StoreKitTransactionPolicyTests`).
  * - A journal written while the 0.3 engine ran must finish under the new one.
  */
 
 const storeSku = 'com.example.game.coins100';
 const products = [{ logicalId: 'COINS_100', storeSku, kind: 'consumable' as const }];
-const unverified = (): Error =>
-  Object.assign(new Error('StoreKit transaction query failed.'), {
-    code: 'STOREKIT_TRANSACTION_UNVERIFIED',
+const misconfigured = (): Error =>
+  Object.assign(new Error('OpenIAP selected the play provider; this plugin requires apple.'), {
+    code: 'STOREKIT_CONFIGURATION_ERROR',
   });
 
 function backendGranting(requests: VerifyPurchaseRequest[]): PurchaseVerificationApi {
@@ -114,7 +116,7 @@ const finishes = (plugin: FakeStoreKitPlugin): string[] =>
   assertEqual((await reconciler.listRecoverable()).length, 0, 'no second record for the event');
 }
 
-// 2. A failed transaction query is a failure, never an empty list, and a
+// 2. A rejected transaction query is a failure, never an empty list, and a
 // finish behind it is never reported as done.
 {
   const plugin = createFakeStoreKitPlugin({
@@ -122,7 +124,7 @@ const finishes = (plugin: FakeStoreKitPlugin): string[] =>
   });
   plugin.getTransactions = async () => {
     plugin.calls.push('getTransactions');
-    throw unverified();
+    throw misconfigured();
   };
   const sdk = createCapacitorStoreKitStoreSdk({
     products: [{ sku: storeSku, kind: 'consumable' }],
@@ -132,7 +134,7 @@ const finishes = (plugin: FakeStoreKitPlugin): string[] =>
   });
   await assertThrowsCode(
     () => sdk.getAvailablePurchases({}),
-    'STOREKIT_TRANSACTION_UNVERIFIED',
+    'STOREKIT_CONFIGURATION_ERROR',
     'getAvailablePurchases rejects with the plugin code',
   );
   await assertThrowsCode(
@@ -142,7 +144,7 @@ const finishes = (plugin: FakeStoreKitPlugin): string[] =>
         ledgerEntryId: 'ledger-1',
         isConsumable: true,
       }),
-    'STOREKIT_TRANSACTION_UNVERIFIED',
+    'STOREKIT_CONFIGURATION_ERROR',
     'finishTransaction rejects instead of answering finished: false',
   );
   assertEqual(finishes(plugin), [], 'nothing reached native finish');
@@ -155,7 +157,7 @@ const finishes = (plugin: FakeStoreKitPlugin): string[] =>
   });
   await assertThrowsCode(
     () => provider.getAvailablePurchases(),
-    'INVALID_RESPONSE',
+    'CONFIGURATION_REQUIRED',
     'the provider normalizes it through the StoreKit error map',
   );
 }

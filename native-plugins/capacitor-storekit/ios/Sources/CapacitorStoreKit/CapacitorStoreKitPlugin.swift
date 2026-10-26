@@ -145,24 +145,18 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func getTransactions(_ call: CAPPluginCall) {
         guard providerReady(call) else { return }
-        Task { [module] in
-            do {
-                // Verified `Transaction.unfinished`, then current entitlements
-                // (`Transaction.currentEntitlements`). Never `Transaction.all`:
-                // finished consumables must not return to the recovery list.
-                let unfinished = try await module.getPendingTransactionsIOS()
-                let entitlements = try await module.getAvailablePurchases(
-                    PurchaseOptions(alsoPublishToEventListenerIOS: false, onlyIncludeActiveItemsIOS: true))
-                call.resolve(["transactions": try StoreKitTransactionPolicy.listedTransactions(
-                    unfinished: unfinished,
-                    entitlements: entitlements.compactMap(Self.iosPurchase)
-                )])
-            } catch {
-                // A failed query is never an empty list: the game reads a
-                // transaction leaving this list as evidence that it finished.
-                call.reject("StoreKit transaction query failed.",
-                            StoreKitTransactionPolicy.queryFailureCode(error), error)
-            }
+        Task {
+            // Verified `Transaction.unfinished`, then current entitlements, read
+            // by `RecoveryReadShim`: an unverified entry is skipped on its own
+            // (0.3 behavior) instead of failing the whole OpenIAP query. Never
+            // `Transaction.all`: finished consumables must not return to the
+            // recovery list. No account filter: the TypeScript SDK admits.
+            let unfinished = await RecoveryReadShim.unfinished()
+            let entitlements = await RecoveryReadShim.currentEntitlements()
+            call.resolve(["transactions": StoreKitTransactionPolicy.listedTransactions(
+                unfinished: unfinished,
+                entitlements: entitlements
+            )])
         }
     }
 
@@ -200,28 +194,28 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         guard providerReady(call) else { return }
         Task { [module] in
             do {
-                // The full verified purchase behind the id: unfinished first,
-                // then the StoreKit history (`Transaction.all`) the 0.3 plugin
-                // searched, so finishing an already-finished durable stays an
-                // idempotent `finished: true`.
+                // The verified transaction behind the id, through the same read
+                // as `getTransactions` (an unverified sibling never blocks it):
+                // unfinished first, then the StoreKit history
+                // (`Transaction.all`) the 0.3 plugin searched, so finishing an
+                // already-finished durable stays an idempotent `finished: true`.
                 var candidate = StoreKitTransactionPolicy.finishable(
                     transactionId: transactionId,
                     appAccountToken: accountToken,
-                    in: try await module.getPendingTransactionsIOS())
+                    in: await RecoveryReadShim.unfinished())
                 if candidate == nil {
-                    let history = try await module.getAvailablePurchases(
-                        PurchaseOptions(alsoPublishToEventListenerIOS: false, onlyIncludeActiveItemsIOS: false))
                     candidate = StoreKitTransactionPolicy.finishable(
                         transactionId: transactionId,
                         appAccountToken: accountToken,
-                        in: history.compactMap(Self.iosPurchase))
+                        in: await RecoveryReadShim.history())
                 }
                 guard let match = candidate else {
                     call.resolve(["finished": false])
                     return
                 }
+                // OpenIAP finishes it (and checks the Apple storeId).
                 try await module.finishTransaction(
-                    purchase: .purchaseIos(match.purchase),
+                    purchase: .purchaseIos(StoreKitTransactionPolicy.finishInput(match)),
                     isConsumable: match.type == .consumable)
                 call.resolve(["finished": true])
             } catch {
@@ -237,10 +231,5 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
             if case .productIos(let ios) = product { return ios }
             return nil
         }
-    }
-
-    private static func iosPurchase(_ purchase: OpenIAP.Purchase) -> PurchaseIOS? {
-        if case .purchaseIos(let ios) = purchase { return ios }
-        return nil
     }
 }

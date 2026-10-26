@@ -75,15 +75,15 @@ public enum StoreKitTransactionPolicy {
 
     // MARK: - Mapping
 
-    /// What the plugin makes of one OpenIAP Apple purchase.
+    /// What the plugin makes of one OpenIAP Apple purchase (the `purchase`
+    /// result and listener events).
     public enum Classification: Equatable {
         /// A verified consumable or non-consumable the plugin reports.
         case oneTime(MpgdStoreKitTransaction)
         /// A subscription (its JWS `type` claim says so); never reported.
         case notOneTime
         /// No readable StoreKit JWS, no `type` claim, another provider, or no
-        /// id. A query that meets one fails instead of dropping it, so the
-        /// list never shrinks silently.
+        /// id. Never reported from the OpenIAP purchase and listener paths.
         case unreadable
     }
 
@@ -116,11 +116,6 @@ public enum StoreKitTransactionPolicy {
     public static func transaction(from purchase: PurchaseIOS) -> MpgdStoreKitTransaction? {
         if case .oneTime(let transaction) = classify(purchase) { return transaction }
         return nil
-    }
-
-    /// A purchase in a transaction query that the plugin cannot read.
-    public struct UnreadableTransaction: Error, Equatable {
-        public let transactionId: String
     }
 
     /// The `StoreKitTransaction` payload of the 0.3 native plugin, key for key.
@@ -165,31 +160,37 @@ public enum StoreKitTransactionPolicy {
         ]
     }
 
+    /// One entry of a StoreKit read (`RecoveryReadShim`): a verified one-time
+    /// transaction, a verified subscription the plugin never reports, or a
+    /// transaction StoreKit could not verify, which is skipped on its own as
+    /// the 0.3 plugin did, so it never hides or blocks a verified sibling.
+    public enum ReadEntry: Equatable, Sendable {
+        case oneTime(MpgdStoreKitTransaction)
+        case notOneTime
+        case unverified
+    }
+
     /// `getTransactions`: every verified unfinished one-time transaction
     /// (`unfinished: true`), then every current non-consumable entitlement not
-    /// already listed (`unfinished: false`). Finished consumables are never
-    /// added: they are not current entitlements, and the game reads a
-    /// consumable leaving this list as evidence that its finish landed.
+    /// already listed (`unfinished: false`), merged by transaction id.
+    /// Finished consumables are never added: they are not current
+    /// entitlements, and the game reads a consumable leaving this list as
+    /// evidence that its finish landed. No account filter here: the
+    /// TypeScript SDK admits transactions for the session account (and
+    /// restore handling needs to see the others).
     public static func listedTransactions(
-        unfinished: [PurchaseIOS],
-        entitlements: [PurchaseIOS]
-    ) throws -> [[String: Any]] {
+        unfinished: [ReadEntry],
+        entitlements: [ReadEntry]
+    ) -> [[String: Any]] {
         var seen = Set<String>()
         var listed: [[String: Any]] = []
-        func reported(_ purchase: PurchaseIOS) throws -> MpgdStoreKitTransaction? {
-            switch classify(purchase) {
-            case .oneTime(let transaction): return transaction
-            case .notOneTime: return nil
-            case .unreadable: throw UnreadableTransaction(transactionId: purchase.id)
-            }
-        }
-        for purchase in unfinished {
-            guard let transaction = try reported(purchase),
+        for entry in unfinished {
+            guard case .oneTime(let transaction) = entry,
                   seen.insert(transaction.transactionId).inserted else { continue }
             listed.append(payload(transaction, unfinished: true))
         }
-        for purchase in entitlements {
-            guard let transaction = try reported(purchase),
+        for entry in entitlements {
+            guard case .oneTime(let transaction) = entry,
                   transaction.type == .nonConsumable,
                   seen.insert(transaction.transactionId).inserted else { continue }
             listed.append(payload(transaction, unfinished: false))
@@ -197,7 +198,7 @@ public enum StoreKitTransactionPolicy {
         return listed
     }
 
-    /// The purchase `finishTransaction` may finish: the verified one-time
+    /// The transaction `finishTransaction` may finish: the verified one-time
     /// transaction with this id that is not revoked and whose app account
     /// token equals the session token. OpenIAP finishes whatever it is given,
     /// so this is the plugin's local gate; it is still not a signed server
@@ -205,16 +206,40 @@ public enum StoreKitTransactionPolicy {
     public static func finishable(
         transactionId: String,
         appAccountToken: String,
-        in purchases: [PurchaseIOS]
-    ) -> (purchase: PurchaseIOS, type: MpgdOneTimeType)? {
+        in entries: [ReadEntry]
+    ) -> MpgdStoreKitTransaction? {
         let expected = appAccountToken.lowercased()
-        for purchase in purchases where purchase.id == transactionId {
-            guard let transaction = transaction(from: purchase),
+        for entry in entries {
+            guard case .oneTime(let transaction) = entry,
+                  transaction.transactionId == transactionId,
                   transaction.revokedAtMillis == nil,
                   transaction.appAccountToken == expected else { continue }
-            return (purchase, transaction.type)
+            return transaction
         }
         return nil
+    }
+
+    /// The OpenIAP purchase handed to `OpenIapModule.finishTransaction` for a
+    /// transaction the read resolved. OpenIAP finishes by transaction id
+    /// (looking it up in `Transaction.unfinished`, then
+    /// `Transaction.latest(for:)`) after checking `storeId`; these are the
+    /// fields it reads.
+    public static func finishInput(_ transaction: MpgdStoreKitTransaction) -> PurchaseIOS {
+        PurchaseIOS(
+            appAccountToken: transaction.appAccountToken,
+            id: transaction.transactionId,
+            isAutoRenewing: false,
+            originalTransactionIdentifierIOS: transaction.originalTransactionId,
+            productId: transaction.productId,
+            purchaseState: .purchased,
+            purchaseToken: transaction.signedTransaction,
+            quantity: 1,
+            revocationDateIOS: transaction.revokedAtMillis,
+            store: .apple,
+            storeId: appleStoreId,
+            transactionDate: transaction.purchasedAtMillis,
+            transactionId: transaction.transactionId
+        )
     }
 
     /// Whether a just-purchased transaction is the one the call asked for:
@@ -274,16 +299,13 @@ public enum StoreKitTransactionPolicy {
         }
     }
 
-    /// The code a failed transaction query rejects with. An unverified
-    /// transaction makes the whole OpenIAP query fail; the plugin reports that
-    /// as a failure, never as an empty (or shortened) successful list.
+    /// The code an OpenIAP failure rejects with (`finishTransaction`). The
+    /// transaction lists come from `RecoveryReadShim`, which skips an
+    /// unverified entry instead of failing.
     public static func queryFailureCode(_ error: Error) -> String {
         if let purchaseError = error as? PurchaseError,
            purchaseError.code == .transactionValidationFailed {
             return "STOREKIT_TRANSACTION_UNVERIFIED"
-        }
-        if error is UnreadableTransaction {
-            return "STOREKIT_EVIDENCE_INVALID"
         }
         return "STOREKIT_UNAVAILABLE"
     }

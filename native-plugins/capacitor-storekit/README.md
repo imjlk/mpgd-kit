@@ -211,10 +211,11 @@ over OpenIAP's `OpenIapModule`; the
 contract, the call mapping, and every behavior difference. Two points to know
 when integrating:
 
-- `getTransactions` and `finishTransaction` reject with
-  `STOREKIT_TRANSACTION_UNVERIFIED` when StoreKit cannot verify a transaction
-  on the device (`STOREKIT_EVIDENCE_INVALID` when a verified JWS cannot be
-  read), instead of skipping it; a failed read is never an empty list.
+- `getTransactions` and the `finishTransaction` lookup read StoreKit's
+  verified lists directly (a read-only shim), because OpenIAP's queries fail
+  as a whole on one unverifiable transaction; an unverified entry is skipped
+  on its own, as in 0.3. The lists carry every app account token; the
+  TypeScript SDK admits the session account.
 - OpenIAP does not deliver revoked transactions, so a small shim forwards
   verified revocations from `Transaction.updates`; it never finishes anything.
 
