@@ -22,6 +22,7 @@ import {
 } from './play-internal-submission.js';
 import {
   defaultPlayReleaseRequest,
+  defaultPlayTrack,
   playReleaseRequestDigest,
   type PlayReleaseRequest,
 } from './play-release-options.js';
@@ -79,6 +80,19 @@ const productionPorts: NativeSubmissionPorts = {
   submitAndroid: submitVerifiedAndroidBundle,
   submitIos: submitVerifiedIosBuild,
 };
+
+/**
+ * `--approve`, or the profile's `preapproved-internal-test`. That preapproval
+ * covers only the internal track: any other Google Play track needs `--approve`.
+ */
+export function isNativeDeployApproved(
+  plan: Pick<NativeDeploymentPlan, 'approval'>,
+  approveFlag: boolean,
+  androidRelease?: Pick<PlayReleaseRequest, 'track'>,
+): boolean {
+  const internalOnly = androidRelease === undefined || androidRelease.track === defaultPlayTrack;
+  return approveFlag || (plan.approval === 'preapproved-internal-test' && internalOnly);
+}
 
 /** Resume exactly one verified build; never rebuild or allocate another version here. */
 export async function submitRecordedNativeTarget(

@@ -101,12 +101,12 @@ import {
 import { targetConfigExtensionsFileEnv, targetConfigMatrixFileEnv } from './target-config-env.js';
 import { readStoreCredential, runNativeDeployment } from './native-deploy-run.js';
 import {
+  isNativeDeployApproved,
   planRecordedAndroidSubmission,
   submitRecordedNativeTarget,
 } from './native-deploy-submission.js';
 import {
   createPlayReleaseRequest,
-  defaultPlayTrack,
   parsePlayUserFraction,
   type PlayReleaseRequest,
 } from './play-release-options.js';
@@ -830,7 +830,7 @@ const deployCommand = defineI18n({
           gameId,
           releaseKey,
           credential: readStoreCredential(plan, target, process.env),
-          approved: isDeployApproved(plan, ctx.values.approve === true, androidRelease),
+          approved: isNativeDeployApproved(plan, ctx.values.approve === true, androidRelease),
           ...(androidRelease === undefined ? {} : { androidRelease }),
           ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
           onDraftAppFallback: reportPlayDraftAppFallback,
@@ -968,7 +968,7 @@ const deployCommand = defineI18n({
               readJsonForCli(path.resolve(initialLedgerFile), 'initial version ledger'),
             ),
           }),
-          approved: isDeployApproved(plan, ctx.values.approve === true, androidRelease),
+          approved: isNativeDeployApproved(plan, ctx.values.approve === true, androidRelease),
           ...(androidRelease === undefined ? {} : { androidRelease }),
           ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
           onDraftAppFallback: reportPlayDraftAppFallback,
@@ -5362,16 +5362,6 @@ function renderHostedPwaVerificationMarkdown(
     '- CDN or account-level cache settings outside the deployment directory.',
     '',
   ].join('\n');
-}
-
-function isDeployApproved(
-  plan: NativeDeploymentPlan,
-  approveFlag: boolean,
-  androidRelease?: PlayReleaseRequest,
-): boolean {
-  // A profile's internal-test preapproval never covers another Google Play track.
-  const internalOnly = androidRelease === undefined || androidRelease.track === defaultPlayTrack;
-  return (plan.approval === 'preapproved-internal-test' && internalOnly) || approveFlag;
 }
 
 /** Google Play release flags; undefined when none is given (the original internal path). */
