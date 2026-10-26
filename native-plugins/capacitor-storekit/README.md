@@ -180,8 +180,8 @@ of truth. The reconciler sends only transactions whose
 each one on the backend under its original idempotency key or returns the
 existing ledger grant, and calls `finishTransaction` only after a verified
 response with a ledger entry id. The StoreKit SDK and the native plugin both
-refuse to finish a transaction whose app account token is missing or does
-not match that session. A caller who can read the token from the plugin can
+refuse to call `transaction.finish()` on a transaction whose app account
+token is missing or does not match that session. A caller who can read the token from the plugin can
 still present it with a forged ledger entry id; that remaining hole needs a
 signed server finish capability. A listed, non-revoked durable StoreKit
 already finished (`unfinished: false`) answers `{ finished: true }` without a

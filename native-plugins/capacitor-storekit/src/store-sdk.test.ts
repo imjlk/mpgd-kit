@@ -518,12 +518,22 @@ async function settled(): Promise<void> {
     appAccountToken: earlierGuest,
     unfinished: false,
   });
-  const earlierWrongKind = fakeTransaction({
+  // The consumable SKU reported as a non-consumable: the catalog kind is
+  // consumable, so the token check excludes it before the kind check.
+  const earlierConsumableSkuAsDurable = fakeTransaction({
     transactionId: '45',
     type: 'non_consumable',
     productId: sku,
     appAccountToken: earlierGuest,
     unfinished: false,
+  });
+  // The durable SKU reported as a consumable: never restorable across tokens.
+  const earlierWrongKind = fakeTransaction({
+    transactionId: '46',
+    type: 'consumable',
+    productId: removeAdsSku,
+    appAccountToken: earlierGuest,
+    unfinished: true,
   });
   const plugin = createFakeStoreKitPlugin({
     transactions: [
@@ -532,6 +542,7 @@ async function settled(): Promise<void> {
       unboundDurable,
       earlierConsumable,
       earlierRetired,
+      earlierConsumableSkuAsDurable,
       earlierWrongKind,
     ],
   });
@@ -563,8 +574,14 @@ async function settled(): Promise<void> {
       { type: 'account-mismatch', sku, transactionId: '43', appAccountToken: earlierGuest },
       { type: 'unmapped-sku', sku: 'com.example.game.retired', transactionId: '44' },
       { type: 'account-mismatch', sku, transactionId: '45', appAccountToken: earlierGuest },
+      {
+        type: 'account-mismatch',
+        sku: removeAdsSku,
+        transactionId: '46',
+        appAccountToken: earlierGuest,
+      },
     ],
-    "an earlier guest's consumable, an unmapped SKU, and a kind mismatch stay excluded on a restore read",
+    "an earlier guest's consumable (by catalog or by StoreKit type) and an unmapped SKU stay excluded on a restore read",
   );
 }
 

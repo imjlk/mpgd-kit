@@ -592,8 +592,10 @@ restoring player gets its own grant of it:
   StoreKit SDK keeps durables bound to another or no token. Consumables,
   unmapped SKUs, and kind mismatches stay filtered; startup and resume
   passes keep the recovery list, so an acknowledged durable is not resent on
-  every launch. A restore of a purchase this install's journal already
-  finished sends nothing, and the backend answers a resend idempotently. On
+  every launch, and a restore read the store or a bridge host rejects falls
+  back to the recovery read. A restore of a purchase this install's journal
+  matches (the same transaction or token) sends nothing; one it cannot match
+  is sent under its derived key, and the backend answers it idempotently. On
   StoreKit the shared grant's finish ends on the entitlement StoreKit already
   finished (`unfinished: false`, `{ finished: true }` without a native call);
   an unfinished transaction of another token is never finished.

@@ -1473,6 +1473,29 @@ const fullClientHistory = [
     'a polled provider reads with restore on the Restore Purchases pass only',
   );
   await polled.reconciler.stop();
+
+  // A provider (or bridge host) that rejects the restore read: the recovery
+  // read still runs, and the restore failure is reported.
+  const strict = createFakeProvider({ withRestore: true });
+  const wider = strict.getAvailablePurchases.bind(strict);
+  strict.getAvailablePurchases = async (request = {}) => {
+    if (request.restore === true) {
+      throw new Error('COMMERCE_V2_INVALID_PAYLOAD: restore');
+    }
+    return wider(request);
+  };
+  const fallback = createHarness({ provider: strict });
+  await fallback.reconciler.start();
+  fallback.backend.queue({ status: 'granted', ledgerEntryId: 'le-18b-fallback' });
+  strict.available.push(purchaseOf({ transactionId: 'tx-18b-fallback' }));
+  await fallback.reconciler.restorePurchases();
+  assertEqual(
+    fallback.history('store:fake-store:tx-18b-fallback').at(-1),
+    'finished',
+    'a rejected restore read falls back to the recovery read',
+  );
+  assertEqual(fallback.failures, ['available'], 'the rejected restore read is reported once');
+  await fallback.reconciler.stop();
 }
 
 // 19. New purchases read fresh capabilities and refuse transient readiness without binding a key.

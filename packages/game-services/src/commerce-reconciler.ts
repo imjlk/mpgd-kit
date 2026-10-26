@@ -784,18 +784,35 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     if (!capabilitiesNow.lifecycle.availablePurchases) {
       return true;
     }
-    try {
+    const read = async (withRestore: boolean): Promise<void> => {
       const available = await provider.getAvailablePurchases({
         includePending: capabilitiesNow.lifecycle.pending,
-        ...(restore ? { restore: true } : {}),
+        ...(withRestore ? { restore: true } : {}),
       });
       for (const purchase of available) {
         inbox.push({ type: 'purchaseUpdated', purchase });
       }
+    };
+    try {
+      await read(restore);
       return true;
     } catch (error) {
+      if (!restore) {
+        fail('available', error);
+        return false;
+      }
+      // A failed restore read still makes the recovery read, so Restore
+      // Purchases never finds less than a recovery pass: a bridge host built
+      // before `restore` rejects the field, and a store may fail only the
+      // wider read. The restore failure is still reported.
       fail('available', error);
-      return false;
+      try {
+        await read(false);
+        return true;
+      } catch (fallbackError) {
+        fail('available', fallbackError);
+        return false;
+      }
     }
   };
 
