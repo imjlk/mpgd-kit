@@ -46,9 +46,10 @@ What the dependency adds to a consumer:
   `androidx.core` 1.18.0, lifecycle 2.10.0, coroutines 1.11.0, Gson 2.14.0,
   and Compose runtime/UI 1.11.4 (OpenIAP's `IapContext`). The merged manifest
   gains `android.permission.INTERNET` and the
-  `dev.hyo.openiap.PROVIDER` meta-data entry. A minified release build of
-  mpgd-games' Nep Nep Nem Nep wrapper shrinks to 2.1 MB with R8 keeping the
-  provider factory and its interface (see [Verification](#verification)).
+  `dev.hyo.openiap.PROVIDER` meta-data entry. In mpgd-games' Nep Nep Nem
+  Nep wrapper a minified (R8) release APK grows from 1.65 MB with the 0.3.7
+  plugin to 2.11 MB, and R8 keeps the provider factory and its interface
+  (see [Verification](#verification)).
 
 ## Layers
 
