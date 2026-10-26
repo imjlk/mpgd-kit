@@ -464,6 +464,16 @@ try {
   );
   assert.deepEqual(
     levels({
+      project: inherited.replace(
+        new RegExp(`(${releaseId} /\\* Release \\*/ = \\{\\s*isa = XCBuildConfiguration;)`, 'u'),
+        '$1\n\t\t\tbaseConfigurationReference = 958DCC722DB07C7200EA8C5F /* release.xcconfig */;',
+      ),
+    }),
+    ['warning'],
+    'a target xcconfig may override the inherited setting',
+  );
+  assert.deepEqual(
+    levels({
       readProjectFile: () => iosPushEntitlementsXml.replace('development', '$(APS_ENVIRONMENT)'),
     }),
     ['warning'],

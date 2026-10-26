@@ -1505,8 +1505,8 @@ function inspectIosPushEntitlement(
 /**
  * The Release signing settings that decide the App target's entitlements
  * file: the target's own, else what it inherits from the project-level
- * Release configuration. `baseConfiguration` is set when an xcconfig on
- * either level may supply the value instead.
+ * Release configuration. `baseConfiguration` is set when an xcconfig may
+ * supply or override the value; the entitlements are then unverifiable.
  */
 function readIosAppReleaseSigning(project: string): {
   readonly entitlements: string | undefined;
@@ -1537,7 +1537,11 @@ function readIosAppReleaseSigning(project: string): {
       const entitlements = readPbxSetting(body, 'CODE_SIGN_ENTITLEMENTS');
       const conditional = /\bCODE_SIGN_ENTITLEMENTS\s*\[/u.test(body);
       if (entitlements !== undefined || conditional) {
-        return { entitlements, conditional, baseConfiguration };
+        // A target xcconfig outranks the project-level settings: the value
+        // found there may not be the one Xcode signs with.
+        return baseConfiguration
+          ? { entitlements: undefined, conditional: false, baseConfiguration }
+          : { entitlements, conditional, baseConfiguration };
       }
       baseConfiguration ||= /\bbaseConfigurationReference\s*=/u.test(
         findPbxObjectById(project, id)?.text.replace(body, '') ?? '',
