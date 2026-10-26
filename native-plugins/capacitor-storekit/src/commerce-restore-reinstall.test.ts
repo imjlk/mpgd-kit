@@ -87,8 +87,14 @@ interface World {
  * The Apple ID's transactions after a reinstall: REMOVE_ADS the earlier guest
  * bought (granted then, and finished, so a current entitlement with
  * `unfinished: false`) and a hint pack it bought that never finished.
+ * `removeAds: 'unfinished'` is a crash between the earlier guest's grant and
+ * its finish (still in `Transaction.unfinished`); `'flag-omitted'` is a
+ * native build that does not report the flag.
  */
-async function createWorld(maxHolders?: number): Promise<World> {
+async function createWorld(
+  maxHolders?: number,
+  removeAds: 'finished' | 'unfinished' | 'flag-omitted' = 'finished',
+): Promise<World> {
   const plugin = createFakeStoreKitPlugin({
     products: [
       fakeProduct({ productId: removeAdsSku, type: 'non_consumable' }),
@@ -100,7 +106,7 @@ async function createWorld(maxHolders?: number): Promise<World> {
         productId: removeAdsSku,
         type: 'non_consumable',
         appAccountToken: tokenOf(earlierGuest),
-        unfinished: false,
+        ...(removeAds === 'flag-omitted' ? {} : { unfinished: removeAds === 'unfinished' }),
       }),
       fakeTransaction({
         transactionId: '3000000000000002',
@@ -263,6 +269,88 @@ async function holdersOf(world: World): Promise<readonly string[]> {
   assertEqual(world.requests.length, 1, 'a later reconcile keeps the startup filter');
   await reconciler.stop();
   assertEqual(failures, [], 'no reconciler stage failed');
+}
+
+// A crash between the earlier guest's grant and its finish, then a reinstall: REMOVE_ADS is
+// still unfinished under the earlier guest's token (or the native build omits the flag). The
+// new guest's restore is shared, and its finish ends the transaction with that transaction's
+// own token instead of retrying forever; the earlier guest's consumable is never finished.
+for (const removeAds of ['unfinished', 'flag-omitted'] as const) {
+  const world = await createWorld(undefined, removeAds);
+  const { reconciler, responses, failures } = install(world, 'guest-after-reinstall');
+  await reconciler.start();
+  assertEqual(world.requests, [], `${removeAds}: startup sends nothing of the earlier guest`);
+  await reconciler.restorePurchases();
+  assertEqual(
+    world.requests.map((request) => [request.productId, request.intent]),
+    [['REMOVE_ADS', 'restore']],
+    `${removeAds}: only REMOVE_ADS is sent, as a restore`,
+  );
+  assertEqual(
+    responses[0]?.restoredAcrossPlayers,
+    true,
+    `${removeAds}: the backend shares the purchase with the new guest`,
+  );
+  const ledgerEntryId = responses[0]?.verified === true ? responses[0].ledgerEntryId : undefined;
+  assertEqual(
+    world.plugin.calls.filter((call) => call.startsWith('finish:')),
+    [`finish:3000000000000001:${String(ledgerEntryId)}:${tokenOf(earlierGuest)}`],
+    `${removeAds}: the shared grant finishes the transaction once, with the transaction's own token`,
+  );
+  assertEqual(
+    await reconciler.listRecoverable(),
+    [],
+    `${removeAds}: the shared record is finished, not left retrying`,
+  );
+  // StoreKit keeps a finished durable in currentEntitlements.
+  world.plugin.upsert(
+    fakeTransaction({
+      transactionId: '3000000000000001',
+      productId: removeAdsSku,
+      type: 'non_consumable',
+      appAccountToken: tokenOf(earlierGuest),
+      unfinished: false,
+    }),
+  );
+  await reconciler.restorePurchases();
+  await reconciler.reconcile();
+  assertEqual(world.requests.length, 1, `${removeAds}: a later restore and reconcile send nothing`);
+  assertEqual(
+    world.plugin.calls.filter((call) => call.startsWith('finish:')).length,
+    1,
+    `${removeAds}: nothing is finished again`,
+  );
+  assertEqual(
+    world.plugin.transactions.some(
+      (transaction) => transaction.transactionId === '3000000000000002',
+    ),
+    true,
+    `${removeAds}: the earlier guest's consumable stays unfinished`,
+  );
+  await reconciler.stop();
+  assertEqual(failures, [], `${removeAds}: no reconciler stage failed`);
+
+  // Finishing took nothing from the earlier guest: both guests hold REMOVE_ADS, and the earlier
+  // guest's own read (another device on the same Apple ID) still lists the entitlement.
+  assertEqual(
+    await holdersOf(world),
+    [earlierGuest, 'guest-after-reinstall'].sort(),
+    `${removeAds}: both guests hold REMOVE_ADS`,
+  );
+  const earlierProvider = createCapacitorStoreKitCommerceProvider({
+    products,
+    getAppAccountToken: () => tokenOf(earlierGuest),
+    isIos: () => true,
+    sdk: world.plugin,
+  });
+  assertEqual(
+    (await earlierProvider.getAvailablePurchases()).some(
+      (purchase) => purchase.transactionId === '3000000000000001',
+    ),
+    true,
+    `${removeAds}: the finished entitlement is still listed to the earlier guest`,
+  );
+  earlierProvider.dispose();
 }
 
 // The holder limit: a third guest past `maxHolders: 2` is answered pending and evicts nobody.

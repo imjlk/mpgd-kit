@@ -239,7 +239,7 @@ Rules every provider follows:
   that raced the ledger grant can still be verified. The server ledger
   dedupes that verify. A finished consumable is not listed.
 
-<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction. -->
+<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction, or a durable of another token (Restore sharing). -->
 - **No grants on the client.** A provider never credits a wallet or unlocks an
   entitlement. `settlement` on an adapter-settled purchase is a pointer for
   the reconciler, not a grant.
@@ -623,8 +623,19 @@ restoring player gets its own grant of it:
   a logout, a durable the earlier player journaled under that key is
   journaled under the next player's [player-scoped key](#idempotency-keys). On
   StoreKit the shared grant's finish ends on the entitlement StoreKit already
-  finished (`unfinished: false`, `{ finished: true }` without a native call);
-  an unfinished transaction of another token is never finished.
+  finished (`unfinished: false`, `{ finished: true }` without a native call).
+  A durable still unfinished under another token (the earlier guest crashed
+  between its grant and its finish, then the app was reinstalled; or a native
+  build omits `unfinished`) is finished with its own token once this
+  player's grant is journaled: the reconciler finishes only a `granted` or
+  `finishing` record, which the backend's `verified` answer (a new grant,
+  `restoredAcrossPlayers`, or `alreadyProcessed`) wrote. Finishing a durable
+  takes nothing from any player, because StoreKit keeps it in
+  `Transaction.currentEntitlements`, where the earlier guest's own read still
+  finds it. The native plugin keeps its token match unchanged and is handed
+  the transaction's own token, read from the native list. A consumable or
+  subscription of another token, and a transaction bound to no token, are
+  never finished.
 - **Verifier.** A decision, `{ status: 'restorable', reason, ...verified
   fields }`: every check passed except the account binding, which names
   another player or none; `reason` is the binding mismatch. Reference

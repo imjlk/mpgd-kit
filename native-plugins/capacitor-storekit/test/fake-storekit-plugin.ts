@@ -142,7 +142,17 @@ export function createFakeStoreKitPlugin(input: {
       calls.push(
         `finish:${request.transactionId}:${request.ledgerEntryId}:${request.appAccountToken}`,
       );
-      const script = finishQueue.shift() ?? { finished: true };
+      const script = finishQueue.shift();
+      if (script === undefined) {
+        // The native token match: a listed transaction bound to another (or
+        // no) token is not finished.
+        const listed = transactions.find((entry) => entry.transactionId === request.transactionId);
+        if (listed !== undefined && listed.appAccountToken?.toLowerCase() !== request.appAccountToken) {
+          return { finished: false };
+        }
+        remove(request.transactionId);
+        return { finished: true };
+      }
       if ('throws' in script) {
         throw script.throws;
       }
