@@ -537,6 +537,18 @@ process.exit(result.status ?? 1);
   assert.deepEqual(await checkpointNativeSubmission({
     gameRoot: game, gameId: 'alpha', checkpoint: androidCheckpoint,
   }), firstCheckpoint);
+  // Release options may be corrected while no Play edit exists.
+  const correctedOptions = { ...androidCheckpoint, playReleaseSha256: 'f'.repeat(64) };
+  await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: correctedOptions,
+  });
+  await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: androidCheckpoint,
+  });
   const editOpen = { ...androidCheckpoint, status: 'edit-open' as const, remoteEditId: 'edit-1' };
   await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: editOpen });
   await checkpointNativeSubmission({

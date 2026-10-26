@@ -328,6 +328,41 @@ try {
     /started with other Google Play release options/u,
   );
   assert.equal(receivedReleases.length, 1);
+  // An attempt refused before it checkpointed a Play edit may change its options.
+  const { playReleaseSha256: _alphaDigest, remoteEditId: _alphaEdit, ...alphaStarted } = committedAlpha;
+  checkpoints = {
+    android: {
+      ...alphaStarted,
+      status: 'started',
+      playReleaseSha256: playReleaseRequestDigest(alphaRelease) ?? '',
+      leaseExpiresAt: new Date(0).toISOString(),
+    },
+  };
+  const corrected = await submitRecordedNativeTargetWithPorts(androidInput, optionPorts);
+  assert.equal(corrected.status, 'committed');
+  assert.equal(corrected.playReleaseSha256, undefined);
+  assert.deepEqual(receivedReleases, [alphaRelease, undefined]);
+  // An unconfirmed production or staged request is refused before release state is read.
+  checkpoints = {};
+  let statusReads = 0;
+  const countingPorts: NativeSubmissionPorts = {
+    ...optionPorts,
+    async readStatus(input) {
+      statusReads += 1;
+      return optionPorts.readStatus(input);
+    },
+  };
+  for (const androidRelease of [
+    { track: 'production', status: 'completed' },
+    { track: 'beta', status: 'inProgress', userFraction: 0.1 },
+  ] satisfies PlayReleaseRequest[]) {
+    await assert.rejects(
+      submitRecordedNativeTargetWithPorts({ ...androidInput, androidRelease }, countingPorts),
+      /needs --confirm-production/u,
+    );
+  }
+  assert.equal(statusReads, 0);
+  assert.deepEqual(checkpoints, {});
   // A profile's internal-test preapproval never covers another track.
   assert.equal(isNativeDeployApproved({ approval: 'preapproved-internal-test' }, false), true);
   assert.equal(

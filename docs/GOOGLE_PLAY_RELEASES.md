@@ -85,9 +85,13 @@ and staged releases, and is checked before anything is reserved, built, or
 sent. `deploy run` passes the flags to the Android target only.
 
 Resumes. The release options (track, status, fraction, notes, mapping hash)
-are hashed into the Android submission checkpoint as `playReleaseSha256`. A
-resumed attempt must use the same options, so an open edit is never committed
-to a different track or status. A committed release cannot be re-submitted
+are hashed into the Android submission checkpoint as `playReleaseSha256`. The
+kit checkpoints a new Play edit only after its read-only checks (bundle
+conflict, the track's current releases, a missing closed-testing track, the
+first-release rollout rule), so a request refused there leaves no edit and can
+be re-run with corrected options. Once an edit is checkpointed, a resumed
+attempt must use the same options, so an open edit is never committed to a
+different track or status. A committed release cannot be re-submitted
 with other options: change it with `deploy rollout` or submit a new release.
 The original internal/completed submission has no digest, so its checkpoints
 are unchanged. A release-state file written by this version can carry the new
@@ -178,13 +182,17 @@ each step:
 
 Without `--version-code`, the track must have exactly one release the action
 applies to. A release already in the requested state reports `unchanged` and
-commits nothing. A lost commit response raises `PlayRolloutUncertainError`;
-re-running the same command is safe because it reads the live track first.
+commits nothing. A lost response raises `PlayRolloutUncertainError` with the
+release's version codes; re-run the same command with `--version-code` from
+the error (needed after `complete`, whose release is then no longer in
+progress). It is safe because it reads the live track first.
 `update` and `resume` leave a staged rollout running, so they always need
 `--confirm-production`; `halt` and `complete` need it on production tracks.
 `--dry-run` reads the track in a new edit, prints the planned track body, and
-deletes the edit. Opening an edit invalidates any other open edit of the same
-service account, so do not dry-run while a submission is in flight.
+deletes the edit. Every rollout command opens an edit, which invalidates any
+other open edit of the same service account, so do not run one while a
+submission is in flight or left `unknown`; that submission then has to reopen
+a fresh edit when it resumes.
 
 ## Closed testing for new personal accounts
 

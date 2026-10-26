@@ -14,6 +14,7 @@ import {
   defaultPlayReleaseRequest,
   hashMappingFile,
   isPlayDraftAppRejection,
+  isWellKnownPlayTrack,
   mergeNewPlayRelease,
   newPlayRelease,
   playReleaseNeedsConfirmation,
@@ -154,13 +155,21 @@ export async function submitVerifiedAndroidBundleWithPublisher(
   input.signal?.throwIfAborted();
   let editId = input.resumeEditId ?? await publisher.insertEdit(packageName, input.signal);
   let freshEdit = input.resumeEditId === undefined;
-  if (input.resumeEditId === undefined) {
+  // A new edit is checkpointed after the read-only checks below and before
+  // anything is uploaded or committed, so a refused request leaves no edit to
+  // reconcile and can be retried with corrected options.
+  let editPersisted = input.resumeEditId !== undefined;
+  const persistEdit = async (): Promise<void> => {
+    if (editPersisted) {
+      return;
+    }
     try {
       await input.onEditCreated?.(editId);
     } catch {
       throw new PlaySubmissionUncertainError('checkpoint', editId);
     }
-  }
+    editPersisted = true;
+  };
 
   let bundles: PlayBundle[];
   try {
@@ -173,11 +182,8 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     // was lost. Open a new snapshot solely to inspect the live track.
     editId = await publisher.insertEdit(packageName, input.signal);
     freshEdit = true;
-    try {
-      await input.onEditCreated?.(editId);
-    } catch {
-      throw new PlaySubmissionUncertainError('checkpoint', editId);
-    }
+    editPersisted = false;
+    await persistEdit();
     bundles = await publisher.listBundles(packageName, editId, input.signal);
   }
   let existing = findVersionBundle(bundles, versionCode, expectedSha256);
@@ -187,6 +193,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     editId,
     trackName,
     input.signal,
+    !isWellKnownPlayTrack(trackName),
   );
   const release = newPlayRelease(request, input.record.releaseKey, versionCode);
   const commit = async (status: PlayNewReleaseStatus): Promise<PlayInternalSubmissionResult> => {
@@ -205,19 +212,32 @@ export async function submitVerifiedAndroidBundleWithPublisher(
         `Google Play ${trackName} track has this version without matching bundle bytes.`,
       );
     }
-    const resumedDraft = !freshEdit && request.status !== 'draft'
-      && hasVersionWithStatus(currentTrack.releases, versionCode, 'draft');
+    // Our own edit (resumed), or the live track after that edit was committed
+    // and its response lost (a resume that found the edit gone), may hold this
+    // release as a draft-app fallback.
+    const fallbackDraft = request.status !== 'draft' && (!freshEdit
+      ? hasVersionWithStatus(currentTrack.releases, versionCode, 'draft')
+      : input.resumeEditId !== undefined && (currentTrack.releases ?? []).some((item) =>
+        item.status === 'draft' && item.name === input.record.releaseKey
+        && item.versionCodes?.includes(String(versionCode))));
     if (!hasVersionWithStatus(currentTrack.releases, versionCode, request.status)
-      && !resumedDraft) {
+      && !fallbackDraft) {
       throw new Error(
         `Google Play ${trackName} track version is not ${request.status}; inspect it before resubmitting.`,
       );
     }
     if (freshEdit) {
-      return result(input, trackName, editId, versionCode, true, {
-        status: request.status,
-        draftAppFallback: false,
-      });
+      await persistEdit();
+      return result(
+        input,
+        trackName,
+        editId,
+        versionCode,
+        true,
+        fallbackDraft
+          ? { status: 'draft', draftAppFallback: true }
+          : { status: request.status, draftAppFallback: false },
+      );
     }
     // A resumed edit sees its own uncommitted track. Publish it before success.
     await uploadMapping(
@@ -229,7 +249,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       input.signal,
       requestRootUrl,
     );
-    return commit(resumedDraft ? 'draft' : request.status);
+    return commit(fallbackDraft ? 'draft' : request.status);
   }
   if (playReleaseStartsRollout(request.status, currentTrack.releases)) {
     // Play Console: "Rollout percentage options are unavailable for a first release."
@@ -238,6 +258,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       + 'release it with --status completed (or draft) first.',
     );
   }
+  await persistEdit();
   if (existing === undefined) {
     try {
       const uploaded = await publisher.uploadBundle({
@@ -499,11 +520,18 @@ async function getTrackOrEmpty(
   editId: string,
   trackName: string,
   signal?: AbortSignal,
+  mustExist = false,
 ): Promise<PlayTrack> {
   try {
     return await publisher.getTrack(packageName, editId, trackName, signal);
   } catch (error) {
     if (isHttpStatus(error, 404)) {
+      if (mustExist) {
+        throw new Error(
+          `Google Play has no closed-testing track named "${trackName}"; create it in Play `
+          + 'Console or check the name.',
+        );
+      }
       return { track: trackName, releases: [] };
     }
     throw error;

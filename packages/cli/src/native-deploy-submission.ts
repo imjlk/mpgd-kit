@@ -21,6 +21,8 @@ import {
   type PlaySubmissionPlan,
 } from './play-internal-submission.js';
 import {
+  assertPlayReleaseConfirmed,
+  assertPlayReleaseRequest,
   defaultPlayReleaseRequest,
   defaultPlayTrack,
   playReleaseRequestDigest,
@@ -167,9 +169,14 @@ export async function submitRecordedNativeTargetWithPorts(
   if (planned === undefined || !input.approved) {
     throw new Error('Native store submission requires a planned target and explicit approval.');
   }
-  const releaseDigest = target === 'android'
-    ? playReleaseRequestDigest(input.androidRelease ?? defaultPlayReleaseRequest)
-    : undefined;
+  const androidRelease = input.androidRelease ?? defaultPlayReleaseRequest;
+  if (target === 'android') {
+    // Refuse an invalid or unconfirmed production/staged request before the
+    // release state is read or a checkpoint is written.
+    assertPlayReleaseRequest(androidRelease);
+    assertPlayReleaseConfirmed(androidRelease, input.confirmProduction === true);
+  }
+  const releaseDigest = target === 'android' ? playReleaseRequestDigest(androidRelease) : undefined;
   const stateInput = {
     gameRoot: input.plan.gameRoot,
     gameId: input.gameId,
@@ -182,7 +189,13 @@ export async function submitRecordedNativeTargetWithPorts(
     ports.readStatus,
   );
   let checkpoint = status.submissions[target];
-  if (checkpoint !== undefined && checkpoint.playReleaseSha256 !== releaseDigest) {
+  // An attempt that never checkpointed a Play edit changed nothing remotely,
+  // so its release options may still be corrected.
+  const optionsReplaceable = checkpoint?.status === 'started'
+    && checkpoint.remoteEditId === undefined && checkpoint.remoteUploadId === undefined
+    && checkpoint.remoteBuildId === undefined;
+  if (checkpoint !== undefined && checkpoint.playReleaseSha256 !== releaseDigest
+    && !optionsReplaceable) {
     throw new Error(isNativeSubmissionSettled(checkpoint.status)
       ? 'This release was already committed to Google Play with other release options; '
         + 'change it with "mpgd deploy rollout" or submit a new release.'
@@ -233,6 +246,17 @@ export async function submitRecordedNativeTargetWithPorts(
     throw new Error('Submission checkpoint no longer matches its immutable build.');
   }
   let activeCheckpoint: NativeSubmissionCheckpoint = checkpoint;
+  if (activeCheckpoint.playReleaseSha256 !== releaseDigest) {
+    const { playReleaseSha256: _replaced, ...withoutDigest } = activeCheckpoint;
+    activeCheckpoint = (await ports.checkpoint({
+      ...stateInput,
+      checkpoint: {
+        ...withoutDigest,
+        ...(releaseDigest === undefined ? {} : { playReleaseSha256: releaseDigest }),
+        leaseExpiresAt: freshSubmissionLeaseExpiresAt(),
+      },
+    })).checkpoint;
+  }
   const save = async (patch: Partial<NativeSubmissionCheckpoint>): Promise<void> => {
     activeCheckpoint = (await ports.checkpoint({
       ...stateInput,

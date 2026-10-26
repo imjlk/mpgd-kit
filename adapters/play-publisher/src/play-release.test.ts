@@ -9,6 +9,7 @@ import path from 'node:path';
 import { inspectAndroidBundleSigner } from '../../../packages/cli/src/android-bundle-signer.js';
 import {
   planVerifiedAndroidBundleSubmission,
+  PlaySubmissionUncertainError,
   submitVerifiedAndroidBundleWithPublisher,
 } from '../../../packages/cli/src/play-internal-submission.js';
 import type {
@@ -374,6 +375,36 @@ try {
     assert.equal(observed.operations.some((item) => item.includes('/upload/')), false);
   });
 
+  // Refusals from the read-only checks happen before the edit is checkpointed,
+  // so the operator can correct the options: a staged first release, a typo in
+  // a closed-testing track name.
+  await withPlay({ bundles: [], tracks: {} }, {}, async (publisher, observed) => {
+    const persisted: string[] = [];
+    const onEditCreated = async (editId: string): Promise<void> => { persisted.push(editId); };
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...baseInput, release: staged, confirmProduction: true, onEditCreated,
+      }, publisher, observed.rootUrl),
+      /no completed release yet/u,
+    );
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...baseInput,
+        release: await createPlayReleaseRequest({ track: 'Closed testrs' }),
+        onEditCreated,
+      }, publisher, observed.rootUrl),
+      /no closed-testing track named "Closed testrs"/u,
+    );
+    assert.deepEqual(persisted, []);
+    assert.equal(observed.operations.some((item) => item.includes('/upload/')), false);
+    // A default track that Play reports missing is still treated as empty.
+    const result = await submitVerifiedAndroidBundleWithPublisher({
+      ...baseInput, release: await createPlayReleaseRequest({ track: 'beta' }), onEditCreated,
+    }, publisher, observed.rootUrl);
+    assert.equal(result.track, 'beta');
+    assert.deepEqual(persisted, ['edit-3']);
+  });
+
   // A never-published app: the completed release is re-staged as a draft and committed.
   await withPlay({ bundles: [], tracks: {} }, { draftApp: true }, async (publisher, observed) => {
     const fallbacks: string[] = [];
@@ -391,6 +422,28 @@ try {
       { name: 'launch-01', status: 'draft', versionCodes: ['45'] },
     ]);
     assert.equal(observed.operations.filter((item) => item.endsWith('/edits')).length, 1);
+  });
+
+  // A draft-app fallback whose commit response is lost is recognised on resume.
+  await withPlay({ bundles: [], tracks: {} }, { draftApp: true, loseFirstCommit: true }, async (publisher, observed) => {
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher(baseInput, publisher, observed.rootUrl),
+      (error: unknown) => error instanceof PlaySubmissionUncertainError
+        && error.stage === 'commit' && error.editId === 'edit-1',
+    );
+    assert.equal(observed.live().tracks.internal?.[0]?.status, 'draft');
+    // Without a resumed edit, a draft of this version is someone else's to inspect.
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher(baseInput, publisher, observed.rootUrl),
+      /not completed; inspect it/u,
+    );
+    const reconciled = await submitVerifiedAndroidBundleWithPublisher({
+      ...baseInput, resumeEditId: 'edit-1',
+    }, publisher, observed.rootUrl);
+    assert.equal(reconciled.alreadyCommitted, true);
+    assert.equal(reconciled.releaseStatus, 'draft');
+    assert.equal(reconciled.draftAppFallback, true);
+    assert.equal(observed.operations.filter((item) => item.endsWith(':commit')).length, 2);
   });
 
   // Same for a staged request: the draft drops userFraction and keeps the notes.
@@ -575,6 +628,33 @@ try {
     assert.equal(observed.updates.every((update) => update.track === 'production'), true);
     assert.equal(observed.operations.some((item) => item.includes('/upload/')), false);
   });
+
+  // A lost complete names the release, so the re-run can find it once completed.
+  await withPlay(productionRollout(), { loseFirstCommit: true }, async (publisher) => {
+    let uncertain: unknown;
+    await changePlayRolloutWithPublisher(rollout({ action: 'complete' }), publisher)
+      .catch((error: unknown) => { uncertain = error; });
+    assert.ok(uncertain instanceof PlayRolloutUncertainError, 'lost commit is uncertain');
+    assert.deepEqual(uncertain.versionCodes, ['45']);
+    assert.match(uncertain.message, /--version-code 45/u);
+    const rerun = await changePlayRolloutWithPublisher(
+      rollout({ action: 'complete', versionCode: 45 }), publisher,
+    );
+    assert.equal(rerun.status, 'unchanged');
+  });
+
+  // Production is matched case-insensitively; a trailing space is not a track name.
+  await assert.rejects(
+    submitVerifiedAndroidBundleWithPublisher(
+      {
+        ...baseInput,
+        release: await createPlayReleaseRequest({ track: 'wear:Production' }),
+      },
+      {} as PlayPublisher,
+    ),
+    /needs --confirm-production/u,
+  );
+  await assert.rejects(createPlayReleaseRequest({ track: 'production ' }), /track must be/u);
 
   // A testing-track halt needs no production confirmation; a lost commit is re-checked.
   await withPlay({

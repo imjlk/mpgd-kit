@@ -63,10 +63,13 @@ export class PlayRolloutUncertainError extends Error {
   constructor(
     readonly stage: 'track-update' | 'validate' | 'commit',
     readonly editId: string,
+    /** The release that was being changed; pass one of them as --version-code on the re-run. */
+    readonly versionCodes: readonly string[] = [],
   ) {
     super(
       `Google Play rollout ${stage} result is uncertain for edit ${editId}. Re-run the same `
-      + 'command: it reads the live track first and reports "unchanged" if the change landed.',
+      + `command${versionCodes[0] === undefined ? '' : ` with --version-code ${versionCodes[0]}`}: `
+      + 'it reads the live track first and reports "unchanged" if the change landed.',
     );
     this.name = 'PlayRolloutUncertainError';
   }
@@ -189,7 +192,7 @@ export async function changePlayRolloutWithPublisher(
       if (isDefinitiveHttpError(error)) {
         throw error;
       }
-      throw new PlayRolloutUncertainError('track-update', editId);
+      throw new PlayRolloutUncertainError('track-update', editId, versionCodes);
     }
     try {
       await publisher.validateEdit(packageName, editId, input.signal);
@@ -197,7 +200,7 @@ export async function changePlayRolloutWithPublisher(
       if (isDefinitiveHttpError(error)) {
         throw error;
       }
-      throw new PlayRolloutUncertainError('validate', editId);
+      throw new PlayRolloutUncertainError('validate', editId, versionCodes);
     }
     try {
       await publisher.commitEdit(packageName, editId, input.signal);
@@ -206,7 +209,7 @@ export async function changePlayRolloutWithPublisher(
         throw error;
       }
       committed = true; // Unknown: never delete an edit that may have been committed.
-      throw new PlayRolloutUncertainError('commit', editId);
+      throw new PlayRolloutUncertainError('commit', editId, versionCodes);
     }
     committed = true;
     return {

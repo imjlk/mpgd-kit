@@ -21,7 +21,8 @@ const maximumReleaseNotesFileBytes = 256 * 1024;
 // A default name (`production`, `beta`, `alpha`, `internal`, `qa`), a custom
 // closed-testing track name, or either behind a form-factor prefix
 // (`wear:production`). Path-unsafe characters are refused before any request.
-const trackNamePattern = /^(?:[a-z][a-z0-9_]{0,31}:)?[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$/u;
+const trackNamePattern = /^(?:[a-z][a-z0-9_]{0,31}:)?[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,98}[A-Za-z0-9._-])?$/u;
+const wellKnownTrackPattern = /^(?:[a-z][a-z0-9_]*:)?(?:internal|qa|alpha|beta|production)$/iu;
 const languageTagPattern = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 
@@ -129,7 +130,17 @@ export function assertPlayTrackName(track: string): void {
 
 /** `production` and form-factor production tracks such as `wear:production`. */
 export function isProductionTrack(track: string): boolean {
-  return track === 'production' || /^[a-z][a-z0-9_]*:production$/u.test(track);
+  // Case-insensitive, so `Production` is never treated as a testing track.
+  return /^(?:[a-z][a-z0-9_]*:)?production$/iu.test(track.trim());
+}
+
+/**
+ * A default track (`internal`/`qa`, `alpha`, `beta`, `production`, optionally
+ * form-factor prefixed). Other names are closed-testing tracks, which "are
+ * created manually", so a missing one is a typo rather than an empty track.
+ */
+export function isWellKnownPlayTrack(track: string): boolean {
+  return wellKnownTrackPattern.test(track);
 }
 
 /** Production releases and every staged rollout need an explicit confirmation flag. */

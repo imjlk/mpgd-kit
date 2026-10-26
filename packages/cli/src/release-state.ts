@@ -633,7 +633,11 @@ export async function checkpointNativeSubmission(input: {
       }
       if (isNativeSubmissionSettled(previous.status)
         || previous.status === 'failed'
-        || previous.playReleaseSha256 !== input.checkpoint.playReleaseSha256
+        || (previous.playReleaseSha256 !== input.checkpoint.playReleaseSha256
+          // Options may be corrected only before any remote edit exists.
+          && !(previous.status === 'started' && input.checkpoint.status === 'started'
+            && previous.remoteEditId === undefined
+            && input.checkpoint.remoteEditId === undefined))
         || previous.remoteEditId !== undefined
           && previous.remoteEditId !== input.checkpoint.remoteEditId
           && !(previous.target === 'android'
