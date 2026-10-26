@@ -26,6 +26,7 @@ import {
   createPurchaseHolderEvidenceVerificationId,
   findEntitlementRevocationsChunked,
   findPurchaseWideRevocation,
+  holderRevocationEvidenceId,
   isEntitlementGrantReversed,
   isRestoredAcrossPlayers,
   listPurchaseHolders,
@@ -38,6 +39,7 @@ import {
   assertPlayerDataErasureInput,
   createRetainedLedgerEntryId,
   detachRetainedLedgerPayload,
+  isRetainedPlayerId,
   type PlayerDataErasureInput,
   type PlayerDataErasureResult,
 } from './account-deletion.js';
@@ -85,7 +87,6 @@ import {
   type VerifyPurchaseResponse,
 } from './types.js';
 import {
-  isRetainedPurchasePlayerId,
   resolvePurchaseRestoreSharingPolicy,
   type PurchaseRestoreSharingPolicy,
   type ResolvedPurchaseRestoreSharingPolicy,
@@ -1770,7 +1771,7 @@ async function shareRestoredPurchase(
             : { status: 'held', grant: own };
         }
         const active = all.filter((grant) =>
-          !reversed.has(grant.ledgerEntryId) && !isRetainedPurchasePlayerId(grant.playerId)).length;
+          !reversed.has(grant.ledgerEntryId) && !isRetainedPlayerId(grant.playerId)).length;
         if (active >= policy.maxHolders) {
           return notGranted('pending', 'PURCHASE_HOLDER_LIMIT_REACHED');
         }
@@ -1796,8 +1797,9 @@ async function shareRestoredPurchase(
             ...payload,
             evidenceVerificationId: holderEvidenceVerificationId,
             holderOfEvidenceVerificationId: purchaseVerificationId,
+            // No ledger id of another holder: it embeds that player's id,
+            // which must not outlive that player's account deletion here.
             holderSlot,
-            sharedFromLedgerEntryId: first.ledgerEntryId,
           },
         });
         if (recorded.status !== 'recorded') {
@@ -1859,7 +1861,7 @@ async function shareRestoredPurchase(
                     ? {}
                     : {
                         evidenceVerificationId:
-                          `${ended.evidenceVerificationId}#${written.ledgerEntryId}`,
+                          holderRevocationEvidenceId(ended.evidenceVerificationId, written),
                       }),
                 });
           }

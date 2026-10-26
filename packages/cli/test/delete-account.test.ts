@@ -504,7 +504,9 @@ const pendingPurchase = {
 // The copy: what goes, what stays, both languages, and the pending purchase warning.
 for (const locale of ['en', 'ko'] as const) {
   const text = deleteAccountConfirmText(locale, false);
-  assert.match(text, locale === 'en' ? /not refunded/u : /환불되지 않으며/u);
+  assert.match(text, locale === 'en' ? /not refunded/u : /환불되지 않습니다/u);
+  // Bought-once items come back through Restore purchases (restore sharing).
+  assert.match(text, locale === 'en' ? /Restore purchases/u : /구매 복원/u);
   assert.match(text, locale === 'en' ? /5 years/u : /5년/u);
   assert.ok(deleteAccountConfirmText(locale, true).length > text.length);
   for (const outcome of [

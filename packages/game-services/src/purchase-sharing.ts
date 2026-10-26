@@ -68,12 +68,3 @@ export function resolvePurchaseRestoreSharingPolicy(
   }
   return { mode: policy.mode, maxHolders };
 }
-
-/**
- * The player id account deletion keeps on a deleted player's retained
- * purchase records (L3b, `deleted:<deletionId>`): such a record holds no
- * entitlement and does not count toward `maxHolders`.
- */
-export function isRetainedPurchasePlayerId(playerId: string): boolean {
-  return playerId.startsWith('deleted:');
-}

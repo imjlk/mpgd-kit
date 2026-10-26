@@ -546,9 +546,10 @@ platform are in
   slot)`, under the request's own key (a player that already holds the
   purchase gets its grant back instead of a second one); its payload
   names the purchase (`holderOfEvidenceVerificationId`, which finalizers such
-  as the Play acknowledge are keyed by, `readPurchaseVerificationId`) and the
-  first grant (`sharedFromLedgerEntryId`), and the store transaction id stays
-  on the first grant. Two writers that read the same holders take the same
+  as the Play acknowledge are keyed by, `readPurchaseVerificationId`) and
+  never another holder's ledger id (it embeds that player's id, which must
+  not outlive that player's deletion), and the store transaction id stays on
+  the first grant. Two writers that read the same holders take the same
   slot, so one loses on the unique evidence id and reads again: the limit
   holds under concurrency. A purchase no grant holds yet is granted to the
   restoring player as its first grant (`restoredAcrossAccounts: true`). The
@@ -569,9 +570,12 @@ platform are in
   attempt left part-way. An `admin` revocation stays on the grant it names
   and frees that holder's place; a purchase whose every holder is revoked is
   never shared again.
-- Deleted accounts (with account deletion, L3b): a deleted player's
-  retained record (`deleted:<id>`) is never revived and does not count toward
-  the limit; a new guest's share links to it and counts.
+- Deleted accounts ([account deletion](#account-deletion)): a deleted
+  player's retained record (`deleted:<id>`, `isRetainedPlayerId`) is never
+  revived, the deletion tombstone refuses a grant to the deleted id, and the
+  record does not count toward the limit; a new guest's share links to the
+  purchase and counts. A share is an ordinary purchase grant, so the erasure
+  keeps it detached like any other when its holder deletes its account.
 
 Subscriptions are never shared (no subscription verifier yet), and the legacy
 `createAppStoreRecoveryBackend` keeps refusing.
@@ -1277,10 +1281,14 @@ transaction). Games that sell outside a store add their own payment records.
 
 ### What the player should know
 
-- Purchases are not refunded by deleting the account, and items bought on
-  it cannot be moved to a new account: the store binds each purchase to the
-  account (`obfuscatedAccountId`, `appAccountToken`), so a new guest's
-  restore does not match. Refunds go through the store.
+- Purchases are not refunded by deleting the account; refunds go through the
+  store. A non-consumable stays owned by the store account: when the player
+  plays again as a new guest, Restore purchases grants it under
+  [restore sharing](#restore-sharing) as a fresh grant linked to the
+  purchase (the retained record keeps its `deleted:<id>` player and is never
+  revived for the deleted id, which the tombstone also refuses). The
+  retained record does not count toward the holder limit; the new grant
+  does. Consumables are not restored.
 - A purchase still pending at the store (Play `PENDING`, Ask to Buy) when the
   account is deleted cannot be granted to anyone afterwards. Google refunds a
   Play purchase that is not acknowledged within three days on its own. An

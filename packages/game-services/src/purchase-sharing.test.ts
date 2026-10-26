@@ -191,7 +191,8 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   );
   assert.equal(shared?.idempotencyKey, 'play-token-sha256:player-b');
   assert.equal(shared?.payload.holderOfEvidenceVerificationId, purchaseVerificationId);
-  assert.equal(shared?.payload.sharedFromLedgerEntryId, firstLedgerEntryId);
+  // The share names the purchase, never another holder's ledger id (it embeds that player's id).
+  assert.equal(JSON.stringify(shared?.payload).includes('player-a'), false);
   assert.equal(shared?.payload.platformTransactionId, undefined);
   const holders = await listPurchaseHolders(store, purchaseVerificationId);
   assert.equal(holders.first?.ledgerEntryId, firstLedgerEntryId);
@@ -484,6 +485,45 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   assert.deepEqual(await listActiveEntitlementTransactions(inner), [], 'no holder survives');
 }
 
+// Account deletion of the buyer: its record is kept detached and never revived,
+// the other holder keeps its share, and a new guest shares the purchase.
+{
+  const store = createInMemoryGameServicesStore();
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share', maxHolders: 2 },
+  });
+  await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }));
+  const toB = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  await store.erasePlayerData({ playerId: 'player-a', retainedPlayerId: 'deleted:deletion-a' });
+  const holders = await listPurchaseHolders(store, purchaseVerificationId);
+  assert.equal(holders.first?.playerId, 'deleted:deletion-a');
+  assert.equal(holders.shared[0]?.ledgerEntryId, toB.ledgerEntryId);
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-c'))).restoredAcrossPlayers,
+    true,
+  );
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-d'))).reason,
+    'PURCHASE_HOLDER_LIMIT_REACHED',
+    'the retained record does not count; B and C do',
+  );
+  // A refund still reaches every holder, the retained record included.
+  await revokeEntitlementGrant(store, {
+    playerId: 'player-b',
+    revokesLedgerEntryId: toB.ledgerEntryId ?? '',
+    idempotencyKey: 'google-play:voided:after-deletion',
+    reason: 'voided',
+    revokedAt: '2030-01-03T00:00:00.000Z',
+    payload: {},
+    evidenceVerificationId: `${purchaseVerificationId}:revoke`,
+  });
+  assert.deepEqual(await listActiveEntitlementTransactions(store), []);
+}
+
 // Consumables are never shared, even under the share policy.
 {
   const store = createInMemoryGameServicesStore();
@@ -622,7 +662,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   const holders = await listPurchaseHolders(store, purchaseVerificationId);
   assert.equal(holders.first?.playerId, 'deleted:deletion-1');
   assert.equal(holders.first?.payload.platformTransactionId, 'GPA.1234');
-  assert.equal(holders.shared[0]?.payload.sharedFromLedgerEntryId, holders.first?.ledgerEntryId);
+  assert.equal(holders.shared[0]?.payload.holderOfEvidenceVerificationId, purchaseVerificationId);
   // A holder revoked by an operator frees its place for another player.
   await revokeEntitlementGrant(store, {
     playerId: 'player-c',

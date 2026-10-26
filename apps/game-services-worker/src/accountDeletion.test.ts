@@ -5,8 +5,11 @@ import {
   accountDeletionConfirmationMaxLength,
   accountDeletionEndpoint,
   createAccountDeletionService,
+  createGameServicesBackend,
   createGooglePlayProductVerificationId,
   finishPendingAccountErasures,
+  listActiveEntitlementTransactions,
+  listPurchaseHolders,
   retryGooglePlayPurchaseFinalization,
   type AccountDeletionReceipt,
   type FinalizePurchaseGrantInput,
@@ -24,7 +27,9 @@ import {
 import {
   AccountDeletedWriteError,
   accountDeletionTombstoneKeyOf,
+  argumentField,
   createAccountDeletionTombstoneEraser,
+  refuseDeletedPlayerWrites,
   resolveAccountDeletionTombstones,
 } from './deletionTombstones.js';
 import { createD1GameServicesStore } from './d1Store.js';
@@ -1043,6 +1048,97 @@ try {
   }
   // The memory deployment keeps its tombstones too: the deleted player writes nothing more.
   await assert.rejects(localService.recordLeaderboardScore(score), AccountDeletedWriteError);
+
+  // --- Restore sharing after an account deletion (L3c) ------------------------
+  // A deleted buyer's retained record is never revived for its id: the
+  // tombstone refuses a grant to it, while a new guest of the same store
+  // account gets a fresh share linked to the purchase.
+  {
+    const deletedPlayers = new Set<string>();
+    const tombstones = {
+      async add(playerId: string) {
+        deletedPlayers.add(playerId);
+      },
+      async isDeleted(playerId: string) {
+        return deletedPlayers.has(playerId);
+      },
+      async purgeExpired() {
+        return 0;
+      },
+    };
+    const guarded = refuseDeletedPlayerWrites(createD1GameServicesStore(db), tombstones, {
+      recordEntitlementGrant: argumentField('playerId'),
+      recordLeaderboardScore: argumentField('playerId'),
+    });
+    const verificationId = 'google-play:product:sharing-after-deletion';
+    const backend = createGameServicesBackend({
+      catalog: {
+        version: 'sharing-after-deletion',
+        products: [{
+          id: 'REMOVE_ADS',
+          type: 'non_consumable',
+          grant: { type: 'entitlement', entitlement: 'remove_ads' },
+          platformProductIds: { android: 'remove_ads_android' },
+        }],
+      },
+      placements: { version: 'sharing-after-deletion', placements: [] },
+      store: guarded,
+      evidenceVerifier: {
+        async verifyPurchase({ request }) {
+          const verified = { verificationId, verifiedAt: '2030-01-01T00:00:00.000Z' };
+          // The store binds the purchase to the buyer.
+          return request.playerId === 'sharing-buyer'
+            ? { status: 'verified', ...verified }
+            : { status: 'restorable', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', ...verified };
+        },
+        async verifyAdReward() {
+          return { status: 'rejected', reason: 'UNUSED' };
+        },
+      },
+      restoreSharing: { mode: 'share', maxHolders: 2 },
+    });
+    const restore = (playerId: string, intent: 'purchase' | 'restore' = 'restore') =>
+      backend.purchases.verifyPurchase({
+        target: 'android',
+        playerId,
+        productId: 'REMOVE_ADS',
+        platformTransactionId: 'GPA.sharing-after-deletion',
+        idempotencyKey: `sharing-after-deletion:${playerId}`,
+        purchasedAt: '2030-01-01T00:00:00.000Z',
+        intent,
+      });
+    assert.equal((await restore('sharing-buyer', 'purchase')).verified, true);
+    const tablet = await restore('sharing-tablet');
+    assert.equal(tablet.restoredAcrossPlayers, true);
+    // The buyer deletes its account: tombstone first, then the erasure keeps the
+    // purchase record detached under deleted:<id> with its retention date.
+    await tombstones.add('sharing-buyer');
+    await createD1PlayerDataEraser(db).erasePlayerData({
+      playerId: 'sharing-buyer',
+      retainedPlayerId: 'deleted:sharing-deletion',
+    });
+    const holders = await listPurchaseHolders(guarded, verificationId);
+    assert.equal(holders.first?.playerId, 'deleted:sharing-deletion');
+    const retainedRow = await db
+      .prepare('SELECT retained_until FROM entitlement_transactions WHERE ledger_entry_id = ?')
+      .bind(holders.first?.ledgerEntryId ?? '')
+      .first<{ retained_until: string | null }>();
+    assert.ok(retainedRow?.retained_until, 'the retained record keeps its retention date');
+    assert.equal(holders.shared[0]?.playerId, 'sharing-tablet', "the other guest's share stays");
+    // The deleted id itself gets nothing again, with a place free: the
+    // tombstone refuses the grant before it is written.
+    await assert.rejects(restore('sharing-buyer'), AccountDeletedWriteError);
+    // A new guest gets a fresh share: the retained record does not count
+    // toward the limit of two, the tablet's share does.
+    const fresh = await restore('sharing-new-guest');
+    assert.equal(fresh.restoredAcrossPlayers, true);
+    assert.equal((await restore('sharing-one-too-many')).reason, 'PURCHASE_HOLDER_LIMIT_REACHED');
+    const active = (await listActiveEntitlementTransactions(guarded))
+      .filter((grant) => grant.evidenceVerificationId?.endsWith(verificationId) === true)
+      .map((grant) => grant.playerId)
+      .sort();
+    assert.deepEqual(active, ['deleted:sharing-deletion', 'sharing-new-guest', 'sharing-tablet']);
+  }
 } finally {
   await miniflare.dispose();
 }

@@ -305,6 +305,14 @@ export async function findPurchaseWideRevocation(
       (order.get(left.revokesLedgerEntryId) ?? 0) - (order.get(right.revokesLedgerEntryId) ?? 0))[0];
 }
 
+/** The evidence id of the entry that reverses `holder` for a store event whose own id is `eventId`. */
+export function holderRevocationEvidenceId(
+  eventId: string,
+  holder: ProductGrantTransaction,
+): string {
+  return `${eventId}#${holder.evidenceVerificationId ?? holder.ledgerEntryId}`;
+}
+
 async function revokeOtherPurchaseHolders(
   store: GameServicesStore,
   named: ProductGrantTransaction,
@@ -334,10 +342,12 @@ async function revokeOtherPurchaseHolders(
       playerId: holder.playerId,
       revokesLedgerEntryId: holder.ledgerEntryId,
       // The store event's own identity names one entry; each holder's is
-      // derived from it, so a replay finds the same entries.
+      // derived from it and the holder's evidence id (never its ledger id,
+      // which embeds the player id account deletion detaches), so a replay
+      // finds the same entries.
       ...(revocation.evidenceVerificationId === undefined
         ? {}
-        : { evidenceVerificationId: `${revocation.evidenceVerificationId}#${holder.ledgerEntryId}` }),
+        : { evidenceVerificationId: holderRevocationEvidenceId(revocation.evidenceVerificationId, holder) }),
     });
   }
 }

@@ -380,10 +380,11 @@ item after they "switch devices"
   client started (`intent` absent or `purchase`) keeps the binding check. The
   legacy App Store recovery backend (`createAppStoreRecoveryBackend`) keeps
   refusing (`APP_STORE_RECOVERY_IDENTITY_MISMATCH`).
-- **Deleted accounts** (with account deletion, L3b). A deleted player's
-  retained purchase record is never revived for that id and does not count
-  toward the limit; a guest who restores the purchase gets a fresh grant
-  linked to it, which counts.
+- **Deleted accounts.** A deleted player's retained purchase record
+  (`deleted:<id>`, kept for the retention period) is never revived for that
+  id, and the deletion tombstone refuses any grant to it; it does not count
+  toward the limit. A guest who restores the purchase gets a fresh grant
+  linked to the purchase, which counts.
 - **Abandoned guests count.** A guest that will never come back (an
   uninstalled app, a logout) keeps its place until account linking or an
   operator frees it with an `admin` revocation; a player who reinstalls more
