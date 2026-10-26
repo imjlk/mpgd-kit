@@ -4,10 +4,10 @@ import {
   copyFileSync,
   createReadStream,
   existsSync,
-  lstatSync,
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -39,7 +39,7 @@ import {
 // failed one can be retried with `mpgd deploy symbols`. It never touches a store
 // submission.
 
-const uploadTimeoutMs = 15 * 60_000;
+const uploadTimeoutMs = 10 * 60_000;
 
 export interface CrashSymbolUploadPlan {
   readonly releaseKey: string;
@@ -115,7 +115,9 @@ export async function uploadRecordedCrashSymbols(
   if (symbols === undefined) {
     return {
       status: 'not-applicable',
-      reason: 'The iOS build recorded no Crashlytics dSYMs (crash reporting is off).',
+      reason: 'The iOS build recorded no Crashlytics dSYMs: crash reporting is off, or the build '
+        + 'was recorded before deploy run recorded dSYMs (upload those by hand, see '
+        + 'docs/CRASH_REPORTING.md).',
     };
   }
   const previous = status.symbolUploads?.ios;
@@ -205,10 +207,23 @@ export async function uploadRecordedCrashSymbols(
   return { status: 'uploaded', plan, upload: await record('uploaded'), output };
 }
 
-/** Only what the tool needs: no store, signing or Git credentials. */
+/** Only what the tool needs (and network proxy settings): no store, signing or Git credentials. */
 function uploadEnvironment(source: NodeJS.ProcessEnv, temporary: string): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { TMPDIR: temporary };
-  for (const name of ['PATH', 'HOME', 'USER', 'LANG', 'LC_ALL']) {
+  for (const name of [
+    'PATH',
+    'HOME',
+    'USER',
+    'LANG',
+    'LC_ALL',
+    'HTTPS_PROXY',
+    'https_proxy',
+    'HTTP_PROXY',
+    'http_proxy',
+    'NO_PROXY',
+    'no_proxy',
+    'SSL_CERT_FILE',
+  ]) {
     const value = source[name];
     if (value !== undefined) {
       environment[name] = value;
@@ -236,7 +251,7 @@ async function verifiedRecordedFile(
 ): Promise<string> {
   const root = realpathSync(gameRoot);
   const candidate = path.resolve(root, recorded.location);
-  if (!existsSync(candidate) || !lstatSync(candidate).isFile()) {
+  if (!existsSync(candidate) || !statSync(candidate).isFile()) {
     throw new Error(
       `The recorded ${label} is missing: ${recorded.location}. Restore the release bundle `
         + '(.mpgd/releases/<release>) the build wrote.',

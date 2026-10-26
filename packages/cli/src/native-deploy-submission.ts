@@ -265,6 +265,14 @@ export async function submitRecordedNativeTargetWithPorts(
   if (checkpoint !== undefined && isNativeSubmissionSettled(checkpoint.status)) {
     return checkpoint;
   }
+  if (record.r8Mapping !== undefined && effectiveAndroidRelease?.mappingFile !== undefined
+    && !existsSync(effectiveAndroidRelease.mappingFile)) {
+    throw new Error(
+      `The R8 mapping recorded with this build is missing: ${record.r8Mapping.location}. Restore `
+        + 'the release bundle (.mpgd/releases/<release>) next to the bundle, or pass the same file '
+        + 'with --mapping-file.',
+    );
+  }
   if (input.environment?.MPGD_VERIFY_RELEASE_MANIFEST === '1') {
     verifyRecordedReleaseManifest(input.plan.gameRoot, record);
   }

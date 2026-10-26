@@ -11,6 +11,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -140,6 +141,11 @@ try {
   const dwarf = path.join(archive, 'dSYMs/App.app.dSYM/Contents/Resources/DWARF');
   mkdirSync(dwarf, { recursive: true });
   writeFileSync(path.join(dwarf, 'App'), thinMachO('00112233445566778899aabbccddeeff'));
+  // Finder litter in DWARF/ is skipped; a product name with spaces and brackets is kept.
+  writeFileSync(path.join(dwarf, '.DS_Store'), 'Finder metadata, not Mach-O');
+  const spaced = path.join(archive, 'dSYMs/My Game (Beta).app.dSYM/Contents/Resources/DWARF');
+  mkdirSync(spaced, { recursive: true });
+  writeFileSync(path.join(spaced, 'My Game (Beta)'), thinMachO('ffeeddccbbaa99887766554433221100'));
   const app = path.join(archive, 'Products/Applications/App.app');
   mkdirSync(app, { recursive: true });
   const outputDirectory = path.join(fixture, 'release-output/native/ios/production/run/symbols');
@@ -183,7 +189,19 @@ try {
   assert.deepEqual(zipped, [path.join(archive, 'dSYMs')]);
   assert.deepEqual(collected.dsyms, [
     { bundle: 'App.app.dSYM', uuids: ['00112233-4455-6677-8899-AABBCCDDEEFF'] },
+    { bundle: 'My Game (Beta).app.dSYM', uuids: ['FFEEDDCC-BBAA-9988-7766-554433221100'] },
   ]);
+  assertNativeBuildSymbols(
+    {
+      crashlytics: {
+        dsymArchive: 'release-output/native/ios/x/dSYMs.zip',
+        dsyms: collected.dsyms,
+        uploadTool: 'release-output/native/ios/x/upload-symbols',
+        googleServiceInfo: 'release-output/native/ios/x/GoogleService-Info.plist',
+      },
+    },
+    (file) => file.startsWith('release-output/native/ios/'),
+  );
   assert.equal(readFileSync(collected.uploadTool, 'utf8'), '#!/bin/sh\nexit 0\n');
   assert.equal(readFileSync(collected.googleServiceInfo, 'utf8'), '<plist>firebase app</plist>\n');
   // The Swift Package checkout is preferred over CocoaPods.
@@ -365,6 +383,23 @@ try {
     /differs from the R8 mapping recorded/u,
   );
   assert.deepEqual(submissions, {}, 'a refused mapping writes no checkpoint');
+  // A recorded mapping that was not restored is named before any checkpoint.
+  rmSync(recordedMapping);
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(submitInput, submissionPorts),
+    /R8 mapping recorded with this build is missing: \.mpgd\/releases\/beta-01\/android-mapping\.txt/u,
+  );
+  assert.deepEqual(submissions, {});
+  // One that resolves out of the game through a symlink is refused.
+  const outsideMapping = path.join(fixture, 'outside-mapping.txt');
+  writeFileSync(outsideMapping, 'com.example.Game -> a:\n');
+  symlinkSync(outsideMapping, recordedMapping);
+  assert.throws(
+    () => withRecordedR8Mapping(undefined, mappingRecord, mappingGame),
+    /escapes the game directory/u,
+  );
+  rmSync(recordedMapping);
+  writeFileSync(recordedMapping, 'com.example.Game -> a:\n');
   const committed = await submitRecordedNativeTargetWithPorts(submitInput, submissionPorts);
   assert.equal(committed.status, 'committed');
   assert.equal(sentReleases.length, 1);
@@ -586,6 +621,17 @@ try {
     /dSYM archive differs from the immutable build record/u,
   );
   writeFileSync(dsymZip, 'zip of dSYMs');
+  // A recorded file replaced by a symlink out of the game is refused.
+  const outsidePlist = path.join(fixture, 'outside.plist');
+  copyFileSync(plist, outsidePlist);
+  rmSync(plist);
+  symlinkSync(outsidePlist, plist);
+  await assert.rejects(
+    uploadRecordedCrashSymbols({ ...uploadInput, dryRun: true }, darwinPorts),
+    /GoogleService-Info.plist resolves outside the game directory/u,
+  );
+  rmSync(plist);
+  copyFileSync(outsidePlist, plist);
 
   writeFileSync(path.join(home, 'fail'), '');
   const reports: string[] = [];

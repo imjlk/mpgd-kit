@@ -359,11 +359,13 @@ function executeIosBuildWithEnvironment(
         sourcePackages,
         outputDirectory: input.targetPath(symbolRoot),
         copyFile: input.copyFile,
+        // Without --sequesterRsrc, ditto writes no __MACOSX AppleDouble
+        // entries that upload-symbols could take for `._*.dSYM` bundles.
         zipDirectory: (source, destination) => {
           mkdirSync(dirname(destination), { recursive: true });
           input.run(
             'ditto',
-            ['-c', '-k', '--sequesterRsrc', '--keepParent', source, destination],
+            ['-c', '-k', '--keepParent', source, destination],
             environment,
           );
         },

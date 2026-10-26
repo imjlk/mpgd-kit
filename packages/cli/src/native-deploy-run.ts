@@ -190,55 +190,69 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
   }
-  if (input.plan.targets.some((entry) => entry.target === 'ios')) {
-    // Crashlytics dSYMs of the recorded iOS build, once; a failure is reported
-    // and retryable (`mpgd deploy symbols`) but never fails the submission.
-    await uploadCrashSymbolsForDeployRun(
-      {
+  // A --mapping-file that differs from the mapping recorded with the Android
+  // build is refused here, before any target (iOS may come first) is submitted.
+  status = await readNativeReleaseStatus({
+    gameRoot: input.plan.gameRoot,
+    gameId: input.gameId,
+    releaseKey: input.releaseKey,
+    environment,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+  withRecordedR8Mapping(input.androidRelease, status.builds.android, input.plan.gameRoot);
+  try {
+    for (const entry of input.plan.targets) {
+      status = await readNativeReleaseStatus({
         gameRoot: input.plan.gameRoot,
         gameId: input.gameId,
         releaseKey: input.releaseKey,
         environment,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
-      },
-      input.onCrashSymbolsReport,
-    );
-  }
-  for (const entry of input.plan.targets) {
-    status = await readNativeReleaseStatus({
-      gameRoot: input.plan.gameRoot,
-      gameId: input.gameId,
-      releaseKey: input.releaseKey,
-      environment,
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
-    });
-    if (status.builds[entry.target] === undefined) {
-      throw new Error(`${entry.target} has no verified build after the native build stage.`);
+      });
+      if (status.builds[entry.target] === undefined) {
+        throw new Error(`${entry.target} has no verified build after the native build stage.`);
+      }
+      const submission = status.submissions[entry.target];
+      if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
+        assertSettledAndroidReleaseOptions(
+          submission,
+          withRecordedR8Mapping(input.androidRelease, status.builds.android, input.plan.gameRoot),
+        );
+        continue;
+      }
+      await submitRecordedNativeTarget({
+        plan: input.plan,
+        gameId: input.gameId,
+        releaseKey: input.releaseKey,
+        credential: readStoreCredential(input.plan, entry.target, environment),
+        approved: input.approved,
+        ...(input.androidRelease === undefined ? {} : { androidRelease: input.androidRelease }),
+        ...(input.confirmProduction === undefined ? {} : {
+          confirmProduction: input.confirmProduction,
+        }),
+        ...(input.onDraftAppFallback === undefined ? {} : {
+          onDraftAppFallback: input.onDraftAppFallback,
+        }),
+        environment,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
     }
-    const submission = status.submissions[entry.target];
-    if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
-      assertSettledAndroidReleaseOptions(
-        submission,
-        withRecordedR8Mapping(input.androidRelease, status.builds.android, input.plan.gameRoot),
+  } finally {
+    if (input.plan.targets.some((entry) => entry.target === 'ios')) {
+      // Crashlytics dSYMs of the recorded iOS build, once, after the store
+      // submission so a slow upload never delays it. It never throws: a
+      // failure is reported and retryable (`mpgd deploy symbols`).
+      await uploadCrashSymbolsForDeployRun(
+        {
+          gameRoot: input.plan.gameRoot,
+          gameId: input.gameId,
+          releaseKey: input.releaseKey,
+          environment,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+        },
+        input.onCrashSymbolsReport,
       );
-      continue;
     }
-    await submitRecordedNativeTarget({
-      plan: input.plan,
-      gameId: input.gameId,
-      releaseKey: input.releaseKey,
-      credential: readStoreCredential(input.plan, entry.target, environment),
-      approved: input.approved,
-      ...(input.androidRelease === undefined ? {} : { androidRelease: input.androidRelease }),
-      ...(input.confirmProduction === undefined ? {} : {
-        confirmProduction: input.confirmProduction,
-      }),
-      ...(input.onDraftAppFallback === undefined ? {} : {
-        onDraftAppFallback: input.onDraftAppFallback,
-      }),
-      environment,
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
-    });
   }
   return readNativeReleaseStatus({
     gameRoot: input.plan.gameRoot,

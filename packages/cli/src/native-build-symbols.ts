@@ -84,11 +84,16 @@ export function isDsymIdentityList(value: unknown): value is readonly NativeDsym
       && !Array.isArray(entry)
       && Object.keys(entry).every((key) => key === 'bundle' || key === 'uuids')
       && typeof (entry as NativeDsymIdentity).bundle === 'string'
-      && /^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,200}\.dSYM$/u.test((entry as NativeDsymIdentity).bundle)
+      && isDsymBundleName((entry as NativeDsymIdentity).bundle)
       && Array.isArray((entry as NativeDsymIdentity).uuids)
       && (entry as NativeDsymIdentity).uuids.length > 0
       && (entry as NativeDsymIdentity).uuids.length <= 32
       && (entry as NativeDsymIdentity).uuids.every(isDsymUuid));
+}
+
+/** A dSYM bundle file name: no path separator or control character, not hidden. */
+export function isDsymBundleName(name: string): boolean {
+  return name.length <= 255 && /^[^./\\\u0000-\u001f\u007f][^/\\\u0000-\u001f\u007f]*\.dSYM$/u.test(name);
 }
 
 /** Where AGP writes the release variant's R8 mapping file. */
@@ -209,19 +214,41 @@ export function readArchiveDsyms(dsymFolder: string): NativeDsymIdentity[] {
   if (!existsSync(dsymFolder)) {
     return [];
   }
-  const bundles = readdirSync(dsymFolder).filter((name) => name.endsWith('.dSYM')).sort();
+  const bundles = readdirSync(dsymFolder)
+    .filter((name) => name.endsWith('.dSYM') && !name.startsWith('.'))
+    .sort();
   return bundles.map((bundle) => {
+    if (!isDsymBundleName(bundle)) {
+      throw new Error(`dSYM bundle name is not supported: ${JSON.stringify(bundle)}.`);
+    }
     const dwarf = path.join(dsymFolder, bundle, 'Contents/Resources/DWARF');
     const files = existsSync(dwarf)
       ? readdirSync(dwarf).filter((name) => lstatSync(path.join(dwarf, name)).isFile()).sort()
       : [];
-    const uuids = [...new Set(files.flatMap((file) => readMachOUuids(path.join(dwarf, file))))]
-      .sort();
+    // Only Mach-O files carry UUIDs; Finder litter such as .DS_Store is skipped.
+    const uuids = [...new Set(files.flatMap((file) => {
+      const candidate = path.join(dwarf, file);
+      return isMachOFile(candidate) ? readMachOUuids(candidate) : [];
+    }))].sort();
     if (uuids.length === 0) {
       throw new Error(`dSYM ${bundle} has no Mach-O UUID.`);
     }
     return { bundle, uuids };
   });
+}
+
+function isMachOFile(file: string): boolean {
+  const descriptor = openSync(file, 'r');
+  try {
+    const magic = Buffer.alloc(4);
+    if (readSync(descriptor, magic, 0, 4, 0) !== 4) {
+      return false;
+    }
+    return [0xfeedfacf, 0xfeedface, 0xcffaedfe, 0xcefaedfe, 0xcafebabe, 0xcafebabf]
+      .includes(magic.readUInt32BE(0));
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 const lcUuid = 0x1b;
