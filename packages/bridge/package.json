@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/bridge",
-  "version": "0.16.2",
+  "version": "0.16.3",
   "description": "Typed native bridge protocol for mpgd platform adapters.",
   "license": "MIT",
   "repository": {
