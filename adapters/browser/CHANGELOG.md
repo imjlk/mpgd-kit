@@ -1,5 +1,15 @@
 # @mpgd/adapter-browser
 
+## 0.12.0 — 2026-10-26
+
+### Minor changes
+
+- [1d2d74e0](https://github.com/imjlk/mpgd-kit/commit/1d2d74e058e6fae18e7d5b4d1850b29a94c6165e) Optional review providers distinguish opaque native requests from explicit store-page navigation. Add an opt-in target integration, persisted visit/play/cooldown policy, AIT Review.request, Capawesome AppReview for explicitly selected mobile stores, and Microsoft/registered ONE store or Verse8 listing helpers. Unsupported hosts have no prompt or storage activity; no outcome claims that a review was displayed or submitted. Import review adapters by subpath so unused SDKs stay out of browser and inline bundles. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.31.0
+
 ## 0.11.10 — 2026-10-26
 
 ### Patch changes
