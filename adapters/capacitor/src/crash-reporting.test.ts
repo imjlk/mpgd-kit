@@ -117,13 +117,17 @@ describe('createCapacitorCrashReporter', () => {
       isPluginAvailable: () => true,
       plugin,
     });
-    await reporter.recordError(new Error('before consent'));
+    // The context keys are set at creation, before any report, so a native
+    // crash carries them too; keys stay on the device until a report is sent.
+    await flushMicrotasks();
+    expect(plugin.setCustomKey).toHaveBeenCalledWith({ key: 'mpgd_target', value: 'android', type: 'string' });
+    await expect(reporter.recordError(new Error('before consent'))).resolves.toBe(false);
     await reporter.log('before consent');
     expect(plugin.recordException).not.toHaveBeenCalled();
     expect(plugin.log).not.toHaveBeenCalled();
     expect((await reporter.getStatus()).collectionEnabled).toBe(false);
     await reporter.setCollectionEnabled(true);
-    await reporter.recordError(new Error('after consent'));
+    await expect(reporter.recordError(new Error('after consent'))).resolves.toBe(true);
     expect(plugin.recordException).toHaveBeenCalledTimes(1);
   });
 
@@ -200,7 +204,7 @@ describe('createCapacitorCrashReporter', () => {
       state: 'available',
       collectionEnabled: false,
     });
-    await expect(ios.recordError(new Error('x'))).resolves.toBeUndefined();
+    await expect(ios.recordError(new Error('x'))).resolves.toBe(false);
     await expect(ios.log('x')).resolves.toBeUndefined();
     await expect(ios.setCollectionEnabled(true)).resolves.toBeUndefined();
 
@@ -282,7 +286,7 @@ describe('createCapacitorGatewayCrashReporting', () => {
     expect(target.size()).toBe(0);
     const reporter: CrashReporter = {
       getStatus: async () => ({ provider: 'custom', state: 'available' }),
-      recordError: async () => {},
+      recordError: async () => true,
       log: async () => {},
       setCollectionEnabled: async () => {},
     };

@@ -98,7 +98,8 @@ try {
 await reporter?.log(`level ${id} started`);
 ```
 
-- Every method resolves; a reporter never throws into game code. Without the
+- Every method resolves; a reporter never throws into game code.
+  `recordError` resolves `true` when the report reached Crashlytics. Without the
   plugin, `getStatus()` reports `not-installed` and the calls do nothing.
 - Uncaught errors and unhandled rejections are reported as non-fatal, once
   per distinct error and at most 8 per session: Crashlytics keeps only the
@@ -114,7 +115,7 @@ await reporter?.log(`level ${id} started`);
 
 ### What a report carries
 
-Custom keys, set once before the first report: `mpgd_target`,
+Custom keys, set when the gateway is created so native crashes carry them too: `mpgd_target`,
 `mpgd_build_id`, `mpgd_app_version`, `mpgd_adapter`, and any keys passed as
 `crashReporting: { context }` (lowercase snake_case keys not starting with
 `mpgd_`, plain values; put

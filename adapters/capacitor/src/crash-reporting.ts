@@ -95,10 +95,10 @@ function kitContextValue(value: string): string {
  * captured by the Crashlytics SDK on its own; this reporter adds non-fatal
  * reports for JavaScript errors, breadcrumbs, and the collection toggle.
  * Context keys (`mpgd_target`, `mpgd_build_id`, `mpgd_app_version`,
- * `mpgd_adapter`, and `options.context`) are set once before the first
- * report. When the first of them fails (Firebase not configured) the
- * reporter is `not-configured` and later calls do nothing; a failing game
- * key is skipped.
+ * `mpgd_adapter`, and `options.context`) are set once, starting when the
+ * reporter is created, so native crashes carry them too. When the first of
+ * them fails (Firebase not configured) the reporter is `not-configured` and
+ * later calls do nothing; a failing game key is skipped.
  */
 export function createCapacitorCrashReporter(options: CapacitorCrashReporterOptions): CrashReporter {
   const isPluginAvailable = options.isPluginAvailable
@@ -144,6 +144,10 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     return ready;
   };
   const collecting = async (): Promise<boolean> => collectionEnabled !== false && await prepare();
+  // Native crashes can happen before any JavaScript report, so the context
+  // keys are set right away. Keys stay on the device until a report is sent,
+  // so this does not bypass `requireConsent`.
+  void prepare();
 
   return {
     async getStatus(): Promise<CrashReporterStatus> {
@@ -166,7 +170,7 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     },
     async recordError(error, recordOptions) {
       if (!await collecting()) {
-        return;
+        return false;
       }
       const normalized = normalizeCrashError(error);
       try {
@@ -174,8 +178,10 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
           message: formatCrashMessage(normalized, recordOptions?.source ?? 'game'),
           ...(normalized.frames.length === 0 ? {} : { stacktrace: [...normalized.frames] }),
         });
+        return true;
       } catch {
         // A report that cannot be recorded is dropped; game code never sees it.
+        return false;
       }
     },
     async log(message) {
