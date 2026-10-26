@@ -28,7 +28,11 @@ export interface PlayPromoteInput {
   readonly packageName: string;
   readonly fromTrack: string;
   readonly toTrack: string;
-  /** Selects the source release; defaults to the source track's only completed release. */
+  /**
+   * Selects the source release that contains this version code; defaults to
+   * the source track's only completed release. The whole release (all its
+   * version codes) is promoted, never part of it.
+   */
   readonly versionCode?: number;
   /** Target release status; defaults to `completed`. */
   readonly status?: PlayNewReleaseStatus;
@@ -38,6 +42,8 @@ export interface PlayPromoteInput {
   readonly releaseNotes?: readonly PlayReleaseNote[];
   /** Required for production tracks and staged (inProgress) releases. */
   readonly confirmProduction?: boolean;
+  /** `--approve`: required unless `dryRun`. */
+  readonly approved?: boolean;
   /** Read both tracks in a throw-away edit and return the planned body without committing. */
   readonly dryRun?: boolean;
   readonly signal?: AbortSignal;
@@ -96,7 +102,7 @@ export async function promotePlayRelease(
 export function assertPlayPromoteInput(input: PlayPromoteInput): void {
   assertPlayTrackName(input.fromTrack);
   assertPlayTrackName(input.toTrack);
-  if (input.fromTrack === input.toTrack) {
+  if (sameTrack(input.fromTrack, input.toTrack)) {
     throw new Error('--from and --to must name different Google Play tracks.');
   }
   if (input.versionCode !== undefined
@@ -127,6 +133,9 @@ export async function promotePlayReleaseWithPublisher(
 ): Promise<PlayPromoteResult> {
   assertPlayPromoteInput(input);
   const status = input.status ?? 'completed';
+  if (input.dryRun !== true && input.approved !== true) {
+    throw new Error('Promoting a Google Play release requires --approve.');
+  }
   if (input.dryRun !== true) {
     assertPlayReleaseConfirmed({ track: input.toTrack, status }, input.confirmProduction === true);
   }
@@ -137,9 +146,12 @@ export async function promotePlayReleaseWithPublisher(
   try {
     const source = await readTrack(publisher, packageName, editId, fromTrack, input.signal, true);
     const sourceRelease = selectSourceRelease(source.releases ?? [], input);
-    const versionCodes = input.versionCode === undefined
-      ? [...(sourceRelease.versionCodes ?? [])]
-      : [String(input.versionCode)];
+    // Always the whole source release, so a re-run with any of its version
+    // codes (as PlayPromoteUncertainError suggests) asks for the same set.
+    const versionCodes = [...(sourceRelease.versionCodes ?? [])];
+    if (versionCodes.length === 0) {
+      throw new Error(`Google Play ${fromTrack} release has no version codes to promote.`);
+    }
     const notes = input.releaseNotes ?? copiedNotes(sourceRelease);
     const release: PlayTrackRelease = {
       ...(typeof sourceRelease.name === 'string' ? { name: sourceRelease.name } : {}),
@@ -285,7 +297,13 @@ function selectSourceRelease(
       release.versionCodes?.includes(String(input.versionCode)),
     );
     const match = matches[0];
-    if (matches.length !== 1 || match === undefined) {
+    if (matches.length > 1) {
+      throw new Error(
+        `Google Play ${input.fromTrack} has several releases with version code `
+        + `${input.versionCode}; inspect the track. Releases: ${listed}.`,
+      );
+    }
+    if (match === undefined) {
       throw new Error(
         `Google Play ${input.fromTrack} has no release with version code ${input.versionCode}; `
         + `only a version already on the source track can be promoted. Releases: ${listed}.`,
@@ -307,6 +325,13 @@ function selectSourceRelease(
     );
   }
   return completed[0];
+}
+
+/** Same track, ignoring case and the `internal`/`qa` alias of the internal track. */
+function sameTrack(left: string, right: string): boolean {
+  const normal = (track: string): string =>
+    track.trim().toLowerCase().replace(/(^|:)qa$/u, '$1internal');
+  return normal(left) === normal(right);
 }
 
 function copiedNotes(release: PlayTrackRelease): PlayReleaseNote[] | undefined {

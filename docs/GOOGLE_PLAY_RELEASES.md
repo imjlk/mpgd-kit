@@ -215,9 +215,9 @@ pnpm exec mpgd deploy promote --plan /tmp/release-plan.json \
 
 | Flag | Meaning |
 | --- | --- |
-| `--from` | Source track. It must exist and hold the release. |
+| `--from` | Source track. It must exist and hold the release, and must differ from `--to` (case and the `internal`/`qa` alias are ignored). |
 | `--to` | Target track, the only track that changes. A closed-testing target must already exist. |
-| `--version-code` | Version to promote. Without it, the source track must have exactly one `completed` release, and all its version codes are promoted. A version code that is not on the source track is refused. |
+| `--version-code` | Selects the source release that contains this version code; a version code that is not on the source track is refused. Without it, the source track must have exactly one `completed` release. Either way the whole release, with all its version codes, is promoted. |
 | `--status` | Target status: `completed` (default), `draft`, or `inProgress` with `--user-fraction`. |
 | `--release-notes` | A notes file (same format as above). Without it, the source release's notes are copied. |
 | `--approve` | Required unless `--dry-run`. |
@@ -228,10 +228,14 @@ Rules:
 
 - Only a `completed` or `inProgress` source release is promoted. A `draft` was
   never served to testers, and a `halted` one was stopped; both are refused.
+  An `inProgress` source (a staged test) goes to the target with the target
+  `--status`, so `--status completed` serves it to everyone on that track.
 - The promoted release keeps the source release's name. On the target track
   it is merged like a submission: it replaces an `inProgress` or `halted`
   rollout (a draft replaces an older draft), and every other release is sent
-  back unchanged. The result lists the replaced releases in `superseded`.
+  back unchanged. The result lists the replaced releases in `superseded`;
+  run `--dry-run` first to see them, because replacing a running rollout on a
+  testing track needs no `--confirm-production`.
 - A staged promotion needs a completed release on the target track, as for a
   submission ("Rollout percentage options are unavailable for a first
   release").

@@ -934,9 +934,6 @@ const deployCommand = defineI18n({
           throw new Error('The deployment plan has no Android target.');
         }
         const dryRun = ctx.values['dry-run'] === true;
-        if (!dryRun && ctx.values.approve !== true) {
-          throw new Error('Promoting a Google Play release requires --approve.');
-        }
         const versionCode = readOptionalString(ctx.values['version-code']);
         if (versionCode !== undefined && !/^[1-9]\d{0,15}$/u.test(versionCode)) {
           throw new Error('--version-code must be a positive integer.');
@@ -958,6 +955,7 @@ const deployCommand = defineI18n({
           ...(userFraction === undefined ? {} : { userFraction: parsePlayUserFraction(userFraction) }),
           ...(notesFile === undefined ? {} : { releaseNotes: readPlayReleaseNotesFile(notesFile) }),
           ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
+          approved: ctx.values.approve === true,
           dryRun,
         });
         console.info(JSON.stringify(result, null, 2));

@@ -82,6 +82,10 @@ interface MockOptions {
   readonly draftApp?: boolean;
   /** The first commit applies but its response is lost. */
   readonly loseFirstCommit?: boolean;
+  /** Every tracks.update answers with this HTTP status and changes nothing. */
+  readonly failTrackUpdate?: number;
+  /** Every edits.validate response is lost. */
+  readonly loseValidate?: boolean;
 }
 
 interface Observed {
@@ -146,12 +150,21 @@ async function withPlay(
         } else {
           reply(response, 200, { track: trackMatch[1], releases });
         }
+      } else if (method === 'PUT' && trackMatch !== null && options.failTrackUpdate !== undefined) {
+        await readBody(request);
+        reply(response, options.failTrackUpdate, {
+          error: { code: options.failTrackUpdate, message: 'track update failed' },
+        });
       } else if (method === 'PUT' && trackMatch !== null) {
         const body = JSON.parse((await readBody(request)).toString('utf8')) as PlayTrack;
         updates.push({ track: trackMatch[1] ?? '', body });
         edit.tracks[trackMatch[1] ?? ''] = [...(body.releases ?? [])];
         reply(response, 200, body);
       } else if (method === 'POST' && pathname.endsWith(':validate')) {
+        if (options.loseValidate === true) {
+          reply(response, 503, { error: { code: 503, message: 'response lost' } });
+          return;
+        }
         reply(response, 200, { id: editId });
       } else if (method === 'POST' && pathname.endsWith(':commit')) {
         assert.equal(url.searchParams.get('changesInReviewBehavior'), 'ERROR_IF_IN_REVIEW');
@@ -741,6 +754,7 @@ try {
     packageName,
     fromTrack: 'Closed testers',
     toTrack: 'production',
+    approved: true,
     ...input,
   });
   await withPlay(promotable(), {}, async (publisher, observed) => {
@@ -835,6 +849,94 @@ try {
       /no Missing track track/u,
     );
   });
+  // Refusals: no --approve, an unknown status, the internal/qa alias as both ends.
+  await withPlay(promotable(), {}, async (publisher, observed) => {
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ approved: false, confirmProduction: true }), publisher),
+      /requires --approve/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(
+        promote({ status: 'halted' as never, confirmProduction: true }), publisher,
+      ),
+      /--status must be/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ fromTrack: 'internal', toTrack: 'QA' }), publisher),
+      /must name different/u,
+    );
+    assert.equal(observed.operations.length, 0);
+    // A dry run needs neither approval nor confirmation.
+    const planned = await promotePlayReleaseWithPublisher(
+      promote({ approved: false, dryRun: true }), publisher,
+    );
+    assert.equal(planned.status, 'dry-run');
+  });
+
+  // A multi-code release is promoted whole, also when selected by one code,
+  // so the --version-code re-run after a lost commit reports unchanged.
+  const multi: LiveState = {
+    bundles: [],
+    tracks: {
+      alpha: [{ name: 'split', status: 'completed', versionCodes: ['50', '51'] }],
+      beta: [
+        { name: 'staged', status: 'inProgress', versionCodes: ['49'], userFraction: 0.3 },
+        completed44,
+      ],
+    },
+  };
+  await withPlay(multi, { loseFirstCommit: true }, async (publisher, observed) => {
+    let uncertain: unknown;
+    await promotePlayReleaseWithPublisher(promote({ fromTrack: 'alpha', toTrack: 'beta' }), publisher)
+      .catch((error: unknown) => { uncertain = error; });
+    assert.ok(uncertain instanceof PlayPromoteUncertainError, 'lost multi-code commit');
+    assert.deepEqual(uncertain.versionCodes, ['50', '51']);
+    // The completed promotion replaced the running beta rollout, as a dry run shows.
+    assert.deepEqual(observed.live().tracks.beta, [
+      completed44,
+      { name: 'split', status: 'completed', versionCodes: ['50', '51'] },
+    ]);
+    const rerun = await promotePlayReleaseWithPublisher(
+      promote({ fromTrack: 'alpha', toTrack: 'beta', versionCode: 51 }), publisher,
+    );
+    assert.equal(rerun.status, 'unchanged');
+    assert.deepEqual(rerun.versionCodes, ['50', '51']);
+  });
+  await withPlay(multi, {}, async (publisher) => {
+    const planned = await promotePlayReleaseWithPublisher(
+      promote({ fromTrack: 'alpha', toTrack: 'beta', versionCode: 50, dryRun: true }), publisher,
+    );
+    assert.deepEqual(planned.versionCodes, ['50', '51']);
+    assert.deepEqual(planned.superseded, [
+      { name: 'staged', status: 'inProgress', versionCodes: ['49'], userFraction: 0.3 },
+    ]);
+  });
+
+  // A refused track update keeps Play's error and discards the edit; a lost
+  // validate response is uncertain and commits nothing.
+  await withPlay(promotable(), { failTrackUpdate: 400 }, async (publisher, observed) => {
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ toTrack: 'beta' }), publisher),
+      (error: unknown) => !(error instanceof PlayPromoteUncertainError),
+    );
+    assert.ok(observed.operations.at(-1)?.startsWith('DELETE '), 'refused update discards the edit');
+    assert.equal(observed.operations.some((item) => item.endsWith(':commit')), false);
+  });
+  await withPlay(promotable(), { failTrackUpdate: 503 }, async (publisher) => {
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ toTrack: 'beta' }), publisher),
+      (error: unknown) => error instanceof PlayPromoteUncertainError && error.stage === 'track-update',
+    );
+  });
+  await withPlay(promotable(), { loseValidate: true }, async (publisher, observed) => {
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ toTrack: 'beta' }), publisher),
+      (error: unknown) => error instanceof PlayPromoteUncertainError && error.stage === 'validate',
+    );
+    assert.equal(observed.operations.some((item) => item.endsWith(':commit')), false);
+    assert.equal(observed.live().tracks.beta, undefined);
+  });
+
   await withPlay(promotable(), { loseFirstCommit: true }, async (publisher) => {
     let uncertain: unknown;
     await promotePlayReleaseWithPublisher(promote({ confirmProduction: true }), publisher)
