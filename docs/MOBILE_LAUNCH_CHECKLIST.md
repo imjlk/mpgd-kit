@@ -270,10 +270,14 @@ pnpm exec mpgd deploy status --game . --game-id mygame --release beta-001
 - [ ] `deploy run` reserves the next `versionCode` / build number on the
       `release-state` branch and stamps them into the build; you do not commit
       them ([versioning](./MULTI_TARGET_RELEASE_VERSIONING.md#stamping-the-reserved-version-numbers)).
-- [ ] Android goes to the **internal** track only. The first upload of a new
-      app may have to be rolled out from the console. Closed, open and
-      production tracks, staged rollout and release notes are console steps
-      for now **(open: Play track expansion)**.
+- [ ] Android goes to the **internal** track by default. `--track`,
+      `--status draft|completed|inProgress`, `--user-fraction`,
+      `--release-notes` and `--confirm-production` target closed, open and
+      production tracks; `mpgd deploy rollout` updates, halts, resumes or
+      completes a staged rollout ([Play releases](./GOOGLE_PLAY_RELEASES.md)).
+- [ ] The first upload of a never-published app is committed as a **draft**
+      (Play accepts nothing else); roll that draft out once in Play Console
+      ([draft apps](./GOOGLE_PLAY_RELEASES.md#draft-apps)).
 - [ ] iOS goes to an internal TestFlight group. The submission reports
       `action-required` while TestFlight waits for the export-compliance
       answer ([TestFlight](./TESTFLIGHT_INTERNAL_SUBMISSION.md)).
@@ -292,8 +296,11 @@ Google Play Console:
       needs a sign-in), data safety, government apps / financial features /
       health declarations ("no" for a typical game).
 - [ ] In-app products with prices; license testers.
-- [ ] Closed test with 12+ testers for 14 days (new personal accounts), then
-      apply for production access.
+- [ ] Closed test with 12+ testers opted in for 14 days in a row (personal
+      accounts created after 13 November 2023): create the closed track and
+      its testers in the console, ship builds to it with `--track <name>`,
+      then apply for production access
+      ([closed testing](./GOOGLE_PLAY_RELEASES.md#closed-testing-for-new-personal-accounts)).
 
 App Store Connect:
 
@@ -332,7 +339,8 @@ App Store Connect:
 ## Related
 
 - [Native deployment](./NATIVE_DEPLOYMENT.md) and [native deploy run](./NATIVE_DEPLOY_RUN.md)
-- [Google Play internal submission](./GOOGLE_PLAY_INTERNAL_SUBMISSION.md)
+- [Google Play internal submission](./GOOGLE_PLAY_INTERNAL_SUBMISSION.md) and
+  [Google Play releases](./GOOGLE_PLAY_RELEASES.md)
 - [TestFlight internal submission](./TESTFLIGHT_INTERNAL_SUBMISSION.md)
 - [Game services backend](./GAME_SERVICES_BACKEND.md)
 - [Store privacy disclosures](./STORE_PRIVACY_DISCLOSURES.md)

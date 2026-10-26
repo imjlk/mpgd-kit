@@ -49,14 +49,31 @@ function wrapPublisher(publisher: ReturnType<typeof androidpublisher>): PlayPubl
       });
       return response.data;
     },
-    async getTrack(packageName, editId, signal) {
+    async uploadDeobfuscationFile(input) {
+      await publisher.edits.deobfuscationfiles.upload({
+        packageName: input.packageName,
+        editId: input.editId,
+        apkVersionCode: input.versionCode,
+        deobfuscationFileType: 'proguard',
+        media: { mimeType: 'application/octet-stream', body: createReadStream(input.mappingFile) },
+      }, {
+        timeout: input.timeoutMs,
+        retry: false,
+        signal: input.signal as never,
+        ...(input.requestRootUrl === undefined ? {} : { rootUrl: input.requestRootUrl }),
+      });
+    },
+    async getTrack(packageName, editId, track, signal) {
       return (await publisher.edits.tracks.get(
-        { packageName, editId, track: 'internal' }, { signal: signal as never },
+        { packageName, editId, track }, { signal: signal as never },
       )).data;
     },
     async updateTrack(packageName, editId, track, signal) {
+      if (typeof track.track !== 'string' || track.track === '') {
+        throw new Error('Google Play track update needs a track name.');
+      }
       await publisher.edits.tracks.update({
-        packageName, editId, track: 'internal',
+        packageName, editId, track: track.track,
         requestBody: track as androidpublisher_v3.Schema$Track,
       }, { retry: false, signal: signal as never });
     },
@@ -69,6 +86,11 @@ function wrapPublisher(publisher: ReturnType<typeof androidpublisher>): PlayPubl
       await publisher.edits.commit({
         packageName, editId, changesInReviewBehavior: 'ERROR_IF_IN_REVIEW',
       }, { retry: false, signal: signal as never });
+    },
+    async deleteEdit(packageName, editId, signal) {
+      await publisher.edits.delete(
+        { packageName, editId }, { retry: false, signal: signal as never },
+      );
     },
   };
 }

@@ -497,6 +497,21 @@ process.exit(result.status ?? 1);
     leaseExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
     status: 'started' as const,
   };
+  // The Google Play release-option digest is Android-only and a SHA-256.
+  assertNativeSubmissionCheckpoint({ ...androidCheckpoint, playReleaseSha256: 'f'.repeat(64) });
+  assert.throws(
+    () => assertNativeSubmissionCheckpoint({ ...androidCheckpoint, playReleaseSha256: 'internal' }),
+    /malformed/u,
+  );
+  assert.throws(
+    () =>
+      assertNativeSubmissionCheckpoint({
+        ...androidCheckpoint,
+        target: 'ios',
+        playReleaseSha256: 'f'.repeat(64),
+      }),
+    /malformed/u,
+  );
   await assert.rejects(
     checkpointNativeSubmission({
       gameRoot: game,
@@ -522,6 +537,18 @@ process.exit(result.status ?? 1);
   assert.deepEqual(await checkpointNativeSubmission({
     gameRoot: game, gameId: 'alpha', checkpoint: androidCheckpoint,
   }), firstCheckpoint);
+  // Release options may be corrected while no Play edit exists.
+  const correctedOptions = { ...androidCheckpoint, playReleaseSha256: 'f'.repeat(64) };
+  await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: correctedOptions,
+  });
+  await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: androidCheckpoint,
+  });
   const editOpen = { ...androidCheckpoint, status: 'edit-open' as const, remoteEditId: 'edit-1' };
   await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: editOpen });
   await checkpointNativeSubmission({
@@ -544,6 +571,14 @@ process.exit(result.status ?? 1);
       checkpoint: { ...editOpen, attemptId: 'b'.repeat(32) },
     }),
     /another active or unreconciled attempt owner/u,
+  );
+  await assert.rejects(
+    checkpointNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      checkpoint: { ...editOpen, status: 'unknown', playReleaseSha256: 'f'.repeat(64) },
+    }),
+    /cannot be replaced/u,
   );
   const releasedAndroid = await releaseNativeSubmissionLease({
     gameRoot: game,

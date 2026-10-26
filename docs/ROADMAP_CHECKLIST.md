@@ -298,6 +298,6 @@ See the [mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md).
 - [x] Store privacy disclosures guide and privacy policy template with SDK, retention, and deletion sections
 - [ ] Sandbox purchases against production backends, refunds and voided purchases, server-side acknowledgement retry (L2)
 - [ ] Server-issued identity and account deletion in app and on the web (L3)
-- [ ] Play closed/open/production tracks, staged rollout, release notes, first-upload draft status
+- [x] Play closed/open/production tracks, staged rollout and `deploy rollout`, release notes, R8 mapping upload, first-upload draft fallback (L4; not yet run against a live Play account)
 - [ ] Crash reporting and dSYM / mapping upload
 - [ ] Catalog sync to Play and App Store Connect products
