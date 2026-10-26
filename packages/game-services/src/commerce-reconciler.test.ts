@@ -3465,6 +3465,119 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   await relaunched.reconciler.stop();
 }
 
+// 52. Logout, then another player on the same install: a durable the earlier player journaled
+// first under the shared derived key is the new player's own restore, journaled under its
+// player-scoped key; the earlier player's consumable is never sent for it, and the earlier
+// player's records (the pre-L6a journal format) are read and resumed unchanged.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const removeAds = (): StorePurchase =>
+    purchaseOf({ transactionId: 'tx-52', storeSku: 'remove.ads', logicalId: 'remove_ads' });
+  const adsKey = 'store:fake-store:tx-52';
+  const gemsKey = 'store:fake-store:tx-52c';
+  const earlier = createHarness({ store, provider, backend });
+  await earlier.reconciler.start();
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-52' });
+  backend.queue({ status: 'pending' });
+  provider.available.push(removeAds(), purchaseOf({ transactionId: 'tx-52c' }));
+  await earlier.reconciler.restorePurchases();
+  assertEqual(
+    [earlier.history(adsKey).at(-1), earlier.history(gemsKey).at(-1)],
+    ['finished', 'pending'],
+    "the earlier player's durable is granted and its consumable waits on the backend",
+  );
+  await earlier.reconciler.stop();
+
+  // Logout. The store still lists the owned durable on a restore read.
+  provider.available.push(removeAds());
+  const next = createHarness({ store, provider, backend, overrides: { playerId: 'player-2' } });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-52-next' });
+  await next.reconciler.start();
+  await next.reconciler.restorePurchases();
+  assertEqual(
+    backend.requests.slice(2).map((request) => [
+      request.playerId,
+      request.idempotencyKey,
+      request.intent,
+    ]),
+    [['player-2', adsKey, 'restore']],
+    "only the durable is sent for the next player, as its own restore; the earlier player's consumable is not",
+  );
+  assertEqual(next.history(adsKey).at(-1), 'finished', "the next player's restore lands");
+  assertEqual(
+    next.failures.every((failure) => failure === 'journal') && next.failures.length > 0,
+    true,
+    "the earlier player's consumable under the shared key is still refused",
+  );
+  const shared = await store.read(createCommercePurchaseOperationKey('android', adsKey));
+  const scoped = await store.read(
+    createCommercePurchaseOperationKey('android', adsKey, 'player-2'),
+  );
+  assertEqual(
+    [
+      shared?.playerId,
+      scoped?.playerId,
+      scoped?.kind === 'commerce-purchase' ? scoped.state : undefined,
+    ],
+    ['player-1', 'player-2', 'finished'],
+    "the earlier player keeps the shared key; the next player's record is under its player-scoped key",
+  );
+  assertEqual(
+    (await store.read(createCommercePurchaseOperationKey('android', gemsKey)))?.revision,
+    earlier.history(gemsKey).length - 1,
+    "the earlier player's consumable record is never rewritten",
+  );
+  assertEqual(
+    (await next.reconciler.read(adsKey))?.playerId,
+    'player-2',
+    'read answers the scoped record',
+  );
+  await next.reconciler.stop();
+
+  // A restart over a journal without the transaction index or the granted list reaches the
+  // player-scoped key through the derived key, and sends nothing again.
+  const {
+    findByTransaction: _findByTransaction,
+    listGranted: _listGranted,
+    ...unindexed
+  } = store;
+  const restarted = createHarness({
+    store: unindexed,
+    provider,
+    backend,
+    overrides: { playerId: 'player-2' },
+  });
+  assertEqual(
+    (await restarted.reconciler.read(adsKey))?.playerId,
+    'player-2',
+    'before any pass, read finds the player-scoped record in the journal',
+  );
+  await restarted.reconciler.start();
+  await restarted.reconciler.restorePurchases();
+  assertEqual(backend.requests.length, 3, 'the restored durable is matched to its scoped record');
+  await restarted.reconciler.stop();
+  assertEqual(
+    createCommercePurchaseOperationKey('android', adsKey, 'player-2')
+      === createCommercePurchaseOperationKey('android', adsKey),
+    false,
+    'the player-scoped key never equals the shared key',
+  );
+
+  // The earlier player logs back in: its own records under the shared key resume unchanged.
+  const back = createHarness({ store, provider, backend });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-52c' });
+  await back.reconciler.start();
+  assertEqual(
+    backend.requests.slice(3).map((request) => [request.playerId, request.idempotencyKey]),
+    [['player-1', gemsKey]],
+    "only the earlier player's own pending consumable is resent, for that player",
+  );
+  assertEqual(back.failures, [], 'nothing of the next player blocks the earlier one');
+  await back.reconciler.stop();
+}
+
 function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   let thrown: unknown;
   try {

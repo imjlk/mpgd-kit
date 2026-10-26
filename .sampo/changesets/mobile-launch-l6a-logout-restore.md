@@ -1,0 +1,5 @@
+---
+npm/@mpgd/game-services: patch (Fixed)
+---
+
+Restore Purchases works after a logout on the same install. The commerce reconciler's journal key of a purchase discovered from the store (`createCommercePurchaseOperationKey(target, derivedKey)`) is the same for every player of the install, so the next guest's restore of a non-consumable the earlier guest had journaled failed as "bound to another player" and sent nothing. A discovered durable whose key another player's record holds is now journaled under the new player-scoped key (`createCommercePurchaseOperationKey(target, derivedKey, playerId)`) and sent as this player's restore under the same derived idempotency key; the backend's restore sharing decides it. Consumables, subscriptions, products of unknown kind, and game-started keys held by another player stay refused, so one player's purchase is never sent for another. Existing journals need no migration: records keep their keys and each player still finds its own. `reconciler.read()` also answers a record under the player-scoped key.

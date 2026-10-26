@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createCommercePurchaseOperationKey,
   createCommerceReconciler,
   createInMemoryMonetizationOperationStore,
   type CommerceReconcilerEvent,
@@ -271,5 +272,50 @@ describe('Play Billing restore after a reinstall', () => {
     expect(await relaunched.reconciler.listRecoverable()).toEqual([]);
     await relaunched.reconciler.stop();
     expect(relaunched.failures).toEqual([]);
+  });
+
+  it("restores the durable after a logout on the same install, under the next guest's own key", async () => {
+    const world = await createWorld();
+    const first = install(world, 'guest-after-reinstall');
+    await first.reconciler.start();
+    await first.reconciler.restorePurchases();
+    await first.reconciler.stop();
+    const derivedKey = world.requests[0]?.idempotencyKey ?? '';
+
+    // Logout; the next guest signs in on the same install, over the same journal.
+    const next = install(world, 'guest-after-logout', first.journal);
+    await next.reconciler.start();
+    expect(world.requests).toHaveLength(1);
+    await next.reconciler.restorePurchases();
+    // REMOVE_ADS is the next guest's own restore under the same derived key;
+    // the earlier guest's consumable is never sent.
+    expect(world.requests.slice(1).map((request) => [
+      request.playerId,
+      request.productId,
+      request.intent,
+      request.idempotencyKey,
+    ])).toEqual([['guest-after-logout', 'REMOVE_ADS', 'restore', derivedKey]]);
+    expect(next.responses.at(-1)).toMatchObject({ verified: true, restoredAcrossPlayers: true });
+    expect(await holdersOf(world))
+      .toEqual([earlierGuest, 'guest-after-logout', 'guest-after-reinstall'].sort());
+    expect(await next.reconciler.listRecoverable()).toEqual([]);
+    expect(next.failures).toEqual([]);
+    // The earlier guest's record keeps the shared key; the next guest's is player-scoped.
+    expect((await first.journal.read(createCommercePurchaseOperationKey('android', derivedKey)))?.playerId)
+      .toBe('guest-after-reinstall');
+    expect((await first.journal.read(
+      createCommercePurchaseOperationKey('android', derivedKey, 'guest-after-logout'),
+    ))?.playerId).toBe('guest-after-logout');
+    await next.reconciler.restorePurchases();
+    expect(world.requests).toHaveLength(2);
+    await next.reconciler.stop();
+
+    // The earlier guest signs back in on the same install: its own record answers.
+    const back = install(world, 'guest-after-reinstall', first.journal);
+    await back.reconciler.start();
+    await back.reconciler.restorePurchases();
+    expect(world.requests).toHaveLength(2);
+    await back.reconciler.stop();
+    expect(back.failures).toEqual([]);
   });
 });

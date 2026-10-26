@@ -1,4 +1,5 @@
 import {
+  createCommercePurchaseOperationKey,
   createCommerceReconciler,
   createInMemoryMonetizationOperationStore,
   type CommerceReconcilerEvent,
@@ -62,6 +63,7 @@ const earlierGuest = 'guest-before-reinstall';
 const tokens = new Map<string, string>([
   [earlierGuest, '7c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f'],
   ['guest-after-reinstall', '1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e'],
+  ['guest-after-logout', '4e5f6a7b-8c9d-4eaf-80b1-3c4d5e6f7a8b'],
   ['guest-second-device', '2c3d4e5f-6a7b-4c8d-ae9f-1a2b3c4d5e6f'],
   ['guest-third-device', '3d4e5f6a-7b8c-4d9e-bfa0-2b3c4d5e6f7a'],
 ]);
@@ -333,6 +335,75 @@ async function holdersOf(world: World): Promise<readonly string[]> {
   );
   await relaunched.reconciler.stop();
   assertEqual(relaunched.failures, [], 'no reconciler stage failed after the relaunch');
+}
+
+// Logout, then the next guest on the same install: the install's journal holds the earlier
+// guest's record of REMOVE_ADS under its derived key, and the next guest's Restore Purchases
+// still restores it, journaled under that guest's player-scoped key.
+{
+  const world = await createWorld();
+  const first = install(world, 'guest-after-reinstall');
+  await first.reconciler.start();
+  await first.reconciler.restorePurchases();
+  await first.reconciler.stop();
+  const derivedKey = world.requests[0]?.idempotencyKey ?? '';
+
+  const next = install(world, 'guest-after-logout', first.journal);
+  await next.reconciler.start();
+  assertEqual(world.requests.length, 1, 'startup after the logout sends nothing');
+  await next.reconciler.restorePurchases();
+  assertEqual(
+    world.requests.slice(1).map((request) => [
+      request.playerId,
+      request.productId,
+      request.intent,
+      request.idempotencyKey,
+    ]),
+    [['guest-after-logout', 'REMOVE_ADS', 'restore', derivedKey]],
+    "the next guest's Restore Purchases sends REMOVE_ADS as its own restore; no consumable is sent",
+  );
+  assertEqual(
+    next.responses.at(-1)?.restoredAcrossPlayers,
+    true,
+    'the backend shares the purchase with the next guest',
+  );
+  assertEqual(
+    await holdersOf(world),
+    [earlierGuest, 'guest-after-logout', 'guest-after-reinstall'].sort(),
+    'every guest of the Apple ID holds REMOVE_ADS',
+  );
+  assertEqual(await next.reconciler.listRecoverable(), [], "the next guest's restore is finished");
+  assertEqual(
+    next.failures,
+    [],
+    'no journal failure: the earlier record no longer blocks the restore',
+  );
+  assertEqual(
+    [
+      (await first.journal.read(createCommercePurchaseOperationKey('ios', derivedKey)))?.playerId,
+      (await first.journal.read(
+        createCommercePurchaseOperationKey('ios', derivedKey, 'guest-after-logout'),
+      ))?.playerId,
+    ],
+    ['guest-after-reinstall', 'guest-after-logout'],
+    "the earlier guest's record keeps the shared key; the next guest's is player-scoped",
+  );
+  await next.reconciler.restorePurchases();
+  assertEqual(world.requests.length, 2, 'a second Restore Purchases sends nothing');
+  await next.reconciler.stop();
+
+  // The earlier guest signs back in on the same install: its own record answers.
+  const back = install(world, 'guest-after-reinstall', first.journal);
+  await back.reconciler.start();
+  await back.reconciler.restorePurchases();
+  assertEqual(world.requests.length, 2, 'the earlier guest finds its own record and sends nothing');
+  await back.reconciler.stop();
+  assertEqual(back.failures, [], "the next guest's record never blocks the earlier guest");
+  assertEqual(
+    world.plugin.calls.filter((call) => call.startsWith('finish:')),
+    [],
+    'the finished entitlement never reaches the native finish',
+  );
 }
 
 console.log('StoreKit restore after a reinstall passed.');

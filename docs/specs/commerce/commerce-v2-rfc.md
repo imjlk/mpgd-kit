@@ -483,6 +483,30 @@ When a game key and a derived key ever reach the backend for the same
 purchase, the existing platform-evidence unique index
 (`EVIDENCE_ALREADY_PROCESSED`) remains the backstop.
 
+The journal stores a record under `[target, kind, idempotencyKey]`
+(`createCommercePurchaseOperationKey`), one key for every player of the
+install, while the backend keys a grant by player and idempotency key. A
+derived key is therefore the same for two players who see the same store
+purchase on one install, the case of a logout followed by the next guest's
+Restore Purchases. The rules:
+
+- A key another player's record holds is refused, as before, for a game key
+  and for a discovered consumable, subscription, or product of unknown kind:
+  one player's purchase is never matched to, sent for, or replayed as
+  another's.
+- A discovered **durable** whose derived key another player's record holds
+  is this player's own restore. It is journaled under the player-scoped key
+  `[target, kind, idempotencyKey, playerId]` and sent with this player's id
+  and the same derived idempotency key; the backend's
+  [restore sharing](#restore-sharing) decides it. Lookups read the shared
+  key first and the player-scoped key only when the shared one is free or
+  another player's.
+- Nothing is migrated. A journal written before the player-scoped key keeps
+  every record under the shared key, where each player still finds its own;
+  only a new restore that meets another player's record takes the
+  player-scoped key, and the transaction index (`findByTransaction`, by
+  player) finds it there on later passes.
+
 ## Server: commerce service protocol {#server}
 
 The verify, ledger, finalizer, and fulfillment endpoints stay. v2 changes how
@@ -595,7 +619,9 @@ restoring player gets its own grant of it:
   every launch, and a restore read the store or a bridge host rejects falls
   back to the recovery read. A restore of a purchase this install's journal
   matches (the same transaction or token) sends nothing; one it cannot match
-  is sent under its derived key, and the backend answers it idempotently. On
+  is sent under its derived key, and the backend answers it idempotently; after
+  a logout, a durable the earlier player journaled under that key is
+  journaled under the next player's [player-scoped key](#idempotency-keys). On
   StoreKit the shared grant's finish ends on the entitlement StoreKit already
   finished (`unfinished: false`, `{ finished: true }` without a native call);
   an unfinished transaction of another token is never finished.
