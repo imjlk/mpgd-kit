@@ -25,6 +25,7 @@ import {
 import { withAndroidUploadSigningSession } from './android-signing-session.js';
 import { withIosSigningSession } from './ios-signing-session.js';
 import {
+  assertSettledAndroidReleaseOptions,
   submitRecordedNativeTarget,
   type NativeStoreCredential,
 } from './native-deploy-submission.js';
@@ -43,6 +44,11 @@ import {
   type PinnedReleaseWorkspace,
 } from './release-workspace.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
+import {
+  assertPlayReleaseConfirmed,
+  assertPlayReleaseRequest,
+  type PlayReleaseRequest,
+} from './play-release-options.js';
 
 const gitAuthEnvironmentNames = ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_ASKPASS'] as const;
 
@@ -55,6 +61,11 @@ export interface RunNativeDeploymentInput {
   /** Required only when no game ledger exists on release-state. */
   readonly initialLedger?: PlatformVersionLedger;
   readonly approved: boolean;
+  /** Google Play track, status, rollout and notes for the Android target. */
+  readonly androidRelease?: PlayReleaseRequest;
+  /** Confirms a production release or staged rollout (`--confirm-production`). */
+  readonly confirmProduction?: boolean;
+  readonly onDraftAppFallback?: (track: string) => void;
   readonly environment?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
   /** Called only after a newly built target has an immutable, committed build record. */
@@ -65,6 +76,13 @@ export interface RunNativeDeploymentInput {
 export async function runNativeDeployment(input: RunNativeDeploymentInput): Promise<NativeReleaseStatus> {
   if (!input.approved) {
     throw new Error('Native deployment requires explicit internal-test approval.');
+  }
+  if (input.androidRelease !== undefined) {
+    // Refuse an unconfirmed production release before reserving or building anything.
+    assertPlayReleaseRequest(input.androidRelease);
+    if (input.plan.targets.some((entry) => entry.target === 'android')) {
+      assertPlayReleaseConfirmed(input.androidRelease, input.confirmProduction === true);
+    }
   }
   const environment = input.environment ?? process.env;
   const pinned = await pinNativeDeploymentPlan(input.plan, input.kit, {
@@ -87,6 +105,8 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
       throw error;
     }
   }
+  // Refuse changed Play options for a committed release before any build work.
+  assertSettledAndroidReleaseOptions(existing?.submissions.android, input.androidRelease);
   const pendingSteps = existing === undefined
     ? {
         buildTargets: input.plan.targets.map((entry) => entry.target),
@@ -176,6 +196,7 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     }
     const submission = status.submissions[entry.target];
     if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
+      assertSettledAndroidReleaseOptions(submission, input.androidRelease);
       continue;
     }
     await submitRecordedNativeTarget({
@@ -184,6 +205,13 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
       releaseKey: input.releaseKey,
       credential: readStoreCredential(input.plan, entry.target, environment),
       approved: input.approved,
+      ...(input.androidRelease === undefined ? {} : { androidRelease: input.androidRelease }),
+      ...(input.confirmProduction === undefined ? {} : {
+        confirmProduction: input.confirmProduction,
+      }),
+      ...(input.onDraftAppFallback === undefined ? {} : {
+        onDraftAppFallback: input.onDraftAppFallback,
+      }),
       environment,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
