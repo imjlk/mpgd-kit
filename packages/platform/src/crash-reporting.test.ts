@@ -35,6 +35,7 @@ describe('redactCrashText', () => {
     expect(redacted).toContain('Bearer <redacted>');
     expect(redacted).toContain('<jwt>');
     expect(redacted).not.toContain('3f9a6c1e0b7d4a2f9e8c7b6a5d4c3b2a1f0e9d8c');
+    expect(redactCrashText(redacted)).toBe(redacted);
     // Control characters other than newline and tab become spaces.
     expect(redactCrashText('a\u0000b')).toBe('a b');
   });

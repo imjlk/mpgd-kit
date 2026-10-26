@@ -103,7 +103,8 @@ const contextValueMaxLength = 128;
 export function redactCrashText(text: string, maxLength = crashTextMaxLength): string {
   const redacted = text
     // Query strings and fragments of absolute URLs (tokens, ids, e-mail).
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s?#"'<>]*)[?#][^\s"'<>]*/giu, '$1?<redacted>')
+    // An already redacted `?<redacted>` does not match again.
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s?#"'<>]*)[?#][^\s"'<>]+/giu, '$1?<redacted>')
     .replace(/\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/gu, '<email>')
     .replace(/\bbearer\s+[\w~+/.=-]+/giu, 'Bearer <redacted>')
     .replace(/\beyJ[\w-]*\.[\w-]+\.[\w-]*/gu, '<jwt>')
