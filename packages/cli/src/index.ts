@@ -115,6 +115,7 @@ import {
 import { promotePlayRelease } from './play-release-promote.js';
 import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
+import { uploadRecordedCrashSymbols } from './crash-symbols-upload.js';
 
 export {
   renderGameAcceptanceMarkdown,
@@ -766,6 +767,39 @@ const deployCommand = defineI18n({
           releaseKey: readRequiredCliOption(ctx.values.release, '--release'),
         });
         console.info(JSON.stringify(status, null, 2));
+      },
+    }),
+    symbols: defineI18n({
+      name: 'symbols',
+      description: "Upload the Crashlytics dSYMs recorded with a release's iOS build.",
+      resource: commandResource({
+        en: "Upload the Crashlytics dSYMs recorded with a release's iOS build.",
+        ko: '릴리스의 iOS 빌드에 기록된 Crashlytics dSYM을 업로드합니다.',
+      }),
+      args: {
+        game: { type: 'string', required: false, description: 'Game project directory holding .mpgd/releases.' },
+        'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
+        release: { type: 'string', required: true, description: 'Explicit release ID.' },
+        'dry-run': {
+          type: 'boolean', required: false,
+          description: 'Verify the recorded files and print the planned upload-symbols command; run nothing.',
+        },
+      },
+      run: async (ctx) => {
+        const result = await uploadRecordedCrashSymbols({
+          gameRoot: path.resolve(readOptionalString(ctx.values.game) ?? '.'),
+          gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
+          releaseKey: readRequiredCliOption(ctx.values.release, '--release'),
+          dryRun: ctx.values['dry-run'] === true,
+        });
+        const { output, ...summary } = 'output' in result ? result : { ...result, output: '' };
+        if (output !== '') {
+          console.info(output);
+        }
+        console.info(JSON.stringify(summary, null, 2));
+        if (result.status === 'failed') {
+          throw new Error(`Crashlytics dSYM upload failed: ${result.error}`);
+        }
       },
     }),
     submit: defineI18n({

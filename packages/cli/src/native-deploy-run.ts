@@ -27,6 +27,7 @@ import { withIosSigningSession } from './ios-signing-session.js';
 import {
   assertSettledAndroidReleaseOptions,
   submitRecordedNativeTarget,
+  withRecordedR8Mapping,
   type NativeStoreCredential,
 } from './native-deploy-submission.js';
 import {
@@ -44,6 +45,7 @@ import {
   type PinnedReleaseWorkspace,
 } from './release-workspace.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
+import { uploadCrashSymbolsForDeployRun } from './crash-symbols-upload.js';
 import {
   assertPlayReleaseConfirmed,
   assertPlayReleaseRequest,
@@ -70,6 +72,8 @@ export interface RunNativeDeploymentInput {
   readonly signal?: AbortSignal;
   /** Called only after a newly built target has an immutable, committed build record. */
   readonly onBuildRecorded?: (target: NativeDeployTarget) => void;
+  /** Receives the Crashlytics dSYM upload outcome; defaults to `console.warn`. */
+  readonly onCrashSymbolsReport?: (message: string) => void;
 }
 
 /** Reserve once, build only missing targets, then submit the recorded binaries. */
@@ -106,7 +110,10 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     }
   }
   // Refuse changed Play options for a committed release before any build work.
-  assertSettledAndroidReleaseOptions(existing?.submissions.android, input.androidRelease);
+  assertSettledAndroidReleaseOptions(
+    existing?.submissions.android,
+    withRecordedR8Mapping(input.androidRelease, existing?.builds.android, input.plan.gameRoot),
+  );
   const pendingSteps = existing === undefined
     ? {
         buildTargets: input.plan.targets.map((entry) => entry.target),
@@ -183,6 +190,20 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
   }
+  if (input.plan.targets.some((entry) => entry.target === 'ios')) {
+    // Crashlytics dSYMs of the recorded iOS build, once; a failure is reported
+    // and retryable (`mpgd deploy symbols`) but never fails the submission.
+    await uploadCrashSymbolsForDeployRun(
+      {
+        gameRoot: input.plan.gameRoot,
+        gameId: input.gameId,
+        releaseKey: input.releaseKey,
+        environment,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      },
+      input.onCrashSymbolsReport,
+    );
+  }
   for (const entry of input.plan.targets) {
     status = await readNativeReleaseStatus({
       gameRoot: input.plan.gameRoot,
@@ -196,7 +217,10 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     }
     const submission = status.submissions[entry.target];
     if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
-      assertSettledAndroidReleaseOptions(submission, input.androidRelease);
+      assertSettledAndroidReleaseOptions(
+        submission,
+        withRecordedR8Mapping(input.androidRelease, status.builds.android, input.plan.gameRoot),
+      );
       continue;
     }
     await submitRecordedNativeTarget({
@@ -317,6 +341,29 @@ async function buildAndRecordTarget(
       manifestLocation,
       built.releaseManifest,
     );
+    // Crash symbols travel with the artifact (and the workflow's release bundle).
+    const persistSymbol = (source: string, name: string): { file: string; location: string } => {
+      const location = `.mpgd/releases/${input.releaseKey}/${target}-${name.replace(
+        '{sha}',
+        sha256(source),
+      )}`;
+      return { file: persistImmutableFile(input.plan.gameRoot, location, source), location };
+    };
+    const r8Mapping = built.symbols?.r8Mapping === undefined
+      ? undefined
+      : persistSymbol(built.symbols.r8Mapping, 'mapping-{sha}.txt');
+    const crashlytics = built.symbols?.crashlytics;
+    const crashlyticsSymbols = crashlytics === undefined
+      ? undefined
+      : {
+          dsymArchive: persistSymbol(crashlytics.dsymArchive, 'dsyms-{sha}.zip'),
+          dsyms: crashlytics.dsyms,
+          uploadTool: persistSymbol(crashlytics.uploadTool, 'upload-symbols-{sha}'),
+          googleServiceInfo: persistSymbol(
+            crashlytics.googleServiceInfo,
+            'GoogleService-Info-{sha}.plist',
+          ),
+        };
     const configDigest = createHash('sha256').update(JSON.stringify({
       gameGitSha: workspace.input.gameGitSha,
       lockfileSha256: workspace.input.lockfileSha256,
@@ -353,6 +400,8 @@ async function buildAndRecordTarget(
       expectedReleaseManifestSha256: sha256(manifestFile),
       inspectedAppId: planned.appId,
       ...(target === 'android' ? { inspectedSignerSha256 } : { inspectedTeamId: signerOrTeam }),
+      ...(r8Mapping === undefined ? {} : { r8Mapping }),
+      ...(crashlyticsSymbols === undefined ? {} : { crashlyticsSymbols }),
       environment,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
