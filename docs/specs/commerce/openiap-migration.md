@@ -135,7 +135,9 @@ on this contract:
    `RevocationUpdatesShim` observes `Transaction.updates` and forwards only
    verified, revoked, one-time transactions in the 0.3 shape. It never
    purchases, lists, or finishes; it is not a second payment engine. Remove
-   it once OpenIAP can deliver revocations (upstream request 1).
+   it once OpenIAP can deliver revocations (upstream request 1). The signal
+   is secondary to the backend's App Store Server Notifications handling
+   (see [release conditions](#not-verified-and-release-conditions)).
 2. **One-time type.** `PurchaseIOS` has no product type. The plugin reads the
    `type` claim (`Consumable` / `Non-Consumable`) of the JWS StoreKit already
    verified, the same claim the backend verifier checks
@@ -349,9 +351,23 @@ These were open before the swap and stay release conditions for the game:
 - A StoreKit Testing (`SKTestSession`) or Play sandbox run of the new engine
   itself: OpenIAP's purchase path needs a window scene, so it needs a host
   app rather than package tests.
-- Whether every `Transaction.updates` iterator receives every update on
-  devices (difference 17), checked with a delayed Ask to Buy approval and a
-  refund while the app runs.
+- **Acceptance step, revocation signal (difference 17).** The revocation
+  shim runs a second `Transaction.updates` iterator next to OpenIAP's, and
+  that StoreKit delivers every update to both is not proven. With the app
+  running against an Xcode StoreKit Testing configuration, refund a
+  purchased one-time product (Transaction Manager, *Refund Purchases*); the
+  plugin must emit `transactionUpdated` for that transaction with
+  `revokedAt` set. Repeat with a delayed Ask to Buy approval, which must
+  arrive as `transactionUpdated` without `revokedAt`. A failure blocks
+  release of the OpenIAP engine on iOS until the shim forwards every
+  verified update itself.
+- **Revocation authority.** The authoritative revocation path is the
+  backend's App Store Server Notifications V2 handling (L2, #440:
+  `REFUND` reverses the grant; see
+  [GAME_SERVICES_BACKEND.md](../../GAME_SERVICES_BACKEND.md)). The client
+  `transactionUpdated` revocation is secondary: a prompt for the server to
+  re-check the grant, never a ledger change by itself, and its absence (a
+  missed event, a closed app) does not leave a refund unprocessed.
 
 ## Rollback
 
