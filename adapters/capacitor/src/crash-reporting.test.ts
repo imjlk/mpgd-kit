@@ -1,0 +1,271 @@
+import type { FirebaseCrashlyticsPlugin } from '@capacitor-firebase/crashlytics';
+import type {
+  CrashErrorEventListener,
+  CrashErrorEventTarget,
+  CrashReporter,
+} from '@mpgd/platform/crash-reporting';
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  capacitorCrashlyticsPluginName,
+  createCapacitorCrashReporter,
+  createCapacitorGatewayCrashReporting,
+  type CapacitorCrashlyticsPlugin,
+} from './crash-reporting.js';
+import { createCapacitorPlatformGateway } from './index.js';
+
+// The plugin's own declarations must satisfy the calls the reporter makes.
+const pluginShape: (plugin: FirebaseCrashlyticsPlugin) => CapacitorCrashlyticsPlugin = (plugin) => plugin;
+void pluginShape;
+
+function createPlugin(overrides: Partial<CapacitorCrashlyticsPlugin> = {}) {
+  const plugin = {
+    setCustomKey: vi.fn<CapacitorCrashlyticsPlugin['setCustomKey']>(async () => {}),
+    log: vi.fn<CapacitorCrashlyticsPlugin['log']>(async () => {}),
+    setEnabled: vi.fn<CapacitorCrashlyticsPlugin['setEnabled']>(async () => {}),
+    isEnabled: vi.fn<CapacitorCrashlyticsPlugin['isEnabled']>(async () => ({ enabled: true })),
+    deleteUnsentReports: vi.fn<CapacitorCrashlyticsPlugin['deleteUnsentReports']>(async () => {}),
+    recordException: vi.fn<CapacitorCrashlyticsPlugin['recordException']>(async () => {}),
+  };
+  return Object.assign(plugin, overrides) as typeof plugin;
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 50; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+const base = { target: 'android', appVersion: '1.2.3', buildId: 'build-7' } as const;
+
+describe('createCapacitorCrashReporter', () => {
+  it('is unavailable when the shell has no Crashlytics plugin', async () => {
+    const isPluginAvailable = vi.fn(() => false);
+    const reporter = createCapacitorCrashReporter({ ...base, isPluginAvailable });
+    expect(isPluginAvailable).toHaveBeenCalledWith(capacitorCrashlyticsPluginName);
+    expect(await reporter.getStatus()).toEqual({
+      provider: 'firebase-crashlytics',
+      state: 'not-installed',
+    });
+    await reporter.recordError(new Error('x'));
+  });
+
+  it('sets non-personal context once and records redacted errors with frames', async () => {
+    const plugin = createPlugin();
+    const reporter = createCapacitorCrashReporter({
+      ...base,
+      isPluginAvailable: () => true,
+      plugin,
+      context: { content_version: 5, 'Player Id': 'p-1' },
+    });
+    const error = new TypeError('failed https://api.example.com/x?token=secret');
+    error.stack = 'TypeError: failed\n    at tick (https://localhost/assets/index.js:10:2)';
+    await reporter.recordError(error, { source: 'uncaught' });
+    await reporter.recordError('second');
+    expect(plugin.setCustomKey.mock.calls.map(([options]) => options)).toEqual([
+      { key: 'content_version', value: 5, type: 'long' },
+      { key: 'mpgd_target', value: 'android', type: 'string' },
+      { key: 'mpgd_build_id', value: 'build-7', type: 'string' },
+      { key: 'mpgd_app_version', value: '1.2.3', type: 'string' },
+      { key: 'mpgd_adapter', value: 'capacitor', type: 'string' },
+    ]);
+    expect(plugin.recordException.mock.calls.map(([options]) => options)).toEqual([
+      {
+        message: '[uncaught] TypeError: failed https://api.example.com/x?<redacted>',
+        stacktrace: [{ functionName: 'tick', fileName: '/assets/index.js', lineNumber: 10 }],
+      },
+      { message: '[game] Error: second' },
+    ]);
+  });
+
+  it('reports not-configured and stops calling when Firebase is not set up', async () => {
+    const plugin = createPlugin({
+      setCustomKey: vi.fn(async () => {
+        throw new Error('Default FirebaseApp is not initialized');
+      }),
+    });
+    const reporter = createCapacitorCrashReporter({
+      ...base,
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    expect(await reporter.getStatus()).toEqual({
+      provider: 'firebase-crashlytics',
+      state: 'not-configured',
+    });
+    await reporter.recordError(new Error('x'));
+    await reporter.log('x');
+    await reporter.setCollectionEnabled(false);
+    expect(plugin.recordException).not.toHaveBeenCalled();
+    expect(plugin.log).not.toHaveBeenCalled();
+    expect(plugin.setEnabled).not.toHaveBeenCalled();
+  });
+
+  it('applies the consent toggle and stops JavaScript reports when it is off', async () => {
+    const plugin = createPlugin();
+    const reporter = createCapacitorCrashReporter({
+      ...base,
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    await reporter.setCollectionEnabled(false);
+    expect(plugin.setEnabled).toHaveBeenCalledWith({ enabled: false });
+    expect(plugin.deleteUnsentReports).toHaveBeenCalledTimes(1);
+    await reporter.recordError(new Error('x'));
+    await reporter.log('breadcrumb');
+    expect(plugin.recordException).not.toHaveBeenCalled();
+    expect(plugin.log).not.toHaveBeenCalled();
+    expect(await reporter.getStatus()).toEqual({
+      provider: 'firebase-crashlytics',
+      state: 'available',
+      collectionEnabled: false,
+    });
+    await reporter.setCollectionEnabled(true);
+    expect(plugin.setEnabled).toHaveBeenLastCalledWith({ enabled: true });
+    expect(plugin.deleteUnsentReports).toHaveBeenCalledTimes(1);
+    await reporter.log('user jane@example.com opened shop');
+    expect(plugin.log).toHaveBeenCalledWith({ message: 'user <email> opened shop' });
+  });
+
+  it('reads collection state on iOS only and never rejects on plugin failures', async () => {
+    const plugin = createPlugin({
+      isEnabled: vi.fn(async () => ({ enabled: false })),
+      recordException: vi.fn(async () => {
+        throw new Error('native failure');
+      }),
+      log: vi.fn(async () => {
+        throw new Error('native failure');
+      }),
+      setEnabled: vi.fn(async () => {
+        throw new Error('native failure');
+      }),
+    });
+    const ios = createCapacitorCrashReporter({
+      ...base,
+      target: 'ios',
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    expect(await ios.getStatus()).toEqual({
+      provider: 'firebase-crashlytics',
+      state: 'available',
+      collectionEnabled: false,
+    });
+    await expect(ios.recordError(new Error('x'))).resolves.toBeUndefined();
+    await expect(ios.log('x')).resolves.toBeUndefined();
+    await expect(ios.setCollectionEnabled(true)).resolves.toBeUndefined();
+
+    const androidPlugin = createPlugin();
+    const android = createCapacitorCrashReporter({
+      ...base,
+      isPluginAvailable: () => true,
+      plugin: androidPlugin,
+    });
+    expect(await android.getStatus()).toEqual({
+      provider: 'firebase-crashlytics',
+      state: 'available',
+    });
+    expect(androidPlugin.isEnabled).not.toHaveBeenCalled();
+  });
+});
+
+function createEventTarget(): CrashErrorEventTarget & {
+  emit(type: 'error' | 'unhandledrejection', event: unknown): void;
+  size(): number;
+} {
+  const listeners = new Map<string, Set<CrashErrorEventListener>>();
+  return {
+    addEventListener(type, listener) {
+      listeners.set(type, (listeners.get(type) ?? new Set()).add(listener));
+    },
+    removeEventListener(type, listener) {
+      listeners.get(type)?.delete(listener);
+    },
+    emit(type, event) {
+      for (const listener of listeners.get(type) ?? []) {
+        listener(event);
+      }
+    },
+    size() {
+      return [...listeners.values()].reduce((total, set) => total + set.size, 0);
+    },
+  };
+}
+
+describe('createCapacitorGatewayCrashReporting', () => {
+  it('captures WebView errors only when the plugin is present', async () => {
+    const absentTarget = createEventTarget();
+    const absent = createCapacitorGatewayCrashReporting({
+      ...base,
+      options: { isPluginAvailable: () => false, errorTarget: absentTarget },
+    });
+    expect(absentTarget.size()).toBe(0);
+    expect((await absent.reporter.getStatus()).state).toBe('not-installed');
+
+    const plugin = createPlugin();
+    const target = createEventTarget();
+    const present = createCapacitorGatewayCrashReporting({
+      ...base,
+      options: { isPluginAvailable: () => true, plugin, errorTarget: target },
+    });
+    expect(target.size()).toBe(2);
+    target.emit('unhandledrejection', { reason: new Error('lost promise') });
+    await flushMicrotasks();
+    expect(plugin.recordException).toHaveBeenCalledTimes(1);
+    expect(plugin.recordException.mock.calls[0]?.[0].message).toBe(
+      '[unhandled-rejection] Error: lost promise',
+    );
+    present.dispose();
+    expect(target.size()).toBe(0);
+  });
+
+  it('respects captureGlobalErrors: false and a custom reporter', () => {
+    const target = createEventTarget();
+    createCapacitorGatewayCrashReporting({
+      ...base,
+      options: {
+        isPluginAvailable: () => true,
+        plugin: createPlugin(),
+        errorTarget: target,
+        captureGlobalErrors: false,
+      },
+    });
+    expect(target.size()).toBe(0);
+    const reporter: CrashReporter = {
+      getStatus: async () => ({ provider: 'custom', state: 'available' }),
+      recordError: async () => {},
+      log: async () => {},
+      setCollectionEnabled: async () => {},
+    };
+    const custom = createCapacitorGatewayCrashReporting({
+      ...base,
+      options: { reporter, errorTarget: target, isPluginAvailable: () => false },
+    });
+    expect(custom.reporter).toBe(reporter);
+    expect(target.size()).toBe(2);
+    custom.dispose();
+  });
+});
+
+describe('createCapacitorPlatformGateway crash reporting', () => {
+  it('exposes the reporter, removes listeners on dispose, and can be turned off', async () => {
+    const bridge = { request: async () => ({ ok: true as const, data: {} }) } as never;
+    const target = createEventTarget();
+    const gateway = createCapacitorPlatformGateway({
+      ...base,
+      bridge,
+      crashReporting: { isPluginAvailable: () => true, plugin: createPlugin(), errorTarget: target },
+    });
+    expect((await gateway.crashReporter?.getStatus())?.state).toBe('available');
+    expect(target.size()).toBe(2);
+    await gateway.lifecycle.dispose?.();
+    expect(target.size()).toBe(0);
+
+    const off = createCapacitorPlatformGateway({
+      ...base,
+      bridge,
+      crashReporting: false,
+    });
+    expect(off.crashReporter).toBeUndefined();
+  });
+});

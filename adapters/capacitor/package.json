@@ -33,6 +33,10 @@
       "types": "./dist/admob.d.ts",
       "default": "./dist/admob.js"
     },
+    "./crash-reporting": {
+      "types": "./dist/crash-reporting.d.ts",
+      "default": "./dist/crash-reporting.js"
+    },
     "./notifications": {
       "types": "./dist/notifications.d.ts",
       "default": "./dist/notifications.js"
@@ -59,12 +63,16 @@
   },
   "peerDependencies": {
     "@capacitor-community/admob": "^8.1.0",
+    "@capacitor-firebase/crashlytics": "^8.5.2",
     "@capacitor-firebase/messaging": "^8.5.2",
     "@capacitor/core": "^8.5.1",
     "@capacitor/local-notifications": "^8.3.1"
   },
   "peerDependenciesMeta": {
     "@capacitor-community/admob": {
+      "optional": true
+    },
+    "@capacitor-firebase/crashlytics": {
       "optional": true
     },
     "@capacitor-firebase/messaging": {
@@ -75,11 +83,12 @@
     }
   },
   "devDependencies": {
-    "@mpgd/game-runtime": "workspace:*",
     "@capacitor-community/admob": "8.1.0",
+    "@capacitor-firebase/crashlytics": "8.5.2",
     "@capacitor-firebase/messaging": "8.5.2",
     "@capacitor/core": "8.5.2",
     "@capacitor/local-notifications": "8.3.1",
+    "@mpgd/game-runtime": "workspace:*",
     "ttsc": "0.32.1",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

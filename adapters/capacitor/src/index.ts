@@ -33,6 +33,10 @@ import {
 import { namesOtherProtocol } from './bridge-events.js';
 import { createBridgeCommerceProvider } from './commerce-bridge.js';
 import {
+  createCapacitorGatewayCrashReporting,
+  type CapacitorCrashReportingOptions,
+} from './crash-reporting.js';
+import {
   assertProviderResponseData,
   createCapacitorProviderRegistry,
   type CapacitorCommerceServiceProvider,
@@ -43,6 +47,14 @@ import {
 import { assertNotificationsV2Served, externalActivityMethods } from './request-policy.js';
 import { createCapacitorViewport } from './viewport.js';
 
+export {
+  capacitorCrashlyticsPluginName,
+  capacitorCrashReportingProvider,
+  createCapacitorCrashReporter,
+  type CapacitorCrashlyticsPlugin,
+  type CapacitorCrashReporterOptions,
+  type CapacitorCrashReportingOptions,
+} from './crash-reporting.js';
 export {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
@@ -167,6 +179,14 @@ export function createCapacitorPlatformGateway(input: {
   readonly historyBack?: () => void;
   readonly onAppEventError?: (error: unknown) => void;
   readonly viewport?: ViewportAdapter;
+  /**
+   * Crash reporting (`gateway.crashReporter`). By default the gateway uses
+   * Firebase Crashlytics when the shell has the native plugin (`--providers
+   * crash-reporting`) and then reports uncaught WebView errors too; without
+   * the plugin the reporter is unavailable and nothing is installed. `false`
+   * leaves `crashReporter` out.
+   */
+  readonly crashReporting?: CapacitorCrashReportingOptions | false;
 }): PlatformGateway {
   const bridge = input.bridge ?? CapacitorGameServices;
   const providers = createCapacitorProviderRegistry(input.providers ?? []);
@@ -220,10 +240,19 @@ export function createCapacitorPlatformGateway(input: {
   const viewport = input.viewport ?? createCapacitorViewport({
     ...(input.onAppEventError === undefined ? {} : { onError: input.onAppEventError }),
   });
+  const crashReporting = input.crashReporting === false
+    ? undefined
+    : createCapacitorGatewayCrashReporting({
+        target: input.target,
+        appVersion: input.appVersion,
+        buildId: input.buildId,
+        options: input.crashReporting ?? {},
+      });
   const launchedPurchaseHolds = new Set<() => void>();
   const gatewayLifecycle = {
     ...lifecycle,
     async dispose() {
+      crashReporting?.dispose();
       try {
         for (const finish of [...launchedPurchaseHolds]) {
           finish();
@@ -434,6 +463,7 @@ export function createCapacitorPlatformGateway(input: {
       };
     },
     ...(commerce === undefined ? {} : { commerce }),
+    ...(crashReporting === undefined ? {} : { crashReporter: crashReporting.reporter }),
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
       getSession: () => request<IdentitySession>('identity.getSession', {}),
