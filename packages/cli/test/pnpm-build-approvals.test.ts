@@ -3,6 +3,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  crashReportingPlugin,
+  crashReportingPluginVersion,
+} from '../src/crash-reporting-starter.js';
 import { notificationsGameDependencies } from '../src/notifications-starter.js';
 import {
   addAllowBuilds,
@@ -13,17 +17,22 @@ import {
 
 /**
  * Every package with a `preinstall`, `install`, or `postinstall` script (or a
- * `binding.gyp`) that installing the notifications starter's packages brings
- * in. Recorded 2026-10-26 from a pnpm 11.7.0 install of firebase 12.19.0,
- * @capacitor-firebase/messaging 8.5.2, @capacitor-firebase/crashlytics 8.5.2,
- * @capacitor/local-notifications 8.3.1, and @capacitor/core 8.5.2 with no
- * allowBuilds, which stopped with
+ * `binding.gyp`) that the notifications and crash-reporting starters' packages
+ * bring in. Recorded 2026-10-26 from a pnpm 11.7.0 install of the `scanned`
+ * packages below with @capacitor/core 8.5.2 and no allowBuilds, which stopped
+ * with
  * `ERR_PNPM_IGNORED_BUILDS Ignored build scripts: @firebase/util@1.15.3, protobufjs@7.6.6`
- * and matched a scan of every installed package.json. Redo it when the
- * starter's firebase version changes.
+ * and matched a scan of every installed package.json. Both come from firebase:
+ * the Capacitor plugins have no install scripts and no dependencies, and their
+ * `firebase` peer is optional. Redo the scan when one of those versions moves.
  */
 const firebaseTree = {
-  firebase: '12.19.0',
+  scanned: {
+    firebase: '12.19.0',
+    '@capacitor-firebase/messaging': '8.5.2',
+    '@capacitor/local-notifications': '8.3.1',
+    '@capacitor-firebase/crashlytics': '8.5.2',
+  },
   buildScripts: {
     '@firebase/util': '1.15.3 postinstall: node ./postinstall.js',
     protobufjs: '7.6.6 postinstall: node scripts/postinstall',
@@ -45,11 +54,15 @@ function resolveTemplate(): string {
   throw new Error(`Cannot locate ${relative} from ${candidates.join(', ')}.`);
 }
 
-// A firebase bump must redo the list above, and every listed script has a decision.
-assert.equal(
-  notificationsGameDependencies.firebase,
-  firebaseTree.firebase,
-  'the notifications starter moved firebase: redo the build-script list in this test',
+// A version bump in either starter must redo the scan above, and every listed
+// script has a decision.
+assert.deepEqual(
+  {
+    ...notificationsGameDependencies,
+    [crashReportingPlugin]: crashReportingPluginVersion,
+  },
+  firebaseTree.scanned,
+  'a starter moved a scanned package: redo the build-script list in this test',
 );
 assert.deepEqual(
   Object.keys(notificationsBuildApprovals).sort(),
