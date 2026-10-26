@@ -58,16 +58,59 @@ export interface CapacitorCrashReporterOptions {
    */
   readonly context?: Readonly<Record<string, unknown>>;
   /**
-   * Hold JavaScript reports and breadcrumbs until the game calls
-   * `setCollectionEnabled(true)` in this session, for games that turn
-   * Crashlytics' automatic collection off until the player agrees
-   * (docs/CRASH_REPORTING.md#the-players-choice). Defaults to false.
+   * Hold JavaScript reports and breadcrumbs until the player turns
+   * collection on with `setCollectionEnabled(true)` (now or in an earlier
+   * launch), for games that turn Crashlytics' automatic collection off until
+   * the player agrees (docs/CRASH_REPORTING.md#the-players-choice).
+   * Defaults to false.
    */
   readonly requireConsent?: boolean;
+  /**
+   * Keeps the player's last `setCollectionEnabled` choice across launches for
+   * the JavaScript side, which Android cannot read back from the SDK.
+   * Defaults to the WebView's `localStorage`; reads and writes never throw.
+   */
+  readonly collectionPreference?: CrashCollectionPreferenceStore;
   /** Defaults to `Capacitor.isPluginAvailable`. */
   readonly isPluginAvailable?: (name: string) => boolean;
   /** Defaults to the plugin registered under `capacitorCrashlyticsPluginName`. */
   readonly plugin?: CapacitorCrashlyticsPlugin;
+}
+
+/** Where the reporter keeps the player's collection choice between launches. */
+export interface CrashCollectionPreferenceStore {
+  read(): boolean | undefined;
+  write(enabled: boolean): void;
+}
+
+const collectionPreferenceKey = 'mpgd.crashReporting.collectionEnabled';
+
+/** The default store: the WebView's `localStorage`, ignored when it is unavailable. */
+export function createLocalCrashCollectionPreferenceStore(): CrashCollectionPreferenceStore {
+  const storage = (): Pick<Storage, 'getItem' | 'setItem'> | undefined => {
+    try {
+      return (globalThis as { readonly localStorage?: Storage }).localStorage;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    read() {
+      try {
+        const value = storage()?.getItem(collectionPreferenceKey);
+        return value === 'true' ? true : value === 'false' ? false : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    write(enabled) {
+      try {
+        storage()?.setItem(collectionPreferenceKey, String(enabled));
+      } catch {
+        // The SDK keeps the native choice; only the JavaScript gate forgets it.
+      }
+    },
+  };
 }
 
 const int32Min = -(2 ** 31);
@@ -121,9 +164,12 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
   ];
   const gameContext = Object.entries(sanitizeCrashContext(options.context ?? {}))
     .filter(([key]) => !key.startsWith('mpgd_'));
-  // Set by `setCollectionEnabled` in this session; the SDK keeps the choice
-  // across launches, but Android cannot read it back.
-  let collectionEnabled: boolean | undefined = options.requireConsent === true ? false : undefined;
+  // The player's last choice gates JavaScript reports. The SDK keeps it
+  // across launches but Android cannot read it back, so the reporter keeps
+  // its own copy; on iOS the SDK's value fills a missing one.
+  const preference = options.collectionPreference ?? createLocalCrashCollectionPreferenceStore();
+  let collectionEnabled: boolean | undefined = preference.read()
+    ?? (options.requireConsent === true ? false : undefined);
   let ready: Promise<boolean> | undefined;
   const prepare = (): Promise<boolean> => {
     ready ??= (async () => {
@@ -137,6 +183,14 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
           await plugin.setCustomKey({ key, value, type: keyType(value) });
         } catch {
           // One key the SDK refuses does not stop reporting.
+        }
+      }
+      if (collectionEnabled === undefined && options.target === 'ios') {
+        try {
+          const { enabled } = await plugin.isEnabled();
+          collectionEnabled ??= enabled;
+        } catch {
+          // Unknown stays unknown.
         }
       }
       return true;
@@ -198,6 +252,7 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     async setCollectionEnabled(enabled) {
       // Set before any wait, so a report racing with the toggle sees it.
       collectionEnabled = enabled;
+      preference.write(enabled);
       if (!await prepare()) {
         return;
       }

@@ -99,6 +99,17 @@ assert.equal(kitAdapter.peerDependencies[crashReportingPlugin], `^${crashReporti
     ),
     true,
   );
+  // `apply false` only declares the plugin; the app module must apply it.
+  assert.equal(
+    androidAppGradleHasCrashlytics(
+      "plugins {\n  id 'com.android.application'\n  id 'com.google.firebase.crashlytics' apply false\n}",
+    ),
+    false,
+  );
+  assert.equal(
+    androidAppGradleHasCrashlytics('plugins {\n  id("com.google.firebase.crashlytics")\n}'),
+    true,
+  );
   // Layouts the template does not produce are left to the game.
   assert.equal(applyAndroidRootGradleCrashlytics('buildscript { dependencies { } }'), undefined);
   assert.equal(

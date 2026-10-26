@@ -51,6 +51,8 @@ export {
   capacitorCrashlyticsPluginName,
   capacitorCrashReportingProvider,
   createCapacitorCrashReporter,
+  createLocalCrashCollectionPreferenceStore,
+  type CrashCollectionPreferenceStore,
   type CapacitorCrashlyticsPlugin,
   type CapacitorCrashReporterOptions,
   type CapacitorCrashReportingOptions,

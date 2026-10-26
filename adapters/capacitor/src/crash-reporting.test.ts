@@ -11,6 +11,7 @@ import {
   createCapacitorCrashReporter,
   createCapacitorGatewayCrashReporting,
   type CapacitorCrashlyticsPlugin,
+  type CrashCollectionPreferenceStore,
 } from './crash-reporting.js';
 import { createCapacitorPlatformGateway } from './index.js';
 
@@ -36,7 +37,26 @@ async function flushMicrotasks(): Promise<void> {
   }
 }
 
-const base = { target: 'android', appVersion: '1.2.3', buildId: 'build-7' } as const;
+function memoryPreference(initial?: boolean): CrashCollectionPreferenceStore & { value?: boolean } {
+  const store: CrashCollectionPreferenceStore & { value?: boolean } = {
+    ...(initial === undefined ? {} : { value: initial }),
+    read: () => store.value,
+    write(enabled) {
+      store.value = enabled;
+    },
+  };
+  return store;
+}
+
+// Each spread gets its own preference store, so tests do not share a choice.
+const base = {
+  target: 'android',
+  appVersion: '1.2.3',
+  buildId: 'build-7',
+  get collectionPreference() {
+    return memoryPreference();
+  },
+} as const;
 
 describe('createCapacitorCrashReporter', () => {
   it('is unavailable when the shell has no Crashlytics plugin', async () => {
@@ -129,6 +149,42 @@ describe('createCapacitorCrashReporter', () => {
     await reporter.setCollectionEnabled(true);
     await expect(reporter.recordError(new Error('after consent'))).resolves.toBe(true);
     expect(plugin.recordException).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the player choice across launches', async () => {
+    const preference = memoryPreference();
+    const plugin = createPlugin();
+    const first = createCapacitorCrashReporter({
+      ...base, collectionPreference: preference, isPluginAvailable: () => true, plugin,
+    });
+    await first.setCollectionEnabled(false);
+    expect(preference.value).toBe(false);
+    // The next launch: Android cannot read the SDK's choice back.
+    const next = createCapacitorCrashReporter({
+      ...base, collectionPreference: preference, isPluginAvailable: () => true, plugin,
+    });
+    await expect(next.recordError(new Error('after opt-out'))).resolves.toBe(false);
+    await next.log('after opt-out');
+    expect(plugin.recordException).not.toHaveBeenCalled();
+    expect(plugin.log).not.toHaveBeenCalled();
+    // Consent given in an earlier launch satisfies requireConsent.
+    const consented = createCapacitorCrashReporter({
+      ...base,
+      requireConsent: true,
+      collectionPreference: memoryPreference(true),
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    await expect(consented.recordError(new Error('consented'))).resolves.toBe(true);
+  });
+
+  it('takes a missing choice from the iOS SDK', async () => {
+    const plugin = createPlugin({ isEnabled: vi.fn(async () => ({ enabled: false })) });
+    const reporter = createCapacitorCrashReporter({
+      ...base, target: 'ios', isPluginAvailable: () => true, plugin,
+    });
+    await expect(reporter.recordError(new Error('x'))).resolves.toBe(false);
+    expect(plugin.recordException).not.toHaveBeenCalled();
   });
 
   it('does not record a report that races with turning collection off', async () => {
@@ -274,7 +330,12 @@ describe('createCapacitorGatewayCrashReporting', () => {
     const target = createEventTarget();
     const present = createCapacitorGatewayCrashReporting({
       ...base,
-      options: { isPluginAvailable: () => true, plugin, errorTarget: target },
+      options: {
+        isPluginAvailable: () => true,
+        plugin,
+        errorTarget: target,
+        collectionPreference: memoryPreference(),
+      },
     });
     expect(target.size()).toBe(2);
     target.emit('unhandledrejection', { reason: new Error('lost promise') });
@@ -296,6 +357,7 @@ describe('createCapacitorGatewayCrashReporting', () => {
         plugin: createPlugin(),
         errorTarget: target,
         captureGlobalErrors: false,
+        collectionPreference: memoryPreference(),
       },
     });
     expect(target.size()).toBe(0);
@@ -322,7 +384,12 @@ describe('createCapacitorPlatformGateway crash reporting', () => {
     const gateway = createCapacitorPlatformGateway({
       ...base,
       bridge,
-      crashReporting: { isPluginAvailable: () => true, plugin: createPlugin(), errorTarget: target },
+      crashReporting: {
+        isPluginAvailable: () => true,
+        plugin: createPlugin(),
+        errorTarget: target,
+        collectionPreference: memoryPreference(),
+      },
     });
     expect((await gateway.crashReporter?.getStatus())?.state).toBe('available');
     expect(target.size()).toBe(2);

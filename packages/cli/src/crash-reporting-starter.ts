@@ -174,9 +174,19 @@ export function androidRootGradleHasCrashlytics(source: string): boolean {
     .test(stripGradleComments(source));
 }
 
+/**
+ * Whether the app module applies the Crashlytics Gradle plugin: `apply
+ * plugin:`, or a plugins-block `id` that is not declared `apply false` (that
+ * only puts the plugin on the classpath, as the root project does).
+ */
 export function androidAppGradleHasCrashlytics(source: string): boolean {
-  return /\bapply\s+plugin\s*:\s*['"]com\.google\.firebase\.crashlytics['"]|\bid\s*\(?\s*['"]com\.google\.firebase\.crashlytics['"]/u
-    .test(stripGradleComments(source));
+  const clean = stripGradleComments(source);
+  if (/\bapply\s+plugin\s*:\s*['"]com\.google\.firebase\.crashlytics['"]/u.test(clean)) {
+    return true;
+  }
+  return clean.split('\n').some((line) =>
+    /\bid\s*\(?\s*['"]com\.google\.firebase\.crashlytics['"]/u.test(line)
+    && !/\bapply\s*\(?\s*false\b/u.test(line));
 }
 
 /**

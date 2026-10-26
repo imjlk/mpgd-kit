@@ -136,16 +136,19 @@ Crashlytics collects by default. A settings toggle calls
 `reporter.setCollectionEnabled(enabled)`: the SDK keeps the choice across
 launches, turning it off deletes reports not sent yet and stops JavaScript
 reports at once, and the native change may only take full effect on the next
-launch (the plugin says so for `setEnabled`).
+launch (the plugin says so for `setEnabled`). Android cannot read the SDK's
+choice back, so the reporter also keeps it in the WebView's `localStorage`
+(`mpgd.crashReporting.collectionEnabled`) and applies it to JavaScript
+reports at the next start; on iOS it falls back to the SDK's value. Pass
+`crashReporting: { collectionPreference }` to keep it elsewhere.
 
 If the game's privacy policy needs consent **before** anything is collected,
 create the gateway with `crashReporting: { requireConsent: true }`, turn
 automatic collection off in the shell, and call `setCollectionEnabled(true)`
 once the player agrees (or `setCollectionEnabled(false)` when they decline,
 which deletes what the SDK holds). With `requireConsent` the reporter sends no
-JavaScript report or breadcrumb in a session until the game calls
-`setCollectionEnabled(true)`, so apply the stored choice at every start. The
-shell keys:
+JavaScript report or breadcrumb until the player has turned collection on,
+in this launch or an earlier one. The shell keys:
 
 - Android, `AndroidManifest.xml` inside `<application>`:
   `<meta-data android:name="firebase_crashlytics_collection_enabled" android:value="false" />`
