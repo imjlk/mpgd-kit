@@ -14,10 +14,17 @@ import {
   type NativeSubmissionCheckpoint,
 } from './release-state.js';
 import {
+  planVerifiedAndroidBundleSubmission,
   PlaySubmissionUncertainError,
   submitVerifiedAndroidBundle,
   type PlayInternalSubmissionResult,
+  type PlaySubmissionPlan,
 } from './play-internal-submission.js';
+import {
+  defaultPlayReleaseRequest,
+  playReleaseRequestDigest,
+  type PlayReleaseRequest,
+} from './play-release-options.js';
 import {
   IosSubmissionUncertainError,
   submitVerifiedIosBuild,
@@ -42,6 +49,12 @@ export interface SubmitRecordedNativeTargetInput {
   readonly releaseKey: string;
   readonly credential: NativeStoreCredential;
   readonly approved: boolean;
+  /** Google Play track, status, rollout, notes and mapping; defaults to internal/completed. */
+  readonly androidRelease?: PlayReleaseRequest;
+  /** Confirms a production release or staged rollout (`--confirm-production`). */
+  readonly confirmProduction?: boolean;
+  /** Called when Play accepts only a draft because the app was never published. */
+  readonly onDraftAppFallback?: (track: string) => void;
   /** Allows the same caller to continue an in-process attempt without taking over its lease. */
   readonly attemptId?: string;
   readonly environment?: NodeJS.ProcessEnv;
@@ -74,22 +87,45 @@ export async function submitRecordedNativeTarget(
   return submitRecordedNativeTargetWithPorts(input, productionPorts);
 }
 
-export async function submitRecordedNativeTargetWithPorts(
-  input: SubmitRecordedNativeTargetInput,
-  ports: NativeSubmissionPorts,
-): Promise<NativeSubmissionCheckpoint> {
-  const target = input.credential.target;
+/** Verify one recorded Android build and print its Play edit without any store call. */
+export async function planRecordedAndroidSubmission(
+  input: Omit<SubmitRecordedNativeTargetInput, 'credential' | 'approved'>,
+  readStatus: typeof readNativeReleaseStatus = readNativeReleaseStatus,
+): Promise<PlaySubmissionPlan> {
+  const recorded = await readRecordedSubmission(input, 'android', readStatus);
+  if (input.environment?.MPGD_VERIFY_RELEASE_MANIFEST === '1') {
+    verifyRecordedReleaseManifest(input.plan.gameRoot, recorded.record);
+  }
+  return planVerifiedAndroidBundleSubmission({
+    record: recorded.record,
+    aabFile: recorded.artifactFile,
+    packageName: recorded.planned.appId,
+    ...(input.androidRelease === undefined ? {} : { release: input.androidRelease }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+}
+
+async function readRecordedSubmission(
+  input: Omit<SubmitRecordedNativeTargetInput, 'credential' | 'approved'>,
+  target: 'android' | 'ios',
+  readStatus: typeof readNativeReleaseStatus,
+): Promise<{
+  readonly planned: NativeDeploymentPlan['targets'][number];
+  readonly record: ImmutableNativeBuildRecord;
+  readonly artifactFile: string;
+  readonly status: Awaited<ReturnType<typeof readNativeReleaseStatus>>;
+}> {
   const planned = input.plan.targets.find((entry) => entry.target === target);
-  if (planned === undefined || !input.approved) {
+  if (planned === undefined) {
     throw new Error('Native store submission requires a planned target and explicit approval.');
   }
-  const stateInput = {
+  const status = await readStatus({
     gameRoot: input.plan.gameRoot,
     gameId: input.gameId,
+    releaseKey: input.releaseKey,
     ...(input.environment === undefined ? {} : { environment: input.environment }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
-  };
-  const status = await ports.readStatus({ ...stateInput, releaseKey: input.releaseKey });
+  });
   if (status.plan.targetConfigDigest !== input.plan.targetConfigSha256
     || status.plan.gameId !== input.gameId
     || status.plan.targets[target] === undefined) {
@@ -105,7 +141,40 @@ export async function submitRecordedNativeTargetWithPorts(
     throw new Error('Store submission requires a matching immutable native build record.');
   }
   const artifactFile = resolveRecordedArtifact(input.plan.gameRoot, record.artifactLocation);
+  return { planned, record, artifactFile, status };
+}
+
+export async function submitRecordedNativeTargetWithPorts(
+  input: SubmitRecordedNativeTargetInput,
+  ports: NativeSubmissionPorts,
+): Promise<NativeSubmissionCheckpoint> {
+  const target = input.credential.target;
+  const planned = input.plan.targets.find((entry) => entry.target === target);
+  if (planned === undefined || !input.approved) {
+    throw new Error('Native store submission requires a planned target and explicit approval.');
+  }
+  const releaseDigest = target === 'android'
+    ? playReleaseRequestDigest(input.androidRelease ?? defaultPlayReleaseRequest)
+    : undefined;
+  const stateInput = {
+    gameRoot: input.plan.gameRoot,
+    gameId: input.gameId,
+    ...(input.environment === undefined ? {} : { environment: input.environment }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  };
+  const { record, artifactFile, status } = await readRecordedSubmission(
+    input,
+    target,
+    ports.readStatus,
+  );
   let checkpoint = status.submissions[target];
+  if (checkpoint !== undefined && checkpoint.playReleaseSha256 !== releaseDigest) {
+    throw new Error(isNativeSubmissionSettled(checkpoint.status)
+      ? 'This release was already committed to Google Play with other release options; '
+        + 'change it with "mpgd deploy rollout" or submit a new release.'
+      : 'This submission was started with other Google Play release options (track, status, '
+        + 'fraction, notes or mapping); re-run it with the same options before changing them.');
+  }
   if (checkpoint !== undefined && isNativeSubmissionSettled(checkpoint.status)) {
     return checkpoint;
   }
@@ -131,6 +200,7 @@ export async function submitRecordedNativeTargetWithPorts(
         attemptId: randomBytes(16).toString('hex'),
         leaseExpiresAt: freshSubmissionLeaseExpiresAt(),
         status: 'started',
+        ...(releaseDigest === undefined ? {} : { playReleaseSha256: releaseDigest }),
       },
     })).checkpoint;
   } else if (Date.parse(checkpoint.leaseExpiresAt) <= Date.now()) {
@@ -182,6 +252,13 @@ export async function submitRecordedNativeTargetWithPorts(
         onEditCreated: async (editId) => {
           await save({ status: 'edit-open', remoteEditId: editId });
         },
+        ...(input.androidRelease === undefined ? {} : { release: input.androidRelease }),
+        ...(input.confirmProduction === undefined ? {} : {
+          confirmProduction: input.confirmProduction,
+        }),
+        ...(input.onDraftAppFallback === undefined ? {} : {
+          onDraftAppFallback: input.onDraftAppFallback,
+        }),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
     } catch (error) {

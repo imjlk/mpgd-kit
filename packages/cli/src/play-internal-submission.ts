@@ -8,11 +8,22 @@ import type {
   PlayTrackRelease,
 } from './play-publisher-port.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
+import {
+  assertPlayReleaseConfirmed,
+  assertPlayReleaseRequest,
+  defaultPlayReleaseRequest,
+  hashMappingFile,
+  isPlayDraftAppRejection,
+  mergeNewPlayRelease,
+  newPlayRelease,
+  playReleaseNeedsConfirmation,
+  type PlayNewReleaseStatus,
+  type PlayReleaseRequest,
+} from './play-release-options.js';
 import type { ImmutableNativeBuildRecord } from './release-state.js';
 
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 const editIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-const trackName = 'internal';
 const bundleUploadTimeoutMs = 120_000;
 
 export interface PlayInternalSubmissionInput {
@@ -25,6 +36,12 @@ export interface PlayInternalSubmissionInput {
   readonly resumeEditId?: string;
   /** Persist this edit ID before any upload begins, for later reconciliation. */
   readonly onEditCreated?: (editId: string) => Promise<void>;
+  /** Track, status, rollout fraction, notes and mapping; defaults to internal/completed. */
+  readonly release?: PlayReleaseRequest;
+  /** Required for production tracks and staged (inProgress) rollouts. */
+  readonly confirmProduction?: boolean;
+  /** Called before the kit re-commits a release as a draft for a never-published app. */
+  readonly onDraftAppFallback?: (track: string) => void;
   readonly signal?: AbortSignal;
 }
 
@@ -32,15 +49,33 @@ export interface PlayInternalSubmissionResult {
   readonly status: 'committed';
   readonly packageName: string;
   readonly editId: string;
-  readonly track: 'internal';
+  readonly track: string;
+  /** The committed release's status; `draft` after a draft-app fallback. */
+  readonly releaseStatus: PlayNewReleaseStatus;
+  /** Play refused a non-draft release because the app was never published. */
+  readonly draftAppFallback: boolean;
   readonly versionCode: number;
   readonly bundleSha256: string;
   readonly alreadyCommitted: boolean;
 }
 
+/** The planned edit of a `--dry-run`: verified locally, no Google Play call made. */
+export interface PlaySubmissionPlan {
+  readonly dryRun: true;
+  readonly packageName: string;
+  readonly track: string;
+  readonly versionCode: number;
+  readonly bundleSha256: string;
+  readonly release: PlayTrackRelease;
+  readonly mapping?: { readonly file: string; readonly sha256: string };
+  readonly requiresConfirmProduction: boolean;
+  readonly operations: readonly string[];
+}
+
 export class PlaySubmissionUncertainError extends Error {
   constructor(
-    readonly stage: 'checkpoint' | 'upload' | 'track-update' | 'validate' | 'commit',
+    readonly stage: 'checkpoint' | 'upload' | 'deobfuscation-upload' | 'track-update'
+      | 'validate' | 'commit',
     readonly editId: string,
   ) {
     super(
@@ -64,13 +99,53 @@ export async function submitVerifiedAndroidBundle(
   return submitVerifiedAndroidBundleWithPublisher(input, publisher);
 }
 
+/** Verify the record and artifact, then describe the edit without calling Google Play. */
+export async function planVerifiedAndroidBundleSubmission(
+  input: Omit<PlayInternalSubmissionInput, 'serviceAccountFile'>,
+): Promise<PlaySubmissionPlan> {
+  const request = input.release ?? defaultPlayReleaseRequest;
+  assertPlayReleaseRequest(request);
+  const versionCode = await preflight(input);
+  await assertMappingUnchanged(request);
+  return {
+    dryRun: true,
+    packageName: input.packageName,
+    track: request.track,
+    versionCode,
+    bundleSha256: input.record.artifactSha256,
+    release: newPlayRelease(request, input.record.releaseKey, versionCode),
+    ...(request.mappingFile === undefined || request.mappingSha256 === undefined ? {} : {
+      mapping: { file: request.mappingFile, sha256: request.mappingSha256 },
+    }),
+    requiresConfirmProduction: playReleaseNeedsConfirmation(request),
+    operations: [
+      'edits.insert',
+      'edits.bundles.list',
+      `edits.tracks.get ${request.track}`,
+      'edits.bundles.upload (skipped when the edit already has this version code)',
+      ...(request.mappingFile === undefined
+        ? [] : ['edits.deobfuscationfiles.upload proguard']),
+      `edits.tracks.update ${request.track} (other releases kept; a ${
+        request.status === 'draft' ? 'draft replaces an older draft'
+          : 'new release replaces an in-progress or halted rollout'})`,
+      'edits.validate',
+      'edits.commit changesInReviewBehavior=ERROR_IF_IN_REVIEW',
+    ],
+  };
+}
+
 /** Internal injection point for credential-free SDK contract tests. */
 export async function submitVerifiedAndroidBundleWithPublisher(
   input: PlayInternalSubmissionInput,
   publisher: PlayPublisher,
   requestRootUrl?: string,
 ): Promise<PlayInternalSubmissionResult> {
+  const request = input.release ?? defaultPlayReleaseRequest;
+  assertPlayReleaseRequest(request);
+  assertPlayReleaseConfirmed(request, input.confirmProduction === true);
+  const trackName = request.track;
   const versionCode = await preflight(input);
+  await assertMappingUnchanged(request);
   const expectedSha256 = input.record.artifactSha256;
   const packageName = input.packageName;
   if (input.resumeEditId !== undefined && !editIdPattern.test(input.resumeEditId)) {
@@ -95,7 +170,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       throw error;
     }
     // A successful commit may have invalidated the old edit while its response
-    // was lost. Open a new snapshot solely to inspect the live internal track.
+    // was lost. Open a new snapshot solely to inspect the live track.
     editId = await publisher.insertEdit(packageName, input.signal);
     freshEdit = true;
     try {
@@ -106,27 +181,62 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     bundles = await publisher.listBundles(packageName, editId, input.signal);
   }
   let existing = findVersionBundle(bundles, versionCode, expectedSha256);
-  const currentTrack = await getInternalTrack(publisher, packageName, editId, input.signal);
+  const currentTrack = await getTrackOrEmpty(
+    publisher,
+    packageName,
+    editId,
+    trackName,
+    input.signal,
+  );
+  const release = newPlayRelease(request, input.record.releaseKey, versionCode);
+  const commit = async (status: PlayNewReleaseStatus): Promise<PlayInternalSubmissionResult> => {
+    const committed = await validateAndCommit({
+      publisher, packageName, editId, trackName, versionCode, release, status,
+      currentTrack, ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.onDraftAppFallback === undefined ? {} : {
+        onDraftAppFallback: input.onDraftAppFallback,
+      }),
+    });
+    return result(input, trackName, editId, versionCode, false, committed);
+  };
   if (hasVersion(currentTrack.releases, versionCode)) {
     if (existing === undefined) {
-      throw new Error('Google Play internal track has this version without matching bundle bytes.');
-    }
-    if (!hasCompletedVersion(currentTrack.releases, versionCode)) {
       throw new Error(
-        'Google Play internal track version is not completed; inspect it before resubmitting.',
+        `Google Play ${trackName} track has this version without matching bundle bytes.`,
+      );
+    }
+    const resumedDraft = !freshEdit && request.status !== 'draft'
+      && hasVersionWithStatus(currentTrack.releases, versionCode, 'draft');
+    if (!hasVersionWithStatus(currentTrack.releases, versionCode, request.status)
+      && !resumedDraft) {
+      throw new Error(
+        `Google Play ${trackName} track version is not ${request.status}; inspect it before resubmitting.`,
       );
     }
     if (freshEdit) {
-      return result(input, editId, versionCode, true);
+      return result(input, trackName, editId, versionCode, true, {
+        status: request.status,
+        draftAppFallback: false,
+      });
     }
     // A resumed edit sees its own uncommitted track. Publish it before success.
-    await publisher.validateEdit(packageName, editId, input.signal);
-    try {
-      await publisher.commitEdit(packageName, editId, input.signal);
-    } catch {
-      throw new PlaySubmissionUncertainError('commit', editId);
-    }
-    return result(input, editId, versionCode, false);
+    await uploadMapping(
+      publisher,
+      request,
+      packageName,
+      editId,
+      versionCode,
+      input.signal,
+      requestRootUrl,
+    );
+    return commit(resumedDraft ? 'draft' : request.status);
+  }
+  if (playReleaseStartsRollout(request.status, currentTrack.releases)) {
+    // Play Console: "Rollout percentage options are unavailable for a first release."
+    throw new Error(
+      `Google Play ${trackName} has no completed release yet, so a staged rollout cannot start; `
+      + 'release it with --status completed (or draft) first.',
+    );
   }
   if (existing === undefined) {
     try {
@@ -154,33 +264,61 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       }
     }
   }
+  await uploadMapping(
+    publisher,
+    request,
+    packageName,
+    editId,
+    versionCode,
+    input.signal,
+    requestRootUrl,
+  );
 
-  const release: PlayTrackRelease = {
-    name: input.record.releaseKey,
-    status: 'completed',
-    versionCodes: [String(versionCode)],
-  };
   const desired: PlayTrack = {
     track: trackName,
-    releases: [...(currentTrack.releases ?? []), release],
+    releases: mergeNewPlayRelease(currentTrack.releases, release).releases,
   };
-  try {
-    await publisher.updateTrack(packageName, editId, desired, input.signal);
-  } catch (error) {
-    let applied: boolean;
-    try {
-      const observed = await getInternalTrack(publisher, packageName, editId, input.signal);
-      applied = hasCompletedVersion(observed.releases, versionCode);
-    } catch {
-      throw new PlaySubmissionUncertainError('track-update', editId);
-    }
-    if (!applied) {
-      throw error;
-    }
-  }
+  await updateTrackChecked(
+    publisher,
+    packageName,
+    editId,
+    trackName,
+    desired,
+    versionCode,
+    request.status,
+    input.signal,
+  );
+  return commit(request.status);
+}
+
+interface CommitInput {
+  readonly publisher: PlayPublisher;
+  readonly packageName: string;
+  readonly editId: string;
+  readonly trackName: string;
+  readonly versionCode: number;
+  readonly release: PlayTrackRelease;
+  /** The status the edit's track now holds for this version. */
+  readonly status: PlayNewReleaseStatus;
+  /** The track as read before this submission changed it. */
+  readonly currentTrack: PlayTrack;
+  readonly onDraftAppFallback?: (track: string) => void;
+  readonly signal?: AbortSignal;
+}
+
+interface CommittedRelease {
+  readonly status: PlayNewReleaseStatus;
+  readonly draftAppFallback: boolean;
+}
+
+async function validateAndCommit(input: CommitInput): Promise<CommittedRelease> {
+  const { publisher, packageName, editId } = input;
   try {
     await publisher.validateEdit(packageName, editId, input.signal);
   } catch (error) {
+    if (input.status !== 'draft' && isPlayDraftAppRejection(error)) {
+      return commitDraftFallback(input);
+    }
     if (isDefinitiveHttpError(error)) {
       throw error;
     }
@@ -188,15 +326,125 @@ export async function submitVerifiedAndroidBundleWithPublisher(
   }
   try {
     await publisher.commitEdit(packageName, editId, input.signal);
-    return result(input, editId, versionCode, false);
-  } catch {
+    return { status: input.status, draftAppFallback: input.status === 'draft'
+      && input.release.status !== 'draft' };
+  } catch (error) {
+    // A definitive draft-app rejection means nothing was committed.
+    if (input.status !== 'draft' && isPlayDraftAppRejection(error)) {
+      return commitDraftFallback(input);
+    }
     // Inserting a new edit invalidates the first edit for this API user. A
     // failed commit response cannot safely be reconciled by creating one.
     throw new PlaySubmissionUncertainError('commit', editId);
   }
 }
 
-async function preflight(input: PlayInternalSubmissionInput): Promise<number> {
+/**
+ * Play accepts only draft releases until an app's first release is rolled out
+ * from Play Console. Re-stage the same version as a draft in the same edit and
+ * commit that, so the operator can roll it out from the console.
+ */
+async function commitDraftFallback(input: CommitInput): Promise<CommittedRelease> {
+  input.onDraftAppFallback?.(input.trackName);
+  const { userFraction: _fraction, ...withoutFraction } = input.release;
+  const draft: PlayTrackRelease = { ...withoutFraction, status: 'draft' };
+  const others = (input.currentTrack.releases ?? []).filter(
+    (release) => !release.versionCodes?.includes(String(input.versionCode)),
+  );
+  await updateTrackChecked(
+    input.publisher,
+    input.packageName,
+    input.editId,
+    input.trackName,
+    {
+      track: input.trackName,
+      releases: mergeNewPlayRelease(others, draft).releases,
+    },
+    input.versionCode,
+    'draft',
+    input.signal,
+  );
+  await validateAndCommit({ ...input, status: 'draft' });
+  return { status: 'draft', draftAppFallback: true };
+}
+
+async function updateTrackChecked(
+  publisher: PlayPublisher,
+  packageName: string,
+  editId: string,
+  trackName: string,
+  desired: PlayTrack,
+  versionCode: number,
+  status: PlayNewReleaseStatus,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    await publisher.updateTrack(packageName, editId, desired, signal);
+  } catch (error) {
+    let applied: boolean;
+    try {
+      const observed = await getTrackOrEmpty(publisher, packageName, editId, trackName, signal);
+      applied = hasVersionWithStatus(observed.releases, versionCode, status);
+    } catch {
+      throw new PlaySubmissionUncertainError('track-update', editId);
+    }
+    if (!applied) {
+      throw error;
+    }
+  }
+}
+
+async function uploadMapping(
+  publisher: PlayPublisher,
+  request: PlayReleaseRequest,
+  packageName: string,
+  editId: string,
+  versionCode: number,
+  signal?: AbortSignal,
+  requestRootUrl?: string,
+): Promise<void> {
+  if (request.mappingFile === undefined) {
+    return;
+  }
+  // Re-uploading replaces the edit's mapping for this version code, so a lost
+  // response is safe to retry on the same edit.
+  try {
+    await publisher.uploadDeobfuscationFile({
+      packageName,
+      editId,
+      versionCode,
+      mappingFile: request.mappingFile,
+      timeoutMs: bundleUploadTimeoutMs,
+      ...(signal === undefined ? {} : { signal }),
+      ...(requestRootUrl === undefined ? {} : { requestRootUrl }),
+    });
+  } catch (error) {
+    if (isDefinitiveHttpError(error)) {
+      throw error;
+    }
+    throw new PlaySubmissionUncertainError('deobfuscation-upload', editId);
+  }
+}
+
+async function assertMappingUnchanged(request: PlayReleaseRequest): Promise<void> {
+  if (request.mappingFile !== undefined
+    && await hashMappingFile(request.mappingFile) !== request.mappingSha256) {
+    throw new Error('R8 mapping file changed after the release request was created.');
+  }
+}
+
+/** A staged rollout needs a completed release on the track to stage over. */
+function playReleaseStartsRollout(
+  status: PlayNewReleaseStatus,
+  releases: readonly PlayTrackRelease[] | null | undefined,
+): boolean {
+  return status === 'inProgress'
+    && !(releases ?? []).some((release) => release.status === 'completed');
+}
+
+async function preflight(
+  input: Pick<PlayInternalSubmissionInput, 'record' | 'aabFile' | 'packageName' | 'signal'>,
+): Promise<number> {
   input.signal?.throwIfAborted();
   const record = input.record;
   const versionCode = record.platformVersion.versionCode;
@@ -245,14 +493,15 @@ function findVersionBundle(
   return sameVersion;
 }
 
-async function getInternalTrack(
+async function getTrackOrEmpty(
   publisher: PlayPublisher,
   packageName: string,
   editId: string,
+  trackName: string,
   signal?: AbortSignal,
 ): Promise<PlayTrack> {
   try {
-    return await publisher.getTrack(packageName, editId, signal);
+    return await publisher.getTrack(packageName, editId, trackName, signal);
   } catch (error) {
     if (isHttpStatus(error, 404)) {
       return { track: trackName, releases: [] };
@@ -261,7 +510,7 @@ async function getInternalTrack(
   }
 }
 
-function isHttpStatus(error: unknown, status: number): boolean {
+export function isHttpStatus(error: unknown, status: number): boolean {
   if (typeof error !== 'object' || error === null) {
     return false;
   }
@@ -269,7 +518,7 @@ function isHttpStatus(error: unknown, status: number): boolean {
   return value.code === status || value.response?.status === status;
 }
 
-function isDefinitiveHttpError(error: unknown): boolean {
+export function isDefinitiveHttpError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) {
     return false;
   }
@@ -291,25 +540,30 @@ function hasVersion(
   return releases?.some((release) => release.versionCodes?.includes(String(versionCode))) ?? false;
 }
 
-function hasCompletedVersion(
+function hasVersionWithStatus(
   releases: readonly PlayTrackRelease[] | null | undefined,
   versionCode: number,
+  status: PlayNewReleaseStatus,
 ): boolean {
-  return releases?.some((release) => release.status === 'completed'
+  return releases?.some((release) => release.status === status
     && release.versionCodes?.includes(String(versionCode))) ?? false;
 }
 
 function result(
   input: PlayInternalSubmissionInput,
+  trackName: string,
   editId: string,
   versionCode: number,
   alreadyCommitted: boolean,
+  committed: CommittedRelease,
 ): PlayInternalSubmissionResult {
   return {
     status: 'committed',
     packageName: input.packageName,
     editId,
     track: trackName,
+    releaseStatus: committed.status,
+    draftAppFallback: committed.draftAppFallback,
     versionCode,
     bundleSha256: input.record.artifactSha256,
     alreadyCommitted,
