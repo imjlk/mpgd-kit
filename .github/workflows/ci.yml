@@ -539,7 +539,9 @@ jobs:
           key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json', 'examples/asset-packs/package.json') }}
           restore-keys: ${{ runner.os }}-runtime-playwright-
       - name: Install runtime fixture browser
-        timeout-minutes: 10
+        # Ubuntu mirror downloads exceeded ten minutes on two fresh hosted runners.
+        # Keep the tests and the overall 45-minute job limit; allow dependency setup to finish.
+        timeout-minutes: 20
         run: pnpm --dir examples/runtime-controls exec playwright install --with-deps chromium
       - name: Verify Phaser runtime controls in Chromium
         timeout-minutes: 5
