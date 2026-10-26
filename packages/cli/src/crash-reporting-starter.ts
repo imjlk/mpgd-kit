@@ -3,6 +3,7 @@ import path from 'node:path';
 import { satisfies, valid, validRange } from 'semver';
 
 import { stripGradleComments } from './native-shell-identity.js';
+import { iosAppBundlesResource, type NativeShellPolicyIssue } from './native-shell-store-policy.js';
 
 // `mpgd target init capacitor --providers crash-reporting`: Firebase
 // Crashlytics in the game-owned Capacitor shell. The shell gets the native
@@ -263,4 +264,69 @@ export function materializeAndroidCrashlytics(shellRoot: string): void {
   if (nextApp !== appSource) {
     writeFileSync(appFile, nextApp);
   }
+}
+
+/** Whether the shell's package.json installs the Crashlytics plugin (`--providers crash-reporting`). */
+export function shellUsesCrashlytics(shellPackage: unknown): boolean {
+  if (typeof shellPackage !== 'object' || shellPackage === null) {
+    return false;
+  }
+  const { dependencies, devDependencies } = shellPackage as Readonly<Record<string, unknown>>;
+  return [dependencies, devDependencies].some((entries) =>
+    typeof entries === 'object' && entries !== null
+    && (entries as Readonly<Record<string, unknown>>)[crashReportingPlugin] !== undefined);
+}
+
+/**
+ * Store-policy preflight for a shell that installs the Crashlytics plugin.
+ * Errors fail a production build (`reportNativeStorePolicy`); other profiles
+ * print them.
+ *
+ * - Android: `android/app/google-services.json` must be present (without it
+ *   Firebase does not start and the release reports nothing), and the app
+ *   module must apply the Crashlytics Gradle plugin (without its build ID the
+ *   Crashlytics SDK stops the app at startup once Firebase starts).
+ * - iOS: the App target must bundle `GoogleService-Info.plist`; without it
+ *   Firebase does not start and the plugin still calls Crashlytics.
+ */
+export function inspectCrashReportingShell(input: {
+  readonly platform: 'android' | 'ios';
+  readonly shellApp: string;
+  readonly shellPackage: unknown;
+  /** The App target's `project.pbxproj` source, for iOS. */
+  readonly iosProject?: string;
+}): readonly NativeShellPolicyIssue[] {
+  if (!shellUsesCrashlytics(input.shellPackage)) {
+    return [];
+  }
+  const issues: NativeShellPolicyIssue[] = [];
+  if (input.platform === 'android') {
+    const config = path.join(input.shellApp, 'android/app/google-services.json');
+    if (!existsSync(config) || !lstatSync(config).isFile() || readFileSync(config, 'utf8').trim() === '') {
+      issues.push({
+        level: 'error',
+        message: `The shell installs ${crashReportingPlugin}, but android/app/google-services.json is `
+          + 'missing; Firebase does not start and the release reports no crashes. Download it from the '
+          + 'Firebase console (the same file notifications use).',
+      });
+    }
+    if (!androidShellHasCrashlytics(input.shellApp)) {
+      issues.push({
+        level: 'error',
+        message: `The shell installs ${crashReportingPlugin}, but the Android project does not apply the `
+          + 'Crashlytics Gradle plugin; the Crashlytics SDK stops the app at startup without the build ID '
+          + `it writes. ${crashReportingAndroidSteps.join(' ')}`,
+      });
+    }
+    return issues;
+  }
+  if (input.iosProject !== undefined && !iosAppBundlesResource(input.iosProject, 'GoogleService-Info.plist')) {
+    issues.push({
+      level: 'error',
+      message: `The shell installs ${crashReportingPlugin}, but the iOS App target does not bundle `
+        + 'GoogleService-Info.plist; Firebase does not start and the plugin still calls Crashlytics. '
+        + 'Download it from the Firebase console and add it to the App target in Xcode.',
+    });
+  }
+  return issues;
 }

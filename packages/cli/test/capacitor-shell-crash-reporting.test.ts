@@ -5,6 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  inspectNativeStorePolicy,
+  reportNativeStorePolicy,
+} from '../../../tools/target/native-store-policy.js';
+import {
   applyCapacitorShellStarter,
   planCapacitorShellStarter,
 } from '../src/capacitor-shell-starter.js';
@@ -19,7 +23,9 @@ import {
   crashReportingPluginVersion,
   iosProjectUploadsCrashlyticsSymbols,
   materializeAndroidCrashlytics,
+  shellUsesCrashlytics,
 } from '../src/crash-reporting-starter.js';
+import { addIosAppResource } from '../src/native-shell-store-policy.js';
 
 // `mpgd target init capacitor --providers crash-reporting` (mobile launch L5a).
 
@@ -43,7 +49,8 @@ function resolveKitRoot(): string {
 }
 
 const kitRoot = resolveKitRoot();
-const referenceAndroid = path.join(kitRoot, 'apps/mobile-capacitor/android');
+const referenceShell = path.join(kitRoot, 'apps/mobile-capacitor');
+const referenceAndroid = path.join(referenceShell, 'android');
 const referenceRootGradle = readFileSync(path.join(referenceAndroid, 'build.gradle'), 'utf8');
 const referenceAppGradle = readFileSync(path.join(referenceAndroid, 'app/build.gradle'), 'utf8');
 const kitAdapter = JSON.parse(
@@ -263,6 +270,84 @@ try {
     assert.ok(
       dropped.warnings.some((warning) => warning.includes(`still lists ${crashReportingPlugin}`)),
     );
+  }
+
+  // The build preflight: a production build fails while a shell with the
+  // plugin lacks its platform's Firebase file (or, on Android, the Gradle
+  // plugin); other profiles only print it.
+  {
+    const shell = mkdtempSync(path.join(tmpdir(), 'mpgd-crash-preflight-'));
+    roots.push(shell);
+    for (const relative of [
+      'ios/App/App.xcodeproj/project.pbxproj',
+      'ios/App/App/Info.plist',
+      'android/app/src/main/AndroidManifest.xml',
+      'android/build.gradle',
+      'android/app/build.gradle',
+    ]) {
+      mkdirSync(path.dirname(path.join(shell, relative)), { recursive: true });
+      writeFileSync(path.join(shell, relative), readFileSync(path.join(referenceShell, relative)));
+    }
+    const crashMessages = (platform: 'android' | 'ios'): string[] =>
+      inspectNativeStorePolicy({ platform, shellApp: shell })
+        .filter((issue) => issue.message.includes(crashReportingPlugin))
+        .map((issue) => `${issue.level}: ${issue.message}`);
+    // Without the plugin nothing about crash reporting is reported.
+    const shellPackage = {
+      name: 'shell',
+      private: true,
+      dependencies: { '@capacitor/core': '8.5.2' },
+    };
+    writeFileSync(path.join(shell, 'package.json'), JSON.stringify(shellPackage));
+    assert.equal(shellUsesCrashlytics(shellPackage), false);
+    assert.deepEqual(crashMessages('ios'), []);
+    assert.deepEqual(crashMessages('android'), []);
+
+    const withPlugin = {
+      ...shellPackage,
+      dependencies: {
+        ...shellPackage.dependencies,
+        [crashReportingPlugin]: crashReportingPluginVersion,
+      },
+    };
+    writeFileSync(path.join(shell, 'package.json'), JSON.stringify(withPlugin));
+    assert.equal(shellUsesCrashlytics(withPlugin), true);
+    const ios = crashMessages('ios');
+    assert.equal(ios.length, 1);
+    assert.match(ios[0] ?? '', /^error: .*does not bundle GoogleService-Info\.plist/u);
+    const android = crashMessages('android');
+    assert.equal(android.length, 2);
+    assert.match(android[0] ?? '', /^error: .*google-services\.json is missing/u);
+    assert.match(android[1] ?? '', /^error: .*does not apply the Crashlytics Gradle plugin/u);
+    for (const platform of ['android', 'ios'] as const) {
+      const issues = inspectNativeStorePolicy({ platform, shellApp: shell });
+      assert.throws(
+        () => reportNativeStorePolicy(issues, true, () => undefined),
+        /not ready for store release[\s\S]*@capacitor-firebase\/crashlytics/u,
+      );
+      const printed: string[] = [];
+      assert.doesNotThrow(() =>
+        reportNativeStorePolicy(issues, false, (message) => printed.push(message)),
+      );
+      assert.ok(
+        printed.some((message) => message.includes(crashReportingPlugin)),
+        'printed outside production',
+      );
+    }
+
+    // The Firebase files and the Gradle plugin clear it.
+    const project = path.join(shell, 'ios/App/App.xcodeproj/project.pbxproj');
+    const bundled = addIosAppResource(readFileSync(project, 'utf8'), 'GoogleService-Info.plist');
+    assert.ok(bundled !== undefined);
+    writeFileSync(project, bundled);
+    assert.deepEqual(crashMessages('ios'), []);
+    writeFileSync(path.join(shell, 'android/app/google-services.json'), '{}\n');
+    assert.equal(crashMessages('android').length, 1, 'the Gradle plugin is still missing');
+    materializeAndroidCrashlytics(shell);
+    assert.deepEqual(crashMessages('android'), []);
+    // An empty file is what the template's own check treats as missing.
+    writeFileSync(path.join(shell, 'android/app/google-services.json'), '  \n');
+    assert.equal(crashMessages('android').length, 1);
   }
 
   // A layout the template does not produce is refused with the manual steps.

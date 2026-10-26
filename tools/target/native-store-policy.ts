@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { inspectCrashReportingShell } from '../../packages/cli/src/crash-reporting-starter.js';
 import { readIosReleaseInfoPlist } from '../../packages/cli/src/native-shell-identity.js';
 import {
   inspectAndroidManifestAds,
@@ -39,7 +40,8 @@ export function inspectNativeStorePolicy(input: {
     : undefined;
   const orientation = readGameNativeOrientation(gameConfigJson);
   const shellPackage = join(input.shellApp, 'package.json');
-  const usesAds = existsSync(shellPackage) && shellUsesAdMob(readJson(shellPackage));
+  const shellPackageJson = existsSync(shellPackage) ? readJson(shellPackage) : undefined;
+  const usesAds = shellUsesAdMob(shellPackageJson);
   if (input.platform === 'ios') {
     const project = join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj');
     if (!existsSync(project)) {
@@ -50,6 +52,13 @@ export function inspectNativeStorePolicy(input: {
     const issues = [
       ...inspectIosProjectDeviceFamily(projectSource, deviceFamily),
       ...inspectIosAppPrivacyManifest(projectSource),
+      // `--providers crash-reporting`: the Firebase config file.
+      ...inspectCrashReportingShell({
+        platform: 'ios',
+        shellApp: input.shellApp,
+        shellPackage: shellPackageJson,
+        iosProject: projectSource,
+      }),
     ];
     const plist = join(dirname(dirname(project)), readIosReleaseInfoPlist(projectSource));
     if (existsSync(plist)) {
@@ -78,6 +87,12 @@ export function inspectNativeStorePolicy(input: {
       usesAds,
       usesAds ? readGameAdvertisingIdPolicy(gameConfigJson) : 'declared',
     ),
+    // `--providers crash-reporting`: the Firebase config file and the Gradle plugin.
+    ...inspectCrashReportingShell({
+      platform: 'android',
+      shellApp: input.shellApp,
+      shellPackage: shellPackageJson,
+    }),
   ];
 }
 

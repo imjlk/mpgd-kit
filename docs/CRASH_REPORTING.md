@@ -77,6 +77,12 @@ Crashlytics, which has not been checked on a device, so never ship the iOS
 plugin without the plist. The plugin's own setup notes are in its
 [README](https://github.com/capawesome-team/capacitor-firebase/tree/main/packages/crashlytics).
 
+`mpgd target build android|ios production` enforces this: while the shell
+lists the plugin, a production build fails when `android/app/google-services.json`
+is missing or empty, when the Android app module does not apply the
+Crashlytics Gradle plugin, or when the iOS App target does not bundle
+`GoogleService-Info.plist`. Other profiles print the same findings and build.
+
 The Gradle plugin 3.0.8 needs the Android Gradle plugin 8.1+, Gradle 8.0+
 and the Google services plugin 4.4.1+
 ([Firebase](https://firebase.google.com/docs/crashlytics/android/get-started));
