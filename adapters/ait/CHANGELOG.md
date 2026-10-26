@@ -1,5 +1,12 @@
 # @mpgd/adapter-ait
 
+## 0.20.6 — 2026-10-26
+
+### Patch changes
+
+- [3d603721](https://github.com/imjlk/mpgd-kit/commit/3d6037213f0494348cdca31e694416cb40de3354) Describe optional host-carried promotion authority acknowledgements and verify AIT passthrough, allowing consumers to omit duplicate finalization only after account-scoped server confirmation. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.16.1, @mpgd/catalog@0.11.0, @mpgd/game-runtime@0.8.3, @mpgd/platform@0.29.0
+
 ## 0.20.5 — 2026-10-25
 
 ### Patch changes

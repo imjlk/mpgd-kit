@@ -1,5 +1,15 @@
 # @mpgd/catalog
 
+## 0.11.0 — 2026-10-26
+
+### Changed
+
+- [6ce27613](https://github.com/imjlk/mpgd-kit/commit/6ce27613a430cde2cf13ffd7bac4e842f29cb296) `validateNotificationTopicCatalog` accepts an advertising topic mapped to `android` when the deployment sets `shellRendersAdvertising: true`, the switch for a shell that renders advertising pushes with the opt-out action (AR1). Without it the mapping is still refused, now with a message that names the switch. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.29.0
+
 ## 0.10.8 — 2026-10-25
 
 ### Patch changes

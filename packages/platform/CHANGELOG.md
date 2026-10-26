@@ -1,5 +1,15 @@
 # @mpgd/platform
 
+## 0.29.0 — 2026-10-26
+
+### Patch changes
+
+- [3d603721](https://github.com/imjlk/mpgd-kit/commit/3d6037213f0494348cdca31e694416cb40de3354) Describe optional host-carried promotion authority acknowledgements and verify AIT passthrough, allowing consumers to omit duplicate finalization only after account-scoped server confirmation. — Thanks @imjlk!
+
+### Added
+
+- [6ce27613](https://github.com/imjlk/mpgd-kit/commit/6ce27613a430cde2cf13ffd7bac4e842f29cb296) Android advertising pushes rendered by the shell (AR1). A device registration's FCM address can say `rendersAdvertising: true`: the app renders advertising pushes itself, with the opt-out action. `NotificationDeployment.shellRendersAdvertising` says the game's shell does so on the targets in `notificationShellRenderedAdvertisingTargets` (`android`, whose FCM notification messages cannot carry actions). The policy gate takes `endpointShowsActions` and fails closed on it: under the Korean rules an advertising send to a resolved device endpoint needs `true`, and `false` or an absent value is `suppressed: purpose-unsupported`, as a registry entry without `actions` is. A backend that calls `evaluateNotificationDelivery` itself passes `true` for an endpoint whose pushes show the opt-out action. The conformance runner's fake backend does so for its fixture device; no vector outcome changed. The JSON Schemas for the endpoint registration and the deployment carry both fields. — Thanks @imjlk!
+
 ## 0.28.0 — 2026-10-25
 
 ### Added
