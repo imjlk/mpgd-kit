@@ -178,6 +178,27 @@ describe('createCapacitorCrashReporter', () => {
     await expect(consented.recordError(new Error('consented'))).resolves.toBe(true);
   });
 
+  it('still applies the native opt-out when the preference store throws', async () => {
+    const plugin = createPlugin();
+    const reporter = createCapacitorCrashReporter({
+      ...base,
+      collectionPreference: {
+        read() {
+          throw new Error('storage unavailable');
+        },
+        write() {
+          throw new Error('quota exceeded');
+        },
+      },
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    await expect(reporter.setCollectionEnabled(false)).resolves.toBeUndefined();
+    expect(plugin.setEnabled).toHaveBeenCalledWith({ enabled: false });
+    expect(plugin.deleteUnsentReports).toHaveBeenCalledTimes(1);
+    await expect(reporter.recordError(new Error('after opt-out'))).resolves.toBe(false);
+  });
+
   it('takes a missing choice from the iOS SDK', async () => {
     const plugin = createPlugin({ isEnabled: vi.fn(async () => ({ enabled: false })) });
     const reporter = createCapacitorCrashReporter({

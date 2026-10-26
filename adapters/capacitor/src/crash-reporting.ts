@@ -168,7 +168,16 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
   // across launches but Android cannot read it back, so the reporter keeps
   // its own copy; on iOS the SDK's value fills a missing one.
   const preference = options.collectionPreference ?? createLocalCrashCollectionPreferenceStore();
-  let collectionEnabled: boolean | undefined = preference.read()
+  // A game-supplied store may throw; the choice then lives for the session
+  // only, and the native toggle still runs.
+  const readPreference = (): boolean | undefined => {
+    try {
+      return preference.read();
+    } catch {
+      return undefined;
+    }
+  };
+  let collectionEnabled: boolean | undefined = readPreference()
     ?? (options.requireConsent === true ? false : undefined);
   let ready: Promise<boolean> | undefined;
   const prepare = (): Promise<boolean> => {
@@ -252,7 +261,11 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     async setCollectionEnabled(enabled) {
       // Set before any wait, so a report racing with the toggle sees it.
       collectionEnabled = enabled;
-      preference.write(enabled);
+      try {
+        preference.write(enabled);
+      } catch {
+        // Kept for this session; the SDK still persists the native choice.
+      }
       if (!await prepare()) {
         return;
       }
