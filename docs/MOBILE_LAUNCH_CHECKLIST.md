@@ -283,6 +283,13 @@ pnpm exec mpgd deploy status --game . --game-id mygame --release beta-001
 - [ ] iOS goes to an internal TestFlight group. The submission reports
       `action-required` while TestFlight waits for the export-compliance
       answer ([TestFlight](./TESTFLIGHT_INTERNAL_SUBMISSION.md)).
+- [ ] Push (shells with `--providers notifications`): the iOS store build
+      reads the signed IPA's entitlements and fails unless `aps-environment`
+      is `production`. The shell's entitlements file says `development`, and
+      Xcode signs the value from the App Store profile. When the build fails,
+      either the profile lacks Push Notifications (enable it on the App ID,
+      then regenerate the profile) or the export used a development profile
+      ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md#4-ios)).
 - [ ] CI: `pnpm exec mpgd deploy workflow init` writes a game-owned workflow
       ([native deploy CI](./GAME_NATIVE_DEPLOY_CI.md)).
 

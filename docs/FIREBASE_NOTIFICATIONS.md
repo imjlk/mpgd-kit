@@ -148,7 +148,10 @@ initializer refuses a game or shell that lists it; remove it first.
      ([Apple](https://developer.apple.com/documentation/bundleresources/entitlements/aps-environment)),
      so an App Store profile ships `production`. The App ID needs Push
      Notifications enabled, and the distribution profile must be generated
-     after that, or the signed archive fails.
+     after that. The iOS store build reads the exported IPA's signed
+     entitlements and fails unless `aps-environment` is `production`, naming
+     the cause: a profile without the Push capability, or a development
+     profile used for the export.
    - **AppDelegate.** The APNs registration callbacks post
      `.capacitorDidRegisterForRemoteNotifications` and
      `.capacitorDidFailToRegisterForRemoteNotifications`, as the

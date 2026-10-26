@@ -94,6 +94,16 @@ export function inspectNativeStorePolicy(input: {
   ];
 }
 
+/**
+ * Whether the shell's package.json installs `@capacitor-firebase/messaging`
+ * (`--providers notifications`): its store IPA must then be signed with
+ * `aps-environment` = `production`.
+ */
+export function shellInstallsFirebaseMessaging(shellApp: string): boolean {
+  const shellPackage = join(shellApp, 'package.json');
+  return existsSync(shellPackage) && shellUsesFirebaseMessaging(readJson(shellPackage));
+}
+
 function readJson(file: string): unknown {
   const source = readFileSync(file, 'utf8');
   try {
