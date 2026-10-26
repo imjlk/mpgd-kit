@@ -143,7 +143,8 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     })();
     return ready;
   };
-  const collecting = async (): Promise<boolean> => collectionEnabled !== false && await prepare();
+  // Read after the wait: the player may turn collection off meanwhile.
+  const collecting = async (): Promise<boolean> => await prepare() && collectionEnabled !== false;
   // Native crashes can happen before any JavaScript report, so the context
   // keys are set right away. Keys stay on the device until a report is sent,
   // so this does not bypass `requireConsent`.
@@ -195,10 +196,11 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
       }
     },
     async setCollectionEnabled(enabled) {
+      // Set before any wait, so a report racing with the toggle sees it.
+      collectionEnabled = enabled;
       if (!await prepare()) {
         return;
       }
-      collectionEnabled = enabled;
       try {
         await plugin.setEnabled({ enabled });
         if (!enabled) {

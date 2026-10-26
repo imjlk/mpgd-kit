@@ -131,6 +131,21 @@ describe('createCapacitorCrashReporter', () => {
     expect(plugin.recordException).toHaveBeenCalledTimes(1);
   });
 
+  it('does not record a report that races with turning collection off', async () => {
+    const plugin = createPlugin();
+    const reporter = createCapacitorCrashReporter({ ...base, isPluginAvailable: () => true, plugin });
+    // Both start while the context keys are still being set.
+    const report = reporter.recordError(new Error('raced'));
+    const breadcrumb = reporter.log('raced');
+    const toggle = reporter.setCollectionEnabled(false);
+    await expect(report).resolves.toBe(false);
+    await breadcrumb;
+    await toggle;
+    expect(plugin.recordException).not.toHaveBeenCalled();
+    expect(plugin.log).not.toHaveBeenCalled();
+    expect(plugin.deleteUnsentReports).toHaveBeenCalledTimes(1);
+  });
+
   it('reports not-configured and stops calling when Firebase is not set up', async () => {
     const plugin = createPlugin({
       setCustomKey: vi.fn(async () => {
