@@ -18,7 +18,10 @@ let package = Package(
     name: "MpgdCapacitorStoreKit",
     platforms: bridgeTestsOnly ? [.iOS(.v15), .macOS(.v14)] : [.iOS(.v15)],
     products: bridgeTestsOnly ? [] : [
-        .library(name: "MpgdCapacitorStoreKit", targets: ["MpgdCapacitorStoreKit"])
+        .library(name: "MpgdCapacitorStoreKit", targets: ["MpgdCapacitorStoreKit"]),
+        // `cap sync ios` derives the product it links from the npm package
+        // name (`@mpgd/capacitor-storekit` -> `MpgdCapacitorStorekit`).
+        .library(name: "MpgdCapacitorStorekit", targets: ["MpgdCapacitorStoreKit"])
     ],
     dependencies: (bridgeTestsOnly ? [] : [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.5.2")

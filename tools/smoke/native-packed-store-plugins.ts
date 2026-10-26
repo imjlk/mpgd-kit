@@ -121,6 +121,11 @@ try {
     packageSwift,
     /\.library\(name: "MpgdCapacitorStoreKit", targets: \["MpgdCapacitorStoreKit"\]\)/u,
   );
+  // The product `cap sync ios` links for `@mpgd/capacitor-storekit` (Capacitor's fixName).
+  assert.match(
+    packageSwift,
+    /\.library\(name: "MpgdCapacitorStorekit", targets: \["MpgdCapacitorStoreKit"\]\)/u,
+  );
   const swift = storeKit.read('ios/Sources/CapacitorStoreKit/CapacitorStoreKitPlugin.swift');
   assert.match(swift, /@objc\(CapacitorStoreKitPlugin\)/u);
   assert.match(swift, /public let jsName = "CapacitorStoreKit"/u);
