@@ -479,6 +479,95 @@ async function settled(): Promise<void> {
   );
 }
 
+// getAvailablePurchases({ restore: true }): the player's Restore Purchases read also lists
+// durables bound to another or no token (a reinstall, a new device); consumables, unmapped
+// SKUs, and kind mismatches stay filtered, and recovery reads keep every filter.
+{
+  const earlierGuest = crypto.randomUUID();
+  const ownDurable = fakeTransaction({
+    transactionId: '40',
+    type: 'non_consumable',
+    productId: removeAdsSku,
+    unfinished: false,
+  });
+  const earlierDurable = fakeTransaction({
+    transactionId: '41',
+    type: 'non_consumable',
+    productId: removeAdsSku,
+    appAccountToken: earlierGuest,
+    unfinished: false,
+  });
+  const unboundDurable = {
+    transactionId: '42',
+    originalTransactionId: '42',
+    productId: removeAdsSku,
+    type: 'non_consumable',
+    purchasedAt: '2026-07-16T12:00:00Z',
+    signedTransaction: 'header.payload.signature-42',
+    unfinished: false,
+  } as const;
+  const earlierConsumable = fakeTransaction({
+    transactionId: '43',
+    appAccountToken: earlierGuest,
+    unfinished: true,
+  });
+  const earlierRetired = fakeTransaction({
+    transactionId: '44',
+    type: 'non_consumable',
+    productId: 'com.example.game.retired',
+    appAccountToken: earlierGuest,
+    unfinished: false,
+  });
+  const earlierWrongKind = fakeTransaction({
+    transactionId: '45',
+    type: 'non_consumable',
+    productId: sku,
+    appAccountToken: earlierGuest,
+    unfinished: false,
+  });
+  const plugin = createFakeStoreKitPlugin({
+    transactions: [
+      ownDurable,
+      earlierDurable,
+      unboundDurable,
+      earlierConsumable,
+      earlierRetired,
+      earlierWrongKind,
+    ],
+  });
+  const { sdk, diagnostics } = createSdk({ plugin });
+  assertEqual(
+    (await sdk.getAvailablePurchases({})).map((purchase) => purchase.transactionId),
+    ['40'],
+    'a recovery read lists only the active token',
+  );
+  diagnostics.length = 0;
+  const restored = await sdk.getAvailablePurchases({ restore: true });
+  assertEqual(
+    restored.map((purchase) => [purchase.transactionId, purchase.accountBinding?.value]),
+    [
+      ['40', fakeAccountToken],
+      ['41', earlierGuest],
+      ['42', undefined],
+    ],
+    "a restore read adds the durables of an earlier guest's token and of no token, with their own binding",
+  );
+  assertEqual(
+    restored.find((purchase) => purchase.transactionId === '41')?.token,
+    earlierDurable.signedTransaction,
+    'a restored durable carries its JWS for the backend to verify',
+  );
+  assertEqual(
+    diagnostics,
+    [
+      { type: 'account-mismatch', sku, transactionId: '43', appAccountToken: earlierGuest },
+      { type: 'unmapped-sku', sku: 'com.example.game.retired', transactionId: '44' },
+      { type: 'account-mismatch', sku, transactionId: '45', appAccountToken: earlierGuest },
+    ],
+    "an earlier guest's consumable, an unmapped SKU, and a kind mismatch stay excluded on a restore read",
+  );
+}
+
 // finishTransaction: the ledger entry authorizes the native finish.
 {
   const plugin = createFakeStoreKitPlugin({
@@ -574,6 +663,52 @@ async function settled(): Promise<void> {
     mismatched.calls.filter((call) => call.startsWith('finish:')),
     [],
     'another account, a revoked transaction, and an unbound transaction never reach native finish',
+  );
+
+  // A durable StoreKit already finished has nothing left to finish, whatever
+  // its token: a restore shared from an earlier guest's purchase ends there.
+  // An unfinished one of another token is still never finished.
+  const restoredPlugin = createFakeStoreKitPlugin({
+    transactions: [
+      fakeTransaction({
+        transactionId: '25',
+        type: 'non_consumable',
+        productId: removeAdsSku,
+        appAccountToken: otherAccount,
+        unfinished: false,
+      }),
+      fakeTransaction({
+        transactionId: '26',
+        type: 'non_consumable',
+        productId: removeAdsSku,
+        appAccountToken: otherAccount,
+        unfinished: true,
+      }),
+      fakeTransaction({
+        transactionId: '27',
+        type: 'non_consumable',
+        productId: removeAdsSku,
+        appAccountToken: otherAccount,
+        unfinished: false,
+        revokedAt: '2026-07-17T12:00:00Z',
+      }),
+    ],
+  });
+  const restoredSdk = createSdk({ plugin: restoredPlugin }).sdk;
+  const restoredFinish = restoredSdk.finishTransaction;
+  if (restoredFinish === undefined) {
+    throw new Error('finishTransaction is required for finish: client.');
+  }
+  assertEqual(
+    await Promise.all(['25', '26', '27'].map((transactionId) =>
+      restoredFinish.call(restoredSdk, { transactionId, isConsumable: false, ledgerEntryId: 'le-share' }))),
+    [{ finished: true }, { finished: false }, { finished: false }],
+    'an already finished durable is finished; an unfinished or revoked one of another token is not',
+  );
+  assertEqual(
+    restoredPlugin.calls.filter((call) => call.startsWith('finish:')),
+    [],
+    'none of them reaches the native finish',
   );
 }
 
