@@ -1,5 +1,17 @@
 # @mpgd/adapter-ait
 
+## 0.21.2 — 2026-10-27
+
+### Patch changes
+
+- [0a0ebd93](https://github.com/imjlk/mpgd-kit/commit/0a0ebd93bfda1aec7737f20465fe78bd4d562767) Align the tested Apps in Toss WebView SDK and CLI baseline on 3.9.0 in the adapter, generated AIT hosts and lite/Phaser starters. This SDK fixes completed/refunded order pagination and reports product-grant callback failures once. Existing games upgrade their game and wrapper pins together and revalidate native identity, sharing, review, advertising and purchase flows; Kit upgrades do not silently replace an uploaded game bundle. — Thanks @imjlk!
+
+## 0.21.1 — 2026-10-27
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.16.4, @mpgd/catalog@0.11.3, @mpgd/game-runtime@0.8.6, @mpgd/platform@0.32.0
+
 ## 0.21.0 — 2026-10-26
 
 ### Minor changes
