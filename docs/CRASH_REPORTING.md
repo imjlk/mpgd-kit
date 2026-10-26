@@ -69,9 +69,12 @@ The initializer:
 
 Then add the Firebase files, the same ones notifications use
 ([Firebase setup](FIREBASE_NOTIFICATIONS.md)): `google-services.json` in
-`android/app/` and `GoogleService-Info.plist` in the App target. Without them
-Firebase does not start, nothing is collected, and `getStatus()` reports
-`not-configured` on Android. The plugin's own setup notes are in its
+`android/app/` and `GoogleService-Info.plist` in the App target; the
+initializer warns while either is missing. Without them Firebase does not
+start and nothing is collected. On Android `getStatus()` then reports
+`not-configured`; the iOS plugin only logs the missing plist and still calls
+Crashlytics, which has not been checked on a device, so never ship the iOS
+plugin without the plist. The plugin's own setup notes are in its
 [README](https://github.com/capawesome-team/capacitor-firebase/tree/main/packages/crashlytics).
 
 The Gradle plugin 3.0.8 needs the Android Gradle plugin 8.1+, Gradle 8.0+
@@ -113,7 +116,8 @@ await reporter?.log(`level ${id} started`);
 
 Custom keys, set once before the first report: `mpgd_target`,
 `mpgd_build_id`, `mpgd_app_version`, `mpgd_adapter`, and any keys passed as
-`crashReporting: { context }` (lowercase snake_case keys, plain values; put
+`crashReporting: { context }` (lowercase snake_case keys not starting with
+`mpgd_`, plain values; put
 the kit or content version here if the game tracks it). The kit never sets a
 Crashlytics user ID and never sends the player ID.
 
@@ -134,8 +138,13 @@ reports at once, and the native change may only take full effect on the next
 launch (the plugin says so for `setEnabled`).
 
 If the game's privacy policy needs consent **before** anything is collected,
-turn automatic collection off in the shell and call
-`setCollectionEnabled(true)` once the player agrees:
+create the gateway with `crashReporting: { requireConsent: true }`, turn
+automatic collection off in the shell, and call `setCollectionEnabled(true)`
+once the player agrees (or `setCollectionEnabled(false)` when they decline,
+which deletes what the SDK holds). With `requireConsent` the reporter sends no
+JavaScript report or breadcrumb in a session until the game calls
+`setCollectionEnabled(true)`, so apply the stored choice at every start. The
+shell keys:
 
 - Android, `AndroidManifest.xml` inside `<application>`:
   `<meta-data android:name="firebase_crashlytics_collection_enabled" android:value="false" />`
@@ -143,7 +152,10 @@ turn automatic collection off in the shell and call
 
 ([Android](https://firebase.google.com/docs/crashlytics/android/customize-crash-reports),
 [iOS](https://firebase.google.com/docs/crashlytics/ios/customize-crash-reports)).
-The initializer does not add these keys.
+The initializer does not add these keys. While collection is off the SDK
+keeps native crash reports on the device instead of sending them; whether it
+sends them once collection is turned on was not checked, so decline with
+`setCollectionEnabled(false)` rather than by never answering.
 
 ## Symbols
 

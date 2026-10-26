@@ -188,6 +188,15 @@ try {
       plan.warnings.some((warning) => /dSYMs/u.test(warning)),
       'the iOS steps are printed',
     );
+    for (const file of [
+      'android/app/google-services.json',
+      'ios/App/App/GoogleService-Info.plist',
+    ]) {
+      assert.ok(
+        plan.warnings.some((warning) => warning.includes(file)),
+        `the missing ${file} is reported`,
+      );
+    }
     applyCapacitorShellStarter(plan);
     assert.equal(readFileSync(path.join(root, 'package.json'), 'utf8'), gameBefore);
     const shell = readJson(root, 'apps/mobile-capacitor/package.json') as {
@@ -202,7 +211,6 @@ try {
     assert.deepEqual(manifest.providers['crash-reporting'], {
       packages: { [crashReportingPlugin]: crashReportingPluginVersion },
       platforms: ['android', 'ios'],
-      crashlyticsGradlePlugin: crashlyticsGradlePluginVersion,
     });
 
     // A rerun reads the selection from the manifest and keeps the shell's version.

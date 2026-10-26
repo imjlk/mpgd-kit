@@ -42,7 +42,6 @@ export const crashReportingAndroidSteps: readonly string[] = Object.freeze([
  * traces need the dSYMs uploaded (docs/CRASH_REPORTING.md#symbols).
  */
 export const crashReportingIosSteps: readonly string[] = Object.freeze([
-  'Add GoogleService-Info.plist to the App target (the same file notifications use).',
   'Upload dSYMs for every App Store build: add the Crashlytics run script build phase '
     + '("${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run") as the '
     + 'last phase of the App target, or run upload-symbols after each archive; see '
@@ -115,6 +114,20 @@ export function planCrashReportingProvider(input: {
         + '\nthen rerun.',
     );
   }
+  // Without the Firebase files Firebase does not start. Android then reports
+  // not-configured; the iOS plugin only logs it and still calls Crashlytics,
+  // so the plist must ship whenever the plugin does.
+  for (const [file, platform] of [
+    ['android/app/google-services.json', 'Android'],
+    ['ios/App/App/GoogleService-Info.plist', 'iOS'],
+  ] as const) {
+    if (!existsSync(path.join(shellRoot, file))) {
+      input.warnings.push(
+        `${crashReportingProviderId}: ${platform} crash reports need ${input.shellPath}/${file} from the `
+          + 'Firebase console (the same file notifications use); add it before a release build.',
+      );
+    }
+  }
   const iosProject = path.join(shellRoot, 'ios/App/App.xcodeproj/project.pbxproj');
   if (!existsSync(iosProject) || !iosProjectUploadsCrashlyticsSymbols(readFileSync(iosProject, 'utf8'))) {
     input.warnings.push(`${crashReportingProviderId}: on iOS, ${crashReportingIosSteps.join(' ')}`);
@@ -124,7 +137,6 @@ export function planCrashReportingProvider(input: {
     manifestEntry: {
       packages: { [crashReportingPlugin]: version },
       platforms: ['android', 'ios'],
-      crashlyticsGradlePlugin: crashlyticsGradlePluginVersion,
     },
   };
 }
