@@ -9,7 +9,11 @@ import { inspectSignedAndroidBundle } from './native-android-inspection';
 import type { NativeBuildPlan } from './native-build-mode';
 import { createNativeShellStage } from './native-build-stage';
 import { applyCapacitorShellCsp } from './native-shell-csp';
-import { inspectNativeStorePolicy, reportNativeStorePolicy } from './native-store-policy';
+import {
+  inspectNativeStorePolicy,
+  reportNativeStorePolicy,
+  shellInstallsFirebaseMessaging,
+} from './native-store-policy';
 import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
 import { resolveIosSigningPlan } from './native-ios-signing';
 import {
@@ -332,7 +336,14 @@ function executeIosBuildWithEnvironment(
         }
         releaseArtifact = `${artifactRoot}/App.ipa`;
         input.copyFile(join(exportRoot, exportedIpas[0] ?? ''), input.targetPath(releaseArtifact));
-        inspectSignedIosIpa(input.targetPath(releaseArtifact), expectedIosIdentity);
+        // The shell's entitlements file says development; the App Store
+        // profile must have signed it as production (Push capability).
+        inspectSignedIosIpa(input.targetPath(releaseArtifact), {
+          ...expectedIosIdentity,
+          ...(shellInstallsFirebaseMessaging(stagedShell)
+            ? { expectedApsEnvironment: 'production' as const }
+            : {}),
+        });
       } finally {
         rmSync(exportRoot, { recursive: true, force: true });
       }

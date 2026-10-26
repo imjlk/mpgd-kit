@@ -377,6 +377,13 @@ needs the same edits by hand:
   QA (see [the mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md)). A
   shell whose App target disagrees with a configured family fails a
   production build.
+- **iOS push (`--providers notifications`).** A newly generated iOS project
+  gets `App/App.entitlements` with `aps-environment` (`CODE_SIGN_ENTITLEMENTS`
+  on the App target), the AppDelegate's APNs token forwarding, and the
+  reference shell's cold-start tap forwarder in `SceneDelegate`. A shell that
+  installs `@capacitor-firebase/messaging` without one of them fails a
+  production build; a missing `GoogleService-Info.plist` in the App target is
+  a warning ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md#4-ios)).
 
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the

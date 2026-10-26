@@ -2,24 +2,29 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { readIosReleaseInfoPlist } from '../../packages/cli/src/native-shell-identity.js';
+import { readIosPushWiringInput } from '../../packages/cli/src/native-shell-ios-push-files.js';
 import {
   inspectAndroidManifestAds,
   inspectAndroidManifestOrientation,
   inspectIosAppPrivacyManifest,
+  inspectIosFirebaseConfig,
   inspectIosInfoPlistAds,
   inspectIosInfoPlistOrientation,
   inspectIosInfoPlistStorePolicy,
   inspectIosProjectDeviceFamily,
+  inspectIosPushWiring,
   readGameAdvertisingIdPolicy,
   readGameNativeOrientation,
   readIosDeviceFamily,
   shellUsesAdMob,
+  shellUsesFirebaseMessaging,
   type NativeShellPolicyIssue,
 } from '../../packages/cli/src/native-shell-store-policy.js';
 
 /**
  * Reads the store-facing settings of the game-owned shell (never the stage)
- * before packaging. Warnings are printed for every profile; errors fail a
+ * before packaging, and, when the shell installs the Firebase messaging
+ * plugin, the iOS push wiring. Warnings are printed for every profile; errors fail a
  * production build, where the shell would ship a binary the store rejects or
  * that crashes at launch.
  */
@@ -39,7 +44,9 @@ export function inspectNativeStorePolicy(input: {
     : undefined;
   const orientation = readGameNativeOrientation(gameConfigJson);
   const shellPackage = join(input.shellApp, 'package.json');
-  const usesAds = existsSync(shellPackage) && shellUsesAdMob(readJson(shellPackage));
+  const shellPackageJson = existsSync(shellPackage) ? readJson(shellPackage) : undefined;
+  const usesAds = shellUsesAdMob(shellPackageJson);
+  const usesPush = shellUsesFirebaseMessaging(shellPackageJson);
   if (input.platform === 'ios') {
     const project = join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj');
     if (!existsSync(project)) {
@@ -51,6 +58,12 @@ export function inspectNativeStorePolicy(input: {
       ...inspectIosProjectDeviceFamily(projectSource, deviceFamily),
       ...inspectIosAppPrivacyManifest(projectSource),
     ];
+    // `--providers notifications`: the entitlement, the AppDelegate token
+    // forwarding, and the scene delegate's cold-start tap forwarding.
+    const pushInput = usesPush ? readIosPushWiringInput(dirname(dirname(project))) : undefined;
+    if (pushInput !== undefined) {
+      issues.push(...inspectIosPushWiring(pushInput), ...inspectIosFirebaseConfig(projectSource));
+    }
     const plist = join(dirname(dirname(project)), readIosReleaseInfoPlist(projectSource));
     if (existsSync(plist)) {
       const plistSource = readFileSync(plist, 'utf8');
@@ -79,6 +92,16 @@ export function inspectNativeStorePolicy(input: {
       usesAds ? readGameAdvertisingIdPolicy(gameConfigJson) : 'declared',
     ),
   ];
+}
+
+/**
+ * Whether the shell's package.json installs `@capacitor-firebase/messaging`
+ * (`--providers notifications`): its store IPA must then be signed with
+ * `aps-environment` = `production`.
+ */
+export function shellInstallsFirebaseMessaging(shellApp: string): boolean {
+  const shellPackage = join(shellApp, 'package.json');
+  return existsSync(shellPackage) && shellUsesFirebaseMessaging(readJson(shellPackage));
 }
 
 function readJson(file: string): unknown {

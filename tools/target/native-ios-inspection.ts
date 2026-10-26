@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { readPlistTopLevelValue } from '../../packages/cli/src/native-shell-store-policy.js';
 import { nativeInspectionEnvironment } from './native-inspection-environment';
 
 import type {
@@ -22,6 +23,11 @@ export interface IosInspectionInput {
   readonly expectedMarketingVersion: string;
   readonly expectedBuildNumber: string;
   readonly expectedTeamId: string;
+  /**
+   * Set for a store build of a shell that installs the Firebase messaging
+   * plugin: the signed app must carry `aps-environment` = `production`.
+   */
+  readonly expectedApsEnvironment?: 'production';
   readonly runner?: NativeInspectionCommandRunner;
 }
 
@@ -91,6 +97,17 @@ export function inspectSignedIosApplication(
     throw new Error('iOS app is not signed for the expected development team.');
   }
 
+  if (input.expectedApsEnvironment !== undefined) {
+    const entitlements = runner.run('codesign', ['-d', '--entitlements', '-', '--xml', appPath]);
+    if (entitlements.status !== 0) {
+      throw new Error('iOS app entitlements could not be read.');
+    }
+    const problem = iosStorePushEntitlementError(readSignedApsEnvironment(entitlements.stdout));
+    if (problem !== undefined) {
+      throw new Error(problem);
+    }
+  }
+
   const fields = [
     ['bundleId', 'CFBundleIdentifier', input.expectedBundleId],
     ['marketingVersion', 'CFBundleShortVersionString', input.expectedMarketingVersion],
@@ -119,6 +136,61 @@ export function inspectSignedIosApplication(
     }
   }
   return { ...observed, teamId: input.expectedTeamId, signed: true };
+}
+
+/**
+ * The `aps-environment` value of a signed app's entitlements, from
+ * `codesign -d --entitlements - --xml` output (a plist; anything before it,
+ * such as the legacy blob header, is skipped). `undefined` when the
+ * entitlement is absent; `null` when it is not a string or the output is not
+ * a readable plist.
+ */
+export function readSignedApsEnvironment(codesignOutput: string): string | null | undefined {
+  const start = codesignOutput.search(/<\?xml|<plist\b/u);
+  if (start === -1) {
+    return codesignOutput.trim() === '' ? undefined : null;
+  }
+  let value: string | undefined;
+  try {
+    value = readPlistTopLevelValue(codesignOutput.slice(start), 'aps-environment')?.xml;
+  } catch {
+    return null;
+  }
+  if (value === undefined) {
+    return undefined;
+  }
+  return /^<string>\s*([^<]*?)\s*<\/string>$/u.exec(value)?.[1] ?? null;
+}
+
+/**
+ * Why a store build of a shell with the Firebase messaging plugin cannot
+ * receive production pushes, or `undefined` when it is signed with
+ * `aps-environment` = `production`. The shell's entitlements file says
+ * `development`; Xcode signs the value from the provisioning profile
+ * (https://developer.apple.com/documentation/bundleresources/entitlements/aps-environment),
+ * so what reaches the IPA shows which profile signed it.
+ */
+export function iosStorePushEntitlementError(apsEnvironment: string | null | undefined): string | undefined {
+  if (apsEnvironment === 'production') {
+    return undefined;
+  }
+  const fix = 'Enable Push Notifications on the App ID in the Apple Developer account, regenerate the '
+    + 'App Store provisioning profile (MPGD_IOS_PROVISIONING_PROFILE_FILE), and rebuild '
+    + '(docs/FIREBASE_NOTIFICATIONS.md#4-ios).';
+  if (apsEnvironment === undefined) {
+    return 'The store IPA has no aps-environment entitlement although the shell installs '
+      + '@capacitor-firebase/messaging: the provisioning profile that signed it lacks the Push '
+      + 'Notifications capability (the App ID has no push, or the profile was generated before it '
+      + `was enabled), so the app never gets an APNs token. ${fix}`;
+  }
+  if (apsEnvironment === 'development') {
+    return 'The store IPA is signed with aps-environment = development although it is an App Store '
+      + 'build: the export used a development provisioning profile, so its APNs token belongs to '
+      + 'the sandbox and production pushes never arrive. Export with the App Store distribution '
+      + `profile. ${fix}`;
+  }
+  return `The store IPA's aps-environment entitlement is ${apsEnvironment === null ? 'unreadable' : apsEnvironment}, `
+    + `not production, so production pushes never arrive. ${fix}`;
 }
 
 function assertNoDebugServer(file: string): void {
