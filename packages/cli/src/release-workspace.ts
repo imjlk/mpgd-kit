@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import { planNativeDeployment, type NativeDeploymentPlan } from './deploy-planning.js';
+import { assertNativeBuildSymbols, type NativeBuildSymbols } from './native-build-symbols.js';
 import {
   runReleaseProcess,
   type ReleaseProcessInput,
@@ -45,6 +46,8 @@ export interface PinnedNativeBuildResult {
   readonly artifact: string;
   readonly releaseManifest: string;
   readonly runId: string;
+  /** Crash symbols of this build, as absolute paths inside the pinned game. */
+  readonly symbols?: NativeBuildSymbols;
 }
 
 const gitShaPattern = /^[0-9a-f]{40}$/u;
@@ -383,7 +386,56 @@ export async function runPinnedNativeBuild(
     || manifest.kitGitSha !== workspace.input.kitGitSha) {
     throw new Error('Pinned native build manifest provenance does not match its inputs.');
   }
-  return { artifact, releaseManifest, runId: status.runId };
+  const symbols = status.symbols === undefined
+    ? undefined
+    : resolvePinnedBuildSymbols(workspace.gameRoot, input.target, status.symbols);
+  return {
+    artifact,
+    releaseManifest,
+    runId: status.runId,
+    ...(symbols === undefined ? {} : { symbols }),
+  };
+}
+
+/** Resolve the status file's symbol paths to regular files inside the pinned game. */
+function resolvePinnedBuildSymbols(
+  gameRoot: string,
+  target: 'android' | 'ios',
+  value: unknown,
+): NativeBuildSymbols {
+  assertNativeBuildSymbols(value, (file) => file.startsWith(`release-output/native/${target}/`)
+    && !path.isAbsolute(file)
+    && !file.split(/[\\/]/u).some((segment) => segment === '' || segment === '..'));
+  const canonicalGameRoot = realpathSync(gameRoot);
+  const resolve = (file: string): string => {
+    const absolute = assertInsideWorkspace(gameRoot, file);
+    if (!existsSync(absolute) || !lstatSync(absolute).isFile()) {
+      throw new Error(`Pinned native build symbol file is missing: ${file}`);
+    }
+    const relative = path.relative(canonicalGameRoot, realpathSync(absolute));
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('Pinned native build symbol file resolves outside its workspace.');
+    }
+    return absolute;
+  };
+  if (value.r8Mapping !== undefined) {
+    if (target !== 'android') {
+      throw new Error('Only an Android build records an R8 mapping file.');
+    }
+    return { r8Mapping: resolve(value.r8Mapping) };
+  }
+  const crashlytics = value.crashlytics;
+  if (crashlytics === undefined || target !== 'ios') {
+    throw new Error('Only an iOS build records Crashlytics dSYMs.');
+  }
+  return {
+    crashlytics: {
+      dsymArchive: resolve(crashlytics.dsymArchive),
+      dsyms: crashlytics.dsyms,
+      uploadTool: resolve(crashlytics.uploadTool),
+      googleServiceInfo: resolve(crashlytics.googleServiceInfo),
+    },
+  };
 }
 
 function assertPinnedInput(input: PinnedReleaseInput): void {

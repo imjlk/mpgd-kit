@@ -474,7 +474,7 @@ try {
         || nativeAttempt === undefined || nativeWebBundle === undefined) {
         throw new Error('Native build plan is missing.');
       }
-      const releaseArtifact = await executeNativeTargetBuild({
+      const nativeOutput = await executeNativeTargetBuild({
         targetName,
         target,
         profile,
@@ -490,12 +490,13 @@ try {
         copyIosSyncSwiftPackage,
         run,
       });
+      const releaseArtifact = nativeOutput.artifact;
       if (assetTargetReport !== undefined) {
         await assertAssetPackNativeArtifact(assetTargetReport, targetPath(releaseArtifact));
       }
       await writeRemoteAssetPacks();
       writeManifest(targetName, profile, releaseArtifact, env);
-      nativeAttempt.complete(releaseArtifact);
+      nativeAttempt.complete(releaseArtifact, nativeOutput.symbols);
       nativeCompleted = true;
       break;
     }

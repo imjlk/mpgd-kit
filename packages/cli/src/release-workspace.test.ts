@@ -214,7 +214,23 @@ fs.mkdirSync(path.join(gameRoot, path.dirname(artifact)), { recursive: true });
 fs.writeFileSync(path.join(gameRoot, artifact), 'signed test fixture');
 const status = path.join(gameRoot, 'artifacts/native-build-status', target + '.json');
 fs.mkdirSync(path.dirname(status), { recursive: true });
-fs.writeFileSync(status, JSON.stringify({ target, status: 'success', runId: 'current-run', artifact }));
+const symbolMode = process.env.MPGD_FAKE_SYMBOLS;
+let symbols;
+if (symbolMode === 'mapping' || symbolMode === 'missing') {
+  const mapping = 'release-output/native/' + target + '/symbols/'
+    + (symbolMode === 'mapping' ? 'mapping.txt' : 'absent.txt');
+  if (symbolMode === 'mapping') {
+    fs.mkdirSync(path.join(gameRoot, path.dirname(mapping)), { recursive: true });
+    fs.writeFileSync(path.join(gameRoot, mapping), 'com.example.Game -> a:');
+  }
+  symbols = { r8Mapping: mapping };
+} else if (symbolMode === 'escape') {
+  symbols = { r8Mapping: 'release-output/native/' + target + '/../../../../outside.txt' };
+}
+fs.writeFileSync(status, JSON.stringify({
+  target, status: 'success', runId: 'current-run-' + (symbolMode || 'plain'), artifact,
+  ...(symbols === undefined ? {} : { symbols }),
+}));
 const manifest = path.join(gameRoot, 'artifacts/release-manifest.json');
 fs.writeFileSync(manifest, JSON.stringify({
   gitSha: process.env.MPGD_FAKE_GAME_SHA,
@@ -241,8 +257,34 @@ fs.writeFileSync(manifest, JSON.stringify({
     mode: 'signed-archive',
     environment: buildEnvironment,
   });
-  assert.equal(built.runId, 'current-run');
+  assert.equal(built.runId, 'current-run-plain');
   assert.equal(existsSync(built.artifact), true);
+  assert.equal(built.symbols, undefined);
+  const withMapping = await runPinnedNativeBuild(first, {
+    target: 'android',
+    profile: 'production',
+    mode: 'signed-archive',
+    environment: { ...buildEnvironment, MPGD_FAKE_SYMBOLS: 'mapping' },
+  });
+  assert.equal(
+    readFileSync(withMapping.symbols?.r8Mapping ?? '', 'utf8'),
+    'com.example.Game -> a:',
+  );
+  assert.equal(path.isAbsolute(withMapping.symbols?.r8Mapping ?? ''), true);
+  for (const [mode, message] of [
+    ['missing', /symbol file is missing/u],
+    ['escape', /symbols are malformed/u],
+  ] as const) {
+    await assert.rejects(
+      runPinnedNativeBuild(first, {
+        target: 'android',
+        profile: 'production',
+        mode: 'signed-archive',
+        environment: { ...buildEnvironment, MPGD_FAKE_SYMBOLS: mode },
+      }),
+      message,
+    );
+  }
   assert.deepEqual(readdirSync(externalTemporary), []);
   assert.deepEqual(
     readdirSync(first.workspaceRoot).filter((entry) => entry.startsWith('mpgd-native-tmp-')),
