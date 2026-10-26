@@ -1,4 +1,23 @@
+buildscript {
+    // Same Kotlin line as the Capacitor 8 community plugins; a shell that pins
+    // `kotlin_version` in its root project wins. OpenIAP Google 4.0.6 needs a
+    // 2.1.20+ Kotlin compiler.
+    ext.kotlin_version = project.hasProperty('kotlin_version') ? rootProject.ext.kotlin_version : '2.2.20'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.13.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
 apply plugin: 'com.android.library'
+// AGP 9 ships built-in Kotlin; only older AGP needs the Kotlin Android plugin.
+if (project.extensions.findByName('kotlin') == null) {
+    apply plugin: 'kotlin-android'
+}
 
 android {
     namespace 'dev.mpgd.capacitor.playbilling'
@@ -7,6 +26,21 @@ android {
     defaultConfig {
         minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
         targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
     }
 }
 
@@ -17,6 +51,13 @@ repositories {
 
 dependencies {
     implementation project(':capacitor-android')
-    implementation 'com.android.billingclient:billing:9.1.0'
+    // OpenIAP Google core, Play flavor, pinned exactly. It brings Play Billing
+    // 9.1.0 as an API dependency, so the plugin no longer declares Billing
+    // itself. See docs/specs/commerce/openiap-migration.md before changing it.
+    implementation 'io.github.hyochan.openiap:openiap-google:4.0.6'
+    // OpenIAP publishes coroutines as a runtime dependency; the plugin calls
+    // its suspend API directly, so it needs them at compile time too.
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0'
     compileOnly 'androidx.appcompat:appcompat:1.7.1'
+    testImplementation 'junit:junit:4.13.2'
 }

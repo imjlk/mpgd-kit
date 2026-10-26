@@ -26,7 +26,7 @@
       "src": "android"
     }
   },
-  "files": ["dist", "android/build.gradle", "android/src"],
+  "files": ["dist", "android/build.gradle", "android/src/main"],
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",

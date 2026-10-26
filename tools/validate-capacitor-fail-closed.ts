@@ -118,18 +118,29 @@ const sourcesIn = (directory: string, extension: string): string =>
     .filter((entry) => entry.isFile() && entry.name.endsWith(extension))
     .map((entry) => readFileSync(`${entry.parentPath}/${entry.name}`, 'utf8'))
     .join('\n');
-const playBilling = read(
-  'native-plugins/capacitor-play-billing/android/src/main/java/dev/mpgd/capacitor/playbilling/CapacitorPlayBillingPlugin.java',
+const playBilling = sourcesIn(
+  'native-plugins/capacitor-play-billing/android/src/main/java/dev/mpgd/capacitor/playbilling',
+  '.kt',
 );
 assert.match(
   playBilling,
-  /queryPurchasesAsync\(/u,
-  'Play Billing must support owned-purchase requery',
+  /@CapacitorPlugin\(name = "CapacitorPlayBilling"\)/u,
+  'Play Billing must keep its Capacitor registration name',
+);
+assert.match(
+  playBilling,
+  /getAvailableItems\(ProductQueryType\.InApp\)/u,
+  'Play Billing must support owned in-app purchase requery',
 );
 assert.doesNotMatch(
   playBilling,
-  /\b(?:acknowledgePurchase|consumeAsync)\s*\(/u,
+  /\b(?:acknowledgePurchase|consumeAsync|acknowledgePurchaseAndroid|consumePurchaseAndroid|finishTransaction)\s*\(/u,
   'Client-side Billing must never finalize before the backend ledger grant',
+);
+assert.match(
+  playBilling,
+  /factory\.storeId != PlayBillingPolicy\.PLAY_STORE_ID/u,
+  'Play Billing must refuse an OpenIAP provider other than play',
 );
 
 const storeKit = sourcesIn('native-plugins/capacitor-storekit/ios/Sources', '.swift');
