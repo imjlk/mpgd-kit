@@ -1,0 +1,5 @@
+---
+npm/@mpgd/cli: patch (Fixed)
+---
+
+Notifications games install under pnpm 11, and simulator builds work for Capacitor shells with Swift package plugins. A generated game's `pnpm-workspace.yaml` now denies `@firebase/util`'s build script (`'@firebase/util': false`), so `pnpm install` no longer stops with `ERR_PNPM_IGNORED_BUILDS` once the notifications starter adds `firebase`. `mpgd target init capacitor --providers notifications` adds the missing `@firebase/util` and `protobufjs` entries to an older game's `allowBuilds`, or prints them when the game has no `pnpm-workspace.yaml` or uses a form it does not edit. The shell's standalone install runs with `--ignore-scripts`, because `--ignore-workspace` reads no `allowBuilds`. The iOS simulator build (`MPGD_RUN_IOS_SIMULATOR_BUILD=1`) applies the smoke `Info.plist`, the storyboard and asset-catalog exclusions and its Swift condition to the App target only, instead of to every target, which failed in the Firebase and `@mpgd/capacitor-game-services` resource-bundle targets.
