@@ -1419,6 +1419,34 @@ async function verifyPurchaseForRetry(
     verification,
     request.platformTransactionId,
   );
+  if (
+    context.restoreSharing.mode === 'share'
+    && product.type === 'non_consumable'
+    && context.store.findEntitlementTransactionsByEvidencePrefix !== undefined
+  ) {
+    // The retention purge can delete a purchase's first grant while its
+    // shares remain: the buyer then takes a holder's place under the limit
+    // like any other player, never a replacement first grant past it.
+    const holders = await listPurchaseHolders(context.store, verification.verificationId);
+    if (holders.first === undefined && holders.shared.length > 0) {
+      return shareRestoredPurchase(
+        request,
+        {
+          product,
+          platformProductId,
+          verification,
+          verifiedStore,
+          bindingMatches: true,
+          refusal: assertVerifyPurchaseResponse({
+            verified: false,
+            alreadyProcessed: false,
+            reason: 'EVIDENCE_ALREADY_PROCESSED',
+          }),
+        },
+        context,
+      );
+    }
+  }
   // The store written is the one the registry routed to (an entry's own
   // store, or a declared fallback store); a fallback serving undeclared
   // stores and the v1 path record the request's resolved store.

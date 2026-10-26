@@ -243,7 +243,9 @@ export async function listPurchaseHolders(
   store: GameServicesStore,
   purchaseVerificationId: string,
 ): Promise<PurchaseHolders> {
-  const first = await findPurchaseGrantRecord(store, purchaseVerificationId);
+  // Shares first, the first grant after: a share written after this read
+  // takes the slot this caller would take (and collides), and a first grant
+  // written meanwhile is seen, so a writer's holder count is exact.
   const holderPrefix = purchaseHolderEvidencePrefix(purchaseVerificationId);
   const listByPrefix = store.findEntitlementTransactionsByEvidencePrefix;
   const shared: { readonly slot: number; readonly grant: ProductGrantTransaction }[] = [];
@@ -281,6 +283,7 @@ export async function listPurchaseHolders(
     }
   }
   shared.sort((left, right) => left.slot - right.slot);
+  const first = await findPurchaseGrantRecord(store, purchaseVerificationId);
   return {
     ...(first === undefined ? {} : { first }),
     shared: shared.map((entry) => entry.grant),

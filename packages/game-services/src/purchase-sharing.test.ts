@@ -652,6 +652,36 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   );
 }
 
+// After the purge of the first grant, the buyer's own checkout takes a holder's
+// place under the limit, never a replacement first grant past it.
+{
+  const store = createInMemoryGameServicesStore();
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share', maxHolders: 2 },
+  });
+  await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  await backend.purchases.verifyPurchase(restoreRequest('player-c'));
+  const first = await store.findEntitlementTransactionByEvidenceVerificationId({
+    source: 'purchase',
+    evidenceVerificationId: purchaseVerificationId,
+  });
+  (store as unknown as { forgetEntitlementTransaction(grant: unknown): void })
+    .forgetEntitlementTransaction(first);
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-d'))).restoredAcrossPlayers,
+    true,
+  );
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }))).reason,
+    'PURCHASE_HOLDER_LIMIT_REACHED',
+  );
+  assert.equal((await listActiveEntitlementTransactions(store)).length, 2);
+}
+
 // Two deployment targets sharing one ledger never share a grant.
 {
   const store = createInMemoryGameServicesStore();
