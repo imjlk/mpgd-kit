@@ -69,7 +69,8 @@ export type TargetIntegration =
   | 'presentation'
   | 'sharing'
   | 'inboundShare'
-  | 'notifications';
+  | 'notifications'
+  | 'reviews';
 
 export type IntegrationAvailabilityState =
   | 'available'
@@ -88,6 +89,8 @@ export interface TargetIntegrationConfig {
   readonly sharing: IntegrationAvailabilityState;
   readonly inboundShare: IntegrationAvailabilityState;
   readonly notifications: IntegrationAvailabilityState;
+  /** Opt-in; omitted by older matrices and disabled by default. */
+  readonly reviews?: IntegrationAvailabilityState;
   readonly presentationMode: PresentationMode;
 }
 
@@ -247,9 +250,12 @@ export const targetIntegrations = [
   'sharing',
   'inboundShare',
   'notifications',
+  'reviews',
 ] as const satisfies readonly TargetIntegration[];
 
 type IntegrationUpperBound = 'available' | 'disabled' | 'unsupported';
+// Review availability permits an explicitly registered listing on ONE store/Verse8;
+// it does not assert support for a native review SDK. Other unverified runtimes stay disabled.
 const integrationUpperBoundsByRuntime = {
   'crazygames-web': {
     identityUpgrade: 'unsupported',
@@ -257,6 +263,7 @@ const integrationUpperBoundsByRuntime = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
   },
   'oneplay-web': {
     identityUpgrade: 'unsupported',
@@ -264,6 +271,7 @@ const integrationUpperBoundsByRuntime = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'available',
   },
   'tiktok-minigame': {
     identityUpgrade: 'unsupported',
@@ -271,6 +279,7 @@ const integrationUpperBoundsByRuntime = {
     sharing: 'available',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
   },
   'verse8-web': {
     identityUpgrade: 'unsupported',
@@ -278,6 +287,7 @@ const integrationUpperBoundsByRuntime = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'available',
   },
   'web-preview': {
     identityUpgrade: 'disabled',
@@ -285,6 +295,7 @@ const integrationUpperBoundsByRuntime = {
     sharing: 'available',
     inboundShare: 'available',
     notifications: 'unsupported',
+    reviews: 'disabled',
   },
   'wechat-minigame': {
     identityUpgrade: 'unsupported',
@@ -292,6 +303,7 @@ const integrationUpperBoundsByRuntime = {
     sharing: 'available',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
   },
 } as const satisfies Record<
   'tiktok-minigame' | 'verse8-web' | 'web-preview' | 'wechat-minigame' | 'crazygames-web' | 'oneplay-web',
@@ -330,6 +342,7 @@ export const defaultTargetIntegrationConfig = {
   sharing: 'disabled',
   inboundShare: 'disabled',
   notifications: 'unsupported',
+  reviews: 'disabled',
   presentationMode: 'fullscreen',
 } as const satisfies TargetIntegrationConfig;
 
@@ -340,7 +353,7 @@ const presentationModeSet = new Set<PresentationMode>(presentationModes);
 
 export function normalizeTargetIntegrationConfig(
   config: Partial<TargetIntegrationConfig> | undefined,
-): TargetIntegrationConfig {
+): TargetIntegrationConfig & { readonly reviews: IntegrationAvailabilityState } {
   if (config === undefined) {
     return defaultTargetIntegrationConfig;
   }
@@ -366,6 +379,7 @@ export function normalizeTargetIntegrationConfig(
       config.notifications,
       defaultTargetIntegrationConfig.notifications,
     ),
+    reviews: normalizeIntegrationAvailabilityState(config.reviews, 'disabled'),
     presentationMode: normalizePresentationMode(config.presentationMode),
   };
 }
@@ -715,6 +729,7 @@ export function withTargetAvailability(
     sharing: gatewaySharing,
     notifications: gatewayNotifications,
     notificationsV2: gatewayNotificationsV2,
+    reviews: gatewayReviews,
     ...gatewayWithoutIntegrations
   } = gateway;
   const integrations = normalizeTargetIntegrationConfig(
@@ -731,6 +746,7 @@ export function withTargetAvailability(
       && (integration === 'identityUpgrade' || integration === 'notifications')
     );
   };
+  const reviews = isIntegrationCallable('reviews') ? gatewayReviews : undefined;
   const identityUpgradeAvailable = isIntegrationCallable('identityUpgrade');
   const presentationAvailable = isIntegrationCallable('presentation');
   const sharingAvailable = isIntegrationCallable('sharing');
@@ -776,10 +792,13 @@ export function withTargetAvailability(
       getGatewayCapabilities(),
       readNotificationBlock?.(),
     ]);
-    return withNotificationCapabilities(
+    const { reviews: _hiddenReviews, ...withoutReviews } = withNotificationCapabilities(
       applyTargetConfigToCapabilities(capabilities, availabilityConfig),
       notificationCapabilities,
     );
+    return reviews === undefined
+      ? withoutReviews
+      : { ...withoutReviews, reviews: reviews.getCapabilities() };
   };
   const getIapAvailability = async () => {
     const oneTimeEnabled = availabilityConfig.features.iap;
@@ -962,6 +981,7 @@ export function withTargetAvailability(
     ...(sharing === undefined ? {} : { sharing }),
     ...(notifications === undefined ? {} : { notifications }),
     ...(notificationsV2 === undefined ? {} : { notificationsV2 }),
+    ...(reviews === undefined ? {} : { reviews }),
     configTarget,
     targetConfig: config,
     ...(options.effectiveConfig === undefined
@@ -1177,6 +1197,10 @@ function isIntegrationAdapterSupported(
       return typeof gateway.sharing?.share === 'function';
     case 'inboundShare':
       return typeof gateway.sharing?.readInboundShare === 'function';
+    case 'reviews': {
+      const capability = gateway.reviews?.getCapabilities();
+      return capability?.nativePrompt === true || capability?.reviewPage === true;
+    }
     case 'notifications':
       return hasNotificationSubscriptionAdapter(gateway) || hasNotificationProvider(gateway);
   }

@@ -68,6 +68,7 @@ const targetIntegrations = Object.keys({
   sharing: true,
   inboundShare: true,
   notifications: true,
+  reviews: true,
 } satisfies Record<TargetIntegration, true>);
 
 export function assertRuntimeTargetConfigMatrix(input: unknown): TargetConfigMatrix {
@@ -142,6 +143,9 @@ function assertTargetConfig(input: unknown, label: string): asserts input is Tar
   if (input.integrations !== undefined) {
     assertRecord(input.integrations, `${label}.integrations`);
     for (const key of targetIntegrations) {
+      if (key === 'reviews' && input.integrations[key] === undefined) {
+        continue;
+      }
       assertOneOf(
         input.integrations[key],
         integrationAvailabilityValues,

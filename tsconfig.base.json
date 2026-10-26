@@ -16,6 +16,9 @@
     "isolatedModules": true,
     "declaration": true,
     "paths": {
+      "@mpgd/adapter-ait/reviews": ["./adapters/ait/src/reviews.ts"],
+      "@mpgd/adapter-capacitor/reviews": ["./adapters/capacitor/src/reviews.ts"],
+      "@mpgd/adapter-browser/reviews": ["./adapters/browser/src/reviews.ts"],
       "@mpgd/cli/devvit": ["./packages/cli/src/devvit-output-collisions.ts"],
       "@mpgd/bridge/cloudflare-pages": ["./packages/bridge/src/cloudflare-pages.ts"],
       "@mpgd/bridge/notifications": ["./packages/bridge/src/notifications.ts"],

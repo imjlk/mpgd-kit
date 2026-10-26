@@ -52,7 +52,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "pnpm build && vitest run test/adaptive-shell.test.ts && node test/adaptive-shell-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/target-config/test/target-config-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/platform-version-allocation-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/provider-availability-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/notifications-v2-gating-smoke.ts",
+    "test": "pnpm build && vitest run test/adaptive-shell.test.ts && node test/adaptive-shell-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/target-config/test/target-config-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/platform-version-allocation-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/provider-availability-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/notifications-v2-gating-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/reviews-gating-smoke.ts",
     "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/target-config"
   },
   "dependencies": {

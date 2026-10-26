@@ -44,6 +44,10 @@
     "./oneplay": {
       "types": "./dist/oneplay.d.ts",
       "default": "./dist/oneplay.js"
+    },
+    "./reviews": {
+      "types": "./dist/reviews.d.ts",
+      "default": "./dist/reviews.js"
     }
   },
   "files": [
