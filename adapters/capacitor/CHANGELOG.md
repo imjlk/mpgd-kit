@@ -1,5 +1,19 @@
 # @mpgd/adapter-capacitor
 
+## 0.13.0 — 2026-10-26
+
+### Changed
+
+- [6ce27613](https://github.com/imjlk/mpgd-kit/commit/6ce27613a430cde2cf13ffd7bac4e842f29cb296) AR1 behaviour changes for outside callers. The FCM provider now refuses routing data keys that start with `mpgd.` (`rejected`, reason `configuration`), which the Android advertising renderer uses. The Capacitor notifications provider leaves `mpgd.` keys out of an open's `data`. `CapacitorGameServicesPlugin` gains `getAdvertisingPushRenderer()`, so a hand-written mock of the interface needs it. — Thanks @imjlk!
+
+### Added
+
+- [6ce27613](https://github.com/imjlk/mpgd-kit/commit/6ce27613a430cde2cf13ffd7bac4e842f29cb296) Android advertising pushes rendered by the shell (AR1). `createCapacitorNotificationProvider` takes `advertisingRenderer`, and `readCapacitorAdvertisingPushRenderer` from `@mpgd/adapter-capacitor/notifications` reads it from `@mpgd/capacitor-game-services`. On Android, with a catalog that maps an advertising topic, the provider reads it once and registers `rendersAdvertising: true` when the shell's messaging service is the kit's renderer (announcing its registration once the read answers, so an app update reaches the backend at its first start; a read that fails or takes more than five seconds counts as no renderer), so the backend sends that installation advertising as a data message the shell shows with the opt-out action. An open from the renderer's opt-out action, which the messaging plugin reports as a `tap` with `mpgd.action` in its data, opens the topic's declared `optOutRoute`, and `mpgd.` keys never reach an open's `data`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.16.1, @mpgd/capacitor-game-services@0.9.0, @mpgd/game-runtime@0.8.3, @mpgd/game-services@0.29.0, @mpgd/platform@0.29.0, @mpgd/target-config@0.23.9
+
 ## 0.12.5 — 2026-10-25
 
 ### Patch changes
