@@ -771,7 +771,7 @@ const deployCommand = defineI18n({
         'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
         release: { type: 'string', required: true, description: 'Explicit release ID.' },
         target: { type: 'string', required: true, description: 'android or ios.' },
-        approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
+        approve: { type: 'boolean', required: false, description: 'Approve the store submission; needed for any Play track but internal.' },
         track: {
           type: 'string', required: false,
           description: 'Android: Google Play track (internal, alpha, beta, production or a closed-testing track name); defaults to internal.',
@@ -910,7 +910,7 @@ const deployCommand = defineI18n({
           type: 'string', required: false,
           description: 'Initial version ledger JSON; only for the first release.',
         },
-        approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
+        approve: { type: 'boolean', required: false, description: 'Approve the store submission; needed for any Play track but internal.' },
         track: {
           type: 'string', required: false,
           description: 'Android: Google Play track (internal, alpha, beta, production or a closed-testing track name); defaults to internal.',
