@@ -69,6 +69,10 @@
     "./anonymous-auth": {
       "types": "./dist/anonymous-auth.d.ts",
       "default": "./dist/anonymous-auth.js"
+    },
+    "./reviews": {
+      "types": "./dist/reviews.d.ts",
+      "default": "./dist/reviews.js"
     }
   },
   "files": [

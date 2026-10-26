@@ -92,6 +92,14 @@
     "./share-link-conformance": {
       "types": "./dist/share-link-conformance.d.ts",
       "default": "./dist/share-link-conformance.js"
+    },
+    "./reviews": {
+      "types": "./dist/reviews.d.ts",
+      "default": "./dist/reviews.js"
+    },
+    "./reviews-runtime": {
+      "types": "./dist/reviews-runtime.d.ts",
+      "default": "./dist/reviews-runtime.js"
     }
   },
   "files": [

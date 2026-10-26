@@ -204,6 +204,9 @@ importers:
       '@capacitor/local-notifications':
         specifier: 8.3.1
         version: 8.3.1(@capacitor/core@8.5.2)
+      '@capawesome/capacitor-app-review':
+        specifier: 8.1.0
+        version: 8.1.0(@capacitor/core@8.5.2)
       '@mpgd/game-runtime':
         specifier: workspace:*
         version: link:../../packages/game-runtime
@@ -2140,6 +2143,11 @@ packages:
 
   '@capacitor/local-notifications@8.3.1':
     resolution: {integrity: sha512-F7zu/+p/mIR958YP4axOkeI5hBKRaXDyYjbNPrAil2wWfd7OxScPSTvP9t85NpQ0eULVRu0/sntoxOg6ck477A==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
+  '@capawesome/capacitor-app-review@8.1.0':
+    resolution: {integrity: sha512-4dOHBEzVZY9p61V2WaiuqyvkyuPFlkZUOCsKjXlVlMuWHCFe6fUDrC6VAan3aE9vHGmkeHYgVI4L0WYUB07weA==}
     peerDependencies:
       '@capacitor/core': '>=8.0.0'
 
@@ -8773,6 +8781,10 @@ snapshots:
       '@capacitor/core': 8.5.2
 
   '@capacitor/local-notifications@8.3.1(@capacitor/core@8.5.2)':
+    dependencies:
+      '@capacitor/core': 8.5.2
+
+  '@capawesome/capacitor-app-review@8.1.0(@capacitor/core@8.5.2)':
     dependencies:
       '@capacitor/core': 8.5.2
 

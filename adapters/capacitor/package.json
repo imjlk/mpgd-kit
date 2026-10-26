@@ -40,6 +40,10 @@
     "./notifications": {
       "types": "./dist/notifications.d.ts",
       "default": "./dist/notifications.js"
+    },
+    "./reviews": {
+      "types": "./dist/reviews.d.ts",
+      "default": "./dist/reviews.js"
     }
   },
   "files": [
@@ -66,7 +70,8 @@
     "@capacitor-firebase/crashlytics": "^8.5.2",
     "@capacitor-firebase/messaging": "^8.5.2",
     "@capacitor/core": "^8.5.1",
-    "@capacitor/local-notifications": "^8.3.1"
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capawesome/capacitor-app-review": "^8.1.0"
   },
   "peerDependenciesMeta": {
     "@capacitor-community/admob": {
@@ -80,6 +85,9 @@
     },
     "@capacitor/local-notifications": {
       "optional": true
+    },
+    "@capawesome/capacitor-app-review": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -88,6 +96,7 @@
     "@capacitor-firebase/messaging": "8.5.2",
     "@capacitor/core": "8.5.2",
     "@capacitor/local-notifications": "8.3.1",
+    "@capawesome/capacitor-app-review": "8.1.0",
     "@mpgd/game-runtime": "workspace:*",
     "ttsc": "0.32.1",
     "typescript": "7.0.2",

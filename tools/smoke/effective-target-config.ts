@@ -30,6 +30,7 @@ const webStoreIntegrationConfig = {
   sharing: 'available',
   inboundShare: 'available',
   notifications: 'unsupported',
+  reviews: 'disabled',
   presentationMode: 'fullscreen',
 } as const satisfies TargetIntegrationConfig;
 const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
@@ -41,6 +42,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
   crazygames: {
@@ -49,6 +51,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
   verse8: {
@@ -57,6 +60,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
   android: {
@@ -65,6 +69,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'configuration-required',
     inboundShare: 'configuration-required',
     notifications: 'configuration-required',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
   ios: {
@@ -73,6 +78,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'configuration-required',
     inboundShare: 'configuration-required',
     notifications: 'configuration-required',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
   ait: {
@@ -81,6 +87,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'available',
     inboundShare: 'available',
     notifications: 'configuration-required',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
   reddit: {
@@ -89,6 +96,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'configuration-required',
     inboundShare: 'configuration-required',
     notifications: 'approval-required',
+    reviews: 'disabled',
     presentationMode: 'inline-expanded',
   },
   wechat: {
@@ -97,6 +105,7 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     sharing: 'available',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
 };
@@ -134,6 +143,7 @@ function verifyGameOwnedIntegrationOverrides(): void {
   });
   const platformTargets = withIntegrations({
     notifications: 'disabled',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   });
   const invalidPlatformTargets = withIntegrations({

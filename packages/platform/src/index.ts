@@ -1,3 +1,4 @@
+import type { ReviewCapabilities, ReviewProvider } from './reviews-contract.js';
 import type { AdProvider } from './ads.js';
 // Only the typia-free contract modules may be imported here: headless
 // consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
@@ -360,6 +361,7 @@ export interface CommerceCapabilities {
 }
 
 export interface PlatformCapabilities {
+  readonly reviews?: ReviewCapabilities;
   readonly nativeAds: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
@@ -672,6 +674,7 @@ export interface GameSettingsAdapter {
 }
 
 export interface PlatformGateway {
+  readonly reviews?: ReviewProvider;
   readonly target: PlatformTarget;
   readonly gameLoading?: GameLoadingAdapter;
   getCapabilities(): Promise<PlatformCapabilities>;

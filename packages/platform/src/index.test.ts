@@ -136,6 +136,7 @@ describe('main entry import closure', () => {
       'crash-reporting.ts',
       'index.ts',
       'notifications-contract.ts',
+      'reviews-contract.ts',
     ]);
   });
 });
