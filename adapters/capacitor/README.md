@@ -391,7 +391,8 @@ await gateway.crashReporter?.setCollectionEnabled(playerAllowsCrashReports);
 ```
 
 `crashReporting: false` leaves `crashReporter` out; `crashReporting: { reporter }`
-uses another `CrashReporter`. Setup, symbols, consent and the store privacy
+uses another `CrashReporter`; `crashReporting: { requireConsent: true }` holds
+JavaScript reports until `setCollectionEnabled(true)`. Setup, symbols, consent and the store privacy
 answers are in the [crash reporting guide](../../docs/CRASH_REPORTING.md).
 
 ## App Store server-side transaction signatures

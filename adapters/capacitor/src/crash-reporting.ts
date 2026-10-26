@@ -57,20 +57,37 @@ export interface CapacitorCrashReporterOptions {
    * Filtered by `sanitizeCrashContext`; never put a player id here.
    */
   readonly context?: Readonly<Record<string, unknown>>;
+  /**
+   * Hold JavaScript reports and breadcrumbs until the game calls
+   * `setCollectionEnabled(true)` in this session, for games that turn
+   * Crashlytics' automatic collection off until the player agrees
+   * (docs/CRASH_REPORTING.md#the-players-choice). Defaults to false.
+   */
+  readonly requireConsent?: boolean;
   /** Defaults to `Capacitor.isPluginAvailable`. */
   readonly isPluginAvailable?: (name: string) => boolean;
   /** Defaults to the plugin registered under `capacitorCrashlyticsPluginName`. */
   readonly plugin?: CapacitorCrashlyticsPlugin;
 }
 
+const int32Min = -(2 ** 31);
+const int32Max = 2 ** 31 - 1;
+
 function keyType(value: CrashContextValue): CrashlyticsKeyType {
   if (typeof value === 'boolean') {
     return 'boolean';
   }
   if (typeof value === 'number') {
-    return Number.isSafeInteger(value) ? 'long' : 'double';
+    // The Android plugin reads `long` and `int` values as a Java Integer, so
+    // an integer outside the int32 range goes as a double.
+    return Number.isInteger(value) && value >= int32Min && value <= int32Max ? 'int' : 'double';
   }
   return 'string';
+}
+
+/** A kit-set build fact: control characters removed and cut to 128 characters, not redacted. */
+function kitContextValue(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 128);
 }
 
 /**
@@ -79,8 +96,9 @@ function keyType(value: CrashContextValue): CrashlyticsKeyType {
  * reports for JavaScript errors, breadcrumbs, and the collection toggle.
  * Context keys (`mpgd_target`, `mpgd_build_id`, `mpgd_app_version`,
  * `mpgd_adapter`, and `options.context`) are set once before the first
- * report. A plugin call that fails (Firebase not configured) marks the
- * reporter `not-configured` and later calls do nothing.
+ * report. When the first of them fails (Firebase not configured) the
+ * reporter is `not-configured` and later calls do nothing; a failing game
+ * key is skipped.
  */
 export function createCapacitorCrashReporter(options: CapacitorCrashReporterOptions): CrashReporter {
   const isPluginAvailable = options.isPluginAvailable
@@ -93,28 +111,35 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
   }
   const plugin = options.plugin
     ?? registerPlugin<CapacitorCrashlyticsPlugin>(capacitorCrashlyticsPluginName);
-  const context = sanitizeCrashContext({
-    ...options.context,
-    mpgd_target: options.target,
-    mpgd_build_id: options.buildId,
-    mpgd_app_version: options.appVersion,
-    mpgd_adapter: 'capacitor',
-  });
-  let configured = true;
+  // Build ids are often long hex strings, which the token rule of
+  // `redactCrashText` would hide, so the kit's own keys are not redacted.
+  // `mpgd_target` goes first: its result tells whether Firebase is configured.
+  const kitContext: readonly (readonly [string, string])[] = [
+    ['mpgd_build_id', kitContextValue(options.buildId)],
+    ['mpgd_app_version', kitContextValue(options.appVersion)],
+    ['mpgd_adapter', 'capacitor'],
+  ];
+  const gameContext = Object.entries(sanitizeCrashContext(options.context ?? {}))
+    .filter(([key]) => !key.startsWith('mpgd_'));
   // Set by `setCollectionEnabled` in this session; the SDK keeps the choice
   // across launches, but Android cannot read it back.
-  let collectionEnabled: boolean | undefined;
+  let collectionEnabled: boolean | undefined = options.requireConsent === true ? false : undefined;
   let ready: Promise<boolean> | undefined;
   const prepare = (): Promise<boolean> => {
     ready ??= (async () => {
       try {
-        for (const [key, value] of Object.entries(context)) {
-          await plugin.setCustomKey({ key, value, type: keyType(value) });
-        }
+        await plugin.setCustomKey({ key: 'mpgd_target', value: options.target, type: 'string' });
       } catch {
-        configured = false;
+        return false;
       }
-      return configured;
+      for (const [key, value] of [...kitContext, ...gameContext]) {
+        try {
+          await plugin.setCustomKey({ key, value, type: keyType(value) });
+        } catch {
+          // One key the SDK refuses does not stop reporting.
+        }
+      }
+      return true;
     })();
     return ready;
   };

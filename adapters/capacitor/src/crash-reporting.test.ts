@@ -56,18 +56,27 @@ describe('createCapacitorCrashReporter', () => {
       ...base,
       isPluginAvailable: () => true,
       plugin,
-      context: { content_version: 5, 'Player Id': 'p-1' },
+      context: {
+        content_version: 5,
+        epoch_ms: 1_793_000_000_000,
+        ratio: 0.5,
+        'Player Id': 'p-1',
+        mpgd_target: 'spoofed',
+      },
     });
     const error = new TypeError('failed https://api.example.com/x?token=secret');
     error.stack = 'TypeError: failed\n    at tick (https://localhost/assets/index.js:10:2)';
     await reporter.recordError(error, { source: 'uncaught' });
     await reporter.recordError('second');
     expect(plugin.setCustomKey.mock.calls.map(([options]) => options)).toEqual([
-      { key: 'content_version', value: 5, type: 'long' },
       { key: 'mpgd_target', value: 'android', type: 'string' },
       { key: 'mpgd_build_id', value: 'build-7', type: 'string' },
       { key: 'mpgd_app_version', value: '1.2.3', type: 'string' },
       { key: 'mpgd_adapter', value: 'capacitor', type: 'string' },
+      { key: 'content_version', value: 5, type: 'int' },
+      // Outside int32: the Android plugin reads `long` as a Java Integer.
+      { key: 'epoch_ms', value: 1_793_000_000_000, type: 'double' },
+      { key: 'ratio', value: 0.5, type: 'double' },
     ]);
     expect(plugin.recordException.mock.calls.map(([options]) => options)).toEqual([
       {
@@ -76,6 +85,46 @@ describe('createCapacitorCrashReporter', () => {
       },
       { message: '[game] Error: second' },
     ]);
+  });
+
+  it('keeps long hex build ids and skips a key the SDK refuses', async () => {
+    const buildId = '3f9a6c1e0b7d4a2f9e8c7b6a5d4c3b2a1f0e9d8c';
+    const plugin = createPlugin({
+      setCustomKey: vi.fn(async (options: { readonly key: string }) => {
+        if (options.key === 'bad_key') {
+          throw new Error('value must be provided.');
+        }
+      }),
+    });
+    const reporter = createCapacitorCrashReporter({
+      ...base,
+      buildId,
+      isPluginAvailable: () => true,
+      plugin,
+      context: { bad_key: 1 },
+    });
+    expect(await reporter.getStatus()).toEqual({ provider: 'firebase-crashlytics', state: 'available' });
+    expect(plugin.setCustomKey).toHaveBeenCalledWith({ key: 'mpgd_build_id', value: buildId, type: 'string' });
+    await reporter.recordError(new Error('x'));
+    expect(plugin.recordException).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds JavaScript reports until consent when requireConsent is set', async () => {
+    const plugin = createPlugin();
+    const reporter = createCapacitorCrashReporter({
+      ...base,
+      requireConsent: true,
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    await reporter.recordError(new Error('before consent'));
+    await reporter.log('before consent');
+    expect(plugin.recordException).not.toHaveBeenCalled();
+    expect(plugin.log).not.toHaveBeenCalled();
+    expect((await reporter.getStatus()).collectionEnabled).toBe(false);
+    await reporter.setCollectionEnabled(true);
+    await reporter.recordError(new Error('after consent'));
+    expect(plugin.recordException).toHaveBeenCalledTimes(1);
   });
 
   it('reports not-configured and stops calling when Firebase is not set up', async () => {
