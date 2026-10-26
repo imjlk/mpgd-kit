@@ -33,7 +33,7 @@ on Play, which marks it ephemeral. Every kit network call uses HTTPS, so
 | UMP consent (AdMob) | Consent choice | Not separately listed | Not separately listed | Compliance | — |
 | Push notifications (FCM, `@capacitor-firebase/messaging`) | FCM registration token, Firebase installation ID, notification consent records on the game server | Device or other IDs; App activity › Other actions for consent records | Identifiers › Device ID; Usage Data › Other Usage Data for consent records | App functionality; Developer's advertising or marketing for advertising topics | Yes |
 | Game server logs (Cloudflare Worker) | IP address, user agent, request metadata | App info and performance › Diagnostics; mark it ephemeral if it is only processed in memory and not stored | Diagnostics › Other Diagnostic Data if stored | Security, fraud prevention | Usually no |
-| Crash reporting | **Not in the kit yet.** Adding Crashlytics or Sentry adds crash logs and diagnostics. | App info and performance › Crash logs, Diagnostics | Diagnostics › Crash Data, Performance Data | Analytics | Depends on the SDK |
+| Crash reporting (Firebase Crashlytics, opt-in `--providers crash-reporting`) | Stack traces and app state at a crash, device and OS metadata, the Crashlytics installation UUID, non-fatal JavaScript error reports, and the custom keys and breadcrumbs the game adds (the kit adds target, build id, app version; never the player ID) | App info and performance › **Crash logs**, **Diagnostics** for non-fatal reports; Device or other IDs for the installation UUID | Diagnostics › **Crash Data**, **Other Diagnostic Data** for non-fatal reports | Play: Analytics; App Store: App Functionality (Apple lists "minimize app crashes" there) | No, while no user ID is set; see below |
 | Analytics (`@mpgd/analytics`) | **Nothing by default**: the package defines events and sinks but sends nothing until the game adds a transport. | Depends on the transport | Depends on the transport | Analytics | Depends |
 
 Notes:
@@ -66,6 +66,24 @@ Notes:
     identifies the purchase. Server logs for the host's log retention.
   For App Privacy, Apple asks no separate deletion question; the in-app
   entry and the privacy policy's deletion section cover the guideline.
+- **Crash reporting.** Firebase lists what Crashlytics collects for
+  [Play](https://firebase.google.com/docs/android/play-data-disclosure) and
+  [App Store](https://firebase.google.com/docs/ios/app-store-data-collection)
+  answers, and leaves the category choice to the developer; the row above is
+  the kit's reading of Play's
+  [data types](https://support.google.com/googleplay/android-developer/answer/10787469)
+  and Apple's [definitions](https://developer.apple.com/app-store/app-privacy-details/).
+  The installation UUID is app-scoped and changes with the Firebase
+  installation ID, so it is not a device-level ID for Apple's Device ID type;
+  Play's "Device or other IDs" also covers app identifiers, so declare it
+  there (a game with notifications already does, for the Firebase
+  installation ID). The kit never calls Crashlytics `setUserId` and redacts
+  messages ([crash reporting](./CRASH_REPORTING.md#what-a-report-carries)),
+  so reports are not linked to the player; a game that adds a user ID or
+  player data to keys or logs must answer "linked" and list that data. When
+  the game turns collection off until the player agrees
+  ([consent](./CRASH_REPORTING.md#the-players-choice)), the Play form may
+  mark crash data as optional.
 - **App Store tracking.** The kit does no tracking and never shows the App
   Tracking Transparency prompt, so "Used to track you" is **no** for kit
   features. A game that turns on personalized AdMob ads using the IDFA, or any

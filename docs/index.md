@@ -45,7 +45,8 @@ certify adapter behavior.
 To ship a game to Google Play and the App Store, follow the
 [mobile launch checklist](MOBILE_LAUNCH_CHECKLIST.md); the
 [store privacy disclosures](STORE_PRIVACY_DISCLOSURES.md) map kit features to
-the Data safety and App Privacy answers.
+the Data safety and App Privacy answers. [Crash reporting](CRASH_REPORTING.md)
+adds Firebase Crashlytics to the Capacitor shells.
 
 The [notifications guide](NOTIFICATIONS.md) explains what each target supports,
 the consent flow, the Korean advertising rules, and how to add a topic; the
