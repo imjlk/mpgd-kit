@@ -76,6 +76,7 @@ import {
   readIosReleaseInfoPlist,
   stripGradleComments,
 } from './native-shell-identity.js';
+import { planNotificationsBuildApprovals } from './pnpm-build-approvals.js';
 
 const shellPath = 'apps/mobile-capacitor';
 const webPath = `${shellPath}/www`;
@@ -681,6 +682,19 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     });
   }
   requestedFiles.push(...gatewayFiles);
+  if (notifications !== undefined) {
+    // pnpm 11 fails an install on an unreviewed dependency build script, and
+    // the firebase package notifications add brings two.
+    const approvals = planNotificationsBuildApprovals(
+      readExisting(safeDestination(gameRoot, 'pnpm-workspace.yaml')),
+    );
+    if (approvals.content !== undefined) {
+      requestedFiles.push({ path: 'pnpm-workspace.yaml', content: approvals.content });
+    }
+    if (approvals.warning !== undefined) {
+      warnings.push(approvals.warning);
+    }
+  }
   // The game bundle imports the plugin from its gateway file, so the game
   // declares it too, at the shell's exact version; the materializer's game
   // install picks it up.
@@ -864,7 +878,11 @@ export function materializeCapacitorShellStarter(
   runner.run('pnpm', ['install', '--no-frozen-lockfile'], plan.gameRoot);
   runner.run(
     'pnpm',
-    ['--dir', shellPath, 'install', '--ignore-workspace', '--no-frozen-lockfile'],
+    // --ignore-workspace also drops every pnpm-workspace.yaml setting, so no
+    // allowBuilds entry can review a dependency build script here and pnpm 11
+    // fails on any (firebase brings two when the shell resolves it). The
+    // shell's packages need none: Gradle and Xcode build the native code.
+    ['--dir', shellPath, 'install', '--ignore-workspace', '--ignore-scripts', '--no-frozen-lockfile'],
     plan.gameRoot,
   );
   for (const platform of plan.nativePlatformsToAdd) {

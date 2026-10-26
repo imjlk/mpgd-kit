@@ -5,6 +5,8 @@ packages:
   - 'apps/*'
 __PNPM_WORKSPACE_KIT_PACKAGES__
 allowBuilds:
+  # Its postinstall only bakes in Firebase App Hosting config (FIREBASE_WEBAPP_CONFIG).
+  '@firebase/util': false
   '@sentry/cli': true
   '@swc/core': true
   esbuild: true

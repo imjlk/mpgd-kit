@@ -274,6 +274,47 @@ try {
     );
   }
 
+  // pnpm 11 stops the game install on firebase's unreviewed build scripts, so
+  // the plan lists them in a game workspace that predates the decision, and
+  // says what to add where it cannot edit one.
+  {
+    const root = createGame();
+    roots.push(root);
+    const withoutWorkspace = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(withoutWorkspace.changedFiles.includes('pnpm-workspace.yaml'), false);
+    assert.ok(
+      withoutWorkspace.warnings.some((warning) =>
+        /no pnpm-workspace\.yaml.*\n {2}'@firebase\/util': false/su.test(warning),
+      ),
+    );
+    const older = readTemplate('pnpm-workspace.yaml').replace(/^ {2}'@firebase\/util'.*\n/mu, '');
+    assert.doesNotMatch(older, /@firebase\/util/u);
+    writeFileSync(path.join(root, 'pnpm-workspace.yaml'), older);
+    const plan = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.ok(plan.changedFiles.includes('pnpm-workspace.yaml'));
+    assert.equal(
+      plan.warnings.some((warning) => /pnpm-workspace\.yaml/u.test(warning)),
+      false,
+    );
+    applyCapacitorShellStarter(plan);
+    const workspace = readFileSync(path.join(root, 'pnpm-workspace.yaml'), 'utf8');
+    assert.equal(workspace.match(/'@firebase\/util': false/gu)?.length, 1);
+    assert.equal(workspace.match(/protobufjs: true/gu)?.length, 1);
+    for (const [name, version] of Object.entries(notificationsGameDependencies)) {
+      const file = path.join(root, 'node_modules', name, 'package.json');
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify({ name, version }));
+    }
+    const rerun = planCapacitorShellStarter(input(root, ['notifications']));
+    assert.equal(rerun.changedFiles.includes('pnpm-workspace.yaml'), false);
+    // Without notifications the workspace is not touched.
+    const other = createGame();
+    roots.push(other);
+    writeFileSync(path.join(other, 'pnpm-workspace.yaml'), older);
+    const plain = planCapacitorShellStarter(input(other, []));
+    assert.equal(plain.changedFiles.includes('pnpm-workspace.yaml'), false);
+  }
+
   // A game that keeps its own serverSession.ts (an earlier release's) gets no
   // developmentServerSession.ts, which nothing in it would import, and a warning.
   {

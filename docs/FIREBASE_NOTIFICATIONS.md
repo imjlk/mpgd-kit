@@ -28,6 +28,22 @@ shell at the game's versions, declares them and `firebase` (which the
 messaging plugin's web fallback imports, so the bundler must resolve it) in
 the game, and runs `cap sync` on an existing native project.
 
+`firebase` brings two dependency build scripts, and pnpm 11 stops an install
+on a build script that `allowBuilds` in `pnpm-workspace.yaml` neither allows
+nor denies ([pnpm](https://pnpm.io/settings/build#allowbuilds)). A generated
+game lists both, and the initializer adds them to an older game's
+`pnpm-workspace.yaml` (or prints them when it cannot edit the file):
+
+- `'@firebase/util': false`: its postinstall only bakes a Firebase App Hosting
+  config from `FIREBASE_WEBAPP_CONFIG` into the package, fetching it from
+  Firebase when that variable is set. The kit never initializes the web SDK.
+- `protobufjs: true`: its postinstall only warns about how a dependent
+  declares the version; the game template already allows it.
+
+The shell's own install runs with `--ignore-scripts`: it is a standalone
+install (`--ignore-workspace`), which reads no `allowBuilds`, and its
+Capacitor packages need no build scripts.
+
 In the shell's `capacitor.config.ts`, set
 `plugins.FirebaseMessaging.presentationOptions` (for example
 `['badge', 'sound', 'alert']`), without which a push that arrives while the

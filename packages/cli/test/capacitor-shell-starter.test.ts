@@ -412,7 +412,7 @@ try {
   });
   assert.deepEqual(commands, [
     'pnpm install --no-frozen-lockfile',
-    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --ignore-scripts --no-frozen-lockfile',
     'pnpm --dir apps/mobile-capacitor cap add android',
     'pnpm --dir apps/mobile-capacitor cap add ios',
   ]);
@@ -550,7 +550,7 @@ try {
   });
   assert.deepEqual(retryCommands, [
     'pnpm install --no-frozen-lockfile',
-    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --ignore-scripts --no-frozen-lockfile',
   ]);
   const completeRetryCommands: string[] = [];
   materializeCapacitorShellStarter(planCapacitorShellStarter(options), {
@@ -560,7 +560,7 @@ try {
   });
   assert.deepEqual(completeRetryCommands, [
     'pnpm install --no-frozen-lockfile',
-    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --ignore-scripts --no-frozen-lockfile',
   ]);
   writeFileSync(path.join(root, 'apps/mobile-capacitor/ios/CustomViewController.swift'), 'custom');
   const withNativeProjects = planCapacitorShellStarter(options);
@@ -1881,7 +1881,7 @@ try {
   });
   assert.deepEqual(providerCommands, [
     'pnpm install --no-frozen-lockfile',
-    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --ignore-scripts --no-frozen-lockfile',
     'pnpm --dir apps/mobile-capacitor cap sync android',
   ]);
   assert.equal(
