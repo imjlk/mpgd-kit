@@ -1780,6 +1780,12 @@ async function shareRestoredPurchase(
           || anchor.grantId !== request.productId
           || anchor.payload.target !== request.target
           || (anchor.payload.store !== undefined && anchor.payload.store !== input.verifiedStore)
+          // Two deployment targets sharing a ledger never share a grant, as
+          // for a retry (`matchesEntitlementTransactionIdentity`).
+          || (
+            anchor.payload.deploymentTarget !== undefined
+            && anchor.payload.deploymentTarget !== request.deploymentTarget
+          )
         ) {
           return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
         }
@@ -1799,6 +1805,9 @@ async function shareRestoredPurchase(
           return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
         }
         const own = all.find((grant) => grant.playerId === request.playerId);
+        if (own !== undefined && !matchesEntitlementTransactionIdentity(own, holderIdentity)) {
+          return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
+        }
         if (own !== undefined) {
           return reversed.has(own.ledgerEntryId)
             ? notGranted('rejected', 'LEDGER_GRANT_REVERSED')

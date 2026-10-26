@@ -12,6 +12,7 @@ import {
 } from './app-store-verifier-conformance.js';
 import {
   createPurchaseHolderEvidenceVerificationId,
+  findPurchaseGrantByEvidenceVerificationId,
   listActiveEntitlementTransactions,
   listPurchaseHolders,
   readPurchaseLedgerStatuses,
@@ -623,6 +624,57 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     (await backend.purchases.verifyPurchase(restoreRequest('player-e'))).reason,
     'PURCHASE_HOLDER_LIMIT_REACHED',
     'the share past the gap still counts',
+  );
+
+  // The first grant purged too: a store event's lookup by the purchase id
+  // reaches a surviving share, and the refund's fan-out the rest.
+  const first = await store.findEntitlementTransactionByEvidenceVerificationId({
+    source: 'purchase',
+    evidenceVerificationId: purchaseVerificationId,
+  });
+  assert.ok(first);
+  (store as unknown as { forgetEntitlementTransaction(grant: unknown): void })
+    .forgetEntitlementTransaction(first);
+  const surviving = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId);
+  assert.equal(surviving?.ledgerEntryId, toC.ledgerEntryId);
+  await revokeEntitlementGrant(store, {
+    playerId: surviving?.playerId ?? '',
+    revokesLedgerEntryId: surviving?.ledgerEntryId ?? '',
+    idempotencyKey: 'google-play:voided:after-purge',
+    reason: 'voided',
+    revokedAt: '2030-01-03T00:00:00.000Z',
+    payload: {},
+  });
+  assert.deepEqual(
+    await listActiveEntitlementTransactions(store),
+    [],
+    'every surviving holder is revoked',
+  );
+}
+
+// Two deployment targets sharing one ledger never share a grant.
+{
+  const store = createInMemoryGameServicesStore();
+  await store.recordEntitlementGrant({
+    playerId: 'player-a',
+    grantId: 'REMOVE_ADS',
+    source: 'purchase',
+    idempotencyKey: 'staging-buy',
+    grantedAt: '2030-01-01T00:00:00.000Z',
+    grant: { type: 'entitlement', entitlement: 'remove_ads' },
+    payload: { target: 'android', productId: 'REMOVE_ADS', deploymentTarget: 'android-staging' },
+    evidenceVerificationId: purchaseVerificationId,
+  });
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share' },
+  });
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-b'))).reason,
+    'LEDGER_GRANT_IDENTITY_MISMATCH',
   );
 }
 

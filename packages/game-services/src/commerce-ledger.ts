@@ -192,6 +192,21 @@ export async function findPurchaseGrantByEvidenceVerificationId(
   store: GameServicesStore,
   evidenceVerificationId: string,
 ): Promise<ProductGrantTransaction | undefined> {
+  const grant = await findPurchaseGrantRecord(store, evidenceVerificationId);
+  if (grant !== undefined || store.findEntitlementTransactionsByEvidencePrefix === undefined) {
+    return grant;
+  }
+  // The first grant can be gone (the retention purge deleted a deleted
+  // player's record) while restore sharing's shares of the purchase remain:
+  // a store event then reaches them through one of those (RFC "Restore
+  // sharing"), and a refund's fan-out through it reaches the rest.
+  return (await listPurchaseHolders(store, evidenceVerificationId)).shared[0];
+}
+
+async function findPurchaseGrantRecord(
+  store: GameServicesStore,
+  evidenceVerificationId: string,
+): Promise<ProductGrantTransaction | undefined> {
   const grant = store.findEntitlementTransactionByEvidenceVerificationId === undefined
     ? (await store.listEntitlementTransactions()).find((transaction) => {
         return transaction.source === 'purchase'
@@ -228,7 +243,7 @@ export async function listPurchaseHolders(
   store: GameServicesStore,
   purchaseVerificationId: string,
 ): Promise<PurchaseHolders> {
-  const first = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId);
+  const first = await findPurchaseGrantRecord(store, purchaseVerificationId);
   const holderPrefix = purchaseHolderEvidencePrefix(purchaseVerificationId);
   const listByPrefix = store.findEntitlementTransactionsByEvidencePrefix;
   const shared: { readonly slot: number; readonly grant: ProductGrantTransaction }[] = [];
@@ -255,7 +270,7 @@ export async function listPurchaseHolders(
       if (slot > maxPurchaseHolderSlots) {
         throw new Error('A purchase has more holder slots than maxPurchaseHolderSlots.');
       }
-      const grant = await findPurchaseGrantByEvidenceVerificationId(
+      const grant = await findPurchaseGrantRecord(
         store,
         createPurchaseHolderEvidenceVerificationId(purchaseVerificationId, slot),
       );
