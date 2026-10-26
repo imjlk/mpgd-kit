@@ -160,20 +160,27 @@ const v8FramePattern = /^\s*at\s+(?:(.*?)\s+\()?(.+?):(\d+)(?::\d+)?\)?\s*$/u;
 const webkitFramePattern = /^\s*(.*?)@(.+?):(\d+)(?::\d+)?\s*$/u;
 
 /**
- * Parse V8 (`at fn (file:line:col)`) and WebKit/Gecko (`fn@file:line:col`)
- * stack lines. File names keep only their path: the origin (`https://localhost`,
- * `capacitor://localhost`) and any query or fragment are dropped.
+ * Parse V8 (`at fn (file:line:col)`) or, when the stack has no V8 frame,
+ * WebKit/Gecko (`fn@file:line:col`) stack lines. File names keep only their
+ * path: the origin (`https://localhost`, `capacitor://localhost`) and any
+ * query or fragment are dropped.
  */
 export function parseCrashStackFrames(
   stack: string,
   limit = crashStackFrameLimit,
 ): readonly CrashStackFrame[] {
   const frames: CrashStackFrame[] = [];
-  for (const line of stack.split('\n')) {
+  const lines = stack.split('\n');
+  // A V8 stack starts with the error's `Name: message` line, which may
+  // contain `@` and `:<digits>`; only `at` lines are frames there.
+  const pattern = lines.some((line) => /^\s*at\s/u.test(line))
+    ? v8FramePattern
+    : webkitFramePattern;
+  for (const line of lines) {
     if (frames.length >= limit) {
       break;
     }
-    const match = v8FramePattern.exec(line) ?? webkitFramePattern.exec(line);
+    const match = pattern.exec(line);
     if (match === null) {
       continue;
     }

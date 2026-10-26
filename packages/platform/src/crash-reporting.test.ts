@@ -79,6 +79,17 @@ describe('parseCrashStackFrames', () => {
     ]);
   });
 
+  it('never reads the V8 message line as a frame', () => {
+    const stack = [
+      'Error: cannot load bob@host.example.com:8080',
+      'second line jane@mail.example.com:443',
+      '    at load (https://localhost/assets/index.js:5:1)',
+    ].join('\n');
+    expect(parseCrashStackFrames(stack)).toEqual([
+      { functionName: 'load', fileName: '/assets/index.js', lineNumber: 5 },
+    ]);
+  });
+
   it('keeps at most the frame limit', () => {
     const stack = Array.from({ length: 10 }, (_, index) => `    at f${index} (/a.js:${index + 1}:1)`)
       .join('\n');
