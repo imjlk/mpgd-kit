@@ -34,7 +34,9 @@ export type AllowBuildsEdit =
   | { readonly kind: 'unsupported'; readonly missing: readonly string[] };
 
 const allowBuildsLine = /^allowBuilds:[ \t]*(?:#.*)?$/mu;
-const allowBuildsKey = /^allowBuilds[ \t]*:/mu;
+// Any top-level spelling of the key, quoted or not, so an unparsed form is
+// reported instead of getting a second, duplicate mapping appended.
+const allowBuildsKey = /^(?:allowBuilds|'allowBuilds'|"allowBuilds")[ \t]*:/mu;
 const entryKey = /^([ \t]+)(?:'((?:[^']|'')*)'|"((?:[^"\\]|\\.)*)"|([^\s#'"][^:#]*?))[ \t]*:/u;
 
 /** The package a matcher names: `name`, `name@range`, `@scope/name@range`, or `name@git-url`. */
@@ -66,7 +68,11 @@ export function addAllowBuilds(
   const newline = content.includes('\r\n') ? '\r\n' : '\n';
   const lines = content.split(/\r?\n/u);
   const header = lines.findIndex((line) => allowBuildsLine.test(line));
+  // A bare name reviews every version; a qualified matcher (`name@1.2.3`,
+  // `name@git+…`) reviews only what it names, which may not be what the
+  // starter's firebase brings.
   const listed = new Set<string>();
+  const qualified = new Set<string>();
   let indent = '  ';
   if (header !== -1) {
     let indentSeen = false;
@@ -84,7 +90,8 @@ export function addAllowBuilds(
         indentSeen = true;
       }
       const key = match[2]?.replaceAll("''", "'") ?? match[3] ?? match[4] ?? '';
-      listed.add(allowBuildsPackageName(key));
+      const name = allowBuildsPackageName(key);
+      (name === key.trim() ? listed : qualified).add(name);
     }
   } else if (allowBuildsKey.test(content)) {
     return { kind: 'unsupported', missing: Object.keys(approvals) };
@@ -92,6 +99,10 @@ export function addAllowBuilds(
   const missing = Object.keys(approvals).filter((name) => !listed.has(name)).sort();
   if (missing.length === 0) {
     return { kind: 'covered' };
+  }
+  if (missing.some((name) => qualified.has(name))) {
+    // A bare entry would override the game's version-specific decision.
+    return { kind: 'unsupported', missing };
   }
   const entries = missing.map((name) => `${indent}${quoteKey(name)}: ${String(approvals[name])}`);
   if (header !== -1) {
@@ -139,7 +150,9 @@ export function planNotificationsBuildApprovals(
   }
   if (edit.kind === 'unsupported') {
     return {
-      warning: `pnpm-workspace.yaml writes allowBuilds in a form the initializer does not edit; ${instruction}`,
+      warning: 'pnpm-workspace.yaml writes allowBuilds in a form the initializer does not edit '
+        + '(a quoted key, a flow mapping, or a version-specific entry for one of these packages); '
+        + instruction,
     };
   }
   return {};

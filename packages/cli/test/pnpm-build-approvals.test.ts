@@ -91,14 +91,32 @@ assert.equal(allowBuildsPackageName('foo@git+ssh://git@example.com/org/foo.git')
   assert.deepEqual(addAllowBuilds(content, notificationsBuildApprovals), { kind: 'covered' });
 }
 
-// A version-qualified or quoted key, and comments inside the block, count.
+// Quoted keys and comments inside the block count.
 assert.deepEqual(
   addAllowBuilds(
-    'allowBuilds:\n  # reviewed\n  \'@firebase/util@1.15.3\': true\n# kept\n  "protobufjs": true\n',
+    'allowBuilds:\n  # reviewed\n  \'@firebase/util\': false\n# kept\n  "protobufjs": true\n',
     notificationsBuildApprovals,
   ),
   { kind: 'covered' },
 );
+// A version-qualified entry reviews only that version (pnpm still stops on
+// another one), and a bare entry next to it would override it: the game decides.
+assert.deepEqual(
+  addAllowBuilds(
+    "allowBuilds:\n  '@firebase/util@1.15.2': true\n  protobufjs: true\n",
+    notificationsBuildApprovals,
+  ),
+  { kind: 'unsupported', missing: ['@firebase/util'] },
+);
+// A quoted top-level key is not parsed, so nothing is appended next to it.
+for (const key of ['"allowBuilds"', "'allowBuilds'"]) {
+  for (const value of ['\n  esbuild: true\n', ' { esbuild: true }\n']) {
+    assert.equal(
+      addAllowBuilds(`${key}:${value}`, notificationsBuildApprovals).kind,
+      'unsupported',
+    );
+  }
+}
 
 // No allowBuilds yet: the block is appended; CRLF files stay CRLF.
 assert.deepEqual(addAllowBuilds("packages:\r\n  - '.'\r\n", notificationsBuildApprovals), {
