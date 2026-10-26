@@ -320,9 +320,17 @@ The scheduler path above uses the same delivery and provider code.
 
 ## iOS
 
-iOS needs the APNs key in Firebase, `GoogleService-Info.plist`, the Push
-Notifications capability, and the AppDelegate wiring from the
-[Firebase setup guide](FIREBASE_NOTIFICATIONS.md#4-ios). A physical iPhone
+iOS needs the APNs key in Firebase and `GoogleService-Info.plist` in the
+App target ([Firebase setup guide](FIREBASE_NOTIFICATIONS.md#4-ios)). A shell
+that `mpgd target init capacitor --providers notifications` generated already
+has the `aps-environment` entitlement, the AppDelegate token forwarding, and
+the cold-start `SceneDelegate` forwarder; for an older shell, apply the steps
+the initializer printed. Every `mpgd target build ios` checks a shell that
+installs the messaging plugin for these three before it packages, printing a
+`[native-store-policy]` line per missing piece; a `production` build stops
+there (`pnpm exec mpgd target build ios production --targets-file
+./mpgd.targets.json`). The signing profile's App ID needs Push Notifications
+enabled. A physical iPhone
 cannot reach `127.0.0.1` on your machine, and App Transport Security
 refuses plain http, so run the iOS half against a test deployment
 ([Staging](#staging)) rather than the local Worker. Check the cold-start tap

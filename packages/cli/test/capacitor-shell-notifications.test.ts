@@ -166,12 +166,14 @@ try {
     assert.ok(plan.warnings.some((warning) => /google-services\.json/u.test(warning)));
     assert.ok(
       plan.warnings.some((warning) =>
-        /GoogleService-Info\.plist, the Push Notifications/u.test(warning),
+        /GoogleService-Info\.plist in the App target and an APNs key/u.test(warning),
       ),
     );
     assert.ok(
       plan.warnings.some((warning) => /notification settings screen is not added/u.test(warning)),
     );
+    // No iOS project yet: the run generates it with the push wiring.
+    assert.ok(!plan.warnings.some((warning) => /ios is game-owned/u.test(warning)));
     // No Android project yet: nothing to warn about the renderer.
     assert.equal(
       plan.warnings.some((warning) => /advertising renderer/u.test(warning)),

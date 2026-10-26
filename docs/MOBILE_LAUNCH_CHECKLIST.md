@@ -125,8 +125,14 @@ production` prints what it lacks and fails on contradictions
       meta-data, iOS `GADApplicationIdentifier` and `SKAdNetworkItems`
       ([AdMob setup](https://github.com/imjlk/mpgd-kit/blob/main/adapters/capacitor/README.md#opt-in-admob-rewarded-ads)).
       The kit never shows the ATT prompt; add it only if the game tracks.
-- [ ] Push: Xcode Push Notifications capability, Firebase files, AppDelegate
-      forwarding ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md)).
+- [ ] Push: Firebase files (`google-services.json`,
+      `GoogleService-Info.plist` in the App target) and the APNs key in
+      Firebase. On iOS, a shell generated with `--providers notifications`
+      has the `aps-environment` entitlement, the AppDelegate token
+      forwarding and the cold-start tap forwarder; an older shell needs the
+      steps the initializer prints, and `mpgd target build ios production`
+      fails until it has all three
+      ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md#4-ios)).
 - [ ] Android advertising push (only if a topic is `advertising` and maps
       to `android`): the manifest declares the kit's
       `dev.mpgd.capacitor.AdvertisingMessagingService` and removes the
@@ -271,12 +277,23 @@ pnpm exec mpgd deploy status --game . --game-id mygame --release beta-001
       `--release-notes` and `--confirm-production` target closed, open and
       production tracks; `mpgd deploy rollout` updates, halts, resumes or
       completes a staged rollout ([Play releases](./GOOGLE_PLAY_RELEASES.md)).
+- [ ] Production gets the build that passed closed testing:
+      `mpgd deploy promote --from <closed track> --to production` releases
+      that version code without uploading or rebuilding
+      ([promote](./GOOGLE_PLAY_RELEASES.md#promoting-a-tested-release-deploy-promote)).
 - [ ] The first upload of a never-published app is committed as a **draft**
       (Play accepts nothing else); roll that draft out once in Play Console
       ([draft apps](./GOOGLE_PLAY_RELEASES.md#draft-apps)).
 - [ ] iOS goes to an internal TestFlight group. The submission reports
       `action-required` while TestFlight waits for the export-compliance
       answer ([TestFlight](./TESTFLIGHT_INTERNAL_SUBMISSION.md)).
+- [ ] Push (shells with `--providers notifications`): the iOS store build
+      reads the signed IPA's entitlements and fails unless `aps-environment`
+      is `production`. The shell's entitlements file says `development`, and
+      Xcode signs the value from the App Store profile. When the build fails,
+      either the profile lacks Push Notifications (enable it on the App ID,
+      then regenerate the profile) or the export used a development profile
+      ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md#4-ios)).
 - [ ] CI: `pnpm exec mpgd deploy workflow init` writes a game-owned workflow
       ([native deploy CI](./GAME_NATIVE_DEPLOY_CI.md)).
 
@@ -295,7 +312,7 @@ Google Play Console:
 - [ ] Closed test with 12+ testers opted in for 14 days in a row (personal
       accounts created after 13 November 2023): create the closed track and
       its testers in the console, ship builds to it with `--track <name>`,
-      then apply for production access
+      apply for production access, then `deploy promote` the tested build
       ([closed testing](./GOOGLE_PLAY_RELEASES.md#closed-testing-for-new-personal-accounts)).
 
 App Store Connect:
@@ -327,6 +344,9 @@ App Store Connect:
       without night consent; ordinary pushes and token refreshes still
       reach the game ([notifications live test](./NOTIFICATIONS_LIVE_TEST.md#android-advertising),
       including its required "Minified release" step).
+- [ ] iOS push on a TestFlight build: a push arrives in the background, and
+      a tap opens the topic's route from a warm start and from a killed app
+      (the cold-start forwarder; [notifications live test](./NOTIFICATIONS_LIVE_TEST.md#ios)).
 
 ## Related
 

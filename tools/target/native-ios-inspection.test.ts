@@ -7,9 +7,22 @@ import {
   inspectSignedIosApplication,
   inspectSignedIosArchive,
   inspectSignedIosIpa,
+  iosStorePushEntitlementError,
+  readSignedApsEnvironment,
   type IosInspectionInput,
 } from './native-ios-inspection';
 import { nativeInspectionEnvironment } from './native-inspection-environment';
+import { shellInstallsFirebaseMessaging } from './native-store-policy';
+
+/** `codesign -d --entitlements - --xml` output of a store-signed app, with `extra` in its dict. */
+const signedEntitlements = (extra: string): string => [
+  '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" ',
+  '"https://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>',
+  '<key>application-identifier</key><string>TEAM123456.dev.example.game</string>',
+  extra,
+  '<key>com.apple.developer.team-identifier</key><string>TEAM123456</string>',
+  '<key>get-task-allow</key><false/></dict></plist>',
+].join('');
 
 const root = mkdtempSync(path.join(tmpdir(), 'mpgd-ios-inspection-test-'));
 const app = path.join(root, 'App.app');
@@ -114,6 +127,102 @@ try {
     }),
   );
   assert.throws(() => inspectSignedIosApplication(app, input), /debug bridge/u);
+  writeFileSync(path.join(app, 'capacitor.config.json'), '{"server":{"iosScheme":"https"}}');
+
+  // aps-environment of a store build whose shell installs the messaging plugin.
+  const production = signedEntitlements('<key>aps-environment</key><string>production</string>');
+  const development = signedEntitlements('<key>aps-environment</key><string>development</string>');
+  assert.equal(readSignedApsEnvironment(production), 'production');
+  assert.equal(readSignedApsEnvironment(development), 'development');
+  assert.equal(readSignedApsEnvironment(signedEntitlements('')), undefined);
+  assert.equal(
+    readSignedApsEnvironment(''),
+    undefined,
+    'an unsigned-entitlements app prints nothing',
+  );
+  assert.equal(
+    readSignedApsEnvironment(`úÞqq\u0000\u0000\u0001\u0000${production}`),
+    'production',
+    'a legacy blob header before the plist is skipped',
+  );
+  // A pretty-printed plist, as `codesign` prints on some releases.
+  assert.equal(readSignedApsEnvironment(production.replaceAll('><', '>\n\t<')), 'production');
+  assert.equal(readSignedApsEnvironment('Executable=/tmp/App.app'), null);
+  assert.equal(
+    readSignedApsEnvironment(signedEntitlements('<key>aps-environment</key><true/>')),
+    null,
+  );
+  assert.equal(
+    readSignedApsEnvironment(signedEntitlements('<key>aps-environment</key><string>')),
+    null,
+  );
+  assert.equal(iosStorePushEntitlementError('production'), undefined);
+  assert.match(
+    iosStorePushEntitlementError(undefined) ?? '',
+    /no aps-environment entitlement[\s\S]*lacks the Push Notifications capability[\s\S]*regenerate the App Store provisioning profile/u,
+  );
+  assert.match(
+    iosStorePushEntitlementError('development') ?? '',
+    /aps-environment = development[\s\S]*export used a development provisioning profile/u,
+  );
+  assert.match(iosStorePushEntitlementError(null) ?? '', /is unreadable, not production/u);
+
+  const entitlementCalls: string[][] = [];
+  const pushInput = (entitlements: { status: number; stdout: string }): IosInspectionInput => ({
+    ...input,
+    expectedApsEnvironment: 'production',
+    runner: {
+      run(command, args) {
+        if (command === 'codesign' && args.includes('--entitlements')) {
+          entitlementCalls.push([...args]);
+          return { ...entitlements, stderr: 'Executable=App.app\n' };
+        }
+        return input.runner?.run(command, args) ?? { status: 1, stdout: '', stderr: '' };
+      },
+    },
+  });
+  assert.equal(
+    inspectSignedIosApplication(app, pushInput({ status: 0, stdout: production })).signed,
+    true,
+  );
+  assert.deepEqual(entitlementCalls.at(-1), ['-d', '--entitlements', '-', '--xml', app]);
+  assert.throws(
+    () => inspectSignedIosApplication(app, pushInput({ status: 0, stdout: development })),
+    /development provisioning profile/u,
+  );
+  assert.throws(
+    () => inspectSignedIosApplication(app, pushInput({ status: 0, stdout: signedEntitlements('') })),
+    /lacks the Push Notifications capability/u,
+  );
+  assert.throws(
+    () => inspectSignedIosApplication(app, pushInput({ status: 1, stdout: '' })),
+    /entitlements could not be read/u,
+  );
+  assert.equal(inspectSignedIosIpa(ipa, { ...ipaInput, expectedApsEnvironment: 'production', runner: {
+    run(command, args) {
+      if (command === 'codesign' && args.includes('--entitlements')) {
+        return { status: 0, stdout: production, stderr: '' };
+      }
+      return ipaInput.runner?.run(command, args) ?? { status: 1, stdout: '', stderr: '' };
+    },
+  } }).signed, true);
+  // Without the messaging plugin the entitlements are never read, so never fail.
+  const callsBefore = entitlementCalls.length;
+  assert.equal(inspectSignedIosApplication(app, input).signed, true);
+  assert.equal(entitlementCalls.length, callsBefore);
+  const shell = path.join(root, 'shell');
+  mkdirSync(shell);
+  assert.equal(shellInstallsFirebaseMessaging(shell), false, 'no package.json');
+  writeFileSync(
+    path.join(shell, 'package.json'),
+    JSON.stringify({ dependencies: { '@capacitor/core': '8.5.2' } }),
+  );
+  assert.equal(shellInstallsFirebaseMessaging(shell), false);
+  writeFileSync(
+    path.join(shell, 'package.json'),
+    JSON.stringify({ dependencies: { '@capacitor-firebase/messaging': '8.5.2' } }),
+  );
+  assert.equal(shellInstallsFirebaseMessaging(shell), true);
   console.info('Signed iOS app inspection passed.');
 } finally {
   rmSync(root, { recursive: true, force: true });
