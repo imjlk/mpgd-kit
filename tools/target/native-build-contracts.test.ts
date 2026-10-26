@@ -6,5 +6,6 @@ import './native-shell-csp.test';
 import './native-android-inspection.test';
 import './native-android-signing-args.test';
 import './native-ios-inspection.test';
+import './ios-simulator-build-settings.test';
 import './release-manifest-lock.test';
 import './target-config-matrix-env.test';
