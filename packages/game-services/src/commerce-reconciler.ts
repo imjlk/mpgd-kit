@@ -769,13 +769,25 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     scheduleRun();
   };
 
-  const readAvailable = async (capabilitiesNow: CommerceCapabilities): Promise<boolean> => {
+  /**
+   * Reads the store's available purchases into the inbox. `restore` is the
+   * player's Restore Purchases read only: the store also lists owned
+   * non-consumables its recovery list hides (acknowledged on Play, bound to
+   * another guest's token on StoreKit), so a reinstall or a new device can
+   * restore them. Startup and resume recovery never set it, so an
+   * acknowledged durable is not sent again on every launch.
+   */
+  const readAvailable = async (
+    capabilitiesNow: CommerceCapabilities,
+    restore = false,
+  ): Promise<boolean> => {
     if (!capabilitiesNow.lifecycle.availablePurchases) {
       return true;
     }
     try {
       const available = await provider.getAvailablePurchases({
         includePending: capabilitiesNow.lifecycle.pending,
+        ...(restore ? { restore: true } : {}),
       });
       for (const purchase of available) {
         inbox.push({ type: 'purchaseUpdated', purchase });
@@ -1222,6 +1234,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     /** A start, reconcile, or restore trigger, as opposed to a store event. */
     readonly explicit: boolean;
     readonly refreshCapabilities: boolean;
+    /**
+     * The Restore Purchases trigger: a polled provider's read in this pass is
+     * a restore read (`GetAvailablePurchasesInput.restore`).
+     */
+    readonly restore?: boolean;
   }
 
   const eventPass: PassOptions = { explicit: false, refreshCapabilities: false };
@@ -1237,7 +1254,8 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     // read again until it succeeds, so a purchase that predates the
     // subscription is not missed for the session.
     if (capabilitiesNow !== undefined && (!capabilitiesNow.lifecycle.events || initialScanPending)) {
-      initialScanPending = !(await readAvailable(capabilitiesNow)) && capabilitiesNow.lifecycle.events;
+      initialScanPending = !(await readAvailable(capabilitiesNow, options.restore === true))
+        && capabilitiesNow.lifecycle.events;
     }
     // An event for a product whose store call is still running waits for that
     // call to journal the store answer: matched then, it is never journaled
@@ -1715,11 +1733,18 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           await loadRecords();
         }
         const capabilitiesNow = await readCapabilities(true);
-        // A polled provider is read by the pass itself.
+        // A polled provider is read by the pass itself. Either read is a
+        // restore read: owned non-consumables the store's recovery list
+        // hides (a reinstall, a new device) reach the backend as restores.
+        let restoreRead = false;
         if (capabilitiesNow !== undefined && capabilitiesNow.lifecycle.events) {
-          await readAvailable(capabilitiesNow);
+          restoreRead = await readAvailable(capabilitiesNow, true);
+          if (restoreRead) {
+            // This read covers a start-time read that failed.
+            initialScanPending = false;
+          }
         }
-        await pass({ explicit: true, refreshCapabilities: false });
+        await pass({ explicit: true, refreshCapabilities: false, restore: !restoreRead });
       });
       await runUntilIdle();
     },
