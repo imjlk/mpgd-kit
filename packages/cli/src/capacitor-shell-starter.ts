@@ -37,11 +37,17 @@ import {
   addIosAppResource,
   applyAndroidManifestAdId,
   applyAndroidManifestOrientation,
+  applyIosAppDelegatePushForwarding,
   applyIosInfoPlistOrientation,
   applyIosInfoPlistStorePolicy,
   applyIosProjectDeviceFamily,
+  applyIosProjectPushEntitlements,
+  applyIosSceneDelegateColdStartForwarding,
+  inspectIosPushWiring,
   iosAppPrivacyManifestFile,
   iosAppPrivacyManifestXml,
+  iosPushEntitlementsFile,
+  iosPushEntitlementsXml,
   isRecord,
   readGameAdvertisingIdPolicy,
   readGameNativeOrientation,
@@ -49,7 +55,9 @@ import {
   shellUsesAdMob,
   type IosDeviceFamily,
   type NativeShellOrientation,
+  type NativeShellPolicyIssue,
 } from './native-shell-store-policy.js';
+import { readIosPushWiringInput } from './native-shell-ios-push-files.js';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
@@ -616,8 +624,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         '@capacitor-firebase/messaging and @capacitor/local-notifications (never',
         `${conflictingPushPlugin}, which claims the same iOS push handler).`,
         'Notifications also need the Firebase files (google-services.json,',
-        'GoogleService-Info.plist) and the iOS Push Notifications capability; see',
-        'the mpgd-kit Firebase guide. A plugin never reports a feature as',
+        'GoogleService-Info.plist) and an APNs key in Firebase; an iOS project',
+        'generated with them gets the push entitlement and the AppDelegate and',
+        'SceneDelegate forwarding. See the mpgd-kit Firebase guide. A plugin never reports a feature as',
         'available on its own; the gateway registers the store provider, and the',
         'store answers configuration-required until the plugin and products exist.',
         'Production builds require a real game-owned backend when grants are enabled.',
@@ -874,6 +883,9 @@ export function materializeCapacitorShellStarter(
     }
     if (platform === 'ios' && generatedNow) {
       materializeIosStorePolicy(plan.gameRoot);
+      if (plan.notificationPlugins.length > 0) {
+        materializeIosPushWiring(plan.gameRoot);
+      }
     }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
@@ -1089,6 +1101,70 @@ function materializeIosStorePolicy(gameRoot: string): void {
   if (next !== source) {
     writeFileSync(projectFile, next);
   }
+}
+
+/**
+ * iOS push wiring of a freshly generated project (`--providers notifications`):
+ * the `aps-environment` entitlement on the App target, the AppDelegate's
+ * APNs registration forwarding, and the reference shell's cold-start tap
+ * forwarding in SceneDelegate (#407). An existing game-owned project is never
+ * rewritten; the initializer and the production build report what it lacks.
+ * Whatever this cannot place in an unexpected layout is printed as the
+ * manual step. Exported for the CLI's tests.
+ */
+export function materializeIosPushWiring(gameRoot: string): void {
+  const projectFile = safeDestination(
+    gameRoot,
+    `${shellPath}/ios/App/App.xcodeproj/project.pbxproj`,
+  );
+  const project = readFileSync(projectFile, 'utf8');
+  const withEntitlements = applyIosProjectPushEntitlements(project);
+  if (withEntitlements !== undefined) {
+    const entitlementsFile = safeDestination(
+      gameRoot,
+      `${shellPath}/ios/App/App/${iosPushEntitlementsFile}`,
+    );
+    if (!existsSync(entitlementsFile)) {
+      writeFileSync(entitlementsFile, iosPushEntitlementsXml, { flag: 'wx' });
+    }
+    if (withEntitlements !== project) {
+      writeFileSync(projectFile, withEntitlements);
+    }
+  }
+  for (const [name, apply] of [
+    ['AppDelegate.swift', applyIosAppDelegatePushForwarding],
+    ['SceneDelegate.swift', applyIosSceneDelegateColdStartForwarding],
+  ] as const) {
+    const file = safeDestination(gameRoot, `${shellPath}/ios/App/App/${name}`);
+    if (!existsSync(file) || !lstatSync(file).isFile()) {
+      continue;
+    }
+    const source = readFileSync(file, 'utf8');
+    const next = apply(source);
+    if (next !== undefined && next !== source) {
+      writeFileSync(file, next);
+    }
+  }
+  for (const issue of readIosPushWiringIssues(gameRoot) ?? []) {
+    console.warn(`[mpgd] The generated iOS project has an unexpected layout: ${issue.message}`);
+  }
+}
+
+/**
+ * The initializer's warnings for an existing, game-owned iOS project that
+ * lacks the push wiring: each names the manual step. Empty when the shell has
+ * no iOS project yet (the run generates it with the wiring) or lacks nothing.
+ */
+export function iosPushWiringWarnings(gameRoot: string): readonly string[] {
+  return (readIosPushWiringIssues(gameRoot) ?? []).map((issue) =>
+    `${shellPath}/ios is game-owned and not rewritten: ${issue.message}`);
+}
+
+/** What the shell's iOS project lacks for push, or undefined when it has no project yet. */
+function readIosPushWiringIssues(gameRoot: string): readonly NativeShellPolicyIssue[] | undefined {
+  safeDestination(gameRoot, `${shellPath}/ios/App`);
+  const input = readIosPushWiringInput(path.join(gameRoot, shellPath, 'ios/App'));
+  return input === undefined ? undefined : inspectIosPushWiring(input);
 }
 
 /**
@@ -3686,11 +3762,13 @@ function planNotificationsProvider(input: {
   if (readExisting(safeDestination(gameRoot, `${shellPath}/ios/App/App/GoogleService-Info.plist`))
     === undefined) {
     warnings.push(
-      `iOS push needs ${shellPath}/ios/App/App/GoogleService-Info.plist, the Push Notifications `
-        + 'capability, an APNs key uploaded to Firebase, and the AppDelegate forwarding the '
-        + 'messaging plugin documents (see the mpgd-kit Firebase guide).',
+      `iOS push needs ${shellPath}/ios/App/App/GoogleService-Info.plist in the App target and an `
+        + 'APNs key uploaded to Firebase (see the mpgd-kit Firebase guide).',
     );
   }
+  // A project this run generates gets the entitlement and the forwarding; an
+  // existing one is game-owned, so only the steps it still needs are printed.
+  warnings.push(...iosPushWiringWarnings(gameRoot));
   return {
     shellPlugins: shellPlugins.map(({ packageName, version }) => ({ packageName, version })),
     gameDependencies: gamePackages,

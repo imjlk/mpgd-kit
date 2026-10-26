@@ -1,3 +1,5 @@
+import { notificationsMessagingPlugin } from './notifications-starter.js';
+
 /**
  * Store-facing settings of the game-owned Capacitor shell: the iOS
  * Info.plist keys App Store Connect reads (export compliance, device
@@ -957,4 +959,474 @@ export function inspectIosInfoPlistAds(
     });
   }
   return issues;
+}
+
+// iOS push (`--providers notifications`).
+
+/** The entitlements file of a kit shell's App target, in the App group. */
+export const iosPushEntitlementsFile = 'App.entitlements';
+/** Its `CODE_SIGN_ENTITLEMENTS` value, relative to the Xcode project directory (`ios/App`). */
+export const iosPushEntitlementsSetting = `App/${iosPushEntitlementsFile}`;
+
+/**
+ * The Push Notifications entitlement the Xcode capability writes. Apple:
+ * "Xcode sets the value of the entitlement based on your app's current
+ * provisioning profile", so `development` here signs as `production` with
+ * an App Store profile
+ * (https://developer.apple.com/documentation/bundleresources/entitlements/aps-environment).
+ */
+export const iosPushEntitlementsXml = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+  '<plist version="1.0">',
+  '<dict>',
+  '\t<key>aps-environment</key>',
+  '\t<string>development</string>',
+  '</dict>',
+  '</plist>',
+  '',
+].join('\n');
+
+/**
+ * The AppDelegate methods `@capacitor-firebase/messaging` documents for iOS:
+ * the plugin observes `.capacitorDidRegisterForRemoteNotifications` and hands
+ * the APNs token to Firebase, so without them it never gets an FCM token.
+ * The plugin README's third method (`didReceiveRemoteNotification`) is left
+ * out: the kit sends no silent pushes, and plugin 8.5.2 never calls the
+ * completion handler it is given.
+ */
+export const iosAppDelegatePushForwardingSwift: readonly string[] = [
+  '    // @capacitor-firebase/messaging reads the APNs token from these Capacitor',
+  '    // notifications (added by mpgd target init capacitor --providers notifications).',
+  '    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {',
+  '        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)',
+  '    }',
+  '',
+  '    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {',
+  '        NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)',
+  '    }',
+];
+
+/** The call the scene delegate makes right after Capacitor's scene proxy (reference shell, #407). */
+const iosSceneDelegateColdStartCall: readonly string[] = [
+  '// A killed-app tap is only in connectionOptions.notificationResponse.',
+  "// Capacitor 8.5's scene proxy replays URL contexts on capacitorViewDidAppear",
+  '// and does not read this, and @capacitor/ios 8.5.2 never does either.',
+  'forwardColdStartNotification(connectionOptions.notificationResponse)',
+];
+
+/** The scene delegate methods that replay a cold-start tap (reference shell, #407). */
+export const iosSceneDelegateColdStartSwift: readonly string[] = [
+  '    /// Replays a cold-start notification response once plugins have registered',
+  "    /// with Capacitor's notification router. `load()` runs before",
+  '    /// `capacitorViewDidAppear`, which is how the scene proxy replays URL contexts.',
+  '    private func forwardColdStartNotification(_ response: UNNotificationResponse?) {',
+  '        guard let response else { return }',
+  '        var token: NSObjectProtocol?',
+  '        token = NotificationCenter.default.addObserver(',
+  '            forName: .capacitorViewDidAppear,',
+  '            object: nil,',
+  '            queue: .main',
+  '        ) { _ in',
+  '            if let token {',
+  '                NotificationCenter.default.removeObserver(token)',
+  '            }',
+  '            self.deliverColdStartNotification(response)',
+  '        }',
+  '    }',
+  '',
+  '    private func deliverColdStartNotification(_ response: UNNotificationResponse) {',
+  '        let center = UNUserNotificationCenter.current()',
+  '        if let delegate = center.delegate {',
+  '            delegate.userNotificationCenter?(center, didReceive: response, withCompletionHandler: {})',
+  '            return',
+  '        }',
+  '        guard let controller = window?.rootViewController as? CAPBridgeViewController,',
+  '              let bridge = controller.bridge else {',
+  '            return',
+  '        }',
+  '        bridge.notificationRouter.userNotificationCenter(',
+  '            center,',
+  '            didReceive: response,',
+  '            withCompletionHandler: {}',
+  '        )',
+  '    }',
+];
+
+/** Whether the shell's package.json installs the Firebase messaging plugin (`--providers notifications`). */
+export function shellUsesFirebaseMessaging(shellPackage: unknown): boolean {
+  if (!isRecord(shellPackage)) {
+    return false;
+  }
+  return [shellPackage.dependencies, shellPackage.devDependencies].some((dependencies) =>
+    isRecord(dependencies) && dependencies[notificationsMessagingPlugin] !== undefined);
+}
+
+/**
+ * Swift source with comments and string literals blanked to spaces, so
+ * offsets stay the same and only code is matched. Nested block comments and
+ * multi-line strings are handled; an interpolation's code inside a string is
+ * blanked with it.
+ */
+export function stripSwiftCommentsAndStrings(source: string): string {
+  let output = '';
+  let commentDepth = 0;
+  let lineComment = false;
+  let quote: '"' | '"""' | undefined;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index] ?? '';
+    const next = source[index + 1] ?? '';
+    const blank = character === '\n' ? '\n' : ' ';
+    if (lineComment) {
+      lineComment = character !== '\n';
+      output += blank;
+    } else if (commentDepth > 0) {
+      if (character === '/' && next === '*') {
+        commentDepth += 1;
+        output += '  ';
+        index += 1;
+      } else if (character === '*' && next === '/') {
+        commentDepth -= 1;
+        output += '  ';
+        index += 1;
+      } else {
+        output += blank;
+      }
+    } else if (quote !== undefined) {
+      if (character === '\\' && next !== '') {
+        output += next === '\n' ? ' \n' : '  ';
+        index += 1;
+      } else if (source.startsWith(quote, index)) {
+        output += ' '.repeat(quote.length);
+        index += quote.length - 1;
+        quote = undefined;
+      } else {
+        output += blank;
+      }
+    } else if (character === '/' && next === '/') {
+      lineComment = true;
+      output += '  ';
+      index += 1;
+    } else if (character === '/' && next === '*') {
+      commentDepth = 1;
+      output += '  ';
+      index += 1;
+    } else if (source.startsWith('"""', index)) {
+      quote = '"""';
+      output += '   ';
+      index += 2;
+    } else if (character === '"') {
+      quote = '"';
+      output += ' ';
+    } else {
+      output += character;
+    }
+  }
+  return output;
+}
+
+/**
+ * The offset of the `}` that closes the top-level `class <name>` whose
+ * inheritance clause names `conformance`, in source whose comments and
+ * strings are blanked, or undefined.
+ */
+function findSwiftClassClose(code: string, name: string, conformance: string): number | undefined {
+  const declaration = new RegExp(`\\bclass\\s+${name}\\b([^{};]*)\\{`, 'gu');
+  for (const match of code.matchAll(declaration)) {
+    const open = (match.index ?? 0) + match[0].length - 1;
+    const before = code.slice(0, match.index ?? 0);
+    const depthBefore = (before.match(/\{/gu)?.length ?? 0) - (before.match(/\}/gu)?.length ?? 0);
+    if (depthBefore !== 0 || !new RegExp(`\\b${conformance}\\b`, 'u').test(match[1] ?? '')) {
+      continue;
+    }
+    let depth = 0;
+    for (let index = open; index < code.length; index += 1) {
+      if (code[index] === '{') {
+        depth += 1;
+      } else if (code[index] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return index;
+        }
+      }
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/** `lines` inserted before the class's closing brace, after one blank line. */
+function insertBeforeSwiftClassClose(source: string, close: number, lines: readonly string[]): string {
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const head = source.slice(0, close).replace(/\s*$/u, '');
+  return `${head}${newline}${newline}${lines.join(newline)}${newline}${source.slice(close)}`;
+}
+
+/** Whether a Swift source forwards the APNs device token to Capacitor. */
+export function swiftForwardsPushToken(source: string): boolean {
+  const code = stripSwiftCommentsAndStrings(source);
+  return /\bdidRegisterForRemoteNotificationsWithDeviceToken\b/u.test(code)
+    && /\bcapacitorDidRegisterForRemoteNotifications\b/u.test(code);
+}
+
+/** Whether a Swift source forwards the scene's cold-start notification response. */
+export function swiftForwardsColdStartNotification(source: string): boolean {
+  return /\.\s*notificationResponse\b/u.test(stripSwiftCommentsAndStrings(source));
+}
+
+/**
+ * Adds the APNs registration forwarding (`iosAppDelegatePushForwardingSwift`)
+ * to the `AppDelegate` class. An AppDelegate that already forwards the token
+ * is returned unchanged; undefined when the class is not found or already
+ * implements a registration callback without the forwarding, which is left
+ * to the game.
+ */
+export function applyIosAppDelegatePushForwarding(source: string): string | undefined {
+  if (swiftForwardsPushToken(source)) {
+    return source;
+  }
+  const code = stripSwiftCommentsAndStrings(source);
+  if (/\bdidRegisterForRemoteNotificationsWithDeviceToken\b|\bdidFailToRegisterForRemoteNotificationsWithError\b/u
+    .test(code)) {
+    return undefined;
+  }
+  const close = findSwiftClassClose(code, 'AppDelegate', 'UIApplicationDelegate');
+  return close === undefined
+    ? undefined
+    : insertBeforeSwiftClassClose(source, close, iosAppDelegatePushForwardingSwift);
+}
+
+/**
+ * Adds the cold-start notification forwarding of the kit reference shell
+ * (#407) to Capacitor's `SceneDelegate`: `import UserNotifications`, the
+ * call after `SceneDelegateProxy.shared.scene(_:willConnectTo:options:)`,
+ * and `iosSceneDelegateColdStartSwift`. A scene delegate that already reads
+ * `notificationResponse` is returned unchanged; undefined when it does not
+ * have Capacitor's layout, which is left to the game.
+ */
+export function applyIosSceneDelegateColdStartForwarding(source: string): string | undefined {
+  if (swiftForwardsColdStartNotification(source)) {
+    return source;
+  }
+  const code = stripSwiftCommentsAndStrings(source);
+  const proxyCalls = [...code.matchAll(
+    /SceneDelegateProxy\s*\.\s*shared\s*\.\s*scene\s*\(\s*scene\s*,\s*willConnectTo\s*:\s*session\s*,\s*options\s*:\s*connectionOptions\s*\)/gu,
+  )];
+  const capacitorImport = /^import[ \t]+Capacitor[ \t]*(?=\r?$)/mu.exec(code);
+  if (proxyCalls.length !== 1 || capacitorImport === null
+    || /\bforwardColdStartNotification\b|\bdeliverColdStartNotification\b/u.test(code)) {
+    return undefined;
+  }
+  const close = findSwiftClassClose(code, 'SceneDelegate', 'UIWindowSceneDelegate');
+  const call = proxyCalls[0];
+  if (close === undefined || call?.index === undefined || call.index > close) {
+    return undefined;
+  }
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const lineStart = source.lastIndexOf('\n', call.index) + 1;
+  const indentation = /^[ \t]*/u.exec(source.slice(lineStart))?.[0] ?? '';
+  const lineEnd = code.indexOf('\n', call.index);
+  if (lineEnd === -1 || lineEnd > close || code.slice(call.index + call[0].length, lineEnd).trim() !== '') {
+    return undefined;
+  }
+  const callEnd = source[lineEnd - 1] === '\r' ? lineEnd - 1 : lineEnd;
+  const withMethods = insertBeforeSwiftClassClose(source, close, iosSceneDelegateColdStartSwift);
+  const withCall = `${withMethods.slice(0, callEnd)}${
+    iosSceneDelegateColdStartCall.map((line) => `${newline}${indentation}${line}`).join('')}${
+    withMethods.slice(callEnd)}`;
+  if (/^import[ \t]+UserNotifications[ \t]*(?=\r?$)/mu.test(code)) {
+    return withCall;
+  }
+  const importEnd = capacitorImport.index + capacitorImport[0].length;
+  return `${withCall.slice(0, importEnd)}${newline}import UserNotifications${withCall.slice(importEnd)}`;
+}
+
+/** The App target's Release `CODE_SIGN_ENTITLEMENTS`, without quotes, or undefined. */
+export function readIosAppReleaseEntitlements(project: string): string | undefined {
+  for (const id of readAppTargetConfigurationIds(project)) {
+    const settings = locatePbxBuildSettings(project, id);
+    if (settings.name === 'Release') {
+      return readPbxSetting(project.slice(settings.start, settings.end), 'CODE_SIGN_ENTITLEMENTS');
+    }
+  }
+  return undefined;
+}
+
+function readPbxSetting(settings: string, name: string): string | undefined {
+  const value = new RegExp(`(?:^|[\\s;{])${name}\\s*=\\s*([^;]+);`, 'u').exec(settings)?.[1];
+  return value?.trim().replace(/^"(.*)"$/u, '$1');
+}
+
+/**
+ * The entitlements path a `CODE_SIGN_ENTITLEMENTS` value names, relative to
+ * the Xcode project directory, or undefined when it uses another build
+ * setting the kit cannot resolve.
+ */
+export function resolveIosEntitlementsSetting(value: string): string | undefined {
+  const relative = value.replace(/^\$[({](?:SRCROOT|PROJECT_DIR)[)}]\//u, '');
+  return relative.includes('$') || relative === '' ? undefined : relative;
+}
+
+/**
+ * Adds `App.entitlements` to the App group of a Capacitor-generated project
+ * and sets `CODE_SIGN_ENTITLEMENTS` in every App target build configuration.
+ * The file is not bundled (no build phase). A project that already points
+ * there is returned unchanged; undefined when the project has another layout
+ * or another entitlements file, which is left to the game.
+ */
+export function applyIosProjectPushEntitlements(project: string): string | undefined {
+  let configurationIds: readonly string[];
+  try {
+    configurationIds = readAppTargetConfigurationIds(project);
+  } catch {
+    return undefined;
+  }
+  const group = findAppGroup(project);
+  if (group === undefined || !project.includes('/* End PBXFileReference section */')) {
+    return undefined;
+  }
+  for (const id of configurationIds) {
+    const settings = locatePbxBuildSettings(project, id);
+    const current = readPbxSetting(
+      project.slice(settings.start, settings.end),
+      'CODE_SIGN_ENTITLEMENTS',
+    );
+    if (current !== undefined && resolveIosEntitlementsSetting(current) !== iosPushEntitlementsSetting) {
+      return undefined;
+    }
+  }
+  let next = project;
+  if (!group.text.includes(`/* ${iosPushEntitlementsFile} */`)) {
+    const fileId = uniquePbxId(project, `${iosPushEntitlementsFile}:file`);
+    const edits = [
+      {
+        at: project.indexOf('/* End PBXFileReference section */'),
+        text: `\t\t${fileId} /* ${iosPushEntitlementsFile} */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ${iosPushEntitlementsFile}; sourceTree = "<group>"; };\n`,
+      },
+      { at: group.childrenEnd, text: `\t${fileId} /* ${iosPushEntitlementsFile} */,\n\t\t\t` },
+    ].sort((left, right) => right.at - left.at);
+    for (const edit of edits) {
+      next = `${next.slice(0, edit.at)}${edit.text}${next.slice(edit.at)}`;
+    }
+  }
+  for (const id of configurationIds) {
+    const settings = locatePbxBuildSettings(next, id);
+    const body = next.slice(settings.start, settings.end);
+    if (readPbxSetting(body, 'CODE_SIGN_ENTITLEMENTS') === undefined) {
+      next = `${next.slice(0, settings.start)}\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = ${
+        iosPushEntitlementsSetting};${body}${next.slice(settings.end)}`;
+    }
+  }
+  return next;
+}
+
+/** What `inspectIosPushWiring` reads from the shell's iOS project. */
+export interface IosPushWiringInput {
+  /** `ios/App/App.xcodeproj/project.pbxproj`. */
+  readonly project: string;
+  /**
+   * A file of the iOS project by its path relative to `ios/App` (the Xcode
+   * project directory), or undefined when it is missing or unsafe to read.
+   */
+  readonly readProjectFile: (relative: string) => string | undefined;
+  /** The Swift sources of the App group (`ios/App/App`). */
+  readonly swiftSources: readonly string[];
+}
+
+export const iosPushEntitlementStep = 'add the Push Notifications capability to the App target in '
+  + `Xcode, or create ios/App/App/${iosPushEntitlementsFile} with <key>aps-environment</key>`
+  + `<string>development</string> and set CODE_SIGN_ENTITLEMENTS = ${iosPushEntitlementsSetting} `
+  + "in the App target's Debug and Release build settings (Xcode signs the value from the "
+  + 'provisioning profile, production for the App Store)';
+export const iosPushTokenForwardingStep = 'add to the AppDelegate class: func application(_ '
+  + 'application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) '
+  + '{ NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: '
+  + 'deviceToken) } and func application(_ application: UIApplication, '
+  + 'didFailToRegisterForRemoteNotificationsWithError error: Error) { NotificationCenter.default.post('
+  + 'name: .capacitorDidFailToRegisterForRemoteNotifications, object: error) }';
+export const iosPushColdStartStep = 'copy forwardColdStartNotification and '
+  + 'deliverColdStartNotification from the mpgd-kit reference shell '
+  + '(apps/mobile-capacitor/ios/App/App/SceneDelegate.swift) into SceneDelegate, import '
+  + 'UserNotifications, and call forwardColdStartNotification(connectionOptions.notificationResponse) '
+  + 'right after SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)';
+
+/**
+ * What a shell with `@capacitor-firebase/messaging` still lacks on iOS: the
+ * `aps-environment` entitlement on the App target's Release configuration,
+ * the AppDelegate's APNs token forwarding, and the scene delegate's
+ * cold-start tap forwarding. Each is an error: without the first two no
+ * push reaches the app, and without the third a tap on a notification
+ * while the app is not running opens it without the notification's route.
+ * An entitlements path the kit cannot resolve is a warning.
+ */
+export function inspectIosPushWiring(input: IosPushWiringInput): readonly NativeShellPolicyIssue[] {
+  const issues: NativeShellPolicyIssue[] = [];
+  const guide = ' (see the mpgd-kit Firebase guide, docs/FIREBASE_NOTIFICATIONS.md#4-ios).';
+  let setting: string | undefined;
+  try {
+    setting = readIosAppReleaseEntitlements(input.project);
+  } catch {
+    setting = undefined;
+  }
+  const relative = setting === undefined ? undefined : resolveIosEntitlementsSetting(setting);
+  if (setting !== undefined && relative === undefined) {
+    issues.push({
+      level: 'warning',
+      message: `iOS App target Release CODE_SIGN_ENTITLEMENTS is ${setting}, which the kit cannot `
+        + 'resolve; make sure that file has the aps-environment entitlement.',
+    });
+  } else {
+    const entitlements = relative === undefined ? undefined : input.readProjectFile(relative);
+    let environment: string | undefined;
+    try {
+      const value = entitlements === undefined
+        ? undefined
+        : readPlistTopLevelValue(entitlements, 'aps-environment');
+      environment = /^<string>\s*(development|production)\s*<\/string>$/u.exec(value?.xml ?? '')?.[1];
+    } catch {
+      environment = undefined;
+    }
+    if (environment === undefined) {
+      issues.push({
+        level: 'error',
+        message: 'The shell installs @capacitor-firebase/messaging, but the iOS App target has no '
+          + 'aps-environment entitlement in its Release configuration'
+          + `${setting === undefined ? '' : ` (${setting})`}, so APNs issues no device token and `
+          + `no push reaches the app: ${iosPushEntitlementStep}${guide}`,
+      });
+    }
+  }
+  if (!input.swiftSources.some(swiftForwardsPushToken)) {
+    issues.push({
+      level: 'error',
+      message: 'The shell installs @capacitor-firebase/messaging, but no App Swift source forwards '
+        + 'the APNs device token to Capacitor, so the plugin never gets an FCM token: '
+        + `${iosPushTokenForwardingStep}${guide}`,
+    });
+  }
+  if (!input.swiftSources.some(swiftForwardsColdStartNotification)) {
+    issues.push({
+      level: 'error',
+      message: 'The shell installs @capacitor-firebase/messaging, but its iOS SceneDelegate does '
+        + 'not forward connectionOptions.notificationResponse, so a tap on a notification while '
+        + "the app is not running opens the game without the notification's route: "
+        + `${iosPushColdStartStep}${guide}`,
+    });
+  }
+  return issues;
+}
+
+/** The Firebase config file the messaging plugin reads from the app bundle. */
+export const iosFirebaseConfigFile = 'GoogleService-Info.plist';
+
+export function inspectIosFirebaseConfig(project: string): readonly NativeShellPolicyIssue[] {
+  if (iosAppBundlesResource(project, iosFirebaseConfigFile)) {
+    return [];
+  }
+  return [{
+    level: 'warning',
+    message: `The shell installs @capacitor-firebase/messaging, but the iOS App target does not bundle `
+      + `${iosFirebaseConfigFile}; the plugin then leaves Firebase unconfigured and push fails closed. `
+      + 'Download it from the Firebase console and add it to the App target in Xcode.',
+  }];
 }
