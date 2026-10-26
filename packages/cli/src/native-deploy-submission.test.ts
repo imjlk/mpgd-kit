@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import type { NativeDeploymentPlan } from './deploy-planning.js';
 import {
+  assertSettledAndroidReleaseOptions,
   isNativeDeployApproved,
   submitRecordedNativeTargetWithPorts,
   verifyRecordedReleaseManifest,
@@ -363,6 +364,26 @@ try {
   }
   assert.equal(statusReads, 0);
   assert.deepEqual(checkpoints, {});
+  // deploy run skips a committed target; changed Play options must fail there too.
+  const { playReleaseSha256: _internalDigest, ...alphaStartedAsInternal } = committedAlpha;
+  assertSettledAndroidReleaseOptions(committedAlpha, alphaRelease);
+  assertSettledAndroidReleaseOptions(undefined, { track: 'production', status: 'completed' });
+  assert.throws(
+    () => assertSettledAndroidReleaseOptions(committedAlpha, undefined),
+    /already committed to Google Play with other release options/u,
+  );
+  assert.throws(
+    () =>
+      assertSettledAndroidReleaseOptions(alphaStartedAsInternal, {
+        track: 'production',
+        status: 'completed',
+      }),
+    /already committed to Google Play with other release options/u,
+  );
+  assertSettledAndroidReleaseOptions(
+    { ...committedAlpha, status: 'unknown' },
+    { track: 'production', status: 'completed' },
+  );
   // A profile's internal-test preapproval never covers another track.
   assert.equal(isNativeDeployApproved({ approval: 'preapproved-internal-test' }, false), true);
   assert.equal(

@@ -25,6 +25,7 @@ import {
 import { withAndroidUploadSigningSession } from './android-signing-session.js';
 import { withIosSigningSession } from './ios-signing-session.js';
 import {
+  assertSettledAndroidReleaseOptions,
   submitRecordedNativeTarget,
   type NativeStoreCredential,
 } from './native-deploy-submission.js';
@@ -104,6 +105,8 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
       throw error;
     }
   }
+  // Refuse changed Play options for a committed release before any build work.
+  assertSettledAndroidReleaseOptions(existing?.submissions.android, input.androidRelease);
   const pendingSteps = existing === undefined
     ? {
         buildTargets: input.plan.targets.map((entry) => entry.target),
@@ -193,6 +196,7 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     }
     const submission = status.submissions[entry.target];
     if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
+      assertSettledAndroidReleaseOptions(submission, input.androidRelease);
       continue;
     }
     await submitRecordedNativeTarget({

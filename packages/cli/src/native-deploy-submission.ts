@@ -96,6 +96,24 @@ export function isNativeDeployApproved(
   return approveFlag || (plan.approval === 'preapproved-internal-test' && internalOnly);
 }
 
+/**
+ * A committed Android release is never re-sent, so a request with other
+ * Google Play options must fail instead of being skipped as done.
+ */
+export function assertSettledAndroidReleaseOptions(
+  checkpoint: NativeSubmissionCheckpoint | undefined,
+  androidRelease: PlayReleaseRequest | undefined,
+): void {
+  if (checkpoint?.target === 'android' && isNativeSubmissionSettled(checkpoint.status)
+    && checkpoint.playReleaseSha256
+      !== playReleaseRequestDigest(androidRelease ?? defaultPlayReleaseRequest)) {
+    throw new Error(
+      'This release was already committed to Google Play with other release options; '
+      + 'change it with "mpgd deploy rollout" or submit a new release.',
+    );
+  }
+}
+
 /** Resume exactly one verified build; never rebuild or allocate another version here. */
 export async function submitRecordedNativeTarget(
   input: SubmitRecordedNativeTargetInput,
@@ -189,6 +207,7 @@ export async function submitRecordedNativeTargetWithPorts(
     ports.readStatus,
   );
   let checkpoint = status.submissions[target];
+  assertSettledAndroidReleaseOptions(checkpoint, androidRelease);
   // An attempt that never checkpointed a Play edit changed nothing remotely,
   // so its release options may still be corrected.
   const optionsReplaceable = checkpoint?.status === 'started'
@@ -196,11 +215,10 @@ export async function submitRecordedNativeTargetWithPorts(
     && checkpoint.remoteBuildId === undefined;
   if (checkpoint !== undefined && checkpoint.playReleaseSha256 !== releaseDigest
     && !optionsReplaceable) {
-    throw new Error(isNativeSubmissionSettled(checkpoint.status)
-      ? 'This release was already committed to Google Play with other release options; '
-        + 'change it with "mpgd deploy rollout" or submit a new release.'
-      : 'This submission was started with other Google Play release options (track, status, '
-        + 'fraction, notes or mapping); re-run it with the same options before changing them.');
+    throw new Error(
+      'This submission was started with other Google Play release options (track, status, '
+      + 'fraction, notes or mapping); re-run it with the same options before changing them.',
+    );
   }
   if (checkpoint !== undefined && isNativeSubmissionSettled(checkpoint.status)) {
     return checkpoint;
