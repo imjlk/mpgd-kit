@@ -220,6 +220,48 @@ describe('createCapacitorCrashReporter', () => {
     expect(plugin.log).not.toHaveBeenCalled();
   });
 
+  it('retries a native opt-in the SDK did not take', async () => {
+    const preference = memoryPreference();
+    let nativeFailures = 1;
+    const plugin = createPlugin({
+      setEnabled: vi.fn(async () => {
+        if (nativeFailures > 0) {
+          nativeFailures -= 1;
+          throw new Error('native failure');
+        }
+      }),
+    });
+    const first = createCapacitorCrashReporter({
+      ...base,
+      requireConsent: true,
+      collectionPreference: preference,
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    await first.setCollectionEnabled(true);
+    expect(preference.value).toBe(true);
+    expect(plugin.setEnabled).toHaveBeenCalledTimes(1);
+    // The next report retries the opt-in, then records.
+    await expect(first.recordError(new Error('x'))).resolves.toBe(true);
+    expect(plugin.setEnabled).toHaveBeenCalledTimes(2);
+    expect(plugin.setEnabled).toHaveBeenLastCalledWith({ enabled: true });
+    await first.log('ok');
+    expect(plugin.setEnabled).toHaveBeenCalledTimes(2);
+
+    // A restart applies the stored opt-in to the SDK again.
+    plugin.setEnabled.mockClear();
+    createCapacitorCrashReporter({
+      ...base,
+      requireConsent: true,
+      collectionPreference: preference,
+      isPluginAvailable: () => true,
+      plugin,
+    });
+    await flushMicrotasks();
+    expect(plugin.setEnabled).toHaveBeenCalledWith({ enabled: true });
+    expect(plugin.deleteUnsentReports).not.toHaveBeenCalled();
+  });
+
   it('still applies the native opt-out when the preference store throws', async () => {
     const plugin = createPlugin();
     const reporter = createCapacitorCrashReporter({

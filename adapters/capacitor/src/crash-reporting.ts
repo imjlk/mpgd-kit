@@ -180,18 +180,24 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
   const storedChoice = readPreference();
   let collectionEnabled: boolean | undefined = storedChoice
     ?? (options.requireConsent === true ? false : undefined);
-  // A stored opt-out is applied to the SDK again at every start: an earlier
-  // native setEnabled may have failed, and the SDK would then still collect.
-  // Until it succeeds it is retried with each report the gate drops.
-  let nativeOptOutPending = storedChoice === false;
-  const applyNativeOptOut = async (): Promise<void> => {
-    if (!nativeOptOutPending || collectionEnabled !== false) {
+  // The stored choice is applied to the SDK again at every start: an earlier
+  // native setEnabled may have failed, leaving the SDK collecting after an
+  // opt-out or idle after an opt-in. Until the SDK takes it, the choice is
+  // retried with each report or breadcrumb.
+  let nativeChoicePending: boolean | undefined = storedChoice;
+  const applyNativeChoice = async (): Promise<void> => {
+    const enabled = nativeChoicePending;
+    if (enabled === undefined || enabled !== collectionEnabled) {
       return;
     }
     try {
-      await plugin.setEnabled({ enabled: false });
-      await plugin.deleteUnsentReports();
-      nativeOptOutPending = false;
+      await plugin.setEnabled({ enabled });
+      if (!enabled) {
+        await plugin.deleteUnsentReports();
+      }
+      if (nativeChoicePending === enabled) {
+        nativeChoicePending = undefined;
+      }
     } catch {
       // Retried with the next report and at the next start.
     }
@@ -219,7 +225,7 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
           // Unknown stays unknown.
         }
       }
-      await applyNativeOptOut();
+      await applyNativeChoice();
       return true;
     })();
     return ready;
@@ -229,11 +235,8 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     if (!await prepare()) {
       return false;
     }
-    if (collectionEnabled === false) {
-      await applyNativeOptOut();
-      return false;
-    }
-    return true;
+    await applyNativeChoice();
+    return collectionEnabled !== false;
   };
   // Native crashes can happen before any JavaScript report, so the context
   // keys are set right away. Keys stay on the device until a report is sent,
@@ -293,9 +296,9 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     async setCollectionEnabled(enabled) {
       // Set before any wait, so a report racing with the toggle sees it.
       collectionEnabled = enabled;
-      // This call applies the choice itself; only its failure leaves an
-      // opt-out pending.
-      nativeOptOutPending = false;
+      // This call applies the choice itself; only its failure leaves it
+      // pending.
+      nativeChoicePending = undefined;
       try {
         preference.write(enabled);
       } catch {
@@ -310,9 +313,11 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
           await plugin.deleteUnsentReports();
         }
       } catch {
-        nativeOptOutPending = !enabled;
-        // The session flag still stops JavaScript reports; a failed opt-out
+        // The session flag still gates JavaScript reports; the native choice
         // stays pending and is retried with the next report and next start.
+        if (collectionEnabled === enabled) {
+          nativeChoicePending = enabled;
+        }
       }
     },
   };

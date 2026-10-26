@@ -145,10 +145,11 @@ reports at once, and the native change may only take full effect on the next
 launch (the plugin says so for `setEnabled`). Android cannot read the SDK's
 choice back, so the reporter also keeps it in the WebView's `localStorage`
 (`mpgd.crashReporting.collectionEnabled`) and applies it to JavaScript
-reports at the next start; on iOS it falls back to the SDK's value. A stored
-opt-out is also applied to the SDK again at every start, and retried with each
-dropped report until the SDK takes it, so a native `setEnabled` that failed
-once does not leave Crashlytics collecting. Pass
+reports at the next start; on iOS it falls back to the SDK's value. The stored
+choice is also applied to the SDK again at every start, and retried with each
+report until the SDK takes it, so a native `setEnabled` that failed once
+leaves Crashlytics neither collecting after an opt-out nor idle after an
+opt-in. Pass
 `crashReporting: { collectionPreference }` to keep it elsewhere.
 
 If the game's privacy policy needs consent **before** anything is collected,
