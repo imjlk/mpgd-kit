@@ -271,6 +271,10 @@ pnpm exec mpgd deploy status --game . --game-id mygame --release beta-001
       `--release-notes` and `--confirm-production` target closed, open and
       production tracks; `mpgd deploy rollout` updates, halts, resumes or
       completes a staged rollout ([Play releases](./GOOGLE_PLAY_RELEASES.md)).
+- [ ] Production gets the build that passed closed testing:
+      `mpgd deploy promote --from <closed track> --to production` releases
+      that version code without uploading or rebuilding
+      ([promote](./GOOGLE_PLAY_RELEASES.md#promoting-a-tested-release-deploy-promote)).
 - [ ] The first upload of a never-published app is committed as a **draft**
       (Play accepts nothing else); roll that draft out once in Play Console
       ([draft apps](./GOOGLE_PLAY_RELEASES.md#draft-apps)).
@@ -295,7 +299,7 @@ Google Play Console:
 - [ ] Closed test with 12+ testers opted in for 14 days in a row (personal
       accounts created after 13 November 2023): create the closed track and
       its testers in the console, ship builds to it with `--track <name>`,
-      then apply for production access
+      apply for production access, then `deploy promote` the tested build
       ([closed testing](./GOOGLE_PLAY_RELEASES.md#closed-testing-for-new-personal-accounts)).
 
 App Store Connect:
