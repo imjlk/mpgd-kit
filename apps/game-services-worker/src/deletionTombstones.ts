@@ -26,8 +26,8 @@ import type { PlayerDataEraser } from '@mpgd/game-services';
  */
 export const accountDeletionTombstoneTtlMs = 30 * 24 * 60 * 60 * 1000;
 
-/** The key a memory deployment (local development only) uses. */
-const developmentTombstoneKey = 'mpgd-development-account-deletion-tombstones';
+/** The key a memory deployment (local development only) uses; nothing it hashes outlives the isolate. */
+const memoryTombstoneKey = 'mpgd-account-deletion-tombstone-memory-key';
 
 /** The shortest `GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY` accepted. */
 export const accountDeletionTombstoneKeyMinLength = 32;
@@ -91,7 +91,7 @@ export function createD1AccountDeletionTombstones(db: D1Database, key: string): 
 
 /** Tombstones in this isolate's memory, for a memory deployment (local development only). */
 export function createMemoryAccountDeletionTombstones(
-  key: string = developmentTombstoneKey,
+  key: string = memoryTombstoneKey,
 ): AccountDeletionTombstones {
   const expiries = new Map<string, number>();
   return {
