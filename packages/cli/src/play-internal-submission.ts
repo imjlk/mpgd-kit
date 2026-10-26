@@ -226,18 +226,37 @@ export async function submitVerifiedAndroidBundleWithPublisher(
         `Google Play ${trackName} track version is not ${request.status}; inspect it before resubmitting.`,
       );
     }
+    const observedStatus: PlayNewReleaseStatus = fallbackDraft
+      && !hasVersionWithStatus(currentTrack.releases, versionCode, request.status)
+      ? 'draft' : request.status;
+    const observed = (currentTrack.releases ?? []).find((item) => item.status === observedStatus
+      && item.versionCodes?.includes(String(versionCode)));
+    if (observed !== undefined && !matchesRequestedRelease(observed, request, observedStatus)) {
+      throw new Error(
+        `Google Play ${trackName} track already has this version with another rollout fraction `
+        + 'or other release notes; change it with "mpgd deploy rollout" or inspect it.',
+      );
+    }
     if (freshEdit) {
       await persistEdit();
-      return result(
-        input,
-        trackName,
-        editId,
-        versionCode,
-        true,
-        fallbackDraft
-          ? { status: 'draft', draftAppFallback: true }
-          : { status: request.status, draftAppFallback: false },
-      );
+      if (request.mappingFile !== undefined) {
+        // The release may have reached Play without this mapping: add it to
+        // the version in an edit of its own.
+        await uploadMapping(
+          publisher,
+          request,
+          packageName,
+          editId,
+          versionCode,
+          input.signal,
+          requestRootUrl,
+        );
+        return { ...await commit(observedStatus), alreadyCommitted: true };
+      }
+      return result(input, trackName, editId, versionCode, true, {
+        status: observedStatus,
+        draftAppFallback: observedStatus !== request.status,
+      });
     }
     // A resumed edit sees its own uncommitted track. Publish it before success.
     await uploadMapping(
@@ -249,7 +268,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       input.signal,
       requestRootUrl,
     );
-    return commit(fallbackDraft ? 'draft' : request.status);
+    return commit(observedStatus);
   }
   if (playReleaseStartsRollout(request.status, currentTrack.releases)) {
     // Play Console: "Rollout percentage options are unavailable for a first release."
@@ -452,6 +471,32 @@ async function assertMappingUnchanged(request: PlayReleaseRequest): Promise<void
     && await hashMappingFile(request.mappingFile) !== request.mappingSha256) {
     throw new Error('R8 mapping file changed after the release request was created.');
   }
+}
+
+/**
+ * The release already on the track matches what this request would create:
+ * the rollout fraction (a draft-app fallback has none) and, when given, the
+ * release notes in any order.
+ */
+function matchesRequestedRelease(
+  observed: PlayTrackRelease,
+  request: PlayReleaseRequest,
+  observedStatus: PlayNewReleaseStatus,
+): boolean {
+  const fraction = typeof observed.userFraction === 'number' ? observed.userFraction : undefined;
+  if (observedStatus === request.status && fraction !== request.userFraction) {
+    return false;
+  }
+  if (request.releaseNotes === undefined) {
+    return true;
+  }
+  const key = (language: string | null | undefined, text: string | null | undefined): string =>
+    JSON.stringify([language ?? '', text ?? '']);
+  const observedNotes = (observed.releaseNotes ?? []).map((note) => key(note.language, note.text))
+    .sort();
+  const wanted = request.releaseNotes.map((note) => key(note.language, note.text)).sort();
+  return observedNotes.length === wanted.length
+    && observedNotes.every((note, index) => note === wanted[index]);
 }
 
 /** A staged rollout needs a completed release on the track to stage over. */

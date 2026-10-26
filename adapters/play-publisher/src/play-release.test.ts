@@ -343,6 +343,42 @@ try {
     }, publisher, observed.rootUrl);
     assert.equal(again.alreadyCommitted, true);
     assert.equal(observed.operations.filter((item) => item.endsWith(':commit')).length, 1);
+    // Other options for the release already there are refused, not reported as done.
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...baseInput,
+        release: { ...staged, userFraction: 0.2 },
+        confirmProduction: true,
+      }, publisher, observed.rootUrl),
+      /another rollout fraction or other release notes/u,
+    );
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...baseInput,
+        release: { ...staged, releaseNotes: [{ language: 'en-US', text: 'Other.' }] },
+        confirmProduction: true,
+      }, publisher, observed.rootUrl),
+      /another rollout fraction or other release notes/u,
+    );
+    const reordered = await submitVerifiedAndroidBundleWithPublisher({
+      ...baseInput,
+      release: { ...staged, releaseNotes: [...(staged.releaseNotes ?? [])].reverse() },
+      confirmProduction: true,
+    }, publisher, observed.rootUrl);
+    assert.equal(reordered.alreadyCommitted, true);
+    // A mapping for a release already on Play is added in an edit of its own.
+    const mapped = await submitVerifiedAndroidBundleWithPublisher({
+      ...baseInput,
+      release: await createPlayReleaseRequest({
+        track: 'production', status: 'inProgress', userFraction: '0.05',
+        releaseNotesFile: notesFile, mappingFile,
+      }),
+      confirmProduction: true,
+    }, publisher, observed.rootUrl);
+    assert.equal(mapped.alreadyCommitted, true);
+    assert.equal(observed.mappings.length, 1);
+    assert.equal(observed.updates.length, 1);
+    assert.equal(observed.operations.filter((item) => item.endsWith(':commit')).length, 2);
   });
 
   // A new staged release replaces an in-progress rollout; a halted older one too.
