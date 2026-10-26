@@ -125,8 +125,14 @@ production` prints what it lacks and fails on contradictions
       meta-data, iOS `GADApplicationIdentifier` and `SKAdNetworkItems`
       ([AdMob setup](https://github.com/imjlk/mpgd-kit/blob/main/adapters/capacitor/README.md#opt-in-admob-rewarded-ads)).
       The kit never shows the ATT prompt; add it only if the game tracks.
-- [ ] Push: Xcode Push Notifications capability, Firebase files, AppDelegate
-      forwarding ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md)).
+- [ ] Push: Firebase files (`google-services.json`,
+      `GoogleService-Info.plist` in the App target) and the APNs key in
+      Firebase. On iOS, a shell generated with `--providers notifications`
+      has the `aps-environment` entitlement, the AppDelegate token
+      forwarding and the cold-start tap forwarder; an older shell needs the
+      steps the initializer prints, and `mpgd target build ios production`
+      fails until it has all three
+      ([Firebase notifications](./FIREBASE_NOTIFICATIONS.md#4-ios)).
 - [ ] Android advertising push (only if a topic is `advertising` and maps
       to `android`): the manifest declares the kit's
       `dev.mpgd.capacitor.AdvertisingMessagingService` and removes the
@@ -320,6 +326,9 @@ App Store Connect:
       without night consent; ordinary pushes and token refreshes still
       reach the game ([notifications live test](./NOTIFICATIONS_LIVE_TEST.md#android-advertising),
       including its required "Minified release" step).
+- [ ] iOS push on a TestFlight build: a push arrives in the background, and
+      a tap opens the topic's route from a warm start and from a killed app
+      (the cold-start forwarder; [notifications live test](./NOTIFICATIONS_LIVE_TEST.md#ios)).
 
 ## Related
 
