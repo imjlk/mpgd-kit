@@ -13,8 +13,9 @@ What the kit covers:
   the player's choice, behind the `CrashReporter` port in
   `@mpgd/platform/crash-reporting`.
 
-What it does not cover yet: uploading iOS dSYMs from `mpgd deploy run`
-([symbols](#symbols)), and a real run against a Firebase project. The CLI and
+`mpgd deploy run` records the iOS dSYMs of each App Store build and uploads
+them to Crashlytics ([symbols](#symbols)). What it does not cover yet: a real
+run against a Firebase project. The CLI and
 adapter are tested with fakes; the Android shell with the plugin compiles and
 starts on an emulator with a placeholder Firebase configuration (Crashlytics
 initializes, then fails to fetch its settings, as expected). No report has
@@ -64,7 +65,8 @@ The initializer:
   the app at startup when the build ID that plugin writes is missing
   ([source](https://github.com/firebase/firebase-android-sdk/blob/main/firebase-crashlytics/src/main/java/com/google/firebase/crashlytics/internal/common/CrashlyticsCore.java)),
   so the plugin is never installed into such a project.
-- prints the iOS dSYM steps until the Xcode project runs the Crashlytics
+- prints the iOS dSYM note (`mpgd deploy run` uploads them; an archive made
+  in Xcode needs the Crashlytics script) until the Xcode project runs that
   script.
 
 Then add the Firebase files, the same ones notifications use
@@ -175,20 +177,81 @@ sends them once collection is turned on was not checked, so decline with
 
 **Android.** The kit's shells build with `minifyEnabled false`, so there is
 no R8 mapping file and stack traces are readable as is. A game that turns R8
-on gets its mapping file uploaded by the Crashlytics Gradle plugin during the
-release build; set `firebaseCrashlytics { mappingFileUploadEnabled false }`
-in a build type to skip it
+on gets its mapping file uploaded to Crashlytics by the Crashlytics Gradle
+plugin during the release build ("When your build generates a mapping file,
+the plugin uploads it"); set `firebaseCrashlytics { mappingFileUploadEnabled
+false }` in a build type to skip it
 ([Firebase](https://firebase.google.com/docs/crashlytics/android/get-deobfuscated-reports)).
-The upload needs network access from the build machine.
+The upload needs network access from the build machine. `mpgd deploy run`
+also records that `mapping.txt` with the build and sends it to Google Play
+([R8 mapping](GOOGLE_PLAY_RELEASES.md#r8-mapping-deobfuscation-file)).
 
 **iOS.** Release builds already produce dSYMs (`DEBUG_INFORMATION_FORMAT =
-dwarf-with-dsym`). Crashlytics needs them uploaded for readable native
-frames. Either:
+dwarf-with-dsym`; Firebase: "Set Debug Information Format to `DWARF with dSYM
+File`"). Crashlytics needs them uploaded for readable native frames.
 
-1. Add a Run Script build phase as the **last** phase of the App target, with
-   the Swift Package Manager script and input files the plugin README and
-   Firebase list
-   ([Firebase](https://firebase.google.com/docs/crashlytics/ios/get-deobfuscated-reports)):
+### `mpgd deploy run` uploads the dSYMs
+
+For a shell with `@capacitor-firebase/crashlytics`, every App Store archive
+`mpgd deploy run` builds keeps, next to the IPA in
+`.mpgd/releases/<release>/`:
+
+- `ios-dsyms-<sha256>.zip`: the archive's `dSYMs` folder. The build record
+  lists each dSYM bundle with its UUIDs (`dwarfdump --uuid` format), so a
+  "missing dSYM" in the Crashlytics console can be matched to a release.
+- `ios-upload-symbols-<sha256>`: Firebase's `upload-symbols` from the build's
+  Swift Package checkout (`firebase-ios-sdk/Crashlytics/`, next to the `run`
+  script; `Pods/FirebaseCrashlytics/` for a CocoaPods shell). The archive is
+  built with `-clonedSourcePackagesDirPath` inside its stage so the tool is
+  taken from the exact checkout the app was built with.
+- `ios-GoogleService-Info-<sha256>.plist`: the plist the archived app bundles.
+
+The build is refused when the archive has no dSYM, the checkout has no
+`upload-symbols`, or the app does not bundle the plist.
+
+After the build and before the TestFlight submission, `deploy run` runs
+Firebase's manual upload command
+([Firebase](https://firebase.google.com/docs/crashlytics/ios/get-deobfuscated-reports))
+on those files:
+
+```sh
+upload-symbols -gsp GoogleService-Info.plist -p ios dSYMs.zip
+```
+
+(`upload-symbols` accepts "zip archives containing dSYMs" per its usage
+text.) Each file is checked against the build record's SHA-256 first, and the
+tool runs from a private copy with only `PATH`, `HOME`, `USER` and `LANG`, no
+store or signing credentials. The outcome is recorded next to the build
+record (`symbolUploads` in `mpgd deploy status`):
+
+- `uploaded`: done; later runs skip it.
+- `failed`: reported as a warning with the retry command. **It never fails or
+  blocks the store submission**; the release goes on to TestFlight.
+
+Retry, or upload for a build made before this step existed, from a Mac with
+the release bundle (`.mpgd/releases/<release>/`) in place:
+
+```sh
+mpgd deploy symbols --game . --game-id <id> --release <release> --dry-run
+mpgd deploy symbols --game . --game-id <id> --release <release>
+```
+
+`--dry-run` verifies the recorded files and prints the `upload-symbols`
+command and the dSYM UUIDs; it runs and records nothing. The upload needs
+network access to Firebase from that machine.
+
+### Archives made outside `deploy run`
+
+The generated shell does **not** get Firebase's Run Script build phase. The
+script uploads from every build of the App target, debug and simulator
+builds included, in the background ("If an error happens here, you won't see
+it in Xcode", per the script's own comments), and it would make every CI or
+smoke build talk to Firebase. `deploy run` covers the release path instead.
+For an archive made in Xcode or another pipeline, either:
+
+1. Add the Run Script build phase as the **last** phase of the App target,
+   with the Swift Package Manager script and input files Firebase lists
+   ([get started](https://firebase.google.com/docs/crashlytics/ios/get-started)):
 
    ```sh
    "${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
@@ -204,7 +267,11 @@ frames. Either:
    $(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)
    ```
 
-2. Or upload after each archive, from the shell's `ios/App` directory, with
+   With `ENABLE_USER_SCRIPT_SANDBOXING=YES` and `ENABLE_DEBUG_DYLIB=YES`,
+   Firebase also lists
+   `${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}.debug.dylib`.
+
+2. Or upload after the archive, from the shell's `ios/App` directory, with
    the `upload-symbols` tool that ships next to that script in the
    `firebase-ios-sdk` package checkout:
 
@@ -216,10 +283,9 @@ frames. Either:
    A zip of the dSYMs can also be dropped on the Crashlytics dSYMs tab in the
    Firebase console.
 
-Running the upload from `mpgd deploy run` / `deploy submit` is a follow-up
-once those commands settle (mobile launch L4/L4p).
+### JavaScript frames
 
-**JavaScript.** Crashlytics has no source map support, so JavaScript frames
+Crashlytics has no source map support, so JavaScript frames
 point into the minified bundle. The `mpgd_build_id` key names the build; keep
 that build's source maps outside the app (for example Vite
 `build.sourcemap: 'hidden'`) to map a frame by hand.
