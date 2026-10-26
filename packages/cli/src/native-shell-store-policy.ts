@@ -1064,15 +1064,18 @@ export function shellUsesFirebaseMessaging(shellPackage: unknown): boolean {
 
 /**
  * Swift source with comments and string literals blanked to spaces, so
- * offsets stay the same and only code is matched. Nested block comments and
- * multi-line strings are handled; an interpolation's code inside a string is
- * blanked with it.
+ * offsets stay the same and only code is matched. Nested block comments,
+ * multi-line strings and raw strings (`#"..."#`) are handled; an
+ * interpolation's code inside a string is blanked with it, and a
+ * single-line string that runs into a newline ends there, so one the
+ * scanner misreads cannot blank the rest of the file.
  */
 export function stripSwiftCommentsAndStrings(source: string): string {
   let output = '';
   let commentDepth = 0;
   let lineComment = false;
-  let quote: '"' | '"""' | undefined;
+  /** The open string's closing delimiter, and whether `\` escapes in it. */
+  let closing: { readonly text: string; readonly multiline: boolean; readonly raw: boolean } | undefined;
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index] ?? '';
     const next = source[index + 1] ?? '';
@@ -1092,15 +1095,18 @@ export function stripSwiftCommentsAndStrings(source: string): string {
       } else {
         output += blank;
       }
-    } else if (quote !== undefined) {
-      if (character === '\\' && next !== '') {
-        output += next === '\n' ? ' \n' : '  ';
+    } else if (closing !== undefined) {
+      if (!closing.raw && character === '\\' && next !== '' && next !== '\n') {
+        output += '  ';
         index += 1;
-      } else if (source.startsWith(quote, index)) {
-        output += ' '.repeat(quote.length);
-        index += quote.length - 1;
-        quote = undefined;
+      } else if (source.startsWith(closing.text, index)) {
+        output += ' '.repeat(closing.text.length);
+        index += closing.text.length - 1;
+        closing = undefined;
       } else {
+        if (character === '\n' && !closing.multiline) {
+          closing = undefined;
+        }
         output += blank;
       }
     } else if (character === '/' && next === '/') {
@@ -1111,15 +1117,17 @@ export function stripSwiftCommentsAndStrings(source: string): string {
       commentDepth = 1;
       output += '  ';
       index += 1;
-    } else if (source.startsWith('"""', index)) {
-      quote = '"""';
-      output += '   ';
-      index += 2;
-    } else if (character === '"') {
-      quote = '"';
-      output += ' ';
     } else {
-      output += character;
+      const opener = /^(#*)("""|")/u.exec(source.slice(index, index + 64));
+      if (opener === null || (opener[1] === '' && character !== '"')) {
+        output += character;
+        continue;
+      }
+      const hashes = opener[1] ?? '';
+      const quote = opener[2] ?? '"';
+      closing = { text: `${quote}${hashes}`, multiline: quote === '"""', raw: hashes !== '' };
+      output += ' '.repeat(opener[0].length);
+      index += opener[0].length - 1;
     }
   }
   return output;
@@ -1162,11 +1170,44 @@ function insertBeforeSwiftClassClose(source: string, close: number, lines: reado
   return `${head}${newline}${newline}${lines.join(newline)}${newline}${source.slice(close)}`;
 }
 
-/** Whether a Swift source forwards the APNs device token to Capacitor. */
+/** The body of each `func` whose name or labels include `label`, in blanked source. */
+function swiftFunctionBodies(code: string, label: string): readonly string[] {
+  const bodies: string[] = [];
+  for (const match of code.matchAll(new RegExp(`\\bfunc\\b[^{}]*\\b${label}\\b[^{}]*\\{`, 'gu'))) {
+    const open = (match.index ?? 0) + match[0].length - 1;
+    let depth = 0;
+    for (let index = open; index < code.length; index += 1) {
+      if (code[index] === '{') {
+        depth += 1;
+      } else if (code[index] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          bodies.push(code.slice(open + 1, index));
+          break;
+        }
+      }
+    }
+  }
+  return bodies;
+}
+
+/**
+ * Whether a Swift source's `didRegisterForRemoteNotificationsWithDeviceToken`
+ * hands the APNs token on: it posts `.capacitorDidRegisterForRemoteNotifications`
+ * (what the messaging plugin observes) or sets Firebase's `apnsToken` itself.
+ */
 export function swiftForwardsPushToken(source: string): boolean {
-  const code = stripSwiftCommentsAndStrings(source);
-  return /\bdidRegisterForRemoteNotificationsWithDeviceToken\b/u.test(code)
-    && /\bcapacitorDidRegisterForRemoteNotifications\b/u.test(code);
+  return swiftFunctionBodies(
+    stripSwiftCommentsAndStrings(source),
+    'didRegisterForRemoteNotificationsWithDeviceToken',
+  ).some((body) => /\bcapacitorDidRegisterForRemoteNotifications\b|\.\s*apnsToken\s*=/u.test(body));
+}
+
+/** Whether a Swift source declares a scene delegate class. */
+export function swiftDeclaresSceneDelegate(source: string): boolean {
+  return /\bclass\s+\w+\s*:[^{]*\bUIWindowSceneDelegate\b/u.test(
+    stripSwiftCommentsAndStrings(source),
+  );
 }
 
 /** Whether a Swift source forwards the scene's cold-start notification response. */
@@ -1275,10 +1316,18 @@ export function resolveIosEntitlementsSetting(value: string): string | undefined
  * or another entitlements file, which is left to the game.
  */
 export function applyIosProjectPushEntitlements(project: string): string | undefined {
-  let configurationIds: readonly string[];
   try {
-    configurationIds = readAppTargetConfigurationIds(project);
+    return addIosProjectPushEntitlements(project);
   } catch {
+    // An Xcode project this cannot read is left to the game, like any other layout.
+    return undefined;
+  }
+}
+
+function addIosProjectPushEntitlements(project: string): string | undefined {
+  const configurationIds = readAppTargetConfigurationIds(project);
+  if (/\bCODE_SIGN_ENTITLEMENTS\s*\[/u.test(project)) {
+    // A per-SDK entitlements setting would override the one this adds.
     return undefined;
   }
   const group = findAppGroup(project);
@@ -1354,47 +1403,21 @@ export const iosPushColdStartStep = 'copy forwardColdStartNotification and '
  * What a shell with `@capacitor-firebase/messaging` still lacks on iOS: the
  * `aps-environment` entitlement on the App target's Release configuration,
  * the AppDelegate's APNs token forwarding, and the scene delegate's
- * cold-start tap forwarding. Each is an error: without the first two no
- * push reaches the app, and without the third a tap on a notification
- * while the app is not running opens it without the notification's route.
- * An entitlements path the kit cannot resolve is a warning.
+ * cold-start tap forwarding (for a shell with a scene delegate). Each is an
+ * error: without the first two no push reaches the app, and without the
+ * third a tap on a notification while the app is not running opens it
+ * without the notification's route. An entitlement the kit cannot follow
+ * (`inspectIosPushEntitlement`) is a warning. The forwarding checks are
+ * textual: the token must be handed on inside
+ * `didRegisterForRemoteNotificationsWithDeviceToken`, and some App source
+ * must read `.notificationResponse`.
  */
 export function inspectIosPushWiring(input: IosPushWiringInput): readonly NativeShellPolicyIssue[] {
   const issues: NativeShellPolicyIssue[] = [];
   const guide = ' (see the mpgd-kit Firebase guide, docs/FIREBASE_NOTIFICATIONS.md#4-ios).';
-  let setting: string | undefined;
-  try {
-    setting = readIosAppReleaseEntitlements(input.project);
-  } catch {
-    setting = undefined;
-  }
-  const relative = setting === undefined ? undefined : resolveIosEntitlementsSetting(setting);
-  if (setting !== undefined && relative === undefined) {
-    issues.push({
-      level: 'warning',
-      message: `iOS App target Release CODE_SIGN_ENTITLEMENTS is ${setting}, which the kit cannot `
-        + 'resolve; make sure that file has the aps-environment entitlement.',
-    });
-  } else {
-    const entitlements = relative === undefined ? undefined : input.readProjectFile(relative);
-    let environment: string | undefined;
-    try {
-      const value = entitlements === undefined
-        ? undefined
-        : readPlistTopLevelValue(entitlements, 'aps-environment');
-      environment = /^<string>\s*(development|production)\s*<\/string>$/u.exec(value?.xml ?? '')?.[1];
-    } catch {
-      environment = undefined;
-    }
-    if (environment === undefined) {
-      issues.push({
-        level: 'error',
-        message: 'The shell installs @capacitor-firebase/messaging, but the iOS App target has no '
-          + 'aps-environment entitlement in its Release configuration'
-          + `${setting === undefined ? '' : ` (${setting})`}, so APNs issues no device token and `
-          + `no push reaches the app: ${iosPushEntitlementStep}${guide}`,
-      });
-    }
+  const entitlement = inspectIosPushEntitlement(input, guide);
+  if (entitlement !== undefined) {
+    issues.push(entitlement);
   }
   if (!input.swiftSources.some(swiftForwardsPushToken)) {
     issues.push({
@@ -1404,7 +1427,10 @@ export function inspectIosPushWiring(input: IosPushWiringInput): readonly Native
         + `${iosPushTokenForwardingStep}${guide}`,
     });
   }
-  if (!input.swiftSources.some(swiftForwardsColdStartNotification)) {
+  // A shell without scenes gets a cold-start tap through the notification
+  // center delegate; only a scene delegate must forward it.
+  if (input.swiftSources.some(swiftDeclaresSceneDelegate)
+    && !input.swiftSources.some(swiftForwardsColdStartNotification)) {
     issues.push({
       level: 'error',
       message: 'The shell installs @capacitor-firebase/messaging, but its iOS SceneDelegate does '
@@ -1414,6 +1440,88 @@ export function inspectIosPushWiring(input: IosPushWiringInput): readonly Native
     });
   }
   return issues;
+}
+
+/**
+ * The Release configuration's `aps-environment` entitlement: an error when it
+ * is provably missing, a warning when the shell sets it in a way the kit
+ * cannot follow (an xcconfig, a per-SDK setting, another build setting, a
+ * build-setting value).
+ */
+function inspectIosPushEntitlement(
+  input: IosPushWiringInput,
+  guide: string,
+): NativeShellPolicyIssue | undefined {
+  const unverifiable = (reason: string): NativeShellPolicyIssue => ({
+    level: 'warning',
+    message: `The kit cannot verify the iOS aps-environment entitlement: ${reason}; make sure the `
+      + `App target's Release signing includes it${guide}`,
+  });
+  let release: ReturnType<typeof readIosAppReleaseSigning>;
+  try {
+    release = readIosAppReleaseSigning(input.project);
+  } catch {
+    return unverifiable('the Xcode project could not be read');
+  }
+  if (release.conditional) {
+    return unverifiable('CODE_SIGN_ENTITLEMENTS is set per SDK');
+  }
+  if (release.entitlements === undefined && release.baseConfiguration) {
+    return unverifiable(
+      'the Release configuration has a base xcconfig that may set CODE_SIGN_ENTITLEMENTS',
+    );
+  }
+  const relative = release.entitlements === undefined
+    ? undefined
+    : resolveIosEntitlementsSetting(release.entitlements);
+  if (release.entitlements !== undefined && relative === undefined) {
+    return unverifiable(`CODE_SIGN_ENTITLEMENTS is ${release.entitlements}`);
+  }
+  const entitlements = relative === undefined ? undefined : input.readProjectFile(relative);
+  let value: string | undefined;
+  try {
+    value = entitlements === undefined
+      ? undefined
+      : readPlistTopLevelValue(entitlements, 'aps-environment')?.xml;
+  } catch {
+    value = undefined;
+  }
+  if (value !== undefined && /^<string>\s*(?:development|production)\s*<\/string>$/u.test(value)) {
+    return undefined;
+  }
+  if (value !== undefined && /^<string>[^<]*\$[({]/u.test(value)) {
+    return unverifiable(`aps-environment is ${value}`);
+  }
+  return {
+    level: 'error',
+    message: 'The shell installs @capacitor-firebase/messaging, but the iOS App target has no '
+      + 'aps-environment entitlement in its Release configuration'
+      + `${release.entitlements === undefined ? '' : ` (${release.entitlements})`}, so APNs issues no `
+      + `device token and no push reaches the app: ${iosPushEntitlementStep}${guide}`,
+  };
+}
+
+/** The App target's Release signing settings that decide its entitlements file. */
+function readIosAppReleaseSigning(project: string): {
+  readonly entitlements: string | undefined;
+  readonly conditional: boolean;
+  readonly baseConfiguration: boolean;
+} {
+  for (const id of readAppTargetConfigurationIds(project)) {
+    const settings = locatePbxBuildSettings(project, id);
+    if (settings.name !== 'Release') {
+      continue;
+    }
+    const body = project.slice(settings.start, settings.end);
+    return {
+      entitlements: readPbxSetting(body, 'CODE_SIGN_ENTITLEMENTS'),
+      conditional: /\bCODE_SIGN_ENTITLEMENTS\s*\[/u.test(body),
+      baseConfiguration: /\bbaseConfigurationReference\s*=/u.test(
+        findPbxObjectById(project, id)?.text.replace(body, '') ?? '',
+      ),
+    };
+  }
+  return { entitlements: undefined, conditional: false, baseConfiguration: false };
 }
 
 /** The Firebase config file the messaging plugin reads from the app bundle. */

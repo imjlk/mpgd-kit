@@ -59,8 +59,9 @@ function listContainedSwiftFiles(root: string, relativeRoot: string): string[] {
         pending.push(child);
       } else if (entry.isFile() && entry.name.endsWith('.swift')) {
         files.push(child);
-        if (files.length > maxSwiftSources) {
-          throw new Error('The iOS App group has too many Swift sources to inspect.');
+        if (files.length >= maxSwiftSources) {
+          // Enough to find the delegates; the rest is not read.
+          return files.sort();
         }
       }
     }

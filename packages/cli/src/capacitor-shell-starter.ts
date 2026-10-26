@@ -1140,7 +1140,13 @@ export function materializeIosPushWiring(gameRoot: string): void {
       continue;
     }
     const source = readFileSync(file, 'utf8');
-    const next = apply(source);
+    let next: string | undefined;
+    try {
+      next = apply(source);
+    } catch {
+      // Left to the game; the inspection below prints the step.
+      next = undefined;
+    }
     if (next !== undefined && next !== source) {
       writeFileSync(file, next);
     }

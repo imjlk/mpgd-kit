@@ -273,6 +273,28 @@ try {
   );
   const swift = 'let a = """\n"quoted" { \n""" // }\nlet b = "\\"}" /* { */ + 1';
   assert.equal(stripSwiftCommentsAndStrings(swift).length, swift.length, 'offsets are kept');
+  const forward = (body: string): string =>
+    `func application(_ a: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken t: Data) {${body}}`;
+  const post = ' NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: t) ';
+  assert.equal(
+    swiftForwardsPushToken(`let s = #"5" screen"#\n${forward(post)}`),
+    true,
+    'raw strings',
+  );
+  assert.equal(swiftForwardsPushToken(`let s = ##"a "# b"##\n${forward(post)}`), true);
+  assert.equal(
+    swiftForwardsPushToken(`let s = "unterminated\n${forward(post)}`),
+    true,
+    'resyncs at a newline',
+  );
+  assert.equal(
+    swiftForwardsPushToken(
+      `${forward(' ')}\nlet o = NotificationCenter.default.addObserver(forName: .capacitorDidRegisterForRemoteNotifications, object: nil, queue: nil) { _ in }`,
+    ),
+    false,
+    'the post must be inside the registration callback',
+  );
+  assert.equal(swiftForwardsPushToken(forward(' Messaging.messaging().apnsToken = t ')), true);
   assert.doesNotMatch(stripSwiftCommentsAndStrings(swift), /[{}"]/u);
 
   // The entitlement on every App target configuration, outside the build phases.
@@ -378,6 +400,53 @@ try {
     ['warning'],
     'a setting the kit cannot resolve is only reported',
   );
+  const levels = (changed: Partial<typeof wired>): readonly string[] =>
+    inspectIosPushWiring({ ...wired, ...changed }).map((issue) => issue.level);
+  assert.deepEqual(
+    levels({
+      project: project.replace(
+        /(\/\* Release \*\/ = \{\s*isa = XCBuildConfiguration;\s*buildSettings = \{[^}]*?)CODE_SIGN_ENTITLEMENTS = App\/App\.entitlements;/u,
+        '$1"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = App/App.entitlements;',
+      ),
+    }),
+    ['warning'],
+    'a per-SDK setting is only reported',
+  );
+  const perSdk = referenceProject.replace(
+    'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;',
+    'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = App/Game.entitlements;',
+  );
+  assert.notEqual(perSdk, referenceProject);
+  assert.equal(
+    applyIosProjectPushEntitlements(perSdk),
+    undefined,
+    'a per-SDK setting is left to the game',
+  );
+  const releaseId = /([0-9A-F]{24}) \/\* Release \*\/ = \{\s*isa = XCBuildConfiguration;\s*buildSettings = \{\s*ASSETCATALOG/u
+    .exec(referenceProject)?.[1];
+  assert.ok(releaseId !== undefined);
+  assert.deepEqual(
+    levels({
+      project: referenceProject.replace(
+        new RegExp(`(${releaseId} /\\* Release \\*/ = \\{\\s*isa = XCBuildConfiguration;)`, 'u'),
+        '$1\n\t\t\tbaseConfigurationReference = 958DCC722DB07C7200EA8C5F /* release.xcconfig */;',
+      ),
+    }),
+    ['warning'],
+    'an xcconfig may set the entitlements',
+  );
+  assert.deepEqual(levels({ project: referenceProject }), ['error'], 'no setting and no xcconfig');
+  assert.deepEqual(
+    levels({
+      readProjectFile: () => iosPushEntitlementsXml.replace('development', '$(APS_ENVIRONMENT)'),
+    }),
+    ['warning'],
+    'a build-setting value is only reported',
+  );
+  assert.deepEqual(levels({ project: '// not a project' }), ['warning']);
+  // A shell without scenes gets the cold-start tap through the notification center.
+  assert.deepEqual(levels({ swiftSources: [appDelegate] }), []);
+  assert.deepEqual(levels({ swiftSources: [appDelegate, capacitorSceneDelegate] }), ['error']);
   assert.equal(
     shellUsesFirebaseMessaging({ dependencies: { [notificationsMessagingPlugin]: '8.5.2' } }),
     true,
@@ -427,6 +496,8 @@ try {
       flag: 'w',
     },
   );
+  const gameScene = 'final class GameScene: UIResponder, UIWindowSceneDelegate {}\n';
+  writeFileSync(path.join(unexpectedIos, 'App/SceneDelegate.swift'), gameScene);
   const warned: string[] = [];
   const warn = console.warn;
   console.warn = (message: string) => {
@@ -442,6 +513,11 @@ try {
     'final class GameDelegate {}\n',
   );
   assert.equal(warned.length, 2, 'the token and cold-start steps are printed');
+  assert.equal(
+    readFileSync(path.join(unexpectedIos, 'App/SceneDelegate.swift'), 'utf8'),
+    gameScene,
+    'a scene delegate without the Capacitor layout is not rewritten',
+  );
   assert.ok(
     warned.every((message) =>
       message.startsWith('[mpgd] The generated iOS project has an unexpected layout: '),

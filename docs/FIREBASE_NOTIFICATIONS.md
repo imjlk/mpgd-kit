@@ -171,9 +171,11 @@ initializer refuses a game or shell that lists it; remove it first.
    Notifications* on the `App` target; the `SceneDelegate` forwarder is in
    [`apps/mobile-capacitor/ios/App/App/SceneDelegate.swift`](../apps/mobile-capacitor/ios/App/App/SceneDelegate.swift).
    `mpgd target build ios` checks a shell that installs
-   `@capacitor-firebase/messaging` for all three and fails a `production`
-   build while one is missing; it warns while `GoogleService-Info.plist` is
-   not in the App target.
+   `@capacitor-firebase/messaging` for all three (the forwarder only when the
+   shell has a scene delegate) and fails a `production` build while one is
+   missing. It only warns when it cannot follow the entitlement (an xcconfig,
+   a per-SDK setting, a build-setting value) and while
+   `GoogleService-Info.plist` is not in the App target.
 4. **Background modes.** None: alert pushes need no background mode.
 5. Categories: the provider registers the advertising opt-out category
    `mpgd-advertising` (action `advertising-opt-out`) through the
