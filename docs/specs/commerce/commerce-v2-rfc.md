@@ -195,8 +195,15 @@ export interface CommerceProvider {
     readonly type?: 'in-app' | 'subscription' | 'all';
   }): Promise<readonly StoreProduct[]>;
   requestPurchase(input: RequestPurchaseInput): Promise<RequestPurchaseResult>;
-  /** Purchases the store still reports as unfinished. */
-  getAvailablePurchases(input?: { readonly includePending?: boolean }): Promise<readonly StorePurchase[]>;
+  /**
+   * Purchases the store still reports as unfinished. `restore` is the
+   * player's Restore Purchases read: owned non-consumables the recovery list
+   * hides are listed too (see "Restore sharing").
+   */
+  getAvailablePurchases(input?: {
+    readonly includePending?: boolean;
+    readonly restore?: boolean;
+  }): Promise<readonly StorePurchase[]>;
   /** Required when `lifecycle.finish` is 'client' or 'host'. */
   finishTransaction?(input: {
     readonly transactionId: string;
@@ -576,6 +583,20 @@ restoring player gets its own grant of it:
   it for a purchase it discovered (no journal record of this install started
   it); a game-started purchase sends none. The intent selects the policy and
   proves nothing.
+- **Restore read.** A store's recovery list hides what a reinstall needs:
+  Google Play's non-consumables are acknowledged at the first grant, and
+  StoreKit's entitlements carry the earlier guest's `appAccountToken`. The
+  reconciler's `restorePurchases` trigger, and only it, reads
+  `getAvailablePurchases({ restore: true })`: the Play SDK adds every owned
+  configured durable from `getPurchases`, acknowledged or not, and the
+  StoreKit SDK keeps durables bound to another or no token. Consumables,
+  unmapped SKUs, and kind mismatches stay filtered; startup and resume
+  passes keep the recovery list, so an acknowledged durable is not resent on
+  every launch. A restore of a purchase this install's journal already
+  finished sends nothing, and the backend answers a resend idempotently. On
+  StoreKit the shared grant's finish ends on the entitlement StoreKit already
+  finished (`unfinished: false`, `{ finished: true }` without a native call);
+  an unfinished transaction of another token is never finished.
 - **Verifier.** A decision, `{ status: 'restorable', reason, ...verified
   fields }`: every check passed except the account binding, which names
   another player or none; `reason` is the binding mismatch. Reference

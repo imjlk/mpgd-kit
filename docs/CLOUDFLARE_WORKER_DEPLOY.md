@@ -355,7 +355,10 @@ item after they "switch devices"
 
 - **What is shared.** A purchase the client sends with `intent: 'restore'`
   (the reconciler does for every purchase the store reported without this
-  install starting it) of a **non-consumable**, which the store verified
+  install starting it; after a reinstall the store reports the earlier
+  guest's non-consumables only to the player's Restore Purchases action,
+  which reads acknowledged Play purchases and StoreKit entitlements of
+  another token too) of a **non-consumable**, which the store verified
   exactly as a new purchase (purchased, not refunded or revoked, right product
   and app) except that its account binding names another guest or none. The
   restoring guest gets its own grant, linked to the purchase; earlier holders

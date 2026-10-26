@@ -531,7 +531,13 @@ platform are in
   commerce reconciler sends it for every purchase it discovered from the store
   (not one this install's journal started); a game-started checkout sends no
   intent and keeps the binding check. The intent is a request for the
-  policy, never proof.
+  policy, never proof. Restore Purchases (`restorePurchases()`) is what
+  finds those purchases after a reinstall: it reads the store with
+  `getAvailablePurchases({ restore: true })`, which on Google Play adds the
+  owned non-consumables the backend already acknowledged and on StoreKit the
+  entitlements bound to the earlier guest's token
+  ([RFC](specs/commerce/commerce-v2-rfc.md#restore-sharing)). Startup
+  recovery does not, so the player's restore action is what shares them.
 - The verifier proves it: the Play boundary and the App Store verifier answer
   `{ status: 'restorable', reason }` (an `EvidenceVerificationDecision`) for a
   restore of a non-consumable whose every check passed except the binding

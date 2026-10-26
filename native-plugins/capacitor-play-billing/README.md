@@ -69,7 +69,13 @@ when `includePending` is set; each carries `token = purchaseToken` and
 `transactionId = orderId`, or the `play-token-sha256:<hex>` token key until
 Play assigns an order id, so the same purchase deduplicates in the ledger. A
 purchased entry whose `isAcknowledged` flag is absent counts as unfinished so a
-paid purchase is never dropped. A purchase for a SKU that is not in `products`
+paid purchase is never dropped. The player's Restore Purchases read
+(`restore: true`, sent only by the reconciler's `restorePurchases`) also lists
+every `purchased` entry of exactly one configured durable, acknowledged or
+not: after a reinstall or on a new device the backend acknowledged it long
+ago under an earlier guest, and only this read hands it to the backend's
+restore sharing. Acknowledged consumables, unmapped SKUs, and multi-line
+purchases are not added. A purchase for a SKU that is not in `products`
 (a retired product) is still listed and emitted, with that product id as
 `sku` and the purchase token intact, so the reconciler can submit it when a
 logical id is still known. A multi-line purchase is listed the same way,

@@ -93,7 +93,12 @@ type disagrees with the catalog kind is never listed or emitted, so the
 reconciler never journals a purchase it cannot resolve or that belongs to
 another player, and never blocks a valid sibling on one. Each exclusion is
 reported through `onDiagnostic` (`unmapped-sku`, `account-mismatch`,
-`kind-mismatch`); diagnostics are never a grant signal. The native
+`kind-mismatch`); diagnostics are never a grant signal. One exception: the
+player's Restore Purchases read (`getAvailablePurchases({ restore: true })`,
+sent only by the reconciler's `restorePurchases`) also lists a durable bound
+to another or no token, the state of every earlier purchase after a reinstall
+or on a new iPhone or iPad, so the backend's restore sharing can decide;
+consumables of another token stay excluded. The native
 `transactionUpdated` listener is attached while either a `purchaseUpdated`
 or a `purchaseError` subscriber exists.
 
@@ -178,7 +183,10 @@ response with a ledger entry id. The StoreKit SDK and the native plugin both
 refuse to finish a transaction whose app account token is missing or does
 not match that session. A caller who can read the token from the plugin can
 still present it with a forged ledger entry id; that remaining hole needs a
-signed server finish capability. Permanently rejected and account-mismatched
+signed server finish capability. A listed, non-revoked durable StoreKit
+already finished (`unfinished: false`) answers `{ finished: true }` without a
+native call whatever its token, so a purchase shared to this guest from an
+earlier guest's restore ends there. Permanently rejected and account-mismatched
 transactions are not finished: the client cannot prove content delivery for
 them, so persist that terminal result in the game-owned operation journal and
 do not run an automatic retry loop for it. An unknown backend result stays
