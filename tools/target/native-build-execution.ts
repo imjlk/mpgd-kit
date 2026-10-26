@@ -14,7 +14,10 @@ import {
   reportNativeStorePolicy,
   shellInstallsFirebaseMessaging,
 } from './native-store-policy';
-import { iosSimulatorSmokeBuildSettings } from './ios-simulator-build-settings';
+import {
+  iosSimulatorAppTarget,
+  iosSimulatorSmokeBuildSettings,
+} from './ios-simulator-build-settings';
 import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
 import { resolveIosSigningPlan } from './native-ios-signing';
 import {
@@ -241,7 +244,7 @@ function executeIosBuildWithEnvironment(
           '-project',
           'App/App.xcodeproj',
           '-target',
-          'App',
+          iosSimulatorAppTarget,
           '-configuration',
           'Release',
           '-sdk',

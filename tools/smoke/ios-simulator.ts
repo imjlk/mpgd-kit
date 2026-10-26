@@ -6,7 +6,10 @@ import {
   assertEmbeddedTargetConfig,
   readEmbeddedTargetConfigFromDirectory,
 } from './embedded-target-config';
-import { iosSimulatorSmokeBuildSettings } from '../target/ios-simulator-build-settings';
+import {
+  iosSimulatorAppTarget,
+  iosSimulatorSmokeBuildSettings,
+} from '../target/ios-simulator-build-settings';
 
 const simulatorName = process.env.MPGD_IOS_SIM_NAME ?? 'iPhone 16';
 const simulatorOs = process.env.MPGD_IOS_SIM_OS ?? 'iOS 18.4';
@@ -35,7 +38,7 @@ const xcodebuildArgs = [
   '-project',
   'App/App.xcodeproj',
   '-target',
-  'App',
+  iosSimulatorAppTarget,
   '-configuration',
   'Debug',
   '-sdk',

@@ -37,7 +37,7 @@ const allowBuildsLine = /^allowBuilds:[ \t]*(?:#.*)?$/mu;
 // Any top-level spelling of the key, quoted or not, so an unparsed form is
 // reported instead of getting a second, duplicate mapping appended.
 const allowBuildsKey = /^(?:allowBuilds|'allowBuilds'|"allowBuilds")[ \t]*:/mu;
-const entryKey = /^([ \t]+)(?:'((?:[^']|'')*)'|"((?:[^"\\]|\\.)*)"|([^\s#'"][^:#]*?))[ \t]*:/u;
+const entryKey = /^([ \t]+)(?:'((?:[^']|'')*)'|"((?:[^"\\]|\\.)*)"|([^\s#'"-][^:#]*?))[ \t]*:[ \t]*[^\s#]/u;
 
 /** The package a matcher names: `name`, `name@range`, `@scope/name@range`, or `name@git-url`. */
 export function allowBuildsPackageName(matcher: string): string {
@@ -81,9 +81,15 @@ export function addAllowBuilds(
       if (line.trim() === '' || /^[ \t]*#/u.test(line)) {
         continue;
       }
-      const match = entryKey.exec(line);
-      if (match === null) {
+      if (!/^[ \t]/u.test(line)) {
         break;
+      }
+      // Only one-line `key: value` entries at one indentation are read; a
+      // sequence item, a value on the next line, or a nested key would make
+      // the scan miss an entry and the edit add a duplicate key.
+      const match = entryKey.exec(line);
+      if (match === null || (indentSeen && match[1] !== indent)) {
+        return { kind: 'unsupported', missing: Object.keys(approvals) };
       }
       if (!indentSeen) {
         indent = match[1] ?? indent;

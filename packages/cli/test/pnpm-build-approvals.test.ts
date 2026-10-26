@@ -108,6 +108,25 @@ assert.deepEqual(
   ),
   { kind: 'unsupported', missing: ['@firebase/util'] },
 );
+// Forms the line scan cannot read in full are left to the game instead of
+// risking a duplicate key: a value on its own line, a nested key at another
+// indentation, a sequence.
+for (const block of [
+  "allowBuilds:\n  '@sentry/cli':\n    true\n  protobufjs: true\n",
+  'allowBuilds:\n  esbuild: true\n    protobufjs: true\n',
+  'allowBuilds:\n  - esbuild\n',
+]) {
+  assert.equal(addAllowBuilds(block, notificationsBuildApprovals).kind, 'unsupported', block);
+}
+// A comment after the key and tab indentation are read.
+assert.deepEqual(
+  addAllowBuilds('allowBuilds: # reviewed\n\tesbuild: true\r\n', notificationsBuildApprovals),
+  {
+    kind: 'edited',
+    content: "allowBuilds: # reviewed\r\n\t'@firebase/util': false\r\n\tprotobufjs: true\r\n\tesbuild: true\r\n",
+    added: ['@firebase/util', 'protobufjs'],
+  },
+);
 // A quoted top-level key is not parsed, so nothing is appended next to it.
 for (const key of ['"allowBuilds"', "'allowBuilds'"]) {
   for (const value of ['\n  esbuild: true\n', ' { esbuild: true }\n']) {
