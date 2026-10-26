@@ -34,6 +34,13 @@ import {
   wireCapacitorGatewayNotifications,
 } from './notifications-starter.js';
 import {
+  crashReportingPlugin,
+  crashReportingProviderId,
+  crashReportingRemovalWarning,
+  materializeAndroidCrashlytics,
+  planCrashReportingProvider,
+} from './crash-reporting-starter.js';
+import {
   addIosAppResource,
   applyAndroidManifestAdId,
   applyAndroidManifestOrientation,
@@ -211,6 +218,11 @@ export interface CapacitorShellStarterPlan {
    * notifications are not requested.
    */
   readonly notificationPlugins: readonly { readonly packageName: string; readonly version: string }[];
+  /**
+   * The Firebase Crashlytics plugin (`--providers crash-reporting`) the plan
+   * installs into the shell; empty when crash reporting is not requested.
+   */
+  readonly crashReportingPlugins: readonly { readonly packageName: string; readonly version: string }[];
   /**
    * Store wiring the plan could not write or confirm: a missing or game-owned
    * gateway that does not register the plugin, or a store plugin the shell
@@ -441,6 +453,22 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     ...(notifications?.files ?? []),
   ];
   const notificationPlugins = notifications?.shellPlugins ?? [];
+  const existingShellDependencies = packageContent === undefined
+    ? undefined
+    : requireObject(
+        parseJsonObject(packageContent, 'existing shell package').dependencies,
+        'existing shell dependencies',
+      );
+  const crashReporting = requestedProviderIds.includes(crashReportingProviderId)
+    ? planCrashReportingProvider({ gameRoot, shellPath, existingShellDependencies, warnings })
+    : undefined;
+  const crashReportingPlugins = crashReporting?.shellPlugins ?? [];
+  const crashReportingWarning = crashReporting === undefined && existingShellDependencies !== undefined
+    ? crashReportingRemovalWarning(existingShellDependencies)
+    : undefined;
+  if (crashReportingWarning !== undefined) {
+    warnings.push(crashReportingWarning);
+  }
   if (packageContent !== undefined) {
     const existingShellDependencies = requireObject(
       parseJsonObject(packageContent, 'existing shell package').dependencies,
@@ -501,6 +529,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     '@mpgd/capacitor-game-services': pluginVersion,
     ...Object.fromEntries(providerPlugins.map((plugin) => [plugin.packageName, plugin.version])),
     ...Object.fromEntries(notificationPlugins.map((plugin) => [plugin.packageName, plugin.version])),
+    ...Object.fromEntries(crashReportingPlugins.map((plugin) => [plugin.packageName, plugin.version])),
   };
   if (packageContent !== undefined) {
     assertCompatibleExistingPackage(
@@ -552,7 +581,10 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
               typescript: typescriptVersion,
             },
           })
-        : withPackageDependencies(packageContent, [...providerPlugins, ...notificationPlugins]),
+        : withPackageDependencies(
+            packageContent,
+            [...providerPlugins, ...notificationPlugins, ...crashReportingPlugins],
+          ),
     },
     {
       path: `${shellPath}/capacitor.config.ts`,
@@ -580,6 +612,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         displayName: input.displayName,
         requestedProviderIds,
         ...(providerPlugins.length === 0 && notificationPlugins.length === 0
+          && crashReporting === undefined
           ? {}
           : {
               providers: {
@@ -601,6 +634,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
                         platforms: ['android', 'ios'],
                       },
                     }),
+                ...(crashReporting === undefined
+                  ? {}
+                  : { [crashReportingProviderId]: crashReporting.manifestEntry }),
               },
             }),
         ...(requestedBackendUrl === undefined ? {} : { backendUrl: requestedBackendUrl }),
@@ -757,6 +793,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     nativePlatformsToAdd,
     providerPlugins,
     notificationPlugins,
+    crashReportingPlugins,
     warnings,
   };
 }
@@ -898,6 +935,9 @@ export function materializeCapacitorShellStarter(
         materializeAndroidAdvertisingRenderer(plan.gameRoot);
       }
       materializeAndroidStorePolicy(plan.gameRoot);
+      if (plan.crashReportingPlugins.length > 0) {
+        materializeAndroidCrashlytics(path.join(plan.gameRoot, shellPath));
+      }
     }
     if (platform === 'ios' && generatedNow) {
       materializeIosStorePolicy(plan.gameRoot);
@@ -929,7 +969,7 @@ export function materializeCapacitorShellStarter(
   for (const platform of ['android', 'ios'] as const) {
     if (
       (plan.providerPlugins.some((plugin) => plugin.platform === platform)
-        || plan.notificationPlugins.length > 0)
+        || plan.notificationPlugins.length > 0 || plan.crashReportingPlugins.length > 0)
       && !plan.nativePlatformsToAdd.includes(platform)
       && existsSync(path.join(plan.gameRoot, shellPath, platform))
     ) {
@@ -2810,6 +2850,7 @@ function assertCompatibleExistingPackage(
   const providerPackages = new Set([
     ...capacitorShellProviderPlugins.map((plugin) => plugin.packageName),
     ...notificationsShellPlugins,
+    crashReportingPlugin,
   ]);
   for (const [name, version] of Object.entries(shellDependencies)) {
     // A store plugin the shell does not list yet is added by the plan. One it

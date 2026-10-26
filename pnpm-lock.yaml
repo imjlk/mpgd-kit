@@ -192,6 +192,9 @@ importers:
       '@capacitor-community/admob':
         specifier: 8.1.0
         version: 8.1.0
+      '@capacitor-firebase/crashlytics':
+        specifier: 8.5.2
+        version: 8.5.2(@capacitor/core@8.5.2)
       '@capacitor-firebase/messaging':
         specifier: 8.5.2
         version: 8.5.2(@capacitor/core@8.5.2)
@@ -2096,6 +2099,15 @@ packages:
   '@capacitor-community/admob@8.1.0':
     resolution: {integrity: sha512-DMIxg80CwQsJd0EcvsCNtpWizFcesZUFCFNVxRctv4HLSH8RPGfaS3pxRuq+tXw6jy0za5o3g5l/+z201nHNsw==}
     engines: {node: '>=22.0.0'}
+
+  '@capacitor-firebase/crashlytics@8.5.2':
+    resolution: {integrity: sha512-iN5mMGe/08Dsg3e1n9Sd3W5U0QlC5Cl8T2joptTUpgoknN+hUf29CBQhe3prKTKXdBLM+tKWOiVo9V6qyXLlqA==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+      firebase: '*'
+    peerDependenciesMeta:
+      firebase:
+        optional: true
 
   '@capacitor-firebase/messaging@8.5.2':
     resolution: {integrity: sha512-6EFxNeU/9teXdlQMmlHdjVqAMq+rr2po8oxLflvGuA6Xy+LPKbKccvamShXnTLjGO30beD6YmERNv5k9SxeGvg==}
@@ -8720,6 +8732,10 @@ snapshots:
     dependencies:
       '@capacitor/core': 8.5.2
       '@rdlabo/capacitor-docgen': 0.4.1
+
+  '@capacitor-firebase/crashlytics@8.5.2(@capacitor/core@8.5.2)':
+    dependencies:
+      '@capacitor/core': 8.5.2
 
   '@capacitor-firebase/messaging@8.5.2(@capacitor/core@8.5.2)':
     dependencies:

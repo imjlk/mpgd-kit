@@ -121,6 +121,10 @@ production` prints what it lacks and fails on contradictions
 - [ ] iOS `PrivacyInfo.xcprivacy` bundled in the App target.
 - [ ] Android: launcher orientation, `android:appCategory="game"`, and the
       advertising ID permission declared with AdMob or removed without it.
+- [ ] Crash reporting (add `crash-reporting` to `--providers`): the
+      Crashlytics plugin in the shell, the Crashlytics Gradle plugin in the
+      Android project (an existing project gets the two lines by hand), and
+      the iOS dSYM upload ([crash reporting](./CRASH_REPORTING.md)).
 - [ ] AdMob only: Android `com.google.android.gms.ads.APPLICATION_ID`
       meta-data, iOS `GADApplicationIdentifier` and `SKAdNetworkItems`
       ([AdMob setup](https://github.com/imjlk/mpgd-kit/blob/main/adapters/capacitor/README.md#opt-in-admob-rewarded-ads)).
@@ -332,8 +336,12 @@ App Store Connect:
 - [ ] One full run on real devices: install from the internal track and
       TestFlight, buy with a license tester and a sandbox account, see the
       grant from the ledger, restore on a second install, receive a push.
-- [ ] Crash reporting **(open: crash reporting)**: the kit ships none; at
-      least watch Play Console vitals and Xcode Organizer crashes.
+- [ ] Crash reporting: `mpgd target init capacitor --providers
+      crash-reporting`, the Firebase files in both projects, iOS dSYM upload,
+      a forced test crash seen in the Crashlytics console from each
+      platform, and the crash rows of the privacy answers
+      ([crash reporting](./CRASH_REPORTING.md)). Without it, at least watch
+      Play Console vitals and Xcode Organizer crashes.
 - [ ] Korea: advertising messages need the 광고성 정보 수신동의 consent and
       "(광고)" prefix the notifications runtime enforces; GRAC rating and
       loot-box odds disclosure if the game sells random items.
