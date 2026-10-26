@@ -1,5 +1,19 @@
 # @mpgd/capacitor-play-billing
 
+## 0.4.0 — 2026-10-26
+
+### Fixed
+
+- [718801f9](https://github.com/imjlk/mpgd-kit/commit/718801f9b9544fc9be505dc5994cb81974bdea48) A restore read (`getAvailablePurchases({ restore: true })`, the reconciler's Restore Purchases) lists every owned `purchased` entry of exactly one configured durable from `getPurchases`, acknowledged or not. The backend acknowledges a non-consumable at its first grant, so after a reinstall or on a new device it was never listed again and the new guest's Restore Purchases sent nothing. Acknowledged consumables, unmapped SKUs, and multi-line purchases stay filtered; recovery reads are unchanged. — Thanks @imjlk!
+
+### Changed
+
+- [706ea874](https://github.com/imjlk/mpgd-kit/commit/706ea87435232974aac23c0f1b630f49f957580f) The Android plugin is now Kotlin on the OpenIAP Google core (`io.github.hyochan.openiap:openiap-google` 4.0.6, Play flavor, pinned exactly) instead of its own Java BillingClient code. The Capacitor contract is unchanged: `CapacitorPlayBilling`, `getProducts`/`purchase`/`getPurchases`, the retained `purchaseUpdated` event, the payload fields (the order id stays absent until Play assigns one, so the `play-token-sha256:<hex>` key keeps working), the `PLAY_BILLING_*` codes, and server-only finalization: nothing in the plugin acknowledges, consumes, or calls OpenIAP's `finishTransaction`. The plugin refuses to run unless OpenIAP's provider is `play`. **Shell requirements:** the module applies the Kotlin Gradle plugin (2.2.20 unless the root project sets `kotlin_version`; OpenIAP needs 2.1.20+), compiles to JVM 21, takes Billing 9.1.0 from OpenIAP, and the merged manifest gains OpenIAP's provider entry and `INTERNET`. **Behavior to know:** an `ITEM_ALREADY_OWNED` purchase still rejects `PLAY_BILLING_ALREADY_OWNED`, and the owned purchase now also arrives as `purchaseUpdated`; after the 180 s `PLAY_BILLING_TIMEOUT`, another purchase answers `PLAY_BILLING_BUSY` until OpenIAP releases its flow (up to 15 minutes), whose cancel or failure is then sent as the late terminal event. The npm package ships `android/src/main` only. Rollback is pinning the previous plugin version and re-running `cap sync android`; journals and evidence are unchanged. Details: `docs/specs/commerce/openiap-migration.md`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.14.0, @mpgd/bridge@0.16.2, @mpgd/game-services@0.30.0, @mpgd/platform@0.30.0
+
 ## 0.3.10 — 2026-10-26
 
 ### Patch changes
