@@ -2297,8 +2297,8 @@ const targetCommand = defineI18n({
             ko: '프로덕션 HTTPS Game Services 기본 URL.',
           },
           providers: {
-            en: 'Comma-separated provider IDs. play-billing (Android) and storekit (iOS) install the kit store plugin into the shell and the game, register it with cap sync, and wire an unwired template gateway; notifications installs the Firebase messaging and local notifications plugins for Android and iOS and wires a template gateway; other IDs are recorded only.',
-            ko: '쉼표로 구분한 provider ID. play-billing(Android)과 storekit(iOS)은 키트 스토어 플러그인을 셸과 게임에 설치하고 cap sync로 등록하며, 연결되지 않은 템플릿 게이트웨이를 연결합니다. notifications는 Android·iOS용 Firebase 메시징과 로컬 알림 플러그인을 설치하고 템플릿 게이트웨이를 연결합니다. 다른 ID는 기록만 합니다.',
+            en: 'Comma-separated provider IDs. play-billing (Android) and storekit (iOS) install the kit store plugin into the shell and the game, register it with cap sync, and wire an unwired template gateway; notifications installs the Firebase messaging and local notifications plugins for Android and iOS and wires a template gateway; crash-reporting installs the Firebase Crashlytics plugin into the shell and its Gradle plugin into a new Android project; other IDs are recorded only.',
+            ko: '쉼표로 구분한 provider ID. play-billing(Android)과 storekit(iOS)은 키트 스토어 플러그인을 셸과 게임에 설치하고 cap sync로 등록하며, 연결되지 않은 템플릿 게이트웨이를 연결합니다. notifications는 Android·iOS용 Firebase 메시징과 로컬 알림 플러그인을 설치하고 템플릿 게이트웨이를 연결합니다. crash-reporting은 Firebase Crashlytics 플러그인을 셸에, Crashlytics Gradle 플러그인을 새 Android 프로젝트에 설치합니다. 다른 ID는 기록만 합니다.',
           },
         },
       ),
@@ -2347,7 +2347,7 @@ const targetCommand = defineI18n({
         providers: {
           type: 'string',
           required: false,
-          description: 'Comma-separated provider IDs. play-billing (Android) and storekit (iOS) install the kit store plugin into the shell and the game, register it with cap sync, and wire an unwired template gateway; notifications installs the Firebase messaging and local notifications plugins for Android and iOS and wires a template gateway; other IDs are recorded only.',
+          description: 'Comma-separated provider IDs. play-billing (Android) and storekit (iOS) install the kit store plugin into the shell and the game, register it with cap sync, and wire an unwired template gateway; notifications installs the Firebase messaging and local notifications plugins for Android and iOS and wires a template gateway; crash-reporting installs the Firebase Crashlytics plugin into the shell and its Gradle plugin into a new Android project; other IDs are recorded only.',
         },
       },
       run: (ctx) => {
@@ -2402,6 +2402,13 @@ const targetCommand = defineI18n({
               `${dryRun ? 'Would install' : 'Installed'} notifications plugins `
                 + plan.notificationPlugins.map((plugin) => `${plugin.packageName}@${plugin.version}`).join(', ')
                 + ` into the shell for android and ios${dryRun ? '; cap add or cap sync registers them' : ''}.`,
+            );
+          }
+          if (plan.crashReportingPlugins.length > 0) {
+            console.info(
+              `${dryRun ? 'Would install' : 'Installed'} crash reporting plugin `
+                + plan.crashReportingPlugins.map((plugin) => `${plugin.packageName}@${plugin.version}`).join(', ')
+                + ` into the shell for android and ios${dryRun ? '; cap add or cap sync registers it' : ''}.`,
             );
           }
           for (const warning of plan.warnings) {

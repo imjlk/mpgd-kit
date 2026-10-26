@@ -366,6 +366,35 @@ is created, which is how a cold-start open reaches it.
   because FCM HTTP v1 cannot send to a Firebase installation id and the
   game-services FCM sender refuses them.
 
+## Crash reporting
+
+`createCapacitorPlatformGateway` exposes `gateway.crashReporter`
+(`@mpgd/platform/crash-reporting`), backed by Firebase Crashlytics when the
+shell has `@capacitor-firebase/crashlytics` 8.x
+(`mpgd target init capacitor --providers crash-reporting`). The adapter
+reaches the native plugin by its registered name, so the game does not
+depend on the npm package; without the plugin the reporter reports
+`not-installed` and does nothing. With it, uncaught WebView errors and
+unhandled rejections are reported as non-fatal (once each, at most 8 per
+session).
+
+```ts
+const gateway = createCapacitorPlatformGateway({
+  target: 'android',
+  appVersion,
+  buildId,
+  // Optional: extra non-personal keys, or turn the WebView capture off.
+  crashReporting: { context: { content_version: 12 }, captureGlobalErrors: true },
+});
+await gateway.crashReporter?.recordError(error);
+await gateway.crashReporter?.setCollectionEnabled(playerAllowsCrashReports);
+```
+
+`crashReporting: false` leaves `crashReporter` out; `crashReporting: { reporter }`
+uses another `CrashReporter`; `crashReporting: { requireConsent: true }` holds
+JavaScript reports until `setCollectionEnabled(true)`. Setup, symbols, consent and the store privacy
+answers are in the [crash reporting guide](../../docs/CRASH_REPORTING.md).
+
 ## App Store server-side transaction signatures
 
 The server-side verifier lives in `@mpgd/game-services/app-store-server`

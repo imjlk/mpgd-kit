@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { inspectCrashReportingShell } from '../../packages/cli/src/crash-reporting-starter.js';
 import { readIosReleaseInfoPlist } from '../../packages/cli/src/native-shell-identity.js';
 import { readIosPushWiringInput } from '../../packages/cli/src/native-shell-ios-push-files.js';
 import {
@@ -64,6 +65,13 @@ export function inspectNativeStorePolicy(input: {
     if (pushInput !== undefined) {
       issues.push(...inspectIosPushWiring(pushInput), ...inspectIosFirebaseConfig(projectSource));
     }
+    // `--providers crash-reporting`: the App target bundles the Firebase config.
+    issues.push(...inspectCrashReportingShell({
+      platform: 'ios',
+      shellApp: input.shellApp,
+      shellPackage: shellPackageJson,
+      iosProject: projectSource,
+    }));
     const plist = join(dirname(dirname(project)), readIosReleaseInfoPlist(projectSource));
     if (existsSync(plist)) {
       const plistSource = readFileSync(plist, 'utf8');
@@ -91,6 +99,12 @@ export function inspectNativeStorePolicy(input: {
       usesAds,
       usesAds ? readGameAdvertisingIdPolicy(gameConfigJson) : 'declared',
     ),
+    // `--providers crash-reporting`: the Firebase config file and the Gradle plugin.
+    ...inspectCrashReportingShell({
+      platform: 'android',
+      shellApp: input.shellApp,
+      shellPackage: shellPackageJson,
+    }),
   ];
 }
 

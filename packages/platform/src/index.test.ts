@@ -133,6 +133,7 @@ describe('main entry import closure', () => {
       'ads.ts',
       'commerce-capabilities.ts',
       'commerce-contract.ts',
+      'crash-reporting.ts',
       'index.ts',
       'notifications-contract.ts',
       'reviews-contract.ts',
