@@ -436,6 +436,32 @@ try {
     'an xcconfig may set the entitlements',
   );
   assert.deepEqual(levels({ project: referenceProject }), ['error'], 'no setting and no xcconfig');
+  // The App target inherits the project-level Release settings.
+  const projectRelease = /([0-9A-F]{24}) \/\* Release \*\/ = \{\s*isa = XCBuildConfiguration;\s*buildSettings = \{\s*ALWAYS_SEARCH/u
+    .exec(referenceProject)?.[1];
+  assert.ok(projectRelease !== undefined);
+  const inherited = referenceProject.replace(
+    new RegExp(
+      `(${projectRelease} /\\* Release \\*/ = \\{\\s*isa = XCBuildConfiguration;\\s*buildSettings = \\{)`,
+      'u',
+    ),
+    '$1\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = App/App.entitlements;',
+  );
+  assert.notEqual(inherited, referenceProject);
+  assert.deepEqual(levels({ project: inherited }), [], 'an inherited project-level setting counts');
+  assert.deepEqual(
+    levels({
+      project: referenceProject.replace(
+        new RegExp(
+          `(${projectRelease} /\\* Release \\*/ = \\{\\s*isa = XCBuildConfiguration;)`,
+          'u',
+        ),
+        '$1\n\t\t\tbaseConfigurationReference = 958DCC722DB07C7200EA8C5F /* release.xcconfig */;',
+      ),
+    }),
+    ['warning'],
+    'a project-level xcconfig may set it too',
+  );
   assert.deepEqual(
     levels({
       readProjectFile: () => iosPushEntitlementsXml.replace('development', '$(APS_ENVIRONMENT)'),

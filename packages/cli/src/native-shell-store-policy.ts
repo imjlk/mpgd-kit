@@ -1502,26 +1502,49 @@ function inspectIosPushEntitlement(
 }
 
 /** The App target's Release signing settings that decide its entitlements file. */
+/**
+ * The Release signing settings that decide the App target's entitlements
+ * file: the target's own, else what it inherits from the project-level
+ * Release configuration. `baseConfiguration` is set when an xcconfig on
+ * either level may supply the value instead.
+ */
 function readIosAppReleaseSigning(project: string): {
   readonly entitlements: string | undefined;
   readonly conditional: boolean;
   readonly baseConfiguration: boolean;
 } {
-  for (const id of readAppTargetConfigurationIds(project)) {
-    const settings = locatePbxBuildSettings(project, id);
-    if (settings.name !== 'Release') {
-      continue;
-    }
-    const body = project.slice(settings.start, settings.end);
-    return {
-      entitlements: readPbxSetting(body, 'CODE_SIGN_ENTITLEMENTS'),
-      conditional: /\bCODE_SIGN_ENTITLEMENTS\s*\[/u.test(body),
-      baseConfiguration: /\bbaseConfigurationReference\s*=/u.test(
+  const projectObject = findPbxObject(project, (body) => /\bisa\s*=\s*PBXProject\s*;/u.test(body));
+  const projectListId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(
+    projectObject?.text ?? '',
+  )?.[1];
+  const projectList = projectListId === undefined
+    ? undefined
+    : findPbxObjectById(project, projectListId);
+  const levels = [
+    readAppTargetConfigurationIds(project),
+    projectList === undefined
+      ? []
+      : (readPbxList(project, projectList, 'buildConfigurations')?.ids ?? []),
+  ];
+  let baseConfiguration = false;
+  for (const ids of levels) {
+    for (const id of ids) {
+      const settings = locatePbxBuildSettings(project, id);
+      if (settings.name !== 'Release') {
+        continue;
+      }
+      const body = project.slice(settings.start, settings.end);
+      const entitlements = readPbxSetting(body, 'CODE_SIGN_ENTITLEMENTS');
+      const conditional = /\bCODE_SIGN_ENTITLEMENTS\s*\[/u.test(body);
+      if (entitlements !== undefined || conditional) {
+        return { entitlements, conditional, baseConfiguration };
+      }
+      baseConfiguration ||= /\bbaseConfigurationReference\s*=/u.test(
         findPbxObjectById(project, id)?.text.replace(body, '') ?? '',
-      ),
-    };
+      );
+    }
   }
-  return { entitlements: undefined, conditional: false, baseConfiguration: false };
+  return { entitlements: undefined, conditional: false, baseConfiguration };
 }
 
 /** The Firebase config file the messaging plugin reads from the app bundle. */
