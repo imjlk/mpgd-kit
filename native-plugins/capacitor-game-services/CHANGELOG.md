@@ -1,5 +1,19 @@
 # @mpgd/capacitor-game-services
 
+## 0.9.0 — 2026-10-26
+
+### Changed
+
+- [6ce27613](https://github.com/imjlk/mpgd-kit/commit/6ce27613a430cde2cf13ffd7bac4e842f29cb296) AR1 behaviour changes for outside callers. The FCM provider now refuses routing data keys that start with `mpgd.` (`rejected`, reason `configuration`), which the Android advertising renderer uses. The Capacitor notifications provider leaves `mpgd.` keys out of an open's `data`. `CapacitorGameServicesPlugin` gains `getAdvertisingPushRenderer()`, so a hand-written mock of the interface needs it. — Thanks @imjlk!
+
+### Added
+
+- [6ce27613](https://github.com/imjlk/mpgd-kit/commit/6ce27613a430cde2cf13ffd7bac4e842f29cb296) An Android renderer for advertising pushes with the opt-out action (AR1). `dev.mpgd.capacitor.AdvertisingMessagingService` is a Firebase messaging service a shell declares in place of the one `@capacitor-firebase/messaging` declares: it posts an advertising push the backend sent as a data message (`mpgd.render: advertising`) on its channel with the "수신거부" action, drops one that arrives after its expiry, leaves one that arrives in the foreground to the plugin as a received notification, and hands every other message and every new token to the plugin unchanged. Tapping the body or the action opens the app through the messaging plugin's notification-open path: the body's intent carries the send's route, and the action's carries the topic's opt-out route instead, with `mpgd.action: advertising-opt-out`. The library's consumer ProGuard rules keep the messaging plugin members the service reaches by name, so a minified release keeps forwarding. `getAdvertisingPushRenderer()` answers `{ installed }` on Android: whether the shell's messaging service declares the `dev.mpgd.notifications.advertising_renderer` meta-data. The library compiles against `com.google.firebase:firebase-messaging` without shipping it, and its consumer ProGuard rules keep R8 quiet in shells without Firebase. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.16.1
+
 ## 0.8.4 — 2026-10-25
 
 ### Patch changes

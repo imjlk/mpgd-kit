@@ -1,6 +1,0 @@
----
-npm/@mpgd/cli: minor (Added)
-npm/@mpgd/create-game: minor (Added)
----
-
-Generated games sign in as a server-issued guest. With `VITE_MPGD_IDENTITY_URL` set to the kit's reference guest identity Worker, the new `src/platform/guestIdentity.ts` issues a guest on the first launch and restores it from the device's Keychain or Keystore after that (rotating refresh token, installation id in the same secure store), sets the server session with `setStarterServerSession`, and makes the server player the game services' `playerId`. StoreKit's `appAccountToken` and Google Play's `obfuscatedAccountId` are now bound to that server player (`setStarterCommerceServerPlayer` in `commerceAccountBinding.ts`) instead of requiring an authenticated platform session, so iOS purchases can start for a guest. A session the identity service ended is replaced by a new guest; offline at launch, purchases are refused until the next launch signs in. Without the variable nothing changes: the native shell's local player binds no purchase, and StoreKit's error now names the missing server session. The Restore Purchases control's no-session message now asks the player to connect to the game server instead of signing in.
