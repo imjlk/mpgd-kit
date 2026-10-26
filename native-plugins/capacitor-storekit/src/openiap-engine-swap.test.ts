@@ -1,0 +1,250 @@
+import {
+  createCommerceReconciler,
+  createInMemoryMonetizationOperationStore,
+  type MonetizationOperationStore,
+} from '@mpgd/game-services';
+import type { PurchaseVerificationApi } from '@mpgd/game-services/client';
+import type { VerifyPurchaseRequest } from '@mpgd/game-services/types';
+
+import {
+  assertEqual,
+  assertThrowsCode,
+  createFakeStoreKitPlugin,
+  fakeAccountToken,
+  fakeProduct,
+  fakeTransaction,
+  type FakeStoreKitPlugin,
+} from '../test/fake-storekit-plugin.js';
+import { createCapacitorStoreKitCommerceProvider } from './commerce-provider.js';
+import { createCapacitorStoreKitStoreSdk } from './store-sdk.js';
+
+/**
+ * The JavaScript side of the OpenIAP engine swap (docs/specs/commerce/
+ * openiap-migration.md). The native plugin keeps its 0.3 payloads (locked by
+ * the Swift `StoreKitTransactionPolicyTests`); what changes is when the
+ * engine delivers them:
+ *
+ * - OpenIAP also hands the result of a `purchase` call to its listener, so the
+ *   same transaction arrives as the call's result and as `transactionUpdated`.
+ * - `getTransactions` can reject (for example when OpenIAP did not select the
+ *   Apple provider); a rejection must never read as an empty list. An
+ *   unverifiable StoreKit entry is still skipped natively, as in 0.3 (Swift
+ *   `StoreKitTransactionPolicyTests`).
+ * - A journal written while the 0.3 engine ran must finish under the new one.
+ */
+
+const storeSku = 'com.example.game.coins100';
+const products = [{ logicalId: 'COINS_100', storeSku, kind: 'consumable' as const }];
+const misconfigured = (): Error =>
+  Object.assign(new Error('OpenIAP selected the play provider; this plugin requires apple.'), {
+    code: 'STOREKIT_CONFIGURATION_ERROR',
+  });
+
+function backendGranting(requests: VerifyPurchaseRequest[]): PurchaseVerificationApi {
+  return {
+    async verifyPurchase(request) {
+      requests.push(request);
+      // The ledger dedupes by transaction: a repeat verify answers the same entry.
+      return {
+        verified: true,
+        alreadyProcessed: requests.length > 1,
+        ledgerEntryId: `ledger-${request.platformTransactionId}`,
+      };
+    },
+  };
+}
+
+function reconcilerFor(
+  plugin: FakeStoreKitPlugin,
+  store: MonetizationOperationStore,
+  requests: VerifyPurchaseRequest[],
+) {
+  const provider = createCapacitorStoreKitCommerceProvider({
+    products,
+    getAppAccountToken: () => fakeAccountToken,
+    isIos: () => true,
+    sdk: plugin,
+  });
+  return createCommerceReconciler({
+    provider,
+    backend: backendGranting(requests),
+    store,
+    playerId: 'player-1',
+    target: 'ios',
+    products,
+  });
+}
+
+const finishes = (plugin: FakeStoreKitPlugin): string[] =>
+  plugin.calls.filter((call) => call.startsWith('finish:'));
+
+// 1. The purchase result and the listener deliver the same transaction:
+// one journal record, one verification, one finish.
+{
+  const plugin = createFakeStoreKitPlugin({ products: [fakeProduct({ productId: storeSku })] });
+  const transaction = fakeTransaction({ transactionId: '2000000000000101' });
+  const purchase = plugin.purchase.bind(plugin);
+  plugin.purchase = async (request) => {
+    // OpenIAP emits to its listener before `requestPurchase` returns.
+    plugin.emit(transaction);
+    plugin.queuePurchase({ status: 'purchased', transaction });
+    return purchase(request);
+  };
+  const requests: VerifyPurchaseRequest[] = [];
+  const reconciler = reconcilerFor(plugin, createInMemoryMonetizationOperationStore(), requests);
+  await reconciler.start();
+  const result = await reconciler.requestPurchase({
+    logicalId: 'COINS_100',
+    idempotencyKey: 'op-dup',
+    source: 'shop',
+  });
+  await reconciler.runUntilIdle();
+  const record = await reconciler.read('op-dup');
+  await reconciler.stop();
+  assertEqual(result.outcome, 'purchased', 'the call answers purchased');
+  assertEqual(record?.state, 'finished', 'the attempt finishes');
+  assertEqual(
+    requests.map((request) => request.platformTransactionId),
+    ['2000000000000101'],
+    'the duplicate delivery is verified once',
+  );
+  assertEqual(
+    finishes(plugin),
+    [`finish:2000000000000101:ledger-2000000000000101:${fakeAccountToken}`],
+    'and finished once with that grant',
+  );
+  assertEqual((await reconciler.listRecoverable()).length, 0, 'no second record for the event');
+}
+
+// 2. A rejected transaction query is a failure, never an empty list, and a
+// finish behind it is never reported as done.
+{
+  const plugin = createFakeStoreKitPlugin({
+    transactions: [fakeTransaction({ transactionId: '2000000000000201', unfinished: true })],
+  });
+  plugin.getTransactions = async () => {
+    plugin.calls.push('getTransactions');
+    throw misconfigured();
+  };
+  const sdk = createCapacitorStoreKitStoreSdk({
+    products: [{ sku: storeSku, kind: 'consumable' }],
+    getAppAccountToken: () => fakeAccountToken,
+    isIos: () => true,
+    sdk: plugin,
+  });
+  await assertThrowsCode(
+    () => sdk.getAvailablePurchases({}),
+    'STOREKIT_CONFIGURATION_ERROR',
+    'getAvailablePurchases rejects with the plugin code',
+  );
+  await assertThrowsCode(
+    () =>
+      sdk.finishTransaction!({
+        transactionId: '2000000000000201',
+        ledgerEntryId: 'ledger-1',
+        isConsumable: true,
+      }),
+    'STOREKIT_CONFIGURATION_ERROR',
+    'finishTransaction rejects instead of answering finished: false',
+  );
+  assertEqual(finishes(plugin), [], 'nothing reached native finish');
+
+  const provider = createCapacitorStoreKitCommerceProvider({
+    products,
+    getAppAccountToken: () => fakeAccountToken,
+    isIos: () => true,
+    sdk: plugin,
+  });
+  await assertThrowsCode(
+    () => provider.getAvailablePurchases(),
+    'CONFIGURATION_REQUIRED',
+    'the provider normalizes it through the StoreKit error map',
+  );
+}
+
+// 3. A journal the 0.3 engine wrote (granted, finish not yet acknowledged)
+// finishes under the new engine after a restart, with no second grant.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const transaction = fakeTransaction({ transactionId: '2000000000000301', unfinished: true });
+  const requests: VerifyPurchaseRequest[] = [];
+  const legacyPlugin = createFakeStoreKitPlugin({
+    products: [fakeProduct({ productId: storeSku })],
+    transactions: [transaction],
+  });
+  legacyPlugin.queueFinish({ throws: Object.assign(new Error('app killed'), { code: 'NETWORK' }) });
+  const legacy = reconcilerFor(legacyPlugin, store, requests);
+  await legacy.start();
+  await legacy.stop();
+  const legacyRecord = (await store.listRecoverable('player-1'))[0];
+  assertEqual(
+    legacyRecord !== undefined && 'state' in legacyRecord ? legacyRecord.state : undefined,
+    'finishing',
+    'the old engine left the grant unfinished',
+  );
+
+  // The new engine lists the same transaction in the same 0.3 shape.
+  const openIapPlugin = createFakeStoreKitPlugin({
+    products: [fakeProduct({ productId: storeSku })],
+    transactions: [transaction],
+  });
+  const resumed = reconcilerFor(openIapPlugin, store, requests);
+  await resumed.start();
+  const record = await resumed.read('store:app-store:2000000000000301');
+  await resumed.stop();
+  assertEqual(record?.state, 'finished', 'the new engine finishes the old record');
+  assertEqual(
+    finishes(openIapPlugin),
+    [`finish:2000000000000301:ledger-2000000000000301:${fakeAccountToken}`],
+    'with the grant the ledger already holds',
+  );
+  assertEqual(
+    new Set(requests.map((request) => request.idempotencyKey)).size,
+    1,
+    'every verification used the same idempotency key',
+  );
+}
+
+// 4. A finished durable the new engine lists from the current entitlements
+// (`unfinished: false`) with no journal is a restore (L3c restore sharing):
+// it is verified with intent `restore` and finished idempotently.
+{
+  const durableSku = 'com.example.game.removeads';
+  const durableProducts = [
+    { logicalId: 'REMOVE_ADS', storeSku: durableSku, kind: 'durable' as const },
+  ];
+  const plugin = createFakeStoreKitPlugin({
+    products: [fakeProduct({ productId: durableSku, type: 'non_consumable' })],
+    transactions: [
+      fakeTransaction({
+        transactionId: '2000000000000401',
+        productId: durableSku,
+        type: 'non_consumable',
+        unfinished: false,
+      }),
+    ],
+  });
+  const requests: VerifyPurchaseRequest[] = [];
+  const reconciler = createCommerceReconciler({
+    provider: createCapacitorStoreKitCommerceProvider({
+      products: durableProducts,
+      getAppAccountToken: () => fakeAccountToken,
+      isIos: () => true,
+      sdk: plugin,
+    }),
+    backend: backendGranting(requests),
+    store: createInMemoryMonetizationOperationStore(),
+    playerId: 'player-1',
+    target: 'ios',
+    products: durableProducts,
+  });
+  await reconciler.start();
+  await reconciler.stop();
+  assertEqual(
+    requests.map((request) => [request.platformTransactionId, request.intent]),
+    [['2000000000000401', 'restore']],
+    'the discovered durable is verified as a restore',
+  );
+}
+
+console.info('StoreKit OpenIAP engine-swap contract passed.');

@@ -66,5 +66,16 @@ test('CI wires native classification to both platform jobs and the required gate
     ?.split(/\r?\n  [a-z0-9][a-z0-9_-]*:\r?\n/)[0];
   assert.match(iosJob ?? '', /pnpm smoke:native-packed-swift/);
   assert.match(iosJob ?? '', /Compile opt-in StoreKit collector/);
+  // The store plugins run on the OpenIAP native cores: their native policy
+  // tests and packed-consumer builds are part of each platform job.
+  assert.match(iosJob ?? '', /MPGD_STOREKIT_BRIDGE_TESTS: '1'\r?\n\s+run: swift test/);
+  assert.match(iosJob ?? '', /pnpm smoke:native-packed-store-plugins ios/);
+  const androidJob = workflow.split(/\r?\n  build-android:\r?\n/)[1]
+    ?.split(/\r?\n  [a-z0-9][a-z0-9_-]*:\r?\n/)[0];
+  assert.match(
+    androidJob ?? '',
+    /:mpgd-capacitor-play-billing:testDebugUnitTest :mpgd-capacitor-play-billing:assembleRelease/,
+  );
+  assert.match(androidJob ?? '', /pnpm smoke:native-packed-store-plugins android/);
   assert.match(workflow, /run: node tools\/ci\/verify-coverage\.mjs/);
 });

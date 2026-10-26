@@ -149,6 +149,7 @@
     "smoke:native-deploy-packed-release": "pnpm build:packages && node tools/smoke/native-cli-packed-consumer.mjs --release-simulation",
     "smoke:native-cli-packed-sync-ios": "node tools/smoke/native-cli-packed-consumer.mjs --sync-ios",
     "smoke:native-packed-swift": "node tools/smoke/native-packed-swift.mjs",
+    "smoke:native-packed-store-plugins": "node tools/run-ttsx.mjs tools/smoke/native-packed-store-plugins.ts",
     "smoke:production-target-readiness": "node tools/run-ttsx.mjs tools/smoke/production-target-readiness.ts",
     "smoke:native-release-identity": "node tools/run-ttsx.mjs tools/target/native-release-identity.test.ts",
     "smoke:release-manifest-merge": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/release-manifest-merge.ts",

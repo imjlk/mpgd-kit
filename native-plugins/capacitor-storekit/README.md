@@ -1,6 +1,7 @@
 # @mpgd/capacitor-storekit
 
-Opt-in StoreKit 2 one-time purchase collector for Capacitor 8 on iOS.
+Opt-in StoreKit 2 one-time purchase collector for Capacitor 8 on iOS, built
+on the [OpenIAP](https://github.com/hyodotdev/openiap) Apple core (4.0.5).
 It does not enable native IAP in the base Capacitor shell. Install it only in a
 game-owned iOS project and register `createCapacitorStoreKitServiceProvider(...)`
 in that game's provider list.
@@ -201,8 +202,31 @@ Commerce v2 PR C4 removed the v1 provider and its recovery driver.
 | `gateway.commerceV2`, the v1 `commerce.*` bridge methods | `gateway.commerce` and the `commerce.v2.*` methods |
 | `features: ['nativeIap']` on the registry entry | none: the entry declares no `features` and its readiness is `getCapabilities().commerce` |
 
-The Kit tests use mocked StoreKit responses and a syntax-only local Swift
-parse. The macOS CI job compiles the optional Swift package against an iOS
-Simulator SDK. Neither check proves a signed App Store purchase, sandbox
-checkout, TestFlight installation, or device grant. Validate those with a
+## Native engine
+
+The Swift package keeps its 0.3 Capacitor contract (methods,
+`transactionUpdated`, payload fields, `STOREKIT_*` codes, the finish gate)
+over OpenIAP's `OpenIapModule`; the
+[migration record](../../docs/specs/commerce/openiap-migration.md) lists the
+contract, the call mapping, and every behavior difference. Two points to know
+when integrating:
+
+- `getTransactions` and the `finishTransaction` lookup read StoreKit's
+  verified lists directly (a read-only shim), because OpenIAP's queries fail
+  as a whole on one unverifiable transaction; an unverified entry is skipped
+  on its own, as in 0.3. The lists carry every app account token; the
+  TypeScript SDK admits the session account.
+- OpenIAP does not deliver revoked transactions, so a small shim forwards
+  verified revocations from `Transaction.updates`; it never finishes anything.
+
+The package declares the products `MpgdCapacitorStoreKit` and
+`MpgdCapacitorStorekit` (the spelling `cap sync ios` links). SwiftPM clones
+the OpenIAP monorepo on first resolution.
+
+The Kit tests use mocked StoreKit responses, Swift XCTests of the native
+policy (`MPGD_STOREKIT_BRIDGE_TESTS=1 swift test` on a Mac), and simulator
+builds of the workspace and the packed package
+(`pnpm smoke:native-packed-store-plugins ios`). None of these checks proves a
+signed App Store purchase, sandbox checkout, TestFlight installation, or
+device grant. Validate those with a
 game-owned account, keys, and device before a production rollout.

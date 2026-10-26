@@ -430,7 +430,9 @@ function walk(root: string): string[] {
     const stats = statSync(path);
 
     if (stats.isDirectory()) {
-      if (entry === 'node_modules' || entry === 'dist') {
+      // `.build` is SwiftPM output (git-ignored); since the StoreKit plugin
+      // resolves the OpenIAP monorepo, it holds third-party `src/*.js` files.
+      if (entry === 'node_modules' || entry === 'dist' || entry === '.build') {
         continue;
       }
 
