@@ -38,13 +38,34 @@ on Play, which marks it ephemeral. Every kit network call uses HTTPS, so
 
 Notes:
 
-- **Play account deletion.** An app that lets players create an account must
-  offer deletion in the app and through a web link entered in the Data safety
-  form. Whether an automatically issued guest ID counts is a judgement call;
-  it applies as soon as the game offers sign-in or account binding, so plan
-  for it. The kit does not ship a deletion flow yet (tracked for the
-  identity and account deletion PR, L3); the privacy policy template already
-  has the section and a placeholder for the URL.
+- **Account deletion.** Play requires deletion in the app and through a web
+  link entered in the Data safety form for apps that let players create an
+  account; Apple requires in-app deletion and says automatically created
+  ("guest") accounts count. The kit's server-issued guest is such an
+  account. The kit ships the route, the starter's Delete account entry, and
+  `legal/delete-account.html`
+  ([account deletion](./GAME_SERVICES_BACKEND.md#account-deletion)). For the
+  Data safety form's deletion questions:
+  - "Users can request that data be deleted": **yes**, in the app and at the
+    Delete account URL (`https://<legal site>/delete-account/`).
+  - What is deleted: the player account and sessions, scores and
+    leaderboard entries, rewarded-ad records, notification tokens, settings
+    and consent records. Only the stores with a registered
+    `PlayerDataEraser` are erased (the kit registers one for each store it
+    ships): a game that keeps its own player data (saves, profiles, chat,
+    its own tables) must register an eraser for each such dataset before it
+    answers this question for them, or list them as kept.
+  - What is kept, why, and for how long: purchase records (product, store
+    transaction and order ids, dates) for **5 years** from the purchase or
+    its last refund, whichever is later, for payment and supply record
+    obligations (the kit's default follows Korea's E-Commerce Act decree
+    art. 6(1); confirm with counsel whether and how it applies to the
+    game's developer) and to stop the same store purchase from being used
+    twice; kept separately and without the player id, then purged. Kept
+    records are detached, not anonymous: the store's order id still
+    identifies the purchase. Server logs for the host's log retention.
+  For App Privacy, Apple asks no separate deletion question; the in-app
+  entry and the privacy policy's deletion section cover the guideline.
 - **App Store tracking.** The kit does no tracking and never shows the App
   Tracking Transparency prompt, so "Used to track you" is **no** for kit
   features. A game that turns on personalized AdMob ads using the IDFA, or any
@@ -83,6 +104,8 @@ compare Xcode's privacy report with the App Store answers.
 - Age rating questionnaires (IARC on Play, App Store age rating), the Play
   target audience and Families program, and whether the game is directed at
   children.
-- Retention periods and the legal entity in the privacy policy.
+- The legal entity in the privacy policy, and retention periods beyond the
+  kit's own (purchase records: 5 years; everything else: deleted with the
+  account).
 - Region-specific rules beyond the Korean advertising-message consent the
   notifications runtime implements (see [notifications](./NOTIFICATIONS.md)).

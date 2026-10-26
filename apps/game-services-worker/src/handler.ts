@@ -1,5 +1,7 @@
 import type { AdPlacements } from '@mpgd/catalog';
 import {
+  accountDeletionConfirmationHeader,
+  createAccountDeletionService,
   createAdRewardEvidenceVerifierRegistry,
   createAppsInTossCommerceEvidenceEntry,
   createAppStoreCommerceEvidenceEntry,
@@ -16,15 +18,17 @@ import {
   createGooglePlayProductPurchaseBoundary,
   createGooglePlayPublisherClient,
   createInMemoryGameServicesStore,
-  createInMemoryVerifiedLeaderboardService,
+  createInMemoryPendingAccountErasureStore,
   createMicrosoftStoreCommerceEvidenceEntry,
   createVerifiedLeaderboardSnapshotFetchHandler,
   createVerse8Agent8EventLookupCommerceEvidenceEntry,
   devvitPaymentOrderEvidenceSchema,
   gameServicesBackendEndpoints,
+  InMemoryVerifiedLeaderboardService,
   microsoftStoreDigitalGoodsEvidenceSchema,
   refusePurchaseRestoreSharing,
   sharePurchaseRestores,
+  type AccountDeletionService,
   type AdRewardEvidenceVerifierRegistry,
   type AdRewardVerifierDescriptor,
   type AdRewardVerifierRegistration,
@@ -43,6 +47,7 @@ import {
   type GameServicesStore,
   type GameServicesStoreTarget,
   type GetVerifiedLeaderboardSnapshotRequest,
+  type PlayerDataEraser,
   type PurchaseGrantFinalization,
   type PurchaseLedgerStatusRequest,
   type RecordLeaderboardScoreRequest,
@@ -61,6 +66,23 @@ import {
   createVerse8AdsVerifierHttpClient,
 } from '@mpgd/adapter-verse8/server';
 
+import {
+  createAccountDeletionFetchHandler,
+  createD1AccountDeletionAudit,
+  createD1PendingAccountErasureStore,
+  createD1PlayerDataEraser,
+  logAccountDeletionAudit,
+  runScheduledAccountDeletion,
+  type AccountDeletionPrincipal,
+  type GameServicesAccountDeletionBinding,
+} from './accountDeletion.js';
+import {
+  argumentField,
+  createAccountDeletionTombstoneEraser,
+  refuseDeletedPlayerWrites,
+  resolveAccountDeletionTombstones,
+  type AccountDeletionTombstonesEnv,
+} from './deletionTombstones.js';
 import { createD1GameServicesStore } from './d1Store.js';
 import {
   createAdMobSsvCallbackFetchHandler,
@@ -69,7 +91,9 @@ import {
 } from './admobSsvHandler.js';
 import {
   assertDevelopmentNotificationSessionsAllowed,
+  authenticateNotificationPlayer,
   createNotificationsFetchHandler,
+  workerNotificationMemoryEraser,
   type GameServicesNotificationsEnv,
 } from './notificationsHandler.js';
 import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
@@ -88,7 +112,8 @@ import {
 } from './storeServerD1.js';
 
 /** `DB` and `MPGD_STORE` come from `GameServicesNotificationsEnv`, which every store here shares. */
-export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv, StoreServerCronEnv {
+export interface GameServicesWorkerEnv
+  extends GameServicesNotificationsEnv, StoreServerCronEnv, AccountDeletionTombstonesEnv {
   /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   /**
@@ -195,6 +220,15 @@ export interface GameServicesWorkerEnv extends GameServicesNotificationsEnv, Sto
   readonly VERSE8_ADS_VERIFIER_BASE_URL?: string;
   readonly MPGD_ADMOB_SSV_ANDROID_AD_UNIT?: string;
   readonly MPGD_ADMOB_SSV_IOS_AD_UNIT?: string;
+  /**
+   * The identity Worker's account deletion entrypoint (`AccountDeletion`:
+   * `deletePlayer` and `verifyAccountDeletionConfirmation`), required by
+   * `POST /game-services/account/delete` outside local development. The
+   * route authenticates the player through `GAME_SERVICES_INGRESS_AUTH`,
+   * else `GAME_SERVICES_NOTIFICATIONS_AUTH`, and checks the request's
+   * deletion confirmation through this binding.
+   */
+  readonly GAME_SERVICES_ACCOUNT_DELETION?: GameServicesAccountDeletionBinding;
 }
 
 export interface GameServicesEvidenceVerifierBinding {
@@ -328,7 +362,8 @@ const adPlacements = {
   ],
 } as const satisfies AdPlacements;
 const fallbackMemoryStore = createInMemoryGameServicesStore();
-const fallbackVerifiedLeaderboardService = createInMemoryVerifiedLeaderboardService();
+const fallbackVerifiedLeaderboardService = new InMemoryVerifiedLeaderboardService();
+const fallbackPendingAccountErasures = createInMemoryPendingAccountErasureStore();
 
 // The Worker entrypoint calls these factories per request with the same env
 // object, so the store, registry (and its Play boundary), backend, and
@@ -421,11 +456,29 @@ function buildWorkerFetchHandler(
     : createAdMobSsvCallbackFetchHandler(admobConfig);
   const notificationsFetch = createNotificationsFetchHandler(env, corsHeaders);
   const appStoreNotificationsFetch = createWorkerAppStoreNotificationsFetchHandler(env, httpStore);
+  const accountDeletionFetch = createAccountDeletionFetchHandler({
+    // The deletion confirmation travels in its own header (browser targets preflight it).
+    corsHeaders: {
+      ...corsHeaders,
+      'Access-Control-Allow-Headers':
+        `${corsHeaders['Access-Control-Allow-Headers']}, ${accountDeletionConfirmationHeader}`,
+    },
+    authenticate: (request) => authenticateAccountDeletionRequest(env, request),
+    service: (principal) => createWorkerAccountDeletionService(env, principal),
+    // Development sessions run without an identity service, and so without
+    // confirmations; every other deletion needs one.
+    confirmation: (principal) =>
+      principal.development ? undefined : env.GAME_SERVICES_ACCOUNT_DELETION,
+  });
 
   return async (request) => {
     const appStoreNotificationResponse = await appStoreNotificationsFetch?.(request);
     if (appStoreNotificationResponse !== undefined) {
       return appStoreNotificationResponse;
+    }
+    const accountDeletionResponse = await accountDeletionFetch(request);
+    if (accountDeletionResponse !== undefined) {
+      return accountDeletionResponse;
     }
     const notificationsResponse = await notificationsFetch(request);
     if (notificationsResponse !== undefined) {
@@ -660,6 +713,124 @@ function jsonResponse(
       'content-type': 'application/json; charset=utf-8',
       ...corsHeaders,
     },
+  });
+}
+
+/**
+ * The player a deletion request is for: `GAME_SERVICES_INGRESS_AUTH`, else
+ * the notifications session binding (or, locally, the development
+ * sessions). Without either the route answers 503: an unauthenticated
+ * deletion of a body-named player is never served.
+ */
+async function authenticateAccountDeletionRequest(
+  env: GameServicesWorkerEnv,
+  request: Request,
+): Promise<AccountDeletionPrincipal> {
+  const ingressAuth = env.GAME_SERVICES_INGRESS_AUTH;
+  if (ingressAuth !== undefined) {
+    const authorization = request.headers.get('Authorization');
+    if (authorization === null || authorization.length === 0) {
+      return { status: 'rejected', response: jsonResponse({ error: 'UNAUTHORIZED' }, 401, {}) };
+    }
+    let principal: unknown;
+    try {
+      principal = await ingressAuth.authenticateGameServicesRequest({ authorization });
+    } catch {
+      return {
+        status: 'rejected',
+        response: jsonResponse({ error: 'AUTHENTICATION_FAILED' }, 500, {}),
+      };
+    }
+    if (principal === undefined || principal === null) {
+      return { status: 'rejected', response: jsonResponse({ error: 'UNAUTHORIZED' }, 401, {}) };
+    }
+    const playerId = readRecord(principal)?.playerId;
+    if (typeof playerId !== 'string' || playerId.length === 0) {
+      return {
+        status: 'rejected',
+        response: jsonResponse({ error: 'AUTHENTICATION_FAILED' }, 500, {}),
+      };
+    }
+    return { status: 'authenticated', playerId, development: false };
+  }
+  const session = await authenticateNotificationPlayer(env, request);
+  if (session === undefined) {
+    return {
+      status: 'rejected',
+      response: jsonResponse({ error: 'ACCOUNT_DELETION_NOT_CONFIGURED' }, 503, {}),
+    };
+  }
+  return session instanceof Response
+    ? { status: 'rejected', response: session }
+    : { status: 'authenticated', playerId: session.playerId, development: session.development };
+}
+
+/**
+ * The account deletion service over this Worker's stores, or `undefined`
+ * without the identity binding outside local development. Also the
+ * `deletePlayerAccount` service-binding RPC for support tooling.
+ */
+export function createWorkerAccountDeletionService(
+  env: GameServicesWorkerEnv,
+  principal: { readonly development: boolean } = { development: false },
+): AccountDeletionService | undefined {
+  const identity = env.GAME_SERVICES_ACCOUNT_DELETION;
+  if (identity === undefined && !principal.development) {
+    return undefined;
+  }
+  const db = resolveD1Database(env);
+  // Without tombstones a late write could recreate the player's rows after
+  // the final pass: a D1 deployment needs the key before it deletes accounts.
+  if (db !== undefined && resolveAccountDeletionTombstones(env) === undefined && !principal.development) {
+    console.error(
+      'Account deletion needs GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY (a secret) on a D1 deployment.',
+    );
+    return undefined;
+  }
+  return createAccountDeletionService({
+    erasers: resolveWorkerPlayerDataErasers(env),
+    identity: identity ?? null,
+    pending: db === undefined
+      ? fallbackPendingAccountErasures
+      : createD1PendingAccountErasureStore(db),
+    audit: db === undefined ? logAccountDeletionAudit : createD1AccountDeletionAudit(db),
+  });
+}
+
+/**
+ * The tombstone first (later writes are refused from then on), then D1: one
+ * eraser over every table; memory: each in-memory store's own.
+ */
+function resolveWorkerPlayerDataErasers(env: GameServicesWorkerEnv): readonly PlayerDataEraser[] {
+  const tombstones = resolveAccountDeletionTombstones(env);
+  const tombstone = tombstones === undefined
+    ? []
+    : [createAccountDeletionTombstoneEraser(tombstones)];
+  const db = resolveD1Database(env);
+  if (db !== undefined) {
+    return [...tombstone, createD1PlayerDataEraser(db)];
+  }
+  const notifications = workerNotificationMemoryEraser(env);
+  return [
+    ...tombstone,
+    fallbackMemoryStore,
+    fallbackVerifiedLeaderboardService,
+    ...(notifications === undefined ? [] : [notifications]),
+  ];
+}
+
+/** The cron's account deletion work: pending erasures and the retention purge. */
+export async function runWorkerScheduledAccountDeletion(env: GameServicesWorkerEnv): Promise<void> {
+  const db = resolveD1Database(env);
+  const tombstones = resolveAccountDeletionTombstones(env);
+  await runScheduledAccountDeletion({
+    db,
+    ...(tombstones === undefined ? {} : { tombstones }),
+    erasers: resolveWorkerPlayerDataErasers(env),
+    pending: db === undefined
+      ? fallbackPendingAccountErasures
+      : createD1PendingAccountErasureStore(db),
+    audit: db === undefined ? logAccountDeletionAudit : createD1AccountDeletionAudit(db),
   });
 }
 
@@ -1222,7 +1393,9 @@ function withWorkerGooglePlayFinalizationOutbox(
     ? googlePlay
     : withGooglePlayFinalizationOutbox(
         googlePlay,
-        createD1GooglePlayFinalizationOutbox(db),
+        withDeletedPlayerRefusal(env, createD1GooglePlayFinalizationOutbox(db), {
+          remember: argumentField('playerId'),
+        }),
         packageName,
       );
 }
@@ -1559,8 +1732,13 @@ function resolveWorkerAdMobSsvConfig(
   if (db === undefined) {
     throw new Error('AdMob SSV callback intake requires MPGD_STORE=d1 and a DB binding.');
   }
+  const tombstones = resolveAccountDeletionTombstones(env);
   return {
     db,
+    // A callback for a deleted account (Google may deliver one late) is acknowledged, never kept.
+    ...(tombstones === undefined
+      ? {}
+      : { isPlayerDeleted: (playerId: string) => tombstones.isDeleted(playerId) }),
     placements: adPlacements,
     adUnits: {
       ...(android ? { android } : {}),
@@ -1612,7 +1790,15 @@ function unavailableEvidenceVerificationDecision(): EvidenceVerificationDecision
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {
   return cachedByEnv(storesByEnv, env, () => {
     const db = resolveD1Database(env);
-    return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+    const store = db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+    // A deleted player gets no new grant or score (the erasers keep the raw store).
+    const tombstones = resolveAccountDeletionTombstones(env);
+    return tombstones === undefined
+      ? store
+      : refuseDeletedPlayerWrites(store, tombstones, {
+          recordEntitlementGrant: argumentField('playerId'),
+          recordLeaderboardScore: argumentField('playerId'),
+        });
   });
 }
 
@@ -1620,9 +1806,27 @@ function createWorkerVerifiedLeaderboardService(
   env: GameServicesWorkerEnv,
 ): VerifiedLeaderboardService {
   const db = resolveD1Database(env);
-  return db === undefined
+  const service = db === undefined
     ? fallbackVerifiedLeaderboardService
     : createD1VerifiedLeaderboardService(db);
+  const tombstones = resolveAccountDeletionTombstones(env);
+  return tombstones === undefined
+    ? service
+    : refuseDeletedPlayerWrites(service, tombstones, {
+        recordVerifiedAttempt: (args) =>
+          (args[0] as { readonly attempt?: { readonly participantId?: unknown } } | undefined)
+            ?.attempt?.participantId,
+      });
+}
+
+/** `target` refusing a deleted player's `writes` when this deployment keeps tombstones. */
+function withDeletedPlayerRefusal<Target extends object>(
+  env: GameServicesWorkerEnv,
+  target: Target,
+  writes: Parameters<typeof refuseDeletedPlayerWrites<Target>>[2],
+): Target {
+  const tombstones = resolveAccountDeletionTombstones(env);
+  return tombstones === undefined ? target : refuseDeletedPlayerWrites(target, tombstones, writes);
 }
 
 function resolveD1Database(env: GameServicesWorkerEnv): D1Database | undefined {

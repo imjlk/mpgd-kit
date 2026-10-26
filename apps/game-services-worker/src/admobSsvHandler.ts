@@ -16,6 +16,12 @@ export interface AdMobSsvWorkerConfig {
   readonly adUnits: Partial<Record<'android' | 'ios', string>>;
   readonly fetcher?: typeof fetch;
   readonly now?: () => Date;
+  /**
+   * Whether the player's account was deleted (its tombstone): a verified
+   * callback for a deleted player is acknowledged and not kept, so a late
+   * delivery cannot recreate a row under the deleted id.
+   */
+  readonly isPlayerDeleted?: (playerId: string) => Promise<boolean>;
 }
 
 const callbackPath = /^\/admob\/ssv\/(android|ios)$/u;
@@ -132,6 +138,9 @@ export function createAdMobSsvCallbackFetchHandler(
       receivedAt: (config.now?.() ?? new Date()).toISOString(),
     };
     try {
+      if (await config.isPlayerDeleted?.(binding.playerId) === true) {
+        return new Response('ok', { status: 200 });
+      }
       const result = await store.record(callback);
       return result === 'conflict'
         ? new Response('Conflicting AdMob SSV callback', { status: 409 })

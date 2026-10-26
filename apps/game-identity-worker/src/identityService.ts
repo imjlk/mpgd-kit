@@ -7,6 +7,7 @@ import {
   createIdentifier,
   createOpaqueToken,
   createRotationNonce,
+  deletionConfirmationPrefix,
   deriveRefreshToken,
   hashToken,
   isOpaqueToken,
@@ -46,6 +47,12 @@ export interface IdentityServiceConfig {
   readonly refreshRetryGraceMs: number;
   /** New guests per installation in a rolling day. Default 5. */
   readonly maxGuestsPerInstallationPerDay: number;
+  /**
+   * How long an account deletion confirmation is accepted after it is
+   * issued: the time between the player's second tap and the game-services
+   * request. Default 5 minutes.
+   */
+  readonly accountDeletionConfirmationTtlMs: number;
 }
 
 /** A configuration the service refuses; its message names the rule and holds no secret. */
@@ -61,6 +68,7 @@ export const defaultIdentityServiceConfig: IdentityServiceConfig = Object.freeze
   refreshIdleMs: 180 * 24 * 60 * 60 * 1000,
   refreshRetryGraceMs: 7 * 24 * 60 * 60 * 1000,
   maxGuestsPerInstallationPerDay: 5,
+  accountDeletionConfirmationTtlMs: 5 * 60 * 1000,
 });
 
 /** An authenticated access token: who, which session, which installation, and when the session ends. */
@@ -102,6 +110,33 @@ export interface GuestIdentityService {
   resolveObfuscatedAccountId(playerId: unknown): Promise<string | undefined>;
   /** StoreKit `appAccountToken` of a known player, or `undefined`. */
   resolveAppAccountToken(playerId: unknown): Promise<string | undefined>;
+  /**
+   * An account deletion confirmation for the refresh token's player (L3b):
+   * the second proof, besides the access token, that the game-services
+   * deletion route requires, so a stolen access token alone cannot delete
+   * the account. The token must be the family's current refresh token, or
+   * the replaced one inside the retry grace while its successor is unused;
+   * it is not rotated. Any other token is `GUEST_SESSION_REJECTED`, without
+   * revoking anything (the refresh route detects replays). Issuing one
+   * replaces the family's earlier confirmation.
+   */
+  issueAccountDeletionConfirmation(input: {
+    readonly refreshToken: unknown;
+  }): Promise<IdentityResult<{ readonly confirmation: string; readonly expiresAt: string }>>;
+  /**
+   * Whether `confirmation` was issued to `playerId`'s live session and is
+   * unexpired; a confirmed one is used up. Never throws for a bad input.
+   */
+  verifyAccountDeletionConfirmation(input: {
+    readonly playerId: unknown;
+    readonly confirmation: unknown;
+  }): Promise<{ readonly confirmed: boolean }>;
+  /**
+   * Deletes the player: every session family and token, at once (L3b). The
+   * game-services Worker calls it before erasing the player's game data.
+   * Idempotent, and an unknown player is not an error.
+   */
+  deletePlayer(input: { readonly playerId: unknown }): Promise<void>;
   /** Storage upkeep; see `IdentityStore.purge`. */
   purge(): Promise<void>;
 }
@@ -183,6 +218,32 @@ export function createGuestIdentityService(input: {
         `[identity] endNotificationSession failed: ${error instanceof Error ? error.name : 'unknown error'}`,
       );
     }
+  }
+
+  /**
+   * The successor `refreshToken` retries inside the grace: when it is the
+   * token the family's latest rotation replaced (`presented` is its hash),
+   * within `refreshRetryGraceMs`, and its successor is still current
+   * (unused). `undefined` otherwise. One definition for `refresh` and the
+   * deletion confirmation, so the two never accept different tokens.
+   */
+  async function graceSuccessor(
+    family: IdentitySessionFamily,
+    presented: string,
+    refreshToken: string,
+    at: number,
+  ): Promise<string | undefined> {
+    if (
+      config.refreshRetryGraceMs <= 0
+      || family.previousRefreshHash !== presented
+      || family.rotatedAt === undefined
+      || family.rotationNonce === undefined
+      || at - family.rotatedAt > config.refreshRetryGraceMs
+    ) {
+      return undefined;
+    }
+    const successor = await deriveRefreshToken(refreshToken, family.rotationNonce);
+    return await hashToken(successor) === family.currentRefreshHash ? successor : undefined;
   }
 
   const rejected = { ok: false, error: 'GUEST_SESSION_REJECTED' } as const;
@@ -269,22 +330,14 @@ export function createGuestIdentityService(input: {
         // unused (still current) and within the grace window: the client
         // lost the answer, or an abandoned request is still running. Answer
         // the same successor again, so no answer ever invalidates another.
-        if (
-          config.refreshRetryGraceMs > 0
-          && family.previousRefreshHash === presented
-          && family.rotatedAt !== undefined
-          && family.rotationNonce !== undefined
-          && at - family.rotatedAt <= config.refreshRetryGraceMs
-        ) {
-          const successor = await deriveRefreshToken(refreshToken, family.rotationNonce);
-          if (await hashToken(successor) === family.currentRefreshHash) {
-            const { token, access } = await issueAccess(family, at);
-            if (await store.addAccessToken({ now: at, currentRefreshHash: family.currentRefreshHash, access })) {
-              return { ok: true, value: credentials(family, token, successor, access) };
-            }
-            raced = true;
-            continue;
+        const successor = await graceSuccessor(family, presented, refreshToken, at);
+        if (successor !== undefined) {
+          const { token, access } = await issueAccess(family, at);
+          if (await store.addAccessToken({ now: at, currentRefreshHash: family.currentRefreshHash, access })) {
+            return { ok: true, value: credentials(family, token, successor, access) };
           }
+          raced = true;
+          continue;
         }
         if (raced) {
           return lostRace();
@@ -313,6 +366,63 @@ export function createGuestIdentityService(input: {
 
     async bindAccount() {
       return { ok: false, error: 'ACCOUNT_BINDING_UNSUPPORTED' };
+    },
+
+    async issueAccountDeletionConfirmation({ refreshToken }) {
+      if (!isOpaqueToken(refreshToken, refreshTokenPrefix)) {
+        return rejected;
+      }
+      const presented = await hashToken(refreshToken);
+      const issuedIn = await store.findRefreshToken(presented);
+      const family = issuedIn === undefined ? undefined : await store.getFamily(issuedIn.familyId);
+      const at = now();
+      if (family === undefined || family.revokedAt !== undefined || family.expiresAt <= at) {
+        return rejected;
+      }
+      // The current token, or a retry of the replaced one (the client lost
+      // the rotation's answer), exactly as `refresh` accepts them.
+      const current = family.currentRefreshHash === presented
+        || await graceSuccessor(family, presented, refreshToken, at) !== undefined;
+      if (!current) {
+        return rejected;
+      }
+      const confirmation = createOpaqueToken(deletionConfirmationPrefix);
+      const expiresAt = at + config.accountDeletionConfirmationTtlMs;
+      const stored = await store.putDeletionConfirmation({
+        confirmation: {
+          tokenHash: await hashToken(confirmation),
+          familyId: family.familyId,
+          playerId: family.playerId,
+          expiresAt,
+        },
+        now: at,
+      });
+      // The family ended (or its player was deleted) since it was read.
+      return stored
+        ? { ok: true, value: { confirmation, expiresAt: new Date(expiresAt).toISOString() } }
+        : rejected;
+    },
+
+    async verifyAccountDeletionConfirmation({ playerId, confirmation }) {
+      if (typeof playerId !== 'string' || !isOpaqueToken(confirmation, deletionConfirmationPrefix)) {
+        return { confirmed: false };
+      }
+      return {
+        confirmed: await store.consumeDeletionConfirmation({
+          tokenHash: await hashToken(confirmation),
+          playerId,
+          now: now(),
+        }),
+      };
+    },
+
+    async deletePlayer({ playerId }) {
+      if (typeof playerId !== 'string' || playerId.trim() === '') {
+        throw new TypeError('deletePlayer needs a player id.');
+      }
+      // The game-services Worker erases the player's notification devices
+      // itself, so no endNotificationSession call is needed here.
+      await store.deletePlayer(playerId);
     },
 
     async authenticate(authorization) {
@@ -370,6 +480,7 @@ function resolveConfig(overrides: Partial<IdentityServiceConfig> | undefined): I
   const positive = (value: number) => Number.isSafeInteger(value) && value > 0;
   if (!positive(config.accessTokenTtlMs) || !positive(config.refreshIdleMs)
     || !positive(config.maxGuestsPerInstallationPerDay)
+    || !positive(config.accountDeletionConfirmationTtlMs)
     || !(Number.isSafeInteger(config.refreshRetryGraceMs) && config.refreshRetryGraceMs >= 0)
     || config.accessTokenTtlMs >= config.refreshIdleMs
     || config.refreshRetryGraceMs >= config.refreshIdleMs) {

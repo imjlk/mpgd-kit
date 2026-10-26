@@ -55,6 +55,22 @@ export class AppStoreAccountBinding extends WorkerEntrypoint<GameIdentityWorkerE
   }
 }
 
+/**
+ * `GAME_SERVICES_ACCOUNT_DELETION` of the game-services Worker (L3b): deletes
+ * a player's sessions before the game data is erased, and checks the
+ * deletion confirmation a client sends with the request. Bind only the
+ * game-services Worker to it.
+ */
+export class AccountDeletion extends WorkerEntrypoint<GameIdentityWorkerEnv> {
+  async deletePlayer(input: { readonly playerId: string }) {
+    return bindingsOf(this.env).accountDeletion.deletePlayer(input);
+  }
+
+  async verifyAccountDeletionConfirmation(input: { readonly playerId: string; readonly confirmation: string }) {
+    return bindingsOf(this.env).accountDeletion.verifyAccountDeletionConfirmation(input);
+  }
+}
+
 export {
   createIdentityBindings,
   createIdentityFetchHandler,

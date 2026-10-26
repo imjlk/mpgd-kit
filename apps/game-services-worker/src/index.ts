@@ -9,9 +9,11 @@ import type {
 import { WorkerEntrypoint } from 'cloudflare:workers';
 
 import {
+  createWorkerAccountDeletionService,
   createWorkerFetchHandler,
   createWorkerService,
   createWorkerStoreServerDependencies,
+  runWorkerScheduledAccountDeletion,
   type GameServicesWorkerEnv,
 } from './handler.js';
 import { runScheduledStoreServer } from './storeServerCron.js';
@@ -79,19 +81,51 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
   /**
    * The cron trigger: notification purges and the scheduler (reminders,
    * notice pushes, due rows), and the store server upkeep (owed Play
-   * acknowledges and consumes, the Play voided purchases sweep). Each keeps
-   * to its own subrequest budget; one failing never skips the other.
+   * acknowledges and consumes, the Play voided purchases sweep), and the
+   * account deletion upkeep (pending erasures, the purge of purchase records
+   * kept past their retention period). Each keeps to its own subrequest
+   * budget; one failing never skips the others.
    */
   override async scheduled(controller: ScheduledController): Promise<void> {
     const [notifications] = await Promise.allSettled([
       runScheduledNotifications(this.env, { cron: controller.cron }),
       runStoreServer(this.env, controller.cron),
+      runAccountDeletion(this.env),
     ]);
     // Both runs finish before the event ends; a notifications failure is
     // reported after the store server run, never instead of it.
     if (notifications.status === 'rejected') {
       throw notifications.reason;
     }
+  }
+}
+
+/**
+ * Account deletion for support tooling (a web deletion request an operator
+ * handles), like the player's own `POST /game-services/account/delete`. A
+ * named entrypoint of its own, so only a Worker bound to
+ * `entrypoint = "GameServicesAccountDeletion"` can delete players; Workers
+ * bound to the default entrypoint (for example to send notifications)
+ * cannot. Rejects when `GAME_SERVICES_ACCOUNT_DELETION` is not bound.
+ */
+export class GameServicesAccountDeletion extends WorkerEntrypoint<GameServicesWorkerEnv> {
+  async deletePlayerAccount(input: { readonly playerId: string }) {
+    const service = createWorkerAccountDeletionService(this.env);
+    if (service === undefined) {
+      throw new Error('ACCOUNT_DELETION_NOT_CONFIGURED: bind GAME_SERVICES_ACCOUNT_DELETION.');
+    }
+    return service.deletePlayerAccount({ playerId: input.playerId });
+  }
+}
+
+async function runAccountDeletion(env: GameServicesWorkerEnv): Promise<void> {
+  try {
+    await runWorkerScheduledAccountDeletion(env);
+  } catch (error) {
+    console.error(
+      'Account deletion cron failed:',
+      error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error',
+    );
   }
 }
 
@@ -121,6 +155,7 @@ export {
   type VerifiedLeaderboardAuthBinding,
   type VerifiedLeaderboardAuthBindingRequest,
 } from './handler.js';
+export { type GameServicesAccountDeletionBinding } from './accountDeletion.js';
 export {
   type GameServicesNotificationsAuthBinding,
   type GameServicesNotificationsIdentityBinding,

@@ -30,6 +30,7 @@ function writeLegalSources(legalDir: string): void {
   writeFileSync(path.join(legalDir, 'privacy.html'), page('Privacy'));
   writeFileSync(path.join(legalDir, 'support.html'), page('Support'));
   writeFileSync(path.join(legalDir, 'terms.html'), page('Terms'));
+  writeFileSync(path.join(legalDir, 'delete-account.html'), page('Delete account'));
 }
 
 async function inProject(project: string, run: () => Promise<void>): Promise<void> {
@@ -173,6 +174,112 @@ await test('builds a legal site inside the project and replaces it without stagi
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+await test('builds the account deletion page when its source exists, and warns without it', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'mpgd-legal-delete-'));
+  const project = path.join(root, 'project');
+  const site = path.join(project, 'artifacts', 'legal-site');
+  try {
+    writeLegalSources(path.join(project, 'legal'));
+    writeFileSync(
+      path.join(project, 'legal', 'delete-account.html'),
+      page('Delete [REPLACE: developer name] account'),
+    );
+    await inProject(project, async () => {
+      const warnings: string[] = [];
+      const infos: string[] = [];
+      const originalWarn = console.warn;
+      const originalInfo = console.info;
+      console.warn = (message: string) => warnings.push(message);
+      console.info = (message: string) => infos.push(message);
+      try {
+        await runMpgdCli(['legal', 'build']);
+        await runMpgdCli(['legal', 'check']);
+      } finally {
+        console.warn = originalWarn;
+        console.info = originalInfo;
+      }
+      assert.match(readFileSync(path.join(site, 'delete-account', 'index.html'), 'utf8'), /Delete/u);
+      const manifest = JSON.parse(readFileSync(path.join(site, 'legal-site.json'), 'utf8')) as {
+        readonly pages: readonly { readonly slug: string; readonly path: string; readonly source: string }[];
+      };
+      assert.deepEqual(manifest.pages.at(-1), {
+        slug: 'delete-account',
+        path: '/delete-account/',
+        source: 'legal/delete-account.html',
+      });
+      assert.match(
+        readFileSync(path.join(site, '_redirects'), 'utf8'),
+        /^\/delete-account \/delete-account\/ 301$/mu,
+      );
+      // The build names the Play Console field; placeholders are warned on build and check.
+      assert.ok(infos.some((line) => /Data safety > Delete account URL/u.test(line)));
+      assert.equal(warnings.filter((line) => /delete-account[/\\]index\.html/u.test(line)).length, 2);
+
+      rmSync(path.join(project, 'legal', 'delete-account.html'));
+      warnings.length = 0;
+      console.warn = (message: string) => warnings.push(message);
+      try {
+        await runMpgdCli(['legal', 'build']);
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.ok(warnings.some((line) => /Google Play needs a web page/u.test(line)));
+      writeFileSync(
+        path.join(project, 'legal', 'privacy.html'),
+        page('Privacy <a href="/delete-account/">Delete account</a>'),
+      );
+      // A page that links to the missing deletion page: build and check refuse
+      // rather than publish a dead link, and name the page.
+      for (const command of ['build', 'check']) {
+        await assert.rejects(
+          runMpgdCli(['legal', command]),
+          /these pages link to \/delete-account\/: .*privacy[/\\]index\.html/u,
+          command,
+        );
+      }
+      writeFileSync(path.join(project, 'legal', 'privacy.html'), page('Privacy'));
+      warnings.length = 0;
+      console.warn = (message: string) => warnings.push(message);
+      try {
+        await runMpgdCli(['legal', 'build']);
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.ok(warnings.some((line) => /Google Play needs a web page/u.test(line)));
+      const rebuilt = JSON.parse(readFileSync(path.join(site, 'legal-site.json'), 'utf8')) as {
+        readonly pages: readonly { readonly slug: string }[];
+      };
+      assert.deepEqual(rebuilt.pages.map((entry) => entry.slug), ['privacy', 'support', 'terms']);
+      // The page built earlier is gone, with its directory.
+      assert.equal(existsSync(path.join(site, 'delete-account')), false);
+      await runMpgdCli(['legal', 'check']);
+      // An output left without its source is stale for check, and build removes it.
+      mkdirSync(path.join(site, 'delete-account'));
+      writeFileSync(path.join(site, 'delete-account', 'index.html'), page('Left over'));
+      await assert.rejects(runMpgdCli(['legal', 'check']), /no delete-account\.html source/u);
+      await runMpgdCli(['legal', 'build']);
+      assert.equal(existsSync(path.join(site, 'delete-account', 'index.html')), false);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('the starter template ships a deletion page linked from its privacy policy', () => {
+  const legal = new URL('../templates/phaser-game/legal/', import.meta.url);
+  const deletion = readFileSync(new URL('delete-account.html', legal), 'utf8');
+  for (const name of ['privacy.html', 'support.html', 'terms.html']) {
+    assert.match(readFileSync(new URL(name, legal), 'utf8'), /href="\/delete-account\/"/u, name);
+  }
+  for (const section of ['In the Game', 'Without the Game', 'What Is Deleted', 'What We Keep']) {
+    assert.ok(deletion.includes(section), section);
+  }
+  assert.match(deletion, /Play Console > App content > Data safety/u);
+  assert.match(deletion, /\[REPLACE: support email address or request form URL\]/u);
+  // The deletion and retention answers match what the server does.
+  assert.match(deletion, /5 years from the purchase or its\s+last refund/u);
 });
 
 await test('still rejects a legal out-dir that lexically leaves the project', async () => {

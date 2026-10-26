@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -1301,7 +1302,20 @@ const gameCommand = defineI18n({
 const defaultLegalDir = 'legal';
 const defaultLegalOutDir = 'artifacts/legal-site';
 const legalPageSlugs = ['privacy', 'support', 'terms'] as const;
+/**
+ * Built when its source exists: the account deletion request page whose URL
+ * Google Play's Data safety form asks for. A missing one is warned about.
+ */
+const optionalLegalPageSlugs = ['delete-account'] as const;
 const legalPageFileList = legalPageSlugs.map((slug) => `${slug}.html`).join(', ');
+const optionalLegalPageFileList = optionalLegalPageSlugs.map((slug) => `${slug}.html`).join(', ');
+/** The account deletion page's slug, whose URL the Play Data safety form asks for. */
+const deleteAccountLegalSlug = optionalLegalPageSlugs[0];
+
+/** Where a legal page is published: `<out-dir>/<slug>/index.html`, served at `/<slug>/`. */
+function legalPageOutputFile(outDir: string, slug: string): string {
+  return path.join(outDir, slug, 'index.html');
+}
 
 interface AcceptGameInput {
   readonly gameRoot: string;
@@ -1971,6 +1985,13 @@ const legalCommand = defineI18n({
         });
 
         console.info(`Built legal site: ${result.outDir}`);
+        if (result.deleteAccountPath !== undefined) {
+          console.info(
+            `Account deletion page: ${result.deleteAccountPath} on the legal site. Enter its full URL `
+              + 'in Play Console > App content > Data safety > Delete account URL, and link it from '
+              + 'the privacy policy.',
+          );
+        }
       },
     }),
     check: defineI18n({
@@ -3370,7 +3391,7 @@ function legalArgs() {
       type: 'string',
       required: false,
       default: defaultLegalDir,
-      description: `Directory containing ${legalPageFileList}.`,
+      description: `Directory containing ${legalPageFileList} (and optionally ${optionalLegalPageFileList}).`,
     },
     'out-dir': {
       type: 'string',
@@ -3384,8 +3405,8 @@ function legalArgs() {
 function legalArgResources(): Record<string, LocalizedText> {
   return {
     'legal-dir': {
-      en: `Directory containing ${legalPageFileList}.`,
-      ko: `${legalPageFileList} 이 있는 디렉터리.`,
+      en: `Directory containing ${legalPageFileList} (and optionally ${optionalLegalPageFileList}).`,
+      ko: `${legalPageFileList} (선택: ${optionalLegalPageFileList}) 이 있는 디렉터리.`,
     },
     'out-dir': {
       en: 'Output directory for the static legal site.',
@@ -3406,6 +3427,8 @@ function resolveLegalCommandOptions(values: Record<string, unknown>): {
 
 interface BuildLegalSiteResult {
   readonly outDir: string;
+  /** The deletion page's path on the site, when its source exists. */
+  readonly deleteAccountPath?: string;
 }
 
 function buildLegalSite(input: {
@@ -3418,26 +3441,70 @@ function buildLegalSite(input: {
   assertLegalProjectPath('legal-dir', legalDir);
   assertLegalProjectPath('out-dir', outDir);
   const outputs = createLegalSiteOutputs(legalDir, outDir);
-  // app-ads.txt is optional: an earlier one is stale once its source is gone.
-  const appAdsOutput = path.join(outDir, 'app-ads.txt');
-  const orphanStat = outputs.some((output) => output.file === appAdsOutput)
-    ? undefined
-    : lstatIfExists(appAdsOutput);
-  const orphanedAppAds = orphanStat !== undefined;
-  if (orphanStat !== undefined) {
-    assertLegalProjectPath('out-dir', appAdsOutput);
-    if (!orphanStat.isFile()) {
-      throw new Error(`Legal site app-ads.txt output is not a regular file: ${appAdsOutput}`);
+  const deleteAccountPath = `/${deleteAccountLegalSlug}/`;
+  const deleteAccountBuilt = outputs.some((output) =>
+    output.file === legalPageOutputFile(outDir, deleteAccountLegalSlug),
+  );
+  const deleteAccountResult = deleteAccountBuilt ? { deleteAccountPath } : {};
+  if (!deleteAccountBuilt) {
+    const linking = outputs
+      // Any quoting of the link (or a full URL ending in the path).
+      .filter((output) => output.content.includes(deleteAccountPath))
+      .map((output) => path.relative(process.cwd(), output.file));
+    const source = path.join(
+      path.relative(process.cwd(), legalDir) || '.',
+      `${deleteAccountLegalSlug}.html`,
+    );
+    if (linking.length > 0) {
+      // The starter's privacy, support, and terms pages link to it: a site
+      // without it would publish dead deletion links, so it is required then.
+      throw new Error(
+        `No ${source}, but these pages link to ${deleteAccountPath}: ${linking.join(', ')}. `
+          + 'Google Play needs that page (Play Console > App content > Data safety): copy '
+          + 'legal/delete-account.html from a game created with the current kit, or remove the links.',
+      );
     }
+    console.warn(
+      `No ${source}: `
+        + 'Google Play needs a web page where players request account deletion without reinstalling '
+        + 'the game (Play Console > App content > Data safety). Copy legal/delete-account.html from a '
+        + 'game created with the current kit.',
+    );
   }
+  // app-ads.txt and the optional pages are stale once their source is gone.
+  const optionalOutputs = [
+    { file: path.join(outDir, 'app-ads.txt'), source: 'app-ads.txt' },
+    ...optionalLegalPageSlugs.map((slug) => ({
+      file: legalPageOutputFile(outDir, slug),
+      source: `${slug}.html`,
+    })),
+  ];
+  const orphans = optionalOutputs.filter(({ file }) => {
+    if (outputs.some((output) => output.file === file)) {
+      return false;
+    }
+    const stat = lstatIfExists(file);
+    if (stat === undefined) {
+      return false;
+    }
+    assertLegalProjectPath('out-dir', file);
+    if (!stat.isFile()) {
+      throw new Error(`Legal site output is not a regular file: ${file}`);
+    }
+    return true;
+  });
 
   warnLegalPlaceholders(outputs);
   if (input.check) {
     assertLegalProjectPath('out-dir', outDir);
-    if (orphanedAppAds) {
+    if (orphans.length > 0) {
       throw new Error(
-        'Legal site output is stale. Run "mpgd legal build".\n'
-          + `- ${path.relative(process.cwd(), appAdsOutput)} (no app-ads.txt source)`,
+        [
+          'Legal site output is stale. Run "mpgd legal build".',
+          ...orphans.map(({ file, source }) =>
+            `- ${path.relative(process.cwd(), file)} (no ${source} source)`,
+          ),
+        ].join('\n'),
       );
     }
     const stale = outputs.filter((output) => {
@@ -3460,16 +3527,36 @@ function buildLegalSite(input: {
 
     return {
       outDir,
+      ...deleteAccountResult,
     };
   }
 
   publishLegalSiteFiles(outDir, outputs);
-  if (orphanedAppAds) {
-    rmSync(appAdsOutput, { force: true });
+  for (const { file } of orphans) {
+    // Checked again right before removing: the directory may have changed.
+    assertLegalProjectPath('out-dir', file);
+    rmSync(file, { force: true });
+    if (path.dirname(file) !== outDir) {
+      // The page's own directory, once empty.
+      try {
+        rmdirSync(path.dirname(file));
+      } catch (error) {
+        // Not empty, or already gone: leave it. Anything else is reported.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && code !== 'ENOENT' && code !== 'ENOTDIR') {
+          console.warn(
+            `Could not remove the empty legal page directory ${
+              path.relative(process.cwd(), path.dirname(file))
+            }: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    }
   }
 
   return {
     outDir,
+    ...deleteAccountResult,
   };
 }
 
@@ -3481,7 +3568,16 @@ function createLegalSiteOutputs(
   assertLegalProjectPath('out-dir', outDir);
 
   const sourceRoot = toTemplatePath(path.relative(process.cwd(), legalDir) || '.');
-  const outputs = legalPageSlugs.map((slug) => {
+  const optionalSlugs = optionalLegalPageSlugs.filter((slug) => {
+    const sourceFile = path.join(legalDir, `${slug}.html`);
+    if (lstatIfExists(sourceFile) === undefined) {
+      return false;
+    }
+    assertLegalProjectPath('legal-dir', sourceFile);
+    return true;
+  });
+  const slugs: readonly string[] = [...legalPageSlugs, ...optionalSlugs];
+  const outputs = slugs.map((slug) => {
     const sourceFile = path.join(legalDir, `${slug}.html`);
     // existsSync and readFileSync follow a page symlink. Check the file
     // itself, not only the legal directory, immediately before reading it.
@@ -3492,7 +3588,7 @@ function createLegalSiteOutputs(
     assertLegalProjectPath('legal-dir', sourceFile);
 
     return {
-      file: path.join(outDir, slug, 'index.html'),
+      file: legalPageOutputFile(outDir, slug),
       content: normalizeLegalHtml(readFileSync(sourceFile, 'utf8'), sourceFile),
     };
   });
@@ -3518,9 +3614,7 @@ function createLegalSiteOutputs(
       file: path.join(outDir, '_redirects'),
       content: [
         '/ /support/ 302',
-        '/privacy /privacy/ 301',
-        '/support /support/ 301',
-        '/terms /terms/ 301',
+        ...slugs.map((slug) => `/${slug} /${slug}/ 301`),
         '',
       ].join('\n'),
     },
@@ -3528,7 +3622,7 @@ function createLegalSiteOutputs(
       file: path.join(outDir, 'legal-site.json'),
       content: `${JSON.stringify({
         version: 1,
-        pages: legalPageSlugs.map((slug) => ({
+        pages: slugs.map((slug) => ({
           slug,
           path: `/${slug}/`,
           source: `${sourceRoot}/${slug}.html`,

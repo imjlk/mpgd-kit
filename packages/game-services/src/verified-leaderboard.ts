@@ -6,6 +6,9 @@ export const verifiedLeaderboardIdentifierMaximumLength = 512;
 export const verifiedLeaderboardMetricsMaximumCount = 16;
 export const verifiedLeaderboardMetricKeyMaximumLength = 64;
 
+/** `retainedPlayerIdPrefix` of `./account-deletion`; this module stays import-free. */
+const retainedPlayerIdPrefix = 'deleted:';
+
 const verifiedLeaderboardMetricKeyPattern = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
 const timestampPattern = new RegExp(
@@ -139,6 +142,43 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
   >();
 
   constructor(private readonly now: () => string = () => new Date().toISOString()) {}
+
+  /**
+   * Account deletion (a `PlayerDataEraser` of `@mpgd/game-services`):
+   * removes every attempt and board entry whose participant id is the
+   * player id (the id the reference recorder uses). This module stays
+   * import-free, so the erasure input is typed structurally.
+   */
+  async erasePlayerData(input: {
+    readonly playerId: string;
+    readonly retainedPlayerId: string;
+  }): Promise<{ readonly deleted: number; readonly retained: number }> {
+    const participantId = input.playerId;
+    if (
+      typeof participantId !== 'string' || participantId.length === 0
+      || participantId.startsWith(retainedPlayerIdPrefix)
+      || typeof input.retainedPlayerId !== 'string'
+      || !input.retainedPlayerId.startsWith(retainedPlayerIdPrefix)
+      || input.retainedPlayerId.length <= retainedPlayerIdPrefix.length
+    ) {
+      throw new Error(
+        'Player data erasure needs a player id and a deleted:<id> retained player id.',
+      );
+    }
+    let removed = 0;
+    for (const [key, stored] of [...this.attemptsById]) {
+      if (stored.attempt.participantId === participantId) {
+        this.attemptsById.delete(key);
+        removed += 1;
+      }
+    }
+    for (const retained of this.retainedByLeaderboard.values()) {
+      if (retained.delete(participantId)) {
+        removed += 1;
+      }
+    }
+    return { deleted: removed, retained: 0 };
+  }
 
   async recordVerifiedAttempt(
     input: RecordVerifiedLeaderboardAttemptRequest,

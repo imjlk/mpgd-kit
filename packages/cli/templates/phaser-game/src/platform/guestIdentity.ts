@@ -10,6 +10,7 @@ import {
 import type { SecureCredentialStore } from '@mpgd/platform';
 
 import { setStarterCommerceServerPlayer } from './commerceAccountBinding';
+import { onStarterAccountDeleted } from './deleteAccount';
 
 /**
  * How long one identity request may hold the boot: 5 seconds. Offline, the
@@ -107,6 +108,9 @@ export async function startStarterGuestIdentity(input: {
     }
     const serverSession = createGuestServerSession(started.coordinator);
     setStarterCommerceServerPlayer(() => serverSession.current()?.playerId);
+    // A deleted account: close the coordinator (and wait for a refresh in flight)
+    // before its credentials are removed, so a late refresh cannot save them again.
+    onStarterAccountDeleted(() => started.coordinator.logout(), { phase: 'session' });
     return {
       status: 'signed-in',
       playerId: started.view.serverUserId,

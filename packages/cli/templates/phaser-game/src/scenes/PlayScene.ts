@@ -9,6 +9,7 @@ import { createStarterRunState, stepStarterRunState, type StarterRunState } from
 import { t } from '../i18n/messages';
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
 import { createClientId } from '../runtime/id';
+import { starterRunKey } from '../platform/deleteAccount';
 
 const rewardedPlacementId = 'CONTINUE_AFTER_FAIL' satisfies LogicalAdPlacementId;
 
@@ -33,7 +34,7 @@ export class PlayScene extends Phaser.Scene {
     const checkpoint = () => {
       try {
         this.context.platform.storage.saveSync?.({
-          key: 'starter-run',
+          key: starterRunKey,
           value: this.state,
         });
       } catch (error) {

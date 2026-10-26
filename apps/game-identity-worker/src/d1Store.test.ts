@@ -15,10 +15,10 @@ const miniflare = new Miniflare({
 });
 
 async function applyMigration(db: D1Database): Promise<void> {
-  const sql = await readFile(
-    new URL('../migrations/0001_guest_identity.sql', import.meta.url),
-    'utf8',
-  );
+  const sql = (await Promise.all(
+    ['0001_guest_identity.sql', '0002_account_deletion.sql'].map((file) =>
+      readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')),
+  )).join('\n');
   const statements = sql
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('--'))
@@ -42,6 +42,7 @@ try {
       'identity_session_families',
       'identity_refresh_tokens',
       'identity_access_tokens',
+      'identity_deletion_confirmations',
     ]) {
       await db.prepare(`DELETE FROM ${table}`).run();
     }
@@ -53,6 +54,7 @@ try {
     'identity_session_families',
     'identity_refresh_tokens',
     'identity_access_tokens',
+    'identity_deletion_confirmations',
   ]) {
     await db.prepare(`DELETE FROM ${table}`).run();
   }
@@ -69,6 +71,13 @@ try {
     assert.ok(answer.ok);
     issued.push(answer.value);
   }
+  // Three confirmations: two for families the purge ends, one only expiring.
+  for (const guest of [issued[0], issued[1], issued[6]]) {
+    assert.ok(guest !== undefined);
+    assert.ok(
+      (await service.issueAccountDeletionConfirmation({ refreshToken: guest.refreshToken })).ok,
+    );
+  }
   for (const guest of issued.slice(0, 5)) {
     await service.revoke({ refreshToken: guest.refreshToken });
   }
@@ -79,6 +88,7 @@ try {
   assert.equal(await count('identity_access_tokens'), 0);
   assert.equal(await count('identity_session_families'), 2);
   assert.equal(await count('identity_refresh_tokens'), 2);
+  assert.equal(await count('identity_deletion_confirmations'), 0);
   console.info('Guest identity service (D1 store) passed.');
 } finally {
   await miniflare.dispose();

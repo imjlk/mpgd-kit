@@ -210,12 +210,35 @@ production` prints what it lacks and fails on contradictions
       With `GAME_SERVICES_RESTORE_SHARING = "refuse"` the restore is refused
       (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `APP_STORE_ACCOUNT_TOKEN_MISMATCH`):
       then do not sell non-consumables.
-- [ ] In-app account deletion and a web deletion URL. Play requires both for
-      apps that create accounts
+- [ ] Account deletion. Play requires deletion in the app and through a
+      web link for apps that create accounts
       ([Play account deletion](https://support.google.com/googleplay/android-developer/answer/13327111));
-      the App Store requires in-app deletion (guideline 5.1.1(v))
-      **(open: L3b)**. Put the URL into the privacy policy and the Play Data
-      safety form.
+      the App Store requires in-app deletion (guideline 5.1.1(v)), guest
+      accounts included
+      ([Apple](https://developer.apple.com/support/offering-account-deletion-in-your-app/)).
+      The kit provides the route, the starter's Delete account entry, and the
+      web page ([account deletion](./GAME_SERVICES_BACKEND.md#account-deletion)):
+      - [ ] Apply migration `0010_account_deletion.sql` (and the identity
+            Worker's `0002_account_deletion.sql`) and bind
+            `GAME_SERVICES_ACCOUNT_DELETION` to the identity Worker's
+            `AccountDeletion` entrypoint, and set the secret
+            `GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY`; the route
+            answers `503` without either.
+            The same binding verifies the deletion confirmation the client
+            sends, so a stolen access token alone cannot delete an account.
+            The cron (above) finishes pending erasures and purges kept
+            purchase records after five years; without it neither happens.
+      - [ ] Register a `PlayerDataEraser` for every player dataset the game
+            adds on its server (only registered erasers run).
+      - [ ] Fill in `legal/delete-account.html` (every `[REPLACE: …]`: the
+            developer name as on the store listing, the in-game path, how a
+            player without the game asks, and your processing time), run
+            `pnpm exec mpgd legal build`, and deploy the site.
+      - [ ] Play Console → App content → Data safety → Delete account URL:
+            `https://<legal site>/delete-account/`.
+      - [ ] Decide how support handles a web request (the operator calls the
+            Worker's `GameServicesAccountDeletion` entrypoint) and how a
+            player without a player ID or order number is identified.
 
 ## 6. Legal pages and privacy answers
 

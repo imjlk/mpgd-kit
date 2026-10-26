@@ -1,0 +1,9 @@
+---
+npm/@mpgd/cli: minor (Added)
+npm/@mpgd/create-game: minor (Added)
+---
+
+Account deletion in generated games and on their legal site.
+
+- The Phaser lobby and the lite template show "Delete account" while a server-backed session is signed in (App Store guideline 5.1.1(v), Google Play's account deletion requirement). The first tap explains in English and Korean what is erased and what is kept (purchase records for five years, without the player id) and that purchases are not refunded; only "Delete permanently" deletes, and it first asks the identity service for a deletion confirmation with the guest session's refresh token (`starterAccountDeletionConfirmation(session)` as `requestConfirmation`; `StarterServerSession.requestAccountDeletionConfirmation`), so a stolen access token alone cannot delete the account. A session the identity service refused after a lost answer reads as the completed deletion. In a run whose guest sign-in failed at boot, the session-gated services expose `accountDeletion` once the player signs in and announce it with `onReady`, so the lobby entry and the lite button appear then. The device then forgets the guest session's secure credentials and the purchase journal (kept when the deletion is only inferred from a refused session after a lost answer), runs steps registered with `onStarterAccountDeleted` (the notifications overlay unregisters its runtime there), and reloads the game (`src/platform/deleteAccount.ts`).
+- `mpgd legal build` and `check` build an optional `legal/delete-account.html` into `/delete-account/`, print where to enter its URL in Play Console (Data safety), warn while it is missing or has `[REPLACE: …]` markers, refuse to build while another page links to `/delete-account/` without it (no dead deletion links), and treat an output left without its source as stale. The starter ships the page, and its privacy policy, support, and terms pages link it.
