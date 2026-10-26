@@ -33,7 +33,7 @@ on Play, which marks it ephemeral. Every kit network call uses HTTPS, so
 | UMP consent (AdMob) | Consent choice | Not separately listed | Not separately listed | Compliance | — |
 | Push notifications (FCM, `@capacitor-firebase/messaging`) | FCM registration token, Firebase installation ID, notification consent records on the game server | Device or other IDs; App activity › Other actions for consent records | Identifiers › Device ID; Usage Data › Other Usage Data for consent records | App functionality; Developer's advertising or marketing for advertising topics | Yes |
 | Game server logs (Cloudflare Worker) | IP address, user agent, request metadata | App info and performance › Diagnostics; mark it ephemeral if it is only processed in memory and not stored | Diagnostics › Other Diagnostic Data if stored | Security, fraud prevention | Usually no |
-| Crash reporting (Firebase Crashlytics, opt-in `--providers crash-reporting`) | Stack traces and app state at a crash, device and OS metadata, the Crashlytics installation UUID, non-fatal JavaScript error reports, and the custom keys and breadcrumbs the game adds (the kit adds target, build id, app version; never the player ID) | App info and performance › **Crash logs**, **Diagnostics** for non-fatal reports; Device or other IDs for the installation UUID | Diagnostics › **Crash Data**, **Other Diagnostic Data** for non-fatal reports | Play: Analytics; App Store: App Functionality (Apple lists "minimize app crashes" there) | No, while no user ID is set; see below |
+| Crash reporting (Firebase Crashlytics, opt-in `--providers crash-reporting`) | Stack traces and app state at a crash, device and OS metadata, the Crashlytics installation UUID, the Firebase installation ID (from the Firebase installations SDK that Crashlytics depends on), non-fatal JavaScript error reports, and the custom keys and breadcrumbs the game adds (the kit adds target, build id, app version and adapter; never the player ID) | App info and performance › **Crash logs**, **Diagnostics** for non-fatal reports; **Device or other IDs** for the Firebase installation ID and the Crashlytics installation UUID, in every shell with Crashlytics | Diagnostics › **Crash Data**, **Other Diagnostic Data** for non-fatal reports; Identifiers › Device ID for the Firebase installation ID, as for push | Play: Analytics; App Store: App Functionality (Apple lists "minimize app crashes" there) | No, while no user ID is set; see below |
 | Analytics (`@mpgd/analytics`) | **Nothing by default**: the package defines events and sinks but sends nothing until the game adds a transport. | Depends on the transport | Depends on the transport | Analytics | Depends |
 
 Notes:
@@ -73,11 +73,16 @@ Notes:
   the kit's reading of Play's
   [data types](https://support.google.com/googleplay/android-developer/answer/10787469)
   and Apple's [definitions](https://developer.apple.com/app-store/app-privacy-details/).
-  The installation UUID is app-scoped and changes with the Firebase
-  installation ID, so it is not a device-level ID for Apple's Device ID type;
-  Play's "Device or other IDs" also covers app identifiers, so declare it
-  there (a game with notifications already does, for the Firebase
-  installation ID). The kit never calls Crashlytics `setUserId` and redacts
+  Firebase states that Crashlytics depends on the Firebase installations
+  SDK, which generates and collects a per-installation identifier (the
+  Firebase installation ID), and that Crashlytics uses it only to rotate its
+  own installation UUID
+  ([Play data disclosure](https://firebase.google.com/docs/android/play-data-disclosure)).
+  Because that SDK ships in every shell with Crashlytics, declare
+  "Device or other IDs" for the Firebase installation ID and the
+  installation UUID whether or not the game also sends notifications, and
+  answer the App Store's Identifiers › Device ID for the Firebase
+  installation ID the same way the push row does. The kit never calls Crashlytics `setUserId` and redacts
   messages ([crash reporting](./CRASH_REPORTING.md#what-a-report-carries)),
   so reports are not linked to the player; a game that adds a user ID or
   player data to keys or logs must answer "linked" and list that data. When
