@@ -210,6 +210,28 @@ least 14 days" before they can apply for production (Play Console → Dashboard
    Groups ("email lists are not supported by this resource"); the kit does not
    set testers.
 
+## Verify on the first live run
+
+These behaviours are mock-tested only. Check them on the first submission to
+a real Play account (the D-12 live run) and correct the kit if Play disagrees:
+
+- [ ] **Internal track name.** The kit sends `internal`; Google's tracks guide
+      lists the internal testing track as `"qa"`. Confirm that `edits.tracks.get`
+      and `update` accept `internal` (and see what `track` Play returns), or
+      switch the default to `qa`.
+- [ ] **Track update body.** For a `completed` release the kit sends the
+      track's existing completed releases plus the new one (the body the kit
+      has always sent on the internal track). gradle-play-publisher sends only
+      the new release. Confirm Play accepts the kit's body on internal, a
+      closed track and production, and that the previous completed release
+      stops serving as expected.
+- [ ] **Draft app.** On a never-published app, confirm that a `completed`
+      submission is rejected with "Only releases with status draft may be
+      created on draft app.", on `edits.commit` (or `edits.validate`), that the
+      kit's same-edit draft fallback commits, and that the draft can then be
+      rolled out from Play Console. Note whether the rejected edit is still
+      usable.
+
 ## Tests
 
 ```sh
