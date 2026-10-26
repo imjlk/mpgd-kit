@@ -13,6 +13,7 @@ import {
   type CommerceProvider,
   type CommerceServiceCapabilities,
   type FinishTransactionInput,
+  type GetAvailablePurchasesInput,
   type RequestPurchaseResult,
   type StorePurchase,
 } from '@mpgd/platform/commerce';
@@ -74,6 +75,8 @@ interface FakeProvider extends CommerceProvider {
   readonly purchaseUiOpened: number;
   readonly finishCalls: FinishTransactionInput[];
   readonly availableReads: number;
+  /** Every `getAvailablePurchases` request, in order. */
+  readonly availableRequests: GetAvailablePurchasesInput[];
   readonly restoreCalls: number;
   readonly available: StorePurchase[];
   queueRequest(result: RequestPurchaseResult | { readonly throws: unknown }): void;
@@ -129,6 +132,7 @@ function createFakeProvider(input: {
   let listener: ((event: CommerceEvent) => void) | undefined;
   let purchaseUiOpened = 0;
   let availableReads = 0;
+  const availableRequests: GetAvailablePurchasesInput[] = [];
   let restoreCalls = 0;
   const emit = (event: CommerceEvent): void => {
     if (!capabilities.lifecycle.events) {
@@ -158,6 +162,7 @@ function createFakeProvider(input: {
     get availableReads() {
       return availableReads;
     },
+    availableRequests,
     get restoreCalls() {
       return restoreCalls;
     },
@@ -197,6 +202,7 @@ function createFakeProvider(input: {
     },
     async getAvailablePurchases(request = {}) {
       availableReads += 1;
+      availableRequests.push(request);
       return available.filter(
         (purchase) =>
           purchase.state !== 'revoked' && (request.includePending === true || purchase.state !== 'pending'),
@@ -1417,6 +1423,79 @@ const fullClientHistory = [
     'the restored purchase is reconciled',
   );
   await h.reconciler.stop();
+}
+
+// 18b. Only the Restore Purchases trigger asks the store for its restore read
+// (owned non-consumables its recovery list hides); start and reconcile never do.
+{
+  const h = createHarness({ provider: createFakeProvider({ withRestore: true }) });
+  await h.reconciler.start();
+  await h.reconciler.reconcile();
+  assertEqual(
+    h.provider.availableRequests.map((request) => request.restore === true),
+    [false],
+    'start reads the recovery list only',
+  );
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-18b' });
+  h.provider.available.push(
+    purchaseOf({
+      transactionId: 'tx-18b',
+      storeSku: 'remove.ads',
+      logicalId: 'remove_ads',
+    }),
+  );
+  await h.reconciler.restorePurchases();
+  assertEqual(
+    h.provider.availableRequests.map((request) => request.restore === true),
+    [false, true],
+    'Restore Purchases makes one restore read',
+  );
+  assertEqual(h.backend.requests[0]?.intent, 'restore', 'a restored purchase is sent as a restore');
+  await h.reconciler.reconcile();
+  assertEqual(
+    h.provider.availableRequests.length,
+    2,
+    'an event provider is not read again by a later reconcile',
+  );
+  await h.reconciler.stop();
+
+  // A polled provider: the restore pass's own read is the restore read; later
+  // passes read the recovery list again.
+  const polled = createHarness({
+    provider: createFakeProvider({ capabilities: capabilitiesOf({ lifecycle: { events: false } }) }),
+  });
+  await polled.reconciler.start();
+  await polled.reconciler.restorePurchases();
+  await polled.reconciler.reconcile();
+  assertEqual(
+    polled.provider.availableRequests.map((request) => request.restore === true),
+    [false, true, false],
+    'a polled provider reads with restore on the Restore Purchases pass only',
+  );
+  await polled.reconciler.stop();
+
+  // A provider (or bridge host) that rejects the restore read: the recovery
+  // read still runs, and the restore failure is reported.
+  const strict = createFakeProvider({ withRestore: true });
+  const wider = strict.getAvailablePurchases.bind(strict);
+  strict.getAvailablePurchases = async (request = {}) => {
+    if (request.restore === true) {
+      throw new Error('COMMERCE_V2_INVALID_PAYLOAD: restore');
+    }
+    return wider(request);
+  };
+  const fallback = createHarness({ provider: strict });
+  await fallback.reconciler.start();
+  fallback.backend.queue({ status: 'granted', ledgerEntryId: 'le-18b-fallback' });
+  strict.available.push(purchaseOf({ transactionId: 'tx-18b-fallback' }));
+  await fallback.reconciler.restorePurchases();
+  assertEqual(
+    fallback.history('store:fake-store:tx-18b-fallback').at(-1),
+    'finished',
+    'a rejected restore read falls back to the recovery read',
+  );
+  assertEqual(fallback.failures, ['available'], 'the rejected restore read is reported once');
+  await fallback.reconciler.stop();
 }
 
 // 19. New purchases read fresh capabilities and refuse transient readiness without binding a key.

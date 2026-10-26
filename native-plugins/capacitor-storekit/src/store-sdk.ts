@@ -11,6 +11,7 @@ import {
   type StoreSdkFetchProductsInput,
   type StoreSdkFinishTransactionInput,
   type StoreSdkFinishTransactionResult,
+  type StoreSdkGetAvailablePurchasesInput,
   type StoreSdkProduct,
   type StoreSdkPurchase,
   type StoreSdkRequestPurchaseInput,
@@ -70,7 +71,8 @@ export interface CreateCapacitorStoreKitStoreSdkInput {
   readonly products: readonly CapacitorStoreKitStoreSdkProduct[];
   /**
    * The active player's app account token (a UUID). Transactions bound to any
-   * other token are never listed or emitted; the backend binds the same value.
+   * other token are never emitted and never listed, except a durable on the
+   * player's Restore Purchases read; the backend binds the same value.
    */
   readonly getAppAccountToken: () => string | Promise<string>;
   readonly sdk?: CapacitorStoreKitStoreSdkPlugin;
@@ -92,7 +94,11 @@ export interface CreateCapacitorStoreKitStoreSdkInput {
  * StoreKit type disagrees with the catalog kind is reported through
  * `onDiagnostic` and never reaches `getAvailablePurchases` or an event, so
  * the reconciler never journals a purchase it cannot resolve or that belongs
- * to another player.
+ * to another player. One exception: the player's Restore Purchases read
+ * (`getAvailablePurchases({ restore: true })`) also lists durables bound to
+ * another or no token, the state of every earlier purchase after a reinstall
+ * or on a new device; the reconciler sends them with `intent: 'restore'` and
+ * the backend's restore sharing decides (RFC "Restore sharing").
  */
 export function createCapacitorStoreKitStoreSdk(
   input: CreateCapacitorStoreKitStoreSdkInput,
@@ -158,8 +164,17 @@ export function createCapacitorStoreKitStoreSdk(
   /**
    * Keeps a verified transaction only when it is sellable to the active
    * player: configured SKU, declared kind, and the active account token.
+   * `restore` (the player's Restore Purchases read) also keeps a durable
+   * bound to another or no token: after a reinstall or on a new device every
+   * earlier purchase carries the earlier guest's token, and the backend's
+   * restore sharing decides whether this player may hold it. A consumable
+   * bound to another token is never kept.
    */
-  const admit = (transaction: StoreKitTransaction, appAccountToken: string): boolean => {
+  const admit = (
+    transaction: StoreKitTransaction,
+    appAccountToken: string,
+    restore = false,
+  ): boolean => {
     const expected = kinds.get(transaction.productId);
     if (expected === undefined) {
       onDiagnostic({
@@ -169,7 +184,10 @@ export function createCapacitorStoreKitStoreSdk(
       });
       return false;
     }
-    if (transaction.appAccountToken?.toLowerCase() !== appAccountToken) {
+    const restorable = restore
+      && expected === 'durable'
+      && kindOf(transaction.type) === 'durable';
+    if (transaction.appAccountToken?.toLowerCase() !== appAccountToken && !restorable) {
       onDiagnostic({
         type: 'account-mismatch',
         sku: transaction.productId,
@@ -359,12 +377,16 @@ export function createCapacitorStoreKitStoreSdk(
   /**
    * Mirrors the native finish gate: the transaction must be listed, not
    * revoked, and bound to the session app account token. A missing list is
-   * an invalid response, not a quiet "not finished".
+   * an invalid response, not a quiet "not finished". A listed, non-revoked
+   * durable StoreKit already finished (`unfinished: false`) has nothing left
+   * to finish whatever its token: a restore shared to this player from an
+   * earlier guest's purchase ends there instead of retrying a finish the
+   * native token match refuses.
    */
   const finishPermitted = async (
     transactionId: string,
     appAccountToken: string,
-  ): Promise<boolean> => {
+  ): Promise<'finish' | 'finished' | 'refused'> => {
     const response: unknown = await sdk.getTransactions();
     if (!isRecord(response) || !Array.isArray(response.transactions)) {
       throw evidenceInvalid('StoreKit returned an invalid transaction list.');
@@ -373,9 +395,13 @@ export function createCapacitorStoreKitStoreSdk(
       (candidate): candidate is StoreKitTransaction =>
         isValidStoreKitTransaction(candidate) && candidate.transactionId === transactionId,
     );
-    return transaction !== undefined
-      && transaction.revokedAt === undefined
-      && transaction.appAccountToken?.toLowerCase() === appAccountToken;
+    if (transaction === undefined || transaction.revokedAt !== undefined) {
+      return 'refused';
+    }
+    if (transaction.type === 'non_consumable' && transaction.unfinished === false) {
+      return 'finished';
+    }
+    return transaction.appAccountToken?.toLowerCase() === appAccountToken ? 'finish' : 'refused';
   };
 
   return {
@@ -433,10 +459,13 @@ export function createCapacitorStoreKitStoreSdk(
           throw evidenceInvalid('StoreKit returned an invalid purchase result.');
       }
     },
-    async getAvailablePurchases(): Promise<readonly StoreSdkPurchase[]> {
+    async getAvailablePurchases(
+      request?: StoreSdkGetAvailablePurchasesInput,
+    ): Promise<readonly StoreSdkPurchase[]> {
       // Pending (Ask to Buy) transactions never appear in `Transaction.unfinished`
       // before approval, so `includePending` has nothing to filter here.
       requireIos();
+      const restore = request?.restore === true;
       const appAccountToken = await resolveAppAccountToken();
       const response: unknown = await sdk.getTransactions();
       if (!isRecord(response) || !Array.isArray(response.transactions)) {
@@ -464,7 +493,7 @@ export function createCapacitorStoreKitStoreSdk(
           continue;
         }
         seen.add(transaction.transactionId);
-        if (admit(transaction, appAccountToken)) {
+        if (admit(transaction, appAccountToken, restore)) {
           purchases.push(toSdkPurchase(transaction));
         }
       }
@@ -495,8 +524,9 @@ export function createCapacitorStoreKitStoreSdk(
       const promise = (async (): Promise<StoreSdkFinishTransactionResult> => {
         // Same match the native plugin applies: missing, revoked, unbound, or
         // another account never reaches `transaction.finish()`.
-        if (!(await finishPermitted(transactionId, appAccountToken))) {
-          return { finished: false };
+        const permitted = await finishPermitted(transactionId, appAccountToken);
+        if (permitted !== 'finish') {
+          return { finished: permitted === 'finished' };
         }
         const reported: unknown = await sdk.finishTransaction({
           transactionId,

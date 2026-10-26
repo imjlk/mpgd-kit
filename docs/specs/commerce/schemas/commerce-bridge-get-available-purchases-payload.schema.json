@@ -13,6 +13,11 @@
           "includePending": {
             "type": "boolean",
             "readOnly": true
+          },
+          "restore": {
+            "type": "boolean",
+            "description": "The player's explicit Restore Purchases read, never a startup or resume\nrecovery pass. A store whose recovery list hides owned non-consumables\nlists them too: Google Play's already acknowledged items, and StoreKit\nentitlements bound to another (or no) app account token. After a\nreinstall or on a new device every earlier purchase is in that state, and\nthe reconciler sends them with `intent: 'restore'` so the backend's\nrestore sharing can grant them to this player (RFC \"Restore sharing\").\nConsumables, unmapped SKUs, and kind mismatches stay filtered. A store\nwithout such a filter ignores it.",
+            "readOnly": true
           }
         },
         "required": [],

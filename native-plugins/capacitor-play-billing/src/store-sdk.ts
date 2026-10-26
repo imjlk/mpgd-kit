@@ -131,7 +131,9 @@ export class PlayBillingStoreSdkError extends Error implements StoreSdkError {
  * the obfuscated account id from the request's account binding and the offer
  * token from `offerId`, `getAvailablePurchases` is `getPurchases` filtered to
  * unfinished entries (purchased and not acknowledged, plus pending on
- * request), and `purchaseUpdated` events are the plugin's. A purchased plugin
+ * request; the player's Restore Purchases read, `restore: true`, adds every
+ * owned configured durable, acknowledged or not), and `purchaseUpdated`
+ * events are the plugin's. A purchased plugin
  * outcome is `purchased`; a pending one is `launched`, because Play resolves
  * it later through `purchaseUpdated` or `getPurchases`; a cancelled one is
  * `cancelled`; a plugin rejection is `failed` with the plugin code, which the
@@ -448,13 +450,14 @@ export function createCapacitorPlayBillingStoreSdk(
     ): Promise<readonly StoreSdkPurchase[]> {
       assertAndroid(isAndroid);
       const includePending = request.includePending ?? false;
+      const restore = request.restore === true;
       const response = await callPlugin(() => plugin.getPurchases());
       const available: StoreSdkPurchase[] = [];
       for (const purchase of readArray(response, 'purchases')) {
         if (!isRecord(purchase)) {
           throw invalidResponse('Play reported an invalid purchase.');
         }
-        if (!isUnfinished(purchase, includePending)) {
+        if (!isUnfinished(purchase, includePending) && !(restore && isOwnedDurable(purchase))) {
           continue;
         }
         isMapped(purchase);
@@ -506,6 +509,20 @@ export function createCapacitorPlayBillingStoreSdk(
       }
     },
   };
+  /**
+   * A purchased entry of exactly one configured durable, acknowledged or not:
+   * what the player's Restore Purchases read adds to the unfinished list.
+   * The backend acknowledged it at the first purchase, so after a reinstall
+   * or on a new device it is never unfinished again, and only a restore read
+   * hands it to the backend's restore sharing. A consumable, an unmapped SKU,
+   * and a multi-line purchase are not added.
+   */
+  function isOwnedDurable(purchase: Readonly<Record<string, unknown>>): boolean {
+    const sku = skuOf(purchase);
+    return purchaseStateOf(purchase) === 'purchased'
+      && sku !== undefined
+      && products.get(sku)?.kind === 'durable';
+  }
   return sdk;
 }
 
