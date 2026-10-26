@@ -26,7 +26,7 @@
       "src": "ios"
     }
   },
-  "files": ["dist", "ios", "Package.swift"],
+  "files": ["dist", "ios/Sources", "Package.swift"],
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",

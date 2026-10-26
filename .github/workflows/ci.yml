@@ -766,9 +766,13 @@ jobs:
       - name: Test Android native storage and settings conformance
         working-directory: apps/mobile-capacitor/android
         run: ./gradlew :mpgd-capacitor-game-services:testDebugUnitTest
-      - name: Compile optional Google Play Billing provider
+      - name: Build and test optional Google Play Billing provider
+        # Kotlin over OpenIAP Google: compiles the plugin, runs its JVM policy
+        # tests, and assembles the release AAR.
         working-directory: apps/mobile-capacitor/android
-        run: ./gradlew -PmpgdPlayBillingPluginTest=true :mpgd-capacitor-play-billing:compileDebugJavaWithJavac
+        run: ./gradlew -PmpgdPlayBillingPluginTest=true :mpgd-capacitor-play-billing:testDebugUnitTest :mpgd-capacitor-play-billing:assembleRelease
+      - name: Assemble the packed Google Play Billing provider
+        run: pnpm smoke:native-packed-store-plugins android
       - run: pnpm smoke:target android
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -828,6 +832,13 @@ jobs:
           -destination 'generic/platform=iOS Simulator'
           -clonedSourcePackagesDirPath .build/spm-packages
           -configuration Debug CODE_SIGNING_ALLOWED=NO -quiet build
+      - name: Test the StoreKit OpenIAP bridge policy
+        working-directory: native-plugins/capacitor-storekit
+        env:
+          MPGD_STOREKIT_BRIDGE_TESTS: '1'
+        run: swift test --scratch-path .build/bridge-tests
+      - name: Compile the packed StoreKit collector
+        run: pnpm smoke:native-packed-store-plugins ios
       - run: pnpm build:target ios staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
