@@ -211,9 +211,12 @@ export const maxPurchaseHolderSlots = 10_000;
 /**
  * Every grant of one purchase (RFC "Restore sharing"): `first`, the grant its
  * store verification id names, and `shared`, the grants verified restores
- * wrote for other players, in slot order. Slots are dense: a share is
- * written at `nextSlot`, the first free one, so two concurrent writers that
- * read the same holders collide on one evidence id and the holder cap holds.
+ * wrote for other players, in slot order. A share is written at `nextSlot`,
+ * one past the highest slot read, so two concurrent writers that read the
+ * same holders collide on one evidence id and the holder cap holds. Slots
+ * can have gaps (the retention purge deletes a deleted player's record after
+ * its period); a store with `findEntitlementTransactionsByEvidencePrefix`
+ * lists them in one indexed read, gaps included.
  */
 export interface PurchaseHolders {
   readonly first?: ProductGrantTransaction;
@@ -226,32 +229,79 @@ export async function listPurchaseHolders(
   purchaseVerificationId: string,
 ): Promise<PurchaseHolders> {
   const first = await findPurchaseGrantByEvidenceVerificationId(store, purchaseVerificationId);
-  const shared: ProductGrantTransaction[] = [];
-  for (let slot = 1; slot <= maxPurchaseHolderSlots; slot += 1) {
-    const grant = await findPurchaseGrantByEvidenceVerificationId(
-      store,
-      createPurchaseHolderEvidenceVerificationId(purchaseVerificationId, slot),
-    );
-    if (grant === undefined) {
-      return { ...(first === undefined ? {} : { first }), shared, nextSlot: slot };
+  const holderPrefix = purchaseHolderEvidencePrefix(purchaseVerificationId);
+  const listByPrefix = store.findEntitlementTransactionsByEvidencePrefix;
+  const shared: { readonly slot: number; readonly grant: ProductGrantTransaction }[] = [];
+  if (listByPrefix !== undefined) {
+    const found = await listByPrefix.call(store, {
+      source: 'purchase',
+      prefix: holderPrefix,
+      limit: maxPurchaseHolderSlots + 1,
+    });
+    if (found.length > maxPurchaseHolderSlots) {
+      throw new Error('A purchase has more holder slots than maxPurchaseHolderSlots.');
     }
-    shared.push(grant);
+    for (const grant of found) {
+      const slot = readPurchaseHolderSlot(grant.evidenceVerificationId, holderPrefix);
+      if (grant.source === 'purchase' && slot !== undefined) {
+        shared.push({ slot, grant });
+      }
+    }
+  } else {
+    // Without the indexed read, slots are read one by one up to the first
+    // free one: correct while no slot is purged (the retention purge runs
+    // only on stores that implement the indexed read).
+    for (let slot = 1; slot <= maxPurchaseHolderSlots + 1; slot += 1) {
+      if (slot > maxPurchaseHolderSlots) {
+        throw new Error('A purchase has more holder slots than maxPurchaseHolderSlots.');
+      }
+      const grant = await findPurchaseGrantByEvidenceVerificationId(
+        store,
+        createPurchaseHolderEvidenceVerificationId(purchaseVerificationId, slot),
+      );
+      if (grant === undefined) {
+        break;
+      }
+      shared.push({ slot, grant });
+    }
   }
-  throw new Error('A purchase has more holder slots than maxPurchaseHolderSlots.');
+  shared.sort((left, right) => left.slot - right.slot);
+  return {
+    ...(first === undefined ? {} : { first }),
+    shared: shared.map((entry) => entry.grant),
+    nextSlot: (shared.at(-1)?.slot ?? 0) + 1,
+  };
+}
+
+function purchaseHolderEvidencePrefix(purchaseVerificationId: string): string {
+  return `${purchaseVerificationId}#mpgd-holder:`;
+}
+
+function readPurchaseHolderSlot(
+  evidenceVerificationId: string | undefined,
+  prefix: string,
+): number | undefined {
+  if (evidenceVerificationId === undefined || !evidenceVerificationId.startsWith(prefix)) {
+    return undefined;
+  }
+  const text = evidenceVerificationId.slice(prefix.length);
+  return /^[1-9][0-9]{0,8}$/u.test(text) ? Number(text) : undefined;
 }
 
 /**
  * The evidence id of a purchase's `slot`-th shared grant (1 for the first
- * share): unique per slot, so a slot is written once.
+ * share): unique per slot, so a slot is written once. It starts with the
+ * purchase's verification id, so a store lists a purchase's shares with one
+ * indexed prefix read.
  */
 export function createPurchaseHolderEvidenceVerificationId(
   purchaseVerificationId: string,
   slot: number,
 ): string {
-  if (!Number.isSafeInteger(slot) || slot < 1) {
+  if (!Number.isSafeInteger(slot) || slot < 1 || slot > 999_999_999) {
     throw new RangeError('A holder slot is a positive integer.');
   }
-  return `mpgd-holder:${String(slot)}:${purchaseVerificationId}`;
+  return `${purchaseHolderEvidencePrefix(purchaseVerificationId)}${String(slot)}`;
 }
 
 /**
@@ -323,33 +373,42 @@ async function revokeOtherPurchaseHolders(
   if (purchaseVerificationId === undefined || record === undefined) {
     return;
   }
-  const holders = await listPurchaseHolders(store, purchaseVerificationId);
-  const others = [...(holders.first === undefined ? [] : [holders.first]), ...holders.shared]
-    .filter((holder) => holder.ledgerEntryId !== named.ledgerEntryId);
-  if (others.length === 0) {
-    return;
-  }
-  const reversed = new Set(
-    (await findEntitlementRevocationsChunked(store, others.map((holder) => holder.ledgerEntryId)))
-      .map((entry) => entry.revokesLedgerEntryId),
-  );
-  for (const holder of others) {
-    if (reversed.has(holder.ledgerEntryId)) {
-      continue;
+  // Read the holders again after each pass: a restore that wrote a share
+  // while this pass ran either sees an entry this pass wrote (and revokes
+  // itself) or is found by the next read. A pass that writes nothing ends.
+  for (let pass = 0; pass < 10; pass += 1) {
+    const holders = await listPurchaseHolders(store, purchaseVerificationId);
+    const others = [...(holders.first === undefined ? [] : [holders.first]), ...holders.shared]
+      .filter((holder) => holder.ledgerEntryId !== named.ledgerEntryId);
+    const reversed = new Set(
+      (await findEntitlementRevocationsChunked(store, others.map((holder) => holder.ledgerEntryId)))
+        .map((entry) => entry.revokesLedgerEntryId),
+    );
+    const active = others.filter((holder) => !reversed.has(holder.ledgerEntryId));
+    if (active.length === 0) {
+      return;
     }
-    await record.call(store, {
-      ...revocation,
-      playerId: holder.playerId,
-      revokesLedgerEntryId: holder.ledgerEntryId,
-      // The store event's own identity names one entry; each holder's is
-      // derived from it and the holder's evidence id (never its ledger id,
-      // which embeds the player id account deletion detaches), so a replay
-      // finds the same entries.
-      ...(revocation.evidenceVerificationId === undefined
-        ? {}
-        : { evidenceVerificationId: holderRevocationEvidenceId(revocation.evidenceVerificationId, holder) }),
-    });
+    for (const holder of active) {
+      await record.call(store, {
+        ...revocation,
+        playerId: holder.playerId,
+        revokesLedgerEntryId: holder.ledgerEntryId,
+        // The store event's own identity names one entry; each holder's is
+        // derived from it and the holder's evidence id (never its ledger id,
+        // which embeds the player id account deletion detaches), so a replay
+        // finds the same entries.
+        ...(revocation.evidenceVerificationId === undefined
+          ? {}
+          : {
+              evidenceVerificationId: holderRevocationEvidenceId(
+                revocation.evidenceVerificationId,
+                holder,
+              ),
+            }),
+      });
+    }
   }
+  throw new Error('The purchase kept gaining holders while its refund was applied.');
 }
 
 /** Whether a grant was reversed by a `revoke` entry; false on a store without revocations. */

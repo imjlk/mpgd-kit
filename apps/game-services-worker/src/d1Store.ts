@@ -408,6 +408,35 @@ class D1GameServicesStore implements GameServicesStore {
     return results.map(leaderboardFromRow);
   }
 
+  /**
+   * One range read on the evidence index of migration 0004 (`source`,
+   * `evidence_verification_id`): the rows whose evidence id starts with
+   * `prefix`. Restore sharing lists a purchase's shares with it.
+   */
+  async findEntitlementTransactionsByEvidencePrefix(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly prefix: string;
+    readonly limit: number;
+  }): Promise<readonly ProductGrantTransaction[]> {
+    if (input.prefix.length === 0) {
+      throw new Error('An evidence prefix must not be empty.');
+    }
+    const { results } = await this.db
+      .prepare(
+        `SELECT * FROM entitlement_transactions
+         WHERE source = ?
+           AND evidence_verification_id >= ?
+           AND evidence_verification_id < ?
+         ORDER BY evidence_verification_id
+         LIMIT ?`,
+      )
+      .bind(input.source, input.prefix, nextPrefix(input.prefix), input.limit)
+      .all<EntitlementRow>();
+    return results
+      .filter((row) => row.evidence_verification_id?.startsWith(input.prefix) === true)
+      .map(entitlementFromRow);
+  }
+
   async findEntitlementTransactionByEvidenceVerificationId(input: {
     readonly source: EntitlementLedgerGrant['source'];
     readonly evidenceVerificationId: string;
@@ -486,6 +515,11 @@ class D1GameServicesStore implements GameServicesStore {
 
     return row?.rank ?? 1;
   }
+}
+
+/** The smallest string greater than every string that starts with `prefix`. */
+function nextPrefix(prefix: string): string {
+  return `${prefix.slice(0, -1)}${String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1)}`;
 }
 
 function entitlementFromRow(row: EntitlementRow): ProductGrantTransaction {

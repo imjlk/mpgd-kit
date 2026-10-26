@@ -541,7 +541,7 @@ platform are in
   A custom verifier can answer it too; anything else stays `rejected`.
 - The backend shares it with ordinary ledger grants, on any store: the
   purchase's holders are its first grant (the evidence id the verifier names)
-  and the shares, `listPurchaseHolders`. A share is written at the next free
+  and the shares, `listPurchaseHolders`. A share is written at the next
   slot, evidence id `createPurchaseHolderEvidenceVerificationId(purchaseId,
   slot)`, under the request's own key (a player that already holds the
   purchase gets its grant back instead of a second one); its payload
@@ -551,7 +551,13 @@ platform are in
   not outlive that player's deletion), and the store transaction id stays on
   the first grant. Two writers that read the same holders take the same
   slot, so one loses on the unique evidence id and reads again: the limit
-  holds under concurrency. A purchase no grant holds yet is granted to the
+  holds under concurrency. Shares are listed with
+  `GameServicesStore.findEntitlementTransactionsByEvidencePrefix` (one range
+  read on the D1 evidence index; the memory store implements it too), which
+  also finds slots past a gap the retention purge leaves; a store without it
+  reads slot by slot. A refund's fan-out reads the holders again after each
+  pass until none is left active, so a share written while it ran is
+  revoked too. A purchase no grant holds yet is granted to the
   restoring player as its first grant (`restoredAcrossAccounts: true`). The
   answer is `verified` with `restoredAcrossPlayers: true`, on retries too.
 - The answers that are not a share: a consumable or a game-started checkout

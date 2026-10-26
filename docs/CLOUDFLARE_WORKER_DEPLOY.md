@@ -366,7 +366,7 @@ item after they "switch devices"
   A restore past it answers `pending` with `PURCHASE_HOLDER_LIMIT_REACHED`
   (retryable; the starter says the purchase is already in use on the maximum
   number of devices) and evicts nobody. The limit holds when restores race:
-  every share takes the next free slot of the purchase, so two writers that
+  every share takes the next slot of the purchase, so two writers that
   read the same holders collide and one reads again. It replaces a time-based
   rate limit: holders are never taken away, so a token passed around reaches
   at most the limit's number of guests in total, and the ledger keeps every

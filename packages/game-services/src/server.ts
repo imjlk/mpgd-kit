@@ -216,6 +216,17 @@ export interface GameServicesStore {
     readonly ledgerEntryIds: readonly string[];
   }): Promise<readonly EntitlementRevocationTransaction[]>;
   /**
+   * The grants of `source` whose `evidenceVerificationId` starts with
+   * `prefix` (at most `limit`), any order: restore sharing lists a purchase's
+   * shared grants with it in one indexed read (RFC "Restore sharing").
+   * Optional: without it the shares are read slot by slot.
+   */
+  findEntitlementTransactionsByEvidencePrefix?(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly prefix: string;
+    readonly limit: number;
+  }): Promise<readonly ProductGrantTransaction[]>;
+  /**
    * Keeps a ledger note (a store event that grants nothing), once per
    * `noteId`: a replay answers `alreadyRecorded: true` and keeps the first.
    * Optional: a store without it still answers the event, with a log only.
@@ -345,6 +356,26 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     readonly evidenceVerificationId: string;
   }): Promise<ProductGrantTransaction | undefined> {
     return this.entitlementTransactionsByEvidence.get(createEntitlementEvidenceKey(input));
+  }
+
+  async findEntitlementTransactionsByEvidencePrefix(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly prefix: string;
+    readonly limit: number;
+  }): Promise<readonly ProductGrantTransaction[]> {
+    const found: ProductGrantTransaction[] = [];
+    for (const transaction of this.entitlementTransactionsById.values()) {
+      if (
+        transaction.source === input.source
+        && transaction.evidenceVerificationId?.startsWith(input.prefix) === true
+      ) {
+        found.push(transaction);
+        if (found.length >= input.limit) {
+          break;
+        }
+      }
+    }
+    return found;
   }
 
   async findEntitlementTransactionByPlatformEvidence(
@@ -1695,7 +1726,11 @@ async function shareRestoredPurchase(
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const holders = await listPurchaseHolders(store, purchaseVerificationId);
         const first = holders.first;
-        if (first === undefined) {
+        // The holders; the first grant may be gone (the retention purge
+        // deleted a deleted player's record) while its shares remain.
+        const all = [...(first === undefined ? [] : [first]), ...holders.shared];
+        const anchor = all[0];
+        if (anchor === undefined) {
           // No grant holds the purchase: it never reached this ledger (an app
           // closed before verifying, or bought outside the app). The store's
           // verification is the proof, as for a share.
@@ -1741,14 +1776,13 @@ async function shareRestoredPurchase(
           };
         }
         if (
-          first.source !== 'purchase'
-          || first.grantId !== request.productId
-          || first.payload.target !== request.target
-          || (first.payload.store !== undefined && first.payload.store !== input.verifiedStore)
+          anchor.source !== 'purchase'
+          || anchor.grantId !== request.productId
+          || anchor.payload.target !== request.target
+          || (anchor.payload.store !== undefined && anchor.payload.store !== input.verifiedStore)
         ) {
           return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
         }
-        const all = [first, ...holders.shared];
         const revocations = await findEntitlementRevocationsChunked(
           store,
           all.map((grant) => grant.ledgerEntryId),

@@ -1134,7 +1134,7 @@ try {
     assert.equal(fresh.restoredAcrossPlayers, true);
     assert.equal((await restore('sharing-one-too-many')).reason, 'PURCHASE_HOLDER_LIMIT_REACHED');
     const active = (await listActiveEntitlementTransactions(guarded))
-      .filter((grant) => grant.evidenceVerificationId?.endsWith(verificationId) === true)
+      .filter((grant) => grant.evidenceVerificationId?.startsWith(verificationId) === true)
       .map((grant) => grant.playerId)
       .sort();
     assert.deepEqual(active, ['deleted:sharing-deletion', 'sharing-new-guest', 'sharing-tablet']);

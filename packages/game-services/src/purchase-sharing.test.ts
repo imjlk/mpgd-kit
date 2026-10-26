@@ -377,7 +377,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   let refundFirst: (() => Promise<void>) | undefined;
   const store: GameServicesStore = {
     recordEntitlementGrant: async (input) => {
-      if (input.evidenceVerificationId?.startsWith('mpgd-holder:') === true && refundFirst !== undefined) {
+      if (input.evidenceVerificationId?.includes('#mpgd-holder:') === true && refundFirst !== undefined) {
         const refund = refundFirst;
         refundFirst = undefined;
         await refund();
@@ -437,7 +437,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   let interleave: (() => Promise<void>) | undefined;
   const store: GameServicesStore = {
     recordEntitlementGrant: async (input) => {
-      if (input.evidenceVerificationId?.startsWith('mpgd-holder:') === true && interleave !== undefined) {
+      if (input.evidenceVerificationId?.includes('#mpgd-holder:') === true && interleave !== undefined) {
         const run = interleave;
         interleave = undefined;
         await run();
@@ -522,6 +522,108 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     evidenceVerificationId: `${purchaseVerificationId}:revoke`,
   });
   assert.deepEqual(await listActiveEntitlementTransactions(store), []);
+}
+
+// A refund naming an admin-revoked grant still reaches a share written while
+// its fan-out runs: the fan-out reads the holders again.
+{
+  const inner = createInMemoryGameServicesStore();
+  let duringFanOut: (() => Promise<void>) | undefined;
+  const store: GameServicesStore = {
+    recordEntitlementGrant: (input) => inner.recordEntitlementGrant(input),
+    findEntitlementTransactionByIdempotency: (input) => inner.findEntitlementTransactionByIdempotency(input),
+    findEntitlementTransactionByEvidenceVerificationId: (input) =>
+      inner.findEntitlementTransactionByEvidenceVerificationId(input),
+    findEntitlementTransactionsByEvidencePrefix: (input) =>
+      inner.findEntitlementTransactionsByEvidencePrefix(input),
+    getEntitlementTransaction: (id) => inner.getEntitlementTransaction(id),
+    listEntitlementTransactions: () => inner.listEntitlementTransactions(),
+    recordEntitlementRevocation: async (input) => {
+      // A restore writes a share between the fan-out's read and its first write.
+      if (input.reason === 'refund' && input.playerId === 'player-b' && duringFanOut !== undefined) {
+        const run = duringFanOut;
+        duringFanOut = undefined;
+        await run();
+      }
+      return inner.recordEntitlementRevocation(input);
+    },
+    findEntitlementRevocations: (input) => inner.findEntitlementRevocations(input),
+    recordLeaderboardScore: (input, options) => inner.recordLeaderboardScore(input, options),
+    getLeaderboardTransaction: (id) => inner.getLeaderboardTransaction(id),
+    listLeaderboardTransactions: () => inner.listLeaderboardTransactions(),
+  };
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store: inner,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share' },
+  });
+  const bought = await backend.purchases.verifyPurchase(
+    restoreRequest('player-a', { intent: 'purchase' }),
+  );
+  await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  await revokeEntitlementGrant(inner, {
+    playerId: 'player-a',
+    revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+    idempotencyKey: 'admin:a',
+    reason: 'admin',
+    revokedAt: '2030-01-02T00:00:00.000Z',
+    payload: {},
+  });
+  duringFanOut = async () => {
+    assert.equal(
+      (await backend.purchases.verifyPurchase(restoreRequest('player-c'))).restoredAcrossPlayers,
+      true,
+    );
+  };
+  // The refund names the buyer's (admin-revoked) grant.
+  await revokeEntitlementGrant(store, {
+    playerId: 'player-a',
+    revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+    idempotencyKey: 'app-store:notification:fan-out',
+    reason: 'refund',
+    revokedAt: '2030-01-03T00:00:00.000Z',
+    payload: {},
+  });
+  assert.deepEqual(await listActiveEntitlementTransactions(inner), [], 'the late share is revoked');
+}
+
+// Holders past a gap: the retention purge deleted a deleted player's share, and
+// the indexed read still finds the share after it (for the cap and refunds).
+{
+  const store = createInMemoryGameServicesStore();
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: createStoreVerifier(),
+    restoreSharing: { mode: 'share', maxHolders: 3 },
+  });
+  await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }));
+  await backend.purchases.verifyPurchase(restoreRequest('player-b'));
+  const toC = await backend.purchases.verifyPurchase(restoreRequest('player-c'));
+  // Slot 1 (player-b's share) is gone, as after the purge of a deleted player's record.
+  const slot1 = await store.findEntitlementTransactionByEvidenceVerificationId({
+    source: 'purchase',
+    evidenceVerificationId: createPurchaseHolderEvidenceVerificationId(purchaseVerificationId, 1),
+  });
+  assert.ok(slot1);
+  (store as unknown as { forgetEntitlementTransaction(grant: unknown): void })
+    .forgetEntitlementTransaction(slot1);
+  const holders = await listPurchaseHolders(store, purchaseVerificationId);
+  assert.deepEqual(
+    holders.shared.map((grant) => grant.ledgerEntryId),
+    [toC.ledgerEntryId],
+  );
+  assert.equal(holders.nextSlot, 3);
+  const toD = await backend.purchases.verifyPurchase(restoreRequest('player-d'));
+  assert.equal(toD.restoredAcrossPlayers, true, 'the purged place is free');
+  assert.equal(
+    (await backend.purchases.verifyPurchase(restoreRequest('player-e'))).reason,
+    'PURCHASE_HOLDER_LIMIT_REACHED',
+    'the share past the gap still counts',
+  );
 }
 
 // Consumables are never shared, even under the share policy.
@@ -695,7 +797,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   // per store object, so only the ledger write decides the race.
   const isolate = (): GameServicesStore => ({
     recordEntitlementGrant: async (input) => {
-      if (input.evidenceVerificationId?.startsWith('mpgd-holder:') === true && arrived < writers) {
+      if (input.evidenceVerificationId?.includes('#mpgd-holder:') === true && arrived < writers) {
         arrived += 1;
         if (arrived === writers) {
           releaseWriters();
