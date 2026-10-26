@@ -168,6 +168,7 @@ head_sampling_rate = 1
 # grants the restoring guest its own entitlement; earlier holders keep theirs,
 # up to GAME_SERVICES_RESTORE_MAX_HOLDERS guests per purchase (default 5)
 # (docs/GAME_SERVICES_BACKEND.md#restore-sharing). "refuse" turns it off.
+# Under [vars]:
 # GAME_SERVICES_RESTORE_SHARING = "refuse"
 # GAME_SERVICES_RESTORE_MAX_HOLDERS = "5"
 #
