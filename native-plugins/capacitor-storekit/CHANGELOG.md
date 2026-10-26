@@ -1,5 +1,19 @@
 # @mpgd/capacitor-storekit
 
+## 0.4.0 — 2026-10-26
+
+### Changed
+
+- [706ea874](https://github.com/imjlk/mpgd-kit/commit/706ea87435232974aac23c0f1b630f49f957580f) The iOS plugin now runs on the OpenIAP Apple core (`hyodotdev/openiap` 4.0.5, pinned exactly in `Package.swift`) instead of its own StoreKit 2 code. The Capacitor contract is unchanged: `CapacitorStoreKit`, its methods and `transactionUpdated` event, the payload fields, the `STOREKIT_*` codes, and the finish gate (verified, one-time, not revoked, matching app account token, only after the ledger grant; OpenIAP's auto-finish is never requested). `getTransactions` still lists verified unfinished one-time transactions plus current non-consumable entitlements (`unfinished: false`), never the full history. **Behavior to know:** `getTransactions` and the `finishTransaction` lookup read StoreKit's verified lists directly through a read-only shim (OpenIAP's queries fail as a whole on one unverifiable transaction), so an unverified transaction is skipped on its own as before and never blocks recovering or finishing the others; the lists stay unfiltered by account (the TypeScript SDK admits the session account). The result of a `purchase` call is also emitted as `transactionUpdated` (the reconciler deduplicates); revocations, which OpenIAP does not deliver, still arrive through a small `Transaction.updates` shim. The package also declares the product `MpgdCapacitorStorekit`, the spelling `cap sync ios` links, so a synced shell no longer needs a patch. SwiftPM now resolves the OpenIAP monorepo on first sync. Rollback is pinning the previous plugin version and re-running `cap sync ios`; journals, evidence, and transaction ids are unchanged. Details: `docs/specs/commerce/openiap-migration.md`. — Thanks @imjlk!
+
+### Fixed
+
+- [718801f9](https://github.com/imjlk/mpgd-kit/commit/718801f9b9544fc9be505dc5994cb81974bdea48) A restore read (`getAvailablePurchases({ restore: true })`, the reconciler's Restore Purchases) also lists a durable bound to another or no `appAccountToken`, the state of every earlier purchase after a reinstall or on a new iPhone or iPad; before, it was dropped as `account-mismatch` and Restore Purchases sent nothing. Consumables of another token, unmapped SKUs, and kind mismatches stay excluded; recovery reads and native events are unchanged. `finishTransaction` answers `{ finished: true }` without a native call for a listed, non-revoked durable StoreKit already finished (`unfinished: false`), whatever its token, so a purchase the backend shared to this guest no longer retries a finish the native token match refuses; an unfinished transaction of another token is still never finished. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.14.0, @mpgd/bridge@0.16.2, @mpgd/game-services@0.30.0, @mpgd/platform@0.30.0
+
 ## 0.3.10 — 2026-10-26
 
 ### Patch changes
