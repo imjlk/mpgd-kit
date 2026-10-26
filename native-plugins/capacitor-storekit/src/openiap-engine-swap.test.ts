@@ -203,4 +203,46 @@ const finishes = (plugin: FakeStoreKitPlugin): string[] =>
   );
 }
 
+// 4. A finished durable the new engine lists from the current entitlements
+// (`unfinished: false`) with no journal is a restore (L3c restore sharing):
+// it is verified with intent `restore` and finished idempotently.
+{
+  const durableSku = 'com.example.game.removeads';
+  const durableProducts = [
+    { logicalId: 'REMOVE_ADS', storeSku: durableSku, kind: 'durable' as const },
+  ];
+  const plugin = createFakeStoreKitPlugin({
+    products: [fakeProduct({ productId: durableSku, type: 'non_consumable' })],
+    transactions: [
+      fakeTransaction({
+        transactionId: '2000000000000401',
+        productId: durableSku,
+        type: 'non_consumable',
+        unfinished: false,
+      }),
+    ],
+  });
+  const requests: VerifyPurchaseRequest[] = [];
+  const reconciler = createCommerceReconciler({
+    provider: createCapacitorStoreKitCommerceProvider({
+      products: durableProducts,
+      getAppAccountToken: () => fakeAccountToken,
+      isIos: () => true,
+      sdk: plugin,
+    }),
+    backend: backendGranting(requests),
+    store: createInMemoryMonetizationOperationStore(),
+    playerId: 'player-1',
+    target: 'ios',
+    products: durableProducts,
+  });
+  await reconciler.start();
+  await reconciler.stop();
+  assertEqual(
+    requests.map((request) => [request.platformTransactionId, request.intent]),
+    [['2000000000000401', 'restore']],
+    'the discovered durable is verified as a restore',
+  );
+}
+
 console.info('StoreKit OpenIAP engine-swap contract passed.');
