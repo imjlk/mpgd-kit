@@ -359,6 +359,54 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
     expect(plugin.getPurchasesCalls).toBe(2);
   });
 
+  it('adds every owned configured durable on a restore read, acknowledged or not', async () => {
+    const { sdk, plugin } = createSdk();
+    // After a reinstall the backend acknowledged REMOVE_ADS long ago, under an earlier guest.
+    plugin.upsert(fakePlayPurchase({
+      purchaseToken: 'ads-earlier',
+      products: ['remove.ads'],
+      orderId: 'GPA.ads',
+      isAcknowledged: true,
+      obfuscatedAccountId: 'earlier-guest',
+    }));
+    // An acknowledged consumable, an unmapped durable, a multi-line purchase, and a pending durable.
+    plugin.upsert(fakePlayPurchase({ purchaseToken: 'gems-done', orderId: 'GPA.gems', isAcknowledged: true }));
+    plugin.upsert(fakePlayPurchase({
+      purchaseToken: 'retired',
+      products: ['not.sold'],
+      orderId: 'GPA.retired',
+      isAcknowledged: true,
+    }));
+    plugin.upsert(fakePlayPurchase({
+      purchaseToken: 'multi-done',
+      products: ['gems.small', 'remove.ads'],
+      orderId: 'GPA.multi',
+      isAcknowledged: true,
+    }));
+    plugin.upsert(fakePlayPurchase({
+      purchaseToken: 'ads-wait',
+      products: ['remove.ads'],
+      purchaseState: 'pending',
+    }));
+
+    expect(await sdk.getAvailablePurchases({})).toEqual([]);
+    const restored = await sdk.getAvailablePurchases({ restore: true });
+    expect(restored).toEqual([
+      {
+        sku: 'remove.ads',
+        transactionId: 'GPA.ads',
+        state: 'purchased',
+        purchasedAt: new Date(1_790_000_000_000).toISOString(),
+        token: 'ads-earlier',
+        quantity: 1,
+        accountBinding: { kind: 'obfuscated-account-id', value: 'earlier-guest' },
+      },
+    ]);
+    expect((await sdk.getAvailablePurchases({ restore: true, includePending: true }))
+      .map((purchase) => [purchase.token, purchase.state]))
+      .toEqual([['ads-earlier', 'purchased'], ['ads-wait', 'pending']]);
+  });
+
   it('keeps a purchase available when it carries no acknowledged flag', async () => {
     const { sdk, plugin } = createSdk();
     // A payload without isAcknowledged and quantity.
