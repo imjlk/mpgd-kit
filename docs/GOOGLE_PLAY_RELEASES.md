@@ -6,7 +6,8 @@ add a `completed` release to the **internal** track, exactly as before
 ([internal submission](./GOOGLE_PLAY_INTERNAL_SUBMISSION.md)). The flags below
 choose another track, a draft, or a staged rollout, attach release notes and an
 R8 mapping file. `mpgd deploy rollout` changes a release that is already on a
-track (fraction, halt, resume, complete) without uploading a bundle.
+track (fraction, halt, resume, complete), and `mpgd deploy promote` releases a
+build already on one track on another; neither uploads a bundle.
 
 Sources: [APKs and Tracks](https://developers.google.com/android-publisher/tracks)
 (last updated 2025-12-18),
@@ -194,6 +195,55 @@ other open edit of the same service account, so do not run one while a
 submission is in flight or left `unknown`; that submission then has to reopen
 a fresh edit when it resumes.
 
+## Promoting a tested release (`deploy promote`)
+
+The build that passed testing should be the one that reaches production, not a
+rebuild. A version code uploaded once is released on any track by
+`Edits.tracks: update` with that version code
+([APKs and Tracks](https://developers.google.com/android-publisher/tracks)), so
+promotion uploads nothing:
+
+```sh
+# Dry run: read both tracks, print the planned production body, discard the edit
+pnpm exec mpgd deploy promote --plan /tmp/release-plan.json \
+  --from "Closed testers" --to production --status inProgress --user-fraction 0.05 --dry-run
+
+pnpm exec mpgd deploy promote --plan /tmp/release-plan.json \
+  --from "Closed testers" --to production --status inProgress --user-fraction 0.05 \
+  --approve --confirm-production
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--from` | Source track. It must exist and hold the release. |
+| `--to` | Target track, the only track that changes. A closed-testing target must already exist. |
+| `--version-code` | Version to promote. Without it, the source track must have exactly one `completed` release, and all its version codes are promoted. A version code that is not on the source track is refused. |
+| `--status` | Target status: `completed` (default), `draft`, or `inProgress` with `--user-fraction`. |
+| `--release-notes` | A notes file (same format as above). Without it, the source release's notes are copied. |
+| `--approve` | Required unless `--dry-run`. |
+| `--confirm-production` | Required for a production target and any `inProgress` promotion, checked before any request. |
+| `--dry-run` | Opens an edit, reads both tracks, prints the planned target body, and deletes the edit. |
+
+Rules:
+
+- Only a `completed` or `inProgress` source release is promoted. A `draft` was
+  never served to testers, and a `halted` one was stopped; both are refused.
+- The promoted release keeps the source release's name. On the target track
+  it is merged like a submission: it replaces an `inProgress` or `halted`
+  rollout (a draft replaces an older draft), and every other release is sent
+  back unchanged. The result lists the replaced releases in `superseded`.
+- A staged promotion needs a completed release on the target track, as for a
+  submission ("Rollout percentage options are unavailable for a first
+  release").
+- If the target track already has the version with the same status, fraction
+  and (when given) notes, the command reports `unchanged` and commits nothing;
+  with other options it is refused, so change it with `deploy rollout`.
+- A lost response raises `PlayPromoteUncertainError` with the version codes;
+  re-run with `--version-code` from the error. Promote does not touch the
+  release-state checkpoints: the build was already submitted and verified.
+- Like `deploy rollout`, it opens an edit, so do not run it while a submission
+  is in flight or left `unknown`.
+
 ## Closed testing for new personal accounts
 
 Personal developer accounts created after 13 November 2023 must run "a closed
@@ -205,7 +255,9 @@ least 14 days" before they can apply for production (Play Console → Dashboard
    name exactly as Play shows it.
 2. `mpgd deploy run … --track <that name>` (or `deploy submit`) puts each build
    on it. Keep testers on the newest build for the whole 14 days.
-3. Testers, the opt-in link, countries and the production-access application
+3. After production access is granted, promote the tested build:
+   `mpgd deploy promote --from <that name> --to production …`.
+4. Testers, the opt-in link, countries and the production-access application
    stay in Play Console. The API's `edits.testers` resource takes only Google
    Groups ("email lists are not supported by this resource"); the kit does not
    set testers.
@@ -244,5 +296,5 @@ The first runs both mock-transport suites through the pinned Google SDK
 adapter: the original internal cases and
 `adapters/play-publisher/src/play-release.test.ts` (staged rollout, refusals
 without confirmation, supersession, first-release refusal, draft-app fallback,
-closed track, mapping upload, dry run, and every rollout action). No live Play
+closed track, mapping upload, dry run, every rollout action, and promote). No live Play
 Console account was used.

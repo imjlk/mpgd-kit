@@ -29,6 +29,11 @@ import {
   PlayRolloutUncertainError,
   type PlayRolloutInput,
 } from '../../../packages/cli/src/play-release-rollout.js';
+import {
+  PlayPromoteUncertainError,
+  promotePlayReleaseWithPublisher,
+  type PlayPromoteInput,
+} from '../../../packages/cli/src/play-release-promote.js';
 import type { ImmutableNativeBuildRecord } from '../../../packages/cli/src/release-state.js';
 import { createSignedAabFixture } from '../../../packages/cli/test/signed-aab-fixture.js';
 import { createMockPublisher } from './index.js';
@@ -714,7 +719,138 @@ try {
     );
   });
 
-  console.info('Verified Google Play tracks, rollout, notes, mapping and draft-app cases passed.');
+  // Promote: the tested build moves to another track; nothing is uploaded.
+  const tested: PlayTrackRelease = {
+    name: 'launch-01',
+    status: 'completed',
+    versionCodes: ['45'],
+    releaseNotes: [{ language: 'en-US', text: 'Faster loading.' }],
+  };
+  const promotable = (): LiveState => ({
+    bundles: [
+      { versionCode: 45, sha256 },
+      { versionCode: 46, sha256: 'f'.repeat(64) },
+    ],
+    tracks: {
+      'Closed testers': [tested, { name: 'stopped', status: 'halted', versionCodes: ['47'] }],
+      production: [completed44],
+      internal: [completed44, { name: 'launch-02', status: 'completed', versionCodes: ['46'] }],
+    },
+  });
+  const promote = (input: Partial<PlayPromoteInput>): PlayPromoteInput => ({
+    packageName,
+    fromTrack: 'Closed testers',
+    toTrack: 'production',
+    ...input,
+  });
+  await withPlay(promotable(), {}, async (publisher, observed) => {
+    await assert.rejects(promotePlayReleaseWithPublisher(promote({}), publisher), /needs --confirm-production/u);
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ toTrack: 'beta', status: 'inProgress', userFraction: 0.1 }), publisher),
+      /needs --confirm-production/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ toTrack: 'Closed testers' }), publisher),
+      /must name different/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ status: 'inProgress', confirmProduction: true }), publisher),
+      /needs --user-fraction/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ userFraction: 0.1, confirmProduction: true }), publisher),
+      /only to an inProgress/u,
+    );
+    assert.equal(observed.operations.length, 0);
+
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ versionCode: 46, confirmProduction: true }), publisher),
+      /no release with version code 46; only a version already on the source track/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ versionCode: 47, confirmProduction: true }), publisher),
+      /version 47 is halted/u,
+    );
+    assert.equal(observed.updates.length, 0);
+    assert.ok(observed.operations.at(-1)?.startsWith('DELETE '), 'refused promote discards its edit');
+
+    const planned = await promotePlayReleaseWithPublisher(
+      promote({ status: 'inProgress', userFraction: 0.1, dryRun: true }), publisher,
+    );
+    assert.equal(planned.status, 'dry-run');
+    const staged10 = { ...tested, status: 'inProgress', userFraction: 0.1 };
+    assert.deepEqual(planned.plannedTrack?.releases, [completed44, staged10]);
+    assert.equal(observed.updates.length, 0);
+
+    const promoted = await promotePlayReleaseWithPublisher(
+      promote({ status: 'inProgress', userFraction: 0.1, confirmProduction: true }), publisher,
+    );
+    assert.equal(promoted.status, 'committed');
+    assert.deepEqual(promoted.versionCodes, ['45']);
+    assert.deepEqual(observed.live().tracks.production, [completed44, staged10]);
+    assert.deepEqual(observed.live().tracks['Closed testers']?.[0], tested, 'source track unchanged');
+    assert.equal(observed.operations.some((item) => item.includes('/upload/')), false);
+    assert.deepEqual(observed.updates.map((update) => update.track), ['production']);
+
+    const again = await promotePlayReleaseWithPublisher(
+      promote({ status: 'inProgress', userFraction: 0.1, confirmProduction: true }), publisher,
+    );
+    assert.equal(again.status, 'unchanged');
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(
+        promote({ status: 'inProgress', userFraction: 0.2, confirmProduction: true }), publisher,
+      ),
+      /already has version 45 as inProgress with other options/u,
+    );
+
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ fromTrack: 'internal', toTrack: 'beta' }), publisher),
+      /exactly one completed release to promote/u,
+    );
+    const toBeta = await promotePlayReleaseWithPublisher(
+      promote({
+        fromTrack: 'internal', toTrack: 'beta', versionCode: 46,
+        releaseNotes: [{ language: 'en-US', text: 'Open beta.' }],
+      }),
+      publisher,
+    );
+    assert.equal(toBeta.status, 'committed');
+    assert.deepEqual(observed.live().tracks.beta, [{
+      name: 'launch-02', status: 'completed', versionCodes: ['46'],
+      releaseNotes: [{ language: 'en-US', text: 'Open beta.' }],
+    }]);
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(
+        promote({ toTrack: 'alpha', status: 'inProgress', userFraction: 0.1, confirmProduction: true }),
+        publisher,
+      ),
+      /alpha has no completed release yet/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ toTrack: 'Closed testrs' }), publisher),
+      /no Closed testrs track/u,
+    );
+    await assert.rejects(
+      promotePlayReleaseWithPublisher(promote({ fromTrack: 'Missing track', toTrack: 'beta' }), publisher),
+      /no Missing track track/u,
+    );
+  });
+  await withPlay(promotable(), { loseFirstCommit: true }, async (publisher) => {
+    let uncertain: unknown;
+    await promotePlayReleaseWithPublisher(promote({ confirmProduction: true }), publisher)
+      .catch((error: unknown) => { uncertain = error; });
+    assert.ok(uncertain instanceof PlayPromoteUncertainError, 'lost promote commit is uncertain');
+    assert.deepEqual(uncertain.versionCodes, ['45']);
+    assert.match(uncertain.message, /--version-code 45/u);
+    const rerun = await promotePlayReleaseWithPublisher(
+      promote({ confirmProduction: true, versionCode: 45 }), publisher,
+    );
+    assert.equal(rerun.status, 'unchanged');
+  });
+
+  console.info(
+    'Verified Google Play tracks, rollout, notes, mapping, draft-app and promote cases passed.',
+  );
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }
