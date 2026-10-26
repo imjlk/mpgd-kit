@@ -62,8 +62,8 @@ interface AitNavigationTargetsConfig {
   };
 }
 
-const aitWebFrameworkVersion = '3.6.0';
-const aitCliVersion = '3.6.0';
+const aitWebFrameworkVersion = '3.9.0';
+const aitCliVersion = '3.9.0';
 const aitWebFrameworkPeerRange = '>=3.0.0 <4';
 const peerDependencyRuleTestSelector = '@example/devtools>@example/web-framework';
 const peerDependencyRuleTestVersion = '1.2.3';
