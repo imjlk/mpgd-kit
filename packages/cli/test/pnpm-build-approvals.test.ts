@@ -115,6 +115,13 @@ for (const block of [
   "allowBuilds:\n  '@sentry/cli':\n    true\n  protobufjs: true\n",
   'allowBuilds:\n  esbuild: true\n    protobufjs: true\n',
   'allowBuilds:\n  - esbuild\n',
+  // Inherited decisions: a merge key (here an inherited `protobufjs: false`
+  // that an inserted `protobufjs: true` would override), an anchored or
+  // aliased value, and a tagged one.
+  'buildDecisions: &decisions\n  protobufjs: false\nallowBuilds:\n  <<: *decisions\n  esbuild: true\n',
+  'allowBuilds:\n  esbuild: true\n  <<: [*a, *b]\n',
+  "allowBuilds:\n  '@firebase/util': &deny false\n  protobufjs: *deny\n",
+  'allowBuilds:\n  protobufjs: !!bool true\n',
 ]) {
   assert.equal(addAllowBuilds(block, notificationsBuildApprovals).kind, 'unsupported', block);
 }

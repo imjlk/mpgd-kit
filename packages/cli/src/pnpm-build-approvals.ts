@@ -91,6 +91,12 @@ export function addAllowBuilds(
       if (match === null || (indentSeen && match[1] !== indent)) {
         return { kind: 'unsupported', missing: Object.keys(approvals) };
       }
+      // A merge key (`<<: *decisions`), an anchor, an alias or a tag brings
+      // entries the line scan cannot see, so an inserted entry could override
+      // an inherited decision.
+      if (/^(?:<<|[&*!])/u.test(match[4] ?? '') || /[&*!]$/u.test(match[0])) {
+        return { kind: 'unsupported', missing: Object.keys(approvals) };
+      }
       if (!indentSeen) {
         indent = match[1] ?? indent;
         indentSeen = true;
