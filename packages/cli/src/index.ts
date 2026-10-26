@@ -2380,7 +2380,16 @@ const targetCommand = defineI18n({
             }),
           });
           if (!dryRun) {
-            materializeCapacitorShellStarter(plan);
+            try {
+              materializeCapacitorShellStarter(plan);
+            } catch (error) {
+              // A failed install may be the one the warnings explain (for example
+              // the allowBuilds entries an unsupported pnpm-workspace.yaml needs).
+              for (const warning of plan.warnings) {
+                console.warn(`Warning: ${warning}`);
+              }
+              throw error;
+            }
           }
           console.info(`${dryRun ? 'Would update' : 'Updated'} game-owned Capacitor shell: ${plan.changedFiles.length} file(s).`);
           for (const file of plan.changedFiles) {
