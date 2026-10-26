@@ -75,20 +75,30 @@ public enum StoreKitTransactionPolicy {
 
     // MARK: - Mapping
 
-    /// The verified one-time transaction an OpenIAP Apple purchase describes,
-    /// or nil for anything the plugin does not report: another provider, a
-    /// subscription, a purchase without a JWS, or a JWS whose `type` claim is
-    /// missing.
-    public static func transaction(from purchase: PurchaseIOS) -> MpgdStoreKitTransaction? {
+    /// What the plugin makes of one OpenIAP Apple purchase.
+    public enum Classification: Equatable {
+        /// A verified consumable or non-consumable the plugin reports.
+        case oneTime(MpgdStoreKitTransaction)
+        /// A subscription (its JWS `type` claim says so); never reported.
+        case notOneTime
+        /// No readable StoreKit JWS, no `type` claim, another provider, or no
+        /// id. A query that meets one fails instead of dropping it, so the
+        /// list never shrinks silently.
+        case unreadable
+    }
+
+    public static func classify(_ purchase: PurchaseIOS) -> Classification {
         guard purchase.storeId == appleStoreId, purchase.store == .apple,
+              !purchase.id.isEmpty, !purchase.productId.isEmpty,
               let jws = purchase.purchaseToken, isCompactJws(jws),
               let claims = jwsPayload(jws),
-              let typeClaim = claims["type"] as? String,
-              let type = MpgdOneTimeType(transactionTypeClaim: typeClaim),
-              !purchase.id.isEmpty, !purchase.productId.isEmpty else {
-            return nil
+              let typeClaim = claims["type"] as? String else {
+            return .unreadable
         }
-        return MpgdStoreKitTransaction(
+        guard let type = MpgdOneTimeType(transactionTypeClaim: typeClaim) else {
+            return .notOneTime
+        }
+        return .oneTime(MpgdStoreKitTransaction(
             transactionId: purchase.id,
             // OpenIAP omits an original id of 0; the 0.3 plugin always sent one.
             originalTransactionId: purchase.originalTransactionIdentifierIOS ?? purchase.id,
@@ -98,7 +108,19 @@ public enum StoreKitTransactionPolicy {
             purchasedAtMillis: purchase.transactionDate,
             revokedAtMillis: purchase.revocationDateIOS,
             signedTransaction: jws
-        )
+        ))
+    }
+
+    /// The verified one-time transaction an OpenIAP Apple purchase describes,
+    /// or nil for anything the plugin does not report.
+    public static func transaction(from purchase: PurchaseIOS) -> MpgdStoreKitTransaction? {
+        if case .oneTime(let transaction) = classify(purchase) { return transaction }
+        return nil
+    }
+
+    /// A purchase in a transaction query that the plugin cannot read.
+    public struct UnreadableTransaction: Error, Equatable {
+        public let transactionId: String
     }
 
     /// The `StoreKitTransaction` payload of the 0.3 native plugin, key for key.
@@ -151,16 +173,23 @@ public enum StoreKitTransactionPolicy {
     public static func listedTransactions(
         unfinished: [PurchaseIOS],
         entitlements: [PurchaseIOS]
-    ) -> [[String: Any]] {
+    ) throws -> [[String: Any]] {
         var seen = Set<String>()
         var listed: [[String: Any]] = []
+        func reported(_ purchase: PurchaseIOS) throws -> MpgdStoreKitTransaction? {
+            switch classify(purchase) {
+            case .oneTime(let transaction): return transaction
+            case .notOneTime: return nil
+            case .unreadable: throw UnreadableTransaction(transactionId: purchase.id)
+            }
+        }
         for purchase in unfinished {
-            guard let transaction = transaction(from: purchase),
+            guard let transaction = try reported(purchase),
                   seen.insert(transaction.transactionId).inserted else { continue }
             listed.append(payload(transaction, unfinished: true))
         }
         for purchase in entitlements {
-            guard let transaction = transaction(from: purchase),
+            guard let transaction = try reported(purchase),
                   transaction.type == .nonConsumable,
                   seen.insert(transaction.transactionId).inserted else { continue }
             listed.append(payload(transaction, unfinished: false))
@@ -253,6 +282,9 @@ public enum StoreKitTransactionPolicy {
            purchaseError.code == .transactionValidationFailed {
             return "STOREKIT_TRANSACTION_UNVERIFIED"
         }
+        if error is UnreadableTransaction {
+            return "STOREKIT_EVIDENCE_INVALID"
+        }
         return "STOREKIT_UNAVAILABLE"
     }
 
@@ -262,11 +294,13 @@ public enum StoreKitTransactionPolicy {
         value.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil
     }
 
-    /// A non-nil UUID app account token, lowercased; nil when invalid.
-    public static func normalizedAccountToken(_ value: String?) -> String? {
+    /// A UUID app account token, lowercased; nil when invalid. `finish`
+    /// also refuses the nil UUID, as the 0.3 plugin did; `purchase` accepted
+    /// any UUID in 0.3 and still does (the StoreKit SDK never sends the nil one).
+    public static func normalizedAccountToken(_ value: String?, allowNil: Bool = false) -> String? {
         guard let value, let uuid = UUID(uuidString: value) else { return nil }
         let normalized = uuid.uuidString.lowercased()
-        return normalized == "00000000-0000-0000-0000-000000000000" ? nil : normalized
+        return !allowNil && normalized == "00000000-0000-0000-0000-000000000000" ? nil : normalized
     }
 
     /// The 0.3 plugin's timestamp format: `ISO8601DateFormatter` defaults.

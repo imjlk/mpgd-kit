@@ -213,7 +213,8 @@ when integrating:
 
 - `getTransactions` and `finishTransaction` reject with
   `STOREKIT_TRANSACTION_UNVERIFIED` when StoreKit cannot verify a transaction
-  on the device, instead of skipping it; a failed read is never an empty list.
+  on the device (`STOREKIT_EVIDENCE_INVALID` when a verified JWS cannot be
+  read), instead of skipping it; a failed read is never an empty list.
 - OpenIAP does not deliver revoked transactions, so a small shim forwards
   verified revocations from `Transaction.updates`; it never finishes anything.
 

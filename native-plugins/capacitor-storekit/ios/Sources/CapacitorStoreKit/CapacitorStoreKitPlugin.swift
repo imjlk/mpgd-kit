@@ -39,7 +39,11 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         if connection.providerError == nil {
             revocations.start { [weak self] transaction in
-                self?.notifyListeners("transactionUpdated", data: StoreKitTransactionPolicy.payload(transaction))
+                // Delivered on the main actor, as OpenIAP's listener and the
+                // 0.3 update loop were, never from the shim's detached task.
+                Task { @MainActor in
+                    self?.notifyListeners("transactionUpdated", data: StoreKitTransactionPolicy.payload(transaction))
+                }
             }
         }
     }
@@ -79,7 +83,7 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let productId = call.getString("productId"),
               StoreKitTransactionPolicy.isValidProductId(productId),
               let accountToken = StoreKitTransactionPolicy.normalizedAccountToken(
-                call.getString("appAccountToken")) else {
+                call.getString("appAccountToken"), allowNil: true) else {
             call.reject("A product ID and app account token are required.", "STOREKIT_INVALID_PURCHASE")
             return
         }
@@ -149,7 +153,7 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
                 let unfinished = try await module.getPendingTransactionsIOS()
                 let entitlements = try await module.getAvailablePurchases(
                     PurchaseOptions(alsoPublishToEventListenerIOS: false, onlyIncludeActiveItemsIOS: true))
-                call.resolve(["transactions": StoreKitTransactionPolicy.listedTransactions(
+                call.resolve(["transactions": try StoreKitTransactionPolicy.listedTransactions(
                     unfinished: unfinished,
                     entitlements: entitlements.compactMap(Self.iosPurchase)
                 )])

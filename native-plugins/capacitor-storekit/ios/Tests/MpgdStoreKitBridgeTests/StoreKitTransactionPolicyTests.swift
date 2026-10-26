@@ -112,14 +112,14 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
 
     // MARK: - getTransactions scope
 
-    func testListedTransactionsKeepThe03Scope() {
+    func testListedTransactionsKeepThe03Scope() throws {
         let unfinishedConsumable = purchase(id: "11")
         let unfinishedDurable = purchase(id: "12", productId: "remove_ads", type: "Non-Consumable")
         let finishedDurable = purchase(id: "13", productId: "starter_pack", type: "Non-Consumable")
         let subscription = purchase(id: "14", productId: "vip", type: "Auto-Renewable Subscription")
         // currentEntitlements never lists consumables; a bogus one is ignored anyway.
         let entitledConsumable = purchase(id: "15")
-        let listed = StoreKitTransactionPolicy.listedTransactions(
+        let listed = try StoreKitTransactionPolicy.listedTransactions(
             unfinished: [unfinishedConsumable, unfinishedDurable, subscription],
             entitlements: [unfinishedDurable, finishedDurable, subscription, entitledConsumable]
         )
@@ -127,8 +127,29 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
         XCTAssertEqual(listed.map { $0["unfinished"] as? Bool }, [true, true, false])
     }
 
-    func testAnEmptyStoreListsNothing() {
-        XCTAssertTrue(StoreKitTransactionPolicy.listedTransactions(unfinished: [], entitlements: []).isEmpty)
+    func testAnEmptyStoreListsNothing() throws {
+        XCTAssertTrue(try StoreKitTransactionPolicy.listedTransactions(unfinished: [], entitlements: []).isEmpty)
+    }
+
+    func testAnUnreadableTransactionFailsTheQueryInsteadOfShorteningIt() {
+        // A verified purchase whose JWS carries no `type` claim must not just
+        // disappear: the game would read a missing consumable as finished.
+        for unreadable in [
+            purchase(id: "31", type: nil),
+            purchase(id: "32", purchaseToken: "2000000000000032"),
+            purchase(id: "33", storeId: "play")
+        ] {
+            XCTAssertEqual(StoreKitTransactionPolicy.classify(unreadable), .unreadable)
+            XCTAssertThrowsError(try StoreKitTransactionPolicy.listedTransactions(
+                unfinished: [purchase(id: "30"), unreadable], entitlements: [])) { error in
+                XCTAssertEqual(error as? StoreKitTransactionPolicy.UnreadableTransaction,
+                               StoreKitTransactionPolicy.UnreadableTransaction(transactionId: unreadable.id))
+                XCTAssertEqual(StoreKitTransactionPolicy.queryFailureCode(error), "STOREKIT_EVIDENCE_INVALID")
+            }
+            XCTAssertThrowsError(try StoreKitTransactionPolicy.listedTransactions(
+                unfinished: [], entitlements: [unreadable]))
+        }
+        XCTAssertEqual(StoreKitTransactionPolicy.classify(purchase(type: "Auto-Renewable Subscription")), .notOneTime)
     }
 
     func testQueryFailuresAreNeverAnEmptyList() {
@@ -229,6 +250,9 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
     func testAccountTokensAndProductIds() {
         XCTAssertEqual(StoreKitTransactionPolicy.normalizedAccountToken(token.uppercased()), token)
         XCTAssertNil(StoreKitTransactionPolicy.normalizedAccountToken("00000000-0000-0000-0000-000000000000"))
+        // `purchase` keeps the 0.3 rule: any UUID; only finish refuses the nil one.
+        XCTAssertEqual(StoreKitTransactionPolicy.normalizedAccountToken(
+            "00000000-0000-0000-0000-000000000000", allowNil: true), "00000000-0000-0000-0000-000000000000")
         XCTAssertNil(StoreKitTransactionPolicy.normalizedAccountToken("not-a-uuid"))
         XCTAssertNil(StoreKitTransactionPolicy.normalizedAccountToken(nil))
         XCTAssertTrue(StoreKitTransactionPolicy.isValidProductId("coins_100.v2-a"))
