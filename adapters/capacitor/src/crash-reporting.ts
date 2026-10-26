@@ -240,7 +240,12 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
       try {
         await plugin.recordException({
           message: formatCrashMessage(normalized, recordOptions?.source ?? 'game'),
-          ...(normalized.frames.length === 0 ? {} : { stacktrace: [...normalized.frames] }),
+          // The plugin's frames have no column.
+          ...(normalized.frames.length === 0
+            ? {}
+            : {
+                stacktrace: normalized.frames.map(({ columnNumber: _column, ...frame }) => frame),
+              }),
         });
         return true;
       } catch {

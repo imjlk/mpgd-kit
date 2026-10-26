@@ -78,6 +78,11 @@ export interface CrashStackFrame {
   readonly functionName?: string;
   readonly fileName?: string;
   readonly lineNumber?: number;
+  /**
+   * Kept to tell apart errors on one line of a minified bundle; a crash
+   * service that takes no column (Crashlytics) gets the frame without it.
+   */
+  readonly columnNumber?: number;
 }
 
 /** An error reduced to what a report may carry. */
@@ -158,8 +163,8 @@ function describeValue(value: unknown): string {
   return typeof value;
 }
 
-const v8FramePattern = /^\s*at\s+(?:(.*?)\s+\()?(.+?):(\d+)(?::\d+)?\)?\s*$/u;
-const webkitFramePattern = /^\s*(.*?)@(.+?):(\d+)(?::\d+)?\s*$/u;
+const v8FramePattern = /^\s*at\s+(?:(.*?)\s+\()?(.+?):(\d+)(?::(\d+))?\)?\s*$/u;
+const webkitFramePattern = /^\s*(.*?)@(.+?):(\d+)(?::(\d+))?\s*$/u;
 
 /**
  * Parse V8 (`at fn (file:line:col)`) or, when the stack has no V8 frame,
@@ -186,8 +191,9 @@ export function parseCrashStackFrames(
     if (match === null) {
       continue;
     }
-    const [, functionName, file, lineText] = match;
+    const [, functionName, file, lineText, columnText] = match;
     const lineNumber = Number(lineText);
+    const columnNumber = columnText === undefined ? Number.NaN : Number(columnText);
     const fileName = crashFrameFileName(file ?? '');
     frames.push({
       ...(functionName === undefined || functionName.trim() === ''
@@ -195,6 +201,7 @@ export function parseCrashStackFrames(
         : { functionName: redactCrashText(functionName.trim(), 200) }),
       ...(fileName === '' ? {} : { fileName }),
       ...(Number.isSafeInteger(lineNumber) && lineNumber > 0 ? { lineNumber } : {}),
+      ...(Number.isSafeInteger(columnNumber) && columnNumber > 0 ? { columnNumber } : {}),
     });
   }
   return frames;
@@ -292,8 +299,18 @@ export function installCrashErrorCapture(options: CrashErrorCaptureOptions): () 
     }
     const normalized = normalizeCrashError(value);
     const top = normalized.frames[0];
-    const key = `${source}\u0000${normalized.name}\u0000${normalized.message}\u0000${
-      top?.fileName ?? ''}:${top?.lineNumber ?? ''}`;
+    // The whole top-frame location: in a minified bundle unrelated errors
+    // often share a name, message, file, and line, and differ only in the
+    // function or column.
+    const key = [
+      source,
+      normalized.name,
+      normalized.message,
+      top?.functionName ?? '',
+      top?.fileName ?? '',
+      top?.lineNumber ?? '',
+      top?.columnNumber ?? '',
+    ].join('\u0000');
     if (seen.has(key)) {
       return;
     }

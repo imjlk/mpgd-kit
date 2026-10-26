@@ -61,9 +61,19 @@ describe('parseCrashStackFrames', () => {
       '    at async loop (https://localhost/assets/index-abc.js:99:2)',
     ].join('\n');
     expect(parseCrashStackFrames(stack)).toEqual([
-      { functionName: 'Scene.update', fileName: '/assets/index-abc.js', lineNumber: 12 },
-      { fileName: '/assets/vendor.js', lineNumber: 7 },
-      { functionName: 'async loop', fileName: '/assets/index-abc.js', lineNumber: 99 },
+      {
+        functionName: 'Scene.update',
+        fileName: '/assets/index-abc.js',
+        lineNumber: 12,
+        columnNumber: 34,
+      },
+      { fileName: '/assets/vendor.js', lineNumber: 7, columnNumber: 1 },
+      {
+        functionName: 'async loop',
+        fileName: '/assets/index-abc.js',
+        lineNumber: 99,
+        columnNumber: 2,
+      },
     ]);
   });
 
@@ -74,8 +84,8 @@ describe('parseCrashStackFrames', () => {
       'global code',
     ].join('\n');
     expect(parseCrashStackFrames(stack)).toEqual([
-      { functionName: 'update', fileName: '/assets/index-abc.js', lineNumber: 12 },
-      { fileName: '/assets/index-abc.js', lineNumber: 3 },
+      { functionName: 'update', fileName: '/assets/index-abc.js', lineNumber: 12, columnNumber: 34 },
+      { fileName: '/assets/index-abc.js', lineNumber: 3, columnNumber: 1 },
     ]);
   });
 
@@ -86,7 +96,11 @@ describe('parseCrashStackFrames', () => {
       '    at load (https://localhost/assets/index.js:5:1)',
     ].join('\n');
     expect(parseCrashStackFrames(stack)).toEqual([
-      { functionName: 'load', fileName: '/assets/index.js', lineNumber: 5 },
+      { functionName: 'load', fileName: '/assets/index.js', lineNumber: 5, columnNumber: 1 },
+    ]);
+    // A frame without a column keeps none.
+    expect(parseCrashStackFrames('    at f (/a.js:3)')).toEqual([
+      { functionName: 'f', fileName: '/a.js', lineNumber: 3 },
     ]);
   });
 
@@ -240,6 +254,32 @@ describe('installCrashErrorCapture', () => {
     expect(target.count()).toBe(0);
     target.emit('error', { error: new Error('later') });
     expect(reporter.calls).toHaveLength(3);
+  });
+
+  it('tells apart errors on one minified line by function and column', () => {
+    const target = createEventTarget();
+    const reporter = createRecordingReporter();
+    installCrashErrorCapture({ reporter, target });
+    const at = (frame: string): Error => {
+      const error = new TypeError("Cannot read properties of undefined (reading 'x')");
+      error.stack = `TypeError: Cannot read properties of undefined (reading 'x')\n    at ${frame}`;
+      return error;
+    };
+    const loadLevel = at('loadLevel (https://localhost/assets/index-abc.js:1:1200)');
+    const buyItem = at('buyItem (https://localhost/assets/index-abc.js:1:5400)');
+    const otherColumn = at('loadLevel (https://localhost/assets/index-abc.js:1:9000)');
+    const otherFunction = at('openShop (https://localhost/assets/index-abc.js:1:1200)');
+    for (const error of [loadLevel, buyItem, otherColumn, otherFunction]) {
+      target.emit('error', { error });
+    }
+    // The same location again is still one report.
+    target.emit('error', { error: at('loadLevel (https://localhost/assets/index-abc.js:1:1200)') });
+    expect(reporter.calls.map((call) => call.error)).toEqual([
+      loadLevel,
+      buyItem,
+      otherColumn,
+      otherFunction,
+    ]);
   });
 
   it('stops after the session limit', () => {
