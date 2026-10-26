@@ -108,8 +108,11 @@ import {
 import {
   createPlayReleaseRequest,
   parsePlayUserFraction,
+  readPlayReleaseNotesFile,
+  type PlayNewReleaseStatus,
   type PlayReleaseRequest,
 } from './play-release-options.js';
+import { promotePlayRelease } from './play-release-promote.js';
 import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
 
@@ -223,6 +226,13 @@ export {
   type PlayReleaseRequest,
   type PlayReleaseStatus,
 } from './play-release-options.js';
+
+export {
+  PlayPromoteUncertainError,
+  promotePlayRelease,
+  type PlayPromoteInput,
+  type PlayPromoteResult,
+} from './play-release-promote.js';
 
 export {
   PlayRolloutUncertainError,
@@ -888,6 +898,64 @@ const deployCommand = defineI18n({
           ...(versionCode === undefined ? {} : { versionCode: Number(versionCode) }),
           ...(userFraction === undefined ? {} : { userFraction: parsePlayUserFraction(userFraction) }),
           ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
+          dryRun,
+        });
+        console.info(JSON.stringify(result, null, 2));
+      },
+    }),
+    promote: defineI18n({
+      name: 'promote',
+      description: 'Promote a Google Play release from one track to another without uploading.',
+      resource: commandResource({
+        en: 'Promote a Google Play release from one track to another without uploading.',
+        ko: '업로드 없이 Google Play 릴리스를 다른 트랙으로 승격합니다.',
+      }),
+      args: {
+        plan: { type: 'string', required: true, description: 'Saved deployment plan JSON (package ID and credential).' },
+        game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
+        from: { type: 'string', required: true, description: 'Source Google Play track holding the tested release.' },
+        to: { type: 'string', required: true, description: 'Target Google Play track; the only track that changes.' },
+        'version-code': { type: 'string', required: false, description: "Version code to promote; defaults to the source track's only completed release." },
+        status: { type: 'string', required: false, description: 'Target release status: completed (default), draft or inProgress (staged rollout).' },
+        'user-fraction': { type: 'string', required: false, description: 'Staged rollout fraction for --status inProgress, greater than 0 and less than 1.' },
+        'release-notes': { type: 'string', required: false, description: "Release notes file; defaults to the source release's notes." },
+        approve: { type: 'boolean', required: false, description: 'Approve the promotion.' },
+        'confirm-production': { type: 'boolean', required: false, description: 'Confirm a production promotion or staged rollout.' },
+        'dry-run': { type: 'boolean', required: false, description: 'Read both tracks and print the planned update; the edit is discarded.' },
+      },
+      run: async (ctx) => {
+        const game = readOptionalString(ctx.values.game);
+        const plan = readNativeDeploymentPlan(
+          readRequiredCliOption(ctx.values.plan, '--plan'),
+          game === undefined ? undefined : path.resolve(game),
+        );
+        const android = plan.targets.find((entry) => entry.target === 'android');
+        if (android === undefined) {
+          throw new Error('The deployment plan has no Android target.');
+        }
+        const dryRun = ctx.values['dry-run'] === true;
+        const versionCode = readOptionalString(ctx.values['version-code']);
+        if (versionCode !== undefined && !/^[1-9]\d{0,15}$/u.test(versionCode)) {
+          throw new Error('--version-code must be a positive integer.');
+        }
+        const status = readOptionalString(ctx.values.status);
+        const userFraction = readOptionalString(ctx.values['user-fraction']);
+        const notesFile = readOptionalString(ctx.values['release-notes']);
+        const credential = readStoreCredential(plan, 'android', process.env);
+        if (credential.target !== 'android') {
+          throw new Error('Google Play promote needs the Android submission credential.');
+        }
+        const result = await promotePlayRelease({
+          packageName: android.appId,
+          serviceAccountFile: credential.serviceAccountFile,
+          fromTrack: readRequiredCliOption(ctx.values.from, '--from'),
+          toTrack: readRequiredCliOption(ctx.values.to, '--to'),
+          ...(versionCode === undefined ? {} : { versionCode: Number(versionCode) }),
+          ...(status === undefined ? {} : { status: status as PlayNewReleaseStatus }),
+          ...(userFraction === undefined ? {} : { userFraction: parsePlayUserFraction(userFraction) }),
+          ...(notesFile === undefined ? {} : { releaseNotes: readPlayReleaseNotesFile(notesFile) }),
+          ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
+          approved: ctx.values.approve === true,
           dryRun,
         });
         console.info(JSON.stringify(result, null, 2));
