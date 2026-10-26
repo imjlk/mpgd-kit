@@ -14,6 +14,10 @@ import {
   reportNativeStorePolicy,
   shellInstallsFirebaseMessaging,
 } from './native-store-policy';
+import {
+  iosSimulatorAppTarget,
+  iosSimulatorSmokeBuildSettings,
+} from './ios-simulator-build-settings';
 import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
 import { resolveIosSigningPlan } from './native-ios-signing';
 import {
@@ -240,17 +244,14 @@ function executeIosBuildWithEnvironment(
           '-project',
           'App/App.xcodeproj',
           '-target',
-          'App',
+          iosSimulatorAppTarget,
           '-configuration',
           'Release',
           '-sdk',
           'iphonesimulator',
           `SYMROOT=${buildRoot}`,
           `OBJROOT=${join(buildRoot, 'Intermediates.noindex')}`,
-          'INFOPLIST_FILE=App/Info-Smoke.plist',
-          'EXCLUDED_SOURCE_FILE_NAMES=Main.storyboard LaunchScreen.storyboard Assets.xcassets',
-          'ASSETCATALOG_COMPILER_APPICON_NAME=',
-          'SWIFT_ACTIVE_COMPILATION_CONDITIONS=MPGD_SMOKE_NO_STORYBOARD',
+          ...iosSimulatorSmokeBuildSettings(['MPGD_SMOKE_NO_STORYBOARD']),
           'CODE_SIGNING_ALLOWED=NO',
         ],
         environment,

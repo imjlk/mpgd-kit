@@ -6,6 +6,10 @@ import {
   assertEmbeddedTargetConfig,
   readEmbeddedTargetConfigFromDirectory,
 } from './embedded-target-config';
+import {
+  iosSimulatorAppTarget,
+  iosSimulatorSmokeBuildSettings,
+} from '../target/ios-simulator-build-settings';
 
 const simulatorName = process.env.MPGD_IOS_SIM_NAME ?? 'iPhone 16';
 const simulatorOs = process.env.MPGD_IOS_SIM_OS ?? 'iOS 18.4';
@@ -34,17 +38,15 @@ const xcodebuildArgs = [
   '-project',
   'App/App.xcodeproj',
   '-target',
-  'App',
+  iosSimulatorAppTarget,
   '-configuration',
   'Debug',
   '-sdk',
   'iphonesimulator',
   `SYMROOT=${buildRoot}`,
   `OBJROOT=${join(buildRoot, 'Intermediates.noindex')}`,
-  'INFOPLIST_FILE=App/Info-Smoke.plist',
-  'EXCLUDED_SOURCE_FILE_NAMES=Main.storyboard LaunchScreen.storyboard Assets.xcassets',
-  'ASSETCATALOG_COMPILER_APPICON_NAME=',
-  'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG',
+  // The Debug configuration already defines DEBUG for the App target.
+  ...iosSimulatorSmokeBuildSettings(),
   'CODE_SIGNING_ALLOWED=NO',
 ];
 
