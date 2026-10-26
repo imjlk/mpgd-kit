@@ -3,6 +3,7 @@ import type { AdProvider } from './ads.js';
 // consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
 import type { CommerceProvider } from './commerce-contract.js';
 import { createUnsupportedCommerceCapabilities } from './commerce-capabilities.js';
+import type { CrashReporter } from './crash-reporting.js';
 import type { NotificationCapabilities, NotificationProvider } from './notifications-contract.js';
 
 export { createUnsupportedCommerceCapabilities };
@@ -709,6 +710,12 @@ export interface PlatformGateway {
   readonly promotions?: PromotionRewardAdapter;
   readonly gameActivity?: GameActivityAdapter;
   readonly gameSettings?: GameSettingsAdapter;
+  /**
+   * Optional crash reporting (`@mpgd/platform/crash-reporting`): non-fatal
+   * error reports and the player's collection toggle. Absent on targets that
+   * ship no crash service; native crashes need no call.
+   */
+  readonly crashReporter?: CrashReporter;
 }
 
 export function createUnsupportedCapabilities(): PlatformCapabilities {
