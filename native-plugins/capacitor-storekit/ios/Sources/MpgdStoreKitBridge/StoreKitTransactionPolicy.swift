@@ -1,0 +1,300 @@
+import Foundation
+import OpenIAP
+
+/// The one-time product kinds the mpgd StoreKit plugin sells and reports.
+/// Raw values are the plugin's wire values (`StoreKitTransaction.type`).
+public enum MpgdOneTimeType: String, Equatable, Sendable {
+    case consumable = "consumable"
+    case nonConsumable = "non_consumable"
+
+    /// The App Store product kind as StoreKit and OpenIAP describe a product.
+    public init?(productType: ProductTypeIOS) {
+        switch productType {
+        case .consumable: self = .consumable
+        case .nonConsumable: self = .nonConsumable
+        default: return nil
+        }
+    }
+
+    /// The `type` claim of a StoreKit-verified JWS transaction
+    /// (`JWSTransactionDecodedPayload.type`): `Consumable` or `Non-Consumable`.
+    /// Subscriptions and unknown values are not one-time purchases.
+    public init?(transactionTypeClaim: String) {
+        switch transactionTypeClaim {
+        case "Consumable": self = .consumable
+        case "Non-Consumable": self = .nonConsumable
+        default: return nil
+        }
+    }
+}
+
+/// The fields of one verified StoreKit transaction the mpgd plugin reports.
+/// Both the OpenIAP purchase path and the revocation shim build this value,
+/// so every `transactionUpdated` and `getTransactions` entry has one shape.
+public struct MpgdStoreKitTransaction: Equatable, Sendable {
+    public let transactionId: String
+    public let originalTransactionId: String
+    public let productId: String
+    public let type: MpgdOneTimeType
+    /// Lowercased UUID, as the 0.3 native plugin reported it.
+    public let appAccountToken: String?
+    public let purchasedAtMillis: Double
+    public let revokedAtMillis: Double?
+    /// The StoreKit-verified JWS; the backend verifies it again.
+    public let signedTransaction: String
+
+    public init(
+        transactionId: String,
+        originalTransactionId: String,
+        productId: String,
+        type: MpgdOneTimeType,
+        appAccountToken: String?,
+        purchasedAtMillis: Double,
+        revokedAtMillis: Double?,
+        signedTransaction: String
+    ) {
+        self.transactionId = transactionId
+        self.originalTransactionId = originalTransactionId
+        self.productId = productId
+        self.type = type
+        self.appAccountToken = appAccountToken?.lowercased()
+        self.purchasedAtMillis = purchasedAtMillis
+        self.revokedAtMillis = revokedAtMillis
+        self.signedTransaction = signedTransaction
+    }
+}
+
+/// mpgd policy over OpenIAP's canonical Apple purchase: which transactions the
+/// plugin reports, the payload shape it reports them in, which ones it may
+/// finish, and how OpenIAP errors become the plugin's existing codes. Nothing
+/// here calls StoreKit; the Capacitor plugin and tests drive it directly.
+public enum StoreKitTransactionPolicy {
+    /// The provider the plugin requires. OpenIAP's Apple provider reports
+    /// `apple`; mpgd names the same store `app-store` on the JavaScript side.
+    public static let appleStoreId = StoreIds.Apple
+
+    // MARK: - Mapping
+
+    /// The verified one-time transaction an OpenIAP Apple purchase describes,
+    /// or nil for anything the plugin does not report: another provider, a
+    /// subscription, a purchase without a JWS, or a JWS whose `type` claim is
+    /// missing.
+    public static func transaction(from purchase: PurchaseIOS) -> MpgdStoreKitTransaction? {
+        guard purchase.storeId == appleStoreId, purchase.store == .apple,
+              let jws = purchase.purchaseToken, isCompactJws(jws),
+              let claims = jwsPayload(jws),
+              let typeClaim = claims["type"] as? String,
+              let type = MpgdOneTimeType(transactionTypeClaim: typeClaim),
+              !purchase.id.isEmpty, !purchase.productId.isEmpty else {
+            return nil
+        }
+        return MpgdStoreKitTransaction(
+            transactionId: purchase.id,
+            // OpenIAP omits an original id of 0; the 0.3 plugin always sent one.
+            originalTransactionId: purchase.originalTransactionIdentifierIOS ?? purchase.id,
+            productId: purchase.productId,
+            type: type,
+            appAccountToken: purchase.appAccountToken,
+            purchasedAtMillis: purchase.transactionDate,
+            revokedAtMillis: purchase.revocationDateIOS,
+            signedTransaction: jws
+        )
+    }
+
+    /// The `StoreKitTransaction` payload of the 0.3 native plugin, key for key.
+    /// `unfinished` is set only on `getTransactions` entries.
+    public static func payload(
+        _ transaction: MpgdStoreKitTransaction,
+        unfinished: Bool? = nil
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
+            "transactionId": transaction.transactionId,
+            "originalTransactionId": transaction.originalTransactionId,
+            "productId": transaction.productId,
+            "type": transaction.type.rawValue,
+            "purchasedAt": isoTimestamp(milliseconds: transaction.purchasedAtMillis),
+            "signedTransaction": transaction.signedTransaction
+        ]
+        if let token = transaction.appAccountToken {
+            payload["appAccountToken"] = token
+        }
+        if let revoked = transaction.revokedAtMillis {
+            payload["revokedAt"] = isoTimestamp(milliseconds: revoked)
+        }
+        if let unfinished {
+            payload["unfinished"] = unfinished
+        }
+        return payload
+    }
+
+    /// The `StoreKitProduct` payload of a one-time product, or nil for a
+    /// subscription the plugin does not sell.
+    public static func productPayload(_ product: ProductIOS) -> [String: Any]? {
+        guard let type = MpgdOneTimeType(productType: product.typeIOS) else {
+            return nil
+        }
+        return [
+            "productId": product.id,
+            "type": type.rawValue,
+            "title": product.displayNameIOS,
+            "description": product.description,
+            "formattedPrice": product.displayPrice,
+            "currencyCode": product.currency
+        ]
+    }
+
+    /// `getTransactions`: every verified unfinished one-time transaction
+    /// (`unfinished: true`), then every current non-consumable entitlement not
+    /// already listed (`unfinished: false`). Finished consumables are never
+    /// added: they are not current entitlements, and the game reads a
+    /// consumable leaving this list as evidence that its finish landed.
+    public static func listedTransactions(
+        unfinished: [PurchaseIOS],
+        entitlements: [PurchaseIOS]
+    ) -> [[String: Any]] {
+        var seen = Set<String>()
+        var listed: [[String: Any]] = []
+        for purchase in unfinished {
+            guard let transaction = transaction(from: purchase),
+                  seen.insert(transaction.transactionId).inserted else { continue }
+            listed.append(payload(transaction, unfinished: true))
+        }
+        for purchase in entitlements {
+            guard let transaction = transaction(from: purchase),
+                  transaction.type == .nonConsumable,
+                  seen.insert(transaction.transactionId).inserted else { continue }
+            listed.append(payload(transaction, unfinished: false))
+        }
+        return listed
+    }
+
+    /// The purchase `finishTransaction` may finish: the verified one-time
+    /// transaction with this id that is not revoked and whose app account
+    /// token equals the session token. OpenIAP finishes whatever it is given,
+    /// so this is the plugin's local gate; it is still not a signed server
+    /// capability (see `finishTransaction` in the plugin definitions).
+    public static func finishable(
+        transactionId: String,
+        appAccountToken: String,
+        in purchases: [PurchaseIOS]
+    ) -> (purchase: PurchaseIOS, type: MpgdOneTimeType)? {
+        let expected = appAccountToken.lowercased()
+        for purchase in purchases where purchase.id == transactionId {
+            guard let transaction = transaction(from: purchase),
+                  transaction.revokedAtMillis == nil,
+                  transaction.appAccountToken == expected else { continue }
+            return (purchase, transaction.type)
+        }
+        return nil
+    }
+
+    /// Whether a just-purchased transaction is the one the call asked for:
+    /// same product and bound to the token the purchase was started with.
+    public static func matchesPurchaseRequest(
+        _ transaction: MpgdStoreKitTransaction,
+        productId: String,
+        appAccountToken: String
+    ) -> Bool {
+        transaction.productId == productId
+            && transaction.appAccountToken == appAccountToken.lowercased()
+            && transaction.revokedAtMillis == nil
+    }
+
+    // MARK: - Errors
+
+    /// How a `requestPurchase` failure answers the plugin's `purchase` call.
+    public enum PurchaseFailure: Equatable {
+        case cancelled
+        /// Ask to Buy or another deferred payment: never a cancellation.
+        case pending
+        case rejected(code: String, message: String)
+    }
+
+    /// Maps an OpenIAP purchase error to the 0.3 plugin outcome. Anything that
+    /// may have happened after the purchase sheet opened stays
+    /// `STOREKIT_PURCHASE_UNCERTAIN`, so the game requeries instead of
+    /// assuming nothing was bought.
+    public static func purchaseFailure(_ code: ErrorCode) -> PurchaseFailure {
+        switch code {
+        case .userCancelled:
+            return .cancelled
+        case .deferredPayment, .pending:
+            return .pending
+        case .transactionValidationFailed:
+            return .rejected(code: "STOREKIT_TRANSACTION_UNVERIFIED",
+                             message: "StoreKit transaction failed verification or account binding.")
+        case .skuNotFound, .itemUnavailable, .emptySkuList:
+            return .rejected(code: "STOREKIT_PRODUCT_UNAVAILABLE",
+                             message: "The one-time product is unavailable.")
+        case .queryProduct:
+            return .rejected(code: "STOREKIT_PRODUCT_LOOKUP_FAILED",
+                             message: "StoreKit product lookup failed.")
+        case .developerError:
+            return .rejected(code: "STOREKIT_INVALID_PURCHASE",
+                             message: "A product ID and app account token are required.")
+        case .iapNotAvailable, .notPrepared, .initConnection:
+            // Raised before any purchase sheet: nothing was bought.
+            return .rejected(code: "STOREKIT_UNAVAILABLE",
+                             message: "StoreKit purchases are unavailable on this device.")
+        case .unknown:
+            return .rejected(code: "STOREKIT_UNKNOWN_RESULT",
+                             message: "StoreKit returned an unknown purchase result.")
+        default:
+            return .rejected(code: "STOREKIT_PURCHASE_UNCERTAIN",
+                             message: "StoreKit purchase result is uncertain; requery transactions.")
+        }
+    }
+
+    /// The code a failed transaction query rejects with. An unverified
+    /// transaction makes the whole OpenIAP query fail; the plugin reports that
+    /// as a failure, never as an empty (or shortened) successful list.
+    public static func queryFailureCode(_ error: Error) -> String {
+        if let purchaseError = error as? PurchaseError,
+           purchaseError.code == .transactionValidationFailed {
+            return "STOREKIT_TRANSACTION_UNVERIFIED"
+        }
+        return "STOREKIT_UNAVAILABLE"
+    }
+
+    // MARK: - Validation and formatting
+
+    public static func isValidProductId(_ value: String) -> Bool {
+        value.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil
+    }
+
+    /// A non-nil UUID app account token, lowercased; nil when invalid.
+    public static func normalizedAccountToken(_ value: String?) -> String? {
+        guard let value, let uuid = UUID(uuidString: value) else { return nil }
+        let normalized = uuid.uuidString.lowercased()
+        return normalized == "00000000-0000-0000-0000-000000000000" ? nil : normalized
+    }
+
+    /// The 0.3 plugin's timestamp format: `ISO8601DateFormatter` defaults.
+    public static func isoTimestamp(milliseconds: Double) -> String {
+        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: milliseconds / 1000))
+    }
+
+    static func isCompactJws(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 3 && parts.allSatisfy { !$0.isEmpty }
+    }
+
+    /// The claims of a compact JWS StoreKit already verified. Only read for
+    /// the `type` claim OpenIAP's `PurchaseIOS` does not carry.
+    static func jwsPayload(_ jws: String) -> [String: Any]? {
+        let parts = jws.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var base64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 {
+            base64.append("=")
+        }
+        guard let data = Data(base64Encoded: base64),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let claims = object as? [String: Any] else {
+            return nil
+        }
+        return claims
+    }
+}
