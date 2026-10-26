@@ -24,8 +24,10 @@ track update, validation, or commit cannot be reconciled, the API raises
 upload merely because an HTTP response was lost; inspect that edit and the
 remote track first. Definitive upload rejections retain the original Play error.
 SDK retries are disabled for mutating edit operations.
-The first implementation is restricted to the `internal` track. Production
-promotion, staged rollout, and release approvals remain out of scope.
+Without release options this is the whole flow, and the internal track body is
+unchanged. Other tracks, drafts, staged rollouts, release notes, R8 mapping
+upload, the draft-app fallback and `mpgd deploy rollout` are described in
+[Google Play releases](./GOOGLE_PLAY_RELEASES.md).
 
 The credential-free test uses the pinned official Google SDK against a local
 mock API and covers authentication rejection, package mismatch, version

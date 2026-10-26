@@ -5388,9 +5388,9 @@ async function readPlayReleaseOptions(
 function reportPlayDraftAppFallback(track: string): void {
   console.warn(
     `Google Play accepts only draft releases until this app's first release is rolled out, `
-    + `so the ${track} release is committed as a draft. Roll it out once from Play Console `
-    + '(Test and release, open the track, edit the draft release, then Save and publish); '
-    + 'later submissions can use their normal status.',
+    + `so the ${track} release is committed as a draft. Open that draft release in Play Console `
+    + 'and roll it out once (docs/GOOGLE_PLAY_RELEASES.md#draft-apps); later submissions can use '
+    + 'their normal status.',
   );
 }
 
