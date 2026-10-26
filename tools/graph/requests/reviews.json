@@ -1,0 +1,14 @@
+{
+  "name": "reviews",
+  "description": "Review provider, persisted courtesy policy and opt-in target gate.",
+  "namedEntrypoints": [
+    { "name": "createReviewProvider", "file": "packages/platform/src/reviews.ts" },
+    { "name": "createReviewController", "file": "packages/platform/src/reviews-runtime.ts" },
+    { "name": "withTargetAvailability", "file": "packages/target-config/src/runtime.ts" }
+  ],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "How are native review requests separated from explicit store navigation and disabled target integrations?",
+  "draft": { "reason": "Inspect the provider, controller and target gate directly.", "type": "details" },
+  "review": "These anchors establish code boundaries, not proof that a host displayed or submitted a review.",
+  "request": { "type": "details", "handles": ["packages/platform/src/reviews.ts#createReviewProvider:function", "packages/platform/src/reviews-runtime.ts#createReviewController:function", "packages/target-config/src/runtime.ts#withTargetAvailability:function"], "neighbors": true, "neighborLimit": 2, "memberLimit": 24, "dependencyLimit": 24 }
+}

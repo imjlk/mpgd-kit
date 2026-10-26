@@ -135,6 +135,7 @@ describe('main entry import closure', () => {
       'commerce-contract.ts',
       'index.ts',
       'notifications-contract.ts',
+      'reviews-contract.ts',
     ]);
   });
 });

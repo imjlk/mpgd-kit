@@ -69,6 +69,7 @@ const targetConfigMatrix = {
           sharing: 'available',
           inboundShare: 'available',
           notifications: 'configuration-required',
+          reviews: 'disabled',
           presentationMode: 'fullscreen',
         },
       ),
@@ -302,6 +303,7 @@ assertDeepEqual(webEffectiveConfig.integrations, {
   sharing: 'disabled',
   inboundShare: 'disabled',
   notifications: 'unsupported',
+  reviews: 'disabled',
   presentationMode: 'fullscreen',
 });
 assertDeepEqual(
@@ -314,6 +316,7 @@ assertDeepEqual(
     sharing: 'disabled',
     inboundShare: 'disabled',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
 );
@@ -443,6 +446,7 @@ const inboundOnlyGateway = withTargetAvailability(gateway, {
     sharing: 'disabled',
     inboundShare: 'available',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
 });
@@ -472,6 +476,7 @@ const partialSharingRuntime = createTargetRuntimeSnapshot({
       sharing: 'available',
       inboundShare: 'available',
       notifications: 'unsupported',
+      reviews: 'disabled',
       presentationMode: 'fullscreen',
     },
   },
@@ -500,6 +505,7 @@ const inboundSharingRuntime = createTargetRuntimeSnapshot({
       sharing: 'available',
       inboundShare: 'available',
       notifications: 'unsupported',
+      reviews: 'disabled',
       presentationMode: 'fullscreen',
     },
   },
@@ -527,6 +533,7 @@ const upgradeOnlyIdentityRuntime = createTargetRuntimeSnapshot({
       sharing: 'disabled',
       inboundShare: 'disabled',
       notifications: 'unsupported',
+      reviews: 'disabled',
       presentationMode: 'fullscreen',
     },
   },
@@ -602,6 +609,7 @@ const crazyGamesConfig: TargetConfig = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'fullscreen',
   },
 };
@@ -639,6 +647,7 @@ const androidTargetOverrideEffectiveConfig = createEffectiveTargetConfig({
       sharing: 'disabled',
       inboundShare: 'disabled',
       notifications: 'disabled',
+      reviews: 'disabled',
       presentationMode: 'inline-expanded',
     },
   },
@@ -691,6 +700,7 @@ assertDeepEqual(androidTargetOverrideEffectiveConfig.integrations, {
   sharing: 'disabled',
   inboundShare: 'disabled',
   notifications: 'disabled',
+  reviews: 'disabled',
   presentationMode: 'inline-expanded',
 });
 assertEqual(androidTargetOverrideRuntime.presentationMode, 'inline-expanded');
@@ -836,6 +846,7 @@ const verse8ResourceTargetConfig = {
     sharing: 'unsupported',
     inboundShare: 'unsupported',
     notifications: 'unsupported',
+    reviews: 'disabled',
     presentationMode: 'inline-expanded',
   },
 } as const satisfies TargetConfig;

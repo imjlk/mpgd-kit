@@ -689,6 +689,8 @@ function supportsIntegration(
       return typeof gateway.sharing?.share === 'function';
     case 'inboundShare':
       return typeof gateway.sharing?.readInboundShare === 'function';
+    case 'reviews':
+      return gateway.reviews !== undefined;
     case 'notifications':
       return (
         typeof gateway.notifications?.getStatus === 'function'
