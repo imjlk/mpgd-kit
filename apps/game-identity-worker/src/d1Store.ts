@@ -27,7 +27,8 @@ const familyColumns = 'f.family_id, f.player_id, f.installation_id, f.created_at
   + 'f.rotation_nonce';
 
 /**
- * The identity store on D1 (migrations/0001_guest_identity.sql). Every
+ * The identity store on D1 (migrations/0001_guest_identity.sql and
+ * 0002_account_deletion.sql). Every
  * multi-row write is one `batch`, which D1 runs as a transaction; the
  * rotation is a compare-and-swap on the family's current refresh hash, and
  * the rows it adds are inserted only when that swap took effect.
@@ -164,6 +165,45 @@ export function createD1IdentityStore(
         .first() !== null;
     },
 
+    async putDeletionConfirmation({ confirmation, now }) {
+      // REPLACE drops the family's earlier confirmation (family_id is UNIQUE);
+      // nothing is written unless the family is live and the player's.
+      const inserted = await db.prepare(
+        'INSERT OR REPLACE INTO identity_deletion_confirmations (token_hash, family_id, player_id, expires_at_ms) '
+          + 'SELECT ?1, family_id, player_id, ?2 FROM identity_session_families '
+          + 'WHERE family_id = ?3 AND player_id = ?4 AND revoked_at_ms IS NULL AND expires_at_ms > ?5',
+      ).bind(
+        confirmation.tokenHash,
+        confirmation.expiresAt,
+        confirmation.familyId,
+        confirmation.playerId,
+        now,
+      ).run();
+      return inserted.meta.changes >= 1;
+    },
+
+    async consumeDeletionConfirmation({ tokenHash, playerId, now }) {
+      const consumed = await db.prepare(
+        'DELETE FROM identity_deletion_confirmations WHERE token_hash = ?1 AND player_id = ?2 '
+          + 'AND expires_at_ms > ?3 AND EXISTS (SELECT 1 FROM identity_session_families f '
+          + 'WHERE f.family_id = identity_deletion_confirmations.family_id '
+          + 'AND f.revoked_at_ms IS NULL AND f.expires_at_ms > ?3)',
+      ).bind(tokenHash, playerId, now).run();
+      return consumed.meta.changes === 1;
+    },
+
+    async deletePlayer(playerId) {
+      // One transaction. A rotation or confirmation racing it inserts only
+      // through a family row, which is gone afterwards, so nothing comes back.
+      await db.batch([
+        'identity_deletion_confirmations',
+        'identity_access_tokens',
+        'identity_refresh_tokens',
+        'identity_session_families',
+        'identity_players',
+      ].map((table) => db.prepare(`DELETE FROM ${table} WHERE player_id = ?1`).bind(playerId)));
+    },
+
     async purge({ now, refreshTokensBefore, familiesEndedBefore }) {
       // Two indexed scans: revoked families, and live ones whose inactivity window passed.
       const ended = await db.prepare(
@@ -172,7 +212,7 @@ export function createD1IdentityStore(
           + 'WHERE revoked_at_ms IS NULL AND expires_at_ms < ?1 LIMIT ?2)',
       ).bind(familiesEndedBefore, purgeBatch).all<{ family_id: string }>();
       const endedIds = JSON.stringify(ended.results.map((row) => row.family_id));
-      const [accessDeleted, refreshDeleted] = await db.batch([
+      const purged = await db.batch([
         db.prepare(
           'DELETE FROM identity_access_tokens WHERE rowid IN '
             + '(SELECT rowid FROM identity_access_tokens WHERE expires_at_ms <= ?1 LIMIT ?2)',
@@ -191,10 +231,18 @@ export function createD1IdentityStore(
           .bind(endedIds),
         db.prepare('DELETE FROM identity_session_families WHERE family_id IN (SELECT value FROM json_each(?1))')
           .bind(endedIds),
+        db.prepare(
+          'DELETE FROM identity_deletion_confirmations WHERE rowid IN '
+            + '(SELECT rowid FROM identity_deletion_confirmations WHERE expires_at_ms <= ?1 LIMIT ?2)',
+        ).bind(now, purgeBatch),
+        db.prepare('DELETE FROM identity_deletion_confirmations WHERE family_id IN (SELECT value FROM json_each(?1))')
+          .bind(endedIds),
       ]);
+      const [accessDeleted, refreshDeleted] = purged;
       // A full batch anywhere (each family scan can return `purgeBatch` ids) means more may remain.
       return {
         more: ended.results.length >= purgeBatch
+          || (purged[5]?.meta.changes ?? 0) >= purgeBatch
           || (accessDeleted?.meta.changes ?? 0) >= purgeBatch
           || (refreshDeleted?.meta.changes ?? 0) >= purgeBatch,
       };

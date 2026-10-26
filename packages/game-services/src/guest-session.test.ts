@@ -1079,6 +1079,122 @@ function familyBackend() {
   assert.equal(bound.current(), undefined);
 }
 
+// An account deletion confirmation: asked with the current refresh token, in
+// the queue with refreshes; a refused session latches like a refresh.
+{
+  const native = credentialFixture();
+  const server = backendFixture();
+  // Without the backend method: unsupported, and the backend is not asked.
+  const plain = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await plain.start();
+  await assert.rejects(plain.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_UNSUPPORTED',
+  });
+  const presented: string[] = [];
+  let answer: () => Promise<unknown> = async () => ({
+    confirmation: 'mpgd_dc_confirmation',
+    expiresAt: '2030-01-01T00:05:00.000Z',
+  });
+  const backend: GuestSessionBackend = {
+    ...server.backend,
+    async requestAccountDeletionConfirmation({ refreshToken }) {
+      presented.push(refreshToken);
+      return await answer() as never;
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend,
+    credentials: credentialFixture().credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_NOT_READY',
+  });
+  await coordinator.start();
+  // Queued behind a refresh in flight: it presents the rotated token.
+  const refreshing = coordinator.refresh();
+  const confirmation = coordinator.requestAccountDeletionConfirmation();
+  await refreshing;
+  assert.equal(await confirmation, 'mpgd_dc_confirmation');
+  assert.deepEqual(presented, [`refresh-${server.calls.refresh + 1}`]);
+  // The server session exposes it.
+  assert.equal(
+    await createGuestServerSession(coordinator, { now }).requestAccountDeletionConfirmation?.(),
+    'mpgd_dc_confirmation',
+  );
+  for (const malformed of [
+    {},
+    { confirmation: '', expiresAt: expires },
+    { confirmation: 'x', expiresAt: 'later' },
+  ]) {
+    answer = async () => malformed;
+    await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+      code: 'GUEST_SESSION_INVALID_RESPONSE',
+    });
+  }
+  answer = async () => {
+    throw new Error('offline https://identity.example.test refresh-secret');
+  };
+  await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_BACKEND_FAILED',
+  });
+  assert.notEqual(coordinator.current(), undefined);
+  answer = async () => {
+    throw new GuestSessionRejectedError();
+  };
+  await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_REJECTED',
+  });
+  assert.equal(coordinator.current(), undefined);
+  // Still the refusal, not "not ready", and the backend is not asked again.
+  const asked = presented.length;
+  await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_REJECTED',
+  });
+  assert.equal(presented.length, asked);
+  await coordinator.logout();
+  await assert.rejects(coordinator.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_CLOSED',
+  });
+  // A failed credential save is not a refusal: NOT_READY.
+  const failing = credentialFixture();
+  const unsaved = createGuestSessionCoordinator({
+    backend,
+    credentials: failing.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await unsaved.start();
+  failing.failNextSave();
+  await assert.rejects(unsaved.refresh(), { code: 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED' });
+  await assert.rejects(unsaved.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_NOT_READY',
+  });
+  // A logout while the request runs gets no confirmation.
+  const closing = createGuestSessionCoordinator({
+    backend: {
+      ...backend,
+      async requestAccountDeletionConfirmation() {
+        void closing.logout();
+        return { confirmation: 'mpgd_dc_late', expiresAt: expires };
+      },
+    },
+    credentials: credentialFixture().credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await closing.start();
+  await assert.rejects(closing.requestAccountDeletionConfirmation(), {
+    code: 'GUEST_SESSION_CLOSED',
+  });
+}
+
 // The HTTP backend: routes, bodies, refusals, and the base URL rules.
 {
   const requests: { url: string; method: string; body: unknown; redirect: string }[] = [];
@@ -1154,6 +1270,23 @@ function familyBackend() {
       externalProof: 'proof',
       idempotencyKey: 'bind',
     }),
+    GuestSessionRejectedError,
+  );
+  // A deletion confirmation: its route, the refresh token, a rejection.
+  answers.push(json({ confirmation: 'mpgd_dc_1', expiresAt: expires }));
+  assert.deepEqual(
+    await backend.requestAccountDeletionConfirmation?.({ refreshToken: 'refresh-2' }),
+    { confirmation: 'mpgd_dc_1', expiresAt: expires },
+  );
+  assert.deepEqual(requests.at(-1), {
+    url: `https://identity.example.test/api${guestIdentityHttpRoutes.requestAccountDeletionConfirmation}`,
+    method: 'POST',
+    body: { refreshToken: 'refresh-2' },
+    redirect: 'manual',
+  });
+  answers.push(json({ error: 'GUEST_SESSION_REJECTED' }, 401));
+  await assert.rejects(
+    backend.requestAccountDeletionConfirmation?.({ refreshToken: 'refresh-2' }) ?? Promise.resolve(),
     GuestSessionRejectedError,
   );
   // A fetch that followed a redirect regardless is refused.

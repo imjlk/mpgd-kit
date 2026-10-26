@@ -299,11 +299,12 @@ Games that merge the verified Microsoft Store PWA artifact into a Pages deployme
 
 `@mpgd/bridge/cloudflare-pages` exposes a reusable Pages advanced-mode host
 helper. New game starters include `legal/privacy.html`, `legal/support.html`,
-`legal/terms.html`, `mpgd legal build/check`, and
+`legal/terms.html`, `legal/delete-account.html` (the account deletion page
+Google Play's Data safety form asks for), `mpgd legal build/check`, and
 `apps/target-cloudflare-pages` for local Pages validation. The worker source is
 TypeScript and bundles to Cloudflare's required `dist/_worker.js` output while
-static legal pages stay in stable `/privacy/`, `/support/`, and `/terms/`
-paths.
+static legal pages stay in stable `/privacy/`, `/support/`, `/terms/`, and
+`/delete-account/` paths.
 
 Cloudflare Pages is a host option for web/PWA targets that need same-origin APIs
 or stable legal URLs. Native SDK capabilities remain target-adapter work:

@@ -37,6 +37,18 @@ export interface IdentityAccessToken {
   readonly expiresAt: number;
 }
 
+/**
+ * An account deletion confirmation (L3b): issued to the holder of a live
+ * family's refresh token, consumed once by the game-services deletion route.
+ * Stored only as its hash; one per family (a new one replaces it).
+ */
+export interface IdentityDeletionConfirmation {
+  readonly tokenHash: string;
+  readonly familyId: string;
+  readonly playerId: string;
+  readonly expiresAt: number;
+}
+
 export interface IdentityStore {
   /**
    * Writes a new player and its first family, refresh token, and access
@@ -92,11 +104,38 @@ export interface IdentityStore {
   ): Promise<{ readonly access: IdentityAccessToken; readonly family: IdentitySessionFamily } | undefined>;
   hasPlayer(playerId: string): Promise<boolean>;
   /**
+   * Stores `confirmation` in place of its family's earlier one, only while
+   * the family is live at `now` (one atomic step); `false` when it is not.
+   */
+  putDeletionConfirmation(input: {
+    readonly confirmation: IdentityDeletionConfirmation;
+    readonly now: number;
+  }): Promise<boolean>;
+  /**
+   * Deletes the confirmation with `tokenHash` when it belongs to `playerId`,
+   * has not expired at `now`, and its family is still live: `true` then, and
+   * only once. A confirmation that does not match is left alone, so another
+   * player's attempt cannot use it up.
+   */
+  consumeDeletionConfirmation(input: {
+    readonly tokenHash: string;
+    readonly playerId: string;
+    readonly now: number;
+  }): Promise<boolean>;
+  /**
+   * Deletes the player and every row it keys (families, refresh and access
+   * tokens, deletion confirmations), all or nothing. An unknown player is
+   * not an error. Its tokens are then unknown everywhere: authentication,
+   * refresh (the retry grace included), revoke, and confirmations.
+   */
+  deletePlayer(playerId: string): Promise<void>;
+  /**
    * Upkeep, bounded per call: access tokens past their end, refresh tokens
    * issued before `refreshTokensBefore` (too old to tell a replay from an
    * unknown token) unless a family still holds them as its current or
    * previous one, and families (with their tokens) that ended, by
-   * revocation or inactivity, before `familiesEndedBefore`. Players stay.
+   * revocation or inactivity, before `familiesEndedBefore`, and deletion
+   * confirmations past their end. Players stay.
    * `more` when a bounded statement hit its limit, so another call has work.
    */
   purge(input: {
@@ -112,6 +151,7 @@ export function createMemoryIdentityStore(): IdentityStore {
   const families = new Map<string, IdentitySessionFamily>();
   const refreshTokens = new Map<string, { familyId: string; issuedAt: number }>();
   const accessTokens = new Map<string, IdentityAccessToken>();
+  const confirmations = new Map<string, IdentityDeletionConfirmation>();
   const live = (family: IdentitySessionFamily, now: number) =>
     family.revokedAt === undefined && family.expiresAt > now;
   return {
@@ -180,10 +220,61 @@ export function createMemoryIdentityStore(): IdentityStore {
     async hasPlayer(playerId) {
       return players.has(playerId);
     },
+    async putDeletionConfirmation({ confirmation, now }) {
+      const family = families.get(confirmation.familyId);
+      if (family === undefined || !live(family, now) || family.playerId !== confirmation.playerId) {
+        return false;
+      }
+      for (const [hash, other] of confirmations) {
+        if (other.familyId === confirmation.familyId) {
+          confirmations.delete(hash);
+        }
+      }
+      confirmations.set(confirmation.tokenHash, confirmation);
+      return true;
+    },
+    async consumeDeletionConfirmation({ tokenHash, playerId, now }) {
+      const confirmation = confirmations.get(tokenHash);
+      const family = confirmation === undefined ? undefined : families.get(confirmation.familyId);
+      if (confirmation === undefined || family === undefined || confirmation.playerId !== playerId
+        || confirmation.expiresAt <= now || !live(family, now)) {
+        return false;
+      }
+      confirmations.delete(tokenHash);
+      return true;
+    },
+    async deletePlayer(playerId) {
+      players.delete(playerId);
+      for (const [familyId, family] of families) {
+        if (family.playerId === playerId) {
+          families.delete(familyId);
+          for (const [hash, row] of refreshTokens) {
+            if (row.familyId === familyId) {
+              refreshTokens.delete(hash);
+            }
+          }
+        }
+      }
+      for (const [hash, access] of accessTokens) {
+        if (access.playerId === playerId) {
+          accessTokens.delete(hash);
+        }
+      }
+      for (const [hash, confirmation] of confirmations) {
+        if (confirmation.playerId === playerId) {
+          confirmations.delete(hash);
+        }
+      }
+    },
     async purge({ now, refreshTokensBefore, familiesEndedBefore }) {
       for (const [hash, access] of accessTokens) {
         if (access.expiresAt <= now) {
           accessTokens.delete(hash);
+        }
+      }
+      for (const [hash, confirmation] of confirmations) {
+        if (confirmation.expiresAt <= now || !families.has(confirmation.familyId)) {
+          confirmations.delete(hash);
         }
       }
       const held = new Set([...families.values()].flatMap((family) =>

@@ -16,7 +16,10 @@ import {
   type NotificationSession,
   type NotificationStore,
 } from '@mpgd/game-services/notifications';
-import { parseDevelopmentNotificationSessionAuthorization } from '@mpgd/game-services';
+import {
+  parseDevelopmentNotificationSessionAuthorization,
+  type PlayerDataEraser,
+} from '@mpgd/game-services';
 import {
   createAitFunctionalMessageDeliveryProvider,
   type CreateAitFunctionalMessageDeliveryProviderOptions,
@@ -28,6 +31,12 @@ import {
   notificationsProtocolVersion,
 } from '@mpgd/platform/notifications';
 
+import {
+  argumentField,
+  refuseDeletedPlayerWrites,
+  resolveAccountDeletionTombstones,
+  type AccountDeletionTombstonesEnv,
+} from './deletionTombstones.js';
 import { createD1NotificationStore } from './notificationsD1.js';
 
 /**
@@ -340,6 +349,45 @@ function notificationSessionAuthOf(
 }
 
 /**
+ * The notifications session binding as account deletion uses it: the
+ * session's player, `undefined` without a session binding (and without the
+ * development sessions), or the answer to send (401, 500). Development
+ * sessions apply only on a local development host, as on the session routes.
+ */
+export async function authenticateNotificationPlayer(
+  env: GameServicesNotificationsEnv,
+  request: Request,
+): Promise<{ readonly playerId: string; readonly development: boolean } | Response | undefined> {
+  const sessions = notificationSessionAuthOf(env);
+  if (sessions === undefined) {
+    return undefined;
+  }
+  if (sessions.development && !isLocalDevelopmentHost(new URL(request.url).hostname)) {
+    return json({ error: 'UNAUTHORIZED' }, 401, {});
+  }
+  const session = await authenticate(request, sessions.auth);
+  return session instanceof Response
+    ? session
+    : { playerId: session.player, development: sessions.development };
+}
+
+/**
+ * The memory notification store's account deletion eraser, or `undefined`
+ * on D1 (the Worker's D1 eraser covers those tables) or before the store
+ * exists (it then holds nothing).
+ */
+export function workerNotificationMemoryEraser(
+  env: GameServicesNotificationsEnv,
+): PlayerDataEraser | undefined {
+  if (env.MPGD_STORE === 'd1') {
+    return undefined;
+  }
+  const store = notificationsStateOf(env).memoryStore as Partial<PlayerDataEraser> | undefined;
+  const erase = store?.erasePlayerData;
+  return erase === undefined ? undefined : { erasePlayerData: (input) => erase.call(store, input) };
+}
+
+/**
  * The notifications service for this environment, built once per
  * configuration in an isolate (`env` objects with the same vars and
  * bindings share it, and its memory store): `disabled` without a catalog, `misconfigured`
@@ -489,7 +537,7 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
   const identity = env.GAME_SERVICES_NOTIFICATIONS_IDENTITY;
   const queue = env.NOTIFICATIONS_QUEUE;
   const service = createNotificationService({
-    store: notificationStoreOf(env),
+    store: refuseDeletedNotificationWrites(env, notificationStoreOf(env)),
     registry,
     catalog,
     ...(deployment === undefined ? {} : { deployment }),
@@ -526,6 +574,30 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
     },
   });
   return { status: 'ready', service };
+}
+
+/**
+ * The store refusing a deleted player's new rows (consent, endpoints,
+ * registrations, notices, sends, history, reminders) once the deployment
+ * keeps tombstones; the account erasure reads the raw store.
+ */
+export function refuseDeletedNotificationWrites(
+  env: GameServicesNotificationsEnv & AccountDeletionTombstonesEnv,
+  store: NotificationStore,
+): NotificationStore {
+  const tombstones = resolveAccountDeletionTombstones(env);
+  return tombstones === undefined
+    ? store
+    : refuseDeletedPlayerWrites(store, tombstones, {
+        appendConsent: argumentField('player'),
+        putEndpoint: argumentField('player'),
+        putPlatformRegistration: argumentField('player'),
+        addNoticeGiven: argumentField('player'),
+        createSend: (args) =>
+          (args[0] as { readonly request?: { readonly player?: unknown } } | undefined)?.request?.player,
+        addHistory: argumentField('player'),
+        createScheduleEntry: argumentField('player'),
+      });
 }
 
 function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationStore {

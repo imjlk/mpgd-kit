@@ -9,6 +9,7 @@ import {
   resolveStarterHostedNotificationBackend,
   type StarterNotificationBackend,
 } from './notificationBackend';
+import { onStarterAccountDeleted } from './deleteAccount';
 import { resolveStarterServerSession } from './serverSession';
 import { routeNotificationOpens, type NotificationOpenRoutes } from './notificationOpens';
 import {
@@ -133,6 +134,15 @@ function starterNotificationBackend(platform: TargetConfiguredGateway): StarterN
     backend = createStarterNotificationBackend(platform);
     if (backend !== undefined) {
       backends.set(platform, backend);
+      const { runtime } = backend;
+      // After an account deletion the device stops registering for the
+      // deleted player (the server already removed its endpoints), and the
+      // next session gets a fresh runtime.
+      const stop = onStarterAccountDeleted(async () => {
+        stop();
+        backends.delete(platform);
+        await runtime.unregister();
+      });
     }
   }
   return backend;

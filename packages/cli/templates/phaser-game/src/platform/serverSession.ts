@@ -45,6 +45,14 @@ export interface StarterServerSession {
   ): () => void;
   /** The current session's request headers, such as `{ authorization: 'Bearer …' }`. */
   readonly getHeaders: GameServicesHeaderResolver;
+  /**
+   * An account deletion confirmation from the identity service, which the
+   * game-services deletion route requires besides the access token
+   * (`createGuestServerSession` answers the coordinator's). Optional: a
+   * session without it (a development session) sends none, which only a
+   * development server accepts.
+   */
+  requestAccountDeletionConfirmation?(): Promise<string>;
 }
 
 /** The game's session, or the development one (see `developmentServerSession.ts`). */

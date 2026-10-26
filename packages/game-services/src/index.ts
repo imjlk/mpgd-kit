@@ -1,3 +1,4 @@
+export * from './account-deletion.js';
 export * from './admob-ssv.js';
 export * from './ad-reward-verifier-registry.js';
 export * from './app-store-verifier.js';

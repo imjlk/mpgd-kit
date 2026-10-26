@@ -1281,8 +1281,24 @@ try {
     // Authorization, so a development session can never authenticate them.
     {
       const source = await readFile(new URL('./notificationsHandler.ts', import.meta.url), 'utf8');
-      // The declaration and its one call, in createNotificationsFetchHandler.
-      assert.equal(source.match(/\bnotificationSessionAuthOf\(/gu)?.length, 2);
+      // The declaration and its two calls: createNotificationsFetchHandler, and
+      // authenticateNotificationPlayer, which only the account deletion fetch
+      // route (handler.ts) calls.
+      assert.equal(source.match(/\bnotificationSessionAuthOf\(/gu)?.length, 3);
+      const playerStart = source.indexOf('export async function authenticateNotificationPlayer');
+      assert.match(
+        source.slice(playerStart, source.indexOf('\nexport ', playerStart + 1)),
+        /notificationSessionAuthOf\(env\)[\s\S]*isLocalDevelopmentHost/u,
+      );
+      const handlerSource = await readFile(new URL('./handler.ts', import.meta.url), 'utf8');
+      assert.equal(handlerSource.match(/\bauthenticateNotificationPlayer\(/gu)?.length, 1);
+      const deletionStart = handlerSource.indexOf(
+        'async function authenticateAccountDeletionRequest',
+      );
+      assert.match(
+        handlerSource.slice(deletionStart, handlerSource.indexOf('\n}\n', deletionStart)),
+        /authenticateNotificationPlayer\(env, request\)/u,
+      );
       assert.equal(source.match(/\bdevelopmentNotificationSessionAuth\b/gu)?.length, 2);
       const fetchStart = source.indexOf('export function createNotificationsFetchHandler');
       assert.match(
