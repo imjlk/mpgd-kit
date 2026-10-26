@@ -478,7 +478,7 @@ async function assertMappingUnchanged(request: PlayReleaseRequest): Promise<void
  * the rollout fraction (a draft-app fallback has none) and, when given, the
  * release notes in any order.
  */
-function matchesRequestedRelease(
+export function matchesRequestedRelease(
   observed: PlayTrackRelease,
   request: PlayReleaseRequest,
   observedStatus: PlayNewReleaseStatus,
