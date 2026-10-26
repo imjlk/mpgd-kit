@@ -1253,13 +1253,16 @@ async function verifyPurchaseForRetry(
     );
     if (
       existingEvidence !== undefined
-      && request.intent === 'restore'
+      && context.restoreSharing.mode === 'share'
       && product.type === 'non_consumable'
       && existingEvidence.playerId !== request.playerId
+      && (request.intent === 'restore' || existingEvidence.payload.restoredAcrossAccounts === true)
     ) {
-      // The store binds the purchase to this player, but a restore granted
-      // it to another player first (before this player's grant reached the
-      // ledger): this player gets its own share.
+      // The store binds the purchase to this player, but another player's
+      // grant names it: a restore of this player's, or (when that grant came
+      // from another guest's restore before this player's own verify reached
+      // the ledger) the buyer's checkout. The binding match is the proof, so
+      // this player gets its own share.
       return shareRestoredPurchase(
         request,
         {
@@ -1267,11 +1270,11 @@ async function verifyPurchaseForRetry(
           platformProductId,
           verification,
           verifiedStore,
+          bindingMatches: true,
           refusal: assertVerifyPurchaseResponse({
             verified: false,
             alreadyProcessed: false,
-            disposition: 'rejected',
-            reason: 'LEDGER_GRANT_REVERSED',
+            reason: 'EVIDENCE_ALREADY_PROCESSED',
           }),
         },
         context,
@@ -1468,6 +1471,8 @@ async function shareRestoredPurchase(
     readonly verification: PurchaseEvidenceDecision;
     readonly verifiedStore: string;
     readonly refusal: VerifyPurchaseResponse;
+    /** The store binds the purchase to this player (a `verified` decision): no restore intent needed. */
+    readonly bindingMatches?: boolean;
   },
   context: PurchaseVerificationContext,
 ): Promise<VerifyPurchaseResponse> {
@@ -1475,7 +1480,7 @@ async function shareRestoredPurchase(
   const { product, verification } = input;
   if (
     policy.mode !== 'share'
-    || request.intent !== 'restore'
+    || (request.intent !== 'restore' && input.bindingMatches !== true)
     || product.type !== 'non_consumable'
   ) {
     return input.refusal;
@@ -1759,7 +1764,7 @@ async function finalizeExistingPurchaseGrant(
   const product = createStoredPurchaseProduct(request, transaction) ?? currentProduct;
   const platformProductId = storedPlatformProductId
     ?? currentProduct?.platformProductIds[request.target];
-  // A moved grant is finalized as the purchase it records, not as the move.
+  // A shared grant is finalized as the purchase it records, not as its slot.
   const evidenceVerificationId = readPurchaseVerificationId(transaction);
   const finalizationRequest = createStoredPurchaseRequest(request, transaction);
 

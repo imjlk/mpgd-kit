@@ -157,7 +157,14 @@ export async function revokeEntitlementGrant(
       // purchase: every player a verified restore shared it with loses it
       // too (RFC "Restore sharing"). Replays finish a fan-out an earlier
       // attempt left part-way. An admin entry stays on the grant it names.
-      await revokeOtherPurchaseHolders(store, grant, revocation);
+      try {
+        await revokeOtherPurchaseHolders(store, grant, revocation);
+      } catch (error) {
+        // The named grant is reversed; the other holders are not yet. A plain
+        // error makes the store event's handler retry (a redelivery or the
+        // next sweep), never report the event settled as a conflict.
+        throw new Error('Revoking the other holders of the purchase failed.', { cause: error });
+      }
     }
     return {
       status: 'revoked',

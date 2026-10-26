@@ -528,16 +528,17 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   const retried = await backend.purchases.verifyPurchase(restoreRequest('player-b'));
   assert.equal(retried.alreadyProcessed, true);
   assert.equal(retried.restoredAcrossPlayers, true);
-  // The buyer's checkout answers that another player holds the purchase; its restore shares.
-  assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-a', { intent: 'purchase' }))).reason,
-    'EVIDENCE_ALREADY_PROCESSED',
+  // The buyer's own checkout (its binding matches, no restore intent) gets its share
+  // too, though another guest's restore wrote the first grant.
+  const buyerCheckout = await backend.purchases.verifyPurchase(
+    restoreRequest('player-a', { intent: 'purchase' }),
   );
+  assert.equal(buyerCheckout.verified, true);
+  assert.equal(buyerCheckout.restoredAcrossPlayers, true);
   const buyerRestore = await backend.purchases.verifyPurchase(
     restoreRequest('player-a', { idempotencyKey: 'player-a-restore' }),
   );
-  assert.equal(buyerRestore.verified, true);
-  assert.equal(buyerRestore.restoredAcrossPlayers, true);
+  assert.equal(buyerRestore.ledgerEntryId, buyerCheckout.ledgerEntryId);
   assert.equal((await listActiveEntitlementTransactions(store)).length, 2);
 }
 
@@ -701,6 +702,31 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   assert.equal((await listActiveEntitlementTransactions(shared)).length, 3, 'the cap holds');
 }
 
+// Under refuse, a verified restore whose evidence another player's grant holds keeps
+// its old answer.
+{
+  const store = createInMemoryGameServicesStore();
+  // Both players verify (an unbound deployment), so the second hits the first's evidence.
+  const unbound = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: {
+      verifyPurchase: async () => ({
+        status: 'verified',
+        verificationId: purchaseVerificationId,
+        verifiedAt: '2030-01-01T00:00:00.000Z',
+      }),
+      verifyAdReward: async () => ({ status: 'rejected', reason: 'UNUSED' }),
+    },
+  });
+  assert.equal((await unbound.purchases.verifyPurchase(restoreRequest('player-a'))).verified, true);
+  assert.equal(
+    (await unbound.purchases.verifyPurchase(restoreRequest('player-b'))).reason,
+    'EVIDENCE_ALREADY_PROCESSED',
+  );
+}
+
 // Without the share policy's store reads the restore is refused as before.
 {
   const inner = createInMemoryGameServicesStore();
@@ -810,7 +836,7 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   });
   assert.deepEqual(asPurchase, { status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
 
-  // The buyer's grant, then the reinstall's restore moves it.
+  // The buyer's grant, then a reinstall's restore shares it.
   const bought = await backend.purchases.verifyPurchase(
     playRequest('token-1', 'player-a', { intent: 'purchase' }),
   );
