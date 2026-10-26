@@ -217,6 +217,15 @@ try {
     assert.equal(result.versionCode, 45);
     assert.equal(result.bundleSha256, sha256);
     assert.deepEqual(observed.updates[0]?.releases?.map((item) => item.versionCodes), [['44'], ['45']]);
+    // Without release options the track body is the original one, byte for byte.
+    assert.equal(
+      JSON.stringify(observed.updates[0]),
+      '{"track":"internal","releases":[{"name":"older","status":"completed","versionCodes":["44"]},'
+        + '{"name":"beta-01","status":"completed","versionCodes":["45"]}]}',
+    );
+    assert.equal(result.track, 'internal');
+    assert.equal(result.releaseStatus, 'completed');
+    assert.equal(result.draftAppFallback, false);
     assert.equal(observed.operations.filter((item) => item.includes(':commit')).length, 1);
   });
   await withPublisher('upload-response-lost', async (publisher, observed) => {

@@ -133,6 +133,12 @@ export interface NativeSubmissionCheckpoint {
   readonly remoteEditId?: string;
   readonly remoteUploadId?: string;
   readonly remoteBuildId?: string;
+  /**
+   * Android only: digest of the Google Play release options (track, status,
+   * fraction, notes, mapping) the attempt started with. Absent for the original
+   * internal/completed submission. It never changes once written.
+   */
+  readonly playReleaseSha256?: string;
 }
 
 export interface NativeReleaseStatus {
@@ -627,6 +633,11 @@ export async function checkpointNativeSubmission(input: {
       }
       if (isNativeSubmissionSettled(previous.status)
         || previous.status === 'failed'
+        || (previous.playReleaseSha256 !== input.checkpoint.playReleaseSha256
+          // Options may be corrected only before any remote edit exists.
+          && !(previous.status === 'started' && input.checkpoint.status === 'started'
+            && previous.remoteEditId === undefined
+            && input.checkpoint.remoteEditId === undefined))
         || previous.remoteEditId !== undefined
           && previous.remoteEditId !== input.checkpoint.remoteEditId
           && !(previous.target === 'android'
@@ -1130,6 +1141,7 @@ const checkpointFields = [
   'remoteEditId',
   'remoteUploadId',
   'remoteBuildId',
+  'playReleaseSha256',
 ] as const;
 
 /** Validate persisted checkpoint shape before any remote mutation or recovery. */
@@ -1171,6 +1183,8 @@ export function assertNativeSubmissionCheckpoint(
       key as typeof checkpointFields[number],
     ))
     || !id('remoteEditId') || !id('remoteUploadId') || !id('remoteBuildId')
+    || (value.playReleaseSha256 !== undefined
+      && (value.target !== 'android' || !sha256Pattern.test(String(value.playReleaseSha256))))
     || (value.target === 'android' && (!androidStatuses.includes(value.status as NativeSubmissionStatus)
       || value.remoteUploadId !== undefined || value.remoteBuildId !== undefined
       || (['edit-open', 'committed'].includes(String(value.status))

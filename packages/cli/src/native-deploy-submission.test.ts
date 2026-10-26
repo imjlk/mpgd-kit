@@ -6,11 +6,14 @@ import path from 'node:path';
 
 import type { NativeDeploymentPlan } from './deploy-planning.js';
 import {
+  assertSettledAndroidReleaseOptions,
+  isNativeDeployApproved,
   submitRecordedNativeTargetWithPorts,
   verifyRecordedReleaseManifest,
   type NativeSubmissionPorts,
 } from './native-deploy-submission.js';
 import { PlaySubmissionUncertainError } from './play-internal-submission.js';
+import { playReleaseRequestDigest, type PlayReleaseRequest } from './play-release-options.js';
 import { IosSubmissionUncertainError } from './testflight-submission.js';
 import type {
   ImmutableNativeBuildRecord,
@@ -142,6 +145,8 @@ try {
         packageName: 'dev.mpgd.test',
         editId: 'edit-1',
         track: 'internal',
+        releaseStatus: 'completed',
+        draftAppFallback: false,
         versionCode: 42,
         bundleSha256: android.artifactSha256,
         alreadyCommitted: false,
@@ -196,6 +201,8 @@ try {
         packageName: 'dev.mpgd.test',
         editId: 'edit-restored',
         track: 'internal',
+        releaseStatus: 'completed',
+        draftAppFallback: false,
         versionCode: 42,
         bundleSha256: android.artifactSha256,
         alreadyCommitted: false,
@@ -267,6 +274,131 @@ try {
   assert.equal(checkpoints.android?.remoteEditId, 'edit-1');
   await submitRecordedNativeTargetWithPorts(androidInput, ports);
   assert.equal(androidCalls, 2);
+
+  // Google Play release options are bound to the checkpoint that starts with them.
+  const savedCheckpoints = checkpoints;
+  checkpoints = {};
+  const alphaRelease: PlayReleaseRequest = { track: 'alpha', status: 'completed' };
+  const receivedReleases: unknown[] = [];
+  const optionPorts: NativeSubmissionPorts = {
+    ...ports,
+    async submitAndroid(input) {
+      receivedReleases.push(input.release);
+      await input.onEditCreated?.('edit-alpha');
+      return {
+        status: 'committed',
+        packageName: 'dev.mpgd.test',
+        editId: 'edit-alpha',
+        track: input.release?.track ?? 'internal',
+        releaseStatus: 'completed',
+        draftAppFallback: false,
+        versionCode: 42,
+        bundleSha256: android.artifactSha256,
+        alreadyCommitted: false,
+      };
+    },
+  };
+  const alphaInput = { ...androidInput, androidRelease: alphaRelease };
+  const committedAlpha = await submitRecordedNativeTargetWithPorts(alphaInput, optionPorts);
+  assert.equal(committedAlpha.status, 'committed');
+  assert.equal(committedAlpha.playReleaseSha256, playReleaseRequestDigest(alphaRelease));
+  assert.deepEqual(receivedReleases, [alphaRelease]);
+  assert.equal(
+    (await submitRecordedNativeTargetWithPorts(alphaInput, optionPorts)).status,
+    'committed',
+  );
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(androidInput, optionPorts),
+    /already committed to Google Play with other release options/u,
+  );
+  checkpoints = {
+    android: {
+      ...committedAlpha,
+      status: 'unknown',
+      leaseExpiresAt: new Date(0).toISOString(),
+    },
+  };
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(
+      {
+        ...androidInput,
+        androidRelease: { track: 'beta', status: 'completed' },
+      },
+      optionPorts,
+    ),
+    /started with other Google Play release options/u,
+  );
+  assert.equal(receivedReleases.length, 1);
+  // An attempt refused before it checkpointed a Play edit may change its options.
+  const { playReleaseSha256: _alphaDigest, remoteEditId: _alphaEdit, ...alphaStarted } = committedAlpha;
+  checkpoints = {
+    android: {
+      ...alphaStarted,
+      status: 'started',
+      playReleaseSha256: playReleaseRequestDigest(alphaRelease) ?? '',
+      leaseExpiresAt: new Date(0).toISOString(),
+    },
+  };
+  const corrected = await submitRecordedNativeTargetWithPorts(androidInput, optionPorts);
+  assert.equal(corrected.status, 'committed');
+  assert.equal(corrected.playReleaseSha256, undefined);
+  assert.deepEqual(receivedReleases, [alphaRelease, undefined]);
+  // An unconfirmed production or staged request is refused before release state is read.
+  checkpoints = {};
+  let statusReads = 0;
+  const countingPorts: NativeSubmissionPorts = {
+    ...optionPorts,
+    async readStatus(input) {
+      statusReads += 1;
+      return optionPorts.readStatus(input);
+    },
+  };
+  for (const androidRelease of [
+    { track: 'production', status: 'completed' },
+    { track: 'beta', status: 'inProgress', userFraction: 0.1 },
+  ] satisfies PlayReleaseRequest[]) {
+    await assert.rejects(
+      submitRecordedNativeTargetWithPorts({ ...androidInput, androidRelease }, countingPorts),
+      /needs --confirm-production/u,
+    );
+  }
+  assert.equal(statusReads, 0);
+  assert.deepEqual(checkpoints, {});
+  // deploy run skips a committed target; changed Play options must fail there too.
+  const { playReleaseSha256: _internalDigest, ...alphaStartedAsInternal } = committedAlpha;
+  assertSettledAndroidReleaseOptions(committedAlpha, alphaRelease);
+  assertSettledAndroidReleaseOptions(undefined, { track: 'production', status: 'completed' });
+  assert.throws(
+    () => assertSettledAndroidReleaseOptions(committedAlpha, undefined),
+    /already committed to Google Play with other release options/u,
+  );
+  assert.throws(
+    () =>
+      assertSettledAndroidReleaseOptions(alphaStartedAsInternal, {
+        track: 'production',
+        status: 'completed',
+      }),
+    /already committed to Google Play with other release options/u,
+  );
+  assertSettledAndroidReleaseOptions(
+    { ...committedAlpha, status: 'unknown' },
+    { track: 'production', status: 'completed' },
+  );
+  // A profile's internal-test preapproval never covers another track.
+  assert.equal(isNativeDeployApproved({ approval: 'preapproved-internal-test' }, false), true);
+  assert.equal(
+    isNativeDeployApproved({ approval: 'preapproved-internal-test' }, false, { track: 'internal' }),
+    true,
+  );
+  assert.equal(
+    isNativeDeployApproved({ approval: 'preapproved-internal-test' }, false, {
+      track: 'production',
+    }),
+    false,
+  );
+  assert.equal(isNativeDeployApproved({ approval: 'manual' }, true, { track: 'production' }), true);
+  assert.equal(isNativeDeployApproved({ approval: 'manual' }, false), false);
+  checkpoints = savedCheckpoints;
 
   const iosInput = {
     plan,

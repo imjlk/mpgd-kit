@@ -100,7 +100,17 @@ import {
 } from './offline-playtest.js';
 import { targetConfigExtensionsFileEnv, targetConfigMatrixFileEnv } from './target-config-env.js';
 import { readStoreCredential, runNativeDeployment } from './native-deploy-run.js';
-import { submitRecordedNativeTarget } from './native-deploy-submission.js';
+import {
+  isNativeDeployApproved,
+  planRecordedAndroidSubmission,
+  submitRecordedNativeTarget,
+} from './native-deploy-submission.js';
+import {
+  createPlayReleaseRequest,
+  parsePlayUserFraction,
+  type PlayReleaseRequest,
+} from './play-release-options.js';
+import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
 
 export {
@@ -187,6 +197,7 @@ export {
 } from './native-deploy-run.js';
 
 export {
+  planRecordedAndroidSubmission,
   submitRecordedNativeTarget,
   type NativeStoreCredential,
   type SubmitRecordedNativeTargetInput,
@@ -194,10 +205,32 @@ export {
 
 export {
   PlaySubmissionUncertainError,
+  planVerifiedAndroidBundleSubmission,
   submitVerifiedAndroidBundle,
   type PlayInternalSubmissionInput,
   type PlayInternalSubmissionResult,
+  type PlaySubmissionPlan,
 } from './play-internal-submission.js';
+
+export {
+  createPlayReleaseRequest,
+  defaultPlayReleaseRequest,
+  maximumPlayReleaseNoteCharacters,
+  parsePlayReleaseNotes,
+  type CreatePlayReleaseRequestInput,
+  type PlayNewReleaseStatus,
+  type PlayReleaseNote,
+  type PlayReleaseRequest,
+  type PlayReleaseStatus,
+} from './play-release-options.js';
+
+export {
+  PlayRolloutUncertainError,
+  changePlayRollout,
+  type PlayRolloutAction,
+  type PlayRolloutInput,
+  type PlayRolloutResult,
+} from './play-release-rollout.js';
 
 export {
   IosSubmissionUncertainError,
@@ -738,7 +771,35 @@ const deployCommand = defineI18n({
         'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
         release: { type: 'string', required: true, description: 'Explicit release ID.' },
         target: { type: 'string', required: true, description: 'android or ios.' },
-        approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
+        approve: { type: 'boolean', required: false, description: 'Approve the store submission; needed for any Play track but internal.' },
+        track: {
+          type: 'string', required: false,
+          description: 'Android: Google Play track (internal, alpha, beta, production or a closed-testing track name); defaults to internal.',
+        },
+        status: {
+          type: 'string', required: false,
+          description: 'Android: release status draft, completed (default) or inProgress (staged rollout).',
+        },
+        'user-fraction': {
+          type: 'string', required: false,
+          description: 'Android: staged rollout fraction for --status inProgress, greater than 0 and less than 1.',
+        },
+        'release-notes': {
+          type: 'string', required: false,
+          description: 'Android: release notes file, Play Console <en-US>…</en-US> blocks or JSON; 500 characters per language.',
+        },
+        'confirm-production': {
+          type: 'boolean', required: false,
+          description: 'Android: confirm a production release or staged rollout.',
+        },
+        'mapping-file': {
+          type: 'string', required: false,
+          description: 'Android: R8 mapping.txt of this exact build, uploaded as its deobfuscation file.',
+        },
+        'dry-run': {
+          type: 'boolean', required: false,
+          description: 'Android: verify the build and print the planned Play edit without any store call.',
+        },
       },
       run: async (ctx) => {
         const game = readOptionalString(ctx.values.game);
@@ -750,12 +811,84 @@ const deployCommand = defineI18n({
         if (target !== 'android' && target !== 'ios') {
           throw new Error('--target must be android or ios.');
         }
+        const androidRelease = await readPlayReleaseOptions(ctx.values, target === 'android');
+        const gameId = readRequiredCliOption(ctx.values['game-id'], '--game-id');
+        const releaseKey = readRequiredCliOption(ctx.values.release, '--release');
+        if (ctx.values['dry-run'] === true) {
+          if (target !== 'android') {
+            throw new Error('--dry-run is available for --target android.');
+          }
+          const planned = await planRecordedAndroidSubmission({
+            plan, gameId, releaseKey,
+            ...(androidRelease === undefined ? {} : { androidRelease }),
+          });
+          console.info(JSON.stringify(planned, null, 2));
+          return;
+        }
         const result = await submitRecordedNativeTarget({
           plan,
-          gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
-          releaseKey: readRequiredCliOption(ctx.values.release, '--release'),
+          gameId,
+          releaseKey,
           credential: readStoreCredential(plan, target, process.env),
-          approved: isDeployApproved(plan, ctx.values.approve === true),
+          approved: isNativeDeployApproved(plan, ctx.values.approve === true, androidRelease),
+          ...(androidRelease === undefined ? {} : { androidRelease }),
+          ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
+          onDraftAppFallback: reportPlayDraftAppFallback,
+        });
+        console.info(JSON.stringify(result, null, 2));
+      },
+    }),
+    rollout: defineI18n({
+      name: 'rollout',
+      description: 'Update, halt, resume or complete a Google Play release already on a track.',
+      resource: commandResource({
+        en: 'Update, halt, resume or complete a Google Play release already on a track.',
+        ko: '트랙에 이미 있는 Google Play 릴리스의 배포 비율을 변경·중지·재개·완료합니다.',
+      }),
+      args: {
+        plan: { type: 'string', required: true, description: 'Saved deployment plan JSON (package ID and credential).' },
+        game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
+        track: { type: 'string', required: true, description: 'Google Play track whose release changes; no other track is touched.' },
+        action: { type: 'string', required: true, description: 'update, halt, resume or complete.' },
+        'version-code': { type: 'string', required: false, description: 'Release to change; defaults to the only release the action applies to.' },
+        'user-fraction': { type: 'string', required: false, description: 'New rollout fraction for update (or resume), greater than 0 and less than 1.' },
+        approve: { type: 'boolean', required: false, description: 'Approve the rollout change.' },
+        'confirm-production': { type: 'boolean', required: false, description: 'Confirm a production change or a running staged rollout.' },
+        'dry-run': { type: 'boolean', required: false, description: 'Read the track and print the planned update; the edit is discarded.' },
+      },
+      run: async (ctx) => {
+        const game = readOptionalString(ctx.values.game);
+        const plan = readNativeDeploymentPlan(
+          readRequiredCliOption(ctx.values.plan, '--plan'),
+          game === undefined ? undefined : path.resolve(game),
+        );
+        const android = plan.targets.find((entry) => entry.target === 'android');
+        if (android === undefined) {
+          throw new Error('The deployment plan has no Android target.');
+        }
+        const dryRun = ctx.values['dry-run'] === true;
+        if (!dryRun && ctx.values.approve !== true) {
+          throw new Error('Changing a Google Play rollout requires --approve.');
+        }
+        const action = readRequiredCliOption(ctx.values.action, '--action') as PlayRolloutAction;
+        const versionCode = readOptionalString(ctx.values['version-code']);
+        const userFraction = readOptionalString(ctx.values['user-fraction']);
+        if (versionCode !== undefined && !/^[1-9]\d{0,15}$/u.test(versionCode)) {
+          throw new Error('--version-code must be a positive integer.');
+        }
+        const credential = readStoreCredential(plan, 'android', process.env);
+        if (credential.target !== 'android') {
+          throw new Error('Google Play rollout needs the Android submission credential.');
+        }
+        const result = await changePlayRollout({
+          packageName: android.appId,
+          serviceAccountFile: credential.serviceAccountFile,
+          track: readRequiredCliOption(ctx.values.track, '--track'),
+          action,
+          ...(versionCode === undefined ? {} : { versionCode: Number(versionCode) }),
+          ...(userFraction === undefined ? {} : { userFraction: parsePlayUserFraction(userFraction) }),
+          ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
+          dryRun,
         });
         console.info(JSON.stringify(result, null, 2));
       },
@@ -777,13 +910,36 @@ const deployCommand = defineI18n({
           type: 'string', required: false,
           description: 'Initial version ledger JSON; only for the first release.',
         },
-        approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
+        approve: { type: 'boolean', required: false, description: 'Approve the store submission; needed for any Play track but internal.' },
+        track: {
+          type: 'string', required: false,
+          description: 'Android: Google Play track (internal, alpha, beta, production or a closed-testing track name); defaults to internal.',
+        },
+        status: {
+          type: 'string', required: false,
+          description: 'Android: release status draft, completed (default) or inProgress (staged rollout).',
+        },
+        'user-fraction': {
+          type: 'string', required: false,
+          description: 'Android: staged rollout fraction for --status inProgress, greater than 0 and less than 1.',
+        },
+        'release-notes': {
+          type: 'string', required: false,
+          description: 'Android: release notes file, Play Console <en-US>…</en-US> blocks or JSON; 500 characters per language.',
+        },
+        'confirm-production': {
+          type: 'boolean', required: false,
+          description: 'Android: confirm a production release or staged rollout.',
+        },
       },
       run: async (ctx) => {
         const game = readOptionalString(ctx.values.game);
         const plan = readNativeDeploymentPlan(
           readRequiredCliOption(ctx.values.plan, '--plan'),
           game === undefined ? undefined : path.resolve(game),
+        );
+        const androidRelease = await readPlayReleaseOptions(
+          ctx.values, plan.targets.some((entry) => entry.target === 'android'),
         );
         const infoFile = path.join(packageRoot, 'dist/native-build-info.json');
         const info = readJsonForCli(infoFile, 'native builder metadata');
@@ -812,7 +968,10 @@ const deployCommand = defineI18n({
               readJsonForCli(path.resolve(initialLedgerFile), 'initial version ledger'),
             ),
           }),
-          approved: isDeployApproved(plan, ctx.values.approve === true),
+          approved: isNativeDeployApproved(plan, ctx.values.approve === true, androidRelease),
+          ...(androidRelease === undefined ? {} : { androidRelease }),
+          ...(ctx.values['confirm-production'] === true ? { confirmProduction: true } : {}),
+          onDraftAppFallback: reportPlayDraftAppFallback,
           ...(recordedBuildMarker === undefined ? {} : {
             onBuildRecorded: (target) => {
               writeFileSync(recordedBuildMarker, target, { flag: 'wx', mode: 0o600 });
@@ -5205,8 +5364,34 @@ function renderHostedPwaVerificationMarkdown(
   ].join('\n');
 }
 
-function isDeployApproved(plan: NativeDeploymentPlan, approveFlag: boolean): boolean {
-  return plan.approval === 'preapproved-internal-test' || approveFlag;
+/** Google Play release flags; undefined when none is given (the original internal path). */
+async function readPlayReleaseOptions(
+  values: Record<string, unknown>,
+  android: boolean,
+): Promise<PlayReleaseRequest | undefined> {
+  const track = readOptionalString(values.track);
+  const status = readOptionalString(values.status);
+  const userFraction = readOptionalString(values['user-fraction']);
+  const releaseNotesFile = readOptionalString(values['release-notes']);
+  const mappingFile = readOptionalString(values['mapping-file']);
+  if (track === undefined && status === undefined && userFraction === undefined
+    && releaseNotesFile === undefined && mappingFile === undefined) {
+    return undefined;
+  }
+  if (!android) {
+    throw new Error('--track, --status, --user-fraction, --release-notes and --mapping-file '
+      + 'apply only to an Android (Google Play) target.');
+  }
+  return createPlayReleaseRequest({ track, status, userFraction, releaseNotesFile, mappingFile });
+}
+
+function reportPlayDraftAppFallback(track: string): void {
+  console.warn(
+    `Google Play accepts only draft releases until this app's first release is rolled out, `
+    + `so the ${track} release is committed as a draft. Open that draft release in Play Console `
+    + 'and roll it out once (docs/GOOGLE_PLAY_RELEASES.md#draft-apps); later submissions can use '
+    + 'their normal status.',
+  );
 }
 
 function readRequiredCliOption(value: unknown, label: string): string {
