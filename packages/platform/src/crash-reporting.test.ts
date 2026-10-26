@@ -163,7 +163,7 @@ describe('createUnavailableCrashReporter', () => {
   it('is a no-op reporter', async () => {
     const reporter = createUnavailableCrashReporter();
     expect(await reporter.getStatus()).toEqual({ provider: 'none', state: 'unsupported' });
-    await expect(reporter.recordError(new Error('x'))).resolves.toBeUndefined();
+    await expect(reporter.recordError(new Error('x'))).resolves.toBe(false);
     await expect(reporter.log('x')).resolves.toBeUndefined();
     await expect(reporter.setCollectionEnabled(false)).resolves.toBeUndefined();
     const notInstalled = createUnavailableCrashReporter({
@@ -210,6 +210,7 @@ function createRecordingReporter(): CrashReporter & {
     },
     async recordError(error, options) {
       calls.push({ error, ...(options === undefined ? {} : { options }) });
+      return true;
     },
     async log() {},
     async setCollectionEnabled() {},
@@ -241,21 +242,56 @@ describe('installCrashErrorCapture', () => {
     expect(reporter.calls).toHaveLength(3);
   });
 
-  it('stops after the session limit and swallows reporter failures', async () => {
+  it('stops after the session limit', () => {
     const target = createEventTarget();
-    let attempts = 0;
-    const reporter: CrashReporter = {
-      ...createRecordingReporter(),
-      async recordError() {
-        attempts += 1;
-        throw new Error('reporter broke');
-      },
-    };
+    const reporter = createRecordingReporter();
     installCrashErrorCapture({ reporter, target, maxReports: 2 });
     for (let index = 0; index < 5; index += 1) {
       target.emit('error', { error: new Error(`e${index}`) });
     }
-    await Promise.resolve();
-    expect(attempts).toBe(2);
+    expect(reporter.calls).toHaveLength(2);
+  });
+
+  it('gives the budget back for dropped reports and swallows reporter failures', async () => {
+    const target = createEventTarget();
+    let collecting = false;
+    let attempts = 0;
+    const sent: unknown[] = [];
+    const reporter: CrashReporter = {
+      ...createRecordingReporter(),
+      async recordError(error) {
+        attempts += 1;
+        if (error instanceof Error && error.message === 'broken') {
+          throw new Error('reporter broke');
+        }
+        if (collecting) {
+          sent.push(error);
+        }
+        return collecting;
+      },
+    };
+    installCrashErrorCapture({ reporter, target, maxReports: 2 });
+    const flush = async (): Promise<void> => {
+      for (let index = 0; index < 5; index += 1) {
+        await Promise.resolve();
+      }
+    };
+    // Before consent: dropped reports do not use up the session budget.
+    const repeated = new Error('before consent');
+    for (let index = 0; index < 5; index += 1) {
+      target.emit('error', { error: new Error(`e${index}`) });
+      await flush();
+    }
+    target.emit('error', { error: repeated });
+    await flush();
+    target.emit('error', { error: new Error('broken') });
+    await flush();
+    expect(sent).toEqual([]);
+    collecting = true;
+    target.emit('error', { error: repeated });
+    target.emit('error', { error: new Error('after consent') });
+    await flush();
+    expect(sent).toEqual([repeated, expect.objectContaining({ message: 'after consent' })]);
+    expect(attempts).toBe(9);
   });
 });

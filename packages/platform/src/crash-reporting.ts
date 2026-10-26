@@ -58,8 +58,10 @@ export interface CrashReporter {
    * Record a non-fatal report for an error the game handled (or one
    * `installCrashErrorCapture` caught). The message is redacted
    * (`redactCrashText`) and the stack is reduced to function, file, and line.
+   * Resolves `true` when the report reached the crash service, and `false`
+   * when it was dropped (no service, collection off, or an SDK failure).
    */
-  recordError(error: unknown, options?: RecordCrashErrorOptions): Promise<void>;
+  recordError(error: unknown, options?: RecordCrashErrorOptions): Promise<boolean>;
   /** A breadcrumb sent with the next report; redacted and truncated. */
   log(message: string): Promise<void>;
   /**
@@ -243,7 +245,9 @@ export function createUnavailableCrashReporter(
     async getStatus() {
       return frozen;
     },
-    async recordError() {},
+    async recordError() {
+      return false;
+    },
     async log() {},
     async setCollectionEnabled() {},
   };
@@ -295,9 +299,18 @@ export function installCrashErrorCapture(options: CrashErrorCaptureOptions): () 
     }
     seen.add(key);
     reported += 1;
-    // recordError never rejects by contract; the catch keeps a faulty
-    // reporter from raising another unhandled rejection.
-    options.reporter.recordError(value, { source }).catch(() => {});
+    // A dropped report (collection off until consent, an SDK failure) gives
+    // back its budget and may be reported when it happens again. The catch
+    // keeps a faulty reporter from raising another unhandled rejection.
+    const release = (): void => {
+      seen.delete(key);
+      reported -= 1;
+    };
+    options.reporter.recordError(value, { source }).then((sent) => {
+      if (!sent) {
+        release();
+      }
+    }, release);
   };
   const onError: CrashErrorEventListener = (event) => {
     if (typeof event !== 'object' || event === null) {
