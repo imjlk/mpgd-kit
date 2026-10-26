@@ -83,10 +83,13 @@ internal class OpenIapPlayConnection private constructor(
         offerToken: String,
         obfuscatedAccountId: String,
     ): Pair<List<PurchaseAndroid>, OpenIapError?> {
+        // OpenIAP publishes one error per purchase request, tagged with its
+        // product; an untagged error counts only until a tagged one arrives.
         val captured = AtomicReference<OpenIapError?>(null)
         errorSink.set { error ->
-            if (error.requestProductId == null || error.requestProductId == productId) {
-                captured.compareAndSet(null, error)
+            when (error.requestProductId) {
+                productId -> captured.set(error)
+                null -> captured.compareAndSet(null, error)
             }
         }
         try {

@@ -2,6 +2,7 @@ package dev.mpgd.capacitor.playbilling
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -11,6 +12,7 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import dev.hyo.openiap.OpenIapError
 import dev.hyo.openiap.PurchaseAndroid
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,7 +32,13 @@ import org.json.JSONException
 @CapacitorPlugin(name = "CapacitorPlayBilling")
 class CapacitorPlayBillingPlugin : Plugin() {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // Every coroutine below answers its own call; the handler only keeps a
+    // billing failure that escapes them (an Error) from crashing the game.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
+            Log.e(TAG, "Unhandled Google Play Billing failure", error)
+        },
+    )
     private var connection: OpenIapPlayConnection? = null
     private var providerError: String? = null
     private var activePurchase: PluginCall? = null
@@ -55,7 +63,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
             }
         } catch (error: OpenIapError) {
             providerError = error.message
-        } catch (error: RuntimeException) {
+        } catch (error: Exception) {
             providerError = "OpenIAP could not load the Google Play provider."
         }
     }
@@ -148,7 +156,6 @@ class CapacitorPlayBillingPlugin : Plugin() {
             val resolution = try {
                 runPurchase(active, productId, accountId, selectedOfferToken)
             } catch (error: CancellationException) {
-                flowInProgress = false
                 throw error
             } catch (error: OpenIapError) {
                 if (PlayBillingPolicy.isCancellation(error)) {
@@ -156,10 +163,13 @@ class CapacitorPlayBillingPlugin : Plugin() {
                 } else {
                     PurchaseResolution.Failed(PlayBillingPolicy.errorCode(error), billingMessage(error))
                 }
-            } catch (error: RuntimeException) {
+            } catch (error: Exception) {
                 PurchaseResolution.Failed("PLAY_BILLING_ERROR", "Google Play Billing failed.")
+            } finally {
+                // Released on every path, so one failure never leaves later
+                // purchases answering PLAY_BILLING_BUSY until a restart.
+                flowInProgress = false
             }
-            flowInProgress = false
             settlePurchase(call, productId, resolution)
         }
     }
@@ -286,7 +296,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
                 throw error
             } catch (error: OpenIapError) {
                 call.reject(billingMessage(error), PlayBillingPolicy.errorCode(error))
-            } catch (error: RuntimeException) {
+            } catch (error: Exception) {
                 call.reject("Google Play Billing failed.", "PLAY_BILLING_ERROR")
             }
         }
@@ -320,6 +330,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
     }
 
     private companion object {
+        const val TAG = "CapacitorPlayBilling"
         const val PURCHASE_TIMEOUT_MILLIS = 180_000L
         const val UNAVAILABLE_MESSAGE = "Google Play Billing is unavailable."
         const val EMPTY_MESSAGE = "Purchase callback was empty; requery owned purchases."

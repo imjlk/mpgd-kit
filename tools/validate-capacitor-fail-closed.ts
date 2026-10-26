@@ -134,7 +134,7 @@ assert.match(
 );
 assert.doesNotMatch(
   playBilling,
-  /\b(?:acknowledgePurchase|consumeAsync|acknowledgePurchaseAndroid|consumePurchaseAndroid|finishTransaction)\s*\(/u,
+  /\b(?:acknowledgePurchase|consumeAsync|acknowledgePurchaseAndroid|consumePurchaseAndroid|settlePurchaseToken|finishTransaction)\s*\(/u,
   'Client-side Billing must never finalize before the backend ledger grant',
 );
 assert.match(

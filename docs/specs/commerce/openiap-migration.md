@@ -140,12 +140,14 @@ on this contract:
    ([`JWSTransactionDecodedPayload.type`](https://developer.apple.com/documentation/appstoreserverapi/type)).
    A missing or subscription claim drops the transaction, as the 0.3 filter
    dropped non-one-time transactions. Upstream request 2.
-3. **Unverified transactions fail the whole query.** OpenIAP's
+3. **Unverified or unreadable transactions fail the whole query.** OpenIAP's
    `getPendingTransactionsIOS` and `getAvailablePurchases` throw on the first
    unverified entry (`checkVerified`, line 2335); the 0.3 plugin skipped
    unverified entries and returned the rest. The plugin now rejects
    `getTransactions` (and a finish behind it) with
-   `STOREKIT_TRANSACTION_UNVERIFIED`. This fails closed: the game never reads
+   `STOREKIT_TRANSACTION_UNVERIFIED`. A verified entry whose JWS has no
+   readable `type` claim fails the query the same way
+   (`STOREKIT_EVIDENCE_INVALID`) instead of being dropped. This fails closed: the game never reads
    a shortened list as "finished" (its finish recovery reads absence from the
    list), and the reconciler treats a failed read as retryable. The cost:
    while StoreKit cannot verify one transaction on a device (tampering, or a
@@ -165,9 +167,12 @@ on this contract:
    and treats an unknown one as already finished (line 764). The plugin
    resolves the full verified purchase first and answers `finished: false`
    only when no purchase passes the gate, so finishing an already finished
-   durable stays an idempotent `finished: true`, and a finished consumable
-   that left the lists stays `finished: false` (the game then checks the
-   list and the server grant, as before).
+   durable stays an idempotent `finished: true`. A finished consumable is
+   found only where StoreKit still returns it (`Transaction.all` includes
+   finished consumables only on iOS 18+ with
+   `SKIncludeConsumableInAppPurchaseHistory`); otherwise it answers
+   `finished: false` and the game checks the list and the server grant, as
+   with the 0.3 plugin, which searched the same history.
 7. **Purchase presentation.** On iOS 17+ OpenIAP calls
    `purchase(confirmIn:)` with the active window scene and fails before the
    sheet when there is none (line 2574); a Capacitor app always has one. When
@@ -213,6 +218,17 @@ on this contract:
 16. **iOS 15 currency.** OpenIAP reads the product currency from the
     product's price locale below iOS 16; the 0.3 plugin used
     `priceFormatStyle.currencyCode` on every version.
+17. **Two update iterators (iOS).** OpenIAP's listener and the revocation
+    shim each iterate `Transaction.updates`. StoreKit is expected to deliver
+    every update to every iterator; if a device does not, an update the shim
+    drops (any non-revoked one) reaches JavaScript only through the next
+    `getTransactions`, which the reconciler runs on start and resume. Listed
+    under [Not verified](#not-verified-and-release-conditions).
+18. **OpenIAP finishes some subscription transactions itself.** The Apple
+    core finishes inactive (expired, revoked, or upgraded) auto-renewable
+    subscription transactions it meets. The plugins sell no subscriptions, so
+    no one-time transaction is affected, but "nothing finishes outside
+    `finishTransaction`" holds for one-time purchases only.
 
 None of these changes recovery, account binding, or refund handling of a
 verified transaction except item 3, which is listed for a maintainer
@@ -226,8 +242,10 @@ decision. No new payment capability (subscriptions, quantity) is enabled.
   listener and end the connection; Android rejects an open purchase and any
   in-flight query with `PLAY_BILLING_INTERRUPTED`.
 - **Initialization and reconnection.** `initConnection` runs at load and is
-  idempotent; every OpenIAP call ensures the connection again, and Play
-  Billing auto-reconnects.
+  idempotent; a failure there is not fatal, because every OpenIAP call
+  ensures the connection again, and Play Billing auto-reconnects. Android
+  releases its purchase slot on every path, failures included, so an error
+  never leaves later purchases answering `PLAY_BILLING_BUSY`.
 - **Listeners.** One native listener per plugin. The TypeScript SDKs attach
   the Capacitor listener with the first subscriber and detach it with the
   last; native forwarding continues, and Capacitor drops (iOS) or retains
@@ -257,7 +275,7 @@ Android SDK 36):
 | `pnpm --dir packages/game-services test:recovery` (reconciler and conformance) | pass, before and after |
 | `pnpm validate:commerce-alignment`, `validate:capacitor-alignment`, `validate:capacitor-fail-closed` | pass (the fail-closed checks now read the Swift and Kotlin sources) |
 | `pnpm smoke:cli-capacitor-shell-starter`, `smoke:native-packed-consumer` | pass |
-| `MPGD_STOREKIT_BRIDGE_TESTS=1 swift test` in `native-plugins/capacitor-storekit` | 15 XCTests pass on the Mac host |
+| `MPGD_STOREKIT_BRIDGE_TESTS=1 swift test` in `native-plugins/capacitor-storekit` | 16 XCTests pass on the Mac host |
 | `swift build --target MpgdCapacitorStoreKit --triple arm64-apple-ios15.0-simulator` | pass |
 | `./gradlew -PmpgdPlayBillingPluginTest=true :mpgd-capacitor-play-billing:testDebugUnitTest :mpgd-capacitor-play-billing:assembleRelease` (reference shell) | 11 JVM tests pass, release AAR built |
 | `pnpm smoke:native-packed-store-plugins ios android` | packed Swift package compiles for the simulator; packed Gradle module assembles a release AAR |
@@ -269,8 +287,9 @@ equivalent SwiftPM simulator build passed, and `xcodebuild -list` shows the
 step.
 
 mpgd-games (`80dc56a0`, Nep Nep Nem Nep), same commands for three
-dependency sets: the game's own 0.3.7 (patched), npm 0.3.9 (the kit before
-this change), and the candidate tarballs packed from this branch. The
+dependency sets: the game's own 0.3.7 (patched), npm 0.3.9 (the last
+published release before this change; 0.3.10 on `main` only bumps
+dependencies), and the candidate tarballs packed from this branch. The
 resolved packages were checked to be the candidates (OpenIAP sources present):
 
 | Check | 0.3.7 | 0.3.9 | candidate |
@@ -321,12 +340,16 @@ These were open before the swap and stay release conditions for the game:
 - A StoreKit Testing (`SKTestSession`) or Play sandbox run of the new engine
   itself: OpenIAP's purchase path needs a window scene, so it needs a host
   app rather than package tests.
+- Whether every `Transaction.updates` iterator receives every update on
+  devices (difference 17), checked with a delayed Ask to Buy approval and a
+  refund while the app runs.
 - The maintainer decision on difference 3.
 
 ## Rollback
 
 Pin the game and its mobile wrapper back to the last verified plugin
-versions (0.3.9, or 0.3.7 with the game's patch), run `sync:ios` and
+versions (0.3.9 on npm, 0.3.10 once published, which has the same native
+code; or 0.3.7 with the game's patch), run `sync:ios` and
 `sync:android`, and rebuild the native apps; a web-bundle update alone does
 not change the native engine. Journals, evidence schemas, and transaction ids
 are the same in both engines, so an older build resumes every open purchase.
