@@ -162,6 +162,16 @@ head_sampling_rate = 1
 # GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME = "com.example.game"
 # GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"
 #
+# Restore sharing: a verified restore of a non-consumable that Google Play
+# (obfuscatedAccountId) or the App Store (appAccountToken) binds to another
+# guest (a reinstall, a new device, a second device on the same store account)
+# grants the restoring guest its own entitlement; earlier holders keep theirs,
+# up to GAME_SERVICES_RESTORE_MAX_HOLDERS guests per purchase (default 5)
+# (docs/GAME_SERVICES_BACKEND.md#restore-sharing). "refuse" turns it off.
+# Under [vars]:
+# GAME_SERVICES_RESTORE_SHARING = "refuse"
+# GAME_SERVICES_RESTORE_MAX_HOLDERS = "5"
+#
 # [[services]]
 # binding = "GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH"
 # service = "game-play-publisher-auth"

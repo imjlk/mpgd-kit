@@ -82,7 +82,12 @@ interface InspectedGooglePlayPurchase {
 }
 
 type GooglePlayPurchaseInspection =
-  | { readonly status: 'verified'; readonly purchase: InspectedGooglePlayPurchase }
+  | {
+      readonly status: 'verified';
+      readonly purchase: InspectedGooglePlayPurchase;
+      /** The binding mismatch of a purchase bound to another account, when `reportForeignBinding` asked for it. */
+      readonly foreignBinding?: string;
+    }
   | { readonly status: 'pending'; readonly reason: string }
   | { readonly status: 'rejected'; readonly reason: string };
 
@@ -153,6 +158,11 @@ export function createGooglePlayProductPurchaseBoundary(
         ),
         accountBinding,
         allowConsumed: false,
+        // A restored non-consumable bound to an earlier player (a reinstall,
+        // a new device) is reported, not refused: the backend's restore
+        // sharing policy decides (RFC "Restore sharing").
+        reportForeignBinding: verificationInput.request.intent === 'restore'
+          && verificationInput.product.type === 'non_consumable',
         signal: verificationInput.signal,
       });
 
@@ -160,8 +170,7 @@ export function createGooglePlayProductPurchaseBoundary(
         return inspection;
       }
 
-      return {
-        status: 'verified',
+      const verified = {
         verificationId: createGooglePlayVerificationId(
           inspection.purchase.purchaseTokenDigest,
         ),
@@ -169,6 +178,9 @@ export function createGooglePlayProductPurchaseBoundary(
         platformEvidenceId: inspection.purchase.orderId ?? null,
         payload: createVerificationPayload(packageName, inspection.purchase),
       };
+      return inspection.foreignBinding === undefined
+        ? { status: 'verified', ...verified }
+        : { status: 'restorable', reason: inspection.foreignBinding, ...verified };
     },
 
     async finalizePurchaseGrant(finalizationInput) {
@@ -394,6 +406,8 @@ async function inspectGooglePlayPurchase(input: {
   readonly orderMatch: GooglePlayOrderMatch;
   readonly accountBinding: VerifiedGooglePlayAccountBinding;
   readonly allowConsumed: boolean;
+  /** Answer a bound purchase whose ids name another account as verified, with the mismatch. */
+  readonly reportForeignBinding?: boolean;
   readonly signal: AbortSignal;
 }): Promise<GooglePlayPurchaseInspection> {
   const raw = await input.client.getProductPurchaseV2({
@@ -513,6 +527,7 @@ async function inspectGooglePlayPurchase(input: {
   ) {
     return rejected('GOOGLE_PLAY_PROFILE_INVALID');
   }
+  let foreignBinding: string | undefined;
   if (input.accountBinding.status === 'bound') {
     // Defensive invariant: every bound context must carry at least one
     // identifier, even though the constructors below already enforce it.
@@ -522,26 +537,32 @@ async function inspectGooglePlayPurchase(input: {
     ) {
       return rejected('GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
     }
+    // A purchase made outside the app (a promo code) carries no ids at all
+    // ("purchases made outside your app won't have these identifiers set").
     if (
       input.accountBinding.accountId !== undefined
       && obfuscatedExternalAccountId !== input.accountBinding.accountId
     ) {
-      return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
-    }
-    if (
+      foreignBinding = 'GOOGLE_PLAY_ACCOUNT_MISMATCH';
+    } else if (
       input.accountBinding.profileId !== undefined
       && obfuscatedExternalProfileId !== input.accountBinding.profileId
     ) {
-      return rejected('GOOGLE_PLAY_PROFILE_MISMATCH');
+      foreignBinding = 'GOOGLE_PLAY_PROFILE_MISMATCH';
+    }
+    if (foreignBinding !== undefined && input.reportForeignBinding !== true) {
+      return rejected(foreignBinding);
     }
     if (
-      input.accountBinding.profileId === undefined
+      foreignBinding === undefined
+      && input.accountBinding.profileId === undefined
       && obfuscatedExternalProfileId !== undefined
     ) {
       return rejected('GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
     }
     if (
-      input.accountBinding.accountId === undefined
+      foreignBinding === undefined
+      && input.accountBinding.accountId === undefined
       && obfuscatedExternalAccountId !== undefined
     ) {
       return rejected('GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
@@ -560,6 +581,7 @@ async function inspectGooglePlayPurchase(input: {
 
   return {
     status: 'verified',
+    ...(foreignBinding === undefined ? {} : { foreignBinding }),
     purchase: {
       purchaseToken: input.purchaseToken,
       purchaseTokenDigest: await digestPurchaseToken(

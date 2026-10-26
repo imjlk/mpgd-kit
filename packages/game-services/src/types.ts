@@ -77,7 +77,19 @@ export interface VerifyPurchaseRequest {
   readonly idempotencyKey: PurchaseIdempotencyKey;
   readonly purchasedAt: string;
   readonly evidence?: PlatformEvidenceEnvelope;
+  /**
+   * Why the client sends the purchase. `restore` is a purchase the store
+   * reported without this client starting it (a reinstall, a new device, or
+   * Restore Purchases): the backend may then grant this player a verified
+   * non-consumable the store binds to an earlier player (`restoreSharing`,
+   * RFC "Restore sharing"). Absent means `purchase`; the intent is a request
+   * for that policy, never proof of ownership.
+   */
+  readonly intent?: VerifyPurchaseIntent;
 }
+
+/** `VerifyPurchaseRequest.intent`. */
+export type VerifyPurchaseIntent = 'purchase' | 'restore';
 
 export interface ClaimAdRewardRequest {
   readonly target: GameServicesAdRewardTarget;
@@ -233,6 +245,9 @@ export function assertVerifyPurchaseRequest(input: VerifyPurchaseRequest): Verif
     assertRequestString(input.idempotencyKey, 'idempotencyKey');
     assertRequestString(input.purchasedAt, 'purchasedAt');
     assertOptionalEvidenceEnvelope(input.evidence);
+    if (input.intent !== undefined && input.intent !== 'purchase' && input.intent !== 'restore') {
+      throw new Error('intent must be purchase or restore.');
+    }
 
     return input;
   });
@@ -249,6 +264,12 @@ export function assertVerifyPurchaseResponse(
   assertOptionalNonEmptyString(input.reason, 'reason');
   if (input.finalization !== undefined) {
     assertPurchaseGrantFinalization(input.finalization);
+  }
+  if (input.restoredAcrossPlayers !== undefined && input.restoredAcrossPlayers !== true) {
+    throw new Error('restoredAcrossPlayers must be true when present.');
+  }
+  if (input.restoredAcrossPlayers === true && input.verified !== true) {
+    throw new Error('restoredAcrossPlayers requires a verified response.');
   }
 
   return input;

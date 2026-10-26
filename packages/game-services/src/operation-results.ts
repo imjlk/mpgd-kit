@@ -7,6 +7,13 @@ export interface VerifyPurchaseResponse {
   readonly alreadyProcessed: boolean;
   readonly reason?: string;
   readonly finalization?: PurchaseGrantFinalization;
+  /**
+   * This player's grant comes from a verified restore of a purchase the
+   * store binds to another player (a reinstall or another device): the game
+   * can say the purchase was restored to this device. Present only on a
+   * verified response.
+   */
+  readonly restoredAcrossPlayers?: true;
 }
 
 export type PurchaseGrantFinalizationAction =

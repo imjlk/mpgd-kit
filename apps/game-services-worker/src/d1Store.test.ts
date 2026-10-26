@@ -1,12 +1,16 @@
 import { readFile } from 'node:fs/promises';
 
 import {
+  createGameServicesBackend,
   EvidenceAlreadyProcessedError,
   listActiveEntitlementTransactions,
+  listPurchaseHolders,
   readPurchaseLedgerStatuses,
   revokeEntitlementGrant,
   type EntitlementLedgerGrant,
   type EntitlementLedgerRevocation,
+  type GameServicesEvidenceVerifier,
+  type VerifyPurchaseRequest,
 } from '@mpgd/game-services';
 import { Miniflare } from 'miniflare';
 
@@ -278,6 +282,8 @@ try {
     false,
     'entitlement reads subtract the reversed grant',
   );
+
+  await runRestoreSharingScenario(db, store);
 } finally {
   await miniflare.dispose();
 }
@@ -355,6 +361,122 @@ function toD1ExecScript(migration: string): string {
     .map((statement) => statement.replace(/\s+/gu, ' ').trim())
     .filter((statement) => statement.length > 0)
     .join('\n');
+}
+
+/**
+ * Restore sharing on D1: no table of its own (unique evidence ids and keys
+ * on the grants), so the holder cap must hold when isolates race, a refund
+ * must reach every holder, and retries must be idempotent per guest.
+ */
+async function runRestoreSharingScenario(
+  db: D1Database,
+  store: ReturnType<typeof createD1GameServicesStore>,
+): Promise<void> {
+  const verificationId = 'google-play:product:d1-sharing-digest';
+  const verifier: GameServicesEvidenceVerifier = {
+    async verifyPurchase({ request }) {
+      const verified = {
+        verificationId,
+        verifiedAt: '2030-01-01T00:00:00.000Z',
+        platformEvidenceId: 'GPA.d1-sharing',
+      };
+      return request.playerId === 'd1-buyer'
+        ? { status: 'verified', ...verified }
+        : { status: 'restorable', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', ...verified };
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'UNUSED' };
+    },
+  };
+  const backendFor = (ledger: ReturnType<typeof createD1GameServicesStore>) =>
+    createGameServicesBackend({
+      catalog: {
+        version: 'd1-sharing',
+        products: [
+          {
+            id: 'REMOVE_ADS',
+            type: 'non_consumable',
+            grant: { type: 'entitlement', entitlement: 'remove_ads' },
+            platformProductIds: { android: 'remove_ads_android' },
+          },
+        ],
+      },
+      placements: { version: 'd1-sharing', placements: [] },
+      store: ledger,
+      evidenceVerifier: verifier,
+      restoreSharing: { mode: 'share', maxHolders: 3 },
+    });
+  const request = (playerId: string, intent: 'purchase' | 'restore'): VerifyPurchaseRequest => ({
+    target: 'android',
+    playerId,
+    productId: 'REMOVE_ADS',
+    platformTransactionId: 'GPA.d1-sharing',
+    idempotencyKey: `d1-sharing:${playerId}`,
+    purchasedAt: '2030-01-01T00:00:00.000Z',
+    intent,
+  });
+  const backend = backendFor(store);
+  const bought = await backend.purchases.verifyPurchase(request('d1-buyer', 'purchase'));
+  assertEqual(bought.verified, true, 'D1 grants the buyer');
+  const shared = await backend.purchases.verifyPurchase(request('d1-guest-1', 'restore'));
+  assertEqual(shared.restoredAcrossPlayers, true, 'D1 shares the restored non-consumable');
+  const replay = await backend.purchases.verifyPurchase({
+    ...request('d1-guest-1', 'restore'),
+    idempotencyKey: 'd1-sharing:another-key',
+  });
+  assertEqual(
+    replay.ledgerEntryId,
+    shared.ledgerEntryId,
+    'a D1 retry of the guest answers its share',
+  );
+  assertEqual(
+    (await readPurchaseLedgerStatuses(store, {
+      playerId: 'd1-buyer',
+      ledgerEntryIds: [bought.ledgerEntryId ?? ''],
+    })).statuses[0]?.status,
+    'active',
+    'the buyer keeps its grant on D1',
+  );
+
+  // Three isolates race for the last free slot: one share lands, the cap holds.
+  const answers = await Promise.all(
+    ['d1-guest-2', 'd1-guest-3', 'd1-guest-4'].map((playerId) =>
+      backendFor(createD1GameServicesStore(db)).purchases.verifyPurchase(
+        request(playerId, 'restore'),
+      ),
+    ),
+  );
+  assertEqual(
+    answers.filter((answer) => answer.verified).length,
+    1,
+    'one racing restore takes the last slot',
+  );
+  assertEqual(
+    answers.filter((answer) => answer.reason === 'PURCHASE_HOLDER_LIMIT_REACHED').length,
+    2,
+    'the others answer the holder limit',
+  );
+  const holders = await listPurchaseHolders(store, verificationId);
+  assertEqual(holders.shared.length, 2, 'D1 keeps two shares next to the first grant');
+
+  // A refund naming the first grant revokes every holder.
+  const refund = await revokeEntitlementGrant(store, {
+    playerId: 'd1-buyer',
+    revokesLedgerEntryId: bought.ledgerEntryId ?? '',
+    idempotencyKey: 'google-play:voided:d1-sharing',
+    reason: 'refund',
+    revokedAt: '2030-01-03T00:00:00.000Z',
+    payload: { target: 'android' },
+    evidenceVerificationId: `${verificationId}:revoke`,
+  });
+  assertEqual(refund.status, 'revoked', 'the refund applies on D1');
+  assertEqual(
+    (await listActiveEntitlementTransactions(store)).some((entry) => entry.grantId === 'REMOVE_ADS'),
+    false,
+    'a refund on D1 revokes every holder',
+  );
+  const afterRefund = await backend.purchases.verifyPurchase(request('d1-late', 'restore'));
+  assertEqual(afterRefund.reason, 'LEDGER_GRANT_REVERSED', 'a refunded purchase is never shared');
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

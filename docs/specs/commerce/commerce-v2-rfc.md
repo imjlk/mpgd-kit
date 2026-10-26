@@ -561,6 +561,48 @@ read, `getPurchaseLedgerStatus({ ledgerEntryIds })`, returns whether each
 grant is active or reversed and by which entry. Entitlement reads subtract
 reversed grants.
 
+### Restore sharing {#restore-sharing}
+
+A purchase is bound to the player that bought it (Google Play
+`obfuscatedAccountId`, StoreKit `appAccountToken`). A guest player lives in
+the device's secure store, so a reinstall, a new device, or a second device
+on the same store account is another player while the store keeps returning
+the non-consumable with the buyer's binding. Under the backend's
+`restoreSharing: { mode: 'share', maxHolders }` policy the store's
+verification of the restored purchase is the proof of ownership, and the
+restoring player gets its own grant of it:
+
+- **Request.** `VerifyPurchaseRequest.intent: 'restore'`. The reconciler sends
+  it for a purchase it discovered (no journal record of this install started
+  it); a game-started purchase sends none. The intent selects the policy and
+  proves nothing.
+- **Verifier.** A decision, `{ status: 'restorable', reason, ...verified
+  fields }`: every check passed except the account binding, which names
+  another player or none; `reason` is the binding mismatch. Reference
+  verifiers answer it only for a restore of a non-consumable (the App Store one
+  only with the client's verified JWS); for everything else they reject as
+  before. Ad reward claims treat it as a verifier error.
+- **Ledger.** The purchase's holders are the grant its verification id names
+  and the shared grants at slots 1, 2, ... (evidence id
+  `<verification id>#mpgd-holder:<slot>`, under the request's key, listed
+  with one indexed prefix read). A share takes the slot after the highest
+  one, so concurrent shares collide and the limit holds;
+  a player that already holds the purchase gets its grant back; nothing is
+  revoked to make room. A purchase whose every holder is revoked is never
+  shared again. A store refund, chargeback, or voided purchase of any holder's
+  grant revokes every holder.
+- **Limit.** At most `maxHolders` (default 5) players hold a purchase at the
+  same time; reversed grants and a deleted player's retained record do not
+  count.
+- **Answers.** `verified` with `restoredAcrossPlayers: true` (retries
+  included); `rejected` with the verifier's reason when the policy refuses or
+  the product is not a non-consumable; `rejected` `LEDGER_GRANT_REVERSED` for
+  a purchase a store refund, chargeback, or voided purchase ended (a share
+  written while that refund fans out is revoked right after its write; an
+  `admin` entry ends one holder only); `pending` `PURCHASE_HOLDER_LIMIT_REACHED` at the
+  limit; `pending` `PURCHASE_HOLDER_CONFLICT` after repeated lost races.
+- **Never shared.** Consumables and subscriptions.
+
 ## Credit wallet {#credit-wallet}
 
 D-02 frames the first recurring product as a credit-funded membership and

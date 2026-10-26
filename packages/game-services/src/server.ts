@@ -23,14 +23,23 @@ import {
   type CommerceEvidenceRegistry,
 } from './commerce-evidence-registry.js';
 import {
+  createPurchaseHolderEvidenceVerificationId,
+  findEntitlementRevocationsChunked,
+  findPurchaseWideRevocation,
+  holderRevocationEvidenceId,
   isEntitlementGrantReversed,
+  isRestoredAcrossPlayers,
+  listPurchaseHolders,
   readPurchaseLedgerStatuses,
+  readPurchaseVerificationId,
   RevocationKeyConflictError,
+  revokeEntitlementGrant,
 } from './commerce-ledger.js';
 import {
   assertPlayerDataErasureInput,
   createRetainedLedgerEntryId,
   detachRetainedLedgerPayload,
+  isRetainedPlayerId,
   type PlayerDataErasureInput,
   type PlayerDataErasureResult,
 } from './account-deletion.js';
@@ -77,6 +86,11 @@ import {
   type VerifyPurchaseRequest,
   type VerifyPurchaseResponse,
 } from './types.js';
+import {
+  resolvePurchaseRestoreSharingPolicy,
+  type PurchaseRestoreSharingPolicy,
+  type ResolvedPurchaseRestoreSharingPolicy,
+} from './purchase-sharing.js';
 import { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
 
 export { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
@@ -114,6 +128,15 @@ export interface CreateGameServicesBackendInput {
    * every purchase, and no capabilities endpoint.
    */
   readonly commerceEvidenceRegistry?: CommerceEvidenceRegistry;
+  /**
+   * How a restored non-consumable that the store binds to another player is
+   * answered (RFC "Restore sharing"). `{ mode: 'share' }` grants the
+   * restoring player its own entitlement while earlier holders keep theirs,
+   * up to `maxHolders` (5) players per purchase. Defaults to
+   * `{ mode: 'refuse' }`, which keeps answering the binding mismatch; the
+   * reference Worker shares by default (`GAME_SERVICES_RESTORE_SHARING`).
+   */
+  readonly restoreSharing?: PurchaseRestoreSharingPolicy;
   /**
    * Receives unexpected (non-validation) failures such as store errors before the
    * transport answers with the generic `INTERNAL_ERROR` code. Defaults to `console.error`.
@@ -192,6 +215,17 @@ export interface GameServicesStore {
   findEntitlementRevocations?(input: {
     readonly ledgerEntryIds: readonly string[];
   }): Promise<readonly EntitlementRevocationTransaction[]>;
+  /**
+   * The grants of `source` whose `evidenceVerificationId` starts with
+   * `prefix` (at most `limit`), any order: restore sharing lists a purchase's
+   * shared grants with it in one indexed read (RFC "Restore sharing").
+   * Optional: without it the shares are read slot by slot.
+   */
+  findEntitlementTransactionsByEvidencePrefix?(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly prefix: string;
+    readonly limit: number;
+  }): Promise<readonly ProductGrantTransaction[]>;
   /**
    * Keeps a ledger note (a store event that grants nothing), once per
    * `noteId`: a replay answers `alreadyRecorded: true` and keeps the first.
@@ -322,6 +356,26 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     readonly evidenceVerificationId: string;
   }): Promise<ProductGrantTransaction | undefined> {
     return this.entitlementTransactionsByEvidence.get(createEntitlementEvidenceKey(input));
+  }
+
+  async findEntitlementTransactionsByEvidencePrefix(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly prefix: string;
+    readonly limit: number;
+  }): Promise<readonly ProductGrantTransaction[]> {
+    const found: ProductGrantTransaction[] = [];
+    for (const transaction of this.entitlementTransactionsById.values()) {
+      if (
+        transaction.source === input.source
+        && transaction.evidenceVerificationId?.startsWith(input.prefix) === true
+      ) {
+        found.push(transaction);
+        if (found.length >= input.limit) {
+          break;
+        }
+      }
+    }
+    return found;
   }
 
   async findEntitlementTransactionByPlatformEvidence(
@@ -686,6 +740,7 @@ export function createGameServicesBackend(
     input.purchaseGrantFinalizationTimeoutMs,
   );
   const deploymentTargetBindings = resolveDeploymentTargetBindings(input.deploymentTargetBindings);
+  const restoreSharing = resolvePurchaseRestoreSharingPolicy(input.restoreSharing);
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -726,6 +781,7 @@ export function createGameServicesBackend(
           evidenceVerificationTimeoutMs,
           purchaseGrantFinalizationTimeoutMs,
           deploymentTargetBindings,
+          restoreSharing,
           ...(purchaseGrantFinalizer === undefined
             ? {}
             : { purchaseGrantFinalizer }),
@@ -746,6 +802,7 @@ export function createGameServicesBackend(
               finalizationAction: verification.finalization?.action,
               finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
               finalizationReason: verification.finalization?.reason,
+              restoredAcrossPlayers: verification.restoredAcrossPlayers,
             },
           });
         });
@@ -1141,6 +1198,7 @@ interface PurchaseVerificationContext {
   readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
   readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
   readonly registry?: CommerceEvidenceRegistry;
+  readonly restoreSharing: ResolvedPurchaseRestoreSharingPolicy;
 }
 
 /** The ledger targets a v1 backend (no registry) accepts: the platform targets with a ledger. */
@@ -1258,10 +1316,13 @@ async function verifyPurchaseForRetry(
       ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: true,
       ...(finalization === undefined ? {} : { finalization }),
+      ...(isRestoredAcrossPlayers(transaction) ? { restoredAcrossPlayers: true } : {}),
     });
   };
   const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
 
+  // A key names one grant: a resend under the key of a reversed grant
+  // answers it as reversed, never as a new restore.
   if (existing !== undefined) {
     return completeExistingRetry(existing);
   }
@@ -1306,6 +1367,32 @@ async function verifyPurchaseForRetry(
     return completeSettledPurchase(request, verification, context);
   }
 
+  // The store routed to, as for a grant below.
+  const routedEntry = context.registry?.route(request);
+  const verifiedStore = routedEntry?.status === 'routed'
+    ? routedEntry.entry.store
+    : resolveCommerceStoreId(request);
+
+  if (verification.status === 'restorable') {
+    // A verified restore of a purchase the store binds to another player.
+    return shareRestoredPurchase(
+      request,
+      {
+        product,
+        platformProductId,
+        verification,
+        verifiedStore,
+        refusal: assertVerifyPurchaseResponse({
+          verified: false,
+          alreadyProcessed: false,
+          disposition: 'rejected',
+          reason: verification.reason,
+        }),
+      },
+      context,
+    );
+  }
+
   if (verification.status !== 'verified') {
     // A matching grant can land while provider verification is in flight. Recheck
     // before returning a stale provider state such as an already-consumed token.
@@ -1332,15 +1419,37 @@ async function verifyPurchaseForRetry(
     verification,
     request.platformTransactionId,
   );
-  const evidenceSchema = request.evidence?.schema;
+  if (
+    context.restoreSharing.mode === 'share'
+    && product.type === 'non_consumable'
+    && context.store.findEntitlementTransactionsByEvidencePrefix !== undefined
+  ) {
+    // The retention purge can delete a purchase's first grant while its
+    // shares remain: the buyer then takes a holder's place under the limit
+    // like any other player, never a replacement first grant past it.
+    const holders = await listPurchaseHolders(context.store, verification.verificationId);
+    if (holders.first === undefined && holders.shared.length > 0) {
+      return shareRestoredPurchase(
+        request,
+        {
+          product,
+          platformProductId,
+          verification,
+          verifiedStore,
+          bindingMatches: true,
+          refusal: assertVerifyPurchaseResponse({
+            verified: false,
+            alreadyProcessed: false,
+            reason: 'EVIDENCE_ALREADY_PROCESSED',
+          }),
+        },
+        context,
+      );
+    }
+  }
   // The store written is the one the registry routed to (an entry's own
   // store, or a declared fallback store); a fallback serving undeclared
   // stores and the v1 path record the request's resolved store.
-  const routed = context.registry?.route(request);
-  const verifiedStore = routed?.status === 'routed'
-    ? routed.entry.store
-    : resolveCommerceStoreId(request);
-
   const grant = await recordEntitlementGrantWithEvidence(context.store, {
     playerId: request.playerId,
     grantId: product.id,
@@ -1349,22 +1458,13 @@ async function verifyPurchaseForRetry(
     grantedAt: context.now(),
     grant: product.grant,
     evidenceVerificationId: verification.verificationId,
-    payload: {
-      ...verificationPayload,
-      target: request.target,
-      store: verifiedStore,
-      ...(request.deploymentTarget === undefined
-        ? {}
-        : { deploymentTarget: request.deploymentTarget }),
-      productId: request.productId,
-      productType: product.type,
+    payload: createPurchaseGrantPayload(request, {
+      product,
       platformProductId,
+      verification,
+      verifiedStore,
       ...(platformTransactionId === undefined ? {} : { platformTransactionId }),
-      purchasedAt: request.purchasedAt,
-      ...(evidenceSchema === undefined ? {} : { evidenceSchema }),
-      evidenceVerificationId: verification.verificationId,
-      evidenceVerifiedAt: verification.verifiedAt,
-    },
+    }),
   });
 
   if (grant.status === 'evidence_already_processed') {
@@ -1372,6 +1472,35 @@ async function verifyPurchaseForRetry(
       context.store,
       { source: 'purchase', evidenceVerificationId: verification.verificationId },
     );
+    if (
+      existingEvidence !== undefined
+      && context.restoreSharing.mode === 'share'
+      && product.type === 'non_consumable'
+      && existingEvidence.playerId !== request.playerId
+      && (request.intent === 'restore' || existingEvidence.payload.restoredAcrossAccounts === true)
+    ) {
+      // The store binds the purchase to this player, but another player's
+      // grant names it: a restore of this player's, or (when that grant came
+      // from another guest's restore before this player's own verify reached
+      // the ledger) the buyer's checkout. The binding match is the proof, so
+      // this player gets its own share.
+      return shareRestoredPurchase(
+        request,
+        {
+          product,
+          platformProductId,
+          verification,
+          verifiedStore,
+          bindingMatches: true,
+          refusal: assertVerifyPurchaseResponse({
+            verified: false,
+            alreadyProcessed: false,
+            reason: 'EVIDENCE_ALREADY_PROCESSED',
+          }),
+        },
+        context,
+      );
+    }
     if (
       existingEvidence !== undefined
       && matchesPurchaseEvidenceRecovery(existingEvidence, {
@@ -1507,6 +1636,349 @@ async function completeSettledPurchase(
   });
 }
 
+type PurchaseEvidenceDecision = Extract<
+  EvidenceVerificationDecision,
+  { readonly status: 'verified' | 'restorable' }
+>;
+
+/** The ledger payload of a purchase grant: the verifier's payload and the request's identity. */
+function createPurchaseGrantPayload(
+  request: VerifyPurchaseRequest,
+  input: {
+    readonly product: ProductCatalog['products'][number];
+    readonly platformProductId: string;
+    readonly verification: PurchaseEvidenceDecision;
+    readonly verifiedStore: string;
+    readonly platformTransactionId?: string;
+  },
+): EntitlementLedgerPayload {
+  const evidenceSchema = request.evidence?.schema;
+  return {
+    ...createVerificationPayload(input.verification, 'platformTransactionId'),
+    target: request.target,
+    store: input.verifiedStore,
+    ...(request.deploymentTarget === undefined
+      ? {}
+      : { deploymentTarget: request.deploymentTarget }),
+    productId: request.productId,
+    productType: input.product.type,
+    platformProductId: input.platformProductId,
+    ...(input.platformTransactionId === undefined
+      ? {}
+      : { platformTransactionId: input.platformTransactionId }),
+    purchasedAt: request.purchasedAt,
+    ...(evidenceSchema === undefined ? {} : { evidenceSchema }),
+    evidenceVerificationId: input.verification.verificationId,
+    evidenceVerifiedAt: input.verification.verifiedAt,
+  };
+}
+
+/**
+ * A verified restore of a non-consumable the store binds to another player
+ * (RFC "Restore sharing"). Under the `share` policy, for a request with
+ * `intent: 'restore'` of a non-consumable, the restoring player gets its own
+ * grant linked to the purchase and earlier holders keep theirs; otherwise
+ * `refusal` is answered. A purchase no grant holds yet is granted to the
+ * restoring player as its first grant. A refunded or revoked purchase is
+ * refused, a purchase already held by `maxHolders` players answers
+ * `pending` (`PURCHASE_HOLDER_LIMIT_REACHED`) and evicts nobody, and a
+ * player that already holds it gets its grant back.
+ */
+async function shareRestoredPurchase(
+  request: VerifyPurchaseRequest,
+  input: {
+    readonly product: ProductCatalog['products'][number];
+    readonly platformProductId: string;
+    readonly verification: PurchaseEvidenceDecision;
+    readonly verifiedStore: string;
+    readonly refusal: VerifyPurchaseResponse;
+    /** The store binds the purchase to this player (a `verified` decision): no restore intent needed. */
+    readonly bindingMatches?: boolean;
+  },
+  context: PurchaseVerificationContext,
+): Promise<VerifyPurchaseResponse> {
+  const { store, restoreSharing: policy } = context;
+  const { product, verification } = input;
+  if (
+    policy.mode !== 'share'
+    || (request.intent !== 'restore' && input.bindingMatches !== true)
+    || product.type !== 'non_consumable'
+  ) {
+    return input.refusal;
+  }
+  const purchaseVerificationId = verification.verificationId;
+  const notGranted = (
+    disposition: 'pending' | 'rejected',
+    reason: string,
+  ): { readonly status: 'answer'; readonly response: VerifyPurchaseResponse } => ({
+    status: 'answer',
+    response: assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      disposition,
+      reason,
+    }),
+  });
+  const payload = createPurchaseGrantPayload(request, input);
+  const platformTransactionId = resolvePlatformEvidenceId(
+    verification,
+    request.platformTransactionId,
+  );
+  const holderIdentity = {
+    source: 'purchase',
+    playerId: request.playerId,
+    grantId: request.productId,
+    target: request.target,
+    store: input.verifiedStore,
+    ...(request.deploymentTarget === undefined
+      ? {}
+      : { deploymentTarget: request.deploymentTarget }),
+  } as const;
+  const outcome = await withEntitlementEvidenceLocks(
+    store,
+    [createEntitlementEvidenceKey({
+      source: 'purchase',
+      evidenceVerificationId: purchaseVerificationId,
+    })],
+    async (): Promise<
+      | { readonly status: 'answer'; readonly response: VerifyPurchaseResponse }
+      | { readonly status: 'held'; readonly grant: ProductGrantTransaction }
+      | {
+          readonly status: 'written';
+          readonly ledgerEntryId: string;
+          readonly alreadyProcessed: boolean;
+        }
+    > => {
+      // A lost race for a slot (another isolate shared the purchase between
+      // the read and the write) reads the holders again.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const holders = await listPurchaseHolders(store, purchaseVerificationId);
+        const first = holders.first;
+        // The holders; the first grant may be gone (the retention purge
+        // deleted a deleted player's record) while its shares remain.
+        const all = [...(first === undefined ? [] : [first]), ...holders.shared];
+        const anchor = all[0];
+        if (anchor === undefined) {
+          // No grant holds the purchase: it never reached this ledger (an app
+          // closed before verifying, or bought outside the app). The store's
+          // verification is the proof, as for a share.
+          const recorded = await recordEntitlementGrantUnchecked(store, {
+            playerId: request.playerId,
+            grantId: product.id,
+            source: 'purchase',
+            idempotencyKey: request.idempotencyKey,
+            grantedAt: context.now(),
+            grant: product.grant,
+            evidenceVerificationId: purchaseVerificationId,
+            payload: {
+              ...payload,
+              ...(platformTransactionId === undefined ? {} : { platformTransactionId }),
+              restoredAcrossAccounts: true,
+            },
+          });
+          if (recorded.status !== 'recorded') {
+            continue;
+          }
+          if (recorded.result.alreadyProcessed) {
+            // The key already held a grant (another isolate wrote it after the
+            // lookup): it is this restore only if it records this purchase.
+            const keyed = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
+            if (
+              keyed === undefined
+              || !matchesEntitlementRetry(keyed, {
+                ...holderIdentity,
+                idempotencyKey: request.idempotencyKey,
+              })
+              || readPurchaseVerificationId(keyed) !== purchaseVerificationId
+            ) {
+              return notGranted('rejected', 'IDEMPOTENCY_KEY_CONFLICT');
+            }
+            if (await isEntitlementGrantReversed(store, keyed.ledgerEntryId)) {
+              return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
+            }
+          }
+          return {
+            status: 'written',
+            ledgerEntryId: recorded.result.ledgerEntryId,
+            alreadyProcessed: recorded.result.alreadyProcessed,
+          };
+        }
+        if (
+          anchor.source !== 'purchase'
+          || anchor.grantId !== request.productId
+          || anchor.payload.target !== request.target
+          || (anchor.payload.store !== undefined && anchor.payload.store !== input.verifiedStore)
+          // Two deployment targets sharing a ledger never share a grant, as
+          // for a retry (`matchesEntitlementTransactionIdentity`).
+          || (
+            anchor.payload.deploymentTarget !== undefined
+            && anchor.payload.deploymentTarget !== request.deploymentTarget
+          )
+        ) {
+          return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
+        }
+        const revocations = await findEntitlementRevocationsChunked(
+          store,
+          all.map((grant) => grant.ledgerEntryId),
+        );
+        const reversed = new Set(revocations.map((entry) => entry.revokesLedgerEntryId));
+        if (
+          await findPurchaseWideRevocation(store, all) !== undefined
+          || all.every((grant) => reversed.has(grant.ledgerEntryId))
+        ) {
+          // Refunded, charged back, or voided: the purchase ended for every
+          // holder. An admin entry ends one holder only and frees its place,
+          // but a purchase no holder keeps is never shared again (a refund
+          // that arrives then finds no grant left to mark).
+          return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
+        }
+        const own = all.find((grant) => grant.playerId === request.playerId);
+        if (own !== undefined && !matchesEntitlementTransactionIdentity(own, holderIdentity)) {
+          return notGranted('rejected', 'LEDGER_GRANT_IDENTITY_MISMATCH');
+        }
+        if (own !== undefined) {
+          return reversed.has(own.ledgerEntryId)
+            ? notGranted('rejected', 'LEDGER_GRANT_REVERSED')
+            : { status: 'held', grant: own };
+        }
+        const active = all.filter((grant) =>
+          !reversed.has(grant.ledgerEntryId) && !isRetainedPlayerId(grant.playerId)).length;
+        if (active >= policy.maxHolders) {
+          return notGranted('pending', 'PURCHASE_HOLDER_LIMIT_REACHED');
+        }
+        const holderSlot = holders.nextSlot;
+        const holderEvidenceVerificationId = createPurchaseHolderEvidenceVerificationId(
+          purchaseVerificationId,
+          holderSlot,
+        );
+        const recorded = await recordEntitlementGrantUnchecked(store, {
+          playerId: request.playerId,
+          grantId: product.id,
+          source: 'purchase',
+          // The request's key, so a retry under it answers this grant; a
+          // player that already holds the purchase was answered above.
+          idempotencyKey: request.idempotencyKey,
+          grantedAt: context.now(),
+          grant: product.grant,
+          evidenceVerificationId: holderEvidenceVerificationId,
+          // The store transaction id stays with the first grant (its platform
+          // evidence is unique); a share names the purchase by its
+          // verification id instead.
+          payload: {
+            ...payload,
+            evidenceVerificationId: holderEvidenceVerificationId,
+            holderOfEvidenceVerificationId: purchaseVerificationId,
+            // No ledger id of another holder: it embeds that player's id,
+            // which must not outlive that player's account deletion here.
+            holderSlot,
+          },
+        });
+        if (recorded.status !== 'recorded') {
+          // The slot went to another restore; read the holders again.
+          continue;
+        }
+        if (recorded.result.alreadyProcessed) {
+          // The key held a grant already (this request's share landed from
+          // another isolate, or the key names something else).
+          const keyed = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
+          if (
+            keyed === undefined
+            || !matchesEntitlementRetry(keyed, {
+              ...holderIdentity,
+              idempotencyKey: request.idempotencyKey,
+            })
+            || readPurchaseVerificationId(keyed) !== purchaseVerificationId
+          ) {
+            return notGranted('rejected', 'IDEMPOTENCY_KEY_CONFLICT');
+          }
+          return { status: 'held', grant: keyed };
+        }
+        // A refund that landed between the read and this write may have
+        // fanned out before the share existed: it then ends the share too.
+        // A refund writes its first entry before it reads the holders, so
+        // either it sees this share or this read sees its entry.
+        // A refund that met only admin-revoked grants leaves no entry of its
+        // own; the share then ends with them, as a purchase no holder keeps
+        // is never shared again.
+        const written = await store.getEntitlementTransaction(recorded.result.ledgerEntryId);
+        const ended = await findPurchaseWideRevocation(
+          store,
+          written === undefined ? all : [...all, written],
+        );
+        const priorReversed = new Set(
+          (await findEntitlementRevocationsChunked(store, all.map((grant) => grant.ledgerEntryId)))
+            .map((entry) => entry.revokesLedgerEntryId),
+        );
+        const abandoned = all.every((grant) => priorReversed.has(grant.ledgerEntryId));
+        if (ended !== undefined || abandoned) {
+          if (written !== undefined && ended?.revokesLedgerEntryId !== written.ledgerEntryId) {
+            await revokeEntitlementGrant(store, ended === undefined
+              ? {
+                  playerId: written.playerId,
+                  revokesLedgerEntryId: written.ledgerEntryId,
+                  idempotencyKey: `mpgd-holder-closed:${purchaseVerificationId}`,
+                  reason: 'admin',
+                  revokedAt: context.now(),
+                  payload: { holderOfEvidenceVerificationId: purchaseVerificationId },
+                }
+              : {
+                  playerId: written.playerId,
+                  revokesLedgerEntryId: written.ledgerEntryId,
+                  idempotencyKey: ended.idempotencyKey,
+                  reason: ended.reason,
+                  revokedAt: ended.revokedAt,
+                  payload: ended.payload,
+                  ...(ended.evidenceVerificationId === undefined
+                    ? {}
+                    : {
+                        evidenceVerificationId:
+                          holderRevocationEvidenceId(ended.evidenceVerificationId, written),
+                      }),
+                });
+          }
+          return notGranted('rejected', 'LEDGER_GRANT_REVERSED');
+        }
+        return {
+          status: 'written',
+          ledgerEntryId: recorded.result.ledgerEntryId,
+          alreadyProcessed: false,
+        };
+      }
+      return notGranted('pending', 'PURCHASE_HOLDER_CONFLICT');
+    },
+  );
+  if (outcome.status === 'answer') {
+    return outcome.response;
+  }
+  if (outcome.status === 'held') {
+    const finalization = await finalizeExistingPurchaseGrant(request, outcome.grant, context);
+    return assertVerifyPurchaseResponse({
+      verified: true,
+      ledgerEntryId: outcome.grant.ledgerEntryId,
+      alreadyProcessed: true,
+      ...(finalization === undefined ? {} : { finalization }),
+      ...(isRestoredAcrossPlayers(outcome.grant) ? { restoredAcrossPlayers: true } : {}),
+    });
+  }
+  const finalization = await finalizePurchaseGrant(context.purchaseGrantFinalizer, {
+    request,
+    product,
+    platformProductId: input.platformProductId,
+    evidenceVerificationId: purchaseVerificationId,
+    ...(verification.payload === undefined ? {} : { evidencePayload: verification.payload }),
+    ledgerEntryId: outcome.ledgerEntryId,
+    alreadyProcessed: outcome.alreadyProcessed,
+    timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
+  });
+  return assertVerifyPurchaseResponse({
+    verified: true,
+    ledgerEntryId: outcome.ledgerEntryId,
+    alreadyProcessed: outcome.alreadyProcessed,
+    ...(finalization === undefined ? {} : { finalization }),
+    restoredAcrossPlayers: true,
+  });
+}
+
 async function finalizeExistingPurchaseGrant(
   request: VerifyPurchaseRequest,
   transaction: ProductGrantTransaction,
@@ -1526,8 +1998,8 @@ async function finalizeExistingPurchaseGrant(
   const product = createStoredPurchaseProduct(request, transaction) ?? currentProduct;
   const platformProductId = storedPlatformProductId
     ?? currentProduct?.platformProductIds[request.target];
-  const evidenceVerificationId = transaction.evidenceVerificationId
-    ?? transaction.payload.evidenceVerificationId;
+  // A shared grant is finalized as the purchase it records, not as its slot.
+  const evidenceVerificationId = readPurchaseVerificationId(transaction);
   const finalizationRequest = createStoredPurchaseRequest(request, transaction);
 
   if (
@@ -1800,8 +2272,8 @@ async function claimAdRewardForRetry(
       disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
-        : verification.status === 'settled'
-          // Only purchase verification reads a settled ledger entry.
+        : verification.status === 'settled' || verification.status === 'restorable'
+          // Only purchase verification reads a settled ledger entry or a restore.
           ? 'EVIDENCE_VERIFIER_ERROR'
           : verification.reason,
     });
@@ -1922,7 +2394,7 @@ type VerifiedEvidenceDecision = Extract<
  * replacing it (`undefined`), and nothing at all when the verifier suppresses it (`null`).
  */
 function resolvePlatformEvidenceId(
-  verification: VerifiedEvidenceDecision,
+  verification: PurchaseEvidenceDecision | VerifiedEvidenceDecision,
   clientPlatformEvidenceId: string | undefined,
 ): string | undefined {
   if (verification.platformEvidenceId === null) {
@@ -1933,7 +2405,10 @@ function resolvePlatformEvidenceId(
 }
 
 function createVerificationPayload(
-  verification: VerifiedEvidenceDecision,
+  verification: VerifiedEvidenceDecision | Extract<
+    EvidenceVerificationDecision,
+    { readonly status: 'restorable' }
+  >,
   platformEvidenceField: 'platformTransactionId' | 'platformImpressionId',
 ): EntitlementLedgerPayload | undefined {
   if (verification.platformEvidenceId !== null || verification.payload === undefined) {
@@ -1949,7 +2424,10 @@ function createVerificationPayload(
 function assertEvidenceVerificationDecision(
   decision: EvidenceVerificationDecision,
 ): EvidenceVerificationDecision {
-  if (decision.status === 'verified') {
+  if (decision.status === 'verified' || decision.status === 'restorable') {
+    if (decision.status === 'restorable') {
+      assertNonEmptyDecisionString(decision.reason, 'reason');
+    }
     assertNonEmptyDecisionString(decision.verificationId, 'verificationId');
     assertNonEmptyDecisionString(decision.verifiedAt, 'verifiedAt');
     if (!Number.isFinite(Date.parse(decision.verifiedAt))) {

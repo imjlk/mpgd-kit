@@ -325,34 +325,76 @@ Not served by the reference Worker: `GAME_SERVICES_NOTIFICATIONS_IDENTITY`
 (`resolveNotificationRecipient` maps a player to an Apps in Toss user key, and
 a guest has none), `VERIFIED_LEADERBOARD_AUTH`, and account linking.
 
-### Reinstalls and new devices: durable purchases (launch blocker, open: L3c)
+### Reinstalls and new devices: restore sharing
 
 A guest is its refresh token in the device's secure store. When that store
-is gone, the next launch is a **new guest**, and every store purchase the old
-guest made still names the old one: Google Play returns it with the old
-`obfuscatedAccountId`, StoreKit with the old `appAccountToken`. A restored
-non-consumable (the template catalog's `REMOVE_ADS`) is then refused, so the
-player who paid cannot get it back:
+is gone, or on a second device, the game runs as a **new guest**, and every
+store purchase still names the guest that made it: Google Play returns it with
+that guest's `obfuscatedAccountId`, StoreKit with its `appAccountToken`.
 
-| Case | Secure store after it | Restore of a non-consumable |
+| Case | Secure store after it | Restore of a non-consumable (`GAME_SERVICES_RESTORE_SHARING` default) |
 |---|---|---|
-| Android: uninstall and reinstall, "Clear storage", or a new device | Gone. The Keystore key and the encrypted file in `getNoBackupFilesDir()` are app-specific storage, which Android removes on uninstall ([app-specific storage](https://developer.android.com/training/data-storage/app-specific)), and that directory is always excluded from Auto Backup, so no restore brings it back ([Auto Backup](https://developer.android.com/identity/data/autobackup)) | Refused: `GOOGLE_PLAY_ACCOUNT_MISMATCH` |
+| Android: uninstall and reinstall, "Clear storage", or a new device | Gone. The Keystore key and the encrypted file in `getNoBackupFilesDir()` are app-specific storage, which Android removes on uninstall ([app-specific storage](https://developer.android.com/training/data-storage/app-specific)), and that directory is always excluded from Auto Backup, so no restore brings it back ([Auto Backup](https://developer.android.com/identity/data/autobackup)) | Granted to the new guest too (Play still returns the old `obfuscatedAccountId`) |
 | iOS: delete and reinstall on the same device | Usually kept. Keychain items have historically survived app deletion, but Apple does not document it, and its developer technical support calls it an implementation detail apps should not depend on ([Apple Developer Forums](https://developer.apple.com/forums/thread/36442)). The accessibility class does not change this | Works while the item survives (same guest) |
-| iOS: new device (a backup of another device, Quick Start), or an erased device set up as new | Gone (a device restored from its own backup may get it back). The kit stores the token with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable (`SecureCredentialStorage.swift`), and "Items with this attribute do not migrate to a new device" ([Apple](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly)) | Refused: `APP_STORE_ACCOUNT_TOKEN_MISMATCH`, or `APP_STORE_RECOVERY_IDENTITY_MISMATCH` where App Store recovery finds the grant under the old player |
-| Any platform: logout, or `IDENTITY_REFRESH_IDLE_DAYS` (180 by default) without a refresh | The old family is ended | Refused, as above |
+| iOS: new device (a backup of another device, Quick Start), or an erased device set up as new | Gone (a device restored from its own backup may get it back). The kit stores the token with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable (`SecureCredentialStorage.swift`), and "Items with this attribute do not migrate to a new device" ([Apple](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly)) | Granted to the new guest too (StoreKit still returns the old `appAccountToken`) |
+| Any platform: logout, or `IDENTITY_REFRESH_IDLE_DAYS` (180 by default) without a refresh | The old family is ended | Granted, as above |
+| Any platform: a second device on the same Apple ID or Google account | Its own guest | Granted on each device, up to the holder limit |
 
-Consumables are not affected once granted (there is nothing to restore), and
-grants already on the ledger stay with the old player id. No server path
-moves them today: the Play and App Store verifiers refuse a purchase whose
-account binding names another player (the codes above), App Store recovery
-refuses a restore whose ledger grant belongs to another player
-(`APP_STORE_RECOVERY_IDENTITY_MISMATCH`), and a settled lookup refuses one
-(`LEDGER_GRANT_IDENTITY_MISMATCH`).
+The reference Worker grants a restored non-consumable (the template
+catalog's `REMOVE_ADS`) to the restoring guest as well: **restore sharing**
+([GAME_SERVICES_BACKEND.md](GAME_SERVICES_BACKEND.md#restore-sharing),
+[RFC](specs/commerce/commerce-v2-rfc.md#restore-sharing)). Apple's App
+Review Guideline 3.1.1 asks for "a restore mechanism for any restorable
+in-app purchases"
+([App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/#in-app-purchase)),
+StoreKit hands a reinstall or a new device "all transactions ... upon initial
+launch" ([`AppStore.sync()`](https://developer.apple.com/documentation/storekit/appstore/sync())),
+and Google's billing guide expects a player who buys on one device to see the
+item after they "switch devices"
+([Integrate the Google Play Billing Library](https://developer.android.com/google/play/billing/integrate)).
 
-This blocks a launch that sells non-consumables. The follow-up L3c will move
-a verified non-consumable entitlement to the current guest on restore; until
-it lands, do not sell non-consumables, or say plainly in the store copy that
-a reinstall on Android, a new device, or a logout loses them.
+- **What is shared.** A purchase the client sends with `intent: 'restore'`
+  (the reconciler does for every purchase the store reported without this
+  install starting it) of a **non-consumable**, which the store verified
+  exactly as a new purchase (purchased, not refunded or revoked, right product
+  and app) except that its account binding names another guest or none. The
+  restoring guest gets its own grant, linked to the purchase; earlier holders
+  keep theirs. On the App Store the client's StoreKit-verified JWS is
+  required: a transaction id alone never shares a purchase.
+- **Holder limit.** At most `GAME_SERVICES_RESTORE_MAX_HOLDERS` guests (5 by
+  default, 1 to 100) hold one purchase at the same time, the buyer included.
+  A restore past it answers `pending` with `PURCHASE_HOLDER_LIMIT_REACHED`
+  (retryable; the starter says the purchase is already in use on the maximum
+  number of devices) and evicts nobody. The limit holds when restores race:
+  every share takes the next slot of the purchase, so two writers that
+  read the same holders collide and one reads again. It replaces a time-based
+  rate limit: holders are never taken away, so a token passed around reaches
+  at most the limit's number of guests in total, and the ledger keeps every
+  share (player ids and the store's verification id, no other personal data).
+- **Refunds and revocations.** A store refund, chargeback, or voided purchase
+  revokes every holder's grant (the Play voided-purchase sweep and the App
+  Store refund notification included), and a refunded purchase is never
+  shared again. An operator's `admin` revocation stays on the grant it names.
+- **What is not shared.** Consumables (there is nothing to restore once
+  granted) and subscriptions (no subscription verifier yet). A checkout this
+  client started (`intent` absent or `purchase`) keeps the binding check. The
+  legacy App Store recovery backend (`createAppStoreRecoveryBackend`) keeps
+  refusing (`APP_STORE_RECOVERY_IDENTITY_MISMATCH`).
+- **Deleted accounts.** A deleted player's retained purchase record
+  (`deleted:<id>`, kept for the retention period) is never revived for that
+  id, and the deletion tombstone refuses any grant to it; it does not count
+  toward the limit. A guest who restores the purchase gets a fresh grant
+  linked to the purchase, which counts.
+- **Abandoned guests count.** A guest that will never come back (an
+  uninstalled app, a logout) keeps its place until account linking or an
+  operator frees it with an `admin` revocation; a player who reinstalls more
+  often than the limit reaches it.
+
+Set `GAME_SERVICES_RESTORE_SHARING = "refuse"` to keep refusing restores
+across guests (`GOOGLE_PLAY_ACCOUNT_MISMATCH`,
+`APP_STORE_ACCOUNT_TOKEN_MISMATCH`); then do not sell non-consumables, or say
+in the store copy that a reinstall on Android, a new device, or a logout loses
+them. No migration is needed: shares are ordinary grants.
 
 ## Authenticated Snapshot Reads
 

@@ -509,6 +509,83 @@ grant and the revocations that reverse it together (see
 entry (`EntitlementLedgerPeriod`) is a validated shape only; nothing writes it
 until a subscription verifier exists.
 
+### Restore sharing
+
+A guest player lives in the device's secure store, so a reinstall on Android,
+a new iOS device, a logout, or a second device on the same store account is a
+new guest while the store keeps returning the purchase's non-consumables with
+the buying guest's binding (Google Play `obfuscatedAccountId`, StoreKit
+`appAccountToken`). **Restore sharing** grants the restoring player its own
+entitlement linked to the purchase; earlier holders keep theirs
+([RFC](specs/commerce/commerce-v2-rfc.md#restore-sharing); the cases per
+platform are in
+[CLOUDFLARE_WORKER_DEPLOY.md](CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-sharing)).
+
+- `createGameServicesBackend({ restoreSharing })` sets the policy:
+  `{ mode: 'share', maxHolders?: 5 }` (1 to 100) or `{ mode: 'refuse' }`,
+  the library default, which answers the binding mismatch as before. The
+  reference Worker shares unless `GAME_SERVICES_RESTORE_SHARING = "refuse"`;
+  `GAME_SERVICES_RESTORE_MAX_HOLDERS` sets the limit (an invalid value turns
+  sharing off).
+- The client asks for it: `VerifyPurchaseRequest.intent: 'restore'`. The
+  commerce reconciler sends it for every purchase it discovered from the store
+  (not one this install's journal started); a game-started checkout sends no
+  intent and keeps the binding check. The intent is a request for the
+  policy, never proof.
+- The verifier proves it: the Play boundary and the App Store verifier answer
+  `{ status: 'restorable', reason }` (an `EvidenceVerificationDecision`) for a
+  restore of a non-consumable whose every check passed except the binding
+  (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `GOOGLE_PLAY_PROFILE_MISMATCH`, including
+  a purchase made outside the app with no ids, or
+  `APP_STORE_ACCOUNT_TOKEN_MISMATCH` with the client's verified JWS present).
+  A custom verifier can answer it too; anything else stays `rejected`.
+- The backend shares it with ordinary ledger grants, on any store: the
+  purchase's holders are its first grant (the evidence id the verifier names)
+  and the shares, `listPurchaseHolders`. A share is written at the next
+  slot, evidence id `createPurchaseHolderEvidenceVerificationId(purchaseId,
+  slot)`, under the request's own key (a player that already holds the
+  purchase gets its grant back instead of a second one); its payload
+  names the purchase (`holderOfEvidenceVerificationId`, which finalizers such
+  as the Play acknowledge are keyed by, `readPurchaseVerificationId`) and
+  never another holder's ledger id (it embeds that player's id, which must
+  not outlive that player's deletion), and the store transaction id stays on
+  the first grant. Two writers that read the same holders take the same
+  slot, so one loses on the unique evidence id and reads again: the limit
+  holds under concurrency. Shares are listed with
+  `GameServicesStore.findEntitlementTransactionsByEvidencePrefix` (one range
+  read on the D1 evidence index; the memory store implements it too), which
+  also finds slots past a gap the retention purge leaves; a store without it
+  reads slot by slot. A refund's fan-out reads the holders again after each
+  pass until none is left active, so a share written while it ran is
+  revoked too. A purchase no grant holds yet is granted to the
+  restoring player as its first grant (`restoredAcrossAccounts: true`). The
+  answer is `verified` with `restoredAcrossPlayers: true`, on retries too.
+- The answers that are not a share: a consumable or a game-started checkout
+  gets the verifier's reason (`rejected`); a purchase a store event ended
+  (refund, chargeback, voided purchase on any holder) `LEDGER_GRANT_REVERSED`,
+  also for a share that lands while that refund fans out, or after every
+  other holder was revoked (it is revoked right after its write); a purchase `maxHolders` players hold `pending`
+  with `PURCHASE_HOLDER_LIMIT_REACHED` (nobody is evicted); three lost races
+  in a row `pending` with `PURCHASE_HOLDER_CONFLICT`. A player who already
+  holds it gets its grant back (`alreadyProcessed: true`); a resend under the
+  key of a reversed grant answers `LEDGER_GRANT_REVERSED`.
+- Refunds reach every holder: `revokeEntitlementGrant` with a store reason
+  (`refund`, `chargeback`, `voided`) on any holder's grant also revokes the
+  other holders' grants, so the Play voided-purchase sweep and the App Store
+  refund notification revoke them all; a replay finishes a fan-out an earlier
+  attempt left part-way. An `admin` revocation stays on the grant it names
+  and frees that holder's place; a purchase whose every holder is revoked is
+  never shared again.
+- Deleted accounts ([account deletion](#account-deletion)): a deleted
+  player's retained record (`deleted:<id>`, `isRetainedPlayerId`) is never
+  revived, the deletion tombstone refuses a grant to the deleted id, and the
+  record does not count toward the limit; a new guest's share links to the
+  purchase and counts. A share is an ordinary purchase grant, so the erasure
+  keeps it detached like any other when its holder deletes its account.
+
+Subscriptions are never shared (no subscription verifier yet), and the legacy
+`createAppStoreRecoveryBackend` keeps refusing.
+
 If any target-specific binding is configured, the Worker enters strict
 target-specific mode for purchase routing. Each purchase request is sent only
 to the binding matching its target. A missing match fails closed with
@@ -794,8 +871,9 @@ is configured, a server-issued guest included); without one, only an
 authenticated, non-local platform session binds. A game with its own account
 scheme replaces the module and both resolvers together. A new guest (after
 an Android reinstall, on a new device, or after a logout) does not match the
-binding of its earlier purchases, so their restore is refused until L3c
-([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-durable-purchases-launch-blocker-open-l3c)).
+binding of its earlier purchases; a restored non-consumable is then granted
+to it as well under the backend's [restore sharing](#restore-sharing) policy
+([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-sharing)).
 
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider
@@ -1209,10 +1287,14 @@ transaction). Games that sell outside a store add their own payment records.
 
 ### What the player should know
 
-- Purchases are not refunded by deleting the account, and items bought on
-  it cannot be moved to a new account: the store binds each purchase to the
-  account (`obfuscatedAccountId`, `appAccountToken`), so a new guest's
-  restore does not match. Refunds go through the store.
+- Purchases are not refunded by deleting the account; refunds go through the
+  store. A non-consumable stays owned by the store account: when the player
+  plays again as a new guest, Restore purchases grants it under
+  [restore sharing](#restore-sharing) as a fresh grant linked to the
+  purchase (the retained record keeps its `deleted:<id>` player and is never
+  revived for the deleted id, which the tombstone also refuses). The
+  retained record does not count toward the holder limit; the new grant
+  does. Consumables are not restored.
 - A purchase still pending at the store (Play `PENDING`, Ask to Buy) when the
   account is deleted cannot be granted to anyone afterwards. Google refunds a
   Play purchase that is not acknowledged within three days on its own. An

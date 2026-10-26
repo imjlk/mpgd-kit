@@ -854,6 +854,16 @@ const fullClientHistory = [
   );
   assertEqual((await h.reconciler.read(derived))?.origin, 'discovered', 'origin discovered');
   assertEqual(h.backend.requests[1]?.idempotencyKey, derived, 'the derived key is the verify key');
+  assertEqual(
+    h.backend.requests[1]?.intent,
+    'restore',
+    'a purchase the journal never started is sent as a restore (RFC "Restore sharing")',
+  );
+  assertEqual(
+    h.backend.requests[0]?.intent,
+    undefined,
+    'a purchase the game started is never sent as a restore',
+  );
   // The same purchase reported again finds the finished record by its derived key, even after a restart.
   await h.reconciler.stop();
   h.provider.available.push(purchaseOf({ transactionId: 'tx:8b' }));

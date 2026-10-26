@@ -809,6 +809,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       idempotencyKey: record.idempotencyKey,
       purchasedAt: purchase.purchasedAt ?? now(),
       evidence: purchase.evidence,
+      // A purchase the store reported without this journal starting it (a
+      // reinstall, a new device, Restore Purchases) is a restore: the backend
+      // may grant this player a non-consumable bound to another guest (RFC
+      // "Restore sharing"). A purchase the game started never asks for it.
+      ...(record.origin === 'discovered' ? { intent: 'restore' as const } : {}),
     };
   };
 
