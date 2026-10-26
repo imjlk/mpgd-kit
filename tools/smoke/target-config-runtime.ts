@@ -140,7 +140,11 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     const integrationRuntime = runtime.integrations[integration];
     const expectedConfiguredState = integrationConfig[integration];
     const expectedAdapterSupported = supportsIntegration(targetGateway.gateway, integration);
-    const expectedRuntimeState = expectedAdapterSupported ? expectedConfiguredState : 'unsupported';
+    // Explicit opt-outs take precedence even when a provider is absent.
+    let expectedRuntimeState = expectedConfiguredState;
+    if (!expectedAdapterSupported && expectedConfiguredState !== 'disabled' && expectedConfiguredState !== 'unsupported') {
+      expectedRuntimeState = 'unsupported';
+    }
 
     assertEqual(
       integrationRuntime.configuredState,
@@ -689,8 +693,10 @@ function supportsIntegration(
       return typeof gateway.sharing?.share === 'function';
     case 'inboundShare':
       return typeof gateway.sharing?.readInboundShare === 'function';
-    case 'reviews':
-      return gateway.reviews !== undefined;
+    case 'reviews': {
+      const capability = gateway.reviews?.getCapabilities();
+      return capability?.nativePrompt === true || capability?.reviewPage === true;
+    }
     case 'notifications':
       return (
         typeof gateway.notifications?.getStatus === 'function'

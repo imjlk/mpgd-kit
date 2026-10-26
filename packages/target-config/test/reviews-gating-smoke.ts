@@ -53,3 +53,6 @@ const missing = withTargetAvailability(createBrowserPlatformGateway(), {
 });
 assert.equal((await missing.getTargetRuntime()).integrations.reviews.state, 'unsupported');
 assert.equal(missing.reviews, undefined);
+
+const absentAndDisabled = withTargetAvailability(createBrowserPlatformGateway(), config);
+assert.equal((await absentAndDisabled.getTargetRuntime()).integrations.reviews.state, 'disabled');

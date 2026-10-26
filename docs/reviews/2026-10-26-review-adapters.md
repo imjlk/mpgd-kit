@@ -38,3 +38,7 @@ Coverage:
 - Reviewed `tools/graph/requests/reviews.json` (added)
 
 - Reviewed `examples/lite-starter/vite.runtime-target-config.ts` (CI follow-up).
+
+## Integration follow-up
+
+The prepared contracts suite exposed an old smoke expectation that mapped every absent provider to unsupported, overriding an explicit disabled setting. Corrected the expectation to preserve configured opt-outs, and added an absent-provider/default-disabled regression. Runtime behavior was already correct. Full graph preflight, target runtime/extension smoke, adapter-effective-config, platform capability and storage conformance passed locally. A CLI and asset smoke initially lacked local dist artifacts; package builds restored their prerequisites. The asset retry passed; game-catalog/release-manifest checks were still running when this follow-up was recorded.
