@@ -1,10 +1,12 @@
 # @mpgd/capacitor-play-billing
 
 Android-only, opt-in Google Play one-time purchase collection for Capacitor 8.
-The native module uses Google Play Billing Library 9.1.0. It queries product
-details, launches a purchase, listens for purchase updates, and requeries
-currently owned, unconsumed purchases. It intentionally does **not** call
-BillingClient acknowledge or consume. The game-owned backend must verify the
+The Kotlin native module runs on the [OpenIAP](https://github.com/hyodotdev/openiap)
+Google core (`io.github.hyochan.openiap:openiap-google` 4.0.6, which brings
+Google Play Billing Library 9.1.0). It queries product details, launches a
+purchase, listens for purchase updates, and requeries currently owned,
+unconsumed purchases. It intentionally does **not** acknowledge, consume, or
+call OpenIAP's `finishTransaction`. The game-owned backend must verify the
 purchase via Google Play Publisher, commit the mpgd ledger grant, and perform
 acknowledge/consume after the grant. A device callback alone never grants a
 purchase.
@@ -181,17 +183,31 @@ owned purchases over the fake plugin: a purchased token is verified once, a
 pending purchase is never sent, a rejection is terminal, and an outage stays
 retryable.
 
-## Native compile check
+## Native engine
 
-The Kit reference app includes an opt-in Gradle compile target, without
-bundling Billing into the base app:
+The plugin keeps its 0.3 Capacitor contract (methods, the `purchaseUpdated`
+event, payload fields, `PLAY_BILLING_*` codes) over OpenIAP; the
+[migration record](../../docs/specs/commerce/openiap-migration.md) lists the
+contract, the call mapping, and every behavior difference. A shell needs the
+Kotlin Gradle plugin (2.2.20 unless the root project sets `kotlin_version`;
+OpenIAP needs 2.1.20 or newer), and the merged manifest gains OpenIAP's
+`dev.hyo.openiap.PROVIDER` entry and `INTERNET`. The plugin refuses to run
+unless OpenIAP's provider is `play`.
+
+## Native build check
+
+The Kit reference app includes an opt-in Gradle target, without bundling
+Billing into the base app. It compiles the Kotlin plugin, runs its JVM
+policy tests, and assembles the release AAR:
 
 ```sh
 cd apps/mobile-capacitor/android
 ./gradlew -PmpgdPlayBillingPluginTest=true \
-  :mpgd-capacitor-play-billing:compileDebugJavaWithJavac
+  :mpgd-capacitor-play-billing:testDebugUnitTest \
+  :mpgd-capacitor-play-billing:assembleRelease
 ```
 
-This compile and the TypeScript fixture do not prove a live Play purchase,
-license-test configuration, or device behavior. Validate those in a game-owned
+`pnpm smoke:native-packed-store-plugins android` assembles the packed npm
+copy the same way. These builds and the TypeScript fixture do not prove a
+live Play purchase, license-test configuration, or device behavior. Validate those in a game-owned
 Play Console project before enabling commerce for players.

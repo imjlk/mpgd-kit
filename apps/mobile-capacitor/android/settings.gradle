@@ -7,6 +7,9 @@ apply from: 'capacitor.settings.gradle'
 // Compile the optional Play Billing plugin without bundling it into the base app.
 if (providers.gradleProperty('mpgdPlayBillingPluginTest').orNull == 'true') {
     include ':mpgd-capacitor-play-billing'
-    project(':mpgd-capacitor-play-billing').projectDir =
-        new File(settingsDir, '../../../native-plugins/capacitor-play-billing/android')
+    // `mpgdPlayBillingPluginDir` points at a packed copy (tools/smoke/native-packed-store-plugins.mjs).
+    def packedPlayBilling = providers.gradleProperty('mpgdPlayBillingPluginDir').orNull
+    project(':mpgd-capacitor-play-billing').projectDir = packedPlayBilling != null
+        ? new File(packedPlayBilling)
+        : new File(settingsDir, '../../../native-plugins/capacitor-play-billing/android')
 }

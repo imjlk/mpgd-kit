@@ -111,45 +111,98 @@ for (const implementation of implementations) {
   assert.doesNotMatch(source, /(?:android|ios)-mock-|rewardGranted|COINS_100|100 demo coins/u);
 }
 
-const playBilling = read(
-  'native-plugins/capacitor-play-billing/android/src/main/java/dev/mpgd/capacitor/playbilling/CapacitorPlayBillingPlugin.java',
+// The store plugins run on the OpenIAP native cores (docs/specs/commerce/
+// openiap-migration.md); these checks keep the mpgd finish policy on top.
+const sourcesIn = (directory: string, extension: string): string =>
+  readdirSync(new URL(`../${directory}`, import.meta.url), { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(extension))
+    .map((entry) => readFileSync(`${entry.parentPath}/${entry.name}`, 'utf8'))
+    .join('\n');
+const playBilling = sourcesIn(
+  'native-plugins/capacitor-play-billing/android/src/main/java/dev/mpgd/capacitor/playbilling',
+  '.kt',
 );
 assert.match(
   playBilling,
-  /queryPurchasesAsync\(/u,
-  'Play Billing must support owned-purchase requery',
+  /@CapacitorPlugin\(name = "CapacitorPlayBilling"\)/u,
+  'Play Billing must keep its Capacitor registration name',
+);
+assert.match(
+  playBilling,
+  /getAvailableItems\(ProductQueryType\.InApp\)/u,
+  'Play Billing must support owned in-app purchase requery',
 );
 assert.doesNotMatch(
   playBilling,
-  /\b(?:acknowledgePurchase|consumeAsync)\s*\(/u,
+  /\b(?:acknowledgePurchase|consumeAsync|acknowledgePurchaseAndroid|consumePurchaseAndroid|settlePurchaseToken|finishTransaction)\s*\(/u,
   'Client-side Billing must never finalize before the backend ledger grant',
 );
-
-const storeKit = read(
-  'native-plugins/capacitor-storekit/ios/Sources/CapacitorStoreKit/CapacitorStoreKitPlugin.swift',
-);
-assert.match(storeKit, /Transaction\.unfinished/u, 'StoreKit must requery unfinished purchases');
-assert.match(storeKit, /Transaction\.updates/u, 'StoreKit must listen for delayed transactions');
-const storeKitPurchase = storeKit.split('@objc func purchase')[1]
-  ?.split('@objc func getTransactions')[0] ?? '';
-assert.match(storeKitPurchase, /case \.success/u, 'StoreKit must handle successful purchases');
 assert.match(
-  storeKitPurchase,
-  /call\.resolve\(\["status": "purchased", "transaction": payload\]\)/u,
-  'StoreKit purchase must return provisional transaction evidence',
+  playBilling,
+  /factory\.storeId != PlayBillingPolicy\.PLAY_STORE_ID/u,
+  'Play Billing must refuse an OpenIAP provider other than play',
 );
-assert.doesNotMatch(
-  storeKit.split('@objc func finishTransaction')[0] ?? '',
-  /transaction\.finish\(/u,
-  'StoreKit must not finish a transaction during checkout or event delivery',
+
+const storeKit = sourcesIn('native-plugins/capacitor-storekit/ios/Sources', '.swift');
+const storeKitPlugin = read(
+  'native-plugins/capacitor-storekit/ios/Sources/CapacitorStoreKit/CapacitorStoreKitPlugin.swift',
 );
 assert.match(
   storeKit,
-  /@objc func finishTransaction[\s\S]*?transaction\.finish\(\)/u,
+  /StoreKit\.Transaction\.unfinished/u,
+  'StoreKit must requery unfinished purchases',
+);
+const storeKitList = storeKitPlugin.split('@objc func getTransactions')[1]
+  ?.split('@objc func sync')[0] ?? '';
+assert.match(
+  storeKitList,
+  /RecoveryReadShim\.unfinished\(\)[\s\S]*RecoveryReadShim\.currentEntitlements\(\)/u,
+  'StoreKit must list unfinished transactions and current entitlements',
+);
+assert.doesNotMatch(
+  storeKitList,
+  /RecoveryReadShim\.history\(\)|StoreKit\.Transaction\.all|getAvailablePurchases\(/u,
+  'StoreKit must never list the full history as recoverable',
+);
+assert.doesNotMatch(
+  read('native-plugins/capacitor-storekit/ios/Sources/MpgdStoreKitBridge/RecoveryReadShim.swift'),
+  /appAccountToken ==|\.finish\(|purchase\(/u,
+  'The StoreKit read shim stays read-only and leaves account admission to TypeScript',
+);
+assert.match(
+  storeKit,
+  /purchaseUpdatedListener\(/u,
+  'StoreKit must listen for delayed transactions',
+);
+assert.match(
+  storeKit,
+  /for await result in StoreKit\.Transaction\.updates/u,
+  'StoreKit must keep forwarding revocations OpenIAP skips',
+);
+const storeKitPurchase = storeKitPlugin.split('@objc func purchase')[1]
+  ?.split('@objc func getTransactions')[0] ?? '';
+assert.match(
+  storeKitPurchase,
+  /"status": "purchased",\s*"transaction": StoreKitTransactionPolicy\.payload\(transaction\)/u,
+  'StoreKit purchase must return provisional transaction evidence',
+);
+assert.match(
+  storeKitPurchase,
+  /andDangerouslyFinishTransactionAutomatically: false/u,
+  'StoreKit must never ask OpenIAP to finish a purchase automatically',
+);
+assert.doesNotMatch(
+  storeKit,
+  /andDangerouslyFinishTransactionAutomatically: true|\.finish\(\)|clearTransactionIOS\(/u,
+  'StoreKit must not finish a transaction during checkout or event delivery',
+);
+assert.match(
+  storeKitPlugin,
+  /@objc func finishTransaction[\s\S]*?module\.finishTransaction\(/u,
   'StoreKit finish must be a separate post-grant operation',
 );
 assert.equal(
-  (storeKit.match(/transaction\.finish\(\)/gu) ?? []).length,
+  (storeKit.match(/\.finishTransaction\(/gu) ?? []).length,
   1,
   'Only the explicit post-grant method may finish StoreKit transactions',
 );
