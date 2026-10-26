@@ -52,7 +52,10 @@ product, otherwise under a derived key (`store:<store>:<transactionId>`, with
 `play-token-sha256:<hex>` for Google Play and `apps-in-toss:purchase:<orderId>`
 kept so ledgers written by the former v1 drivers still deduplicate); builds and saves
 the verify request once and resends it unchanged while `purchased`,
-`verifying`, or server-side `pending`; finishes `granted` records according
+`verifying`, or server-side `pending` (a restore the backend answered
+`pending` with `PURCHASE_HOLDER_LIMIT_REACHED` is resent only by
+`restorePurchases()`, since nothing an automatic pass observes frees a
+holder); finishes `granted` records according
 to the provider's `lifecycle.finish` (`client` and `host` call
 `finishTransaction` with the ledger entry id, `server` resends the saved
 request until the backend reports `finalization: 'completed'`, `none` marks
@@ -98,7 +101,16 @@ kind), terminal records stay addressable by `read`, and the optional
 records within the retention window for the revocation pass, and the
 optional `findByTransaction({ playerId, target, deploymentTarget, store,
 transactionId })` returns the
-commerce record, terminal or not, that holds a store transaction. Implement
+commerce record, terminal or not, that holds a store transaction. Records
+are keyed by `createCommercePurchaseOperationKey(target, idempotencyKey)`,
+which is the same for every player of the install. After a logout, a
+restored durable whose derived key another player's record already holds is
+reserved under the player-scoped key `createCommercePurchaseOperationKey(target,
+idempotencyKey, playerId)` instead, so a store must treat `record.key` as
+opaque (store and replace by it, never rebuild it from the record's fields)
+and must not assume one record per idempotency key across players.
+`commerceReconciler.read(idempotencyKey)` answers this player's record under
+either key, and `undefined` when only another player's record holds the key. Implement
 both: with them a purchase the store lists again after a restart (an owned
 durable, a rejected or finished purchase) meets its own record instead of
 being verified again under a derived key (the backend's platform-evidence

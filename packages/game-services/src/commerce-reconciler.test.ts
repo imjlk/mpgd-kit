@@ -3463,6 +3463,29 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
   assertEqual([...h.failures, ...relaunched.failures], [], 'no stage failed');
   await relaunched.reconciler.stop();
+
+  // A polled provider: the Restore Purchases pass reads and resends; its later polls do not.
+  const polledProvider = createFakeProvider({
+    capabilities: capabilitiesOf({ lifecycle: { events: false } }),
+  });
+  const polled = createHarness({ provider: polledProvider });
+  await polled.reconciler.start();
+  polled.backend.queue({ status: 'pending', reason: 'PURCHASE_HOLDER_LIMIT_REACHED' });
+  polledProvider.available.push(
+    purchaseOf({ transactionId: 'tx-51p', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await polled.reconciler.restorePurchases();
+  await polled.reconciler.reconcile();
+  await polled.reconciler.reconcile();
+  assertEqual(polled.backend.requests.length, 1, 'polling passes never resend it');
+  polled.backend.queue({ status: 'granted', ledgerEntryId: 'le-51p' });
+  await polled.reconciler.restorePurchases();
+  assertEqual(
+    polled.history('store:fake-store:tx-51p').at(-1),
+    'finished',
+    "a polled provider's Restore Purchases resends it",
+  );
+  await polled.reconciler.stop();
 }
 
 // 52. Logout, then another player on the same install: a durable the earlier player journaled
@@ -3534,6 +3557,11 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     'player-2',
     'read answers the scoped record',
   );
+  assertEqual(
+    await next.reconciler.read(gemsKey),
+    undefined,
+    "read answers nothing for a key only the earlier player's record holds",
+  );
   await next.reconciler.stop();
 
   // A restart over a journal without the transaction index or the granted list reaches the
@@ -3564,6 +3592,46 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     false,
     'the player-scoped key never equals the shared key',
   );
+
+  // The journal's retention dropped the earlier player's finished record (open ones are kept): the
+  // shared key is free, and the next player's record is still found under its player-scoped key,
+  // not journaled again.
+  const pruned = createInMemoryMonetizationOperationStore();
+  for (const key of [
+    createCommercePurchaseOperationKey('android', adsKey, 'player-2'),
+    createCommercePurchaseOperationKey('android', gemsKey),
+  ]) {
+    const kept = await store.read(key);
+    if (kept === undefined) {
+      throw new Error(`${key} is journaled`);
+    }
+    await pruned.reserve(kept);
+  }
+  const {
+    findByTransaction: _prunedIndex,
+    listGranted: _prunedGranted,
+    ...prunedUnindexed
+  } = pruned;
+  const afterRetention = createHarness({
+    store: prunedUnindexed,
+    provider,
+    backend,
+    overrides: { playerId: 'player-2' },
+  });
+  assertEqual(
+    (await afterRetention.reconciler.read(adsKey))?.playerId,
+    'player-2',
+    'with the shared key free, read still finds the player-scoped record',
+  );
+  await afterRetention.reconciler.start();
+  await afterRetention.reconciler.restorePurchases();
+  assertEqual(backend.requests.length, 3, 'the restored durable is not sent again');
+  assertEqual(
+    await pruned.read(createCommercePurchaseOperationKey('android', adsKey)),
+    undefined,
+    'nothing is journaled under the freed shared key',
+  );
+  await afterRetention.reconciler.stop();
 
   // The earlier player logs back in: its own records under the shared key resume unchanged.
   const back = createHarness({ store, provider, backend });
