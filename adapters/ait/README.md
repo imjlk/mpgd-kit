@@ -174,3 +174,18 @@ seconds, and a late observer rejection is ignored.
 ### Avoiding a duplicate promotion finalization
 
 A game-owned host wrapper may attach `authorityConfirmation` to a granted promotion result after its observer has received and validated a successful game-authority finalization response. The adapter passes this optional metadata through; it does not create, validate, persist, or trust the acknowledgement. Keep it bounded, short lived, single-use and scoped to the current account, campaign, claim and receipt. The game validates that complete correlation and the returned state before omitting its duplicate finalization. SDK success alone is insufficient. Missing, stale or invalid acknowledgements, interrupted observers and legacy hosts must use the existing idempotent finalization/recovery path. Do not send this client metadata to the server as grant evidence.
+
+## WebView SDK upgrades
+
+The tested starter baseline is WebView SDK/CLI **3.9.0**. The adapter's compatible
+peer range remains `>=3.0.0 <4`; optional APIs still use native support checks.
+SDK 3.9.0 fixes completed/refunded order pagination and product-grant callback
+error handling ([official release notes](https://developers-apps-in-toss.toss.im/release-note/release-note)).
+
+For an existing game, check both packages' npm `latest` tags and release notes,
+then pin the same reviewed version in the game SDK, AIT wrapper SDK and wrapper
+CLI. Update the owning lockfile; do not update unrelated games or silently pick
+`latest` during an upload. Run the adapter/host tests, owning game and wrapper
+checks, build/smoke, and a private-QR check of changed native flows before review.
+Purchase/ad rewards remain server-authoritative. A resolved native review request
+is not proof that a prompt appeared or that a review was written.
