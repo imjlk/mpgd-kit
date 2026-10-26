@@ -72,10 +72,16 @@ interface World {
  */
 async function createWorld(maxHolders?: number): Promise<World> {
   const plugin = createFakePlayBillingPlugin({
-    products: [fakePlayProduct({ productId: 'remove_ads' }), fakePlayProduct({ productId: 'hint_pack_5' })],
+    products: [
+      fakePlayProduct({ productId: 'remove_ads' }),
+      fakePlayProduct({ productId: 'hint_pack_5' }),
+    ],
   });
   /** What Google Play knows: the guest whose obfuscated account id each order carries. */
-  const buyers = new Map<string, string>([['GPA.ads', earlierGuest], ['GPA.hints', earlierGuest]]);
+  const buyers = new Map<string, string>([
+    ['GPA.ads', earlierGuest],
+    ['GPA.hints', earlierGuest],
+  ]);
   const store = createInMemoryGameServicesStore();
   const backend = createGameServicesBackend({
     catalog,
@@ -119,20 +125,24 @@ async function createWorld(maxHolders?: number): Promise<World> {
     purchasedAt: '2030-01-01T00:00:00.000Z',
   });
   expect(bought.verified).toBe(true);
-  plugin.upsert(fakePlayPurchase({
-    purchaseToken: 'token-ads',
-    products: ['remove_ads'],
-    orderId: 'GPA.ads',
-    isAcknowledged: true,
-    obfuscatedAccountId: earlierGuest,
-  }));
-  plugin.upsert(fakePlayPurchase({
-    purchaseToken: 'token-hints',
-    products: ['hint_pack_5'],
-    orderId: 'GPA.hints',
-    isAcknowledged: true,
-    obfuscatedAccountId: earlierGuest,
-  }));
+  plugin.upsert(
+    fakePlayPurchase({
+      purchaseToken: 'token-ads',
+      products: ['remove_ads'],
+      orderId: 'GPA.ads',
+      isAcknowledged: true,
+      obfuscatedAccountId: earlierGuest,
+    }),
+  );
+  plugin.upsert(
+    fakePlayPurchase({
+      purchaseToken: 'token-hints',
+      products: ['hint_pack_5'],
+      orderId: 'GPA.hints',
+      isAcknowledged: true,
+      obfuscatedAccountId: earlierGuest,
+    }),
+  );
   return { plugin, backend, store, requests: [] };
 }
 
