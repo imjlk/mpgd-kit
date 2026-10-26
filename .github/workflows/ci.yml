@@ -538,15 +538,18 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json', 'examples/asset-packs/package.json') }}
           restore-keys: ${{ runner.os }}-runtime-playwright-
+      # The ubuntu-24.04 runner image already ships Chromium's shared libraries.
+      # `--with-deps` only added fonts and upgrades through apt-get, and the Azure
+      # Ubuntu mirror sometimes trickled those downloads past the step limit.
       - name: Install runtime fixture browser
         timeout-minutes: 10
-        run: pnpm --dir examples/runtime-controls exec playwright install --with-deps chromium
+        run: pnpm --dir examples/runtime-controls exec playwright install chromium
       - name: Verify Phaser runtime controls in Chromium
         timeout-minutes: 5
         run: pnpm --dir examples/runtime-controls build && pnpm --dir examples/runtime-controls test:browser
       - name: Install asset pack example browser
         timeout-minutes: 10
-        run: pnpm --dir examples/asset-packs exec playwright install --with-deps chromium
+        run: pnpm --dir examples/asset-packs exec playwright install chromium
       - name: Verify asset pack delivery and lifetime in Chromium
         timeout-minutes: 5
         run: pnpm --dir examples/asset-packs test:browser
