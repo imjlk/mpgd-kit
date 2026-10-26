@@ -172,7 +172,7 @@ initializer refuses a game or shell that lists it; remove it first.
    rewrite it and prints each missing piece with the exact edit instead. In
    Xcode the entitlement is *Signing & Capabilities → + Capability → Push
    Notifications* on the `App` target; the `SceneDelegate` forwarder is in
-   [`apps/mobile-capacitor/ios/App/App/SceneDelegate.swift`](../apps/mobile-capacitor/ios/App/App/SceneDelegate.swift).
+   [`apps/mobile-capacitor/ios/App/App/SceneDelegate.swift`](https://github.com/imjlk/mpgd-kit/blob/main/apps/mobile-capacitor/ios/App/App/SceneDelegate.swift).
    `mpgd target build ios` checks a shell that installs
    `@capacitor-firebase/messaging` for all three (the forwarder only when the
    shell has a scene delegate) and fails a `production` build while one is
