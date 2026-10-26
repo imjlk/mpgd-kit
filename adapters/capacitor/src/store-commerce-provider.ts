@@ -383,7 +383,10 @@ export function createStoreCommerceProvider(
       const includePending = request.includePending ?? false;
       let reported: readonly StoreSdkPurchase[];
       try {
-        reported = await sdk.getAvailablePurchases({ includePending });
+        reported = await sdk.getAvailablePurchases({
+          includePending,
+          ...(request.restore === true ? { restore: true } : {}),
+        });
       } catch (error) {
         throw normalize(error);
       }

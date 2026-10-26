@@ -204,6 +204,18 @@ export interface FetchProductsInput {
 
 export interface GetAvailablePurchasesInput {
   readonly includePending?: boolean;
+  /**
+   * The player's explicit Restore Purchases read, never a startup or resume
+   * recovery pass. A store whose recovery list hides owned non-consumables
+   * lists them too: Google Play's already acknowledged items, and StoreKit
+   * entitlements bound to another (or no) app account token. After a
+   * reinstall or on a new device every earlier purchase is in that state, and
+   * the reconciler sends them with `intent: 'restore'` so the backend's
+   * restore sharing can grant them to this player (RFC "Restore sharing").
+   * Consumables, unmapped SKUs, and kind mismatches stay filtered. A store
+   * without such a filter ignores it.
+   */
+  readonly restore?: boolean;
 }
 
 export interface FinishTransactionInput {

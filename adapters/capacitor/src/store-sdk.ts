@@ -90,6 +90,13 @@ export type StoreSdkRequestPurchaseResult =
 
 export interface StoreSdkGetAvailablePurchasesInput {
   readonly includePending?: boolean;
+  /**
+   * The player's explicit Restore Purchases read
+   * (`GetAvailablePurchasesInput.restore`): also list owned non-consumables
+   * the recovery list hides (Play: already acknowledged; StoreKit: bound to
+   * another or no app account token). Consumables stay unfinished-only.
+   */
+  readonly restore?: boolean;
 }
 
 export interface StoreSdkPurchase {

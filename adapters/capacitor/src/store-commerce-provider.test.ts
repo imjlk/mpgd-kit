@@ -330,6 +330,17 @@ describe('createStoreCommerceProvider', () => {
       includePending: true,
     });
 
+    // An explicit Restore Purchases read reaches the SDK; recovery never asks for it.
+    await provider.getAvailablePurchases({ restore: true });
+    expect(vi.mocked(sdk.getAvailablePurchases).mock.calls.at(-1)?.[0]).toEqual({
+      includePending: false,
+      restore: true,
+    });
+    await provider.getAvailablePurchases({ restore: false });
+    expect(vi.mocked(sdk.getAvailablePurchases).mock.calls.at(-1)?.[0]).toEqual({
+      includePending: false,
+    });
+
     sdk.upsert({ ...fakePurchase({ transactionId: 'tx-5' }), quantity: 0 });
     await expect(provider.getAvailablePurchases()).rejects.toMatchObject({
       code: 'INVALID_RESPONSE',
