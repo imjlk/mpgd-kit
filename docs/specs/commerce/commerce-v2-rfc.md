@@ -396,7 +396,7 @@ requested ──▶ launched ──▶ purchased ──▶ verifying ──▶ g
 | `purchased` | `verifying` | The verify request was saved and sent. |
 | `verifying` | `granted` | The backend returned a ledger entry (new or already processed). |
 | `verifying` | `pending` | The backend returned `pending`, for example a server-push store whose fulfillment has not arrived. |
-| `pending` | `verifying` | The next reconcile resends the same saved request. |
+| `pending` | `verifying` | The next reconcile resends the same saved request; a restore pending at the [holder limit](#restore-sharing) waits for the player's next Restore Purchases. |
 | `verifying` | `rejected` | The backend returned a definitive non-grant. |
 | `granted` | `finishing` | The finish owner is `client`, `host`, or `server`. For `server` this means waiting for the backend to report `finalization: 'completed'`. |
 | `granted` | `finished` | The finish owner is `none`. |
@@ -623,7 +623,11 @@ restoring player gets its own grant of it:
   a purchase a store refund, chargeback, or voided purchase ended (a share
   written while that refund fans out is revoked right after its write; an
   `admin` entry ends one holder only); `pending` `PURCHASE_HOLDER_LIMIT_REACHED` at the
-  limit; `pending` `PURCHASE_HOLDER_CONFLICT` after repeated lost races.
+  limit; `pending` `PURCHASE_HOLDER_CONFLICT` after repeated lost races. The
+  reconciler resends a restore pending at the limit only on the player's next
+  Restore Purchases (a holder may have been freed since); start, resume, and
+  event passes leave it, since nothing they observe frees a holder. Every other
+  backend-pending answer is resent by the next reconcile as before.
 - **Never shared.** Consumables and subscriptions.
 
 ## Credit wallet {#credit-wallet}

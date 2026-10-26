@@ -3393,6 +3393,78 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
 }
 
+// Restore follow-ups (L6a).
+
+// 51. A restore pending at the holder limit is resent by Restore Purchases only: a reconcile, an
+// event pass after the retry interval, and a restart leave it; other pending reasons still retry.
+{
+  let clock = '2026-10-02T00:00:00.000Z';
+  const provider = createFakeProvider({ withRestore: true });
+  const h = createHarness({ provider, overrides: { now: () => clock, retryIntervalMs: 60_000 } });
+  await h.reconciler.start();
+  h.backend.queue({ status: 'pending', reason: 'PURCHASE_HOLDER_LIMIT_REACHED' });
+  provider.available.push(
+    purchaseOf({ transactionId: 'tx-51', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await h.reconciler.restorePurchases();
+  const key = 'store:fake-store:tx-51';
+  assertEqual(h.backend.requests.length, 1, 'Restore Purchases sends the restore once');
+  assertEqual(h.history(key).at(-1), 'pending', 'the backend answered pending at the holder limit');
+
+  await h.reconciler.reconcile();
+  clock = '2026-10-02T00:05:00.000Z';
+  provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  await h.reconciler.stop();
+  const relaunched = createHarness({
+    provider,
+    backend: h.backend,
+    store: h.store,
+    overrides: { now: () => clock, retryIntervalMs: 60_000 },
+  });
+  await relaunched.reconciler.start();
+  assertEqual(
+    h.backend.requests.length,
+    1,
+    'a reconcile, an event pass after the retry interval, and a restart never resend it',
+  );
+  assertEqual(
+    (await relaunched.reconciler.listRecoverable()).map((record) => record.state),
+    ['pending'],
+    'the restore stays pending for the game to report',
+  );
+
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-51' });
+  await relaunched.reconciler.restorePurchases();
+  assertEqual(h.backend.requests.length, 2, "the player's Restore Purchases resends it");
+  assertEqual(
+    h.backend.requests[1],
+    h.backend.requests[0],
+    'the saved request is resent unchanged',
+  );
+  assertEqual(
+    relaunched.history(key).slice(-2),
+    ['finishing', 'finished'],
+    'a freed holder lets the restore land',
+  );
+
+  // Another backend-pending reason keeps the automatic retry.
+  h.backend.queue({ status: 'pending', reason: 'PURCHASE_HOLDER_CONFLICT' });
+  provider.report(
+    purchaseOf({ transactionId: 'tx-51b', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await relaunched.reconciler.runUntilIdle();
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-51b' });
+  await relaunched.reconciler.reconcile();
+  assertEqual(
+    relaunched.history('store:fake-store:tx-51b'),
+    ['purchased', 'verifying', 'pending', 'verifying', 'granted', 'finishing', 'finished'],
+    'a restore pending after lost races is resent by the next reconcile',
+  );
+  assertEqual([...h.failures, ...relaunched.failures], [], 'no stage failed');
+  await relaunched.reconciler.stop();
+}
+
 function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   let thrown: unknown;
   try {

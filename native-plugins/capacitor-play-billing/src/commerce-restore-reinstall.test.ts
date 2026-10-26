@@ -6,6 +6,7 @@ import {
   type CommerceReconcilerEvent,
   type EvidenceVerificationDecision,
   type GameServicesBackendApi,
+  type MonetizationOperationStore,
 } from '@mpgd/game-services';
 import {
   createGameServicesBackend,
@@ -146,8 +147,16 @@ async function createWorld(maxHolders?: number): Promise<World> {
   return { plugin, backend, store, requests: [] };
 }
 
-/** A fresh install's reconciler for `playerId`: an empty journal, the same store account. */
-function install(world: World, playerId: string) {
+/**
+ * A fresh install's reconciler for `playerId`: an empty journal, the same
+ * store account. `journal` is the install's journal when the app relaunches
+ * or another guest signs in on the same install.
+ */
+function install(
+  world: World,
+  playerId: string,
+  journal: MonetizationOperationStore = createInMemoryMonetizationOperationStore(),
+) {
   const provider = createCapacitorPlayBillingCommerceProvider({
     plugin: world.plugin,
     isAndroid: () => true,
@@ -166,7 +175,7 @@ function install(world: World, playerId: string) {
         return response;
       },
     },
-    store: createInMemoryMonetizationOperationStore(),
+    store: journal,
     playerId,
     target: 'android',
     products,
@@ -176,7 +185,7 @@ function install(world: World, playerId: string) {
       }
     },
   });
-  return { reconciler, responses, failures };
+  return { reconciler, responses, failures, journal };
 }
 
 /** The players holding an active REMOVE_ADS grant (the only entitlement in this catalog). */
@@ -239,7 +248,28 @@ describe('Play Billing restore after a reinstall', () => {
     });
     const [pending] = await third.reconciler.listRecoverable();
     expect(pending?.state).toBe('pending');
+    const sentAtLimit = world.requests.length;
+    await third.reconciler.reconcile();
     await third.reconciler.stop();
     expect(await holdersOf(world)).toEqual([earlierGuest, 'guest-second-device'].sort());
+
+    // A relaunch and a resume never resend the restore at the holder limit.
+    const relaunched = install(world, 'guest-third-device', third.journal);
+    await relaunched.reconciler.start();
+    await relaunched.reconciler.reconcile();
+    expect(world.requests).toHaveLength(sentAtLimit);
+
+    // The second device's guest deletes its account, which frees its place;
+    // the player's next Restore Purchases asks again and lands.
+    await world.store.erasePlayerData({
+      playerId: 'guest-second-device',
+      retainedPlayerId: 'deleted:guest-second-device',
+    });
+    await relaunched.reconciler.restorePurchases();
+    expect(world.requests).toHaveLength(sentAtLimit + 1);
+    expect(relaunched.responses.at(-1)).toMatchObject({ verified: true, restoredAcrossPlayers: true });
+    expect(await relaunched.reconciler.listRecoverable()).toEqual([]);
+    await relaunched.reconciler.stop();
+    expect(relaunched.failures).toEqual([]);
   });
 });

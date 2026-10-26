@@ -4,6 +4,7 @@ import {
   type CommerceReconcilerEvent,
   type EvidenceVerificationDecision,
   type GameServicesBackendApi,
+  type MonetizationOperationStore,
 } from '@mpgd/game-services';
 import {
   createGameServicesBackend,
@@ -152,8 +153,16 @@ async function createWorld(maxHolders?: number): Promise<World> {
   return { plugin, backend, store, requests: [] };
 }
 
-/** A fresh install's reconciler for `playerId`: an empty journal, the same Apple ID. */
-function install(world: World, playerId: string) {
+/**
+ * A fresh install's reconciler for `playerId`: an empty journal, the same
+ * Apple ID. `journal` is the install's journal when the app relaunches or
+ * another guest signs in on the same install.
+ */
+function install(
+  world: World,
+  playerId: string,
+  journal: MonetizationOperationStore = createInMemoryMonetizationOperationStore(),
+) {
   const provider = createCapacitorStoreKitCommerceProvider({
     products,
     getAppAccountToken: () => tokenOf(playerId),
@@ -172,7 +181,7 @@ function install(world: World, playerId: string) {
         return response;
       },
     },
-    store: createInMemoryMonetizationOperationStore(),
+    store: journal,
     playerId,
     target: 'ios',
     products,
@@ -182,7 +191,7 @@ function install(world: World, playerId: string) {
       }
     },
   });
-  return { reconciler, responses, failures };
+  return { reconciler, responses, failures, journal };
 }
 
 /** The players holding an active REMOVE_ADS grant (the only entitlement in this catalog). */
@@ -281,12 +290,49 @@ async function holdersOf(world: World): Promise<readonly string[]> {
     ['pending'],
     'the restore stays pending for the starter to report',
   );
+  const sentAtLimit = world.requests.length;
+  await third.reconciler.reconcile();
   await third.reconciler.stop();
   assertEqual(
     await holdersOf(world),
     [earlierGuest, 'guest-second-device'].sort(),
     'nobody is evicted',
   );
+
+  // A relaunch and a resume never resend the restore at the holder limit.
+  const relaunched = install(world, 'guest-third-device', third.journal);
+  await relaunched.reconciler.start();
+  await relaunched.reconciler.reconcile();
+  assertEqual(
+    world.requests.length,
+    sentAtLimit,
+    'only Restore Purchases asks the backend again at the holder limit',
+  );
+
+  // The second device's guest deletes its account, which frees its place; the
+  // player's next Restore Purchases asks again and lands.
+  await world.store.erasePlayerData({
+    playerId: 'guest-second-device',
+    retainedPlayerId: 'deleted:guest-second-device',
+  });
+  await relaunched.reconciler.restorePurchases();
+  assertEqual(
+    world.requests.length,
+    sentAtLimit + 1,
+    'Restore Purchases resends the saved request',
+  );
+  assertEqual(
+    relaunched.responses.at(-1)?.restoredAcrossPlayers,
+    true,
+    'the freed place is shared with the third guest',
+  );
+  assertEqual(
+    await relaunched.reconciler.listRecoverable(),
+    [],
+    'the restore finishes on the entitlement StoreKit already finished',
+  );
+  await relaunched.reconciler.stop();
+  assertEqual(relaunched.failures, [], 'no reconciler stage failed after the relaunch');
 }
 
 console.log('StoreKit restore after a reinstall passed.');

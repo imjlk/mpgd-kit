@@ -342,6 +342,23 @@ function isOpen(state: CommercePurchaseState): state is OpenState {
   return state === 'launched' || state === 'pending';
 }
 
+/** The backend's answer for a restore past the restore sharing holder limit (RFC "Restore sharing"). */
+const purchaseHolderLimitReason = 'PURCHASE_HOLDER_LIMIT_REACHED';
+
+/**
+ * A backend-pending record that only the player's Restore Purchases resends:
+ * a restore the backend answered `pending` at the holder limit. Nothing a
+ * pass can observe frees a holder, so an automatic resend would repeat the
+ * same answer on every launch, resume, and event; an explicit restore may
+ * find a holder freed (a deleted player, a reversed grant).
+ */
+function waitsForRestoreTrigger(record: CommercePurchaseOperationRecord): boolean {
+  return record.state === 'pending'
+    && record.response !== undefined
+    && !record.response.verified
+    && record.response.reason === purchaseHolderLimitReason;
+}
+
 /** A backend answer that the capabilities read does not exist: HTTP 404 or oRPC NOT_FOUND. */
 function isNotFoundError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) {
@@ -1020,8 +1037,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const drive = async (
     initial: CommercePurchaseOperationRecord,
     capabilitiesNow: CommerceCapabilities | undefined,
-    explicit: boolean,
+    options: PassOptions,
   ): Promise<void> => {
+    const explicit = options.explicit;
     let record = initial;
     /** Finalization the grant of this drive reported; a later pass re-reads it from the backend. */
     let finalization: 'pending' | 'completed' | undefined;
@@ -1075,6 +1093,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           case 'pending':
             if (record.request === undefined) {
               // Store-side pending: waiting on the store, never sent.
+              return;
+            }
+            if (options.restoreTrigger !== true && waitsForRestoreTrigger(record)) {
+              // At the holder limit only the player's Restore Purchases asks again.
               return;
             }
             record = await write(record, 'verifying');
@@ -1256,6 +1278,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
      * a restore read (`GetAvailablePurchasesInput.restore`).
      */
     readonly restore?: boolean;
+    /**
+     * The pass the player's Restore Purchases runs, whichever read it made:
+     * the only pass that resends a restore pending at the holder limit.
+     */
+    readonly restoreTrigger?: boolean;
   }
 
   const eventPass: PassOptions = { explicit: false, refreshCapabilities: false };
@@ -1302,7 +1329,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
     }
     for (const record of await listRecoverable()) {
-      await drive(records.get(record.idempotencyKey) ?? record, capabilitiesNow, options.explicit);
+      await drive(records.get(record.idempotencyKey) ?? record, capabilitiesNow, options);
     }
     await revokeReversed();
   };
@@ -1761,7 +1788,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             initialScanPending = false;
           }
         }
-        await pass({ explicit: true, refreshCapabilities: false, restore: !restoreRead });
+        await pass({
+          explicit: true,
+          refreshCapabilities: false,
+          restore: !restoreRead,
+          restoreTrigger: true,
+        });
       });
       await runUntilIdle();
     },
