@@ -178,6 +178,48 @@ describe('createCapacitorCrashReporter', () => {
     await expect(consented.recordError(new Error('consented'))).resolves.toBe(true);
   });
 
+  it('re-applies a stored opt-out the SDK did not take, at start and with later reports', async () => {
+    const preference = memoryPreference();
+    let nativeFailures = 1;
+    const plugin = createPlugin({
+      setEnabled: vi.fn(async () => {
+        if (nativeFailures > 0) {
+          nativeFailures -= 1;
+          throw new Error('native failure');
+        }
+      }),
+    });
+    const first = createCapacitorCrashReporter({
+      ...base, collectionPreference: preference, isPluginAvailable: () => true, plugin,
+    });
+    await first.setCollectionEnabled(false);
+    expect(preference.value).toBe(false);
+    expect(plugin.deleteUnsentReports).not.toHaveBeenCalled();
+    // In the same session the next dropped report retries it.
+    await expect(first.recordError(new Error('x'))).resolves.toBe(false);
+    expect(plugin.setEnabled).toHaveBeenLastCalledWith({ enabled: false });
+    expect(plugin.deleteUnsentReports).toHaveBeenCalledTimes(1);
+    expect(plugin.recordException).not.toHaveBeenCalled();
+
+    // A restart applies the stored opt-out again before any report.
+    plugin.setEnabled.mockClear();
+    plugin.deleteUnsentReports.mockClear();
+    nativeFailures = 1;
+    const restarted = createCapacitorCrashReporter({
+      ...base, collectionPreference: preference, isPluginAvailable: () => true, plugin,
+    });
+    await flushMicrotasks();
+    expect(plugin.setEnabled).toHaveBeenCalledWith({ enabled: false });
+    expect(plugin.deleteUnsentReports).not.toHaveBeenCalled();
+    // That attempt failed too; the next report retries until it succeeds.
+    await restarted.log('dropped');
+    expect(plugin.setEnabled).toHaveBeenCalledTimes(2);
+    expect(plugin.deleteUnsentReports).toHaveBeenCalledTimes(1);
+    await restarted.log('dropped again');
+    expect(plugin.setEnabled).toHaveBeenCalledTimes(2);
+    expect(plugin.log).not.toHaveBeenCalled();
+  });
+
   it('still applies the native opt-out when the preference store throws', async () => {
     const plugin = createPlugin();
     const reporter = createCapacitorCrashReporter({

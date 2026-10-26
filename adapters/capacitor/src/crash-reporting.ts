@@ -177,8 +177,25 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
       return undefined;
     }
   };
-  let collectionEnabled: boolean | undefined = readPreference()
+  const storedChoice = readPreference();
+  let collectionEnabled: boolean | undefined = storedChoice
     ?? (options.requireConsent === true ? false : undefined);
+  // A stored opt-out is applied to the SDK again at every start: an earlier
+  // native setEnabled may have failed, and the SDK would then still collect.
+  // Until it succeeds it is retried with each report the gate drops.
+  let nativeOptOutPending = storedChoice === false;
+  const applyNativeOptOut = async (): Promise<void> => {
+    if (!nativeOptOutPending || collectionEnabled !== false) {
+      return;
+    }
+    try {
+      await plugin.setEnabled({ enabled: false });
+      await plugin.deleteUnsentReports();
+      nativeOptOutPending = false;
+    } catch {
+      // Retried with the next report and at the next start.
+    }
+  };
   let ready: Promise<boolean> | undefined;
   const prepare = (): Promise<boolean> => {
     ready ??= (async () => {
@@ -202,12 +219,22 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
           // Unknown stays unknown.
         }
       }
+      await applyNativeOptOut();
       return true;
     })();
     return ready;
   };
   // Read after the wait: the player may turn collection off meanwhile.
-  const collecting = async (): Promise<boolean> => await prepare() && collectionEnabled !== false;
+  const collecting = async (): Promise<boolean> => {
+    if (!await prepare()) {
+      return false;
+    }
+    if (collectionEnabled === false) {
+      await applyNativeOptOut();
+      return false;
+    }
+    return true;
+  };
   // Native crashes can happen before any JavaScript report, so the context
   // keys are set right away. Keys stay on the device until a report is sent,
   // so this does not bypass `requireConsent`.
@@ -266,6 +293,9 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
     async setCollectionEnabled(enabled) {
       // Set before any wait, so a report racing with the toggle sees it.
       collectionEnabled = enabled;
+      // This call applies the choice itself; only its failure leaves an
+      // opt-out pending.
+      nativeOptOutPending = false;
       try {
         preference.write(enabled);
       } catch {
@@ -280,7 +310,9 @@ export function createCapacitorCrashReporter(options: CapacitorCrashReporterOpti
           await plugin.deleteUnsentReports();
         }
       } catch {
-        // The session flag still stops JavaScript reports when turned off.
+        nativeOptOutPending = !enabled;
+        // The session flag still stops JavaScript reports; a failed opt-out
+        // stays pending and is retried with the next report and next start.
       }
     },
   };
