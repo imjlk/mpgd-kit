@@ -36,7 +36,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
     // billing failure that escapes them (an Error) from crashing the game.
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
-            Log.e(TAG, "Unhandled Google Play Billing failure", error)
+            Log.e(TAG, "Unhandled Google Play Billing failure: ${error.javaClass.name}")
         },
     )
     private var connection: OpenIapPlayConnection? = null
@@ -64,6 +64,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
         } catch (error: OpenIapError) {
             providerError = error.message
         } catch (error: Exception) {
+            logUnexpected("provider load", error)
             providerError = "OpenIAP could not load the Google Play provider."
         }
     }
@@ -164,6 +165,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
                     PurchaseResolution.Failed(PlayBillingPolicy.errorCode(error), billingMessage(error))
                 }
             } catch (error: Exception) {
+                logUnexpected("purchase", error)
                 PurchaseResolution.Failed("PLAY_BILLING_ERROR", "Google Play Billing failed.")
             } finally {
                 // Released on every path, so one failure never leaves later
@@ -297,9 +299,18 @@ class CapacitorPlayBillingPlugin : Plugin() {
             } catch (error: OpenIapError) {
                 call.reject(billingMessage(error), PlayBillingPolicy.errorCode(error))
             } catch (error: Exception) {
+                logUnexpected(call.methodName ?: "query", error)
                 call.reject("Google Play Billing failed.", "PLAY_BILLING_ERROR")
             }
         }
+    }
+
+    /**
+     * The exception class only: a message or stack trace can carry a
+     * purchase token or account id, so neither is logged.
+     */
+    private fun logUnexpected(operation: String, error: Exception) {
+        Log.w(TAG, "Unexpected Google Play Billing failure in $operation: ${error.javaClass.name}")
     }
 
     private fun rejectUnavailable(call: PluginCall) {
