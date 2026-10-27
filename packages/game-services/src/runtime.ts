@@ -3,6 +3,7 @@ import type { AnalyticsSink } from '@mpgd/analytics';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 import {
+  assertCommerceStaleLaunchedAfterMs,
   createGameServicesClient,
   createGameServicesFetchBackendTransport,
   createGameServicesHttpBackendApi,
@@ -96,6 +97,7 @@ export function createGameServicesRuntime(
 ): GameServicesRuntime {
   assertAuthorityMode(input.authorityMode);
   assertTransport(input.transport);
+  assertCommerceStaleLaunchedAfterMs(input.commerceStaleLaunchedAfterMs);
   if (input.transport === 'orpc' && input.httpTransport !== undefined) {
     throw new Error('Game Services httpTransport cannot be used with oRPC.');
   }

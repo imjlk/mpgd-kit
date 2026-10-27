@@ -236,6 +236,18 @@ export interface CreateGameServicesClientInput {
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
 }
 
+/**
+ * `commerceStaleLaunchedAfterMs` is checked where it enters, so a bad value
+ * fails even when no reconciler is built (a gateway without `commerce`).
+ */
+export function assertCommerceStaleLaunchedAfterMs(value: number | undefined): void {
+  if (value !== undefined && !(typeof value === 'number' && value > 0)) {
+    throw new RangeError(
+      'commerceStaleLaunchedAfterMs must be a positive duration in milliseconds, or Infinity.',
+    );
+  }
+}
+
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
 
 export interface GameServicesLeaderboardResult {
@@ -247,6 +259,7 @@ export interface GameServicesLeaderboardResult {
 }
 
 export function createGameServicesClient(input: CreateGameServicesClientInput): GameServicesClient {
+  assertCommerceStaleLaunchedAfterMs(input.commerceStaleLaunchedAfterMs);
   const now = input.now ?? (() => new Date().toISOString());
   const requestNow = input.requestNow ?? now;
   const rewardEvidenceRegistry = input.rewardEvidenceRegistry ?? createDefaultClientRewardEvidenceRegistry();

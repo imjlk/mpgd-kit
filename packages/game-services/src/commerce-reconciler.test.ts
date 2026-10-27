@@ -2065,9 +2065,40 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
   await short.client?.commerceReconciler?.stop();
   await defaulted.client?.commerceReconciler?.stop();
+  for (const bad of [0, -1, Number.NaN]) {
+    assertThrowsSync(
+      () => runtimeOf(createInMemoryMonetizationOperationStore(), bad),
+      /commerceStaleLaunchedAfterMs must be a positive duration/u,
+    );
+  }
+  // Refused where it enters, also when no reconciler is built (no commerce provider) or the
+  // runtime is disabled before it builds a client.
+  const { commerce: _commerce, ...withoutCommerce } = createGateway(createFakeProvider());
   assertThrowsSync(
-    () => runtimeOf(createInMemoryMonetizationOperationStore(), 0),
-    /staleLaunchedAfterMs must be a positive duration/u,
+    () =>
+      createGameServicesRuntime({
+        gateway: withoutCommerce,
+        playerId: 'player-1',
+        authorityMode: 'production',
+        commerceStaleLaunchedAfterMs: 0,
+      }),
+    /commerceStaleLaunchedAfterMs must be a positive duration/u,
+  );
+  assertThrowsSync(
+    () =>
+      createGameServicesClient({
+        gateway: withoutCommerce,
+        backend: createBackendApi(createFakeBackend()),
+        playerId: 'player-1',
+        target: 'android',
+        commerceStaleLaunchedAfterMs: -5,
+      }),
+    /commerceStaleLaunchedAfterMs must be a positive duration/u,
+  );
+  assertEqual(
+    runtimeOf(createInMemoryMonetizationOperationStore(), Number.POSITIVE_INFINITY).mode,
+    'local',
+    'Infinity is accepted',
   );
 }
 
