@@ -530,9 +530,14 @@ describe('gateway with a commerce provider', () => {
     ]);
     expect((await commerce.getAvailablePurchases()).map((purchase) => purchase.transactionId))
       .toEqual(['tx-1']);
+    // The host is this package's: the retry hint crosses the bridge to the SDK.
+    expect(commerce.acceptsFinishRetry).toBe(true);
     await expect(commerce.finishTransaction?.({
-      transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true,
+      transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true, retry: true,
     })).resolves.toEqual({ finished: true });
+    expect(sdk.finishCalls.at(-1)).toEqual(
+      { transactionId: 'tx-1', isConsumable: true, ledgerEntryId: 'le-1', retry: true },
+    );
     await expect(commerce.requestPurchase({
       logicalId: 'nope', idempotencyKey: 'op-2', source: 'shop',
     })).rejects.toMatchObject({ code: 'ITEM_UNAVAILABLE' });
