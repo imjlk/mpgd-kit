@@ -95,8 +95,15 @@ pnpm exec mpgd store products apply --plan products-plan.json --approve
 - `skipped`: no listing entry, a subscription, or no price to create with.
 - `remote`: on Play but named by no catalog product. Never deleted.
 
-Listing languages, purchase options and regions that the file does not name
-are kept as they are on Play.
+Listing languages and purchase options that the file does not name are kept
+as they are on Play. Prices follow the file: every region Play's conversion
+covers gets the converted price (or the file's regional price), so a price
+typed into Play Console for one region is replaced unless the file names
+that region too. A region's availability (for example `NO_LONGER_AVAILABLE`)
+and an existing option's choice about regions Play launches later stay as
+Play has them; regions the conversion does not list are kept. Each price
+change is printed with its old and new value, and the plan file lists all of
+them.
 
 `apply`:
 
@@ -105,8 +112,9 @@ are kept as they are on Play.
   write differs from the saved plan (someone edited it in Play Console, or
   the files changed): run `plan` again and review;
 - skips products an earlier apply already wrote, so re-running it is safe;
-- activates new and `DRAFT` purchase options, so the product can be bought;
-  an `INACTIVE` option is reported and never reactivated;
+- activates new and `DRAFT` purchase options that have prices, so the
+  product can be bought; an `INACTIVE` option is reported and never
+  reactivated;
 - refuses a price change on a product whose purchase option is `ACTIVE`
   unless `--confirm-price-change` is given. `plan --keep-live-prices` leaves
   live prices as they are instead. Play's converted prices follow its

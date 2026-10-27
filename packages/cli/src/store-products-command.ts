@@ -122,9 +122,18 @@ export async function applyStoreProducts(
   }
   const saved = readSavedPlan(options.planFile);
   const gameRoot = options.game === undefined ? saved.gameRoot : path.resolve(options.game);
-  const relocate = (file: string): string => options.game === undefined
-    ? file
-    : path.resolve(gameRoot, path.relative(saved.gameRoot, file));
+  const relocate = (file: string): string => {
+    if (options.game === undefined) {
+      return file;
+    }
+    const relative = path.relative(saved.gameRoot, file);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(
+        `The saved plan reads ${file}, outside its game directory; --game cannot move it. Plan again.`,
+      );
+    }
+    return path.resolve(gameRoot, relative);
+  };
   const current = await planStoreProducts(
     {
       game: gameRoot,
@@ -171,10 +180,21 @@ function readSavedPlan(file: string): StoreProductPlanFile {
     || typeof raw.listingsFile !== 'string' || typeof plan !== 'object' || plan === null
     || plan.schemaVersion !== 1 || plan.store !== 'google-play'
     || typeof plan.packageName !== 'string' || typeof plan.catalogTarget !== 'string'
-    || typeof plan.keepLivePrices !== 'boolean' || !Array.isArray(plan.products)) {
+    || typeof plan.keepLivePrices !== 'boolean' || !Array.isArray(plan.products)
+    || !plan.products.every(isSavedProduct)) {
     throw new Error('Saved store product plan is malformed.');
   }
   return raw as unknown as StoreProductPlanFile;
+}
+
+function isSavedProduct(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const product = value as Record<string, unknown>;
+  return typeof product.productId === 'string' && typeof product.action === 'string'
+    && (product.remoteSha256 === null || typeof product.remoteSha256 === 'string')
+    && typeof product.desiredSha256 === 'string';
 }
 
 async function loadPlayProductCatalog(serviceAccountFile: string): Promise<PlayProductCatalogPort> {

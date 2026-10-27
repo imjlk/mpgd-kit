@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -68,6 +68,7 @@ interface FakePlay {
   readonly writes: string[];
   readonly products: Map<string, PlayOneTimeProduct>;
   failNextPatch?: Error | undefined;
+  failNextActivate?: Error | undefined;
   conversionCalls: number;
 }
 
@@ -125,6 +126,11 @@ function fakePlay(initial: readonly PlayOneTimeProduct[] = []): FakePlay {
       },
       async activatePurchaseOption(input) {
         writes.push(`activate ${input.productId}/${input.purchaseOptionId}`);
+        if (fake.failNextActivate !== undefined) {
+          const error = fake.failNextActivate;
+          fake.failNextActivate = undefined;
+          throw error;
+        }
         const product = products.get(input.productId);
         assert.ok(product !== undefined);
         products.set(input.productId, {
@@ -412,6 +418,13 @@ function find(plan: PlayProductPlan, productId: string) {
   const plan = await planPlayProducts({ packageName, catalog, listings: cheaper }, play.port);
   const removeAds = find(plan, 'remove_ads');
   assert.deepEqual(removeAds.changes, ['prices']);
+  assert.deepEqual(
+    removeAds.priceChanges.find((change) => change.region === 'US'),
+    { region: 'US', from: '2.99 USD', to: '1.99 USD' },
+    'the plan shows each regional price change',
+  );
+  assert.equal(removeAds.priceChanges.at(-1)?.region, 'new-regions');
+  assert.match(formatPlayProductPlan(plan), /price US: 2\.99 USD -> 1\.99 USD/u);
   assert.equal(removeAds.livePriceChange, true);
   assert.match(formatPlayProductPlan(plan), /PRICE CHANGE ON LIVE PRODUCT/u);
   await assert.rejects(
@@ -618,6 +631,158 @@ function find(plan: PlayProductPlan, productId: string) {
   assert.deepEqual(play.writes, []);
 }
 
+// --- Play's region availability and new-region choice are kept ------------
+{
+  const tuned = convertedOption('legacy-base', '2.99', 'ACTIVE');
+  const { newRegionsConfig: _optedOut, ...withoutNewRegions } = tuned;
+  const remote: PlayOneTimeProduct = {
+    ...liveRemoveAds,
+    listings: [liveRemoveAds.listings?.[0] ?? {}],
+    purchaseOptions: [
+      {
+        ...withoutNewRegions,
+        regionalPricingAndAvailabilityConfigs: tuned.regionalPricingAndAvailabilityConfigs?.map(
+          (config) =>
+            config.regionCode === 'KR' ? { ...config, availability: 'NO_LONGER_AVAILABLE' } : config,
+        ),
+      },
+    ],
+  };
+  const same = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          ...listingsInput.products.REMOVE_ADS,
+          localizations: { 'en-US': { title: 'Remove ads', description: 'Old text.' } },
+        },
+      },
+    },
+    catalog,
+  );
+  const play = fakePlay([remote]);
+  const plan = await planPlayProducts({ packageName, catalog, listings: same }, play.port);
+  assert.equal(
+    find(plan, 'remove_ads').action,
+    'unchanged',
+    'availability and opt-out are not price changes',
+  );
+
+  const multi = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          ...same.products.REMOVE_ADS,
+          googlePlay: { ...same.products.REMOVE_ADS?.googlePlay, multiQuantity: true },
+        },
+      },
+    },
+    catalog,
+  );
+  const multiPlan = await planPlayProducts({ packageName, catalog, listings: multi }, play.port);
+  const option = find(multiPlan, 'remove_ads').write?.patch?.product.purchaseOptions?.[0];
+  assert.equal(
+    option?.regionalPricingAndAvailabilityConfigs?.find((config) => config.regionCode === 'KR')?.availability,
+    'NO_LONGER_AVAILABLE',
+  );
+  assert.equal(
+    option?.newRegionsConfig,
+    undefined,
+    'an option that opted out of new regions stays out',
+  );
+}
+
+// --- held live prices go back with Play's own regions version ---------------
+{
+  const cheaperMulti = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          localizations: { 'en-US': { title: 'Remove ads', description: 'Old text.' } },
+          googlePlay: { price: { base: { currency: 'USD', amount: '1.99' } }, multiQuantity: true },
+        },
+      },
+    },
+    catalog,
+  );
+  const remote = { ...liveRemoveAds, listings: [liveRemoveAds.listings?.[0] ?? {}] };
+  const play = fakePlay([remote]);
+  const plan = await planPlayProducts(
+    { packageName, catalog, listings: cheaperMulti, keepLivePrices: true },
+    play.port,
+  );
+  const removeAds = find(plan, 'remove_ads');
+  assert.deepEqual(removeAds.changes, ['multi-quantity']);
+  assert.equal(removeAds.livePriceChange, false);
+  assert.equal(removeAds.write?.patch?.regionsVersion, '2022/02');
+  assert.deepEqual(
+    removeAds.write?.patch?.product.purchaseOptions?.[0]?.regionalPricingAndAvailabilityConfigs,
+    remote.purchaseOptions?.[0]?.regionalPricingAndAvailabilityConfigs,
+    "the held prices are Play's own",
+  );
+
+  // Text-only listing with a multi-quantity change: Play's version, no conversion.
+  const noPrice = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          localizations: { 'en-US': { title: 'Remove ads', description: 'Old text.' } },
+          googlePlay: { multiQuantity: true },
+        },
+      },
+    },
+    catalog,
+  );
+  const textPlay = fakePlay([remote]);
+  const textPlan = await planPlayProducts(
+    { packageName, catalog, listings: noPrice },
+    textPlay.port,
+  );
+  assert.equal(textPlay.conversionCalls, 0);
+  assert.deepEqual(find(textPlan, 'remove_ads').changes, ['multi-quantity']);
+  assert.equal(find(textPlan, 'remove_ads').write?.patch?.regionsVersion, '2022/02');
+
+  // A DRAFT option without prices is not activated.
+  const unpriced = fakePlay([
+    {
+      ...remote,
+      purchaseOptions: [{ purchaseOptionId: 'legacy-base', buyOption: {}, state: 'DRAFT' }],
+    },
+  ]);
+  const unpricedPlan = await planPlayProducts(
+    { packageName, catalog, listings: noPrice },
+    unpriced.port,
+  );
+  assert.equal(find(unpricedPlan, 'remove_ads').changes.includes('activate'), false);
+  assert.match(find(unpricedPlan, 'remove_ads').notes.join(' '), /no prices/u);
+}
+
+// --- a failed activation: the next plan has only the activation left -------
+{
+  const play = fakePlay([]);
+  const only = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: { COINS_100: listingsInput.products.COINS_100 },
+    },
+    catalog,
+  );
+  const plan = await planPlayProducts({ packageName, catalog, listings: only }, play.port);
+  play.failNextActivate = Object.assign(new Error('Backend Error'), { code: 503 });
+  const error = await applyPlayProductPlan({ saved: plan, current: plan, port: play.port, approved: true })
+    .then(() => undefined, (caught: unknown) => caught);
+  assert.ok(error instanceof PlayProductApplyError);
+  assert.equal(error.stage, 'activate');
+  const next = await planPlayProducts({ packageName, catalog, listings: only }, play.port);
+  assert.deepEqual(find(next, 'coins_100').changes, ['activate']);
+  play.writes.length = 0;
+  await applyPlayProductPlan({ saved: next, current: next, port: play.port, approved: true });
+  assert.deepEqual(play.writes, ['activate coins_100/buy']);
+}
+
 // --- a failed write names what landed --------------------------------------
 {
   const play = fakePlay([liveRemoveAds]);
@@ -703,7 +868,18 @@ function find(plan: PlayProductPlan, productId: string) {
       path.join(game, 'mpgd.store-listings.json'),
       `${JSON.stringify(listingsInput, null, 2)}\n`,
     );
-    const applied = await applyStoreProducts({ planFile, approved: true }, environment, factory);
+    // The game moved to another checkout: --game re-reads the files there.
+    const moved = path.join(fixture, 'moved');
+    cpSync(game, moved, { recursive: true });
+    writeFileSync(
+      path.join(game, 'mpgd.store-listings.json'),
+      `${JSON.stringify({ version: 'gone', products: {} }, null, 2)}\n`,
+    );
+    const applied = await applyStoreProducts(
+      { planFile, game: moved, approved: true },
+      environment,
+      factory,
+    );
     assert.deepEqual(
       applied.products.map((product) => product.status),
       ['created', 'updated'],

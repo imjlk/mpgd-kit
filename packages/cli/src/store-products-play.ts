@@ -47,6 +47,13 @@ export type PlayProductChange =
   | 'tax-category'
   | 'activate';
 
+export interface PlayPriceChange {
+  /** ISO region code, or `new-regions` for Play's future-regions USD/EUR prices. */
+  readonly region: string;
+  readonly from?: string;
+  readonly to?: string;
+}
+
 export interface PlayProductWrite {
   /** `onetimeproducts.patch`; absent when only an activation is planned. */
   readonly patch?: {
@@ -69,6 +76,8 @@ export interface PlannedPlayProduct {
   readonly live: boolean;
   /** A price of a live product changes; apply needs `--confirm-price-change`. */
   readonly livePriceChange: boolean;
+  /** Each regional (or new-regions) price or availability that changes. */
+  readonly priceChanges: readonly PlayPriceChange[];
   readonly notes: readonly string[];
   /** Digest of the product as Play returned it; `null` when Play has none. */
   readonly remoteSha256: string | null;
@@ -108,6 +117,7 @@ const maxDescriptionLength = 200;
 const productIdPattern = /^[a-z0-9][a-z0-9_.]*$/u;
 const purchaseOptionIdPattern = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const defaultPurchaseOptionId = 'buy';
+const maxPrintedPriceChanges = 20;
 
 export async function planPlayProducts(
   input: PlayProductPlanInput,
@@ -278,7 +288,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
   // Prices: Play's conversion of the base price, then the file's overrides.
   let pricing: {
     readonly regional: PlayRegionalPricingConfig[];
-    readonly newRegions: PlayNewRegionsConfig;
+    readonly newRegions: PlayNewRegionsConfig | undefined;
     readonly regionsVersion: string;
   } | undefined;
   if (googlePlay.price !== undefined) {
@@ -324,16 +334,35 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
         'Google Play price conversion returned no USD and EUR prices for new regions.',
       );
     }
-    const keptRegions = (remoteOption?.regionalPricingAndAvailabilityConfigs ?? []).filter(
+    // Prices follow the file; a region's availability stays as Play has it.
+    const remoteRegions = remoteOption?.regionalPricingAndAvailabilityConfigs ?? [];
+    for (const config of remoteRegions) {
+      const desired = typeof config.regionCode === 'string'
+        ? byRegion.get(config.regionCode)
+        : undefined;
+      if (desired !== undefined && typeof config.availability === 'string'
+        && config.availability !== desired.availability) {
+        byRegion.set(String(config.regionCode), { ...desired, availability: config.availability });
+      }
+    }
+    const keptRegions = remoteRegions.filter(
       (config) => typeof config.regionCode === 'string' && !byRegion.has(config.regionCode),
     );
     if (keptRegions.length > 0) {
       notes.push(`Play keeps ${keptRegions.length} region(s) the conversion does not list: ${
         keptRegions.map((config) => String(config.regionCode)).join(', ')}.`);
     }
+    // New regions: a new option opts in; an existing one keeps its choice.
+    const remoteNewRegions = remoteOption === undefined ? undefined : remoteOption.newRegionsConfig;
     pricing = {
       regional: sortRegions([...byRegion.values(), ...keptRegions]),
-      newRegions: { usdPrice: normalizeMoney(usd), eurPrice: normalizeMoney(eur), availability: 'AVAILABLE' },
+      newRegions: remoteOption !== undefined && remoteNewRegions === undefined
+        ? undefined
+        : {
+            usdPrice: normalizeMoney(usd),
+            eurPrice: normalizeMoney(eur),
+            availability: remoteNewRegions?.availability ?? 'AVAILABLE',
+          },
       regionsVersion,
     };
   }
@@ -362,7 +391,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
     },
     ...(pricing === undefined ? {} : {
       regionalPricingAndAvailabilityConfigs: pricing.regional,
-      newRegionsConfig: pricing.newRegions,
+      ...(pricing.newRegions === undefined ? {} : { newRegionsConfig: pricing.newRegions }),
     }),
   };
 
@@ -389,7 +418,9 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
     changes.push('tax-category');
   }
   let livePriceChange = live && changes.includes('prices');
+  let pricesHeld = false;
   if (livePriceChange && input.keepLivePrices && remoteOption !== undefined) {
+    pricesHeld = true;
     desiredOption = {
       ...desiredOption,
       regionalPricingAndAvailabilityConfigs: remoteOption.regionalPricingAndAvailabilityConfigs,
@@ -399,8 +430,15 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
     livePriceChange = false;
     notes.push('A price change on this live product is held (--keep-live-prices).');
   }
+  const priceChanges = changes.includes('prices') ? diffPrices(remoteOption, desiredOption) : [];
   if (isNewOption || remoteOption.state === 'DRAFT') {
-    changes.push('activate');
+    if ((desiredOption.regionalPricingAndAvailabilityConfigs ?? []).length === 0) {
+      notes.push(
+        `Purchase option ${purchaseOptionId} has no prices on Play; give googlePlay.price to activate it.`,
+      );
+    } else {
+      changes.push('activate');
+    }
   }
 
   const remoteSha256 = remote === undefined ? null : stableSha256(remote);
@@ -413,6 +451,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
       purchaseOptionId,
       live,
       livePriceChange: false,
+      priceChanges: [],
       notes,
       remoteSha256,
       desiredSha256: stableSha256({ productId, listings, desiredOption }),
@@ -450,11 +489,12 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
       },
     }),
   };
-  // A patch that changes purchase options uses the conversion's regions
-  // version; one that leaves them alone keeps the version Play reported.
-  const regionsVersion = mask.has('purchaseOptions') || remote === undefined
-    ? pricing?.regionsVersion
-    : (remote.regionsVersion?.version ?? pricing?.regionsVersion);
+  // Prices written from the conversion go with its regions version; a patch
+  // that sends Play's own prices back keeps the version Play reported.
+  const regionsVersion = pricing !== undefined && !pricesHeld
+    && (mask.has('purchaseOptions') || remote === undefined)
+    ? pricing.regionsVersion
+    : (remote?.regionsVersion?.version ?? pricing?.regionsVersion);
   if (mask.size > 0 && (regionsVersion === undefined || regionsVersion === null || regionsVersion === '')) {
     throw new Error(`${label}: no regions version is known for the update; give googlePlay.price.`);
   }
@@ -477,6 +517,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
     purchaseOptionId,
     live,
     livePriceChange,
+    priceChanges,
     notes,
     remoteSha256,
     desiredSha256: stableSha256({ changes, write }),
@@ -612,6 +653,17 @@ export function formatPlayProductPlan(plan: PlayProductPlan): string {
     lines.push(`  ${product.action.padEnd(9)} ${product.productId} (${product.logicalId})${
       product.changes.length === 0 ? '' : `: ${product.changes.join(', ')}`}${
       flags.length === 0 ? '' : ` [${flags.join('; ')}]`}`);
+    const shown = product.priceChanges.slice(0, maxPrintedPriceChanges);
+    for (const change of shown) {
+      lines.push(
+        `            price ${change.region}: ${change.from ?? '-'} -> ${change.to ?? '-'}`,
+      );
+    }
+    if (product.priceChanges.length > shown.length) {
+      lines.push(
+        `            ... ${product.priceChanges.length - shown.length} more price changes in the plan file`,
+      );
+    }
     for (const note of product.notes) {
       lines.push(`            note: ${note}`);
     }
@@ -666,6 +718,63 @@ function samePricing(remote: PlayPurchaseOption, desired: PlayPurchaseOption): b
   return a?.availability === b?.availability
     && sameMoney(a?.usdPrice, b?.usdPrice)
     && sameMoney(a?.eurPrice, b?.eurPrice);
+}
+
+function diffPrices(
+  remote: PlayPurchaseOption | undefined,
+  desired: PlayPurchaseOption,
+): PlayPriceChange[] {
+  const describe = (config: PlayRegionalPricingConfig | undefined): string | undefined =>
+    config === undefined
+      ? undefined
+      : `${formatMoney(config.price)}${config.availability === 'AVAILABLE' ? '' : ` (${String(config.availability)})`}`;
+  const left = new Map(
+    (remote?.regionalPricingAndAvailabilityConfigs ?? []).map((config) => [
+      String(config.regionCode),
+      config,
+    ]),
+  );
+  const right = new Map(
+    (desired.regionalPricingAndAvailabilityConfigs ?? []).map((config) => [
+      String(config.regionCode),
+      config,
+    ]),
+  );
+  const changes: PlayPriceChange[] = [];
+  for (const region of [...new Set([...left.keys(), ...right.keys()])].sort()) {
+    const from = describe(left.get(region));
+    const to = describe(right.get(region));
+    if (from !== to) {
+      changes.push({
+        region,
+        ...(from === undefined ? {} : { from }),
+        ...(to === undefined ? {} : { to }),
+      });
+    }
+  }
+  const newRegions = (config: PlayNewRegionsConfig | undefined): string | undefined =>
+    config === undefined
+      ? undefined
+      : `${formatMoney(config.usdPrice)} / ${formatMoney(config.eurPrice)} (${String(config.availability)})`;
+  const fromNew = newRegions(remote?.newRegionsConfig);
+  const toNew = newRegions(desired.newRegionsConfig);
+  if (fromNew !== toNew) {
+    changes.push({
+      region: 'new-regions',
+      ...(fromNew === undefined ? {} : { from: fromNew }),
+      ...(toNew === undefined ? {} : { to: toNew }),
+    });
+  }
+  return changes;
+}
+
+function formatMoney(money: PlayMoney | undefined): string {
+  if (money === undefined) {
+    return '?';
+  }
+  const normal = normalizeMoney(money);
+  const nanos = String(normal.nanos ?? 0).padStart(9, '0').replace(/0+$/u, '');
+  return `${String(normal.units)}${nanos === '' ? '' : `.${nanos}`} ${String(normal.currencyCode)}`;
 }
 
 function sameListings(
