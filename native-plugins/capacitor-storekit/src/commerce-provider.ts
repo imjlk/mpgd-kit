@@ -15,6 +15,11 @@ import {
   storeKitCommerceAuthority,
 } from './commerce-profile.js';
 import {
+  refuseNewPurchasesUnlessGated,
+  resolvePurchaseGateSupport,
+  type StorePurchaseGate,
+} from './purchase-gate-support.js';
+import {
   capacitorStoreKitErrorCodeMap,
   createCapacitorStoreKitStoreSdk,
   readAppAccountToken,
@@ -39,9 +44,18 @@ export interface CreateCapacitorStoreKitCommerceProviderInput {
   readonly products: readonly StoreCommerceProductMapping[];
   /**
    * Authenticated, stable UUID app account token of the current player. The
-   * backend's `resolveAppAccountToken` must resolve the same value.
+   * backend's `resolveAppAccountToken` must resolve the same value. It also
+   * filters recovery and finishing to this player, so it must keep answering
+   * while sales are paused; pause sales with `purchaseGate` instead.
    */
   readonly getAppAccountToken: () => string | Promise<string>;
+  /**
+   * Optional sales switch, asked before a new purchase opens the StoreKit
+   * sheet and never by recovery, restore, or finishing, which keep using
+   * `getAppAccountToken` alone; a refusal is `ITEM_UNAVAILABLE` with
+   * `PURCHASES_PAUSED` (see `StorePurchaseGate` in `@mpgd/adapter-capacitor`).
+   */
+  readonly purchaseGate?: StorePurchaseGate;
   /** Recorded in the evidence payload when known; the backend checks the signed value anyway. */
   readonly bundleId?: string;
   readonly sdk?: CapacitorStoreKitStoreSdkPlugin;
@@ -86,6 +100,7 @@ export function createCapacitorStoreKitCommerceProvider(
     throw new TypeError('StoreKit bundleId must be a non-empty string when provided.');
   }
   const bundleId = input.bundleId;
+  const gate = resolvePurchaseGateSupport(input.purchaseGate);
   const sdk = createCapacitorStoreKitStoreSdk({
     products: input.products.map((product) => ({
       sku: product.storeSku,
@@ -96,7 +111,7 @@ export function createCapacitorStoreKitCommerceProvider(
     ...(input.isIos === undefined ? {} : { isIos: input.isIos }),
     ...(input.onDiagnostic === undefined ? {} : { onDiagnostic: input.onDiagnostic }),
   });
-  return createStoreCommerceProvider({
+  return refuseNewPurchasesUnlessGated(createStoreCommerceProvider({
     sdk,
     store: appStoreStoreId,
     products: input.products,
@@ -117,6 +132,9 @@ export function createCapacitorStoreKitCommerceProvider(
       try {
         value = await input.getAppAccountToken();
       } catch (error) {
+        if (error instanceof CommerceError) {
+          throw error;
+        }
         throw new CommerceError('ACCOUNT_BINDING_REQUIRED', {
           message: 'The StoreKit app account token could not be resolved.',
           storeCode: 'STOREKIT_ACCOUNT_LOOKUP_FAILED',
@@ -139,9 +157,10 @@ export function createCapacitorStoreKitCommerceProvider(
         });
       }
     },
+    ...(gate.purchaseGate === undefined ? {} : { purchaseGate: gate.purchaseGate }),
     authority: storeKitCommerceAuthority,
     mapError: { ...capacitorStoreKitErrorCodeMap, ...input.mapError },
-  });
+  }), gate);
 }
 
 export interface CreateCapacitorStoreKitServiceProviderInput

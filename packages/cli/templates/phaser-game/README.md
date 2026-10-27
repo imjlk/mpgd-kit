@@ -515,8 +515,8 @@ session: Google Play's `obfuscatedAccountId` and StoreKit's `appAccountToken`
 are derived from that player's id (`src/platform/commerceAccountBinding.ts`),
 and the backend checks them before it grants. The native shell's local player
 (`android-local-player` / `ios-local-player`) is the same on every install, so
-it binds nothing: Play refuses with `ACCOUNT_BINDING_REQUIRED` and StoreKit
-throws an error naming the missing session.
+it binds nothing: both stores refuse the purchase before the sheet opens with
+a `failed` result whose code is `ACCOUNT_BINDING_REQUIRED`.
 
 Point the game at the kit's reference guest identity Worker
 (`apps/game-identity-worker` in mpgd-kit, deployed per
