@@ -183,7 +183,11 @@ plugin build stops with `go.mod requires go >= 1.27`; with the default
 SDK. A shell that still exports an older mise `GOROOT` makes the build fail
 with `compile: version "go1.26.5" does not match go tool version "go1.27.3"`;
 run builds through `mise exec --` (or re-activate mise) after a Go bump. Jobs
-without mise leave `TTSC_GO_BINARY` unset and use the bundled compiler. The
+without mise leave `TTSC_GO_BINARY` unset and use the bundled compiler. CI's
+mise-action jobs install the `.mise.toml` Go, so they get 1.27.3 too. Games on
+ttsc 0.34 have the same floor: a game whose own mise or CI pins Go for ttsc
+(through `TTSC_GO_BINARY`) must pin Go 1.27 or later; the generated README
+says so. The
 Windows plugin cache key hashes `pnpm-lock.yaml` and `.mise.toml`, which cover
 the ttsc, typia, and Go versions the plugin binaries depend on.
 
