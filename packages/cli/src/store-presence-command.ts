@@ -1,8 +1,21 @@
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { openAscStorePresenceSession } from './app-store-presence-asc.js';
+import type { AscStorePresencePort } from './app-store-presence-port.js';
+import type { AscCredential } from './asc-session.js';
 import type { PlayStoreListingPort } from './play-listing-port.js';
-import { readStorePresenceSource, type StorePresenceSource } from './store-presence.js';
+import {
+  readStorePresenceSource,
+  storePresencePlanCommand,
+  type StorePresenceSource,
+} from './store-presence.js';
+import {
+  applyAppStorePresence,
+  planAppStorePresence,
+  type AppStorePresenceApplyResult,
+  type AppStorePresencePlan,
+} from './store-presence-app-store.js';
 import {
   applyPlayPresence,
   planPlayPresence,
@@ -14,6 +27,7 @@ import {
   readStorePlanFile,
   relocateStoreSyncFile,
   resolveStoreSyncApp,
+  StorePlanStaleError,
   writeStorePlanFile,
   type StoreSyncApp,
   type StoreSyncStore,
@@ -42,17 +56,31 @@ export interface StorePresencePlanFile {
   readonly gameRoot: string;
   readonly profile: string;
   readonly presenceFile: string;
-  readonly plan: PlayPresencePlan;
+  readonly plan: PlayPresencePlan | AppStorePresencePlan;
 }
 
 /** Store clients; the tests replace them with fakes. */
 export interface StorePresencePorts {
   readonly googlePlay: (serviceAccountFile: string) => Promise<PlayStoreListingPort>;
+  readonly appStore: (
+    credential: AscCredential,
+    signal?: AbortSignal,
+  ) => Promise<{ readonly port: AscStorePresencePort; close(): void }>;
 }
 
 const defaultPorts: StorePresencePorts = {
   googlePlay: loadPlayStoreListing,
+  appStore: openAscStorePresenceSession,
 };
+
+type StoreSession =
+  | { readonly store: 'google-play'; readonly packageName: string; readonly port: PlayStoreListingPort }
+  | {
+      readonly store: 'app-store';
+      readonly appId: string;
+      readonly bundleId: string;
+      readonly port: AscStorePresencePort;
+    };
 
 export async function planStorePresence(
   options: StorePresencePlanOptions,
@@ -60,16 +88,32 @@ export async function planStorePresence(
   ports: Partial<StorePresencePorts> = {},
 ): Promise<StorePresencePlanFile> {
   const { app, source } = resolveInputs(options, environment);
-  const plan = await withPlayPort(app, ports, (packageName, port) =>
-    planPlayPresence(
-      {
-        packageName,
-        presence: source.presence,
-        directory: source.directory,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      },
-      port,
-    ),
+  const plan = await withSession<PlayPresencePlan | AppStorePresencePlan>(
+    app,
+    ports,
+    options.signal,
+    (session) => {
+      if (session.store === 'google-play') {
+        return planPlayPresence(
+          {
+            packageName: session.packageName,
+            presence: source.presence,
+            directory: source.directory,
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          },
+          session.port,
+        );
+      }
+      return planAppStorePresence(
+        {
+          appId: session.appId,
+          bundleId: session.bundleId,
+          presence: source.presence,
+          directory: source.directory,
+        },
+        session.port,
+      );
+    },
   );
   return {
     schemaVersion: 1,
@@ -101,7 +145,7 @@ export async function applyStorePresence(
   options: StorePresenceApplyOptions,
   environment: NodeJS.ProcessEnv = process.env,
   ports: Partial<StorePresencePorts> = {},
-): Promise<PlayPresenceApplyResult> {
+): Promise<PlayPresenceApplyResult | AppStorePresenceApplyResult> {
   if (!options.approved) {
     throw new Error('Writing the store listing requires --approve.');
   }
@@ -119,20 +163,49 @@ export async function applyStorePresence(
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
   const { app, source } = resolveInputs(planOptions, environment);
-  return withPlayPort(app, ports, (packageName, port) =>
-    applyPlayPresence({
-      saved: saved.plan,
-      plan: {
-        packageName,
-        presence: source.presence,
-        directory: source.directory,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      },
-      port,
-      approved: true,
-      ...(options.confirmImageRemoval === true ? { confirmImageRemoval: true } : {}),
-      ...(options.changesNotSentForReview === true ? { changesNotSentForReview: true } : {}),
-    }),
+  const removal = options.confirmImageRemoval === true ? { confirmImageRemoval: true } : {};
+  return withSession<PlayPresenceApplyResult | AppStorePresenceApplyResult>(
+    app,
+    ports,
+    options.signal,
+    (session) => {
+      if (session.store === 'google-play' && saved.plan.store === 'google-play') {
+        return applyPlayPresence({
+          saved: saved.plan,
+          plan: {
+            packageName: session.packageName,
+            presence: source.presence,
+            directory: source.directory,
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          },
+          port: session.port,
+          approved: true,
+          ...removal,
+          ...(options.changesNotSentForReview === true ? { changesNotSentForReview: true } : {}),
+        });
+      }
+      if (session.store === 'app-store' && saved.plan.store === 'app-store') {
+        if (options.changesNotSentForReview === true) {
+          throw new Error('--changes-not-sent-for-review applies to Google Play only.');
+        }
+        return applyAppStorePresence({
+          saved: saved.plan,
+          plan: {
+            appId: session.appId,
+            bundleId: session.bundleId,
+            presence: source.presence,
+            directory: source.directory,
+          },
+          port: session.port,
+          approved: true,
+          ...removal,
+        });
+      }
+      throw new StorePlanStaleError(
+        'The saved plan is for another store.',
+        storePresencePlanCommand,
+      );
+    },
   );
 }
 
@@ -141,11 +214,6 @@ function resolveInputs(
   environment: NodeJS.ProcessEnv,
 ): { readonly app: StoreSyncApp; readonly source: StorePresenceSource } {
   assertStoreSyncStore(options.store);
-  if (options.store === 'app-store') {
-    throw new Error(
-      'mpgd store presence supports --store google-play; the App Store sync is not available yet.',
-    );
-  }
   // The game file first: a malformed file reports its own error without a credential.
   const source = readStorePresenceSource({
     gameRoot: options.game,
@@ -155,29 +223,45 @@ function resolveInputs(
   return { app, source };
 }
 
-async function withPlayPort<T>(
+/** One store session per command. */
+async function withSession<T>(
   app: StoreSyncApp,
   overrides: Partial<StorePresencePorts>,
-  action: (packageName: string, port: PlayStoreListingPort) => Promise<T>,
+  signal: AbortSignal | undefined,
+  action: (session: StoreSession) => Promise<T>,
 ): Promise<T> {
-  if (app.store !== 'google-play') {
-    throw new Error('mpgd store presence supports --store google-play only.');
-  }
   const ports = { ...defaultPorts, ...overrides };
-  return action(app.packageName, await ports.googlePlay(app.serviceAccountFile));
+  if (app.store === 'google-play') {
+    const port = await ports.googlePlay(app.serviceAccountFile);
+    return action({ store: 'google-play', packageName: app.packageName, port });
+  }
+  const session = await ports.appStore(app.credential, signal);
+  try {
+    return await action({
+      store: 'app-store',
+      appId: app.appId,
+      bundleId: app.bundleId,
+      port: session.port,
+    });
+  } finally {
+    session.close();
+  }
 }
 
 function readSavedPlan(file: string): StorePresencePlanFile {
   const raw = readStorePlanFile(file, 'store presence plan');
   const plan = raw.plan as Record<string, unknown> | undefined;
+  const storeFields = typeof plan === 'object' && plan !== null && (
+    (plan.store === 'google-play' && typeof plan.packageName === 'string' && Array.isArray(plan.languages))
+    || (plan.store === 'app-store' && typeof plan.appId === 'string' && typeof plan.bundleId === 'string'
+      && Array.isArray(plan.locales))
+  );
   if (raw.schemaVersion !== 1 || raw.kind !== 'mpgd-store-presence-plan'
     || typeof raw.gameRoot !== 'string' || !path.isAbsolute(raw.gameRoot)
     || typeof raw.profile !== 'string' || typeof raw.presenceFile !== 'string'
-    || typeof plan !== 'object' || plan === null || plan.schemaVersion !== 1
-    || plan.store !== 'google-play' || typeof plan.packageName !== 'string'
+    || typeof plan !== 'object' || plan === null || plan.schemaVersion !== 1 || !storeFields
     || typeof plan.remoteSha256 !== 'string' || typeof plan.desiredSha256 !== 'string'
-    || typeof plan.changed !== 'boolean' || typeof plan.imageRemovals !== 'number'
-    || !Array.isArray(plan.languages)) {
+    || typeof plan.changed !== 'boolean' || typeof plan.imageRemovals !== 'number') {
     throw new Error('Saved store presence plan is malformed.');
   }
   return raw as unknown as StorePresencePlanFile;

@@ -23,6 +23,7 @@ import {
   formatTextChange,
   imageMimeType,
   normalizeLineBreaks,
+  planStoreImageSet,
   readLocalStoreImage,
   sameUrlForm,
   storePresencePlanCommand,
@@ -350,77 +351,26 @@ function planImageSlot(
   complete: boolean,
   remote: readonly PlayImage[],
 ): PlannedPlayImageSlot {
-  const remoteDigests = remote.map((image) => remoteImageDigest(image, local, imageType));
-  const desired = local.map(
-    (image): PlannedPlayImage => ({ path: image.path, sha256: image.sha256 }),
-  );
-  const desiredDigests = desired.map((image) => image.sha256);
-  const notes: string[] = [];
-  const same = remoteDigests.length === desiredDigests.length
-    && remoteDigests.every((digest, index) => digest === desiredDigests[index]);
-  const unchanged = (): PlannedPlayImageSlot => ({
-    imageType,
-    action: 'unchanged',
+  const plan = planStoreImageSet({
+    local: local.map((image) => ({ path: image.path, digest: image.sha256 })),
+    remote: remote.map((image) => ({
+      id: String(image.id),
+      digest: remoteImageDigest(image, local, imageType),
+    })),
     complete,
-    upload: [],
-    keep: remoteDigests,
-    remove: [],
-    notes,
+    single: !isMultiImage(imageType),
+    maxImages: googlePlayPresenceLimits.screenshots,
+    label: `Google Play ${imageType}`,
+    storeName: 'Play',
   });
-  const replace = (): PlannedPlayImageSlot => ({
-    imageType,
-    action: 'replace',
-    complete,
-    upload: desired,
-    keep: [],
-    remove: remote
-      .map((image, index) => ({ id: String(image.id), sha256: remoteDigests[index] ?? '' }))
-      .filter((image) => !desiredDigests.includes(image.sha256)),
-    notes,
-  });
-  if (same) {
-    return unchanged();
-  }
-  if (!isMultiImage(imageType)) {
-    // The file names the one icon or feature graphic: it replaces Play's.
-    return remote.length === 0
-      ? { imageType, action: 'add', complete, upload: desired, keep: [], remove: [], notes }
-      : replace();
-  }
-  const isPrefix = remoteDigests.length < desiredDigests.length
-    && remoteDigests.every((digest, index) => digest === desiredDigests[index]);
-  if (complete && !isPrefix) {
-    if (remoteDigests.some((digest) => desiredDigests.includes(digest))) {
-      notes.push("Play's images are deleted and the set uploaded again in the file's order.");
-    }
-    return replace();
-  }
-  const missing = desired.filter((image) => !remoteDigests.includes(image.sha256));
-  if (missing.length === 0) {
-    notes.push(
-      "Play holds the file's images in another order or with others; mark the set complete to match it.",
-    );
-    return unchanged();
-  }
-  if (remote.length + missing.length > googlePlayPresenceLimits.screenshots) {
-    throw new Error(
-      `Google Play ${imageType}: Play holds ${remote.length} and the file adds ${missing.length}; a set takes at `
-      + `most ${googlePlayPresenceLimits.screenshots}. Mark the set complete to replace Play's images.`,
-    );
-  }
-  if (!complete && remote.length > 0) {
-    notes.push(
-      `Play keeps ${remote.length - (desired.length - missing.length)} image(s) the file does not list.`,
-    );
-  }
   return {
     imageType,
-    action: 'add',
+    action: plan.action,
     complete,
-    upload: missing,
-    keep: remoteDigests,
-    remove: [],
-    notes,
+    upload: plan.upload.map((image) => ({ path: image.path, sha256: image.digest })),
+    keep: plan.keep,
+    remove: plan.remove.map((image) => ({ id: image.id, sha256: image.digest })),
+    notes: plan.notes,
   };
 }
 

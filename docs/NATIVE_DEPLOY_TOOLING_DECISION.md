@@ -11,6 +11,7 @@ Baseline: `main@c377cc0`, Node 24.11.0, TypeScript 7.0.2, ttsc 0.30.4.
 | Google Play edit, AAB upload, internal track and commit | Official `@googleapis/androidpublisher` | 42.0.0 |
 | App Store Connect IPA upload, processing lookup, internal TestFlight group | `asc` from `rorkai/App-Store-Connect-CLI` | 5.5.0 |
 | App Store Connect in-app purchases (`mpgd store products --store app-store`) | the same `asc` | 5.5.0 |
+| App Store page text and screenshots (`mpgd store presence --store app-store`) | the same `asc` | 5.5.0 |
 
 The Apple `appstore-connect-sdk` 2.0.0 was evaluated, not selected. It has typed
 `buildUploads` and `builds` REST operations, but it does not provide the complete

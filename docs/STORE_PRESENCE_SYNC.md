@@ -7,9 +7,9 @@ URLs, the icon and feature graphic, and phone and tablet screenshots.
 to the store, in the same reviewed plan / apply style as the
 [store product sync](./STORE_PRODUCT_SYNC.md).
 
-Supported stores: Google Play (`--store google-play`). The App Store side of
-the file is already validated; its sync (`--store app-store`, through the
-pinned `asc`) comes in a follow-up.
+Supported stores: Google Play (`--store google-play`) and App Store Connect
+(`--store app-store`, through the pinned `asc` 5.5.0; iPhone and iPad share
+one store page).
 
 ## The store presence file
 
@@ -111,16 +111,25 @@ the store holds.
 ## Workflow
 
 The app and the store credential come from the deployment profile, the same
-ones `mpgd deploy submit` and `mpgd store products` use (Google Play: the
-package ID and the service account file named by the Android profile's
-`submissionCredential.env`, default `MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT`).
+ones `mpgd deploy submit` and `mpgd store products` use:
+
+- Google Play: the package ID and the service account file named by the
+  Android profile's `submissionCredential.env` (default
+  `MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT`).
+- App Store Connect: the bundle ID, `MPGD_ASC_APP_ID`, `MPGD_ASC_KEY_ID`,
+  `MPGD_ASC_ISSUER_ID`, the iOS profile's `submissionCredential.env` (the
+  base64 `.p8`) and `MPGD_ASC_BINARY`, the pinned `asc` 5.5.0
+  ([tooling decision](./NATIVE_DEPLOY_TOOLING_DECISION.md)). The key needs
+  the App Manager role.
 
 ```sh
 # Read the store, print the changes, save the plan; nothing is written.
 pnpm exec mpgd store presence plan --game . --store google-play --out play-presence.json
+pnpm exec mpgd store presence plan --game . --store app-store --out app-store-presence.json
 
 # Write exactly what was reviewed.
 pnpm exec mpgd store presence apply --plan play-presence.json --approve
+pnpm exec mpgd store presence apply --plan app-store-presence.json --approve
 ```
 
 `plan` prints, per language, `create`, `update` or `unchanged`, the text
@@ -210,11 +219,97 @@ What stays manual on Play (printed by `plan`):
 
 ## App Store Connect
 
-The file's `appStore` section is validated now (lengths from App Store
-Connect Help, [App information](https://developer.apple.com/help/app-store-connect/reference/app-information/app-information)
-and [Platform version information](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information);
-screenshot sizes from [Screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications)).
-The sync itself arrives in a follow-up change.
+The App Store page has two parts with different lifetimes:
+
+- **App information** (name, subtitle, privacy policy URL, per locale):
+  editable only while an app information record is being prepared
+  (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `REJECTED`), which App
+  Store Connect opens with a new version.
+- **Version localizations** (description, keywords, promotional text, what's
+  new, support and marketing URLs) and their **screenshot sets**: written
+  only to the one editable iOS version (`PREPARE_FOR_SUBMISSION`,
+  `DEVELOPER_REJECTED`, `REJECTED`, `METADATA_REJECTED`).
+
+The sync never creates a version, never submits for review, and never
+touches pricing, availability or release settings. When nothing is
+editable, `plan` marks the parts `blocked`, shows what would change, and
+prints the step as `manual` (create the next version in App Store Connect,
+then plan again); the plan header counts the blocked parts. A locale that is
+not on App Store Connect yet waits whole while no app information record is
+editable, so it is never half added without a name. App Store Connect takes
+what's new only once a version of the app has been released
+(`READY_FOR_DISTRIBUTION`, `READY_FOR_SALE`, `REPLACED_WITH_NEW_VERSION` or
+removed from sale, in either state field), so until then the sync leaves it
+out. Without an editable app information record, the plan compares against
+the live one. Text is compared and written with LF line breaks.
+
+Commands (pinned `asc` 5.5.0, one session per command):
+
+| Read / write | `asc` command |
+| --- | --- |
+| App record and bundle ID check | `apps view --id` |
+| App information records | `apps info list --app` |
+| App information localizations | `localizations list --type app-info --app --app-info --paginate` |
+| Create or update one | `app-setup info set --app --app-info --locale --name [--subtitle] [--privacy-policy-url]` |
+| iOS versions | `versions list --app --platform IOS --paginate` |
+| Version localizations | `localizations list --version --paginate` |
+| Create / update one | `localizations create --version --locale ...`, `localizations update --id ...` |
+| Screenshot sets | `screenshots list --version-localization` |
+| Upload one screenshot | `screenshots upload --version-localization --path <file> --device-type <APP_...>` |
+| Delete one screenshot | `screenshots delete --id --confirm` |
+
+Screenshots are compared by MD5 (App Store Connect's `sourceFileChecksum`).
+Each upload is one file: `asc` appends it to the set (creating the set),
+waits until the asset delivery reaches `COMPLETE` and fails on `FAILED`; the
+sync then requires the result to report `COMPLETE`. A screenshot whose
+delivery `FAILED` counts as missing: the plan reports it and a complete set
+replaces it. While App Store Connect is still processing a screenshot
+(awaiting upload, or delivered without a checksum yet), only that set is
+blocked with a note; the text and the other sets still plan. When the store's screenshots are not the first
+ones of a complete set, the set is replaced: every file is checked first,
+then the set's screenshots are deleted and the file's uploaded in order.
+Every screenshot such a replacement deletes counts toward
+`--confirm-image-removal`, a pure reorder included, because the set is
+empty until the uploads finish.
+Each file is read once, checked against the plan and copied to a private
+directory before the set is cleared; `asc` uploads the copies, so a file
+changed during the minutes-long uploads is not picked up (and `asc`, which
+refuses a source reached through a symbolic link, never sees one).
+
+Locale keys are App Store Connect's codes (`en-US`, `ko`, `ja`, `de-DE`,
+`zh-Hans`): `asc` rejects a bare language root such as `de` that App Store
+Connect spells with a region, and only at apply time.
+
+App Store Connect has no transaction. `apply` writes per locale (app
+information, version localization, screenshots) and, on a failure, names
+the steps already written; when screenshots were deleted before a failed
+upload it says so. When `asc` exits with a code for a refused request
+(2 to 5, or a 4xx code other than timeout and rate limit), the failed step
+is reported as not landed; other failures, and any failed upload (several
+App Store Connect calls), are reported as unknown. `plan` then shows what is
+left.
+
+`asc` cannot clear a field (an empty flag means "leave it"), so removing a
+subtitle or promotional text stays manual. App previews (videos) are not
+synced.
+
+What stays manual in App Store Connect (printed by `plan`): App Privacy
+answers, the age rating, App Review notes and demo account, pricing,
+availability, release settings, and submitting for review.
+
+### App Store Connect references
+
+- App Store Connect Help, [App information](https://developer.apple.com/help/app-store-connect/reference/app-information/app-information)
+  (name 2 to 30 characters, subtitle 30, privacy policy URL required for iOS),
+  [Platform version information](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information)
+  (description 4,000, keywords 100 bytes, promotional text 170, what's new
+  4,000 and not on the first version) and
+  [Screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications)
+  (sizes per display, 1 to 10 per display, `.jpeg`, `.jpg` or `.png`, no
+  alpha or transparency).
+- `asc` 5.5.0 source: `internal/cli/localizations`, `internal/cli/apps/app_setup.go`,
+  `internal/cli/versions`, `internal/cli/assets/assets_screenshots*.go`,
+  `internal/screenshotcatalog/catalog.go` (the same size table).
 
 ## Verify on the first live run
 
@@ -249,6 +344,31 @@ Mock-tested only. Check on the first run against a real Play app:
       `changesNotSentForReview`.
 - [ ] The service account permission that covers store listing writes.
 
+And against a real App Store Connect app:
+
+- [ ] Which screenshot sizes App Store Connect requires to submit. Its
+      specification page names the 6.3" iPhone ("iPhone with Dynamic Island,
+      medium display") under "Required device sizes" but marks the 6.5"
+      iPhone as required when 6.9" is missing; the kit accepts all four
+      display keys and requires none (see the maintainer questions).
+- [ ] `asc screenshots list` returns a set's screenshots in display order,
+      so a complete set that matches reports `unchanged`.
+- [ ] `sourceFileChecksum` is the MD5 of the uploaded file, so a second `plan`
+      reports every set `unchanged`.
+- [ ] Texts read back exactly as written (line breaks, trailing spaces that
+      `asc` trims), and `localizations update` accepts every field on a
+      `PREPARE_FOR_SUBMISSION` version.
+- [ ] Whether App Store Connect normalizes keywords (spaces after commas)
+      or the support, marketing and privacy policy URLs; they are compared
+      exactly, so a normalized value would plan as changed on every run.
+- [ ] Which state field (`appVersionState` or `appStoreState`) carries the
+      released states the what's new rule reads.
+- [ ] `app-setup info set` creates a new app information locale on the
+      editable record, and App Store Connect accepts the locale codes the file
+      uses (`ko`, not `ko-KR`).
+- [ ] The editable app information record and version states the sync
+      writes to: whether `READY_FOR_REVIEW` or `INVALID_BINARY` should count.
+
 ## Tests
 
 ```sh
@@ -259,6 +379,10 @@ pnpm --filter @mpgd/catalog test
 The store presence parts run the planner and apply against an in-memory Play
 with edit semantics (`packages/cli/src/store-presence-play.test.ts`), the SDK
 adapter against a local mock of the REST paths
-(`adapters/play-publisher/src/play-store-listing.test.ts`), and the file and
-image rules on generated PNG and JPEG headers
-(`packages/catalog/src/store-presence.test.ts`). No Google endpoint is called.
+(`adapters/play-publisher/src/play-store-listing.test.ts`), the App Store
+planner and apply against an in-memory App Store Connect and the `asc` command
+lines and output parsing against recorded `asc` 5.5.0 output shapes
+(`packages/cli/src/store-presence-app-store.test.ts`), and the file and image
+rules on generated PNG and JPEG headers
+(`packages/catalog/src/store-presence.test.ts`). No Google or Apple endpoint is
+called, and no `asc` binary runs.
