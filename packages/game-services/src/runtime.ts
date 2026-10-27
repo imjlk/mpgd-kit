@@ -64,8 +64,9 @@ export interface GameServicesRuntime {
   readonly accountDeletion?: AccountDeletionClient;
   /**
    * Closes the runtime for good, then waits until a purchase whose store
-   * sheet is open has journaled its answer and the commerce reconciler has
-   * stopped (each wait bounded by `gameServicesDisposeWaitMs`); repeated
+   * sheet is open has journaled its answer, a startup or resume recovery
+   * pass (`monetizationRecovery.reconcile()`) has finished, and the commerce
+   * reconciler has stopped (each wait bounded by `gameServicesDisposeWaitMs`); repeated
    * calls share that wait. Afterwards nothing it holds talks to the backend
    * or the store for its player: a purchase answers `failed` with the
    * retryable diagnostic `gameServicesRuntimeDisposedCode` before any store
@@ -302,7 +303,10 @@ export function createGameServicesRuntime(
     };
   }
   const reconciler = routedClient.commerceReconciler;
-  /** Purchases and rewarded-ad claims running now: `dispose()` lets them journal first. */
+  /**
+   * Purchases, rewarded-ad claims, and recovery passes running now:
+   * `dispose()` lets them journal first.
+   */
   const purchases = new Set<Promise<unknown>>();
   const track = <T>(running: Promise<T>): Promise<T> => {
     purchases.add(running);
@@ -314,8 +318,9 @@ export function createGameServicesRuntime(
     : guardReconciler(reconciler, gate, track);
   gate.onClose(async () => {
     // A purchase whose store sheet is open journals the store answer first,
-    // and an open rewarded ad its platform result (both stay this player's
-    // to recover), then the reconciler stops.
+    // an open rewarded ad its platform result (both stay this player's to
+    // recover), and a recovery pass finishes its start, then the reconciler
+    // stops.
     await settleWithin(Promise.allSettled([...purchases]), gameServicesDisposeWaitMs);
     await settleWithin(reconciler?.stop() ?? Promise.resolve(), gameServicesDisposeWaitMs);
   });
@@ -607,18 +612,23 @@ function guardReconciler(
   gate: RuntimeGate,
   track: PurchaseTracker,
 ): CommerceReconciler {
+  // The runtime owns this reconciler, and the recovery client starts the
+  // same instance from its startup pass (`reconcile()`), which can reach
+  // `start()` after `dispose()` stopped it (a pass still awaiting the journal
+  // when the dispose wait ran out). So the instance itself refuses a start
+  // once the runtime closed for good. A start already under way when it
+  // closes is the one `stop()` waits for and unsubscribes.
+  const startOpen = reconciler.start;
+  reconciler.start = async () => {
+    if (!gate.closed) {
+      await startOpen.call(reconciler);
+    }
+  };
   // The reconciler's getters and methods are closures: the prototype chain serves them.
   return Object.create(reconciler, {
     requestPurchase: {
       value: (request: Parameters<CommerceReconciler['requestPurchase']>[0]) =>
         track(reconciler.requestPurchase(request)),
-    },
-    start: {
-      value: async () => {
-        if (!gate.closed) {
-          await reconciler.start();
-        }
-      },
     },
   }) as CommerceReconciler;
 }
@@ -661,7 +671,9 @@ function guardRecovery(
     recoverRewardResult: (idempotencyKey, platform) => recovery.recoverRewardResult(idempotencyKey, platform),
     async reconcile() {
       // Startup and resume recovery wait for a runtime the session permits.
-      return gate.check() === undefined ? recovery.reconcile() : [];
+      // `dispose()` waits for a pass under way, so the reconciler it starts
+      // is stopped after it, not before.
+      return gate.check() === undefined ? track(recovery.reconcile()) : [];
     },
     async restorePurchases() {
       gate.assert();

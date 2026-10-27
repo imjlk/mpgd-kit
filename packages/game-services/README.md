@@ -295,9 +295,12 @@ within a run (an account switch), pass `sessionPlayerId: () => session.current()
 Refusals end no journal record: a runtime created for the player later
 resumes them. `runtime.dispose()` closes a runtime the same way
 (`GAME_SERVICES_RUNTIME_DISPOSED`) and resolves once a purchase whose store
-sheet is open has journaled its answer and the reconciler has stopped (each
-wait bounded by `gameServicesDisposeWaitMs`, 3 minutes); call it, and wait,
-before creating the runtime for another player or reloading. A custom
+sheet is open has journaled its answer, a recovery pass under way
+(`monetizationRecovery.reconcile()`) has finished, and the reconciler has
+stopped (each wait bounded by `gameServicesDisposeWaitMs`, 3 minutes); call
+it, and wait, before creating the runtime for another player or reloading.
+A recovery pass that outlives that wait starts no store subscription
+afterwards. A custom
 `httpTransport` must send only the headers the runtime resolved for each
 request, or the after-resolution check cannot cover it. A refusal keeps its
 `GameServicesRuntimeClosedError` through header resolution and the HTTP

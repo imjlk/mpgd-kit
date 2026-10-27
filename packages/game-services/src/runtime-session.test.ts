@@ -14,6 +14,7 @@ import { AccountDeletionError } from './account-deletion.js';
 import {
   createGameServicesRuntime,
   gameServicesBackendEndpoints,
+  gameServicesDisposeWaitMs,
   gameServicesPlayerChangedCode,
   GameServicesRuntimeClosedError,
   gameServicesRuntimeDisposedCode,
@@ -113,6 +114,60 @@ const verifies = (harness: Harness) =>
   harness.sent.filter(
     (request) => request.endpoint === gameServicesBackendEndpoints.verifyPurchase,
   );
+
+/** A provider whose subscriptions the test counts. */
+function countingProvider(): { readonly provider: TestCommerceProvider; readonly listeners: unknown[] } {
+  const listeners: ((event: CommerceEvent) => void)[] = [];
+  const base = createTestCommerceProvider({ store: 'android-store' });
+  const provider: TestCommerceProvider = Object.assign(
+    Object.create(base) as TestCommerceProvider,
+    {
+      subscribe(listener: (event: CommerceEvent) => void) {
+        listeners.push(listener);
+        return () => {
+          listeners.splice(listeners.indexOf(listener), 1);
+        };
+      },
+    },
+  );
+  return { provider, listeners };
+}
+
+/** A journal whose next `listRecoverable` waits for `release()` once `hold()` armed it. */
+function holdingStore(): {
+  readonly store: MonetizationOperationStore;
+  hold(): Promise<void>;
+  release(): void;
+} {
+  const inner = createInMemoryMonetizationOperationStore();
+  let armed: { reached: () => void; released: Promise<void> } | undefined;
+  let release: () => void = () => undefined;
+  return {
+    store: {
+      ...inner,
+      async listRecoverable(playerId) {
+        const waiting = armed;
+        armed = undefined;
+        if (waiting !== undefined) {
+          waiting.reached();
+          await waiting.released;
+        }
+        return inner.listRecoverable(playerId);
+      },
+    },
+    hold() {
+      return new Promise<void>((reached) => {
+        armed = {
+          reached,
+          released: new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+        };
+      });
+    },
+    release: () => release(),
+  };
+}
 
 async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   return (await store.listRecoverable(playerId)).filter(
@@ -1011,6 +1066,68 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
     0,
     'no claim left with B in session',
   );
+}
+
+// dispose() waits for a startup recovery pass still reading the journal, so
+// the reconciler that pass starts is stopped after it, not before.
+{
+  const { provider, listeners } = countingProvider();
+  const journal = holdingStore();
+  const harness = createHarness({ provider, store: journal.store });
+  const runtimeA = harness.create(playerA);
+  const reached = journal.hold();
+  const reconciling = runtimeA.monetizationRecovery?.reconcile();
+  await reached;
+  let disposed = false;
+  const disposing = runtimeA.dispose().then(() => {
+    disposed = true;
+  });
+  for (let turn = 0; turn < 20; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(disposed, false, 'dispose waits for the recovery pass');
+  journal.release();
+  await reconciling;
+  await disposing;
+  assert.equal(listeners.length, 0, 'no store subscription outlives dispose');
+  assert.equal(runtimeA.client?.commerceReconciler?.started, false);
+}
+
+// A recovery pass that reaches start() after dispose() gave up waiting for it
+// and stopped the reconciler subscribes nothing.
+{
+  const { provider, listeners } = countingProvider();
+  const journal = holdingStore();
+  const harness = createHarness({ provider, store: journal.store });
+  const runtimeA = harness.create(playerA);
+  const reached = journal.hold();
+  const reconciling = runtimeA.monetizationRecovery?.reconcile();
+  await reached;
+  // The dispose wait runs out at once: its timers fire when the test says so.
+  const realSetTimeout = globalThis.setTimeout;
+  const disposeTimers: (() => void)[] = [];
+  globalThis.setTimeout = ((handler: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms === gameServicesDisposeWaitMs) {
+      disposeTimers.push(handler);
+      return realSetTimeout(() => undefined, 0);
+    }
+    return realSetTimeout(handler, ms, ...rest);
+  }) as typeof setTimeout;
+  try {
+    const disposing = runtimeA.dispose();
+    for (let turn = 0; turn < 20 && disposeTimers.length === 0; turn += 1) {
+      await Promise.resolve();
+    }
+    disposeTimers.shift()?.();
+    await disposing;
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  assert.equal(listeners.length, 0, 'disposed with the pass still pending');
+  journal.release();
+  await reconciling;
+  assert.equal(listeners.length, 0, 'the late start subscribes nothing');
+  assert.equal(runtimeA.client?.commerceReconciler?.started, false, 'the reconciler stays stopped');
 }
 
 console.info('Game services runtime session checks passed.');
