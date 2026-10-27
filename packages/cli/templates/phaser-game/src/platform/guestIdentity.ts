@@ -59,9 +59,10 @@ export type StarterGuestIdentity =
  * place: that session cannot come back, and without a linked account its
  * player cannot either. Any other failure (offline, an outage) leaves the
  * stored token alone for the next attempt (`createStarterGuestSignIn`
- * retries), and until one succeeds purchases are refused with the reason
- * (`ACCOUNT_BINDING_REQUIRED` on Google Play, a StoreKit error naming the
- * missing session). One attempt: the game calls it through
+ * retries), and until one succeeds purchases are refused before the store
+ * opens with a `failed` result (`ACCOUNT_BINDING_REQUIRED`, store code
+ * `PLAY_BILLING_ACCOUNT_LOOKUP_FAILED` or `STOREKIT_ACCOUNT_LOOKUP_FAILED`
+ * when the lookup throws). One attempt: the game calls it through
  * `createStarterGuestSignIn`.
  */
 export async function startStarterGuestIdentity(input: {

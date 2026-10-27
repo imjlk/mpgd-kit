@@ -14,6 +14,12 @@ import {
   createCapacitorStoreKitCommerceProvider,
   createCapacitorStoreKitServiceProvider,
 } from './commerce-provider.js';
+import {
+  adapterSupportsPurchaseGate,
+  createPurchaseGateUnsupportedError,
+  refuseNewPurchasesUnlessGated,
+  resolvePurchaseGateSupport,
+} from './purchase-gate-support.js';
 import type { CapacitorStoreKitDiagnostic } from './store-sdk.js';
 
 const products = [
@@ -298,18 +304,17 @@ function expectThrows(operation: () => unknown, message: string): void {
     sdk: plugin,
     isIos: () => true,
   });
-  let error: unknown;
-  try {
-    await invalid.requestPurchase({
-      logicalId: 'COINS_100',
-      idempotencyKey: 'op-6',
-      source: 'shop',
-    });
-  } catch (caught) {
-    error = caught;
-  }
+  // Binding failures are failed results, not throws, so the store code
+  // survives the bridge.
+  const invalidResult = await invalid.requestPurchase({
+    logicalId: 'COINS_100',
+    idempotencyKey: 'op-6',
+    source: 'shop',
+  });
   assertEqual(
-    [(error as { code?: string }).code, (error as { storeCode?: string }).storeCode],
+    invalidResult.outcome === 'failed'
+      ? [invalidResult.error.code, invalidResult.error.storeCode]
+      : [invalidResult.outcome],
     ['CONFIGURATION_REQUIRED', 'STOREKIT_CONFIGURATION_ERROR'],
     'a non-UUID app account token is a configuration failure',
   );
@@ -321,18 +326,16 @@ function expectThrows(operation: () => unknown, message: string): void {
     sdk: plugin,
     isIos: () => true,
   });
-  try {
-    await unavailable.requestPurchase({
-      logicalId: 'COINS_100',
-      idempotencyKey: 'op-7',
-      source: 'shop',
-    });
-  } catch (caught) {
-    error = caught;
-  }
+  const unavailableResult = await unavailable.requestPurchase({
+    logicalId: 'COINS_100',
+    idempotencyKey: 'op-7',
+    source: 'shop',
+  });
   assertEqual(
-    (error as { code?: string }).code,
-    'ACCOUNT_BINDING_REQUIRED',
+    unavailableResult.outcome === 'failed'
+      ? [unavailableResult.error.code, unavailableResult.error.storeCode]
+      : [unavailableResult.outcome],
+    ['ACCOUNT_BINDING_REQUIRED', 'STOREKIT_ACCOUNT_LOOKUP_FAILED'],
     'a token that cannot be resolved is a missing account binding',
   );
   assertEqual(
@@ -351,6 +354,7 @@ function expectThrows(operation: () => unknown, message: string): void {
     'unsupported',
     'off iOS the provider is unsupported',
   );
+  let error: unknown;
   try {
     await web.requestPurchase({ logicalId: 'COINS_100', idempotencyKey: 'op-8', source: 'shop' });
   } catch (caught) {
@@ -364,6 +368,152 @@ function expectThrows(operation: () => unknown, message: string): void {
   invalid.dispose();
   unavailable.dispose();
   web.dispose();
+}
+
+// The purchase gate refuses new sales only: recovery, finishing, and restore
+// keep the app account token and never ask the gate.
+{
+  const plugin = createPlugin();
+  const paid = fakeTransaction({ transactionId: '2000000123456700', unfinished: true });
+  plugin.upsert(paid);
+  let open = false;
+  const gateCalls: string[] = [];
+  const service = createCapacitorStoreKitServiceProvider({
+    products,
+    getAppAccountToken: () => fakeAccountToken,
+    purchaseGate: (request) => {
+      gateCalls.push(`${request.store}:${request.logicalId}:${request.storeSku}:${request.kind}`);
+      return open ? { allowed: true } : { allowed: false };
+    },
+    sdk: plugin,
+    isIos: () => true,
+  });
+  const gateway = createCapacitorPlatformGateway({
+    target: 'ios',
+    appVersion: '1.0.0',
+    buildId: 'storekit-gate-test',
+    bridge: {
+      async request(input: BridgeRequest): Promise<BridgeResponse> {
+        throw new Error(`The base bridge must not receive ${input.method}.`);
+      },
+    },
+    providers: [service],
+  });
+  const commerce = gateway.commerce;
+  if (commerce === undefined) {
+    throw new Error('The gateway must expose the StoreKit commerce provider.');
+  }
+  assertEqual(
+    await commerce.requestPurchase({ logicalId: 'COINS_100', idempotencyKey: 'op-g1', source: 'shop' }),
+    {
+      outcome: 'failed',
+      error: {
+        code: 'ITEM_UNAVAILABLE',
+        retryable: false,
+        storeCode: 'PURCHASES_PAUSED',
+        message: 'New purchases of COINS_100 are paused.',
+      },
+    },
+    'a paused sale is a failed result whose store code survives the bridge',
+  );
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('purchase:')),
+    [],
+    'a paused sale never opens the StoreKit sheet',
+  );
+  assertEqual(
+    (await commerce.getAvailablePurchases()).map((purchase) => purchase.transactionId),
+    ['2000000123456700'],
+    'a paid, unfinished purchase is still recovered while sales are paused',
+  );
+  assertEqual(
+    await commerce.finishTransaction?.({
+      transactionId: '2000000123456700',
+      ledgerEntryId: 'le-paused',
+      isConsumable: true,
+    }),
+    { finished: true },
+    'a granted purchase still finishes while sales are paused',
+  );
+  await commerce.restorePurchases?.();
+  assertEqual(
+    gateCalls,
+    ['app-store:COINS_100:com.example.game.coins100:consumable'],
+    'only the new purchase asked the gate',
+  );
+  open = true;
+  plugin.queuePurchase({ status: 'cancelled' });
+  assertEqual(
+    (await commerce.requestPurchase({ logicalId: 'COINS_100', idempotencyKey: 'op-g2', source: 'shop' }))
+      .outcome,
+    'cancelled',
+    'an open gate lets the store sheet open',
+  );
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('purchase:')),
+    [`purchase:com.example.game.coins100:${fakeAccountToken}`],
+    'the sheet opened once the gate allowed it',
+  );
+}
+
+// An adapter from before the gate would ignore it and keep selling: the
+// plugin probes for gate support and otherwise refuses every new purchase
+// through the account binding, which recovery never asks.
+{
+  assertEqual(adapterSupportsPurchaseGate(), true, 'this adapter runs the purchase gate');
+  assertEqual(
+    adapterSupportsPurchaseGate({}),
+    false,
+    'an adapter without the gate exports is detected',
+  );
+  const gate = () => ({ allowed: true }) as const;
+  assertEqual(
+    [
+      resolvePurchaseGateSupport(undefined, false),
+      resolvePurchaseGateSupport(gate, true).refuseNewPurchases,
+      resolvePurchaseGateSupport(gate, false),
+    ],
+    [{ refuseNewPurchases: false }, false, { refuseNewPurchases: true }],
+    'only a gate the adapter would ignore refuses new purchases',
+  );
+  assertEqual(
+    createPurchaseGateUnsupportedError().toCommerceErrorInfo().storeCode,
+    'PURCHASE_GATE_UNSUPPORTED',
+    'the refusal names the unsupported gate',
+  );
+  // The refusal is answered at the plugin boundary, as a result: an old
+  // adapter's requestPurchase (which would throw and drop the store code) is
+  // never reached, and recovery passes through.
+  let oldAdapterAsked = 0;
+  let recoveryReads = 0;
+  const old = {
+    async requestPurchase() {
+      oldAdapterAsked += 1;
+      throw new Error('an old adapter must not be asked to open the store');
+    },
+    async getAvailablePurchases() {
+      recoveryReads += 1;
+      return [];
+    },
+  } as unknown as Parameters<typeof refuseNewPurchasesUnlessGated>[0];
+  const guarded = refuseNewPurchasesUnlessGated(old, { refuseNewPurchases: true });
+  const refused = await guarded.requestPurchase({
+    logicalId: 'COINS_100',
+    idempotencyKey: 'op-old',
+    source: 'shop',
+  });
+  await guarded.getAvailablePurchases();
+  assertEqual(
+    [
+      refused.outcome === 'failed'
+        ? [refused.error.code, refused.error.storeCode]
+        : [refused.outcome],
+      oldAdapterAsked,
+      recoveryReads,
+    ],
+    [['ITEM_UNAVAILABLE', 'PURCHASE_GATE_UNSUPPORTED'], 0, 1],
+    'an unsupported gate refuses before the adapter and leaves recovery alone',
+  );
 }
 
 // Registry and gateway integration.
