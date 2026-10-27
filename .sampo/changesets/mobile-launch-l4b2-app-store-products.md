@@ -1,5 +1,0 @@
----
-npm/@mpgd/cli: minor (Added)
----
-
-`mpgd store products plan|apply` now also takes `--store app-store`: it creates and updates App Store Connect in-app purchases (consumable and non-consumable) from `mpgd.catalog.json` and `mpgd.store-listings.json`, through the pinned `asc` 5.5.0 binary with the TestFlight submission's checksum pin, isolated environment and API key (`MPGD_ASC_BINARY`, `MPGD_ASC_APP_ID`, `MPGD_ASC_KEY_ID`, `MPGD_ASC_ISSUER_ID`, the profile's key variable). The plan checks the app's bundle ID and covers the reference name, turning Family Sharing on, version-scoped localizations (on the editable version, or a new draft version after approval), a new price schedule from the base-territory price point and manual territory prices, availability for new in-app purchases, and the review screenshot (uploaded, or replaced when its MD5 differs). `apply` has the Google Play rules (`--approve`, refuses a stale plan, `--confirm-price-change` for an `APPROVED` in-app purchase, `--keep-live-prices`). Submission for review and review notes stay manual and are listed in the plan.

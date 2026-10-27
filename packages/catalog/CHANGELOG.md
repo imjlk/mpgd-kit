@@ -1,5 +1,12 @@
 # @mpgd/catalog
 
+## 0.12.0 — 2026-10-27
+
+### Added
+
+- [dad46c97](https://github.com/imjlk/mpgd-kit/commit/dad46c97ac14592d86fb2024f06015aceb17f14d) The store listing file accepts `appStore.availability` (`territories` as ISO 3166-1 alpha-3 codes, `availableInNewTerritories`) for the territories a new App Store in-app purchase is sold in; duplicate territories are rejected. — Thanks @imjlk!
+- [0bb03c08](https://github.com/imjlk/mpgd-kit/commit/0bb03c08d2764c383feb91c18d9573c434617ec7) New store listing file for one-time products (`StoreListingCatalog`, validated by `assertStoreListingCatalog(input, catalog)`): per logical product, the localized title and description, a Google Play tax-exclusive base price with optional per-region prices (tax inclusive: the price players pay in that region), purchase option ID and tax category, and for the App Store the base-territory customer price, manual territory prices, reference name, review note, review screenshot and Family Sharing. It is a separate file from `catalog.json` (game clients bundle the catalog; review notes and prices must not ship), every key must name a catalog product, and subscriptions are rejected. `resolveStoreListingLocalizations(entry, store)` returns a store's own localizations or the shared ones. Existing catalogs are unchanged. — Thanks @imjlk!
+
 ## 0.11.3 — 2026-10-27
 
 ### Patch changes

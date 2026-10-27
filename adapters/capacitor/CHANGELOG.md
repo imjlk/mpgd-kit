@@ -1,5 +1,11 @@
 # @mpgd/adapter-capacitor
 
+## 0.16.2 — 2026-10-27
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-runtime@0.8.8, @mpgd/game-services@0.30.4, @mpgd/target-config@0.24.2
+
 ## 0.16.1 — 2026-10-27
 
 ### Patch changes
