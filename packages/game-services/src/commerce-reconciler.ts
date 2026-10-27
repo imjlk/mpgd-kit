@@ -322,6 +322,18 @@ export interface CreateCommerceReconcilerInput {
    */
   readonly sessionCheck?: () => CommerceError | undefined;
   /**
+   * Whether the reconciler's owner closed for good (`createGameServicesRuntime`
+   * passes its disposed or player-changed state). Read synchronously at each
+   * `start()`: while it answers true, `start()` subscribes nothing and starts
+   * nothing, so a caller that reaches `start()` after `stop()` (a recovery
+   * pass that outlived its owner's dispose) leaves no store subscription. A
+   * start already under way is the one `stop()` waits for and unsubscribes.
+   * Unlike `sessionCheck`, a signed-out session is not closed: the reconciler
+   * still subscribes then and its work waits for the session. Omitted, a
+   * stopped reconciler can be started again.
+   */
+  readonly closed?: () => boolean;
+  /**
    * This player's store account binding: the value the store provider binds
    * the player's new purchases to (Google Play's obfuscated account id,
    * StoreKit's app account token). A store purchase the journal does not
@@ -2035,6 +2047,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     },
     async start() {
       if (started) {
+        return;
+      }
+      if (input.closed?.() === true) {
+        // Closed for good: nothing subscribes, and nothing awaits before this
+        // check, so a start under way already set `starting` for `stop()`.
         return;
       }
       if (starting !== undefined) {

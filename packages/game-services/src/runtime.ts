@@ -275,6 +275,9 @@ export function createGameServicesRuntime(
             message: refusal.message,
           });
     },
+    // Closed for good, the reconciler starts nothing: a recovery pass that
+    // reaches `start()` after `dispose()` stopped it subscribes nothing.
+    commerceClosed: () => gate.closed,
     ...(input.commerceStaleLaunchedAfterMs === undefined
       ? {}
       : { commerceStaleLaunchedAfterMs: input.commerceStaleLaunchedAfterMs }),
@@ -315,7 +318,7 @@ export function createGameServicesRuntime(
   };
   const exposedReconciler = reconciler === undefined
     ? undefined
-    : guardReconciler(reconciler, gate, track);
+    : guardReconciler(reconciler, track);
   gate.onClose(async () => {
     // A purchase whose store sheet is open journals the store answer first,
     // an open rewarded ad its platform result (both stay this player's to
@@ -601,29 +604,16 @@ async function guardedPurchase(
 }
 
 /**
- * The reconciler a runtime exposes: once the runtime closed for good, a
- * `start()` (a caller that passed its check just before) subscribes nothing.
- * While only signed out it starts as usual and its work waits for the
- * session (the reconciler's `sessionCheck`). Its purchases are tracked like
- * the client's, so `dispose()` waits for an open store sheet's answer.
+ * The reconciler a runtime exposes. Once the runtime closed for good its
+ * `start()` subscribes nothing (the reconciler's `closed`); while only signed
+ * out it starts as usual and its work waits for the session (its
+ * `sessionCheck`). Its purchases are tracked like the client's, so
+ * `dispose()` waits for an open store sheet's answer.
  */
 function guardReconciler(
   reconciler: CommerceReconciler,
-  gate: RuntimeGate,
   track: PurchaseTracker,
 ): CommerceReconciler {
-  // The runtime owns this reconciler, and the recovery client starts the
-  // same instance from its startup pass (`reconcile()`), which can reach
-  // `start()` after `dispose()` stopped it (a pass still awaiting the journal
-  // when the dispose wait ran out). So the instance itself refuses a start
-  // once the runtime closed for good. A start already under way when it
-  // closes is the one `stop()` waits for and unsubscribes.
-  const startOpen = reconciler.start;
-  reconciler.start = async () => {
-    if (!gate.closed) {
-      await startOpen.call(reconciler);
-    }
-  };
   // The reconciler's getters and methods are closures: the prototype chain serves them.
   return Object.create(reconciler, {
     requestPurchase: {
