@@ -70,8 +70,8 @@ await test('preview is read-only; application preserves kit paths, aligns tools 
     assert.match(f.read('tools/run-game-acceptance.ts'), /\.\.\/\.\.\/kit with spaces/);
     const manifest = JSON.parse(f.read('package.json'));
     assert.equal(manifest.scripts.custom, 'keep me');
-    assert.equal(manifest.devDependencies.ttsc, '0.32.1');
-    assert.equal(manifest.devDependencies['@ttsc/unplugin'], '0.32.1');
+    assert.equal(manifest.devDependencies.ttsc, '0.34.2');
+    assert.equal(manifest.devDependencies['@ttsc/unplugin'], '0.34.2');
     assert.equal(JSON.parse(f.read('tsconfig.tools.json')).compilerOptions.strict, true);
     const again = planToolingMigration(f.game, template);
     assert.deepEqual(again.edits, []);
@@ -159,7 +159,7 @@ await test('preserves another install lockfile when a managed-file write fails b
     const rename = fs.renameSync;
     try {
       if (!needsUpgrade) {
-        f.write('package.json', f.read('package.json').replaceAll('0.30.4', '0.32.1'));
+        f.write('package.json', f.read('package.json').replaceAll('0.30.4', '0.34.2'));
       }
       const manifest = f.read('package.json');
       const runner = f.read('tools/run-game-acceptance.mjs');
@@ -246,7 +246,7 @@ await test('blocks parent-workspace games even when local pins are already align
   const f = fixture();
   try {
     writeFileSync(path.join(f.root, 'pnpm-workspace.yaml'), 'packages: ["*"]\n');
-    f.write('package.json', f.read('package.json').replaceAll('0.30.4', '0.32.1'));
+    f.write('package.json', f.read('package.json').replaceAll('0.30.4', '0.34.2'));
     const plan = planToolingMigration(f.game, template);
     assert.match(plan.blockers.join('\n'), /parent pnpm workspace/);
     assert.equal(plan.updateLockfile, false);
@@ -340,7 +340,7 @@ await test('blocks mismatched child toolchains and applies after child pins are 
     assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
     for (const target of ['target-ait', 'target-devvit']) {
       const file = `apps/${target}/package.json`;
-      f.write(file, f.read(file).replaceAll('0.30.4', '0.32.1'));
+      f.write(file, f.read(file).replaceAll('0.30.4', '0.34.2'));
     }
     const ready = planToolingMigration(f.game, template);
     assert.deepEqual(ready.blockers, []);
@@ -356,7 +356,7 @@ await test('detects child-package and workspace changes after preview', () => {
     try {
       mkdirSync(path.join(f.game, 'custom/nested'), { recursive: true });
       if (change === 'modified') {
-        f.write('custom/nested/package.json', '{"devDependencies":{"ttsc":"0.32.1"}}');
+        f.write('custom/nested/package.json', '{"devDependencies":{"ttsc":"0.34.2"}}');
       }
       const plan = planToolingMigration(f.game, template);
       const before = f.read('package.json');
