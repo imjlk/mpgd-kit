@@ -117,7 +117,7 @@ the sales switch: it is asked before a new purchase opens the Play sheet,
 never during recovery, and a refusal is `failed` with `ITEM_UNAVAILABLE` and
 `PURCHASES_PAUSED` (see the adapter-capacitor README). With an adapter-capacitor from before
 the gate, which would ignore it, the plugin detects the missing gate support
-and refuses every new purchase with `ITEM_UNAVAILABLE` and
+and answers every new purchase itself with a `failed` result, `ITEM_UNAVAILABLE` and
 `PURCHASE_GATE_UNSUPPORTED` instead of selling; recovery is unaffected.
 `store` defaults to `google-play`; only a conformance
 harness overrides it, because the derived idempotency key follows the store

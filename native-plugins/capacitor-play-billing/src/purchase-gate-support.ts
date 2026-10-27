@@ -1,6 +1,10 @@
 import * as adapterCapacitor from '@mpgd/adapter-capacitor';
 import type { StorePurchaseGate } from '@mpgd/adapter-capacitor';
-import { CommerceError } from '@mpgd/platform/commerce';
+import {
+  CommerceError,
+  type CommerceProvider,
+  type RequestPurchaseResult,
+} from '@mpgd/platform/commerce';
 
 /** `storeCode` of every new purchase refused because the adapter cannot run the gate. */
 export const purchaseGateUnsupportedStoreCode = 'PURCHASE_GATE_UNSUPPORTED' as const;
@@ -23,9 +27,8 @@ export interface PurchaseGateSupport {
   /** The gate to hand the adapter, when it runs one. */
   readonly purchaseGate?: StorePurchaseGate;
   /**
-   * Set when a gate was given but the adapter cannot run it: the account
-   * binding, which every adapter asks before a new purchase opens the store
-   * and never during recovery, then refuses every new purchase.
+   * Set when a gate was given but the adapter cannot run it: the plugin then
+   * answers every new purchase itself (`refuseNewPurchasesUnlessGated`).
    */
   readonly refuseNewPurchases: boolean;
 }
@@ -47,5 +50,29 @@ export function createPurchaseGateUnsupportedError(): CommerceError {
       + 'new purchases are refused until the adapter is upgraded.',
     storeCode: purchaseGateUnsupportedStoreCode,
     retryable: false,
+  });
+}
+
+/**
+ * Refuses every new purchase at the plugin boundary when the adapter cannot
+ * run the configured gate, before the adapter's `requestPurchase` (which
+ * would open the store) is reached. The refusal is a `failed` result, not a
+ * throw, so `PURCHASE_GATE_UNSUPPORTED` survives the bridge whatever the
+ * adapter version. Recovery, finishing, restore, and events are untouched.
+ */
+export function refuseNewPurchasesUnlessGated<TProvider extends CommerceProvider>(
+  provider: TProvider,
+  support: PurchaseGateSupport,
+): TProvider {
+  if (!support.refuseNewPurchases) {
+    return provider;
+  }
+  return Object.assign(provider, {
+    async requestPurchase(): Promise<RequestPurchaseResult> {
+      return {
+        outcome: 'failed',
+        error: createPurchaseGateUnsupportedError().toCommerceErrorInfo(),
+      };
+    },
   });
 }

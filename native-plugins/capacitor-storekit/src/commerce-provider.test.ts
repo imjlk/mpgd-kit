@@ -17,6 +17,7 @@ import {
 import {
   adapterSupportsPurchaseGate,
   createPurchaseGateUnsupportedError,
+  refuseNewPurchasesUnlessGated,
   resolvePurchaseGateSupport,
 } from './purchase-gate-support.js';
 import type { CapacitorStoreKitDiagnostic } from './store-sdk.js';
@@ -479,6 +480,39 @@ function expectThrows(operation: () => unknown, message: string): void {
     createPurchaseGateUnsupportedError().toCommerceErrorInfo().storeCode,
     'PURCHASE_GATE_UNSUPPORTED',
     'the refusal names the unsupported gate',
+  );
+  // The refusal is answered at the plugin boundary, as a result: an old
+  // adapter's requestPurchase (which would throw and drop the store code) is
+  // never reached, and recovery passes through.
+  let oldAdapterAsked = 0;
+  let recoveryReads = 0;
+  const old = {
+    async requestPurchase() {
+      oldAdapterAsked += 1;
+      throw new Error('an old adapter must not be asked to open the store');
+    },
+    async getAvailablePurchases() {
+      recoveryReads += 1;
+      return [];
+    },
+  } as unknown as Parameters<typeof refuseNewPurchasesUnlessGated>[0];
+  const guarded = refuseNewPurchasesUnlessGated(old, { refuseNewPurchases: true });
+  const refused = await guarded.requestPurchase({
+    logicalId: 'COINS_100',
+    idempotencyKey: 'op-old',
+    source: 'shop',
+  });
+  await guarded.getAvailablePurchases();
+  assertEqual(
+    [
+      refused.outcome === 'failed'
+        ? [refused.error.code, refused.error.storeCode]
+        : [refused.outcome],
+      oldAdapterAsked,
+      recoveryReads,
+    ],
+    [['ITEM_UNAVAILABLE', 'PURCHASE_GATE_UNSUPPORTED'], 0, 1],
+    'an unsupported gate refuses before the adapter and leaves recovery alone',
   );
 }
 

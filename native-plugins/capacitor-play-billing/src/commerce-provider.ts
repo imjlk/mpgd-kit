@@ -21,7 +21,7 @@ import {
 } from './commerce-profile.js';
 import type { CapacitorPlayBillingPlugin, PlayPurchase } from './definitions.js';
 import {
-  createPurchaseGateUnsupportedError,
+  refuseNewPurchasesUnlessGated,
   resolvePurchaseGateSupport,
 } from './purchase-gate-support.js';
 import {
@@ -124,33 +124,33 @@ export function createCapacitorPlayBillingCommerceProvider(
   });
   const resolveAccountBinding = input.accountBinding;
   const gate = resolvePurchaseGateSupport(input.purchaseGate);
-  return createStoreCommerceProvider({
-    sdk,
-    store: input.store ?? googlePlayStoreId,
-    products: input.products,
-    evidenceSchema: googlePlayProductPurchaseEvidenceSchema,
-    evidencePayload: createPlayBillingEvidencePayload,
-    accountBinding: async () => {
-      if (gate.refuseNewPurchases) {
-        throw createPurchaseGateUnsupportedError();
-      }
-      try {
-        return await resolveAccountBinding();
-      } catch (error) {
-        if (error instanceof CommerceError) {
-          throw error;
+  return refuseNewPurchasesUnlessGated(
+    createStoreCommerceProvider({
+      sdk,
+      store: input.store ?? googlePlayStoreId,
+      products: input.products,
+      evidenceSchema: googlePlayProductPurchaseEvidenceSchema,
+      evidencePayload: createPlayBillingEvidencePayload,
+      accountBinding: async () => {
+        try {
+          return await resolveAccountBinding();
+        } catch (error) {
+          if (error instanceof CommerceError) {
+            throw error;
+          }
+          throw new CommerceError('ACCOUNT_BINDING_REQUIRED', {
+            message: 'Play Billing could not resolve the obfuscated account id.',
+            storeCode: 'PLAY_BILLING_ACCOUNT_LOOKUP_FAILED',
+            cause: error,
+          });
         }
-        throw new CommerceError('ACCOUNT_BINDING_REQUIRED', {
-          message: 'Play Billing could not resolve the obfuscated account id.',
-          storeCode: 'PLAY_BILLING_ACCOUNT_LOOKUP_FAILED',
-          cause: error,
-        });
-      }
-    },
-    ...(gate.purchaseGate === undefined ? {} : { purchaseGate: gate.purchaseGate }),
-    authority: playBillingCommerceAuthority,
-    mapError: { ...playBillingStoreSdkErrorCodeMap, ...input.mapError },
-  });
+      },
+      ...(gate.purchaseGate === undefined ? {} : { purchaseGate: gate.purchaseGate }),
+      authority: playBillingCommerceAuthority,
+      mapError: { ...playBillingStoreSdkErrorCodeMap, ...input.mapError },
+    }),
+    gate,
+  );
 }
 
 export interface CreateCapacitorPlayBillingServiceProviderInput

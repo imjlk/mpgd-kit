@@ -16,7 +16,7 @@ import {
   storeKitCommerceAuthority,
 } from './commerce-profile.js';
 import {
-  createPurchaseGateUnsupportedError,
+  refuseNewPurchasesUnlessGated,
   resolvePurchaseGateSupport,
 } from './purchase-gate-support.js';
 import {
@@ -111,7 +111,7 @@ export function createCapacitorStoreKitCommerceProvider(
     ...(input.isIos === undefined ? {} : { isIos: input.isIos }),
     ...(input.onDiagnostic === undefined ? {} : { onDiagnostic: input.onDiagnostic }),
   });
-  return createStoreCommerceProvider({
+  return refuseNewPurchasesUnlessGated(createStoreCommerceProvider({
     sdk,
     store: appStoreStoreId,
     products: input.products,
@@ -128,9 +128,6 @@ export function createCapacitorStoreKitCommerceProvider(
       return { ...payload };
     },
     accountBinding: async (): Promise<StorePurchaseAccountBinding> => {
-      if (gate.refuseNewPurchases) {
-        throw createPurchaseGateUnsupportedError();
-      }
       let value: unknown;
       try {
         value = await input.getAppAccountToken();
@@ -163,7 +160,7 @@ export function createCapacitorStoreKitCommerceProvider(
     ...(gate.purchaseGate === undefined ? {} : { purchaseGate: gate.purchaseGate }),
     authority: storeKitCommerceAuthority,
     mapError: { ...capacitorStoreKitErrorCodeMap, ...input.mapError },
-  });
+  }), gate);
 }
 
 export interface CreateCapacitorStoreKitServiceProviderInput
