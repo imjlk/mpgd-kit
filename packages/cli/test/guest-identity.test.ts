@@ -741,14 +741,28 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
 
   // Created for another player than the session's (a local placeholder): it says so.
   const before = warnings.length;
+  const misused: string[] = [];
   bindStarterServicesToPlayer({
-    services: { mode: 'http', dispose: async () => undefined },
+    services: {
+      mode: 'http',
+      dispose: async () => {
+        misused.push('disposed');
+      },
+    },
     playerId: 'android-local-player',
     session,
+    onPlayerChanging: () => misused.push('changing'),
+    onPlayerChanged: () => misused.push('restart'),
+    onDisposed: () => misused.push('released'),
     warn,
   });
   assert.equal(warnings.length, before + 1);
   assert.match(warnings.at(-1) ?? '', /not the server session's/u);
+  for (let turn = 0; turn < 5; turn += 1) {
+    await Promise.resolve();
+  }
+  // Closed and released at once, without a restart (it would only repeat the mistake).
+  assert.deepEqual(misused, ['disposed', 'released']);
 }
 
 // The store account binding is pinned to the services' player: after an account switch a

@@ -813,4 +813,50 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   }
 }
 
+// A finished consumable the store reports again is not finished again once
+// the session switched while the report was matched.
+{
+  const finishes: string[] = [];
+  const base = createTestCommerceProvider({ store: 'android-store', finish: 'client' });
+  const provider: TestCommerceProvider = Object.assign(
+    Object.create(base) as TestCommerceProvider,
+    {
+      async finishTransaction(request: { readonly transactionId: string }) {
+        finishes.push(request.transactionId);
+        return { finished: true };
+      },
+    },
+  );
+  const journal = createInMemoryMonetizationOperationStore();
+  const hooks: { onFind?: () => void } = {};
+  const harness = createHarness({
+    provider,
+    store: {
+      ...journal,
+      async findByTransaction(query) {
+        hooks.onFind?.();
+        return journal.findByTransaction?.(query);
+      },
+    },
+  });
+  const purchase = createTestStorePurchase(
+    { idempotencyKey: 'again', logicalId: 'COINS_100' },
+    {},
+    'android-store',
+  );
+  base.available.push(purchase);
+  const first = harness.create(playerA);
+  await first.monetizationRecovery?.reconcile();
+  assert.deepEqual(finishes, ['tx-again'], 'granted and finished once');
+  await first.dispose();
+  // A new session for A: the store lists it again; B signs in while it is matched.
+  const second = harness.create(playerA);
+  hooks.onFind = () => {
+    harness.session.player = playerB;
+  };
+  await second.monetizationRecovery?.reconcile();
+  assert.deepEqual(finishes, ['tx-again'], 'not finished again for the closed runtime');
+  await second.dispose();
+}
+
 console.info('Game services runtime session checks passed.');

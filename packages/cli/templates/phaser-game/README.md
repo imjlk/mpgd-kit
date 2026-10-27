@@ -573,8 +573,8 @@ open purchases stay in the journal and recover when that player signs in
 again; store purchases bound to another player's account are left for that
 player instead of being verified with this one's session. Create the services
 only with the server session's player, never the native shell's local
-placeholder: services created for another player than the session's stay
-closed (and say so in the console), and services for a second player cannot be
+placeholder: services created for another player than the session's are
+closed at once (and say so in the console), and services for a second player cannot be
 created while the first player's are still open
 (`StarterCommercePinConflictError`).
 

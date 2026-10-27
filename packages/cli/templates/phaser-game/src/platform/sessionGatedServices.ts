@@ -284,12 +284,7 @@ export function bindStarterServicesToPlayer(input: {
   const warn = input.warn ?? ((message: string, error?: unknown) => console.warn(message, error ?? ''));
   const { services } = input;
   const current = input.session.current()?.playerId;
-  if (current !== undefined && current !== input.playerId) {
-    warn(
-      "[game-services] created for a player that is not the server session's; they stay closed. "
-        + "Create them with the session's player.",
-    );
-  }
+  const createdForAnother = current !== undefined && current !== input.playerId;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     closing ??= services.dispose().catch((error: unknown) => {
@@ -309,10 +304,23 @@ export function bindStarterServicesToPlayer(input: {
     notifyChanging(input.onPlayerChanging, next.playerId, warn);
     void close().finally(() => input.onPlayerChanged?.(next.playerId));
   };
-  watching.stop = input.session.onAuthenticated(onSession);
-  if (changed) {
-    // The session announced another player while subscribing.
-    watching.stop();
+  if (createdForAnother) {
+    // Created for another player than the session's (a local placeholder):
+    // closed at once and the pin released, so services for the session's
+    // player can be created. No restart: the host that created these would
+    // create them the same way again.
+    changed = true;
+    warn(
+      "[game-services] created for a player that is not the server session's; they are closed. "
+        + "Create them with the session's player.",
+    );
+    void close();
+  } else {
+    watching.stop = input.session.onAuthenticated(onSession);
+    if (changed) {
+      // The session announced another player while subscribing.
+      watching.stop();
+    }
   }
   return {
     ...services,

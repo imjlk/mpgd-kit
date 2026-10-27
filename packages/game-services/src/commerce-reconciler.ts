@@ -1066,6 +1066,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     ) {
       return;
     }
+    if (sessionBlocked(record.idempotencyKey)) {
+      // The session changed while the report was matched: the next report asks again.
+      return;
+    }
     finishedAgain.add(transactionId);
     try {
       const { finished } = await provider.finishTransaction({
