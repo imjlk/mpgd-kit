@@ -1,6 +1,7 @@
 import { createAccountDeletionClient, type AccountDeletionClient } from './account-deletion.js';
 import type { AnalyticsSink } from '@mpgd/analytics';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
+import { CommerceError } from '@mpgd/platform/commerce';
 
 import {
   createGameServicesClient,
@@ -16,7 +17,8 @@ import {
 } from './client.js';
 import type { GameServicesLedgerTarget } from './types.js';
 import type { ClientRewardEvidenceRegistry } from './client-reward-evidence.js';
-import type { CommerceReconcilerProduct } from './commerce-reconciler.js';
+import type { CommerceReconciler, CommerceReconcilerProduct } from './commerce-reconciler.js';
+import type { GameServicesPurchaseResult, GameServicesRewardedAdResult } from './operations.js';
 import {
   createRecoverableMonetizationClient,
   type MonetizationOperationStore,
@@ -44,6 +46,59 @@ export interface GameServicesRuntime {
    * with the runtime's headers; present with an authoritative `baseUrl`.
    */
   readonly accountDeletion?: AccountDeletionClient;
+  /**
+   * Closes the runtime for good and waits until its commerce reconciler has
+   * stopped (a pass awaiting the backend or the store ends first); repeated
+   * calls share that wait. Afterwards nothing it holds talks to the backend
+   * or the store for its player: a purchase answers `failed` with the
+   * retryable diagnostic `gameServicesRuntimeDisposedCode` before any store
+   * UI, a rewarded-ad claim answers `unavailable` before any ad, recovery
+   * runs nothing, Restore Purchases and leaderboard submissions reject with
+   * `GameServicesRuntimeClosedError`, and every backend request (account
+   * deletion included) is refused before its headers are resolved. The
+   * journal keeps every record; a runtime created later for the same player
+   * resumes them. A disabled runtime has nothing to close.
+   */
+  dispose(): Promise<void>;
+}
+
+/** A runtime refused an operation because it was disposed (see `GameServicesRuntime.dispose`). */
+export const gameServicesRuntimeDisposedCode = 'GAME_SERVICES_RUNTIME_DISPOSED';
+/**
+ * A runtime refused an operation because `sessionPlayerId` names another
+ * player: it closed itself, as `dispose()` does, and the host creates a
+ * runtime for the signed-in player (retryable there).
+ */
+export const gameServicesPlayerChangedCode = 'GAME_SERVICES_PLAYER_CHANGED';
+/** A runtime refused an operation because `sessionPlayerId` names no player (signed out); it stays open. */
+export const gameServicesSessionRequiredCode = 'GAME_SERVICES_SESSION_REQUIRED';
+
+export type GameServicesRuntimeClosedCode =
+  | typeof gameServicesRuntimeDisposedCode
+  | typeof gameServicesPlayerChangedCode
+  | typeof gameServicesSessionRequiredCode;
+
+/**
+ * An operation the runtime refused before it reached the backend or the
+ * store: it was disposed, its player is no longer the session's, or the
+ * session is signed out. Always retryable (with a runtime for the signed-in
+ * player); nothing was sent and no record was ended.
+ */
+export class GameServicesRuntimeClosedError extends Error {
+  readonly code: GameServicesRuntimeClosedCode;
+  readonly retryable = true;
+
+  constructor(code: GameServicesRuntimeClosedCode) {
+    super(
+      code === gameServicesPlayerChangedCode
+        ? 'The session now names another player; this game services runtime is closed.'
+        : code === gameServicesSessionRequiredCode
+          ? 'The session names no player; sign in before using game services.'
+          : 'This game services runtime was disposed.',
+    );
+    this.name = 'GameServicesRuntimeClosedError';
+    this.code = code;
+  }
 }
 
 interface CreateGameServicesRuntimeCommonInput {
@@ -71,6 +126,25 @@ interface CreateGameServicesRuntimeCommonInput {
    * product catalog's `platformProductIds` for the gateway target.
    */
   readonly commerceProducts?: readonly CommerceReconcilerProduct[];
+  /**
+   * The player the session's credentials belong to right now, read
+   * synchronously: pass it whenever `getHeaders` (or the store account
+   * binding) follows a session that can change player within the run. It is
+   * checked before every backend request and again once its headers are
+   * resolved (no request leaves with another player's credentials), and by
+   * the commerce reconciler before it journals, verifies, restores, or
+   * finishes anything and right before a store UI opens (no purchase is
+   * journaled under this player and bound to another account). Another
+   * player closes the runtime for good, as `dispose()` does, with
+   * `gameServicesPlayerChangedCode`; no player refuses with
+   * `gameServicesSessionRequiredCode` and leaves the runtime open. Refusals
+   * are retryable and end no record, so a purchase of this player is never
+   * verified with another player's session (which a backend answers with a
+   * permanent account-mismatch rejection) and is resumed by a runtime for
+   * this player later. A custom `httpTransport` must send only the headers
+   * the runtime resolved for each request.
+   */
+  readonly sessionPlayerId?: () => string | undefined;
 }
 
 export type CreateGameServicesRuntimeInput = CreateGameServicesRuntimeCommonInput & (
@@ -95,6 +169,7 @@ export function createGameServicesRuntime(
   }
 
   const target = resolveGameServicesLedgerTarget(input.target ?? input.gateway.target);
+  const gate = createRuntimeGate(input.playerId, input.sessionPlayerId);
 
   if (target === null) {
     return disabledRuntime('unsupported_target');
@@ -123,12 +198,13 @@ export function createGameServicesRuntime(
       ? createGameServicesOrpcBackendApi(createGameServicesOrpcClient({
           url: baseUrl,
           ...(input.headers === undefined ? {} : { headers: input.headers }),
-          ...(input.getHeaders === undefined ? {} : { getHeaders: input.getHeaders }),
+          getHeaders: guardHeaders(input.getHeaders, gate),
         }))
       : createGameServicesHttpBackendApi({
           transport: withRuntimeHeaders(
             input.httpTransport ?? createGameServicesFetchBackendTransport({ baseUrl }),
             input,
+            gate,
           ),
         });
   } else {
@@ -147,6 +223,8 @@ export function createGameServicesRuntime(
     mode = 'local';
     backend = input.localBackend;
   }
+  // Every backend call is refused before it starts once the runtime is closed.
+  backend = guardBackend(backend, gate);
 
   const clientInput = {
     gateway: input.gateway,
@@ -163,6 +241,16 @@ export function createGameServicesRuntime(
     ...(input.now === undefined ? {} : { now: input.now }),
     ...(input.rewardEvidenceRegistry === undefined ? {} : { rewardEvidenceRegistry: input.rewardEvidenceRegistry }),
     ...(input.commerceProducts === undefined ? {} : { commerceProducts: input.commerceProducts }),
+    commerceSessionCheck: () => {
+      const refusal = gate.check();
+      return refusal === undefined
+        ? undefined
+        : new CommerceError('ACCOUNT_BINDING_REQUIRED', {
+            retryable: true,
+            storeCode: refusal.code,
+            message: refusal.message,
+          });
+    },
   };
   const monetizationRecovery = input.operationStore === undefined
     ? undefined
@@ -187,12 +275,18 @@ export function createGameServicesRuntime(
         : { commerceReconciler: monetizationRecovery.commerceReconciler }),
     };
   }
+  const reconciler = routedClient.commerceReconciler;
+  gate.onClose(async () => {
+    await reconciler?.stop();
+  });
   return {
     mode,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     target,
-    client: routedClient,
-    ...(monetizationRecovery === undefined ? {} : { monetizationRecovery }),
+    client: guardClient(routedClient, gate),
+    ...(monetizationRecovery === undefined
+      ? {}
+      : { monetizationRecovery: guardRecovery(monetizationRecovery, gate, reconciler) }),
     ...(baseUrl === undefined
       ? {}
       : {
@@ -202,23 +296,218 @@ export function createGameServicesRuntime(
             // does not sit under.
             baseUrl: input.transport === 'orpc' ? baseUrl.replace(/\/rpc\/?$/u, '') : baseUrl,
             ...(input.headers === undefined ? {} : { headers: input.headers }),
-            ...(input.getHeaders === undefined ? {} : { getHeaders: input.getHeaders }),
+            getHeaders: guardHeaders(input.getHeaders, gate),
           }),
         }),
+    dispose: () => gate.close(gameServicesRuntimeDisposedCode),
+  };
+}
+
+/**
+ * Whether the runtime may act for its player: open, and (with
+ * `sessionPlayerId`) the session's player is the runtime's. Another player
+ * closes it for good; closing stops the commerce reconciler once.
+ */
+interface RuntimeGate {
+  /** The refusal for an operation starting now, if any. */
+  check(): GameServicesRuntimeClosedError | undefined;
+  /** Throws the refusal, if any. */
+  assert(): void;
+  close(code: GameServicesRuntimeClosedCode): Promise<void>;
+  onClose(teardown: () => Promise<void>): void;
+}
+
+function createRuntimeGate(
+  playerId: string,
+  sessionPlayerId: (() => string | undefined) | undefined,
+): RuntimeGate {
+  let closed: GameServicesRuntimeClosedError | undefined;
+  let closing: Promise<void> | undefined;
+  const teardowns: (() => Promise<void>)[] = [];
+  const gate: RuntimeGate = {
+    check() {
+      if (closed !== undefined) {
+        return closed;
+      }
+      if (sessionPlayerId === undefined) {
+        return undefined;
+      }
+      let current: string | undefined;
+      try {
+        current = sessionPlayerId()?.trim();
+      } catch {
+        current = undefined;
+      }
+      if (current === undefined || current === '') {
+        return new GameServicesRuntimeClosedError(gameServicesSessionRequiredCode);
+      }
+      if (current !== playerId) {
+        void gate.close(gameServicesPlayerChangedCode);
+        return closed;
+      }
+      return undefined;
+    },
+    assert() {
+      const refusal = gate.check();
+      if (refusal !== undefined) {
+        throw refusal;
+      }
+    },
+    close(code) {
+      closed ??= new GameServicesRuntimeClosedError(code);
+      closing ??= (async () => {
+        for (const teardown of teardowns) {
+          try {
+            await teardown();
+          } catch {
+            // Closed regardless: every operation is refused from now on.
+          }
+        }
+      })();
+      return closing;
+    },
+    onClose(teardown) {
+      teardowns.push(teardown);
+    },
+  };
+  return gate;
+}
+
+function guardHeaders(
+  getHeaders: GameServicesHeaderResolver | undefined,
+  gate: RuntimeGate,
+): GameServicesHeaderResolver {
+  return async () => {
+    gate.assert();
+    const headers = (await getHeaders?.()) ?? {};
+    // A session that changed player while its headers were resolved: they
+    // may be the new player's, so they are never sent for this one.
+    gate.assert();
+    return headers;
+  };
+}
+
+function guardBackend(backend: GameServicesBackendApi, gate: RuntimeGate): GameServicesBackendApi {
+  const { purchases, adRewards, leaderboard } = backend;
+  const ledgerStatus = purchases.getPurchaseLedgerStatus;
+  const capabilities = purchases.getCommerceCapabilities;
+  return {
+    ...(backend.version === undefined ? {} : { version: backend.version }),
+    purchases: {
+      async verifyPurchase(request) {
+        gate.assert();
+        return purchases.verifyPurchase(request);
+      },
+      ...(ledgerStatus === undefined
+        ? {}
+        : {
+            async getPurchaseLedgerStatus(request) {
+              gate.assert();
+              return ledgerStatus.call(purchases, request);
+            },
+          }),
+      ...(capabilities === undefined
+        ? {}
+        : {
+            async getCommerceCapabilities() {
+              gate.assert();
+              return capabilities.call(purchases);
+            },
+          }),
+    },
+    adRewards: {
+      async claimAdReward(request) {
+        gate.assert();
+        return adRewards.claimAdReward(request);
+      },
+    },
+    leaderboard: {
+      async recordScore(request) {
+        gate.assert();
+        return leaderboard.recordScore(request);
+      },
+    },
+  };
+}
+
+function refusedPurchase(refusal: GameServicesRuntimeClosedError): GameServicesPurchaseResult {
+  return {
+    status: 'failed',
+    purchase: {
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: refusal.code, retryable: true },
+    },
+  };
+}
+
+function refusedReward(): GameServicesRewardedAdResult {
+  return { status: 'unavailable', reward: { status: 'unavailable', rewardGranted: false } };
+}
+
+/** The client of an open runtime; refusals answer before any store UI or ad opens. */
+function guardClient(client: GameServicesClient, gate: RuntimeGate): GameServicesClient {
+  return {
+    ...client,
+    async purchase(purchase, options) {
+      const refusal = gate.check();
+      return refusal === undefined ? client.purchase(purchase, options) : refusedPurchase(refusal);
+    },
+    async claimRewardedAd(reward, options) {
+      return gate.check() === undefined ? client.claimRewardedAd(reward, options) : refusedReward();
+    },
+    async submitLeaderboardScore(score) {
+      gate.assert();
+      return client.submitLeaderboardScore(score);
+    },
+  };
+}
+
+function guardRecovery(
+  recovery: RecoverableMonetizationClient,
+  gate: RuntimeGate,
+  reconciler: CommerceReconciler | undefined,
+): RecoverableMonetizationClient {
+  return {
+    ...recovery,
+    ...(reconciler === undefined ? {} : { commerceReconciler: reconciler }),
+    async purchase(purchase, options) {
+      const refusal = gate.check();
+      return refusal === undefined ? recovery.purchase(purchase, options) : refusedPurchase(refusal);
+    },
+    async claimRewardedAd(reward, options) {
+      return gate.check() === undefined ? recovery.claimRewardedAd(reward, options) : refusedReward();
+    },
+    // A late ad callback is journaled; its claim is refused until a runtime
+    // for the player resends it, so it stays pending, never ended.
+    recoverRewardResult: (idempotencyKey, platform) => recovery.recoverRewardResult(idempotencyKey, platform),
+    async reconcile() {
+      // Startup and resume recovery wait for a runtime the session permits.
+      return gate.check() === undefined ? recovery.reconcile() : [];
+    },
+    async restorePurchases() {
+      gate.assert();
+      return recovery.restorePurchases();
+    },
   };
 }
 
 function withRuntimeHeaders(
   transport: GameServicesBackendTransport,
   input: CreateGameServicesRuntimeCommonInput,
+  gate: RuntimeGate,
 ): GameServicesBackendTransport {
   return {
     async send(request) {
+      gate.assert();
       const headers = await resolveGameServicesRequestHeaders({
         headers: input.headers,
         getHeaders: input.getHeaders,
         requestHeaders: request.headers,
       });
+      // A session that changed player while its headers were resolved: they
+      // may be the new player's, so they are never sent for this one.
+      gate.assert();
       return transport.send({
         ...request,
         headers,
@@ -276,6 +565,8 @@ function disabledRuntime(
     mode: 'disabled',
     reason,
     ...(target === undefined ? {} : { target }),
+    // Nothing to close: a disabled runtime holds no client.
+    dispose: async () => undefined,
   };
 }
 

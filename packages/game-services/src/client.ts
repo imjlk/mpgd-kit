@@ -21,6 +21,7 @@ import {
   type CommerceReconciler,
   type CommerceReconcilerEvent,
   type CommerceReconcilerProduct,
+  type CreateCommerceReconcilerInput,
 } from './commerce-reconciler.js';
 import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import { createInMemoryMonetizationOperationStore } from './monetization-operation-store.js';
@@ -232,6 +233,8 @@ export interface CreateGameServicesClientInput {
   /** Catalog kinds and SKUs the reconciler resolves without a store read. */
   readonly commerceProducts?: readonly CommerceReconcilerProduct[];
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
+  /** The reconciler's `sessionCheck` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceSessionCheck?: CreateCommerceReconcilerInput['sessionCheck'];
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
@@ -274,6 +277,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       target: input.target,
       ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
       ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
+      ...(input.commerceSessionCheck === undefined ? {} : { sessionCheck: input.commerceSessionCheck }),
       now: requestNow,
     });
     if (input.onCommerceEvent !== undefined) {

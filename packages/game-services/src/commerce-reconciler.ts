@@ -232,7 +232,9 @@ export type CommerceReconcilerFailureStage =
   | 'verify'
   | 'finish'
   | 'ledger-status'
-  | 'restore';
+  | 'restore'
+  /** `sessionCheck` refused: the reconciler's player is not the session's now. */
+  | 'session';
 
 export type CommerceReconcilerEvent =
   | {
@@ -301,6 +303,21 @@ export interface CreateCommerceReconcilerInput {
    * ten seconds.
    */
   readonly serviceCapabilitiesTimeoutMs?: number;
+  /**
+   * Whether the reconciler may act for `playerId` right now; an error says
+   * why not (`createGameServicesRuntime` passes its session player check).
+   * It is read synchronously before every pass, before each queued event and
+   * each record a pass handles, before a store read, restore, or finish, and
+   * twice for a purchase: before anything is journaled and right before the
+   * store UI opens. A refusal never ends a record: a pass stops with the
+   * journal as it is and the events still queued (a `failure` event with
+   * stage `session` reports it), a purchase answers the error with no store
+   * UI (a reserved attempt stays retryable), and `restorePurchases` rejects
+   * with it. So one player's journaled purchases are never verified,
+   * restored, or finished while another player's session headers or account
+   * binding are current. Return a retryable `CommerceError`.
+   */
+  readonly sessionCheck?: () => CommerceError | undefined;
 }
 
 export const defaultStaleLaunchedAfterMs = 24 * 60 * 60 * 1000;
@@ -515,6 +532,30 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
 
   const trigger = (): void => {
     triggerPending = true;
+  };
+
+  /** The session check's refusal, if any; a check that throws refuses too. */
+  const sessionRefusal = (): CommerceError | undefined => {
+    if (input.sessionCheck === undefined) {
+      return undefined;
+    }
+    try {
+      return input.sessionCheck();
+    } catch (error) {
+      return new CommerceError('ACCOUNT_BINDING_REQUIRED', {
+        retryable: true,
+        message: `The session check failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  };
+  /** True (and reported) when the reconciler must not act for its player now. */
+  const sessionBlocked = (idempotencyKey?: string): boolean => {
+    const refusal = sessionRefusal();
+    if (refusal === undefined) {
+      return false;
+    }
+    fail('session', refusal, idempotencyKey);
+    return true;
   };
 
   const ownsRecord = (record: CommercePurchaseOperationRecord): boolean =>
@@ -878,6 +919,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     if (!capabilitiesNow.lifecycle.availablePurchases) {
       return true;
     }
+    if (sessionBlocked()) {
+      // Another player's store account may be current: nothing is read into
+      // this player's journal, and the next permitted pass reads again.
+      return false;
+    }
     const read = async (withRestore: boolean): Promise<void> => {
       const available = await provider.getAvailablePurchases({
         includePending: capabilitiesNow.lifecycle.pending,
@@ -1144,6 +1190,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     }
     try {
       for (;;) {
+        if (sessionBlocked(record.idempotencyKey)) {
+          // The record stays as journaled for this player's next permitted pass.
+          return;
+        }
         switch (record.state) {
           case 'requested':
             if (isRetryableBeforeLaunch(record)) {
@@ -1282,6 +1332,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
               retryLater(record.idempotencyKey);
               return;
             }
+            if (sessionBlocked(record.idempotencyKey)) {
+              return;
+            }
             let finished = false;
             try {
               finished = (await provider.finishTransaction({
@@ -1377,6 +1430,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const eventPass: PassOptions = { explicit: false, refreshCapabilities: false };
 
   const pass = async (options: PassOptions): Promise<void> => {
+    if (sessionBlocked()) {
+      // Queued events wait for a pass the session permits.
+      return;
+    }
     let capabilitiesNow = await readCapabilities(options.refreshCapabilities);
     if (options.refreshCapabilities) {
       await readServiceAlignment();
@@ -1394,10 +1451,14 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     // call to journal the store answer: matched then, it is never journaled
     // twice, and a cancel event ends the attempt the call launched.
     const busy = inFlightProducts();
-    for (const event of [
-      ...deferred.splice(0, deferred.length),
-      ...inbox.splice(0, inbox.length),
-    ]) {
+    const queued = [...deferred.splice(0, deferred.length), ...inbox.splice(0, inbox.length)];
+    for (const [index, event] of queued.entries()) {
+      if (sessionBlocked()) {
+        // A purchase reported now may be another player's: it is not
+        // journaled under this one; the rest wait, in order.
+        inbox.unshift(...queued.slice(index));
+        return;
+      }
       try {
         if (event.type === 'purchaseUpdated') {
           const product = busy.size === 0 ? undefined : await resolveLogicalId(event.purchase);
@@ -1418,6 +1479,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
     }
     for (const listed of await listRecoverable()) {
+      if (sessionBlocked()) {
+        return;
+      }
       const record = records.get(listed.idempotencyKey) ?? listed;
       if (options.restoreTrigger !== true && waitsForRestoreTrigger(record)) {
         // At the holder limit only the player's Restore Purchases asks again;
@@ -1425,6 +1489,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         continue;
       }
       await drive(record, capabilitiesNow, options.explicit);
+    }
+    if (sessionBlocked()) {
+      return;
     }
     await revokeReversed();
   };
@@ -1721,6 +1788,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     // Only the call that reserved the record owns its in-flight entry: a
     // same-key replay must not release it while the store sheet is open.
     let owned = false;
+    const refusal = sessionRefusal();
+    if (refusal !== undefined) {
+      // Nothing is journaled and no store UI opens; the key stays usable.
+      fail('session', refusal, request.idempotencyKey);
+      return failedOutcome(refusal);
+    }
     try {
       const prepared = await withLock(() => prepareRequest(request));
       if (prepared.kind === 'answered') {
@@ -1738,12 +1811,24 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             notStarted = event.state === 'not-started';
           }
         });
-        try {
-          answer = await provider.requestPurchase(request);
-        } catch (error) {
-          answer = failedOutcome(error);
-        } finally {
+        // Checked again with nothing awaited before the store call: the
+        // provider binds the purchase to the account current now, which must
+        // still be the player this attempt is journaled under.
+        const lateRefusal = sessionRefusal();
+        if (lateRefusal !== undefined) {
+          fail('session', lateRefusal, request.idempotencyKey);
           unsubscribePresentation?.();
+          // The store never opened: the reserved attempt stays retryable.
+          answer = failedOutcome(lateRefusal);
+          notStarted = true;
+        } else {
+          try {
+            answer = await provider.requestPurchase(request);
+          } catch (error) {
+            answer = failedOutcome(error);
+          } finally {
+            unsubscribePresentation?.();
+          }
         }
         result = await withLock(() => recordAnswer(request, prepared.record, prepared.product, answer, notStarted));
       }
@@ -1860,6 +1945,13 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     },
     runUntilIdle,
     async restorePurchases() {
+      const refusal = sessionRefusal();
+      if (refusal !== undefined) {
+        // A store restore (StoreKit's sync, an account sign-in) would run for
+        // the account current now, not this reconciler's player.
+        fail('session', refusal);
+        throw refusal;
+      }
       if (provider.restorePurchases !== undefined) {
         try {
           await provider.restorePurchases();
