@@ -46,11 +46,6 @@ minimumReleaseAgeExclude:
   # Reviewed first-party releases: imjlk/ait-kit PRs #52 and #53.
   - '@ait-kit/api-core@0.6.0'
   - '@ait-kit/sdk@0.7.0'
-  - '@orpc/client@2.0.0-beta.14'
-  - '@orpc/contract@2.0.0-beta.14'
-  - '@orpc/interop@2.0.0-beta.14'
-  - '@orpc/server@2.0.0-beta.14'
-  - '@orpc/shared@2.0.0-beta.14'
   - '@devvit/build-pack@0.14.1'
   - '@devvit/builders@0.14.1'
   - '@devvit/cache@0.14.1'

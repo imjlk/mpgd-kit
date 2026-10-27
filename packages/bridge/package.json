@@ -58,9 +58,9 @@
   },
   "dependencies": {
     "@mpgd/platform": "workspace:*",
-    "@orpc/client": "2.0.0-beta.14",
-    "@orpc/contract": "2.0.0-beta.14",
-    "@orpc/server": "2.0.0-beta.14",
+    "@orpc/client": "2.0.0-beta.46",
+    "@orpc/contract": "2.0.0-beta.46",
+    "@orpc/server": "2.0.0-beta.46",
     "typia": "15.2.1"
   },
   "devDependencies": {
