@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.64.0 — 2026-10-27
+
+### Added
+
+- [631379f8](https://github.com/imjlk/mpgd-kit/commit/631379f83c273908fa9f862c936bb01c0c86a0e4) `mpgd store presence plan|apply` now also takes `--store app-store`: through the pinned `asc` 5.5.0 and the same session and credential as the in-app purchase sync, it writes per locale the app information localization (name, subtitle, privacy policy URL) to the editable app information record, the version localization (description, keywords, promotional text, what's new, support and marketing URLs) to the one editable iOS version (`PREPARE_FOR_SUBMISSION` or rejected), and the 6.9", 6.5" and 6.3" iPhone and 13" iPad screenshot sets (compared by MD5; each upload waits for the asset delivery and fails on `FAILED`). It never creates or submits a version and never touches pricing, availability or release settings; when nothing is editable the plan marks the parts `blocked` and prints the manual step. What's new is left out on an app's first version. A failed apply names the steps already written. The asc session and JSON helpers move to a shared module (`openAscIapSession` is unchanged). — Thanks @imjlk!
+- [07efee2c](https://github.com/imjlk/mpgd-kit/commit/07efee2c8c8f9048de864ee7fe9e923c4c50c1db) New `mpgd store presence plan --store google-play [--presence file] [--out plan.json]` and `mpgd store presence apply --plan plan.json --approve [--confirm-image-removal] [--changes-not-sent-for-review]` sync the Google Play main store listing from the game's `mpgd.store-presence.json`: per language the title, descriptions and promo video (`edits.listings`), the icon, feature graphic and phone and tablet screenshots (`edits.images`, compared by SHA-256) and the contact details (`edits.details`). `plan` reads through a discarded edit and prints per language the text changes (lengths, and short texts in full) and the image uploads and removals. `apply` re-plans inside one edit, refuses when Play or the files changed since the plan, writes, and commits once; on a failure it discards the edit. Images Play holds that the file does not list are kept unless the set is marked complete, and removing them needs `--confirm-image-removal`. The shared store sync plumbing moves to `StorePlanStaleError` (exported), which `StoreProductPlanStaleError` now extends. See `docs/STORE_PRESENCE_SYNC.md`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.21.5, @mpgd/adapter-capacitor@0.16.3, @mpgd/adapter-devvit@0.14.7, @mpgd/adapter-verse8@0.7.16, @mpgd/capacitor-play-billing@0.4.5, @mpgd/capacitor-storekit@0.4.5, @mpgd/catalog@0.13.0, @mpgd/game-runtime@0.8.9, @mpgd/game-services@0.30.5, @mpgd/target-config@0.24.3
+
 ## 0.63.0 — 2026-10-27
 
 ### Added
