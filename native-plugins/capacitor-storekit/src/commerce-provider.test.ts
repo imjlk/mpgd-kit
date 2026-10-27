@@ -14,6 +14,11 @@ import {
   createCapacitorStoreKitCommerceProvider,
   createCapacitorStoreKitServiceProvider,
 } from './commerce-provider.js';
+import {
+  adapterSupportsPurchaseGate,
+  createPurchaseGateUnsupportedError,
+  resolvePurchaseGateSupport,
+} from './purchase-gate-support.js';
 import type { CapacitorStoreKitDiagnostic } from './store-sdk.js';
 
 const products = [
@@ -447,6 +452,33 @@ function expectThrows(operation: () => unknown, message: string): void {
     plugin.calls.filter((call) => call.startsWith('purchase:')),
     [`purchase:com.example.game.coins100:${fakeAccountToken}`],
     'the sheet opened once the gate allowed it',
+  );
+}
+
+// An adapter from before the gate would ignore it and keep selling: the
+// plugin probes for gate support and otherwise refuses every new purchase
+// through the account binding, which recovery never asks.
+{
+  assertEqual(adapterSupportsPurchaseGate(), true, 'this adapter runs the purchase gate');
+  assertEqual(
+    adapterSupportsPurchaseGate({}),
+    false,
+    'an adapter without the gate exports is detected',
+  );
+  const gate = () => ({ allowed: true }) as const;
+  assertEqual(
+    [
+      resolvePurchaseGateSupport(undefined, false),
+      resolvePurchaseGateSupport(gate, true).refuseNewPurchases,
+      resolvePurchaseGateSupport(gate, false),
+    ],
+    [{ refuseNewPurchases: false }, false, { refuseNewPurchases: true }],
+    'only a gate the adapter would ignore refuses new purchases',
+  );
+  assertEqual(
+    createPurchaseGateUnsupportedError().toCommerceErrorInfo().storeCode,
+    'PURCHASE_GATE_UNSUPPORTED',
+    'the refusal names the unsupported gate',
   );
 }
 

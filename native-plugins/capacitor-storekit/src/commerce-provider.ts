@@ -16,6 +16,10 @@ import {
   storeKitCommerceAuthority,
 } from './commerce-profile.js';
 import {
+  createPurchaseGateUnsupportedError,
+  resolvePurchaseGateSupport,
+} from './purchase-gate-support.js';
+import {
   capacitorStoreKitErrorCodeMap,
   createCapacitorStoreKitStoreSdk,
   readAppAccountToken,
@@ -96,6 +100,7 @@ export function createCapacitorStoreKitCommerceProvider(
     throw new TypeError('StoreKit bundleId must be a non-empty string when provided.');
   }
   const bundleId = input.bundleId;
+  const gate = resolvePurchaseGateSupport(input.purchaseGate);
   const sdk = createCapacitorStoreKitStoreSdk({
     products: input.products.map((product) => ({
       sku: product.storeSku,
@@ -123,6 +128,9 @@ export function createCapacitorStoreKitCommerceProvider(
       return { ...payload };
     },
     accountBinding: async (): Promise<StorePurchaseAccountBinding> => {
+      if (gate.refuseNewPurchases) {
+        throw createPurchaseGateUnsupportedError();
+      }
       let value: unknown;
       try {
         value = await input.getAppAccountToken();
@@ -152,7 +160,7 @@ export function createCapacitorStoreKitCommerceProvider(
         });
       }
     },
-    ...(input.purchaseGate === undefined ? {} : { purchaseGate: input.purchaseGate }),
+    ...(gate.purchaseGate === undefined ? {} : { purchaseGate: gate.purchaseGate }),
     authority: storeKitCommerceAuthority,
     mapError: { ...capacitorStoreKitErrorCodeMap, ...input.mapError },
   });

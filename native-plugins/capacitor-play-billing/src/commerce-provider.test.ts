@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BridgeEvent, BridgeMethod, BridgeRequest } from '@mpgd/bridge';
 import { createCapacitorPlatformGateway, type NativeBridge } from '@mpgd/adapter-capacitor';
@@ -473,6 +473,51 @@ describe('createCapacitorPlayBillingCommerceProvider with the reference reconcil
     await reconciler.stop();
     expect(verified).toEqual(['GPA.p']);
     expect(plugin.purchaseCalls).toEqual([]);
+  });
+
+  it('journals a retryable gate failure as failed; a new key retries once the gate answers', async () => {
+    // Without trusted presentation facts (bridge presentation is K4), the
+    // reconciler cannot tell a pre-launch refusal from a closed sheet, so it
+    // keeps the attempt terminal and the game retries under a new key.
+    const plugin = createPlugin();
+    let gateUp = false;
+    const gate = vi.fn(async () => {
+      if (!gateUp) {
+        throw new Error('sales flag unreachable');
+      }
+      return { allowed: true } as const;
+    });
+    const { provider } = createProvider(plugin, { purchaseGate: gate });
+    const reconciler = createCommerceReconciler({
+      provider,
+      backend: {
+        async verifyPurchase() {
+          return { verified: false, alreadyProcessed: false, reason: 'not used' };
+        },
+      },
+      store: createInMemoryMonetizationOperationStore(),
+      playerId: 'player-1',
+      target: 'android',
+      products: catalog.map((entry) => ({ ...entry })),
+    });
+    await reconciler.start();
+    const request = { logicalId: 'gems_small', idempotencyKey: 'op-gate', source: 'shop' } as const;
+    await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: true },
+    });
+    expect((await reconciler.read('op-gate'))?.state).toBe('failed');
+    gateUp = true;
+    // The same key answers from the journal without asking the gate again.
+    await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed', error: { storeCode: 'PURCHASE_GATE_FAILED' },
+    });
+    expect(gate).toHaveBeenCalledTimes(1);
+    plugin.queuePurchase({ status: 'cancelled' });
+    await expect(reconciler.requestPurchase({ ...request, idempotencyKey: 'op-gate-2' }))
+      .resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(plugin.purchaseCalls).toHaveLength(1);
+    await reconciler.stop();
   });
 
   it('reconciles a valid purchase next to an unfinished purchase for a retired SKU', async () => {

@@ -121,7 +121,11 @@ while sales are paused: pause new sales with the optional `purchaseGate`
 instead, which is asked only before a new purchase opens the StoreKit sheet
 (never by recovery, restore, or finishing) and refuses with `failed`,
 `ITEM_UNAVAILABLE`, and `PURCHASES_PAUSED` (see the adapter-capacitor
-README). A token that cannot be resolved is a `failed` result with
+README). With an adapter-capacitor from before
+the gate, which would ignore it, the plugin detects the missing gate support
+and refuses every new purchase with `ITEM_UNAVAILABLE` and
+`PURCHASE_GATE_UNSUPPORTED` instead of selling; recovery is unaffected.
+A token that cannot be resolved is a `failed` result with
 `STOREKIT_ACCOUNT_LOOKUP_FAILED` (a thrown `CommerceError` keeps its own code). `createCapacitorStoreKitServiceProvider`
 wraps the provider as a `CapacitorServiceProvider` (id `apple-storekit` by
 default, no `features`, no `methods`) so the gateway serves the six

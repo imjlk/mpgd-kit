@@ -21,6 +21,10 @@ import {
 } from './commerce-profile.js';
 import type { CapacitorPlayBillingPlugin, PlayPurchase } from './definitions.js';
 import {
+  createPurchaseGateUnsupportedError,
+  resolvePurchaseGateSupport,
+} from './purchase-gate-support.js';
+import {
   createCapacitorPlayBillingStoreSdk,
   googlePlayStoreId,
   playBillingStoreSdkErrorCodeMap,
@@ -119,6 +123,7 @@ export function createCapacitorPlayBillingCommerceProvider(
       : { onUnmappedPurchase: input.onUnmappedPurchase }),
   });
   const resolveAccountBinding = input.accountBinding;
+  const gate = resolvePurchaseGateSupport(input.purchaseGate);
   return createStoreCommerceProvider({
     sdk,
     store: input.store ?? googlePlayStoreId,
@@ -126,6 +131,9 @@ export function createCapacitorPlayBillingCommerceProvider(
     evidenceSchema: googlePlayProductPurchaseEvidenceSchema,
     evidencePayload: createPlayBillingEvidencePayload,
     accountBinding: async () => {
+      if (gate.refuseNewPurchases) {
+        throw createPurchaseGateUnsupportedError();
+      }
       try {
         return await resolveAccountBinding();
       } catch (error) {
@@ -139,7 +147,7 @@ export function createCapacitorPlayBillingCommerceProvider(
         });
       }
     },
-    ...(input.purchaseGate === undefined ? {} : { purchaseGate: input.purchaseGate }),
+    ...(gate.purchaseGate === undefined ? {} : { purchaseGate: gate.purchaseGate }),
     authority: playBillingCommerceAuthority,
     mapError: { ...playBillingStoreSdkErrorCodeMap, ...input.mapError },
   });
