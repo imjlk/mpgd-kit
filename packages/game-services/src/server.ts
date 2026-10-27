@@ -45,6 +45,7 @@ import {
   type PlayerDataErasureResult,
 } from './account-deletion.js';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
+import { addLegacyOrpcErrorFlag } from './orpc-error-compat.js';
 import {
   createRejectingGameServicesEvidenceVerifier,
   type EvidenceVerificationDecision,
@@ -1061,7 +1062,8 @@ export function createGameServicesRpcFetchHandler(
       return textResponse('Not Found', 404, options.corsHeaders);
     }
 
-    return withCors(result.response, options.corsHeaders);
+    // Error bodies keep the pre-beta.34 `inferable` flag so older game clients decode them.
+    return withCors(await addLegacyOrpcErrorFlag(result.response), options.corsHeaders);
   };
 }
 

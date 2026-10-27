@@ -20,9 +20,12 @@ import {
 
 import {
   createGameServicesClient,
+  createGameServicesOrpcBackendApi,
+  createGameServicesOrpcClient,
   type GameServicesBackendApi,
   type PurchaseVerificationApi,
 } from './client.js';
+import { createGameServicesRouter, createGameServicesRpcFetchHandler } from './server.js';
 import {
   assertCommerceFinishAllowed,
   createCommercePurchaseOperationKey,
@@ -3324,6 +3327,45 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   await unpublished.reconciler.reconcile();
   assertEqual(unpublished.backend.capabilityReads, 1, 'the 404 is not read again on refresh');
   await unpublished.reconciler.stop();
+
+  // The same answer over oRPC from a Worker on either side of the oRPC 2.0.0-beta.34 error-body
+  // change: NOT_FOUND must still read as a v1 server, not as a failed comparison.
+  const recordedBeta14NotFound = new Response(
+    '{"json":{"defined":false,"inferable":false,"code":"NOT_FOUND","message":"This backend publishes no commerce capabilities."}}',
+    { status: 404, headers: { 'content-type': 'application/json' } },
+  );
+  const currentServerWithoutCapabilities = createGameServicesRpcFetchHandler(
+    createGameServicesRouter({
+      purchases: { verifyPurchase: () => Promise.reject(new Error('unused')) },
+      adRewards: { claimAdReward: () => Promise.reject(new Error('unused')) },
+      leaderboard: { recordScore: () => Promise.reject(new Error('unused')) },
+    } as unknown as GameServicesBackendApi),
+  );
+  for (const [server, answer] of [
+    ['an oRPC 2.0.0-beta.14 Worker', async () => recordedBeta14NotFound.clone()],
+    [
+      'a current Worker',
+      (url: string, init?: RequestInit) => {
+        return currentServerWithoutCapabilities(new Request(url, init));
+      },
+    ],
+  ] as const) {
+    const orpcBackend = createGameServicesOrpcBackendApi(
+      createGameServicesOrpcClient({
+        url: 'https://game-services.test/rpc',
+        fetch: answer as typeof fetch,
+      }),
+    );
+    const overOrpc = createHarness({ overrides: { backend: orpcBackend.purchases } });
+    await overOrpc.reconciler.start();
+    assertEqual(
+      overOrpc.reconciler.serviceAlignment?.status,
+      'unpublished',
+      `NOT_FOUND from ${server} reads as unpublished`,
+    );
+    assertEqual(overOrpc.failures, [], `NOT_FOUND from ${server} is not a failure`);
+    await overOrpc.reconciler.stop();
+  }
 
   // A purchase before start() attempts the comparison before any store UI opens.
   const early = createHarness({

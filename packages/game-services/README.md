@@ -183,6 +183,31 @@ and retry policy are not redesigned by this observer API.
 The root `pnpm test` pipeline includes compiled client JS and public declaration
 consumption checks alongside the client and target conformance suites.
 
+## oRPC version and error compatibility
+
+The oRPC transport (`createGameServicesOrpcClient`, `createGameServicesRouter`,
+`createGameServicesRpcFetchHandler`) is built on oRPC `2.0.0-beta.46`, pinned
+exactly. Pin the same exact version if a game or Worker also uses oRPC directly.
+
+oRPC 2.0.0-beta.34 removed the `inferable` flag from RPC error bodies, and each
+side rejects the other's shape: an older client would see a malformed response
+instead of `BAD_REQUEST` or `NOT_FOUND`, and so would a newer client talking to
+an older Worker. Games and Workers deploy separately, so this package bridges
+the change in `src/orpc-error-compat.ts`:
+
+- `createGameServicesRpcFetchHandler` adds `inferable: false` to oRPC error
+  bodies, so clients from `@mpgd/game-services` 0.30.5 and older (oRPC
+  2.0.0-beta.14) still decode error codes;
+- `createGameServicesOrpcClient` removes a boolean `inferable` from error bodies
+  before oRPC validates them, so it still decodes errors from such Workers.
+
+Success responses are unchanged. The shim is removed once the oldest supported
+game client and every supported Worker come from a release that ships oRPC
+2.0.0-beta.46 or later. Other oRPC changes picked up with it: RPC routes accept
+only POST, PUT, PATCH, and DELETE (a GET answers 404, and the kit clients always
+POST), and `Infinity` inputs are encoded with their own meta marker, which an
+oRPC 2.0.0-beta.14 Worker cannot decode.
+
 ## Runtime backend transport
 
 `createGameServicesRuntime` accepts `httpTransport` for its HTTP JSON backend
