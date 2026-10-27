@@ -3518,6 +3518,17 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   const next = createHarness({ store, provider, backend, overrides: { playerId: 'player-2' } });
   backend.queue({ status: 'granted', ledgerEntryId: 'le-52-next' });
   await next.reconciler.start();
+  await next.reconciler.reconcile();
+  assertEqual(
+    backend.requests.length,
+    2,
+    "automatic passes never take the earlier player's durable: only Restore Purchases does",
+  );
+  assertEqual(
+    await store.read(createCommercePurchaseOperationKey('android', adsKey, 'player-2')),
+    undefined,
+    'nothing is journaled under the player-scoped key before Restore Purchases',
+  );
   await next.reconciler.restorePurchases();
   assertEqual(
     backend.requests.slice(2).map((request) => [
@@ -3557,10 +3568,10 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     'player-2',
     'read answers the scoped record',
   );
-  assertEqual(
-    await next.reconciler.read(gemsKey),
-    undefined,
-    "read answers nothing for a key only the earlier player's record holds",
+  await assertRejects(
+    () => next.reconciler.read(gemsKey),
+    /bound to another player/u,
+    "read still refuses a key only the earlier player's consumable record holds",
   );
   await next.reconciler.stop();
 

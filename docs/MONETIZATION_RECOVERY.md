@@ -104,13 +104,13 @@ transactionId })` returns the
 commerce record, terminal or not, that holds a store transaction. Records
 are keyed by `createCommercePurchaseOperationKey(target, idempotencyKey)`,
 which is the same for every player of the install. After a logout, a
-restored durable whose derived key another player's record already holds is
-reserved under the player-scoped key `createCommercePurchaseOperationKey(target,
+durable that the player's `restorePurchases()` finds and whose derived key
+another player's record already holds is reserved under the player-scoped key `createCommercePurchaseOperationKey(target,
 idempotencyKey, playerId)` instead, so a store must treat `record.key` as
 opaque (store and replace by it, never rebuild it from the record's fields)
 and must not assume one record per idempotency key across players.
 `commerceReconciler.read(idempotencyKey)` answers this player's record under
-either key, and `undefined` when only another player's record holds the key. Implement
+either key and still refuses a key only another player's record holds. Implement
 both: with them a purchase the store lists again after a restart (an owned
 durable, a rejected or finished purchase) meets its own record instead of
 being verified again under a derived key (the backend's platform-evidence

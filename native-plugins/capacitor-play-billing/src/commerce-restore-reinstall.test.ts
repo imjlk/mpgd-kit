@@ -318,4 +318,42 @@ describe('Play Billing restore after a reinstall', () => {
     await back.reconciler.stop();
     expect(back.failures).toEqual([]);
   });
+
+  it("leaves another guest's unacknowledged durable to the next guest's Restore Purchases", async () => {
+    const world = await createWorld();
+    const first = install(world, 'guest-after-reinstall');
+    await first.reconciler.start();
+    await first.reconciler.restorePurchases();
+    await first.reconciler.stop();
+    const derivedKey = world.requests[0]?.idempotencyKey ?? '';
+    // The backend's acknowledgement has not reached Google Play yet, so a
+    // normal read lists the purchase again, whoever is signed in.
+    world.plugin.upsert(
+      fakePlayPurchase({
+        purchaseToken: 'token-ads',
+        products: ['remove_ads'],
+        orderId: 'GPA.ads',
+        isAcknowledged: false,
+        obfuscatedAccountId: earlierGuest,
+      }),
+    );
+
+    // Logout; the next guest's startup and resume passes leave the earlier
+    // guest's record alone and send nothing.
+    const next = install(world, 'guest-after-logout', first.journal);
+    await next.reconciler.start();
+    await next.reconciler.reconcile();
+    expect(world.requests).toHaveLength(1);
+    expect(await first.journal.read(
+      createCommercePurchaseOperationKey('android', derivedKey, 'guest-after-logout'),
+    )).toBeUndefined();
+
+    // Only the player's Restore Purchases restores it, under that guest's own key.
+    await next.reconciler.restorePurchases();
+    expect(world.requests.slice(1).map((request) => [request.playerId, request.intent, request.idempotencyKey]))
+      .toEqual([['guest-after-logout', 'restore', derivedKey]]);
+    expect(next.responses.at(-1)).toMatchObject({ verified: true, restoredAcrossPlayers: true });
+    expect(await next.reconciler.listRecoverable()).toEqual([]);
+    await next.reconciler.stop();
+  });
 });

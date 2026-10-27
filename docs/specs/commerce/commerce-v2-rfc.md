@@ -490,17 +490,21 @@ derived key is therefore the same for two players who see the same store
 purchase on one install, the case of a logout followed by the next guest's
 Restore Purchases. The rules:
 
-- A key another player's record holds is refused, as before, for a game key
-  and for a discovered consumable, subscription, or product of unknown kind:
-  one player's purchase is never matched to, sent for, or replayed as
-  another's.
-- A discovered **durable** whose derived key another player's record holds
-  is this player's own restore. It is journaled under the player-scoped key
+- A key another player's record holds is refused, as before, for a game key,
+  for a discovered consumable, subscription, or product of unknown kind, and
+  on every start, resume, and event pass: one player's purchase is never
+  matched to, sent for, or replayed as another's, and a purchase a normal
+  read lists for the earlier player (Google Play lists an unacknowledged one
+  whoever is signed in) is never shared without the player asking.
+- On the player's Restore Purchases pass, a discovered **durable** whose
+  derived key another player's record holds is this player's own restore. It
+  is journaled under the player-scoped key
   `[target, kind, idempotencyKey, playerId]` and sent with this player's id
   and the same derived idempotency key; the backend's
   [restore sharing](#restore-sharing) decides it. Lookups read the shared
-  key first and the player-scoped key only when the shared one is free or
-  another player's.
+  key first, and the player-scoped key when the shared one is free or
+  another player's; `reconciler.read()` answers a record there and refuses
+  any other key another player's record holds.
 - Nothing is migrated. A journal written before the player-scoped key keeps
   every record under the shared key, where each player still finds its own;
   only a new restore that meets another player's record takes the

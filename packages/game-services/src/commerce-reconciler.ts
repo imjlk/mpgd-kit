@@ -700,30 +700,24 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   };
 
   /**
-   * `playerScoped`: a durable this player restores may take its player-scoped
-   * key when another player's record holds the shared one (see `readRecord`).
+   * Reserves the record under `key`: the shared key of its idempotency key
+   * unless `resolveSlot` chose this player's player-scoped one.
    */
   const reserve = async (
     record: Omit<CommercePurchaseOperationRecord, 'kind' | 'key' | 'playerId' | 'target' | 'deploymentTarget' | 'revision' | 'updatedAt'>,
-    options: { readonly playerScoped?: boolean } = {},
+    key: string = createCommercePurchaseOperationKey(target, record.idempotencyKey),
   ): Promise<{ readonly created: boolean; readonly record: CommercePurchaseOperationRecord }> => {
     const candidate: CommercePurchaseOperationRecord = {
       ...record,
       kind: commercePurchaseOperationKind,
-      key: createCommercePurchaseOperationKey(target, record.idempotencyKey),
+      key,
       playerId,
       target,
       deploymentTarget,
       revision: 0,
       updatedAt: now(),
     };
-    let reserved = await journal.reserve(candidate);
-    if (options.playerScoped === true && heldByAnotherPlayer(reserved.record)) {
-      reserved = await journal.reserve({
-        ...candidate,
-        key: createCommercePurchaseOperationKey(target, record.idempotencyKey, playerId),
-      });
-    }
+    const reserved = await journal.reserve(candidate);
     if (!isCommercePurchaseOperationRecord(reserved.record)) {
       throw new Error('Commerce purchase operation key is bound to another operation kind.');
     }
@@ -757,40 +751,58 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   };
 
   /**
-   * The record journaled under a purchase idempotency key. A key another
-   * player's record holds is refused, except with `playerScoped`: then this
-   * player's record under its player-scoped key answers, or none. Only a
-   * durable this player restores is ever journaled there (`ingestPurchase`),
+   * Where this player's record of an idempotency key lives, and what that key
+   * holds now. A record is under the shared key, or under this player's
+   * player-scoped key, which only the player's Restore Purchases ever takes,
+   * for a durable another player journaled first (`ingestPurchase`). The
+   * scoped key is read when the shared one is free (retention may have
+   * dropped the other player's record) and, with `takeScoped`, when another
+   * player's record holds the shared one; then the scoped key is the slot.
+   * Without `takeScoped`, another player's record is what the slot holds, and
+   * `recordIn` refuses it.
+   */
+  const resolveSlot = async (
+    idempotencyKey: string,
+    takeScoped: boolean,
+  ): Promise<{ readonly key: string; readonly found: unknown; readonly heldByAnother: boolean }> => {
+    const sharedKey = createCommercePurchaseOperationKey(target, idempotencyKey);
+    const shared = await journal.read(sharedKey);
+    const heldByAnother = shared !== undefined && heldByAnotherPlayer(shared);
+    if (shared !== undefined && !(heldByAnother && takeScoped)) {
+      return { key: sharedKey, found: shared, heldByAnother };
+    }
+    const scopedKey = createCommercePurchaseOperationKey(target, idempotencyKey, playerId);
+    const scoped = await journal.read(scopedKey);
+    return scoped !== undefined || heldByAnother
+      ? { key: scopedKey, found: scoped, heldByAnother }
+      : { key: sharedKey, found: undefined, heldByAnother };
+  };
+
+  /** This player's record in a slot; another player's or another store's is refused. */
+  const recordIn = (
+    slot: { readonly found: unknown },
+    idempotencyKey: string,
+  ): CommercePurchaseOperationRecord | undefined => {
+    const found = slot.found;
+    if (found === undefined) {
+      return records.get(idempotencyKey);
+    }
+    if (!isCommercePurchaseOperationRecord(found) || !ownsRecord(found)) {
+      throw new Error('Commerce purchase operation key is bound to another player or store.');
+    }
+    return remember(found);
+  };
+
+  /**
+   * This player's record of a purchase idempotency key, under the shared key
+   * or its player-scoped key. A key another player's record holds is refused,
    * so another player's consumable, subscription, or game-started attempt is
    * never matched, sent, or replayed for this player.
    */
   const readRecord = async (
     idempotencyKey: string,
-    options: { readonly playerScoped?: boolean } = {},
-  ): Promise<CommercePurchaseOperationRecord | undefined> => {
-    const found = await journal.read(createCommercePurchaseOperationKey(target, idempotencyKey));
-    if (found !== undefined && !(options.playerScoped === true && heldByAnotherPlayer(found))) {
-      if (!isCommercePurchaseOperationRecord(found) || !ownsRecord(found)) {
-        throw new Error('Commerce purchase operation key is bound to another player or store.');
-      }
-      return remember(found);
-    }
-    if (options.playerScoped === true) {
-      // The shared key is free or another player's: this player's record, if
-      // any, is under its player-scoped key (the shared one may have been
-      // freed since by the journal's retention).
-      const scoped = await journal.read(
-        createCommercePurchaseOperationKey(target, idempotencyKey, playerId),
-      );
-      if (scoped !== undefined) {
-        if (!isCommercePurchaseOperationRecord(scoped) || !ownsRecord(scoped)) {
-          throw new Error('Commerce purchase operation key is bound to another player or store.');
-        }
-        return remember(scoped);
-      }
-    }
-    return records.get(idempotencyKey);
-  };
+  ): Promise<CommercePurchaseOperationRecord | undefined> =>
+    recordIn(await resolveSlot(idempotencyKey, false), idempotencyKey);
 
   const ownedRecordsOf = (
     listed: readonly unknown[],
@@ -923,7 +935,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   };
 
   // Reconciler step 2: match a reported purchase to a journal record.
-  const ingestPurchase = async (purchase: StorePurchase): Promise<void> => {
+  const ingestPurchase = async (purchase: StorePurchase, restoring: boolean): Promise<void> => {
     if (purchase.store !== storeId) {
       fail(
         'match',
@@ -993,14 +1005,17 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         transactionId: purchase.transactionId,
         token: purchase.token,
       });
-      // The derived key is the same for every player of the install. A
-      // durable another player journaled first (a logout, then this player's
-      // Restore Purchases) is this player's own restore, journaled under its
-      // player-scoped key; the backend keys the grant by player and key. Any
-      // other kind held by another player stays refused: one player's
+      // The derived key is the same for every player of the install. On the
+      // player's Restore Purchases pass, a durable another player journaled
+      // first (a logout, then this player's restore) is this player's own
+      // restore, journaled under its player-scoped key; the backend keys the
+      // grant by player and key. Automatic passes, and any other kind held by
+      // another player, stay refused: a purchase a normal read lists for the
+      // earlier player (Play lists an unacknowledged one whoever is signed in)
+      // is never shared without the player asking, and one player's
       // consumable is never sent for another.
-      const playerScoped = product.kind === 'durable';
-      record = await readRecord(idempotencyKey, { playerScoped });
+      const slot = await resolveSlot(idempotencyKey, restoring && product.kind === 'durable');
+      record = recordIn(slot, idempotencyKey);
       if (
         record !== undefined
         && (record.logicalId !== product.logicalId
@@ -1028,7 +1043,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             state: purchase.state,
             purchase,
           },
-          { playerScoped },
+          slot.key,
         );
         return;
       }
@@ -1106,9 +1121,8 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const drive = async (
     initial: CommercePurchaseOperationRecord,
     capabilitiesNow: CommerceCapabilities | undefined,
-    options: PassOptions,
+    explicit: boolean,
   ): Promise<void> => {
-    const explicit = options.explicit;
     let record = initial;
     /** Finalization the grant of this drive reported; a later pass re-reads it from the backend. */
     let finalization: 'pending' | 'completed' | undefined;
@@ -1162,10 +1176,6 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           case 'pending':
             if (record.request === undefined) {
               // Store-side pending: waiting on the store, never sent.
-              return;
-            }
-            if (options.restoreTrigger !== true && waitsForRestoreTrigger(record)) {
-              // At the holder limit only the player's Restore Purchases asks again.
               return;
             }
             record = await write(record, 'verifying');
@@ -1385,7 +1395,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             defer(event);
             continue;
           }
-          await ingestPurchase(event.purchase);
+          await ingestPurchase(event.purchase, options.restoreTrigger === true);
         } else if (event.type === 'purchaseError') {
           if (event.logicalId !== undefined && busy.has(event.logicalId)) {
             defer(event);
@@ -1397,8 +1407,14 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         fail('journal', error);
       }
     }
-    for (const record of await listRecoverable()) {
-      await drive(records.get(record.idempotencyKey) ?? record, capabilitiesNow, options);
+    for (const listed of await listRecoverable()) {
+      const record = records.get(listed.idempotencyKey) ?? listed;
+      if (options.restoreTrigger !== true && waitsForRestoreTrigger(record)) {
+        // At the holder limit only the player's Restore Purchases asks again;
+        // other passes skip the record before driving it.
+        continue;
+      }
+      await drive(record, capabilitiesNow, options.explicit);
     }
     await revokeReversed();
   };
@@ -1870,7 +1886,14 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     async fetchProducts(request = {}) {
       return provider.fetchProducts(request);
     },
-    read: (idempotencyKey) => readRecord(idempotencyKey, { playerScoped: true }),
+    // A restored durable under this player's player-scoped key answers; any
+    // other key another player's record holds is refused as before.
+    read: async (idempotencyKey) => {
+      const slot = await resolveSlot(idempotencyKey, true);
+      return slot.heldByAnother && slot.found === undefined
+        ? readRecord(idempotencyKey)
+        : recordIn(slot, idempotencyKey);
+    },
     listRecoverable,
     subscribe(listenerToAdd) {
       listeners.add(listenerToAdd);
