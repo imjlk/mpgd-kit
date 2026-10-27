@@ -20,6 +20,11 @@ import {
 } from './commerce-profile.js';
 import type { CapacitorPlayBillingPlugin, PlayPurchase } from './definitions.js';
 import {
+  refuseNewPurchasesUnlessGated,
+  resolvePurchaseGateSupport,
+  type StorePurchaseGate,
+} from './purchase-gate-support.js';
+import {
   createCapacitorPlayBillingStoreSdk,
   googlePlayStoreId,
   playBillingStoreSdkErrorCodeMap,
@@ -53,13 +58,21 @@ export interface CreateCapacitorPlayBillingCommerceProviderInput {
   /**
    * Resolves the player's obfuscated account id (`{ kind:
    * 'obfuscated-account-id', value }`) before a purchase opens. It must agree
-   * with the backend's `resolveObfuscatedAccountId`. A thrown lookup becomes
-   * `ACCOUNT_BINDING_REQUIRED` with `PLAY_BILLING_ACCOUNT_LOOKUP_FAILED` kept.
+   * with the backend's `resolveObfuscatedAccountId`. A thrown `CommerceError`
+   * keeps its code; any other thrown lookup becomes `ACCOUNT_BINDING_REQUIRED`
+   * with `PLAY_BILLING_ACCOUNT_LOOKUP_FAILED` kept. Either is answered as a
+   * `failed` purchase result before the store opens.
    */
   readonly accountBinding: () =>
     | Promise<StorePurchaseAccountBinding | undefined>
     | StorePurchaseAccountBinding
     | undefined;
+  /**
+   * Optional sales switch, asked before a new purchase opens the Play sheet
+   * and never during recovery; a refusal is `ITEM_UNAVAILABLE` with
+   * `PURCHASES_PAUSED` (see `StorePurchaseGate` in `@mpgd/adapter-capacitor`).
+   */
+  readonly purchaseGate?: StorePurchaseGate;
   /** Defaults to the registered `CapacitorPlayBilling` plugin. */
   readonly plugin?: CapacitorPlayBillingPlugin;
   /** Defaults to `Capacitor.getPlatform() === 'android'`. */
@@ -110,26 +123,34 @@ export function createCapacitorPlayBillingCommerceProvider(
       : { onUnmappedPurchase: input.onUnmappedPurchase }),
   });
   const resolveAccountBinding = input.accountBinding;
-  return createStoreCommerceProvider({
-    sdk,
-    store: input.store ?? googlePlayStoreId,
-    products: input.products,
-    evidenceSchema: googlePlayProductPurchaseEvidenceSchema,
-    evidencePayload: createPlayBillingEvidencePayload,
-    accountBinding: async () => {
-      try {
-        return await resolveAccountBinding();
-      } catch (error) {
-        throw new CommerceError('ACCOUNT_BINDING_REQUIRED', {
-          message: 'Play Billing could not resolve the obfuscated account id.',
-          storeCode: 'PLAY_BILLING_ACCOUNT_LOOKUP_FAILED',
-          cause: error,
-        });
-      }
-    },
-    authority: playBillingCommerceAuthority,
-    mapError: { ...playBillingStoreSdkErrorCodeMap, ...input.mapError },
-  });
+  const gate = resolvePurchaseGateSupport(input.purchaseGate);
+  return refuseNewPurchasesUnlessGated(
+    createStoreCommerceProvider({
+      sdk,
+      store: input.store ?? googlePlayStoreId,
+      products: input.products,
+      evidenceSchema: googlePlayProductPurchaseEvidenceSchema,
+      evidencePayload: createPlayBillingEvidencePayload,
+      accountBinding: async () => {
+        try {
+          return await resolveAccountBinding();
+        } catch (error) {
+          if (error instanceof CommerceError) {
+            throw error;
+          }
+          throw new CommerceError('ACCOUNT_BINDING_REQUIRED', {
+            message: 'Play Billing could not resolve the obfuscated account id.',
+            storeCode: 'PLAY_BILLING_ACCOUNT_LOOKUP_FAILED',
+            cause: error,
+          });
+        }
+      },
+      ...(gate.purchaseGate === undefined ? {} : { purchaseGate: gate.purchaseGate }),
+      authority: playBillingCommerceAuthority,
+      mapError: { ...playBillingStoreSdkErrorCodeMap, ...input.mapError },
+    }),
+    gate,
+  );
 }
 
 export interface CreateCapacitorPlayBillingServiceProviderInput

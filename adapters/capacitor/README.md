@@ -133,6 +133,47 @@ normalizes every SDK failure through `mapError` into a `CommerceError` whose
 `storeCode` keeps the store's own code. It never grants and never sets
 `settlement`; the backend ledger decides.
 
+`purchaseGate` is an optional sales switch for new purchases, separate from
+the account binding (and from StoreKit's `appAccountToken`). It is asked once
+per `requestPurchase`, after the product, availability, and kind checks and
+before `accountBinding`, with `{ store, logicalId, storeSku, kind, source }`,
+and answers `{ allowed: true }` or `{ allowed: false, storeCode?, message?,
+retryable? }`. A refusal never opens the store UI and is answered as data:
+`{ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE', storeCode:
+'PURCHASES_PAUSED' } }` (or the gate's own `storeCode`), `retryable` false
+unless the gate says otherwise. A gate that could not answer refuses too,
+with `PURCHASE_GATE_FAILED` and always retryable, whether it threw, returned
+something malformed, or did not answer within `purchaseGateTimeoutMs` (three
+seconds): the sales flag is unknown rather than closed. An answer that
+arrives after the timeout is ignored and never opens the store. A thrown
+`CommerceError` keeps its own code, except a code that claims a launched or
+cancelled sheet (`OUTCOME_UNKNOWN`, `ALREADY_OWNED`, `USER_CANCELLED`), which
+becomes `PURCHASE_GATE_FAILED` because nothing was launched. The reconciler
+journals a refused attempt as terminal `failed` even when it is retryable:
+only trusted presentation facts (`not-started`) keep a key reusable, and the
+Capacitor bridge does not carry them yet, so a later try uses a new
+idempotency key. The store provider deliberately exposes no `presentation`
+that could only ever say `not-started`, because the game runtime's purchase
+coordinator would take it as a closure source and quarantine the game after
+every launched purchase. The gate runs while the gateway already holds the
+purchase's external activity (the game is paused, with no sheet shown), so it
+should answer from a flag the game already holds rather than a slow network
+call; the timeout bounds that pause. Recovery, restore, finishing, events, `fetchProducts`, and
+`getAvailablePurchases` never
+ask the gate, so purchases already paid for keep reconciling while new sales
+are refused. A failed or missing account binding is a `failed` result too,
+not a throw: a thrown `CommerceError` keeps its code (with the same exception
+for launched or cancelled codes), and anything else is
+`ACCOUNT_BINDING_REQUIRED` with `ACCOUNT_BINDING_LOOKUP_FAILED`, retryable.
+Over the bridge a thrown error keeps only `code`, `message`, and
+`retryable`, while a result keeps `storeCode`, so the game can tell
+`PURCHASES_PAUSED` from `PLAY_BILLING_ACCOUNT_LOOKUP_FAILED`. The gate is not
+reflected in `getCapabilities()`: `availability` describes the store and
+gates the reconciler (a paused gate there would read as `STORE_UNAVAILABLE`
+and lose the reason), and a capability read stays free of server round trips.
+A shop hides its buy buttons from the same server flag it hands the gate,
+for example the sales flag of its account binding response.
+
 Two failure classes are not terminal. When `requestPurchase` throws or
 returns a code that normalizes to `OUTCOME_UNKNOWN` (for example
 `PLAY_BILLING_TIMEOUT`, `PLAY_BILLING_INTERRUPTED`,
