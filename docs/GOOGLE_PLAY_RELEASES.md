@@ -45,7 +45,7 @@ pnpm exec mpgd deploy submit --plan /tmp/release-plan.json \
 | `--status` | `completed` (default), `draft`, or `inProgress` (a staged rollout). A new release cannot start `halted`; halt it with `deploy rollout`. |
 | `--user-fraction` | Required with `inProgress`, refused otherwise. Play's range is "0 < fraction < 1"; use `completed` for 100%. |
 | `--release-notes` | A notes file, validated before any request (below). |
-| `--mapping-file` | `deploy submit` only: the R8 `mapping.txt` of this exact build (below). |
+| `--mapping-file` | `deploy submit` only: the R8 `mapping.txt` of this exact build. Not needed for a build `deploy run` recorded with its mapping (below). |
 | `--confirm-production` | Required for any `production` track (including form-factor production tracks) and for every `inProgress` release. |
 | `--dry-run` | `deploy submit` only: verifies the recorded build and prints the planned edit as JSON. |
 
@@ -122,16 +122,27 @@ and `text`). A draft-app fallback keeps them.
 ## R8 mapping (deobfuscation file)
 
 With `minifyEnabled true`, the Android Gradle build writes
-`android/app/build/outputs/mapping/release/mapping.txt`. Pass that file from
-the same build to `deploy submit --mapping-file`. The kit hashes it when the
-command starts, refuses it if it changes before upload, and uploads it with
-`edits.deobfuscationfiles.upload` (`deobfuscationFileType=proguard`, the
-release's version code) in the same edit, before the track update. A lost
-upload response is retried on the same edit when the submission resumes; a
-re-upload replaces the edit's file. The kit's shell ships with
-`minifyEnabled false`, and `deploy run` does not yet capture the mapping file
-into the immutable build record, so it is the operator's job to pass the
-mapping of the recorded build.
+`android/app/build/outputs/mapping/release/mapping.txt`. `deploy run` copies
+it out of the build stage, keeps it next to the AAB as
+`.mpgd/releases/<release>/android-mapping-<sha256>.txt`, and records its
+location and SHA-256 in the immutable build record (`r8Mapping`). The
+kit's shell ships with `minifyEnabled false`; such a build has no mapping and
+its record and submission are unchanged.
+
+The Play submission of a build with a recorded mapping (`deploy run`, and
+`deploy submit` for that build) uploads it automatically, exactly as
+`--mapping-file` does: with `edits.deobfuscationfiles.upload`
+(`deobfuscationFileType=proguard`, the release's version code) in the same
+edit, before the track update. The mapping hash is part of the release
+options (`playReleaseSha256`). `deploy submit --mapping-file` with the same
+bytes is accepted; **a file with other bytes is refused** before any
+checkpoint or Play request, because the recorded mapping is the one that
+matches the bundle. For a build without a recorded mapping (an older record),
+pass the mapping of that build with `--mapping-file`.
+
+The kit hashes the mapping when the command starts and refuses it if it
+changes before upload. A lost upload response is retried on the same edit
+when the submission resumes; a re-upload replaces the edit's file.
 
 ## Draft apps
 

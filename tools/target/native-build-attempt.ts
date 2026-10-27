@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import {
+  assertNativeBuildSymbols,
+  isNativeOutputPath,
+  type NativeBuildSymbols,
+} from '../../packages/cli/src/native-build-symbols';
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import { withReleaseManifestLock } from './release-manifest-lock';
 
@@ -11,11 +16,13 @@ export interface NativeBuildAttemptRecord {
   readonly pid: number;
   readonly status: 'building' | 'failed' | 'success';
   readonly artifact?: string;
+  /** Crash symbols copied next to the artifact (R8 mapping, Crashlytics dSYMs). */
+  readonly symbols?: NativeBuildSymbols;
 }
 
 export interface NativeBuildAttempt {
   readonly runId: string;
-  complete(artifact: string): void;
+  complete(artifact: string, symbols?: NativeBuildSymbols): void;
   fail(): void;
 }
 
@@ -41,7 +48,9 @@ export function readNativeBuildAttempt(
     || typeof record.pid !== 'number' || !Number.isSafeInteger(record.pid) || record.pid < 1
     || (record.status !== 'building' && record.status !== 'failed'
       && record.status !== 'success')
-    || (record.artifact !== undefined && typeof record.artifact !== 'string')) {
+    || (record.artifact !== undefined && typeof record.artifact !== 'string')
+    || (record.symbols !== undefined && (record.status !== 'success'
+      || !isNativeBuildSymbols(record.symbols, target)))) {
     throw new Error('Native build status is malformed.');
   }
   return record as unknown as NativeBuildAttemptRecord;
@@ -76,27 +85,47 @@ export function beginNativeBuildAttempt(gameRoot: string, target: string): Nativ
     writeRecord(file, record);
   });
 
-  function settle(status: 'failed' | 'success', artifact?: string): void {
+  function settle(
+    status: 'failed' | 'success',
+    artifact?: string,
+    symbols?: NativeBuildSymbols,
+  ): void {
     const current = readNativeBuildAttempt(gameRoot, target);
     if (current?.runId !== record.runId || current.status !== 'building') {
       throw new Error('Native build status was replaced by another attempt.');
     }
-    writeRecord(file, { ...record, status, ...(artifact === undefined ? {} : { artifact }) });
+    writeRecord(file, {
+      ...record,
+      status,
+      ...(artifact === undefined ? {} : { artifact }),
+      ...(symbols === undefined ? {} : { symbols }),
+    });
   }
 
   return {
     runId: record.runId,
-    complete(artifact) {
-      if (!artifact.startsWith(`release-output/native/${target}/`) || path.isAbsolute(artifact)
-        || artifact.split(/[\\/]/u).some((segment) => segment === '' || segment === '..')) {
+    complete(artifact, symbols) {
+      if (!isNativeOutputPath(artifact, target)) {
         throw new Error('Native build artifact path is invalid.');
       }
-      settle('success', artifact);
+      if (symbols !== undefined) {
+        assertNativeBuildSymbols(symbols, (file) => isNativeOutputPath(file, target));
+      }
+      settle('success', artifact, symbols);
     },
     fail() {
       settle('failed');
     },
   };
+}
+
+function isNativeBuildSymbols(value: unknown, target: string): value is NativeBuildSymbols {
+  try {
+    assertNativeBuildSymbols(value, (file) => isNativeOutputPath(file, target));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function writeRecord(file: string, record: NativeBuildAttemptRecord): void {

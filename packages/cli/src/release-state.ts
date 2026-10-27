@@ -25,6 +25,7 @@ import {
 } from '@mpgd/target-config';
 
 import { runReleaseProcess, type ReleaseProcessInput } from './deploy-process.js';
+import { isDsymIdentityList, type NativeDsymIdentity } from './native-build-symbols.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 
 // Build-time mirror of the private @mpgd/release-manifest schema. The packaged CLI
@@ -112,6 +113,48 @@ export interface ImmutableNativeBuildRecord {
   readonly inspectedAppId: string;
   readonly inspectedSignerSha256?: string | undefined;
   readonly inspectedTeamId?: string | undefined;
+  /** Android: the R8 `mapping.txt` of this bundle, when the build was minified. */
+  readonly r8Mapping?: RecordedSymbolFile;
+  /** iOS with Firebase Crashlytics: the archive's dSYMs and what uploads them. */
+  readonly crashlyticsSymbols?: RecordedCrashlyticsSymbols;
+}
+
+/** A game-relative file kept next to the recorded artifact, with its SHA-256. */
+export interface RecordedSymbolFile {
+  readonly location: string;
+  readonly sha256: string;
+}
+
+export interface RecordedCrashlyticsSymbols {
+  /** Zip of the archive's `dSYMs` folder. */
+  readonly dsymArchive: RecordedSymbolFile;
+  /** Each dSYM bundle and its Mach-O UUIDs. */
+  readonly dsyms: readonly NativeDsymIdentity[];
+  /** Firebase's `upload-symbols` from the build's package checkout. */
+  readonly uploadTool: RecordedSymbolFile;
+  /** The `GoogleService-Info.plist` the archived app bundles. */
+  readonly googleServiceInfo: RecordedSymbolFile;
+}
+
+/** A symbol file to copy into the record: its bytes and its game-relative location. */
+export interface RecordSymbolFileInput {
+  readonly file: string;
+  readonly location: string;
+}
+
+/**
+ * The Crashlytics dSYM upload of one recorded iOS build. It is mutable state
+ * next to the immutable build record: `failed` can be retried, `uploaded` is final.
+ */
+export interface CrashSymbolUploadRecord {
+  readonly releaseKey: string;
+  readonly target: 'ios';
+  readonly buildRunId: string;
+  readonly dsymArchiveSha256: string;
+  readonly status: 'uploaded' | 'failed';
+  readonly updatedAt: string;
+  /** Short reason of the last failed attempt. */
+  readonly failure?: string;
 }
 
 export type NativeSubmissionStatus = 'started' | 'edit-open' | 'upload-committed'
@@ -145,6 +188,8 @@ export interface NativeReleaseStatus {
   readonly plan: PlatformVersionReleasePlan;
   readonly builds: Partial<Record<'android' | 'ios', ImmutableNativeBuildRecord>>;
   readonly submissions: Partial<Record<'android' | 'ios', NativeSubmissionCheckpoint>>;
+  /** Crashlytics dSYM uploads of recorded iOS builds. */
+  readonly symbolUploads?: Partial<Record<'ios', CrashSymbolUploadRecord>>;
   readonly stateCommit: string;
 }
 
@@ -168,6 +213,15 @@ export interface RecordNativeBuildInput {
   readonly inspectedAppId: string;
   readonly inspectedSignerSha256?: string | undefined;
   readonly inspectedTeamId?: string | undefined;
+  /** Android: the R8 mapping file the build wrote, already copied next to the artifact. */
+  readonly r8Mapping?: RecordSymbolFileInput;
+  /** iOS with Firebase Crashlytics, already copied next to the artifact. */
+  readonly crashlyticsSymbols?: {
+    readonly dsymArchive: RecordSymbolFileInput;
+    readonly dsyms: readonly NativeDsymIdentity[];
+    readonly uploadTool: RecordSymbolFileInput;
+    readonly googleServiceInfo: RecordSymbolFileInput;
+  };
   readonly environment?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
 }
@@ -178,6 +232,7 @@ interface GameReleaseState {
   readonly reservations: Record<string, PlatformVersionReleasePlan>;
   readonly builds: Record<string, ImmutableNativeBuildRecord>;
   readonly submissions?: Record<string, NativeSubmissionCheckpoint>;
+  readonly symbolUploads?: Record<string, CrashSymbolUploadRecord>;
 }
 
 interface ReleaseState {
@@ -402,6 +457,7 @@ export async function reserveNativeRelease(
       reservations: { ...(game?.reservations ?? {}), [input.releaseKey]: allocation.plan },
       builds: game?.builds ?? {},
       ...(game?.submissions === undefined ? {} : { submissions: game.submissions }),
+      ...(game?.symbolUploads === undefined ? {} : { symbolUploads: game.symbolUploads }),
     };
     const next: ReleaseState = {
       schemaVersion: 1,
@@ -448,7 +504,27 @@ export async function recordNativeReleaseBuild(
     || !statSync(input.releaseManifestFile).isFile()) {
     throw new Error('Native build record requires file artifacts.');
   }
-  const artifactSha256 = await sha256(input.artifactFile);
+  if ((input.r8Mapping !== undefined && input.target !== 'android')
+    || (input.crashlyticsSymbols !== undefined && (input.target !== 'ios'
+      || !isDsymIdentityList(input.crashlyticsSymbols.dsyms)))) {
+    throw new Error('Native build symbols do not match the build target.');
+  }
+  const r8Mapping = input.r8Mapping === undefined
+    ? undefined
+    : await recordSymbolFile(input.r8Mapping);
+  const crashlyticsSymbols: RecordedCrashlyticsSymbols | undefined =
+    input.crashlyticsSymbols === undefined
+      ? undefined
+      : {
+          dsymArchive: await recordSymbolFile(input.crashlyticsSymbols.dsymArchive),
+          dsyms: input.crashlyticsSymbols.dsyms.map((entry) => ({
+            bundle: entry.bundle,
+            uuids: [...entry.uuids],
+          })),
+          uploadTool: await recordSymbolFile(input.crashlyticsSymbols.uploadTool),
+          googleServiceInfo: await recordSymbolFile(input.crashlyticsSymbols.googleServiceInfo),
+        };
+  const artifactSha256 = await sha256File(input.artifactFile);
   const manifestBytes = readFileSync(input.releaseManifestFile);
   const releaseManifestSha256 = createHash('sha256').update(manifestBytes).digest('hex');
   if (artifactSha256 !== input.expectedArtifactSha256
@@ -540,6 +616,8 @@ export async function recordNativeReleaseBuild(
       ...(input.target === 'android'
         ? { inspectedSignerSha256: signer }
         : { inspectedTeamId: input.inspectedTeamId ?? '' }),
+      ...(r8Mapping === undefined ? {} : { r8Mapping }),
+      ...(crashlyticsSymbols === undefined ? {} : { crashlyticsSymbols }),
     };
     const key = `${input.releaseKey}/${input.target}`;
     const previous = ownValue(game.builds, key);
@@ -593,6 +671,8 @@ export async function readNativeReleaseStatus(input: {
         ...(game.submissions?.[iosKey] === undefined
           ? {} : { ios: game.submissions[iosKey] }),
       },
+      symbolUploads: game.symbolUploads?.[iosKey] === undefined
+        ? {} : { ios: game.symbolUploads[iosKey] },
       stateCommit: session.previousCommit,
     };
   });
@@ -769,6 +849,69 @@ export async function releaseNativeSubmissionLease(input: {
     await commitState(session, next, `Release ${input.gameId}/${key} submission lease`);
     return checkpoint;
   });
+}
+
+/**
+ * Record the outcome of a Crashlytics dSYM upload for one recorded iOS build.
+ * A failure can be recorded again and retried; once `uploaded`, it stays so.
+ */
+export async function recordCrashSymbolUpload(input: {
+  readonly gameRoot: string;
+  readonly gameId: string;
+  readonly releaseKey: string;
+  readonly buildRunId: string;
+  readonly dsymArchiveSha256: string;
+  readonly status: CrashSymbolUploadRecord['status'];
+  readonly failure?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
+}): Promise<CrashSymbolUploadRecord> {
+  assertReleaseKey(input.releaseKey);
+  const upload: CrashSymbolUploadRecord = {
+    releaseKey: input.releaseKey,
+    target: 'ios',
+    buildRunId: input.buildRunId,
+    dsymArchiveSha256: input.dsymArchiveSha256,
+    status: input.status,
+    updatedAt: new Date().toISOString(),
+    ...(input.status === 'failed' && input.failure !== undefined
+      ? { failure: boundedFailure(input.failure) } : {}),
+  };
+  assertCrashSymbolUploadRecord(upload);
+  return withStateSession(input, async (session) => {
+    const game = ownValue(session.state.games, input.gameId);
+    const key = `${input.releaseKey}/ios`;
+    const build = game === undefined ? undefined : ownValue(game.builds, key);
+    if (game === undefined || build === undefined
+      || build.buildRunId !== input.buildRunId
+      || build.crashlyticsSymbols?.dsymArchive.sha256 !== input.dsymArchiveSha256) {
+      throw new Error('A dSYM upload must reference the immutable iOS build record.');
+    }
+    const previous = ownValue(game.symbolUploads ?? {}, key);
+    if (previous?.status === 'uploaded') {
+      if (input.status === 'uploaded') {
+        return previous;
+      }
+      throw new Error('The dSYMs of this build were already uploaded.');
+    }
+    const next: ReleaseState = {
+      schemaVersion: 1,
+      games: {
+        ...session.state.games,
+        [input.gameId]: {
+          ...game,
+          symbolUploads: { ...(game.symbolUploads ?? {}), [key]: upload },
+        },
+      },
+    };
+    await commitState(session, next, `Symbols ${input.gameId}/${key} ${input.status}`);
+    return upload;
+  });
+}
+
+function boundedFailure(text: string): string {
+  const line = text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').trim();
+  return line.length > 300 ? `${line.slice(0, 297)}...` : (line === '' ? 'failed' : line);
 }
 
 /** Exported for tests: the checkpoint status moves a store submission may make. */
@@ -969,13 +1112,14 @@ function parseReleaseState(json: string): ReleaseState {
     }
     const game = rawGame as Record<string, unknown>;
     if (Object.keys(game).some((key) => ![
-      'initialLedger', 'ledger', 'reservations', 'builds', 'submissions',
+      'initialLedger', 'ledger', 'reservations', 'builds', 'submissions', 'symbolUploads',
     ].includes(key))
       || typeof game.reservations !== 'object' || game.reservations === null
       || Array.isArray(game.reservations)
       || typeof game.builds !== 'object' || game.builds === null
       || Array.isArray(game.builds)
-      || (game.submissions !== undefined && !isRecord(game.submissions))) {
+      || (game.submissions !== undefined && !isRecord(game.submissions))
+      || (game.symbolUploads !== undefined && !isRecord(game.symbolUploads))) {
       throw new Error(`Release state game ${gameId} has invalid entries.`);
     }
     const initialLedger = assertPlatformVersionLedger(game.initialLedger);
@@ -1043,6 +1187,19 @@ function parseReleaseState(json: string): ReleaseState {
         throw new Error(`Release state game ${gameId} has an invalid submission ${key}.`);
       }
     }
+    for (const [key, rawUpload] of Object.entries(game.symbolUploads ?? {})) {
+      const build = (game.builds as Record<string, ImmutableNativeBuildRecord>)[key];
+      try {
+        assertCrashSymbolUploadRecord(rawUpload);
+      } catch {
+        throw new Error(`Release state game ${gameId} has an invalid dSYM upload ${key}.`);
+      }
+      if (key !== `${rawUpload.releaseKey}/ios` || build === undefined
+        || rawUpload.buildRunId !== build.buildRunId
+        || rawUpload.dsymArchiveSha256 !== build.crashlyticsSymbols?.dsymArchive.sha256) {
+        throw new Error(`Release state game ${gameId} has an invalid dSYM upload ${key}.`);
+      }
+    }
   }
   return value as ReleaseState;
 }
@@ -1068,6 +1225,8 @@ const buildRecordFields = [
   'inspectedAppId',
   'inspectedSignerSha256',
   'inspectedTeamId',
+  'r8Mapping',
+  'crashlyticsSymbols',
 ] as const;
 
 function assertStoredBuildRecord(
@@ -1116,7 +1275,11 @@ function assertStoredBuildRecord(
       || !sha256Pattern.test(String(record.inspectedSignerSha256))))
     || (record.target === 'ios' && (record.inspectedSignerSha256 !== undefined
       || !teamIdPattern.test(String(record.inspectedTeamId))))
-    || !isRecord(record.platformVersion)) {
+    || !isRecord(record.platformVersion)
+    || (record.r8Mapping !== undefined
+      && (record.target !== 'android' || !isRecordedSymbolFile(record.r8Mapping)))
+    || (record.crashlyticsSymbols !== undefined
+      && (record.target !== 'ios' || !isRecordedCrashlyticsSymbols(record.crashlyticsSymbols)))) {
     malformed();
   }
   const plan = ownValue(reservations, record.releaseKey as string);
@@ -1201,6 +1364,63 @@ export function assertNativeSubmissionCheckpoint(
   }
 }
 
+const recordedLocationPattern = /^[A-Za-z0-9._-][A-Za-z0-9._ +-]*(?:\/[A-Za-z0-9._-][A-Za-z0-9._ +-]*)*$/u;
+
+/** A game-relative location without `..` segments. */
+export function isRecordedLocation(location: unknown): location is string {
+  return typeof location === 'string' && location.length <= 512
+    && recordedLocationPattern.test(location)
+    && !location.split('/').some((segment) => segment === '.' || segment === '..');
+}
+
+function isRecordedSymbolFile(value: unknown): value is RecordedSymbolFile {
+  return isRecord(value) && Object.keys(value).every((key) => key === 'location' || key === 'sha256')
+    && isRecordedLocation(value.location) && sha256Pattern.test(String(value.sha256));
+}
+
+function isRecordedCrashlyticsSymbols(value: unknown): value is RecordedCrashlyticsSymbols {
+  return isRecord(value)
+    && Object.keys(value).every((key) =>
+      ['dsymArchive', 'dsyms', 'uploadTool', 'googleServiceInfo'].includes(key))
+    && isRecordedSymbolFile(value.dsymArchive) && isRecordedSymbolFile(value.uploadTool)
+    && isRecordedSymbolFile(value.googleServiceInfo) && isDsymIdentityList(value.dsyms);
+}
+
+const symbolUploadFields = [
+  'releaseKey',
+  'target',
+  'buildRunId',
+  'dsymArchiveSha256',
+  'status',
+  'updatedAt',
+  'failure',
+] as const;
+
+function assertCrashSymbolUploadRecord(value: unknown): asserts value is CrashSymbolUploadRecord {
+  if (!isRecord(value)
+    || Object.keys(value).some((key) => !symbolUploadFields.includes(
+      key as typeof symbolUploadFields[number],
+    ))
+    || typeof value.releaseKey !== 'string' || !releaseKeyPattern.test(value.releaseKey)
+    || value.target !== 'ios'
+    || typeof value.buildRunId !== 'string' || value.buildRunId.trim() === ''
+    || !sha256Pattern.test(String(value.dsymArchiveSha256))
+    || (value.status !== 'uploaded' && value.status !== 'failed')
+    || typeof value.updatedAt !== 'string' || !Number.isFinite(Date.parse(value.updatedAt))
+    || (value.failure !== undefined && (value.status !== 'failed'
+      || typeof value.failure !== 'string' || value.failure.length > 300))) {
+    throw new Error('Crashlytics dSYM upload record is malformed.');
+  }
+}
+
+async function recordSymbolFile(input: RecordSymbolFileInput): Promise<RecordedSymbolFile> {
+  if (!isRecordedLocation(input.location) || !existsSync(input.file)
+    || !statSync(input.file).isFile() || statSync(input.file).size === 0) {
+    throw new Error('Native build symbol file is missing or has an invalid location.');
+  }
+  return { location: input.location, sha256: await sha256File(input.file) };
+}
+
 function assertReservationHistory(
   gameId: string,
   initialLedger: PlatformVersionLedger,
@@ -1277,7 +1497,8 @@ function assertReleaseKey(key: string): void {
   }
 }
 
-async function sha256(file: string): Promise<string> {
+/** Streamed SHA-256 of a file, hex. */
+export async function sha256File(file: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) {
     hash.update(chunk);

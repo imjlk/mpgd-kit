@@ -3,6 +3,13 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 
 import { withIosSigningSession } from '../../packages/cli/src/ios-signing-session';
+import {
+  androidReleaseMappingPath,
+  collectIosCrashlyticsSymbols,
+  iosCrashlyticsSourcePackagesDirectory,
+  nativeSymbolFileNames,
+  type NativeBuildSymbols,
+} from '../../packages/cli/src/native-build-symbols';
 import { stageNativeIconResources } from '../icons/staging';
 import type { GeneratedTargetIcons } from '../icons/types';
 import { inspectSignedAndroidBundle } from './native-android-inspection';
@@ -12,6 +19,7 @@ import { applyCapacitorShellCsp } from './native-shell-csp';
 import {
   inspectNativeStorePolicy,
   reportNativeStorePolicy,
+  shellInstallsCrashlytics,
   shellInstallsFirebaseMessaging,
 } from './native-store-policy';
 import {
@@ -59,8 +67,17 @@ export interface NativeBuildExecutionInput {
   ) => void;
 }
 
+/** The store artifact and the crash symbols copied out of the stage next to it. */
+export interface NativeBuildOutput {
+  /** Game-relative artifact path under the artifact root. */
+  readonly artifact: string;
+  readonly symbols?: NativeBuildSymbols;
+}
+
 /** The Gradle/Xcode execution path shared by the Kit script and installed CLI. */
-export async function executeNativeTargetBuild(input: NativeBuildExecutionInput): Promise<string> {
+export async function executeNativeTargetBuild(
+  input: NativeBuildExecutionInput,
+): Promise<NativeBuildOutput> {
   const { target, targetName, profile, environment, plan, artifactRoot, webBundle } = input;
   if (target.kind !== 'capacitor-android' && target.kind !== 'capacitor-ios') {
     throw new Error(`Target ${targetName} is not a Capacitor native target.`);
@@ -113,10 +130,14 @@ export async function executeNativeTargetBuild(input: NativeBuildExecutionInput)
   }
 }
 
-function executeAndroidBuild(input: NativeBuildExecutionInput, stagedShell: string): string {
+function executeAndroidBuild(
+  input: NativeBuildExecutionInput,
+  stagedShell: string,
+): NativeBuildOutput {
   const { plan, artifactRoot, environment, target } = input;
   const androidProject = `${stagedShell}/android`;
   let releaseArtifact: string;
+  let symbols: NativeBuildSymbols | undefined;
   if (plan.mode === 'sync') {
     releaseArtifact = `${artifactRoot}/capacitor-sync`;
     input.replaceDirectory(androidProject, input.targetPath(releaseArtifact));
@@ -141,6 +162,13 @@ function executeAndroidBuild(input: NativeBuildExecutionInput, stagedShell: stri
       `${androidProject}/app/build/outputs/bundle/release/app-release.aab`,
       input.targetPath(releaseArtifact),
     );
+    // A minified (R8) release writes its mapping file; without minify there is none.
+    const mapping = `${androidProject}/${androidReleaseMappingPath}`;
+    if (existsSync(mapping) && statSync(mapping).isFile() && statSync(mapping).size > 0) {
+      const r8Mapping = `${artifactRoot}/symbols/${nativeSymbolFileNames.r8Mapping}`;
+      input.copyFile(mapping, input.targetPath(r8Mapping));
+      symbols = { r8Mapping };
+    }
     if (plan.mode === 'signed-archive') {
       inspectSignedAndroidBundle({
         bundle: input.targetPath(releaseArtifact),
@@ -164,7 +192,7 @@ function executeAndroidBuild(input: NativeBuildExecutionInput, stagedShell: stri
   } else {
     throw new Error(`Unsupported Android build mode: ${plan.mode}.`);
   }
-  return releaseArtifact;
+  return { artifact: releaseArtifact, ...(symbols === undefined ? {} : { symbols }) };
 }
 
 export function androidSignedReleaseGradleArgs(environment: NodeJS.ProcessEnv): readonly string[] {
@@ -178,7 +206,10 @@ export function androidSignedReleaseGradleArgs(environment: NodeJS.ProcessEnv): 
   return ['bundleRelease', '--no-daemon', '--init-script', initScript];
 }
 
-async function executeIosBuild(input: NativeBuildExecutionInput, stagedShell: string): Promise<string> {
+async function executeIosBuild(
+  input: NativeBuildExecutionInput,
+  stagedShell: string,
+): Promise<NativeBuildOutput> {
   const { plan, artifactRoot, target } = input;
   const p12File = input.environment.MPGD_IOS_SIGNING_P12;
   if ((plan.mode === 'signed-archive' || plan.mode === 'store-export')
@@ -208,9 +239,10 @@ function executeIosBuildWithEnvironment(
   input: NativeBuildExecutionInput,
   stagedShell: string,
   environment: NodeJS.ProcessEnv,
-): string {
+): NativeBuildOutput {
   const { plan, artifactRoot, target } = input;
   let releaseArtifact: string;
+  let symbols: NativeBuildSymbols | undefined;
   if (plan.mode === 'unsigned-archive') {
     releaseArtifact = `${artifactRoot}/App.xcarchive`;
     mkdirSync(dirname(input.targetPath(releaseArtifact)), { recursive: true });
@@ -281,6 +313,11 @@ function executeIosBuildWithEnvironment(
     const signing = resolveIosSigningPlan(environment, plan.mode);
     const archiveArtifact = `${artifactRoot}/App.xcarchive`;
     mkdirSync(dirname(input.targetPath(archiveArtifact)), { recursive: true });
+    // With Crashlytics the package checkouts go to a known stage directory, so
+    // its upload-symbols can be copied out before the stage is removed.
+    const sourcePackages = shellInstallsCrashlytics(stagedShell)
+      ? join(stagedShell, 'ios', iosCrashlyticsSourcePackagesDirectory)
+      : undefined;
     input.run(
       'xcodebuild',
       [
@@ -295,6 +332,7 @@ function executeIosBuildWithEnvironment(
         'generic/platform=iOS',
         '-archivePath',
         input.targetPath(archiveArtifact),
+        ...(sourcePackages === undefined ? [] : ['-clonedSourcePackagesDirPath', sourcePackages]),
         ...signing.archiveBuildSettings,
       ],
       environment,
@@ -313,6 +351,34 @@ function executeIosBuildWithEnvironment(
       expectedTeamId: signing.teamId,
     };
     inspectSignedIosArchive(input.targetPath(archiveArtifact), expectedIosIdentity);
+    if (sourcePackages !== undefined) {
+      const symbolRoot = `${artifactRoot}/symbols`;
+      const collected = collectIosCrashlyticsSymbols({
+        archive: input.targetPath(archiveArtifact),
+        iosProject: `${stagedShell}/ios`,
+        sourcePackages,
+        outputDirectory: input.targetPath(symbolRoot),
+        copyFile: input.copyFile,
+        // Without --sequesterRsrc, ditto writes no __MACOSX AppleDouble
+        // entries that upload-symbols could take for `._*.dSYM` bundles.
+        zipDirectory: (source, destination) => {
+          mkdirSync(dirname(destination), { recursive: true });
+          input.run(
+            'ditto',
+            ['-c', '-k', '--keepParent', source, destination],
+            environment,
+          );
+        },
+      });
+      symbols = {
+        crashlytics: {
+          dsymArchive: `${symbolRoot}/${nativeSymbolFileNames.dsymArchive}`,
+          dsyms: collected.dsyms,
+          uploadTool: `${symbolRoot}/${nativeSymbolFileNames.uploadTool}`,
+          googleServiceInfo: `${symbolRoot}/${nativeSymbolFileNames.googleServiceInfo}`,
+        },
+      };
+    }
     releaseArtifact = archiveArtifact;
     if (plan.mode === 'store-export') {
       const exportRoot = mkdtempSync(join(tmpdir(), 'mpgd-ios-export-'));
@@ -352,7 +418,7 @@ function executeIosBuildWithEnvironment(
   } else {
     throw new Error(`Unsupported iOS build mode: ${plan.mode}.`);
   }
-  return releaseArtifact;
+  return { artifact: releaseArtifact, ...(symbols === undefined ? {} : { symbols }) };
 }
 
 function requireString(value: string | undefined, label: string): string {
