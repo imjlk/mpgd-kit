@@ -233,7 +233,21 @@ export interface CreateGameServicesClientInput {
   readonly warn?: (message: string) => void;
   /** Catalog kinds and SKUs the reconciler resolves without a store read. */
   readonly commerceProducts?: readonly CommerceReconcilerProduct[];
+  /** The reconciler's `staleLaunchedAfterMs` (24 hours by default). */
+  readonly commerceStaleLaunchedAfterMs?: number;
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
+}
+
+/**
+ * `commerceStaleLaunchedAfterMs` is checked where it enters, so a bad value
+ * fails even when no reconciler is built (a gateway without `commerce`).
+ */
+export function assertCommerceStaleLaunchedAfterMs(value: number | undefined): void {
+  if (value !== undefined && !(typeof value === 'number' && value > 0)) {
+    throw new RangeError(
+      'commerceStaleLaunchedAfterMs must be a positive duration in milliseconds, or Infinity.',
+    );
+  }
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
@@ -247,6 +261,7 @@ export interface GameServicesLeaderboardResult {
 }
 
 export function createGameServicesClient(input: CreateGameServicesClientInput): GameServicesClient {
+  assertCommerceStaleLaunchedAfterMs(input.commerceStaleLaunchedAfterMs);
   const now = input.now ?? (() => new Date().toISOString());
   const requestNow = input.requestNow ?? now;
   const rewardEvidenceRegistry = input.rewardEvidenceRegistry ?? createDefaultClientRewardEvidenceRegistry();
@@ -276,6 +291,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       target: input.target,
       ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
       ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
+      ...(input.commerceStaleLaunchedAfterMs === undefined
+        ? {}
+        : { staleLaunchedAfterMs: input.commerceStaleLaunchedAfterMs }),
       now: requestNow,
     });
     if (input.onCommerceEvent !== undefined) {
