@@ -149,7 +149,7 @@ export function createAscIapPort(
         ['iap', 'pricing', 'schedules', 'view', '--iap-id', iapId, '--include', 'baseTerritory'],
       );
       // No schedule: asc exits 4 (not found), or App Store Connect answers with no resource.
-      if (response === undefined || (isRecord(response) && response.data === null)) {
+      if (response === undefined || isEmptyResource(response)) {
         return undefined;
       }
       const schedule = single(response, 'iap pricing schedules view');
@@ -201,7 +201,7 @@ export function createAscIapPort(
         }
         throw error;
       }
-      if (isRecord(response) && response.data === null) {
+      if (isEmptyResource(response)) {
         return undefined;
       }
       const availability = single(response, 'iap pricing availability view');
@@ -369,6 +369,18 @@ function toResource(value: unknown): JsonResource | undefined {
     attributes: isRecord(value.attributes) ? value.attributes : {},
     ...(value.relationships === undefined ? {} : { relationships: value.relationships }),
   };
+}
+
+/**
+ * App Store Connect's `data: null`, or asc's rendering of it: asc 5.5.0
+ * decodes into a non-pointer resource and prints `{ "type": "", "id": "" }`.
+ */
+function isEmptyResource(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return value.data === null
+    || (isRecord(value.data) && (value.data.id === undefined || value.data.id === ''));
 }
 
 function relationshipId(relationships: unknown, name: string): string | undefined {

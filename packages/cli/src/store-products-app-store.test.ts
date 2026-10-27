@@ -1270,6 +1270,14 @@ try {
     });
     assert.equal(await unset.readAvailability('6000'), undefined);
     assert.equal(await unset.readPriceSchedule('6000'), undefined);
+    // asc prints App Store Connect's `data: null` as an empty resource.
+    const empty = createAscIapPort(async () => ({
+      data: { type: '', id: '', attributes: {} },
+      links: {},
+    }));
+    assert.equal(await empty.readPriceSchedule('6000'), undefined);
+    assert.equal(await empty.readAvailability('6000'), undefined);
+    assert.equal(await empty.readReviewScreenshot('6000'), undefined);
     assert.deepEqual(await unset.readReviewScreenshot('6000'), {
       id: 'shot-9',
       sourceFileChecksum: 'abc',
