@@ -209,8 +209,8 @@ For a shell with `@capacitor-firebase/crashlytics`, every App Store archive
 The build is refused when the archive has no dSYM, the checkout has no
 `upload-symbols`, or the app does not bundle the plist.
 
-After the store submissions (also when a submission throws; a slow upload
-never delays one), `deploy run` runs Firebase's manual upload command
+Once every store submission of the run has gone through (a slow upload never
+delays one), `deploy run` runs Firebase's manual upload command
 ([Firebase](https://firebase.google.com/docs/crashlytics/ios/get-deobfuscated-reports))
 on those files:
 
@@ -227,6 +227,11 @@ record (`symbolUploads` in `mpgd deploy status`):
 - `uploaded`: done; later runs skip it.
 - `failed`: reported as a warning with the retry command. **It never fails or
   changes the store submission.**
+- A run that fails or is cancelled reports its own error at once and uploads
+  nothing; the next `deploy run` or `mpgd deploy symbols` does.
+- If the upload succeeds but the release state cannot record it, the warning
+  says so; `deploy status` still shows it as not uploaded, and a retry uploads
+  the same dSYMs again.
 
 Retry, or upload for a build made before this step existed, from a Mac with
 the release bundle (`.mpgd/releases/<release>/`) in place:
