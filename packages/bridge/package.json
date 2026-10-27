@@ -61,11 +61,11 @@
     "@orpc/client": "2.0.0-beta.46",
     "@orpc/contract": "2.0.0-beta.46",
     "@orpc/server": "2.0.0-beta.46",
-    "typia": "13.0.2"
+    "typia": "15.2.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

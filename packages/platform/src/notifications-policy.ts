@@ -1,5 +1,18 @@
+/**
+ * Notifications v2 pure policy (RFC "Topic catalog", "Reminders", "Server",
+ * and "Advertising rules"): topic declarations and their rules, consent
+ * records, deployment settings, provider registry entries, the delivery gate
+ * `evaluateNotificationDelivery` with the advertising rendering, input bounds
+ * and idempotency fingerprints, reminder routing and the client-evaluable
+ * reminder checks, the Asia/Seoul night window and quiet hours, and the
+ * consent notices. No Phaser, DOM, network, or SDK imports, and no state
+ * beyond a bounded cache of `Intl` formatters: every function decides from its
+ * arguments. `./notifications` re-exports it.
+ */
+
 import type { tags } from 'typia';
 
+import type { NonEmptyString } from './commerce-contract.js';
 import type { PlatformEvidenceEnvelope } from './index.js';
 import type {
   NotificationCapabilities,
@@ -15,20 +28,8 @@ import type {
 } from './notifications-contract.js';
 import { normalizeRootRelativeRoute } from './routes.js';
 
-/**
- * Notifications v2 pure policy (RFC "Topic catalog", "Reminders", "Server",
- * and "Advertising rules"): topic declarations and their rules, consent
- * records, deployment settings, provider registry entries, the delivery gate
- * `evaluateNotificationDelivery` with the advertising rendering, input bounds
- * and idempotency fingerprints, reminder routing and the client-evaluable
- * reminder checks, the Asia/Seoul night window and quiet hours, and the
- * consent notices. No Phaser, DOM, network, or SDK imports, and no state
- * beyond a bounded cache of `Intl` formatters: every function decides from its
- * arguments. `./notifications` re-exports it.
- */
-
-type NonEmptyString = string & tags.MinLength<1>;
-type PositiveInteger = number & tags.Type<'uint32'> & tags.Minimum<1>;
+// Exported for the conformance vectors so the generated schemas name one PositiveInteger.
+export type PositiveInteger = number & tags.Type<'uint32'> & tags.Minimum<1>;
 type IsoDateTime = string & tags.Format<'date-time'>;
 
 // Topics.
@@ -1820,11 +1821,13 @@ export interface NotificationTimeFields {
 }
 
 /**
- * The check every notifications validator runs after typia's, whose formats
- * accept a day the month does not have (31 April) and a space for `T`: each
+ * The check every notifications validator runs after typia's: each
  * `date-time` field `fields` names must pass `isNotificationTimestamp`, and
  * each `date` field `isNotificationCalendarDate`. Answers the first field
- * that does not, or `undefined`.
+ * that does not, or `undefined`. typia 13 formats accepted a day the month
+ * does not have (31 April) and a space for `T`; typia 15 refuses both, so its
+ * own error usually comes first, but the RFC "Timestamps" rule stays enforced
+ * here independent of the typia release and of fields typia does not format.
  */
 export function notificationTimeFieldIssue(
   value: unknown,

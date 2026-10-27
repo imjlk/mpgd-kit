@@ -19,7 +19,7 @@
             "readOnly": true
           },
           "templateData": {
-            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean-o1",
             "readOnly": true
           },
           "key": {
@@ -69,7 +69,7 @@
         "type": "string",
         "description": "Open topic id declared by the game's topic catalog."
       },
-      "ReadonlyRecordstringstringnumberboolean": {
+      "ReadonlyRecordstringstringnumberboolean-o1": {
         "type": "object",
         "additionalProperties": {
           "oneOf": [

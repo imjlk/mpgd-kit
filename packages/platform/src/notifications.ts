@@ -197,9 +197,7 @@ export {
   type ReminderResult,
   type ResolveNotificationContentInput,
 } from './notifications-policy.js';
-
-type NonEmptyString = string & tags.MinLength<1>;
-type NonNegativeInteger = number & tags.Type<'uint32'>;
+import type { NonEmptyString, NonNegativeInteger } from './commerce-contract.js';
 
 // Errors.
 
