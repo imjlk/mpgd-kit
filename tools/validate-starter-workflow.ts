@@ -3193,7 +3193,9 @@ function validateTemplateGuestIdentityWiring(): void {
         // One player per run: the runtime and the store binding refuse anyone else.
         'sessionPlayerId: () => session.current()?.playerId',
         'pinStarterCommercePlayer(input.playerId)',
-        'commerceAccountBinding: () => resolveStarterStoreAccountBindingFor(',
+        // Compared only where the template binds purchases (never Microsoft Store).
+        'starterStoreAccountBindingKind(input.gateway.target) === undefined',
+        'resolveStarterStoreAccountBindingFor(input.gateway.target, input.playerId)',
         'return bindStarterServicesToPlayer({',
       ],
     ],

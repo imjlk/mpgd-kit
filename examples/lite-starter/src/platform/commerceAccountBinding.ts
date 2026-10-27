@@ -142,13 +142,31 @@ export async function resolveStarterStoreAccountBindingFor(
   target: string,
   playerId: string,
 ): Promise<StorePurchaseAccountBinding | undefined> {
+  const kind = starterStoreAccountBindingKind(target);
+  if (kind === undefined) {
+    return undefined;
+  }
+  const digest = await digestPlayerId(playerId);
+  return kind === 'obfuscated-account-id'
+    ? { kind, value: toHex(digest) }
+    : { kind, value: toUuid(digest) };
+}
+
+/**
+ * The kind of store account binding this module derives for `target`'s
+ * purchases, or `undefined` where it binds none (every target but the
+ * native stores: Microsoft Store purchases, for one, carry their own
+ * claimed scope). Pass `commerceAccountBinding` only where this answers a
+ * kind: a runtime given a binding source that never answers would leave every
+ * bound purchase alone.
+ */
+export function starterStoreAccountBindingKind(
+  target: string,
+): 'obfuscated-account-id' | 'app-account-token' | undefined {
   if (target === 'android') {
-    return { kind: 'obfuscated-account-id', value: toHex(await digestPlayerId(playerId)) };
+    return 'obfuscated-account-id';
   }
-  if (target === 'ios') {
-    return { kind: 'app-account-token', value: toUuid(await digestPlayerId(playerId)) };
-  }
-  return undefined;
+  return target === 'ios' ? 'app-account-token' : undefined;
 }
 
 async function digestPlayerId(playerId: string): Promise<Uint8Array> {

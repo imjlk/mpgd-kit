@@ -17,6 +17,7 @@ import {
   resolveStoreKitAppAccountToken,
   setStarterCommerceServerPlayer,
   StarterCommercePinConflictError,
+  starterStoreAccountBindingKind,
 } from '../templates/phaser-game/src/platform/commerceAccountBinding.js';
 import {
   createStarterGuestSignIn,
@@ -785,6 +786,13 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     value: await resolveStoreKitAppAccountToken(nativeShell),
   });
   assert.equal(await resolveStarterStoreAccountBindingFor('browser', 'p_pinned'), undefined);
+  // The runtime gets a binding to compare only where the template binds purchases.
+  assert.equal(starterStoreAccountBindingKind('android'), 'obfuscated-account-id');
+  assert.equal(starterStoreAccountBindingKind('ios'), 'app-account-token');
+  for (const target of ['microsoft-store', 'browser', 'ait', 'reddit']) {
+    assert.equal(starterStoreAccountBindingKind(target), undefined, target);
+    assert.equal(await resolveStarterStoreAccountBindingFor(target, 'p_pinned'), undefined, target);
+  }
   // Another player's services cannot pin while these are open.
   assert.throws(() => pinStarterCommercePlayer('p_other'), StarterCommercePinConflictError);
   sessionPlayer = 'p_switched';

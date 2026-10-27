@@ -16,6 +16,7 @@ import type { PurchasePresentationEvent } from '@mpgd/game-runtime/ads';
 import {
   pinStarterCommercePlayer,
   resolveStarterStoreAccountBindingFor,
+  starterStoreAccountBindingKind,
 } from './commerceAccountBinding';
 import { resolveStarterCommerceProducts } from './commerceProducts';
 import type { StarterGuestSignIn } from './guestIdentity';
@@ -180,7 +181,13 @@ function createRuntime(
       : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),
     transport: resolveGameServicesTransport(import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT),
     // A store purchase bound to another player's account is left for that player.
-    commerceAccountBinding: () => resolveStarterStoreAccountBindingFor(input.gateway.target, input.playerId),
+    // Only where the template binds purchases: elsewhere (Microsoft Store) nothing is compared.
+    ...(starterStoreAccountBindingKind(input.gateway.target) === undefined
+      ? {}
+      : {
+          commerceAccountBinding: () =>
+            resolveStarterStoreAccountBindingFor(input.gateway.target, input.playerId),
+        }),
     ...(session === undefined
       ? {}
       : {

@@ -865,4 +865,36 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   await second.dispose();
 }
 
+// A store the player's binding does not cover (Microsoft Store purchases
+// carry their own claimed scope as an obfuscated-account-id value): with the
+// input omitted, nothing is compared and the player's purchase is verified.
+// A source that answers nothing leaves bound purchases alone, which is why a
+// runtime that never binds must omit it.
+{
+  const msStorePurchase = () =>
+    createTestStorePurchase(
+      { idempotencyKey: 'ms-own', logicalId: 'COINS_100' },
+      { accountBinding: { kind: 'obfuscated-account-id', value: 'claimed-scope-of-player-a' } },
+      'android-store',
+    );
+  const omitted = createHarness();
+  omitted.provider.available.push(msStorePurchase());
+  const runtime = omitted.create(playerA);
+  await runtime.monetizationRecovery?.reconcile();
+  assert.deepEqual(
+    verifies(omitted).map((request) =>
+      (request.body as { readonly platformTransactionId: string }).platformTransactionId),
+    ['tx-ms-own'],
+    'omitted: the purchase is verified for the current player',
+  );
+  await runtime.dispose();
+
+  const unanswered = createHarness({ accountBindings: {} });
+  unanswered.provider.available.push(msStorePurchase());
+  const unansweredRuntime = unanswered.create(playerA);
+  await unansweredRuntime.monetizationRecovery?.reconcile();
+  assert.equal(verifies(unanswered).length, 0, 'a source that never answers leaves it alone');
+  await unansweredRuntime.dispose();
+}
+
 console.info('Game services runtime session checks passed.');

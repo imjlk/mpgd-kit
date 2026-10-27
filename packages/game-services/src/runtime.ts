@@ -152,7 +152,11 @@ interface CreateGameServicesRuntimeCommonInput {
    * another player, Google Play still lists the previous player's
    * unacknowledged purchases. The player's Restore Purchases still takes a
    * durable bound to another account (restore sharing). Derive it from
-   * `playerId`, not from the live session.
+   * `playerId`, not from the live session. Pass it only for a store whose
+   * purchases carry this kind of binding: answering `undefined` leaves every
+   * bound purchase alone, which is meant only while the binding is briefly
+   * unreadable. Omitted, nothing is compared (for example Microsoft Store,
+   * whose purchases carry their own claimed scope).
    */
   readonly commerceAccountBinding?: CreateCommerceReconcilerInput['accountBinding'];
   /**

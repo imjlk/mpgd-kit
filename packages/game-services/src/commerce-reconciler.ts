@@ -331,8 +331,11 @@ export interface CreateCommerceReconcilerInput {
    * and its derived key would then block that player's own recovery). The
    * player's explicit Restore Purchases pass still takes a durable bound to
    * another account (restore sharing). A purchase without a binding, or with
-   * a binding of another kind, is not compared. While this answers nothing
-   * (or throws), a bound purchase is left alone too, for the next pass.
+   * a binding of another kind, is not compared. Answer `undefined` (or
+   * throw) only transiently, while this player's binding cannot be read
+   * yet: every bound purchase is then left alone until a pass where it
+   * answers. A runtime for a store or target whose purchases this player's
+   * binding never covers must omit the input; omitted, nothing is compared.
    */
   readonly accountBinding?: () =>
     | StorePurchaseAccountBinding
