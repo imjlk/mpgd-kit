@@ -269,3 +269,17 @@ export {
   type NotificationTopicCatalogValidation,
   type NotificationTopicCatalogValidationOptions,
 } from './notification-topics.js';
+
+export {
+  assertStoreListingCatalog,
+  resolveStoreListingLocalizations,
+  type AppStoreListing,
+  type AppStoreListingPrice,
+  type GooglePlayListing,
+  type GooglePlayListingPrice,
+  type StoreListingCatalog,
+  type StoreListingEntry,
+  type StoreListingLocale,
+  type StoreListingLocalization,
+  type StoreListingMoney,
+} from './store-listings.js';

@@ -113,6 +113,13 @@ import {
   type PlayReleaseRequest,
 } from './play-release-options.js';
 import { promotePlayRelease } from './play-release-promote.js';
+import {
+  applyStoreProducts,
+  planStoreProducts,
+  saveStoreProductPlan,
+  type StoreProductStore,
+} from './store-products-command.js';
+import { formatPlayProductPlan } from './store-products-play.js';
 import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
 import { uploadRecordedCrashSymbols } from './crash-symbols-upload.js';
@@ -227,6 +234,30 @@ export {
   type PlayReleaseRequest,
   type PlayReleaseStatus,
 } from './play-release-options.js';
+
+export {
+  applyStoreProducts,
+  planStoreProducts,
+  saveStoreProductPlan,
+  type StoreProductApplyOptions,
+  type StoreProductPlanFile,
+  type StoreProductPlanOptions,
+  type StoreProductStore,
+} from './store-products-command.js';
+
+export {
+  applyPlayProductPlan,
+  formatPlayProductPlan,
+  planPlayProducts,
+  PlayProductApplyError,
+  type PlannedPlayProduct,
+  type PlayProductApplyResult,
+  type PlayProductChange,
+  type PlayProductPlan,
+  type PlayProductPlanInput,
+} from './store-products-play.js';
+
+export { StoreProductPlanStaleError } from './store-products.js';
 
 export {
   PlayPromoteUncertainError,
@@ -531,6 +562,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
       assets: assetsCommand,
       game: gameCommand,
       deploy: deployCommand,
+      store: storeCommand,
       legal: legalCommand,
       target: targetCommand,
       kit: kitCommand,
@@ -590,7 +622,7 @@ const entryCommand = defineI18n({
     ko: 'mpgd-kit 스타터와 타깃 워크플로우를 관리합니다.',
   }),
   run: () => {
-    console.info('Use a sub-command: assets, game, deploy, legal, target, kit.');
+    console.info('Use a sub-command: assets, game, deploy, store, legal, target, kit.');
     console.info('Run "pnpm mpgd --help" for available commands.');
   },
 });
@@ -1088,6 +1120,91 @@ const deployCommand = defineI18n({
         console.info(JSON.stringify(status, null, 2));
       },
     }),
+  },
+});
+
+const storeCommand = defineI18n({
+  name: 'store',
+  description: 'Sync store-side configuration from game files.',
+  resource: commandResource({
+    en: 'Sync store-side configuration from game files.',
+    ko: '게임 파일에서 스토어 쪽 설정을 동기화합니다.',
+  }),
+  subCommands: {
+    products: defineI18n({
+      name: 'products',
+      description: 'Plan and apply one-time products from the catalog and store listing file.',
+      resource: commandResource({
+        en: 'Plan and apply one-time products from the catalog and store listing file.',
+        ko: '카탈로그와 스토어 리스팅 파일로 일회성 상품을 계획하고 적용합니다.',
+      }),
+      subCommands: {
+        plan: defineI18n({
+          name: 'plan',
+          description: 'Read the store products and print the changes; never writes to the store.',
+          resource: commandResource({
+            en: 'Read the store products and print the changes; never writes to the store.',
+            ko: '스토어 상품을 읽고 변경 사항을 출력합니다. 스토어에 쓰지 않습니다.',
+          }),
+          args: {
+            game: { type: 'string', required: false, description: 'Game project directory.' },
+            profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
+            store: { type: 'string', required: true, description: 'google-play.' },
+            catalog: { type: 'string', required: false, description: 'Product catalog path, relative to the current directory; defaults to mpgd.catalog.json in the game.' },
+            listings: { type: 'string', required: false, description: 'Store listing file path, relative to the current directory; defaults to mpgd.store-listings.json in the game.' },
+            'catalog-target': { type: 'string', required: false, description: 'Catalog platformProductIds key of the store; defaults to android.' },
+            'keep-live-prices': { type: 'boolean', required: false, description: 'Leave the prices of products players can already buy unchanged.' },
+            out: { type: 'string', required: false, description: 'New plan JSON path for apply; existing files are not overwritten.' },
+          },
+          run: async (ctx) => {
+            const catalog = readOptionalString(ctx.values.catalog);
+            const listings = readOptionalString(ctx.values.listings);
+            const catalogTarget = readOptionalString(ctx.values['catalog-target']);
+            const result = await planStoreProducts({
+              game: readOptionalString(ctx.values.game) ?? '.',
+              profile: readOptionalString(ctx.values.profile) ?? 'beta',
+              store: readRequiredCliOption(ctx.values.store, '--store') as StoreProductStore,
+              ...(catalog === undefined ? {} : { catalogFile: catalog }),
+              ...(listings === undefined ? {} : { listingsFile: listings }),
+              ...(catalogTarget === undefined ? {} : { catalogTarget }),
+              ...(ctx.values['keep-live-prices'] === true ? { keepLivePrices: true } : {}),
+            });
+            console.info(formatPlayProductPlan(result.plan));
+            const out = readOptionalString(ctx.values.out);
+            if (out !== undefined) {
+              console.info(`Wrote store product plan: ${saveStoreProductPlan(out, result)}`);
+            }
+          },
+        }),
+        apply: defineI18n({
+          name: 'apply',
+          description: 'Write the reviewed plan; refuses when the store or the files changed since.',
+          resource: commandResource({
+            en: 'Write the reviewed plan; refuses when the store or the files changed since.',
+            ko: '검토한 계획을 적용합니다. 이후 스토어나 파일이 바뀌었으면 거부합니다.',
+          }),
+          args: {
+            plan: { type: 'string', required: true, description: 'Plan JSON written by "store products plan --out".' },
+            game: { type: 'string', required: false, description: 'Current game directory if the game moved.' },
+            approve: { type: 'boolean', required: false, description: 'Approve the store writes.' },
+            'confirm-price-change': { type: 'boolean', required: false, description: 'Confirm price changes on products players can already buy.' },
+          },
+          run: async (ctx) => {
+            const game = readOptionalString(ctx.values.game);
+            const result = await applyStoreProducts({
+              planFile: readRequiredCliOption(ctx.values.plan, '--plan'),
+              ...(game === undefined ? {} : { game }),
+              approved: ctx.values.approve === true,
+              ...(ctx.values['confirm-price-change'] === true ? { confirmPriceChange: true } : {}),
+            });
+            console.info(JSON.stringify(result, null, 2));
+          },
+        }),
+      },
+    }),
+  },
+  run: () => {
+    console.info('Use "mpgd store products plan" or "mpgd store products apply".');
   },
 });
 

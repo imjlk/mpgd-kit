@@ -277,6 +277,15 @@ least 14 days" before they can apply for production (Play Console → Dashboard
    Groups ("email lists are not supported by this resource"); the kit does not
    set testers.
 
+## In-app products (`store products`)
+
+Releases carry the build; the one-time products a build sells are a
+separate Play resource. `mpgd store products plan --store google-play` and
+`apply --approve` create and update them from the catalog and
+`mpgd.store-listings.json`, with the same service account as `deploy`
+([store product sync](./STORE_PRODUCT_SYNC.md)). A product must be active
+before testers can buy it; `apply` activates new purchase options.
+
 ## Verify on the first live run
 
 These behaviours are mock-tested only. Check them on the first submission to

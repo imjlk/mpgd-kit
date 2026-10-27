@@ -92,8 +92,11 @@ Cloudflare:
 - [ ] `mpgd.targets.json` → android `metadata.packageId`, ios
       `metadata.bundleId`, `displayName` for both.
 - [ ] Catalog products (`packages/catalog/catalog.json` or the game's copy)
-      with the store SKUs; create the same products in Play Console and App
-      Store Connect by hand **(open: catalog sync to the stores)**.
+      with the store SKUs, and `mpgd.store-listings.json` with each
+      product's titles, descriptions and prices. `mpgd store products plan`
+      then `apply --approve` creates the Google Play one-time products
+      ([store product sync](./STORE_PRODUCT_SYNC.md)); App Store Connect
+      in-app purchases are still created by hand.
 - [ ] Ads: `ads.admob.publisherId` in `mpgd.game.json` if AdMob is used;
       `ads.admob.advertisingId: "removed"` only for a deliberate
       no-advertising-ID policy such as a child-directed game.
@@ -319,7 +322,9 @@ Google Play Console:
       (matches the manifest, see above), app access (instructions if review
       needs a sign-in), data safety, government apps / financial features /
       health declarations ("no" for a typical game).
-- [ ] In-app products with prices; license testers.
+- [ ] In-app products with prices: `mpgd store products apply` creates and
+      activates them ([store product sync](./STORE_PRODUCT_SYNC.md)); the
+      payments profile and license testers stay in the console.
 - [ ] Closed test with 12+ testers opted in for 14 days in a row (personal
       accounts created after 13 November 2023): create the closed track and
       its testers in the console, ship builds to it with `--track <name>`,
@@ -369,6 +374,7 @@ App Store Connect:
 - [Native deployment](./NATIVE_DEPLOYMENT.md) and [native deploy run](./NATIVE_DEPLOY_RUN.md)
 - [Google Play internal submission](./GOOGLE_PLAY_INTERNAL_SUBMISSION.md) and
   [Google Play releases](./GOOGLE_PLAY_RELEASES.md)
+- [Store product sync](./STORE_PRODUCT_SYNC.md)
 - [TestFlight internal submission](./TESTFLIGHT_INTERNAL_SUBMISSION.md)
 - [Game services backend](./GAME_SERVICES_BACKEND.md)
 - [Store privacy disclosures](./STORE_PRIVACY_DISCLOSURES.md)

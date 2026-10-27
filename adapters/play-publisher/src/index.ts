@@ -2,6 +2,10 @@ import { createReadStream } from 'node:fs';
 
 import { androidpublisher, auth, type androidpublisher_v3 } from '@googleapis/androidpublisher';
 
+import type {
+  PlayOneTimeProduct,
+  PlayProductCatalogPort,
+} from '../../../packages/cli/src/play-product-port.js';
 import type { PlayPublisher } from '../../../packages/cli/src/play-publisher-port.js';
 
 const scope = 'https://www.googleapis.com/auth/androidpublisher';
@@ -91,6 +95,78 @@ function wrapPublisher(publisher: ReturnType<typeof androidpublisher>): PlayPubl
       await publisher.edits.delete(
         { packageName, editId }, { retry: false, signal: signal as never },
       );
+    },
+  };
+}
+
+/** Production one-time product catalog port (`monetization.onetimeproducts`). */
+export function createServiceAccountProductCatalog(serviceAccountFile: string): PlayProductCatalogPort {
+  const googleAuth = new auth.GoogleAuth({ keyFile: serviceAccountFile, scopes: [scope] });
+  return wrapProductCatalog(androidpublisher({ version: 'v3', auth: googleAuth }));
+}
+
+/** Test-only product catalog port for a mock HTTP server with a fixture OAuth token. */
+export function createMockProductCatalog(accessToken: string, rootUrl: string): PlayProductCatalogPort {
+  const oauth = new auth.OAuth2();
+  oauth.setCredentials({ access_token: accessToken });
+  return wrapProductCatalog(androidpublisher({ version: 'v3', auth: oauth, rootUrl }));
+}
+
+function wrapProductCatalog(publisher: ReturnType<typeof androidpublisher>): PlayProductCatalogPort {
+  const products = publisher.monetization.onetimeproducts;
+  return {
+    async listOneTimeProducts(packageName, signal) {
+      const all: PlayOneTimeProduct[] = [];
+      let pageToken: string | undefined;
+      do {
+        const response = await products.list({
+          packageName,
+          pageSize: 1000,
+          ...(pageToken === undefined ? {} : { pageToken }),
+        }, { signal: signal as never });
+        all.push(...(response.data.oneTimeProducts ?? []) as unknown as PlayOneTimeProduct[]);
+        const next = response.data.nextPageToken;
+        pageToken = typeof next === 'string' && next !== '' ? next : undefined;
+      } while (pageToken !== undefined);
+      return all;
+    },
+    async convertRegionPrices(input) {
+      const response = await publisher.monetization.convertRegionPrices({
+        packageName: input.packageName,
+        requestBody: {
+          price: input.price as androidpublisher_v3.Schema$Money,
+          ...(input.productTaxCategoryCode === undefined
+            ? {}
+            : { productTaxCategoryCode: input.productTaxCategoryCode }),
+        },
+      }, { signal: input.signal as never });
+      return response.data;
+    },
+    async patchOneTimeProduct(input) {
+      const response = await products.patch({
+        packageName: input.packageName,
+        productId: input.productId,
+        allowMissing: input.allowMissing,
+        updateMask: input.updateMask,
+        'regionsVersion.version': input.regionsVersion,
+        requestBody: input.product as unknown as androidpublisher_v3.Schema$OneTimeProduct,
+      }, { retry: false, signal: input.signal as never });
+      return response.data as unknown as PlayOneTimeProduct;
+    },
+    async activatePurchaseOption(input) {
+      await products.purchaseOptions.batchUpdateStates({
+        packageName: input.packageName,
+        productId: input.productId,
+        requestBody: {
+          requests: [{
+            activatePurchaseOptionRequest: {
+              packageName: input.packageName,
+              productId: input.productId,
+              purchaseOptionId: input.purchaseOptionId,
+            },
+          }],
+        },
+      }, { retry: false, signal: input.signal as never });
     },
   };
 }
