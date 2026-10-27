@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -8,6 +7,15 @@ import {
   type ProductCatalog,
   type StoreListingCatalog,
 } from '@mpgd/catalog';
+
+import { readJsonFile, StorePlanStaleError } from './store-sync.js';
+
+export {
+  canonicalLanguageTag,
+  mapWithConcurrency,
+  stableJson,
+  stableSha256,
+} from './store-sync.js';
 
 /**
  * Shared pieces of `mpgd store products plan|apply`: the game files the sync
@@ -49,38 +57,14 @@ export function readStoreProductSources(input: {
       throw new Error(`Store product sync needs ${file}.`);
     }
   }
-  const catalog = assertProductCatalog(readJson(catalogFile));
-  const listings = assertStoreListingCatalog(readJson(listingsFile), catalog);
+  const catalog = assertProductCatalog(readJsonFile(catalogFile));
+  const listings = assertStoreListingCatalog(readJsonFile(listingsFile), catalog);
   return { catalogFile, listingsFile, catalog, listings };
 }
 
-/** JSON with object keys sorted, so equal values always hash the same. */
-export function stableJson(value: unknown): string {
-  return JSON.stringify(sortKeys(value));
-}
-
-export function stableSha256(value: unknown): string {
-  return createHash('sha256').update(stableJson(value)).digest('hex');
-}
-
-/** A new plan file, never overwriting one (the same rule as `deploy plan --out`). */
-export function writeStoreProductPlan(file: string, plan: unknown): string {
-  const resolved = path.resolve(file);
-  writeFileSync(resolved, `${JSON.stringify(plan, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-  return resolved;
-}
-
-export function readStoreProductPlanFile(file: string): Record<string, unknown> {
-  const raw = readJson(path.resolve(file));
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error('Saved store product plan is malformed.');
-  }
-  return raw as Record<string, unknown>;
-}
-
-export class StoreProductPlanStaleError extends Error {
+export class StoreProductPlanStaleError extends StorePlanStaleError {
   constructor(detail: string) {
-    super(`${detail} Run "mpgd store products plan" again and review the new plan.`);
+    super(detail, 'mpgd store products plan');
     this.name = 'StoreProductPlanStaleError';
   }
 }
@@ -106,62 +90,4 @@ export function sameDecimal(left: string, right: string): boolean {
     return trimmedFraction === '' ? trimmedWhole : `${trimmedWhole}.${trimmedFraction}`;
   };
   return normal(left) === normal(right);
-}
-
-/** BCP-47 casing: language lowercase, script title case, region uppercase. */
-export function canonicalLanguageTag(tag: string): string {
-  return tag.split('-').map((part, index) => {
-    if (index === 0) {
-      return part.toLowerCase();
-    }
-    if (/^[A-Za-z]{4}$/u.test(part)) {
-      return `${part.slice(0, 1).toUpperCase()}${part.slice(1).toLowerCase()}`;
-    }
-    if (/^[A-Za-z]{2}$/u.test(part)) {
-      return part.toUpperCase();
-    }
-    return part.toLowerCase();
-  }).join('-');
-}
-
-/** `map` with at most `limit` calls in flight; results keep input order. */
-export async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  map: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await map(items[index] as T);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-function readJson(file: string): unknown {
-  try {
-    return JSON.parse(readFileSync(file, 'utf8')) as unknown;
-  } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`);
-  }
-}
-
-function sortKeys(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortKeys);
-  }
-  if (typeof value === 'object' && value !== null) {
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
-        .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
-    );
-  }
-  return value;
 }

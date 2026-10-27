@@ -286,6 +286,16 @@ separate Play resource. `mpgd store products plan --store google-play` and
 ([store product sync](./STORE_PRODUCT_SYNC.md)). A product must be active
 before testers can buy it; `apply` activates new purchase options.
 
+## Store listing (`store presence`)
+
+The store page text and graphics are a third resource:
+`mpgd store presence plan --store google-play` and `apply --approve` write
+them from `mpgd.store-presence.json` in one edit
+([store page sync](./STORE_PRESENCE_SYNC.md)). A service account has only one
+open edit, and committing any edit invalidates the others, so run `plan` and
+`apply` when no `deploy run`, `deploy promote` or `deploy rollout` is in
+progress.
+
 ## Verify on the first live run
 
 These behaviours are mock-tested only. Check them on the first submission to

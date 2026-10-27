@@ -6,6 +6,7 @@ import type {
   PlayOneTimeProduct,
   PlayProductCatalogPort,
 } from '../../../packages/cli/src/play-product-port.js';
+import type { PlayStoreListingPort } from '../../../packages/cli/src/play-listing-port.js';
 import type { PlayPublisher } from '../../../packages/cli/src/play-publisher-port.js';
 
 const scope = 'https://www.googleapis.com/auth/androidpublisher';
@@ -23,17 +24,31 @@ export function createMockPublisher(accessToken: string, rootUrl: string): PlayP
   return wrapPublisher(androidpublisher({ version: 'v3', auth: oauth, rootUrl }));
 }
 
-function wrapPublisher(publisher: ReturnType<typeof androidpublisher>): PlayPublisher {
+type Publisher = ReturnType<typeof androidpublisher>;
+
+async function insertEdit(publisher: Publisher, packageName: string, signal?: AbortSignal): Promise<string> {
+  const response = await publisher.edits.insert(
+    { packageName },
+    { retry: false, signal: signal as never },
+  );
+  if (typeof response.data.id !== 'string' || response.data.id.trim() === '') {
+    throw new Error('Google Play did not return an edit ID.');
+  }
+  return response.data.id;
+}
+
+async function deleteEdit(
+  publisher: Publisher,
+  packageName: string,
+  editId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await publisher.edits.delete({ packageName, editId }, { retry: false, signal: signal as never });
+}
+
+function wrapPublisher(publisher: Publisher): PlayPublisher {
   return {
-    async insertEdit(packageName, signal) {
-      const response = await publisher.edits.insert(
-        { packageName }, { retry: false, signal: signal as never },
-      );
-      if (typeof response.data.id !== 'string' || response.data.id.trim() === '') {
-        throw new Error('Google Play did not return an edit ID.');
-      }
-      return response.data.id;
-    },
+    insertEdit: (packageName, signal) => insertEdit(publisher, packageName, signal),
     async listBundles(packageName, editId, signal) {
       return (await publisher.edits.bundles.list(
         { packageName, editId }, { signal: signal as never },
@@ -91,11 +106,7 @@ function wrapPublisher(publisher: ReturnType<typeof androidpublisher>): PlayPubl
         packageName, editId, changesInReviewBehavior: 'ERROR_IF_IN_REVIEW',
       }, { retry: false, signal: signal as never });
     },
-    async deleteEdit(packageName, editId, signal) {
-      await publisher.edits.delete(
-        { packageName, editId }, { retry: false, signal: signal as never },
-      );
-    },
+    deleteEdit: (packageName, editId, signal) => deleteEdit(publisher, packageName, editId, signal),
   };
 }
 
@@ -166,6 +177,99 @@ function wrapProductCatalog(publisher: ReturnType<typeof androidpublisher>): Pla
             },
           }],
         },
+      }, { retry: false, signal: input.signal as never });
+    },
+  };
+}
+
+/** Production store listing port (`edits.details`, `edits.listings`, `edits.images`). */
+export function createServiceAccountStoreListing(serviceAccountFile: string): PlayStoreListingPort {
+  const googleAuth = new auth.GoogleAuth({ keyFile: serviceAccountFile, scopes: [scope] });
+  return wrapStoreListing(androidpublisher({ version: 'v3', auth: googleAuth }));
+}
+
+/** Test-only store listing port for a mock HTTP server with a fixture OAuth token. */
+export function createMockStoreListing(
+  accessToken: string,
+  rootUrl: string,
+  requestRootUrl?: string,
+): PlayStoreListingPort {
+  const oauth = new auth.OAuth2();
+  oauth.setCredentials({ access_token: accessToken });
+  return wrapStoreListing(
+    androidpublisher({ version: 'v3', auth: oauth, rootUrl }),
+    requestRootUrl,
+  );
+}
+
+function wrapStoreListing(publisher: Publisher, requestRootUrl?: string): PlayStoreListingPort {
+  // The generated SDK's media endpoint ignores the client's rootUrl.
+  const mediaRoot = requestRootUrl === undefined ? {} : { rootUrl: requestRootUrl };
+  return {
+    insertEdit: (packageName, signal) => insertEdit(publisher, packageName, signal),
+    deleteEdit: (packageName, editId, signal) => deleteEdit(publisher, packageName, editId, signal),
+    async commitEdit(input) {
+      await publisher.edits.commit({
+        packageName: input.packageName,
+        editId: input.editId,
+        changesInReviewBehavior: 'ERROR_IF_IN_REVIEW',
+        ...(input.changesNotSentForReview ? { changesNotSentForReview: true } : {}),
+      }, { retry: false, signal: input.signal as never });
+    },
+    async getDetails(packageName, editId, signal) {
+      return (await publisher.edits.details.get(
+        { packageName, editId }, { signal: signal as never },
+      )).data;
+    },
+    async updateDetails(input) {
+      await publisher.edits.details.update({
+        packageName: input.packageName,
+        editId: input.editId,
+        requestBody: input.details as androidpublisher_v3.Schema$AppDetails,
+      }, { retry: false, signal: input.signal as never });
+    },
+    async listListings(packageName, editId, signal) {
+      return (await publisher.edits.listings.list(
+        { packageName, editId }, { signal: signal as never },
+      )).data.listings ?? [];
+    },
+    async updateListing(input) {
+      await publisher.edits.listings.update({
+        packageName: input.packageName,
+        editId: input.editId,
+        language: input.listing.language,
+        requestBody: input.listing as androidpublisher_v3.Schema$Listing,
+      }, { retry: false, signal: input.signal as never });
+    },
+    async listImages(input) {
+      return (await publisher.edits.images.list({
+        packageName: input.packageName,
+        editId: input.editId,
+        language: input.language,
+        imageType: input.imageType,
+      }, { signal: input.signal as never })).data.images ?? [];
+    },
+    async uploadImage(input) {
+      const response = await publisher.edits.images.upload({
+        packageName: input.packageName,
+        editId: input.editId,
+        language: input.language,
+        imageType: input.imageType,
+        media: { mimeType: input.mimeType, body: createReadStream(input.file) },
+      }, {
+        timeout: input.timeoutMs,
+        retry: false,
+        signal: input.signal as never,
+        ...mediaRoot,
+      });
+      return response.data.image ?? {};
+    },
+    async deleteAllImages(input) {
+      await publisher.edits.images.deleteall({
+        packageName: input.packageName,
+        editId: input.editId,
+        language: input.language,
+        imageType: input.imageType,
       }, { retry: false, signal: input.signal as never });
     },
   };

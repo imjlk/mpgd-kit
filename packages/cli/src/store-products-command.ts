@@ -3,14 +3,10 @@ import path from 'node:path';
 
 import type { AscIapPort } from './app-store-iap-port.js';
 import { openAscIapSession, type AscCredential } from './app-store-iap-asc.js';
-import { planNativeDeployment } from './deploy-planning.js';
-import { readStoreCredential } from './native-deploy-run.js';
 import type { PlayProductCatalogPort } from './play-product-port.js';
 import {
-  readStoreProductPlanFile,
   readStoreProductSources,
   StoreProductPlanStaleError,
-  writeStoreProductPlan,
   type StoreProductSources,
 } from './store-products.js';
 import {
@@ -25,6 +21,14 @@ import {
   type PlayProductApplyResult,
   type PlayProductPlan,
 } from './store-products-play.js';
+import {
+  assertStoreSyncStore,
+  readStorePlanFile,
+  relocateStoreSyncFile,
+  resolveStoreSyncApp,
+  writeStorePlanFile,
+  type StoreSyncStore,
+} from './store-sync.js';
 
 /**
  * `mpgd store products plan|apply`: the game's deployment profile names the
@@ -32,7 +36,7 @@ import {
  * game's catalog and store listing file name the products.
  */
 
-export type StoreProductStore = 'google-play' | 'app-store';
+export type StoreProductStore = StoreSyncStore;
 
 export interface StoreProductPlanOptions {
   readonly game: string;
@@ -102,7 +106,7 @@ export async function planStoreProducts(
 }
 
 export function saveStoreProductPlan(file: string, plan: StoreProductPlanFile): string {
-  return writeStoreProductPlan(file, plan);
+  return writeStorePlanFile(file, plan);
 }
 
 export interface StoreProductApplyOptions {
@@ -124,18 +128,11 @@ export async function applyStoreProducts(
   }
   const saved = readSavedPlan(options.planFile);
   const gameRoot = options.game === undefined ? saved.gameRoot : path.resolve(options.game);
-  const relocate = (file: string): string => {
-    if (options.game === undefined) {
-      return file;
-    }
-    const relative = path.relative(saved.gameRoot, file);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error(
-        `The saved plan reads ${file}, outside its game directory; --game cannot move it. Plan again.`,
-      );
-    }
-    return path.resolve(gameRoot, relative);
-  };
+  const relocate = (file: string): string => relocateStoreSyncFile(
+    saved.gameRoot,
+    options.game === undefined ? undefined : gameRoot,
+    file,
+  );
   const planOptions: StoreProductPlanOptions = {
     game: gameRoot,
     profile: saved.profile,
@@ -189,45 +186,25 @@ async function withStoreSession<T>(
   overrides: Partial<StoreProductPorts>,
   action: (session: StoreSession) => Promise<T>,
 ): Promise<T> {
-  if (options.store !== 'google-play' && options.store !== 'app-store') {
-    throw new Error('--store must be google-play or app-store.');
-  }
+  assertStoreSyncStore(options.store);
   const ports = { ...defaultPorts, ...overrides };
-  const gameRoot = path.resolve(options.game);
-  const target = options.store === 'google-play' ? 'android' : 'ios';
-  const deployment = planNativeDeployment({
-    game: gameRoot,
-    profile: options.profile,
-    targets: [target],
-  });
-  const planned = deployment.targets.find((entry) => entry.target === target);
-  if (planned === undefined) {
-    throw new Error(`Deployment profile ${options.profile} has no ${target} target.`);
-  }
+  // The game files first: a malformed file reports its own error without a credential.
   const sources = readStoreProductSources({
-    gameRoot,
+    gameRoot: path.resolve(options.game),
     ...(options.catalogFile === undefined ? {} : { catalogFile: options.catalogFile }),
     ...(options.listingsFile === undefined ? {} : { listingsFile: options.listingsFile }),
   });
-  const credential = readStoreCredential(deployment, target, environment);
-  if (credential.target === 'android') {
-    const port = await ports.googlePlay(credential.serviceAccountFile);
-    return action({ store: 'google-play', packageName: planned.appId, port, sources });
+  const app = resolveStoreSyncApp(options, environment);
+  if (app.store === 'google-play') {
+    const port = await ports.googlePlay(app.serviceAccountFile);
+    return action({ store: 'google-play', packageName: app.packageName, port, sources });
   }
-  const session = await ports.appStore(
-    {
-      ascBinary: credential.ascBinary,
-      apiKeyId: credential.apiKeyId,
-      apiIssuerId: credential.apiIssuerId,
-      apiPrivateKeyBase64: credential.apiPrivateKeyBase64,
-    },
-    options.signal,
-  );
+  const session = await ports.appStore(app.credential, options.signal);
   try {
     return await action({
       store: 'app-store',
-      appId: credential.appStoreAppId,
-      bundleId: planned.appId,
+      appId: app.appId,
+      bundleId: app.bundleId,
       port: session.port,
       sources,
     });
@@ -268,7 +245,7 @@ async function planWithSession(
 }
 
 function readSavedPlan(file: string): StoreProductPlanFile {
-  const raw = readStoreProductPlanFile(file);
+  const raw = readStorePlanFile(file, 'store product plan');
   const plan = raw.plan as Record<string, unknown> | undefined;
   const storeFields = typeof plan === 'object' && plan !== null && (
     (plan.store === 'google-play' && typeof plan.packageName === 'string')

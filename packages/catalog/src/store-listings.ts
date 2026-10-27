@@ -115,7 +115,8 @@ export interface StoreListingCatalog {
 
 const assertStoreListingCatalogShape = typia.createAssert<StoreListingCatalog>();
 
-const localePattern = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u;
+/** @internal BCP-47 shape shared by the store files. */
+export const storeListingLocalePattern = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u;
 const regionPattern = /^[A-Z]{2}$/u;
 const territoryPattern = /^[A-Z]{3}$/u;
 
@@ -208,7 +209,7 @@ function assertLocalizations(
   }
   const seen = new Set<string>();
   for (const locale of locales) {
-    if (!localePattern.test(locale)) {
+    if (!storeListingLocalePattern.test(locale)) {
       throw new Error(
         `Store listing ${productId}: ${field} key ${locale} is not a BCP-47 language tag.`,
       );
@@ -228,7 +229,8 @@ function assertLocalizations(
   }
 }
 
-function isRelativeChildPath(value: string): boolean {
+/** @internal A relative path that stays inside its directory. */
+export function isRelativeChildPath(value: string): boolean {
   if (value.startsWith('/') || value.startsWith('\\') || /^[A-Za-z]:/u.test(value)) {
     return false;
   }

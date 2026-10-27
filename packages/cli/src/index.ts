@@ -121,6 +121,13 @@ import {
 } from './store-products-command.js';
 import { formatAppStoreProductPlan } from './store-products-app-store.js';
 import { formatPlayProductPlan } from './store-products-play.js';
+import {
+  applyStorePresence,
+  planStorePresence,
+  saveStorePresencePlan,
+  type StorePresenceStore,
+} from './store-presence-command.js';
+import { formatPlayPresencePlan } from './store-presence-play.js';
 import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
 import { uploadRecordedCrashSymbols } from './crash-symbols-upload.js';
@@ -272,6 +279,38 @@ export {
 } from './store-products-app-store.js';
 
 export { StoreProductPlanStaleError } from './store-products.js';
+export { StorePlanStaleError } from './store-sync.js';
+
+export {
+  applyStorePresence,
+  planStorePresence,
+  saveStorePresencePlan,
+  type StorePresenceApplyOptions,
+  type StorePresencePlanFile,
+  type StorePresencePlanOptions,
+  type StorePresencePorts,
+  type StorePresenceStore,
+} from './store-presence-command.js';
+
+export {
+  applyPlayPresence,
+  formatPlayPresencePlan,
+  planPlayPresence,
+  PlayPresenceApplyError,
+  type PlannedPlayImageSlot,
+  type PlannedPlayLanguage,
+  type PlayPresenceApplyResult,
+  type PlayPresencePlan,
+  type PlayPresencePlanInput,
+} from './store-presence-play.js';
+
+export type {
+  PlayAppDetails,
+  PlayImage,
+  PlayImageType,
+  PlayListing,
+  PlayStoreListingPort,
+} from './play-listing-port.js';
 
 export {
   PlayPromoteUncertainError,
@@ -1218,9 +1257,74 @@ const storeCommand = defineI18n({
         }),
       },
     }),
+    presence: defineI18n({
+      name: 'presence',
+      description: 'Plan and apply the store page text and graphics from mpgd.store-presence.json.',
+      resource: commandResource({
+        en: 'Plan and apply the store page text and graphics from mpgd.store-presence.json.',
+        ko: 'mpgd.store-presence.json으로 스토어 페이지 문구와 그래픽을 계획하고 적용합니다.',
+      }),
+      subCommands: {
+        plan: defineI18n({
+          name: 'plan',
+          description: 'Read the store listing and print the changes; never writes to the store.',
+          resource: commandResource({
+            en: 'Read the store listing and print the changes; never writes to the store.',
+            ko: '스토어 리스팅을 읽고 변경 사항을 출력합니다. 스토어에 쓰지 않습니다.',
+          }),
+          args: {
+            game: { type: 'string', required: false, description: 'Game project directory.' },
+            profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
+            store: { type: 'string', required: true, description: 'google-play.' },
+            presence: { type: 'string', required: false, description: 'Store presence file path, relative to the current directory; defaults to mpgd.store-presence.json in the game.' },
+            out: { type: 'string', required: false, description: 'New plan JSON path for apply; existing files are not overwritten.' },
+          },
+          run: async (ctx) => {
+            const presence = readOptionalString(ctx.values.presence);
+            const result = await planStorePresence({
+              game: readOptionalString(ctx.values.game) ?? '.',
+              profile: readOptionalString(ctx.values.profile) ?? 'beta',
+              store: readRequiredCliOption(ctx.values.store, '--store') as StorePresenceStore,
+              ...(presence === undefined ? {} : { presenceFile: presence }),
+            });
+            console.info(formatPlayPresencePlan(result.plan));
+            const out = readOptionalString(ctx.values.out);
+            if (out !== undefined) {
+              console.info(`Wrote store presence plan: ${saveStorePresencePlan(out, result)}`);
+            }
+          },
+        }),
+        apply: defineI18n({
+          name: 'apply',
+          description: 'Write the reviewed plan in one edit; refuses when the store or the files changed since.',
+          resource: commandResource({
+            en: 'Write the reviewed plan in one edit; refuses when the store or the files changed since.',
+            ko: '검토한 계획을 한 번의 편집으로 적용합니다. 이후 스토어나 파일이 바뀌었으면 거부합니다.',
+          }),
+          args: {
+            plan: { type: 'string', required: true, description: 'Plan JSON written by "store presence plan --out".' },
+            game: { type: 'string', required: false, description: 'Current game directory if the game moved.' },
+            approve: { type: 'boolean', required: false, description: 'Approve the store writes.' },
+            'confirm-image-removal': { type: 'boolean', required: false, description: 'Confirm removing store images a complete set no longer lists.' },
+            'changes-not-sent-for-review': { type: 'boolean', required: false, description: 'Google Play: commit without sending for review; send it from Play Console.' },
+          },
+          run: async (ctx) => {
+            const game = readOptionalString(ctx.values.game);
+            const result = await applyStorePresence({
+              planFile: readRequiredCliOption(ctx.values.plan, '--plan'),
+              ...(game === undefined ? {} : { game }),
+              approved: ctx.values.approve === true,
+              ...(ctx.values['confirm-image-removal'] === true ? { confirmImageRemoval: true } : {}),
+              ...(ctx.values['changes-not-sent-for-review'] === true ? { changesNotSentForReview: true } : {}),
+            });
+            console.info(JSON.stringify(result, null, 2));
+          },
+        }),
+      },
+    }),
   },
   run: () => {
-    console.info('Use "mpgd store products plan" or "mpgd store products apply".');
+    console.info('Use "mpgd store products plan|apply" or "mpgd store presence plan|apply".');
   },
 });
 

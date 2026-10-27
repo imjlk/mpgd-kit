@@ -10,6 +10,9 @@ and App Store Connect by hand. Subscriptions stay outside the sync
 Supported stores: Google Play (`--store google-play`) and App Store Connect
 (`--store app-store`, iPhone and iPad share the in-app purchases).
 
+The app's own store page (name, descriptions, graphics, screenshots) is a
+separate file and command: [store page sync](./STORE_PRESENCE_SYNC.md).
+
 ## The store listing file
 
 The product catalog (`mpgd.catalog.json`) keeps the product IDs, kinds and
