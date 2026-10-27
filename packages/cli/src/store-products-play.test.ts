@@ -822,6 +822,11 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
     .then(() => undefined, (caught: unknown) => caught);
   assert.ok(error instanceof PlayProductApplyError);
   assert.equal(error.stage, 'activate');
+  assert.deepEqual(
+    error.done,
+    [{ productId: 'coins_100', status: 'created' }],
+    'the patch before it landed',
+  );
   const next = await planPlayProducts({ packageName, catalog, listings: only }, play.port);
   assert.deepEqual(find(next, 'coins_100').changes, ['activate']);
   play.writes.length = 0;

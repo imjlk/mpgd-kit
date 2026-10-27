@@ -661,7 +661,17 @@ export async function applyPlayProductPlan(input: {
           ...(input.signal === undefined ? {} : { signal: input.signal }),
         });
       } catch (error) {
-        throw new PlayProductApplyError(product.productId, 'activate', written(done), error);
+        // The patch before it landed: report this product as written too.
+        const patched = patch === undefined
+          ? done
+          : [
+              ...done,
+              {
+                productId: product.productId,
+                status: product.action === 'create' ? 'created' as const : 'updated' as const,
+              },
+            ];
+        throw new PlayProductApplyError(product.productId, 'activate', written(patched), error);
       }
     }
     done.push({
