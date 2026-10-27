@@ -282,7 +282,7 @@ within a run (an account switch), pass `sessionPlayerId: () => session.current()
   someone else. The provider resolves its account binding a few steps after
   that last check, so the binding resolver must follow the runtime's player
   too (bind nothing for anyone else, as the generated game's
-  `setStarterCommerceServicesPlayer` does) for a purchase never to be
+  `pinStarterCommercePlayer` does) for a purchase never to be
   journaled here and bound to the other account; a binding refused while the
   session changed keeps the attempt retryable. Purchases
   answer `failed` with the retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`
