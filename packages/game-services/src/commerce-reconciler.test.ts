@@ -3659,6 +3659,112 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   await back.reconciler.stop();
 }
 
+// 53. A consumable a client-finish store reports again after its record finished (a finish
+// reported done without a native call, then the store listed it again) is finished again once
+// per session with the journaled ledger entry; it is never verified again. A durable, which a
+// store keeps listing after its finish, and a server-finish store are left alone.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const first = createHarness({ store });
+  first.backend.queue({ status: 'granted', ledgerEntryId: 'le-53' });
+  first.backend.queue({ status: 'granted', ledgerEntryId: 'le-53d' });
+  await first.reconciler.start();
+  await first.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-53',
+    source: 'shop',
+  });
+  first.provider.report(purchaseOf({ transactionId: 'tx-53' }));
+  await first.reconciler.runUntilIdle();
+  await first.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'op-53d',
+    source: 'shop',
+  });
+  first.provider.report(
+    purchaseOf({ transactionId: 'tx-53d', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await first.reconciler.runUntilIdle();
+  assertEqual(
+    [first.history('op-53').at(-1), first.history('op-53d').at(-1)],
+    ['finished', 'finished'],
+    'both purchases finished',
+  );
+  const transitionsBefore = first.transitions.length;
+  first.provider.report(purchaseOf({ transactionId: 'tx-53' }));
+  first.provider.report(
+    purchaseOf({ transactionId: 'tx-53d', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await first.reconciler.runUntilIdle();
+  first.provider.report(purchaseOf({ transactionId: 'tx-53' }));
+  await first.reconciler.runUntilIdle();
+  assertEqual(
+    first.provider.finishCalls.map((call) => [
+      call.transactionId,
+      call.ledgerEntryId,
+      call.isConsumable,
+    ]),
+    [
+      ['tx-53', 'le-53', true],
+      ['tx-53d', 'le-53d', false],
+      ['tx-53', 'le-53', true],
+    ],
+    'the consumable reported again is finished again once this session; the durable is not',
+  );
+  assertEqual(first.backend.requests.length, 2, 'nothing is verified again');
+  assertEqual(
+    first.transitions.length,
+    transitionsBefore,
+    'the finished records are not rewritten',
+  );
+  await first.reconciler.stop();
+
+  // A failed finish is reported; the next session tries again from the journal.
+  const failing = createHarness({ store });
+  failing.provider.available.push(purchaseOf({ transactionId: 'tx-53' }));
+  failing.provider.queueFinish({ throws: new Error('store unavailable') });
+  await failing.reconciler.start();
+  assertEqual(failing.failures, ['finish(op-53)'], 'the failed finish is reported');
+  const next = createHarness({ store });
+  next.provider.available.push(purchaseOf({ transactionId: 'tx-53' }));
+  await next.reconciler.start();
+  assertEqual(
+    next.provider.finishCalls,
+    [{ transactionId: 'tx-53', ledgerEntryId: 'le-53', isConsumable: true }],
+    'a restart finishes the listed consumable from the journal',
+  );
+  assertEqual(next.backend.requests.length, 0, 'a restart verifies nothing');
+  assertEqual(next.history('op-53'), [], 'the record stays finished');
+  await failing.reconciler.stop();
+  await next.reconciler.stop();
+
+  // A server-finish store finishes nothing on the client.
+  const server = createHarness({
+    provider: createFakeProvider({
+      capabilities: capabilitiesOf({ lifecycle: { finish: 'server' } }),
+    }),
+  });
+  server.backend.queue({ status: 'granted', ledgerEntryId: 'le-53s', finalization: 'completed' });
+  await server.reconciler.start();
+  await server.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-53s',
+    source: 'shop',
+  });
+  server.provider.report(purchaseOf({ transactionId: 'tx-53s' }));
+  await server.reconciler.runUntilIdle();
+  assertEqual(server.history('op-53s').at(-1), 'finished', 'the server finalized the grant');
+  server.provider.report(purchaseOf({ transactionId: 'tx-53s' }));
+  await server.reconciler.runUntilIdle();
+  assertEqual(
+    server.provider.finishCalls,
+    [],
+    'a server-finish purchase reported again is not finished',
+  );
+  assertEqual(server.backend.requests.length, 1, 'nor verified again');
+  await server.reconciler.stop();
+}
+
 function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   let thrown: unknown;
   try {

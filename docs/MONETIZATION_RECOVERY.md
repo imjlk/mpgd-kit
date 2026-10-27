@@ -90,7 +90,13 @@ Nothing is granted from a provider result: an adapter-settled purchase and a
 wallet spend (`credit-wallet.spend.v1`, no `settlement`) are verified like any
 other, and `finishTransaction` is only ever called for a `granted` or
 `finishing` record that holds the backend's ledger entry id
-(`assertCommerceFinishAllowed`).
+(`assertCommerceFinishAllowed`), or for a `finished` consumable that a
+`client`-finish store reports again: a store lists a consumable only while it
+is unfinished, so the reconciler finishes it again with the journaled ledger
+entry, once per session, without verifying it again and without rewriting the
+record (StoreKit answers a consumable that already left
+`Transaction.unfinished` as finished, which can end a record before a late
+or unverifiable entry shows up in the list).
 
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal

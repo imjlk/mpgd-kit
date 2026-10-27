@@ -451,7 +451,10 @@ One pass:
    waiting on the store and is never sent.
 4. For `granted` and `finishing` records, act on `lifecycle.finish`: call
    `finishTransaction` for `client` and `host`; resend the verify request to
-   read finalization for `server`; mark `finished` for `none`.
+   read finalization for `server`; mark `finished` for `none`. A `finished`
+   consumable a `client` store reports again (available means unfinished) is
+   finished again with the record's ledger entry, once per session; it is
+   never verified again and the record is not rewritten.
 5. For records whose grant is still within the journal retention window, ask
    the backend for ledger status and move reversed grants to `revoked`.
 
