@@ -85,7 +85,10 @@ export async function openAscIapSession(
 }
 
 /** The port over any runner; the tests drive it with recorded asc output. */
-export function createAscIapPort(run: AscCommandRunner): AscIapPort {
+export function createAscIapPort(
+  run: AscCommandRunner,
+  today: () => string = () => new Date().toISOString().slice(0, 10),
+): AscIapPort {
   const optional = async (args: readonly string[]): Promise<unknown> => {
     try {
       return await run(args, lookupTimeoutMs);
@@ -145,7 +148,8 @@ export function createAscIapPort(run: AscCommandRunner): AscIapPort {
       const response = await optional(
         ['iap', 'pricing', 'schedules', 'view', '--iap-id', iapId, '--include', 'baseTerritory'],
       );
-      if (response === undefined) {
+      // No schedule: asc exits 4 (not found), or App Store Connect answers with no resource.
+      if (response === undefined || (isRecord(response) && response.data === null)) {
         return undefined;
       }
       const schedule = single(response, 'iap pricing schedules view');
@@ -166,7 +170,47 @@ export function createAscIapPort(run: AscCommandRunner): AscIapPort {
       if (baseTerritory === undefined && manualPrices.length === 0) {
         return undefined;
       }
-      return { id: schedule.id, ...(baseTerritory === undefined ? {} : { baseTerritory }), manualPrices };
+      // `--resolved` lists only prices in effect; the raw list also holds future ones.
+      const all = list(await run(
+        ['iap', 'pricing', 'schedules', 'manual-prices', '--schedule-id', schedule.id, '--paginate'],
+        listTimeoutMs,
+      ), 'iap pricing schedules manual-prices');
+      const now = today();
+      const scheduledChanges = all.filter((price) =>
+        typeof price.attributes.startDate === 'string' && price.attributes.startDate.slice(0, 10) > now,
+      ).length;
+      return {
+        id: schedule.id,
+        ...(baseTerritory === undefined ? {} : { baseTerritory }),
+        manualPrices,
+        scheduledChanges,
+      };
+    },
+    async readAvailability(iapId) {
+      let response: unknown;
+      try {
+        response = await run(['iap', 'pricing', 'availability', 'view', '--iap-id', iapId], lookupTimeoutMs);
+      } catch (error) {
+        // asc 5.5.0 reports an unset availability as an error naming it (availability.go).
+        if (error instanceof ReleaseProcessError
+          && (error.exitCode === ascExitNotFound || error.output.includes('has no availability configured'))) {
+          return undefined;
+        }
+        throw error;
+      }
+      if (isRecord(response) && response.data === null) {
+        return undefined;
+      }
+      const availability = single(response, 'iap pricing availability view');
+      const territories = list(await run(
+        ['iap', 'pricing', 'availabilities', 'available-territories', '--id', availability.id, '--paginate'],
+        listTimeoutMs,
+      ), 'iap pricing availabilities available-territories').map((territory) => territory.id);
+      return {
+        id: availability.id,
+        availableInNewTerritories: availability.attributes.availableInNewTerritories === true,
+        territories,
+      };
     },
     async readReviewScreenshot(iapId) {
       const response = await optional(['iap', 'review-screenshots', 'view', '--iap-id', iapId]);
@@ -180,6 +224,10 @@ export function createAscIapPort(run: AscCommandRunner): AscIapPort {
         ...optionalString('fileName', attributes.fileName),
         ...(typeof attributes.fileSize === 'number' ? { fileSize: attributes.fileSize } : {}),
         ...optionalString('sourceFileChecksum', attributes.sourceFileChecksum),
+        ...optionalString(
+          'deliveryState',
+          isRecord(attributes.assetDeliveryState) ? attributes.assetDeliveryState.state : undefined,
+        ),
       } satisfies AscIapReviewScreenshot;
     },
     async listTerritories() {

@@ -46,6 +46,15 @@ export interface AscIapPriceSchedule {
   readonly baseTerritory?: string | undefined;
   /** Manual (not equalized) prices in effect now, per alpha-3 territory. */
   readonly manualPrices: readonly { readonly territory: string; readonly customerPrice: string }[];
+  /** Manual prices that start in the future; a new schedule would drop them. */
+  readonly scheduledChanges: number;
+}
+
+export interface AscIapAvailability {
+  readonly id: string;
+  readonly availableInNewTerritories: boolean;
+  /** Alpha-3 territories the in-app purchase is sold in. */
+  readonly territories: readonly string[];
 }
 
 export interface AscIapReviewScreenshot {
@@ -54,6 +63,8 @@ export interface AscIapReviewScreenshot {
   readonly fileSize?: number | undefined;
   /** MD5 of the uploaded file, as App Store Connect records it. */
   readonly sourceFileChecksum?: string | undefined;
+  /** `assetDeliveryState.state`: `AWAITING_UPLOAD`, `UPLOAD_COMPLETE`, `COMPLETE` or `FAILED`. */
+  readonly deliveryState?: string | undefined;
 }
 
 export interface AscIapPort {
@@ -64,6 +75,8 @@ export interface AscIapPort {
   listLocalizations(versionId: string): Promise<AscIapLocalization[]>;
   /** `undefined` when the in-app purchase has no price schedule yet. */
   readPriceSchedule(iapId: string): Promise<AscIapPriceSchedule | undefined>;
+  /** `undefined` when no availability was set. */
+  readAvailability(iapId: string): Promise<AscIapAvailability | undefined>;
   /** `undefined` when no review screenshot was uploaded. */
   readReviewScreenshot(iapId: string): Promise<AscIapReviewScreenshot | undefined>;
   /** Every App Store territory (alpha-3). */

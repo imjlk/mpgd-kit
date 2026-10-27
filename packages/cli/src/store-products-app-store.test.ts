@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -63,8 +63,8 @@ interface FakeState {
   iaps: FakeIap[];
   versions: Map<string, AscIapVersion[]>;
   localizations: Map<string, AscIapLocalization[]>;
-  schedules: Map<string, { baseTerritory: string; manual: Map<string, string> }>;
-  screenshots: Map<string, { id: string; checksum: string }>;
+  schedules: Map<string, { baseTerritory: string; manual: Map<string, string>; scheduled?: number }>;
+  screenshots: Map<string, { id: string; checksum: string; deliveryState?: string }>;
 }
 
 interface FakeAsc {
@@ -136,11 +136,28 @@ function fakeAsc(initial: Partial<FakeState> = {}, options: { provisionVersion?:
             id: `schedule-${iapId}`,
             baseTerritory: schedule.baseTerritory,
             manualPrices: [...schedule.manual].map(([territory, customerPrice]) => ({ territory, customerPrice })),
+            scheduledChanges: schedule.scheduled ?? 0,
+          };
+    },
+    async readAvailability(iapId) {
+      const availability = iap(iapId).availability;
+      return availability === undefined
+        ? undefined
+        : {
+            id: `availability-${iapId}`,
+            availableInNewTerritories: availability.availableInNew,
+            territories: [...availability.territories],
           };
     },
     async readReviewScreenshot(iapId) {
       const screenshot = state.screenshots.get(iapId);
-      return screenshot === undefined ? undefined : { id: screenshot.id, sourceFileChecksum: screenshot.checksum };
+      return screenshot === undefined
+        ? undefined
+        : {
+            id: screenshot.id,
+            sourceFileChecksum: screenshot.checksum,
+            ...(screenshot.deliveryState === undefined ? {} : { deliveryState: screenshot.deliveryState }),
+          };
     },
     async listTerritories() {
       return ['USA', 'KOR', 'JPN'];
@@ -674,6 +691,198 @@ try {
     ]);
   }
 
+  // --- review findings: live versions, availability, schedules, screenshots -
+  {
+    const cheaper = assertStoreListingCatalog(
+      {
+        version: 'test',
+        products: {
+          REMOVE_ADS: {
+            ...listingsInput.products.REMOVE_ADS,
+            appStore: {
+              ...listingsInput.products.REMOVE_ADS.appStore,
+              price: { baseTerritory: 'USA', customerPrice: '1.99' },
+            },
+          },
+        },
+      },
+      catalog,
+    );
+    // The in-app purchase reads READY_TO_SUBMIT (a new draft is pending) but
+    // version 1 was approved: it is on sale, so the price change needs confirmation.
+    const drafted = approvedRemoveAds();
+    Object.assign(drafted.iaps?.[0] ?? {}, { state: 'READY_TO_SUBMIT' });
+    drafted.versions = new Map([['iap-live', [
+      { id: 'iap-live-v2', version: 2, state: 'PREPARE_FOR_SUBMISSION' },
+      { id: 'iap-live-v1', version: 1, state: 'REPLACED_WITH_NEW_VERSION' },
+    ]]]);
+    drafted.localizations = new Map([['iap-live-v2', approvedRemoveAds().localizations?.get('iap-live-v1') ?? []]]);
+    const draftedPlan = await planAppStoreProducts(
+      { ...planInput, listings: cheaper },
+      fakeAsc(drafted).port,
+    );
+    assert.equal(find(draftedPlan, 'dev.mpgd.store.remove_ads').live, true);
+    assert.equal(find(draftedPlan, 'dev.mpgd.store.remove_ads').livePriceChange, true);
+
+    // A scheduled future price is never dropped by a new schedule.
+    const scheduled = approvedRemoveAds();
+    scheduled.schedules = new Map([['iap-live', { baseTerritory: 'USA', manual: new Map([['USA', '2.99']]), scheduled: 1 }]]);
+    const scheduledPlan = await planAppStoreProducts(
+      { ...planInput, listings: cheaper },
+      fakeAsc(scheduled).port,
+    );
+    assert.equal(find(scheduledPlan, 'dev.mpgd.store.remove_ads').action, 'unchanged');
+    assert.match(
+      find(scheduledPlan, 'dev.mpgd.store.remove_ads').notes.join(' '),
+      /scheduled price change/u,
+    );
+
+    // A manual territory price the file does not name reverts to the equalized price.
+    const extra = approvedRemoveAds();
+    extra.schedules = new Map([['iap-live', { baseTerritory: 'USA', manual: new Map([['USA', '2.99'], ['KOR', '4400']]) }]]);
+    const extraPlan = await planAppStoreProducts(planInput, fakeAsc(extra).port);
+    assert.deepEqual(find(extraPlan, 'dev.mpgd.store.remove_ads').priceChanges, [
+      { territory: 'KOR', from: '4400', to: 'equalized' },
+    ]);
+
+    // An in-app purchase that stays MISSING_METADATA converges once its
+    // availability is set; the file's availability is applied when it differs.
+    const noShot = assertStoreListingCatalog(
+      {
+        version: 'test',
+        products: {
+          COINS_100: {
+            localizations: listingsInput.products.COINS_100.localizations,
+            appStore: { price: { baseTerritory: 'USA', customerPrice: '0.99' } },
+          },
+        },
+      },
+      catalog,
+    );
+    const stuck = fakeAsc();
+    const first = await planAppStoreProducts({ ...planInput, listings: noShot }, stuck.port);
+    await applyAppStoreProductPlan({
+      saved: first,
+      current: first,
+      port: stuck.port,
+      approved: true,
+    });
+    assert.equal(stuck.state.iaps[0]?.state, 'MISSING_METADATA', 'no review screenshot yet');
+    const second = await planAppStoreProducts({ ...planInput, listings: noShot }, stuck.port);
+    assert.equal(find(second, 'dev.mpgd.store.coins100').action, 'unchanged');
+    const narrowed = assertStoreListingCatalog(
+      {
+        version: 'test',
+        products: {
+          COINS_100: {
+            ...noShot.products.COINS_100,
+            appStore: {
+              ...noShot.products.COINS_100?.appStore,
+              availability: { territories: ['USA'], availableInNewTerritories: false },
+            },
+          },
+        },
+      },
+      catalog,
+    );
+    const third = await planAppStoreProducts({ ...planInput, listings: narrowed }, stuck.port);
+    assert.deepEqual(find(third, 'dev.mpgd.store.coins100').changes, ['availability']);
+    assert.match(
+      find(third, 'dev.mpgd.store.coins100').notes.join(' '),
+      /1 territories, new territories off/u,
+    );
+    const unpricedTerritory = assertStoreListingCatalog(
+      {
+        version: 'test',
+        products: {
+          COINS_100: {
+            ...narrowed.products.COINS_100,
+            appStore: {
+              ...narrowed.products.COINS_100?.appStore,
+              price: { baseTerritory: 'USA', customerPrice: '0.99', territories: { KOR: '1500' } },
+            },
+          },
+        },
+      },
+      catalog,
+    );
+    await assert.rejects(
+      planAppStoreProducts({ ...planInput, listings: unpricedTerritory }, stuck.port),
+      /KOR are missing from appStore.availability/u,
+    );
+
+    // A failed screenshot delivery with the same checksum is replaced.
+    const failed = approvedRemoveAds();
+    failed.screenshots = new Map([['iap-live', { id: 'shot-failed', checksum: md5(shot), deliveryState: 'FAILED' }]]);
+    const failedPlan = await planAppStoreProducts(planInput, fakeAsc(failed).port);
+    assert.deepEqual(find(failedPlan, 'dev.mpgd.store.remove_ads').changes, ['review-screenshot']);
+    assert.equal(
+      find(failedPlan, 'dev.mpgd.store.remove_ads').write?.reviewScreenshot?.replaceId,
+      'shot-failed',
+    );
+
+    // Text changes while a version is in review wait for App Review.
+    const inReview = approvedRemoveAds();
+    inReview.versions = new Map([['iap-live', [
+      { id: 'iap-live-v2', version: 2, state: 'WAITING_FOR_REVIEW' },
+      { id: 'iap-live-v1', version: 1, state: 'APPROVED' },
+    ]]]);
+    inReview.localizations = new Map([['iap-live-v2', approvedRemoveAds().localizations?.get('iap-live-v1') ?? []]]);
+    const changedText = assertStoreListingCatalog(
+      {
+        version: 'test',
+        products: {
+          REMOVE_ADS: {
+            ...listingsInput.products.REMOVE_ADS,
+            localizations: { 'en-US': { title: 'Remove ads', description: 'Banners begone.' } },
+          },
+        },
+      },
+      catalog,
+    );
+    const reviewPlan = await planAppStoreProducts(
+      { ...planInput, listings: changedText },
+      fakeAsc(inReview).port,
+    );
+    assert.equal(find(reviewPlan, 'dev.mpgd.store.remove_ads').action, 'unchanged');
+    assert.match(
+      find(reviewPlan, 'dev.mpgd.store.remove_ads').notes.join(' '),
+      /after App Review answers/u,
+    );
+
+    // The plan digest names the screenshot by its relative path: another
+    // checkout with the same files plans the same write.
+    const other = path.join(fixture, 'other-checkout');
+    mkdirSync(path.join(other, 'store'), { recursive: true });
+    writeFileSync(path.join(other, 'store', 'coins.png'), readFileSync(shot));
+    const here = await planAppStoreProducts(planInput, fakeAsc().port);
+    const there = await planAppStoreProducts(
+      { ...planInput, listingsDirectory: other },
+      fakeAsc().port,
+    );
+    assert.equal(
+      find(here, 'dev.mpgd.store.coins100').desiredSha256,
+      find(there, 'dev.mpgd.store.coins100').desiredSha256,
+    );
+    assert.notEqual(
+      find(here, 'dev.mpgd.store.coins100').write?.reviewScreenshot?.file,
+      find(there, 'dev.mpgd.store.coins100').write?.reviewScreenshot?.file,
+    );
+
+    // A screenshot symlink must stay inside the listing directory.
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'mpgd-outside-'));
+    const outside = path.join(outsideDir, 'coins.png');
+    writeFileSync(outside, 'outside');
+    const linked = path.join(fixture, 'linked');
+    mkdirSync(path.join(linked, 'store'), { recursive: true });
+    symlinkSync(outside, path.join(linked, 'store', 'coins.png'));
+    await assert.rejects(
+      planAppStoreProducts({ ...planInput, listingsDirectory: linked }, fakeAsc().port),
+      /resolves outside/u,
+    );
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+
   // --- the asc commands behind the port ----------------------------------------
   {
     const calls: string[][] = [];
@@ -737,7 +946,7 @@ try {
         },
       ],
       [
-        'iap pricing schedules manual-prices',
+        'iap pricing schedules manual-prices (resolved)',
         {
           prices: [
             {
@@ -778,6 +987,45 @@ try {
       ],
       ['iap create', { data: { type: 'inAppPurchases', id: '6001', attributes: {} }, links: {} }],
       [
+        'iap pricing schedules manual-prices',
+        {
+          data: [
+            {
+              type: 'inAppPurchasePrices',
+              id: 'p1',
+              attributes: { startDate: '2025-01-01', manual: true },
+            },
+            {
+              type: 'inAppPurchasePrices',
+              id: 'p3',
+              attributes: { startDate: '2026-12-01', manual: true },
+            },
+            { type: 'inAppPurchasePrices', id: 'p4', attributes: { manual: true } },
+          ],
+          links: {},
+        },
+      ],
+      [
+        'iap pricing availability view',
+        {
+          data: {
+            type: 'inAppPurchaseAvailabilities',
+            id: 'av1',
+            attributes: { availableInNewTerritories: true },
+          },
+        },
+      ],
+      [
+        'iap pricing availabilities available-territories',
+        {
+          data: [
+            { type: 'territories', id: 'USA' },
+            { type: 'territories', id: 'KOR' },
+          ],
+          links: {},
+        },
+      ],
+      [
         'iap versions create',
         {
           data: {
@@ -792,7 +1040,8 @@ try {
     const notFound = new Set(['iap review-screenshots view']);
     const run: AscCommandRunner = async (args) => {
       calls.push([...args]);
-      const key = args.filter((arg) => !arg.startsWith('-')).slice(0, 5).join(' ');
+      const key = args.filter((arg) => !arg.startsWith('-')).slice(0, 4).join(' ')
+        + (args.includes('--resolved') ? ' (resolved)' : '');
       for (const [prefix, response] of responses) {
         if (key.startsWith(prefix)) {
           return structuredClone(response);
@@ -805,7 +1054,7 @@ try {
       }
       return { data: { type: 'x', id: 'ok', attributes: {} } };
     };
-    const port = createAscIapPort(run);
+    const port = createAscIapPort(run, () => '2026-10-27');
     assert.equal(await port.readAppBundleId(appId), bundleId);
     assert.deepEqual(await port.listIaps(appId), [
       {
@@ -829,9 +1078,15 @@ try {
         id: 's1',
         baseTerritory: 'USA',
         manualPrices: [{ territory: 'USA', customerPrice: '2.99' }],
+        scheduledChanges: 1,
       },
-      'equalized (non-manual) prices are not the schedule',
+      'equalized (non-manual) prices are not the schedule; one manual price starts later',
     );
+    assert.deepEqual(await port.readAvailability('6000'), {
+      id: 'av1',
+      availableInNewTerritories: true,
+      territories: ['USA', 'KOR'],
+    });
     assert.equal(await port.readReviewScreenshot('6000'), undefined, 'asc exit 4 is "none"');
     assert.deepEqual(await port.listTerritories(), ['USA']);
     assert.equal(
@@ -877,6 +1132,9 @@ try {
       ['iap', 'versions', 'localizations', 'list', '--version-id', 'v1', '--paginate'],
       ['iap', 'pricing', 'schedules', 'view', '--iap-id', '6000', '--include', 'baseTerritory'],
       ['iap', 'pricing', 'schedules', 'manual-prices', '--schedule-id', 's1', '--resolved'],
+      ['iap', 'pricing', 'schedules', 'manual-prices', '--schedule-id', 's1', '--paginate'],
+      ['iap', 'pricing', 'availability', 'view', '--iap-id', '6000'],
+      ['iap', 'pricing', 'availabilities', 'available-territories', '--id', 'av1', '--paginate'],
       ['iap', 'review-screenshots', 'view', '--iap-id', '6000'],
       ['pricing', 'territories', 'list', '--paginate'],
       [
@@ -981,6 +1239,44 @@ try {
       createAscIapPort(async () => ({ data: 'nope' })).listIaps(appId),
       /returned no resource list/u,
     );
+    // An unset availability (asc 5.5.0 exits non-zero naming it), a schedule
+    // answered with no resource, and a failed screenshot delivery.
+    const unset = createAscIapPort(async (args) => {
+      if (args.includes('availability')) {
+        throw new ReleaseProcessError(
+          'exit',
+          'In-app purchase 6000 has no availability configured yet; create it with: asc iap pricing availability set',
+          1,
+        );
+      }
+      if (args.includes('schedules')) {
+        return { data: null };
+      }
+      return {
+        data: {
+          type: 'inAppPurchaseAppStoreReviewScreenshots',
+          id: 'shot-9',
+          attributes: {
+            sourceFileChecksum: 'abc',
+            assetDeliveryState: { state: 'FAILED', errors: [] },
+          },
+        },
+      };
+    });
+    assert.equal(await unset.readAvailability('6000'), undefined);
+    assert.equal(await unset.readPriceSchedule('6000'), undefined);
+    assert.deepEqual(await unset.readReviewScreenshot('6000'), {
+      id: 'shot-9',
+      sourceFileChecksum: 'abc',
+      deliveryState: 'FAILED',
+    });
+    await assert.rejects(
+      createAscIapPort(async () => {
+        throw new ReleaseProcessError('exit', 'Error: internal', 1);
+      }).readAvailability('6000'),
+      ReleaseProcessError,
+      'an unrelated failure is not "no availability"',
+    );
   }
 
   // --- the command reads the iOS profile and the asc credential --------------
@@ -1067,6 +1363,24 @@ try {
       ),
       /MPGD_ASC_APP_ID/u,
     );
+    // The asc session is closed when the plan fails too.
+    const failing = {
+      appStore: async (credential: { ascBinary: string }) => {
+        const session = { binary: credential.ascBinary, closed: false };
+        sessions.push(session);
+        return {
+          port: { ...asc.port, readAppBundleId: async () => 'dev.other' },
+          close: () => {
+            session.closed = true;
+          },
+        };
+      },
+    };
+    await assert.rejects(
+      planStoreProducts({ game, profile: 'beta', store: 'app-store' }, environment, failing),
+      /bundle ID dev\.other/u,
+    );
+    assert.equal(sessions.at(-1)?.closed, true);
   }
 } finally {
   rmSync(fixture, { recursive: true, force: true });

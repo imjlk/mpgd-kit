@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -78,7 +78,10 @@ export interface AppStoreProductWrite {
     readonly availableInNewTerritories: boolean;
   };
   readonly reviewScreenshot?: {
+    /** Absolute path on this checkout. */
     readonly file: string;
+    /** Path relative to the listing file, as the file names it. */
+    readonly path: string;
     readonly md5: string;
     /** The completed screenshot to delete first (App Store Connect keeps one). */
     readonly replaceId?: string;
@@ -156,6 +159,8 @@ const maxDisplayName = 30;
 const maxDescription = 45;
 const maxReviewNote = 4000;
 // Version states whose localizations App Store Connect still accepts edits for.
+const inReviewVersionStates = new Set(['WAITING_FOR_REVIEW', 'IN_REVIEW']);
+const approvedVersionStates = new Set(['ACCEPTED', 'APPROVED', 'REPLACED_WITH_NEW_VERSION']);
 const editableVersionStates = new Set([
   'PREPARE_FOR_SUBMISSION',
   'READY_FOR_REVIEW',
@@ -294,7 +299,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
   }
   const screenshot = appStore.reviewScreenshot === undefined
     ? undefined
-    : readScreenshot(path.resolve(input.listingsDirectory, appStore.reviewScreenshot), label);
+    : readScreenshot(input.listingsDirectory, appStore.reviewScreenshot, label);
 
   if (remote !== undefined && remote.inAppPurchaseType !== input.type) {
     throw new Error(
@@ -302,7 +307,6 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
       + 'App Store Connect cannot change the type.',
     );
   }
-  const live = remote?.state === 'APPROVED';
   const write: MutableWrite = {};
 
   // The in-app purchase itself.
@@ -345,7 +349,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     }
   } else {
     versions = [...await port.listVersions(remote.id)]
-      .sort((left, right) => (right.version ?? 0) - (left.version ?? 0));
+      .sort((left, right) => (right.version ?? 0) - (left.version ?? 0) || left.id.localeCompare(right.id));
     const editable = versions.filter((version) => editableVersionStates.has(String(version.state)));
     if (editable.length > 1) {
       throw new Error(
@@ -354,7 +358,9 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     }
     const target = editable[0];
     const base = target ?? versions[0];
-    baseLocalizations = base === undefined ? [] : await port.listLocalizations(base.id);
+    baseLocalizations = base === undefined
+      ? []
+      : [...await port.listLocalizations(base.id)].sort((left, right) => left.locale.localeCompare(right.locale));
     const byLocale = new Map(
       baseLocalizations.map((localization) => [localization.locale.toLowerCase(), localization]),
     );
@@ -370,7 +376,12 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
       notes.push(`App Store Connect keeps localizations the file does not name: ${
         kept.map((localization) => localization.locale).join(', ')}.`);
     }
-    if (changed.length > 0) {
+    if (changed.length > 0 && target === undefined && base !== undefined
+      && inReviewVersionStates.has(String(base.state))) {
+      notes.push(
+        `Version ${String(base.version ?? '?')} is ${String(base.state)}; change the text after App Review answers.`,
+      );
+    } else if (changed.length > 0) {
       changes.push('localizations');
       if (target !== undefined) {
         write.localizations = { version: 'existing', versionId: target.id, entries: changed };
@@ -387,7 +398,13 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     }
   }
 
+  // On sale: the in-app purchase, or any of its versions, passed App Review.
+  const live = remote?.state === 'APPROVED'
+    || versions.some((version) => approvedVersionStates.has(String(version.state)));
+
   // Prices: the base territory's customer price, plus manual territory prices.
+  // A new schedule replaces the old one: a territory the file does not name
+  // goes back to Apple's equalized price.
   const priceChanges: AppStorePriceChange[] = [];
   let schedule: AscIapPriceSchedule | undefined;
   if (remote !== undefined) {
@@ -420,11 +437,17 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
         priceChanges.push({
           territory,
           ...(from === undefined ? {} : { from }),
-          ...(to === undefined ? {} : { to }),
+          to: to ?? 'equalized',
         });
       }
     }
-    if (priceChanges.length > 0) {
+    if (priceChanges.length > 0 && (schedule?.scheduledChanges ?? 0) > 0) {
+      notes.push(
+        `App Store Connect has ${String(schedule?.scheduledChanges)} scheduled price change(s); a new schedule `
+        + 'would drop them, so the sync leaves the prices alone. Change them in App Store Connect.',
+      );
+      priceChanges.length = 0;
+    } else if (priceChanges.length > 0) {
       if (live && input.keepLivePrices) {
         notes.push('A price change on this live in-app purchase is held (--keep-live-prices).');
         priceChanges.length = 0;
@@ -439,13 +462,36 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     }
   }
 
-  // Availability: set for a new in-app purchase or one still missing metadata.
-  if (remote === undefined || remote.state === 'MISSING_METADATA') {
+  // Availability: set when there is none; changed only when the file names it.
+  const availability = remote === undefined ? undefined : await port.readAvailability(remote.id);
+  const desiredAvailability = async (): Promise<NonNullable<AppStoreProductWrite['availability']>> => ({
+    territories: [...(appStore.availability?.territories ?? await input.allTerritories())].sort(),
+    availableInNewTerritories: appStore.availability?.availableInNewTerritories ?? true,
+  });
+  if (appStore.availability?.territories !== undefined && appStore.price !== undefined) {
+    const sold = new Set(appStore.availability.territories);
+    const priced = [appStore.price.baseTerritory, ...Object.keys(appStore.price.territories ?? {})];
+    const unsold = priced.filter((territory) => !sold.has(territory));
+    if (unsold.length > 0) {
+      throw new Error(
+        `${label}: priced territories ${unsold.join(', ')} are missing from appStore.availability.`,
+      );
+    }
+  }
+  if (availability === undefined) {
     changes.push('availability');
-    write.availability = {
-      territories: [...(appStore.availability?.territories ?? await input.allTerritories())].sort(),
-      availableInNewTerritories: appStore.availability?.availableInNewTerritories ?? true,
-    };
+    write.availability = await desiredAvailability();
+  } else if (appStore.availability !== undefined) {
+    const wanted = await desiredAvailability();
+    if (wanted.availableInNewTerritories !== availability.availableInNewTerritories
+      || wanted.territories.join(',') !== [...availability.territories].sort().join(',')) {
+      changes.push('availability');
+      write.availability = wanted;
+    }
+  }
+  if (write.availability !== undefined) {
+    notes.push(`Availability: ${write.availability.territories.length} territories, new territories ${
+      write.availability.availableInNewTerritories ? 'on' : 'off'}.`);
   }
 
   // Review screenshot: upload when missing, replace when the bytes differ.
@@ -454,11 +500,21 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     remoteScreenshot = await port.readReviewScreenshot(remote.id);
   }
   if (screenshot !== undefined) {
-    const same = remoteScreenshot?.sourceFileChecksum?.toLowerCase() === screenshot.md5;
+    // A failed or never-finished upload keeps its checksum; only a delivered one counts.
+    const delivered = remoteScreenshot?.deliveryState === undefined
+      || remoteScreenshot.deliveryState === 'COMPLETE'
+      || remoteScreenshot.deliveryState === 'UPLOAD_COMPLETE';
+    const same = delivered && remoteScreenshot?.sourceFileChecksum?.toLowerCase() === screenshot.md5;
+    if (remoteScreenshot !== undefined && !delivered) {
+      notes.push(
+        `The review screenshot on App Store Connect is ${String(remoteScreenshot.deliveryState)}.`,
+      );
+    }
     if (!same) {
       changes.push('review-screenshot');
       write.reviewScreenshot = {
         file: screenshot.file,
+        path: screenshot.path,
         md5: screenshot.md5,
         ...(remoteScreenshot === undefined ? {} : { replaceId: remoteScreenshot.id }),
       };
@@ -469,7 +525,14 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
 
   const remoteSha256 = remote === undefined
     ? null
-    : stableSha256({ remote, versions, baseLocalizations, schedule, remoteScreenshot });
+    : stableSha256({
+        remote,
+        versions,
+        baseLocalizations,
+        schedule,
+        availability,
+        remoteScreenshot,
+      });
   const action: StoreProductAction = remote === undefined
     ? 'create'
     : changes.length === 0
@@ -487,7 +550,17 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     priceChanges,
     notes,
     remoteSha256,
-    desiredSha256: stableSha256({ changes, write }),
+    // The digest names the screenshot by its listing-relative path, so a
+    // plan applied from another checkout (`apply --game`) still matches.
+    desiredSha256: stableSha256({
+      changes,
+      write: {
+        ...write,
+        ...(write.reviewScreenshot === undefined ? {} : {
+          reviewScreenshot: { ...write.reviewScreenshot, file: write.reviewScreenshot.path },
+        }),
+      },
+    }),
     ...(changes.length === 0 ? {} : { write }),
   };
 }
@@ -569,7 +642,7 @@ export async function applyAppStoreProductPlan(input: {
       done.push({ productId: product.productId, status: 'unchanged' });
       continue;
     }
-    let stage = 'create';
+    let stage = 'start';
     const step = async <T>(name: string, action: () => Promise<T>): Promise<T> => {
       stage = name;
       return action();
@@ -727,14 +800,26 @@ export function formatAppStoreProductPlan(plan: AppStoreProductPlan): string {
   return lines.join('\n');
 }
 
-function readScreenshot(file: string, label: string): { file: string; md5: string } {
+function readScreenshot(
+  listingsDirectory: string,
+  relative: string,
+  label: string,
+): { file: string; path: string; md5: string } {
+  const file = path.resolve(listingsDirectory, relative);
   if (!existsSync(file) || !statSync(file).isFile()) {
     throw new Error(`${label}: review screenshot ${file} is missing.`);
   }
   if (!/\.(?:png|jpe?g)$/iu.test(file)) {
     throw new Error(`${label}: review screenshot ${file} must be a PNG or JPEG file.`);
   }
-  return { file, md5: md5File(file) };
+  // A symbolic link must not reach outside the game.
+  const real = path.relative(realpathSync(listingsDirectory), realpathSync(file));
+  if (real.startsWith('..') || path.isAbsolute(real)) {
+    throw new Error(
+      `${label}: review screenshot ${relative} resolves outside the listing file's directory.`,
+    );
+  }
+  return { file, path: relative, md5: md5File(file) };
 }
 
 function md5File(file: string): string {
