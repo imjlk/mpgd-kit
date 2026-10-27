@@ -264,6 +264,68 @@ them into analytics or logs.
 All published entrypoints use explicit internal ESM module paths and are smoke-tested
 with native Node imports, without a bundler or TypeScript runtime loader.
 
+## One player per runtime
+
+A runtime, its purchase journal records, and its reconciler belong to
+`playerId` for their whole life, while `getHeaders` and a store provider's
+account binding follow the live session. When the session can change player
+within a run (an account switch), pass `sessionPlayerId: () => session.current()?.playerId`:
+
+- It is read before every backend request and again once that request's
+  headers are resolved, and by the commerce reconciler before each pass,
+  queued event, record step, store read, restore, and finish, and right
+  before a store UI opens.
+- Another player closes the runtime for good: nothing more is verified,
+  restored, or finished for this player with the other player's credentials
+  (a backend answers that with a permanent account-mismatch rejection), and
+  no store UI opens for a purchase journaled here once the session names
+  someone else. The provider resolves its account binding a few steps after
+  that last check, so the binding resolver must follow the runtime's player
+  too (bind nothing for anyone else, as the generated game's
+  `pinStarterCommercePlayer` does) for a purchase never to be
+  journaled here and bound to the other account; a binding refused while the
+  session changed keeps the attempt retryable. Purchases
+  answer `failed` with the retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`
+  before any store UI, rewarded-ad claims answer `unavailable` before any
+  ad, recovery runs nothing, and Restore Purchases rejects with
+  `GameServicesRuntimeClosedError`.
+- No player (signed out) refuses the same way with
+  `GAME_SERVICES_SESSION_REQUIRED` and leaves the runtime open for its player.
+
+Refusals end no journal record: a runtime created for the player later
+resumes them. `runtime.dispose()` closes a runtime the same way
+(`GAME_SERVICES_RUNTIME_DISPOSED`) and resolves once a purchase whose store
+sheet is open has journaled its answer and the reconciler has stopped (each
+wait bounded by `gameServicesDisposeWaitMs`, 3 minutes); call it, and wait,
+before creating the runtime for another player or reloading. A custom
+`httpTransport` must send only the headers the runtime resolved for each
+request, or the after-resolution check cannot cover it. A refusal keeps its
+`GameServicesRuntimeClosedError` through header resolution and the HTTP
+transport (it is not turned into `GameServicesHeaderResolutionError` or
+`GameServicesBackendTransportError`). A reconciler started while the session
+is signed out still subscribes to the store; its work waits for the session.
+
+Pass `commerceAccountBinding` too: this player's store account binding,
+derived from `playerId` the way the store provider binds the player's new
+purchases (Google Play's obfuscated account id, StoreKit's app account
+token). The reconciler then leaves a store purchase bound to another account
+alone (reported, never journaled or verified for this player). After a
+restart as another player, Google Play still lists the previous player's
+unacknowledged purchases; sending one with this player's session would be
+rejected for good, and its derived key would then block the other player's
+own recovery. The player's explicit Restore Purchases still takes a durable
+bound to another account (restore sharing). StoreKit's provider already
+filters transactions by app account token the same way.
+
+`dispose()` is a required member of `GameServicesRuntime`: a runtime built by
+hand (a test fake, a custom wrapper) adds `dispose: async () => undefined`.
+
+A game adopting this creates its runtime from its server session's player
+(never a platform placeholder), passes `sessionPlayerId` and
+`commerceAccountBinding`, keeps its store account binding resolver on the
+same player (bind nothing for anyone else), and disposes the runtime (and
+waits) before it creates one for another player.
+
 ## Guest session and account binding foundation
 
 `createGuestSessionCoordinator` from `@mpgd/game-services/guest-session`

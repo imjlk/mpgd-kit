@@ -137,6 +137,21 @@ in memory for the session only and warns once (`warn`, default
 `console.warn`); duplicates are then caught by the backend ledger, not by
 the client.
 
+A runtime and its reconciler act for one `playerId`. When the session can
+change player within a run, pass `createGameServicesRuntime({ sessionPlayerId })`
+(the reconciler's `sessionCheck`): from the moment the session names another
+player, the old runtime closes before that player's headers or store account
+binding reach the old player's records, and every refusal is retryable and
+ends no record (see "One player per runtime" in the `@mpgd/game-services`
+README). Verifying one player's purchase with another player's session is not
+a transient error: the kit's Google Play and App Store verification answers it
+(for anything but a restored non-consumable) as a permanent `rejected`
+account mismatch (`GOOGLE_PLAY_ACCOUNT_MISMATCH`,
+`APP_STORE_ACCOUNT_TOKEN_MISMATCH`), which would end a valid purchase.
+`runtime.dispose()` closes a runtime the same way before the host creates one
+for the new player; the generated game reloads instead (template README,
+"Guest identity").
+
 ### The retired v1 purchase record
 
 Releases before commerce v2 C4 wrote a `purchase` journal record for every

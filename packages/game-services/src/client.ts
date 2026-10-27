@@ -21,6 +21,7 @@ import {
   type CommerceReconciler,
   type CommerceReconcilerEvent,
   type CommerceReconcilerProduct,
+  type CreateCommerceReconcilerInput,
 } from './commerce-reconciler.js';
 import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import { createInMemoryMonetizationOperationStore } from './monetization-operation-store.js';
@@ -45,6 +46,7 @@ import { withLegacyOrpcErrorCompat } from './orpc-error-compat.js';
 export { withLegacyOrpcErrorCompat } from './orpc-error-compat.js';
 import {
   GameServicesHeaderResolutionError,
+  GameServicesRuntimeClosedError,
   resolveGameServicesRequestHeaders,
   type GameServicesHeaderResolver,
 } from './request-headers.js';
@@ -236,6 +238,10 @@ export interface CreateGameServicesClientInput {
   /** The reconciler's `staleLaunchedAfterMs` (24 hours by default). */
   readonly commerceStaleLaunchedAfterMs?: number;
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
+  /** The reconciler's `sessionCheck` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceSessionCheck?: CreateCommerceReconcilerInput['sessionCheck'];
+  /** The reconciler's `accountBinding` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceAccountBinding?: CreateCommerceReconcilerInput['accountBinding'];
 }
 
 /**
@@ -291,6 +297,8 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       target: input.target,
       ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
       ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
+      ...(input.commerceSessionCheck === undefined ? {} : { sessionCheck: input.commerceSessionCheck }),
+      ...(input.commerceAccountBinding === undefined ? {} : { accountBinding: input.commerceAccountBinding }),
       ...(input.commerceStaleLaunchedAfterMs === undefined
         ? {}
         : { staleLaunchedAfterMs: input.commerceStaleLaunchedAfterMs }),
@@ -792,7 +800,7 @@ async function sendGameServicesBackendRequest<TRequest, TResponse>(
       body,
     });
   } catch (error) {
-    if (error instanceof GameServicesHeaderResolutionError) {
+    if (error instanceof GameServicesHeaderResolutionError || error instanceof GameServicesRuntimeClosedError) {
       throw error;
     }
     // Do not leak SDK or native transport exceptions (which can contain

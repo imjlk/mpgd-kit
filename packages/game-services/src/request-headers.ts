@@ -7,6 +7,45 @@
 export type GameServicesHeaderResolver =
   () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
 
+/** A runtime refused an operation because it was disposed (see `GameServicesRuntime.dispose`). */
+export const gameServicesRuntimeDisposedCode = 'GAME_SERVICES_RUNTIME_DISPOSED';
+/**
+ * A runtime refused an operation because `sessionPlayerId` names another
+ * player: it closed itself, as `dispose()` does, and the host creates a
+ * runtime for the signed-in player (retryable there).
+ */
+export const gameServicesPlayerChangedCode = 'GAME_SERVICES_PLAYER_CHANGED';
+/** A runtime refused an operation because `sessionPlayerId` names no player (signed out); it stays open. */
+export const gameServicesSessionRequiredCode = 'GAME_SERVICES_SESSION_REQUIRED';
+
+export type GameServicesRuntimeClosedCode =
+  | typeof gameServicesRuntimeDisposedCode
+  | typeof gameServicesPlayerChangedCode
+  | typeof gameServicesSessionRequiredCode;
+
+/**
+ * An operation the runtime refused before it reached the backend or the
+ * store: it was disposed, its player is no longer the session's, or the
+ * session is signed out. Always retryable (with a runtime for the signed-in
+ * player); nothing was sent and no record was ended.
+ */
+export class GameServicesRuntimeClosedError extends Error {
+  readonly code: GameServicesRuntimeClosedCode;
+  readonly retryable = true;
+
+  constructor(code: GameServicesRuntimeClosedCode) {
+    super(
+      code === gameServicesPlayerChangedCode
+        ? 'The session now names another player; this game services runtime is closed.'
+        : code === gameServicesSessionRequiredCode
+          ? 'The session names no player; sign in before using game services.'
+          : 'This game services runtime was disposed.',
+    );
+    this.name = 'GameServicesRuntimeClosedError';
+    this.code = code;
+  }
+}
+
 /** Credentials could not be resolved; no backend request was dispatched. */
 export class GameServicesHeaderResolutionError extends Error {
   constructor() {
@@ -24,7 +63,11 @@ export async function resolveGameServicesRequestHeaders(input: {
   let dynamicHeaders: Readonly<Record<string, string>> | undefined;
   try {
     dynamicHeaders = await input.getHeaders?.();
-  } catch {
+  } catch (error) {
+    if (error instanceof GameServicesRuntimeClosedError) {
+      // The runtime's own refusal carries no credentials; its code says why.
+      throw error;
+    }
     // Resolver exceptions can contain credentials; expose a stable outcome.
     throw new GameServicesHeaderResolutionError();
   }

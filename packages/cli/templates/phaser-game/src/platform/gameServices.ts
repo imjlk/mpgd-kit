@@ -13,11 +13,17 @@ import type { PlatformGateway } from '@mpgd/platform';
 import type { GameActionReconciliationPort } from '@mpgd/game-runtime/actions';
 import type { PurchasePresentationEvent } from '@mpgd/game-runtime/ads';
 
+import {
+  pinStarterCommercePlayer,
+  resolveStarterStoreAccountBindingFor,
+  starterStoreAccountBindingKind,
+} from './commerceAccountBinding';
 import { resolveStarterCommerceProducts } from './commerceProducts';
 import type { StarterGuestSignIn } from './guestIdentity';
 import { createStorageMonetizationOperationStore } from './monetizationJournal';
 import { resolveStarterServerSession } from './serverSession';
 import {
+  bindStarterServicesToPlayer,
   createSessionGatedGameServices,
   type StarterSessionGatedServices,
 } from './sessionGatedServices';
@@ -52,6 +58,20 @@ interface StarterGameServicesInput {
   readonly operationStore?: MonetizationOperationStore;
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
+  /**
+   * Called at once when the server session names another player than the
+   * services' (an account switch within the run): the services refuse
+   * everything from now on; block input or show a switching screen
+   * (`main.ts` does both). `onPlayerChanged` follows.
+   */
+  readonly onPlayerChanging?: (playerId: string) => void;
+  /**
+   * Called once after `onPlayerChanging`, when the closed services have
+   * stopped (an open store sheet first journals its answer, up to
+   * `gameServicesDisposeWaitMs`): restart the game so it boots for that
+   * player (`main.ts` reloads).
+   */
+  readonly onPlayerChanged?: (playerId: string) => void;
 }
 
 /**
@@ -60,9 +80,42 @@ interface StarterGameServicesInput {
  * over the platform storage adapter unless the game supplies its own) and
  * verified through the backend ledger, with the catalog's kinds and SKUs for
  * the gateway target resolved without a store read.
+ *
+ * With a server session (`setStarterServerSession`), the services belong to
+ * `playerId` for their whole life and fail closed for anyone else: while the
+ * session names no player, purchases and backend requests are refused
+ * (retryable); once it names another player (an account switch), the
+ * services close for good before that player's headers or store account
+ * binding reach this player's journal (purchases answer `failed` with the
+ * retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`), `onPlayerChanging`
+ * tells the host at once, and `onPlayerChanged` asks it to boot again for
+ * the new player once they have stopped. Pass the
+ * session's player as `playerId`, never the platform's local placeholder:
+ * services created for another player than the session's stay closed.
  */
 export function createStarterGameServices(input: StarterGameServicesInput): StarterGameServices {
-  return createRuntime(input, resolveStarterServerSession({ once: true }));
+  const session = resolveStarterServerSession({ once: true });
+  if (session === undefined) {
+    return createRuntime(input, session);
+  }
+  // The store account binding follows the same player as the journal, until
+  // these services were disposed; throws while another player's are open.
+  const releasePin = pinStarterCommercePlayer(input.playerId);
+  let services: GameServicesRuntime;
+  try {
+    services = createRuntime(input, session);
+  } catch (error) {
+    releasePin();
+    throw error;
+  }
+  return bindStarterServicesToPlayer({
+    services,
+    playerId: input.playerId,
+    session,
+    onDisposed: releasePin,
+    ...(input.onPlayerChanging === undefined ? {} : { onPlayerChanging: input.onPlayerChanging }),
+    ...(input.onPlayerChanged === undefined ? {} : { onPlayerChanged: input.onPlayerChanged }),
+  });
 }
 
 /**
@@ -79,14 +132,30 @@ export function createStarterSessionGatedGameServices(
     readonly onActivated?: () => void;
   },
 ): StarterGameServices {
-  const { signIn, onActivated, ...rest } = input;
+  const { signIn, onActivated, onPlayerChanging, onPlayerChanged, ...rest } = input;
+  // The inner services (a session switch) and the gate (a later sign-in) may
+  // both see the same change; the host hears each step once.
+  const once = (callback: (playerId: string) => void): ((playerId: string) => void) => {
+    let called = false;
+    return (playerId) => {
+      if (!called) {
+        called = true;
+        callback(playerId);
+      }
+    };
+  };
+  const hooks = {
+    ...(onPlayerChanging === undefined ? {} : { onPlayerChanging: once(onPlayerChanging) }),
+    ...(onPlayerChanged === undefined ? {} : { onPlayerChanged: once(onPlayerChanged) }),
+  };
   return createSessionGatedGameServices({
     // Configuration only (mode, target, whether a client exists); never sends a request.
     probe: createRuntime({ ...rest, playerId: 'session-pending' }, undefined),
     ensurePlayer: async () => (await signIn.ensure())?.playerId,
     onPlayer: (listener) => signIn.onSignedIn((signedIn) => listener(signedIn.playerId)),
-    create: (playerId) => createStarterGameServices({ ...rest, playerId }),
+    create: (playerId) => createStarterGameServices({ ...rest, playerId, ...hooks }),
     ...(onActivated === undefined ? {} : { onActivated }),
+    ...hooks,
   });
 }
 
@@ -111,6 +180,21 @@ function createRuntime(
       ? {}
       : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),
     transport: resolveGameServicesTransport(import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT),
-    ...(session === undefined ? {} : { getHeaders: () => session.getHeaders() }),
+    // A store purchase bound to another player's account is left for that player.
+    // Only where the template binds purchases: elsewhere (Microsoft Store) nothing is compared.
+    ...(starterStoreAccountBindingKind(input.gateway.target) === undefined
+      ? {}
+      : {
+          commerceAccountBinding: () =>
+            resolveStarterStoreAccountBindingFor(input.gateway.target, input.playerId),
+        }),
+    ...(session === undefined
+      ? {}
+      : {
+          getHeaders: () => session.getHeaders(),
+          // Requests, the store account binding, and the journal follow this
+          // session's player; the services refuse while it is not theirs.
+          sessionPlayerId: () => session.current()?.playerId,
+        }),
   });
 }

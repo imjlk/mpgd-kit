@@ -27,6 +27,9 @@ import { setStarterServerSession } from './platform/serverSession';
 import { installPlatform } from './platform/installPlatform';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
+/** Set by the first restart for another player (before bootstrap, which may call it). */
+let restartingForAnotherPlayer = false;
+
 await bootstrap();
 
 /** Install target services, analytics, and viewport state before starting the game. */
@@ -150,6 +153,17 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
           ...(options.monetization === undefined ? {} : { operationStore: options.monetization.operationStore }),
           analytics: analyticsSink,
           analyticsSessionId,
+          // The services are one player's for the run: another player signing in closes them
+          // (purchases fail closed, retryably). Play stops at once; the game boots again for
+          // that player once the old services have stopped.
+          onPlayerChanging: () => {
+            gameRuntime?.execution.acquireBlock({
+              reason: 'game-services:player-change',
+              channels: ['simulation', 'gameplay-input', 'audio'],
+            });
+            renderPlayerSwitch(locale);
+          },
+          onPlayerChanged: restartForAnotherPlayer,
         };
         // Configured but not signed in yet: the services wait for the server player, never
         // binding purchases or the journal to the platform's local placeholder.
@@ -214,6 +228,34 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
     renderBootstrapError(error, locale);
     console.error('[bootstrap]', error);
   }
+}
+
+/**
+ * Another player signed in to the server session within the run (a game's own
+ * account switch; the reference guest never changes player). The game
+ * services already closed for the boot player; the scenes, the action
+ * coordinator, and the notifications still hold it, so the game boots again
+ * and builds them all for the new player. Replace the reload with your own
+ * restart (back to the title, then `bootstrap()`) if a reload does not suit
+ * the target.
+ */
+function restartForAnotherPlayer(): void {
+  if (!restartingForAnotherPlayer) {
+    restartingForAnotherPlayer = true;
+    globalThis.location?.reload();
+  }
+}
+
+/** Cover the game while it restarts for another player (taps never reach it meanwhile). */
+function renderPlayerSwitch(locale: Locale): void {
+  if (document.querySelector('.player-switch') !== null) {
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'player-switch';
+  overlay.setAttribute('role', 'status');
+  overlay.textContent = t(locale, 'switchingPlayer');
+  document.body.append(overlay);
 }
 
 /** Resolve a verified platform session or fall back to a local guest. */

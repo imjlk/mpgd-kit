@@ -557,7 +557,32 @@ be claimed. The scenes' `player` and `identitySession` are the boot values
 for the whole run (the platform's player when the boot sign-in failed) and
 the server player from the next launch on: key game-owned save data by
 something that does not change, such as the platform storage itself, not by
-`player.playerId`. A native shell only reaches `https:` origins, so test on a
+`player.playerId`.
+
+The game services belong to one server player for the run
+(`src/platform/gameServices.ts`). A game that replaces the guest session with
+its own and lets the player switch accounts within a run gets them closed, not
+moved to the new account: from the moment the session names another player,
+nothing is verified, restored, or finished with the new player's credentials
+for the old player's purchases (a backend rejects those for good as an
+account mismatch), no purchase is journaled under one player and bound to the
+other's store account, and purchases answer `failed` with the retryable
+diagnostic `GAME_SERVICES_PLAYER_CHANGED` before any store sheet opens.
+`main.ts` stops play at once (`onPlayerChanging`: an execution block and a
+"Switching player..." screen), and once the old services have stopped (an
+open store sheet first records its answer) it reloads the game
+(`restartForAnotherPlayer`), which boots again for the new player; replace the
+reload with your own restart if it does not suit the target. The old player's
+open purchases stay in the journal and recover when that player signs in
+again; store purchases bound to another player's account are left for that
+player instead of being verified with this one's session. Create the services
+only with the server session's player, never the native shell's local
+placeholder: services created for another player than the session's are
+closed at once (and say so in the console), and services for a second player cannot be
+created while the first player's are still open
+(`StarterCommercePinConflictError`).
+
+A native shell only reaches `https:` origins, so test on a
 device or emulator through an https tunnel to a local Worker. Account linking (Sign in with Apple or Google) is not
 part of the reference Worker yet.
 
