@@ -4,11 +4,11 @@ A purchase works only after its product exists in the store, with a title,
 a description and a price. `mpgd store products plan|apply` creates and
 updates the store's one-time products (consumables and non-consumables) from
 the game's files, so the products do not have to be typed into Play Console
-by hand. Subscriptions stay outside the sync
+and App Store Connect by hand. Subscriptions stay outside the sync
 ([subscription decision](./SUBSCRIPTION_COMMERCE_DECISION.md)).
 
-Supported stores: Google Play (`--store google-play`). App Store Connect
-in-app purchases are declared in the same file; their sync is a follow-up.
+Supported stores: Google Play (`--store google-play`) and App Store Connect
+(`--store app-store`, iPhone and iPad share the in-app purchases).
 
 ## The store listing file
 
@@ -64,9 +64,18 @@ pricing never ship to players, and the game runtime never reads this file.
 - Multi-quantity checkout stays off: the kit backend grants one unit per
   purchase and rejects larger quantities, so the sync turns it off on a
   managed option where it was turned on in Play Console.
-- `appStore.*`: base territory (ISO 3166-1 alpha-3) and customer price,
-  manual `territories` prices, review note, review screenshot (relative to
-  the listing file) and `familySharable` (non-consumables only).
+- `appStore.price`: `baseTerritory` (ISO 3166-1 alpha-3) and the customer
+  price there, which must be one of Apple's price points; Apple equalizes
+  the other territories from it. `territories` sets manual customer prices
+  that replace the equalized price of single territories.
+- `appStore.referenceName` (defaults to the logical ID, 64 characters),
+  `reviewNote` (4,000), `reviewScreenshot` (PNG or JPEG, relative to the
+  listing file), `familySharable` (non-consumables only; cannot be turned
+  off again), `availability` (`territories`, `availableInNewTerritories`;
+  default every territory and new ones).
+- App Store display names are 2-30 characters and descriptions up to 45;
+  Play titles up to 55 and descriptions up to 200. The plan refuses longer
+  text before any write.
 
 `assertStoreListingCatalog` in `@mpgd/catalog` validates the file against
 the catalog: every key must be a catalog product, and subscriptions are
@@ -74,29 +83,58 @@ rejected.
 
 ## Workflow
 
-The app ID and the store credential come from the deployment profile
+The app and the store credential come from the deployment profile
 (`mpgd.deploy.json` and `mpgd.targets.json`), the same ones
-`mpgd deploy submit` uses: for Google Play the service account file named by
-the profile's `submissionCredential.env` (default
-`MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT`). That account also needs a Play Console
-permission that covers in-app products (see the first-live-run checks).
+`mpgd deploy submit` uses:
+
+- Google Play: the package ID, and the service account file named by the
+  Android profile's `submissionCredential.env` (default
+  `MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT`). That account also needs a Play
+  Console permission that covers in-app products (see the first-live-run
+  checks).
+- App Store Connect: the bundle ID, `MPGD_ASC_APP_ID`, `MPGD_ASC_KEY_ID`,
+  `MPGD_ASC_ISSUER_ID`, the iOS profile's `submissionCredential.env` (the
+  base64 `.p8`) and `MPGD_ASC_BINARY`, the pinned `asc` 5.5.0 the TestFlight
+  submission uses ([tooling decision](./NATIVE_DEPLOY_TOOLING_DECISION.md)).
+  The key needs the App Manager role.
 
 ```sh
-# Read Play, print the changes, save the plan; nothing is written.
-pnpm exec mpgd store products plan --game . --store google-play --out products-plan.json
+# Read the store, print the changes, save the plan; nothing is written.
+pnpm exec mpgd store products plan --game . --store google-play --out play-products.json
+pnpm exec mpgd store products plan --game . --store app-store --out app-store-products.json
 
 # Write exactly what was reviewed.
-pnpm exec mpgd store products apply --plan products-plan.json --approve
+pnpm exec mpgd store products apply --plan play-products.json --approve
+pnpm exec mpgd store products apply --plan app-store-products.json --approve
 ```
 
 `plan` lists each catalog product sold on the target:
 
-- `create`: not on Play yet.
-- `update`: with the fields that change (`listings`, `prices`,
-  `purchase-option`, `multi-quantity`, `tax-category`, `activate`).
+- `create`: not in the store yet.
+- `update`: with the fields that change.
 - `unchanged`.
-- `skipped`: no listing entry, a subscription, or no price to create with.
-- `remote`: on Play but named by no catalog product. Never deleted.
+- `skipped`: no listing entry, a subscription, or (Play) no price to create with.
+- `remote`: in the store but named by no catalog product. Never deleted.
+- `manual` (App Store): what the reviewer does in App Store Connect.
+
+`apply` is the same for both stores:
+
+- needs `--approve`;
+- reads the store again and refuses when a product's store state or its
+  planned write differs from the saved plan (someone edited it in the
+  console, or the files changed): run `plan` again and review;
+- skips products an earlier apply already wrote, so re-running it is safe;
+- refuses a price change on a product players can buy (Play `ACTIVE`
+  purchase option, App Store `APPROVED` in-app purchase) unless
+  `--confirm-price-change` is given; `plan --keep-live-prices` leaves live
+  prices as they are instead;
+- on a failed write, names the products already written. Run `plan` again:
+  it reads the store and shows what is left.
+
+## Google Play
+
+Changes: `listings`, `prices`, `purchase-option`, `multi-quantity`,
+`tax-category`, `activate`.
 
 Listing languages and purchase options that the file does not name are kept
 as they are on Play. Prices follow the file: every region Play's conversion
@@ -108,26 +146,13 @@ Play has them; regions the conversion does not list are kept. Each price
 change is printed with its old and new value, and the plan file lists all of
 them.
 
-`apply`:
+`apply` activates new and `DRAFT` purchase options that have prices, so
+the product can be bought; an `INACTIVE` option is reported and never
+reactivated. Play's converted prices follow its exchange rates, so a later
+plan can show a price change for a live product even when the file did not
+change; read it before confirming.
 
-- needs `--approve`;
-- reads Play again and refuses when a product's Play state or its planned
-  write differs from the saved plan (someone edited it in Play Console, or
-  the files changed): run `plan` again and review;
-- skips products an earlier apply already wrote, so re-running it is safe;
-- activates new and `DRAFT` purchase options that have prices, so the
-  product can be bought; an `INACTIVE` option is reported and never
-  reactivated;
-- refuses a price change on a product whose purchase option is `ACTIVE`
-  unless `--confirm-price-change` is given. `plan --keep-live-prices` leaves
-  live prices as they are instead. Play's converted prices follow its
-  exchange rates, so a later plan can show a price change for a live product
-  even when the file did not change; read it before confirming.
-
-If a write fails, the error names the products already written. Run `plan`
-again: it reads Play and shows what is left.
-
-## What stays manual
+What stays manual on Play:
 
 - Creating the app and the payments profile (Play needs a merchant account
   before it sells anything).
@@ -136,7 +161,7 @@ again: it reads Play and shows what is left.
 - Reactivating an `INACTIVE` purchase option.
 - License testers.
 
-## API references
+### Google Play API references
 
 - [`monetization.onetimeproducts`](https://developers.google.com/android-publisher/api-ref/rest/v3/monetization.onetimeproducts)
   (resource, purchase option states, field limits)
@@ -146,6 +171,62 @@ again: it reads Play and shows what is left.
 - [`monetization.convertRegionPrices`](https://developers.google.com/android-publisher/api-ref/rest/v3/monetization/convertRegionPrices)
 - [Multiple purchase options and offers](https://developer.android.com/google/play/billing/one-time-product-multi-purchase-options-offers)
   (backward-compatible buy option)
+
+## App Store Connect
+
+Changes: `create`, `reference-name`, `family-sharing`, `version`,
+`localizations`, `prices`, `availability`, `review-screenshot`.
+
+- **Localizations** belong to the in-app purchase version (App Store
+  Connect API 4.4.1). The sync edits the one version that still accepts
+  edits (`PREPARE_FOR_SUBMISSION`, `READY_FOR_REVIEW`, `REJECTED`,
+  `DEVELOPER_REJECTED`). When the latest version is approved, `apply`
+  creates a new draft version (App Store Connect copies the current
+  metadata into it) and changes only the differing locales; that version
+  needs App Review. Two editable versions stop the plan. Locales the file
+  does not name are kept.
+- **Prices**: a new price schedule effective now, with the base territory's
+  price point and the manual territory prices. Apply resolves each price
+  point by territory and customer price; a price that is not an App Store
+  price point fails before the schedule is written.
+- **Availability** is set when the sync creates the in-app purchase, and
+  again while App Store Connect reports it `MISSING_METADATA`. Availability
+  of an in-app purchase past that state is left alone.
+- **Review screenshot**: uploaded when missing; when its MD5 differs from
+  the file, the old one is deleted and the new one uploaded (App Store
+  Connect keeps one).
+- **Never automatic**: submission. The first consumable and the first
+  non-consumable must each go to App Review with a new app version; later
+  ones can be submitted on their own
+  ([Submit an In-App Purchase](https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/submit-an-in-app-purchase)).
+  The plan prints this as a manual step.
+- **Review note**: `asc` 5.5.0 has no flag for it, so a differing review
+  note is printed as a manual step with the text to paste.
+
+What stays manual on the App Store:
+
+- Paid Apps agreement, tax and banking.
+- Submitting the in-app purchases (with the app version the first time).
+- The review note.
+- Turning Family Sharing off (Apple does not allow it), changing an in-app
+  purchase's type, deleting in-app purchases, offer codes, promotional
+  images, and availability changes after the first submission.
+- Sandbox testers.
+
+### App Store Connect API references
+
+- [In-App Purchases (v2)](https://developer.apple.com/documentation/appstoreconnectapi/in-app-purchases)
+- [In-App Purchase versions](https://developer.apple.com/documentation/appstoreconnectapi/in-app-purchase-versions)
+  and [API 4.4.1 release notes](https://developer.apple.com/documentation/appstoreconnectapi/app-store-connect-api-4-4-1-release-notes)
+  (version-scoped localizations; v1 localizations deprecated)
+- [Price schedules](https://developer.apple.com/documentation/appstoreconnectapi/post-v1-inapppurchasepriceschedules)
+  ("A base territory is now required")
+- [Availability](https://developer.apple.com/documentation/appstoreconnectapi/post-v1-inapppurchaseavailabilities)
+- [Review screenshot](https://developer.apple.com/documentation/appstoreconnectapi/post-v1-inapppurchaseappstorereviewscreenshots)
+- [In-App Purchase information](https://developer.apple.com/help/app-store-connect/reference/in-app-purchases-and-subscriptions/in-app-purchase-information)
+  (field limits)
+- `asc` 5.5.0 commands: `commands/iap.mdx` and `internal/cli/iap/*` at the
+  [5.5.0 tag](https://github.com/rorkai/App-Store-Connect-CLI/tree/5.5.0)
 
 ## Verify on the first live run
 
@@ -162,6 +243,20 @@ Mock-tested only. Check on the first run against a real Play account:
       sync picks it as the managed option.
 - [ ] The service account permission needed for `onetimeproducts` writes.
 
+And against a real App Store Connect app:
+
+- [ ] `asc iap create` provisions the first in-app purchase version, or the
+      sync's `versions create` does; localizations land on it.
+- [ ] `asc iap pricing schedules view` on an in-app purchase without a price
+      exits with code 4 (not found), which the sync reads as "no schedule".
+- [ ] `asc iap review-screenshots view` without a screenshot exits with code
+      4 or returns no resource.
+- [ ] A new in-app purchase with localization, price, availability and
+      screenshot reaches `READY_TO_SUBMIT`, and a second `plan` reports it
+      `unchanged`.
+- [ ] Editing the text of an approved in-app purchase creates version 2 with
+      the copied locales, and only the changed locale is updated.
+
 ## Tests
 
 ```sh
@@ -170,5 +265,8 @@ pnpm smoke:cli-store-products
 
 Runs the planner and apply against an in-memory Play
 (`packages/cli/src/store-products-play.test.ts`) and the SDK adapter against
-a local mock of the REST paths (`adapters/play-publisher/src/play-products.test.ts`).
-No Google endpoint is called.
+a local mock of the REST paths (`adapters/play-publisher/src/play-products.test.ts`),
+then the App Store Connect planner and apply against an in-memory App Store
+Connect and the `asc` command lines and output parsing against recorded
+`asc` 5.5.0 output shapes (`packages/cli/src/store-products-app-store.test.ts`).
+No Google or Apple endpoint is called, and no `asc` binary runs.
