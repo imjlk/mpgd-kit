@@ -1,5 +1,19 @@
 # @mpgd/cli
 
+## 0.62.0 — 2026-10-27
+
+### Added
+
+- [8287b1ff](https://github.com/imjlk/mpgd-kit/commit/8287b1ffc7648bf217b1671ee4557cdf04a59ffa) `mpgd deploy run` records a native build's crash symbols in its immutable build record and keeps them next to the artifact in `.mpgd/releases/<release>/`. Android: the R8 `mapping.txt` of a minified release build (`r8Mapping`), which the Google Play submission (`deploy run`, and `deploy submit` for that build) now uploads as the bundle's deobfuscation file without `--mapping-file`; an explicit `--mapping-file` with other bytes is refused, and a build without a mapping is unchanged. iOS, for a shell with `@capacitor-firebase/crashlytics`: the archive's dSYMs (zipped, with their UUIDs), Firebase's `upload-symbols` from the build's Swift Package checkout, and the bundled `GoogleService-Info.plist` (`crashlyticsSymbols`); such an archive is refused without dSYMs, tool or plist. `deploy run` uploads those dSYMs once with `upload-symbols -gsp <plist> -p ios <zip>` after the store submissions and records `uploaded` or `failed` (`symbolUploads` in `deploy status`); a failure is reported with the retry command and never fails the store submission. New `mpgd deploy symbols --game-id <id> --release <release> [--dry-run]` re-runs the upload for an existing build, or prints the command without running it. A release-state file that holds these new fields needs this CLI version or newer. — Thanks @imjlk!
+
+### Fixed
+
+- [14a19e63](https://github.com/imjlk/mpgd-kit/commit/14a19e636a5c4cda78fa8f414cfa4a44d370c604) Notifications games install under pnpm 11, and simulator builds work for Capacitor shells with Swift package plugins. A generated game's `pnpm-workspace.yaml` now denies `@firebase/util`'s build script (`'@firebase/util': false`), so `pnpm install` no longer stops with `ERR_PNPM_IGNORED_BUILDS` once the notifications starter adds `firebase`. `mpgd target init capacitor --providers notifications` adds the missing `@firebase/util` and `protobufjs` entries to an older game's `allowBuilds`, or prints them when the game has no `pnpm-workspace.yaml` or uses a form it does not edit. The shell's standalone install runs with `--ignore-scripts`, because `--ignore-workspace` reads no `allowBuilds`. The iOS simulator build (`MPGD_RUN_IOS_SIMULATOR_BUILD=1`) applies the smoke `Info.plist`, the storyboard and asset-catalog exclusions and its Swift condition to the App target only, instead of to every target, which failed in the Firebase and `@mpgd/capacitor-game-services` resource-bundle targets. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.21.3, @mpgd/adapter-capacitor@0.16.1, @mpgd/adapter-devvit@0.14.5, @mpgd/adapter-verse8@0.7.14, @mpgd/capacitor-play-billing@0.4.3, @mpgd/capacitor-storekit@0.4.3, @mpgd/game-runtime@0.8.7, @mpgd/game-services@0.30.3
+
 ## 0.61.1 — 2026-10-27
 
 ### Patch changes

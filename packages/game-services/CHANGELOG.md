@@ -1,5 +1,12 @@
 # @mpgd/game-services
 
+## 0.30.3 — 2026-10-27
+
+### Fixed
+
+- [dd045e6b](https://github.com/imjlk/mpgd-kit/commit/dd045e6b2ce851b48ea8c97e133030730878196a) The commerce reconciler no longer resends a restore the backend answered `pending` with `PURCHASE_HOLDER_LIMIT_REACHED` on every start, resume, and store event. Only the player's next Restore Purchases (`restorePurchases()`) sends the saved request again, since a holder may have been freed by then (a deleted account, a revoked grant); nothing an automatic pass observes frees one. The record stays `pending` for the game to report. Other backend-pending answers, `PURCHASE_HOLDER_CONFLICT` included, keep their retries. — Thanks @imjlk!
+- [dd045e6b](https://github.com/imjlk/mpgd-kit/commit/dd045e6b2ce851b48ea8c97e133030730878196a) Restore Purchases works after a logout on the same install. The commerce reconciler's journal key of a purchase discovered from the store (`createCommercePurchaseOperationKey(target, derivedKey)`) is the same for every player of the install, so the next guest's restore of a non-consumable the earlier guest had journaled failed as "bound to another player" and sent nothing. On the player's Restore Purchases, a discovered durable whose key another player's record holds is now journaled under the new player-scoped key (`createCommercePurchaseOperationKey(target, derivedKey, playerId)`) and sent as this player's restore under the same derived idempotency key; the backend's restore sharing decides it. Start, resume, and event passes, and consumables, subscriptions, products of unknown kind, and game-started keys held by another player, stay refused: one player's purchase is never sent for another, and a purchase a normal read lists for the earlier player (an unacknowledged Google Play purchase) is never shared without the player asking. Existing journals need no migration: records keep their keys and each player still finds its own. `reconciler.read()` also answers this player's record under the player-scoped key and still refuses any other key another player's record holds. A custom `MonetizationOperationStore` must treat `record.key` as opaque; see `docs/MONETIZATION_RECOVERY.md`. — Thanks @imjlk!
+
 ## 0.30.2 — 2026-10-27
 
 ### Patch changes
