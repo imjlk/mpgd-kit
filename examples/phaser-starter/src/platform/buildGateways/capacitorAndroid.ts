@@ -51,6 +51,11 @@ function createStoreProviders(
   return [
     createCapacitorPlayBillingServiceProvider({
       products,
+      // Sales switch (none by default): to refuse NEW purchases without
+      // touching recovery, add `purchaseGate: async () => ({ allowed })`,
+      // `allowed` read from the game's own server flag. A refusal answers
+      // ITEM_UNAVAILABLE / PURCHASES_PAUSED before the store opens; paid
+      // purchases keep reconciling. See the adapter-capacitor README.
       // The backend's resolveObfuscatedAccountId must derive the same value; see commerceAccountBinding.ts.
       accountBinding: async () => {
         const gateway = resolveGateway();
