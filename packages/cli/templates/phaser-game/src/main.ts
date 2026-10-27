@@ -27,6 +27,9 @@ import { setStarterServerSession } from './platform/serverSession';
 import { installPlatform } from './platform/installPlatform';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
+/** Set by the first restart for another player (before bootstrap, which may call it). */
+let restartingForAnotherPlayer = false;
+
 await bootstrap();
 
 /** Install target services, analytics, and viewport state before starting the game. */
@@ -228,7 +231,6 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
  * restart (back to the title, then `bootstrap()`) if a reload does not suit
  * the target.
  */
-let restartingForAnotherPlayer = false;
 function restartForAnotherPlayer(): void {
   if (!restartingForAnotherPlayer) {
     restartingForAnotherPlayer = true;

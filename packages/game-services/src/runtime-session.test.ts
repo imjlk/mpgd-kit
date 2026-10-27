@@ -475,4 +475,39 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   await runtimeA.dispose();
 }
 
+// Static authorization headers never stand in for a refused session.
+{
+  const realFetch = globalThis.fetch;
+  let fetched = 0;
+  globalThis.fetch = (async () => {
+    fetched += 1;
+    return new Response('{}');
+  }) as unknown as typeof fetch;
+  try {
+    const session: { player: string | undefined } = { player: undefined };
+    const runtime = createGameServicesRuntime({
+      gateway: createTestGateway({ target: 'android', playerId: playerA }),
+      playerId: playerA,
+      authorityMode: 'production',
+      baseUrl: 'https://services.example.com',
+      headers: { authorization: 'Bearer static' },
+      sessionPlayerId: () => session.player,
+    });
+    await assert.rejects(
+      runtime.accountDeletion?.deleteAccount() ?? Promise.resolve(),
+      (error: unknown) => error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED'
+        && !error.requestSent,
+    );
+    session.player = playerB;
+    await assert.rejects(
+      runtime.accountDeletion?.deleteAccount() ?? Promise.resolve(),
+      (error: unknown) => error instanceof AccountDeletionError && !error.requestSent,
+    );
+    assert.equal(fetched, 0, 'nothing was sent');
+    await runtime.dispose();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.info('Game services runtime session checks passed.');

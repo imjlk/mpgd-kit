@@ -1,4 +1,8 @@
-import { createAccountDeletionClient, type AccountDeletionClient } from './account-deletion.js';
+import {
+  AccountDeletionError,
+  createAccountDeletionClient,
+  type AccountDeletionClient,
+} from './account-deletion.js';
 import type { AnalyticsSink } from '@mpgd/analytics';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 import { CommerceError } from '@mpgd/platform/commerce';
@@ -312,14 +316,14 @@ export function createGameServicesRuntime(
     ...(baseUrl === undefined
       ? {}
       : {
-          accountDeletion: createAccountDeletionClient({
+          accountDeletion: guardAccountDeletion(createAccountDeletionClient({
             // The deletion route is plain HTTP next to the oRPC handler: an
             // oRPC URL names the handler's `/rpc` prefix, which the route
             // does not sit under.
             baseUrl: input.transport === 'orpc' ? baseUrl.replace(/\/rpc\/?$/u, '') : baseUrl,
             ...(input.headers === undefined ? {} : { headers: input.headers }),
-            getHeaders: guardHeaders(input.getHeaders, gate, { signedOutHeaders: true }),
-          }),
+            getHeaders: guardHeaders(input.getHeaders, gate),
+          }), gate),
         }),
     dispose: () => gate.close(gameServicesRuntimeDisposedCode),
   };
@@ -395,25 +399,36 @@ function createRuntimeGate(
   return gate;
 }
 
+/**
+ * Account deletion refused before anything resolves or is sent: signed out
+ * answers `UNAUTHORIZED` (no session on this device), a closed runtime the
+ * retryable `ACCOUNT_DELETION_UNREACHABLE`. Static headers never stand in
+ * for a session the runtime refuses.
+ */
+function guardAccountDeletion(deletion: AccountDeletionClient, gate: RuntimeGate): AccountDeletionClient {
+  return {
+    ...deletion,
+    async deleteAccount(request) {
+      const refusal = gate.check();
+      if (refusal !== undefined) {
+        throw new AccountDeletionError(
+          refusal.code === gameServicesSessionRequiredCode
+            ? 'UNAUTHORIZED'
+            : 'ACCOUNT_DELETION_UNREACHABLE',
+          { requestSent: false, cause: refusal },
+        );
+      }
+      return deletion.deleteAccount(request);
+    },
+  };
+}
+
 function guardHeaders(
   getHeaders: GameServicesHeaderResolver | undefined,
   gate: RuntimeGate,
-  options: {
-    /**
-     * Signed out, resolve no headers instead of throwing, so account
-     * deletion reports the missing session as before; nothing is sent then.
-     */
-    readonly signedOutHeaders?: boolean;
-  } = {},
 ): GameServicesHeaderResolver {
   return async () => {
-    const refusal = gate.check();
-    if (refusal?.code === gameServicesSessionRequiredCode && options.signedOutHeaders === true) {
-      return {};
-    }
-    if (refusal !== undefined) {
-      throw refusal;
-    }
+    gate.assert();
     const headers = (await getHeaders?.()) ?? {};
     // A session that changed player while its headers were resolved: they
     // may be the new player's, so they are never sent for this one.
