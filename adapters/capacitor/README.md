@@ -143,7 +143,12 @@ retryable? }`. A refusal never opens the store UI and is answered as data:
 'PURCHASES_PAUSED' } }` (or the gate's own `storeCode`), `retryable` false
 unless the gate says otherwise. A gate that throws refuses too
 (`PURCHASE_GATE_FAILED`, retryable; a thrown `CommerceError` keeps its own
-code), and so does any answer other than `{ allowed: true }`. Recovery,
+code), and so does a malformed answer (`PURCHASE_GATE_FAILED`). The
+reconciler journals a refused attempt as `failed`, so a later try uses a new
+idempotency key; `retryable` only tells the shop whether asking again soon
+makes sense. The gate runs while the gateway already holds the purchase's
+external activity (the game is paused), so it should answer from a flag the
+game already holds rather than a slow network call. Recovery,
 restore, finishing, events, `fetchProducts`, and `getAvailablePurchases` never
 ask the gate, so purchases already paid for keep reconciling while new sales
 are refused. A failed or missing account binding is a `failed` result too,
