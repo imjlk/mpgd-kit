@@ -333,8 +333,8 @@ export interface CreateCommerceReconcilerInput {
    * another account (restore sharing). A purchase without a binding, or with
    * a binding of another kind, is not compared. Answer `undefined` (or
    * throw) only transiently, while this player's binding cannot be read
-   * yet: every bound purchase is then left alone until a pass where it
-   * answers. A runtime for a store or target whose purchases this player's
+   * yet: a bound purchase reported then is kept and asked about again on
+   * the next pass (a resume, an event, an explicit trigger). A runtime for a store or target whose purchases this player's
    * binding never covers must omit the input; omitted, nothing is compared.
    */
   readonly accountBinding?: () =>
@@ -1010,10 +1010,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   };
 
   /** Whether a store purchase is bound to another account than this player's (`accountBinding`). */
-  const boundToAnotherAccount = async (purchase: StorePurchase): Promise<boolean> => {
+  const accountOf = async (purchase: StorePurchase): Promise<'own' | 'another' | 'unknown'> => {
     const bound = purchase.accountBinding;
     if (input.accountBinding === undefined || bound?.value === undefined) {
-      return false;
+      return 'own';
     }
     let own: StorePurchaseAccountBinding | undefined;
     try {
@@ -1022,15 +1022,15 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       own = undefined;
     }
     if (own?.value === undefined) {
-      // This player's binding is unknown: the purchase cannot be shown to be theirs.
-      return true;
+      // This player's binding cannot be read now: the purchase cannot be shown to be theirs yet.
+      return 'unknown';
     }
     if (own.kind !== bound.kind) {
-      return false;
+      return 'own';
     }
     const normalize = (value: string): string =>
       bound.kind === 'app-account-token' ? value.toLowerCase() : value;
-    return normalize(own.value) !== normalize(bound.value);
+    return normalize(own.value) === normalize(bound.value) ? 'own' : 'another';
   };
 
   /** Transactions `finishReportedAgain` already finished again this session. */
@@ -1138,11 +1138,21 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         record = remember(stored);
       }
     }
-    if (
-      record === undefined
-      && !(restoring && product.kind === 'durable')
-      && await boundToAnotherAccount(purchase)
-    ) {
+    const account = record !== undefined || (restoring && product.kind === 'durable')
+      ? 'own'
+      : await accountOf(purchase);
+    if (account === 'unknown') {
+      // Not decided yet: the report waits for the next pass, which asks again.
+      defer({ type: 'purchaseUpdated', purchase });
+      fail(
+        'match',
+        new Error(
+          `Purchase ${purchase.transactionId} waits: this player's store account binding could not be read.`,
+        ),
+      );
+      return;
+    }
+    if (account === 'another') {
       // Another player's purchase (Play lists unacknowledged purchases of
       // every app account on the device): neither attached to this player's
       // open attempt nor journaled under a derived key.

@@ -897,4 +897,64 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   await unansweredRuntime.dispose();
 }
 
+// A binding that cannot be read for a moment keeps the report: the next
+// pass asks again and verifies the player's own purchase.
+{
+  const harness = createHarness();
+  let readable = false;
+  const runtime = createGameServicesRuntime({
+    gateway: createTestGateway({ target: 'android', playerId: playerA, provider: harness.provider }),
+    playerId: playerA,
+    authorityMode: 'non-production',
+    allowLocalBackend: true,
+    localBackend: {
+      purchases: {
+        async verifyPurchase(request) {
+          harness.sent.push({
+            method: 'POST',
+            endpoint: gameServicesBackendEndpoints.verifyPurchase,
+            body: request,
+          });
+          return {
+            verified: true,
+            ledgerEntryId: `ledger-${request.idempotencyKey}`,
+            alreadyProcessed: false,
+          };
+        },
+      },
+      adRewards: { claimAdReward: () => Promise.reject(new Error('not called')) },
+      leaderboard: { recordScore: () => Promise.reject(new Error('not called')) },
+    },
+    operationStore: harness.store,
+    commerceProducts: [{ logicalId: 'COINS_100', kind: 'consumable', storeSku: 'coins_100' }],
+    commerceAccountBinding: () => {
+      if (!readable) {
+        throw new Error('binding unavailable');
+      }
+      return { kind: 'obfuscated-account-id', value: 'acct-a' };
+    },
+  });
+  harness.provider.available.push(
+    createTestStorePurchase(
+      { idempotencyKey: 'later', logicalId: 'COINS_100' },
+      { accountBinding: { kind: 'obfuscated-account-id', value: 'acct-a' } },
+      'android-store',
+    ),
+  );
+  // The initial scan happens while the binding cannot be read.
+  await runtime.monetizationRecovery?.reconcile();
+  assert.equal(verifies(harness).length, 0, 'not decided while the binding is unreadable');
+  // The store lists it no more on its own (no new event); the kept report is asked about again.
+  harness.provider.available.length = 0;
+  readable = true;
+  await runtime.monetizationRecovery?.reconcile();
+  assert.deepEqual(
+    verifies(harness).map((request) =>
+      (request.body as { readonly platformTransactionId: string }).platformTransactionId),
+    ['tx-later'],
+    'verified once the binding answers',
+  );
+  await runtime.dispose();
+}
+
 console.info('Game services runtime session checks passed.');
