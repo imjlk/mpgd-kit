@@ -54,6 +54,15 @@ export async function planStoreProducts(
   environment: NodeJS.ProcessEnv = process.env,
   createPort: PlayPortFactory = loadPlayProductCatalog,
 ): Promise<StoreProductPlanFile> {
+  return (await planWithPort(options, environment, createPort)).file;
+}
+
+/** The plan, and the port it read with, so apply writes through the same client. */
+async function planWithPort(
+  options: StoreProductPlanOptions,
+  environment: NodeJS.ProcessEnv,
+  createPort: PlayPortFactory,
+): Promise<{ readonly file: StoreProductPlanFile; readonly port: PlayProductCatalogPort }> {
   if (options.store !== 'google-play') {
     throw new Error('--store must be google-play.');
   }
@@ -89,13 +98,16 @@ export async function planStoreProducts(
     port,
   );
   return {
-    schemaVersion: 1,
-    kind: 'mpgd-store-products-plan',
-    gameRoot,
-    profile: options.profile,
-    catalogFile: sources.catalogFile,
-    listingsFile: sources.listingsFile,
-    plan,
+    file: {
+      schemaVersion: 1,
+      kind: 'mpgd-store-products-plan',
+      gameRoot,
+      profile: options.profile,
+      catalogFile: sources.catalogFile,
+      listingsFile: sources.listingsFile,
+      plan,
+    },
+    port,
   };
 }
 
@@ -134,7 +146,7 @@ export async function applyStoreProducts(
     }
     return path.resolve(gameRoot, relative);
   };
-  const current = await planStoreProducts(
+  const { file: current, port } = await planWithPort(
     {
       game: gameRoot,
       profile: saved.profile,
@@ -153,18 +165,10 @@ export async function applyStoreProducts(
       `The deployment profile now names ${current.plan.packageName}, not ${saved.plan.packageName}.`,
     );
   }
-  const credential = readStoreCredential(
-    planNativeDeployment({ game: gameRoot, profile: saved.profile, targets: ['android'] }),
-    'android',
-    environment,
-  );
-  if (credential.target !== 'android') {
-    throw new Error('Google Play product sync needs the Android submission credential.');
-  }
   return applyPlayProductPlan({
     saved: saved.plan,
     current: current.plan,
-    port: await createPort(credential.serviceAccountFile),
+    port,
     approved: true,
     ...(options.confirmPriceChange === true ? { confirmPriceChange: true } : {}),
     ...(options.signal === undefined ? {} : { signal: options.signal }),

@@ -234,7 +234,15 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
           `${label}: the ${languageCode} description is longer than ${maxDescriptionLength} characters.`,
         );
       }
-      return { languageCode, title: text.title, description: text.description };
+      // Play's own spelling when it already lists the language, else BCP-47 casing.
+      const remoteSpelling = remote?.listings?.find(
+        (listing) => fold(listing.languageCode) === fold(languageCode),
+      )?.languageCode;
+      return {
+        languageCode: typeof remoteSpelling === 'string' ? remoteSpelling : canonicalLanguageTag(languageCode),
+        title: text.title,
+        description: text.description,
+      };
     },
   );
   const desiredLanguages = new Set(desiredListings.map((listing) => fold(listing.languageCode)));
@@ -339,6 +347,24 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
     }
     // Prices follow the file; a region's availability stays as Play has it.
     const remoteRegions = remoteOption?.regionalPricingAndAvailabilityConfigs ?? [];
+    // An existing option is not opted in to regions it does not list (for
+    // example one Play launched after the option opted out of new regions),
+    // unless the file names the region. A new option sells everywhere.
+    if (remoteRegions.length > 0) {
+      const listed = new Set(remoteRegions.map((config) => String(config.regionCode)));
+      const named = new Set(Object.keys(googlePlay.price.regions ?? {}));
+      const unlisted = [...byRegion.keys()].filter(
+        (region) => !listed.has(region) && !named.has(region),
+      );
+      for (const region of unlisted) {
+        byRegion.delete(region);
+      }
+      if (unlisted.length > 0) {
+        notes.push(`Play sells in ${unlisted.length} region(s) this purchase option does not list; the sync `
+          + `leaves them out (name them in googlePlay.price.regions or add them in Play Console): ${
+            unlisted.sort().join(', ')}.`);
+      }
+    }
     for (const config of remoteRegions) {
       const desired = typeof config.regionCode === 'string'
         ? byRegion.get(config.regionCode)
@@ -544,6 +570,7 @@ export class PlayProductApplyError extends Error {
   constructor(
     readonly productId: string,
     readonly stage: 'patch' | 'activate',
+    /** The products already written (created, updated or activated). */
     readonly done: PlayProductApplyResult['products'],
     cause: unknown,
   ) {
@@ -622,7 +649,7 @@ export async function applyPlayProductPlan(input: {
           ...(input.signal === undefined ? {} : { signal: input.signal }),
         });
       } catch (error) {
-        throw new PlayProductApplyError(product.productId, 'patch', done, error);
+        throw new PlayProductApplyError(product.productId, 'patch', written(done), error);
       }
     }
     if (activatePurchaseOptionId !== undefined) {
@@ -634,7 +661,7 @@ export async function applyPlayProductPlan(input: {
           ...(input.signal === undefined ? {} : { signal: input.signal }),
         });
       } catch (error) {
-        throw new PlayProductApplyError(product.productId, 'activate', done, error);
+        throw new PlayProductApplyError(product.productId, 'activate', written(done), error);
       }
     }
     done.push({
@@ -647,6 +674,11 @@ export async function applyPlayProductPlan(input: {
     });
   }
   return { packageName: current.packageName, products: done };
+}
+
+/** Products an apply wrote (created, updated or activated), not the unchanged ones. */
+function written(done: PlayProductApplyResult['products']): PlayProductApplyResult['products'] {
+  return done.filter((entry) => entry.status !== 'unchanged');
 }
 
 /** One line per product for the terminal. */
@@ -813,6 +845,22 @@ function sortRegions(configs: readonly PlayRegionalPricingConfig[]): PlayRegiona
 function withoutState(option: PlayPurchaseOption): PlayPurchaseOption {
   const { state: _state, ...rest } = option;
   return rest;
+}
+
+/** BCP-47 casing: language lowercase, script title case, region uppercase. */
+export function canonicalLanguageTag(tag: string): string {
+  return tag.split('-').map((part, index) => {
+    if (index === 0) {
+      return part.toLowerCase();
+    }
+    if (/^[A-Za-z]{4}$/u.test(part)) {
+      return `${part.slice(0, 1).toUpperCase()}${part.slice(1).toLowerCase()}`;
+    }
+    if (/^[A-Za-z]{2}$/u.test(part)) {
+      return part.toUpperCase();
+    }
+    return part.toLowerCase();
+  }).join('-');
 }
 
 function fold(value: string | null | undefined): string {

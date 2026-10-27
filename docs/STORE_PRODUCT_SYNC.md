@@ -54,7 +54,11 @@ pricing never ship to players, and the game runtime never reads this file.
 - `googlePlay.price.base` is the **tax-exclusive** price that Play converts
   into every region (`monetization.convertRegionPrices`). `regions` replaces
   the converted price of single regions (ISO 3166-1 alpha-2), each in that
-  region's currency. Play needs a base price to create a product; without
+  region's currency and **tax inclusive**: the price players pay there.
+  Play's conversion returns regional prices tax inclusive ("The converted
+  price tax inclusive", with the tax as a separate `taxAmount`), and an
+  override takes the place of that price, so a tax-exclusive figure (for
+  example a Korean price without VAT) undercharges by the tax. Play needs a base price to create a product; without
   one the sync only updates the text of an existing product.
 - `googlePlay.purchaseOptionId`: the purchase option the sync manages.
   Defaults to the product's only buy option, or `buy` for a new product.
@@ -99,12 +103,18 @@ pnpm exec mpgd store products apply --plan products-plan.json --approve
 - `remote`: on Play but named by no catalog product. Never deleted.
 
 Listing languages and purchase options that the file does not name are kept
-as they are on Play. Prices follow the file: every region Play's conversion
+as they are on Play. A file language that Play already lists in other
+casing (`en-us` and `en-US`) uses Play's spelling; a new one is written in
+BCP-47 casing. Prices follow the file: every region Play's conversion
 covers gets the converted price (or the file's regional price), so a price
 typed into Play Console for one region is replaced unless the file names
 that region too. A region's availability (for example `NO_LONGER_AVAILABLE`)
 and an existing option's choice about regions Play launches later stay as
-Play has them; regions the conversion does not list are kept. Each price
+Play has them; regions the conversion does not list are kept. An existing
+option does not gain regions it does not list (for example one Play
+launched after the option opted out of new regions) unless the file names
+the region in `googlePlay.price.regions`; the plan lists them. A new option
+sells in every region the conversion covers. Each price
 change is printed with its old and new value, and the plan file lists all of
 them.
 
@@ -157,6 +167,10 @@ Mock-tested only. Check on the first run against a real Play account:
 - [ ] The converted regional prices (tax inclusive, per the
       `convertRegionPrices` reference) are what Play Console then shows, and
       a second `plan` reports the product `unchanged`.
+- [ ] Play treats a purchase option's regional price as tax inclusive, so a
+      `googlePlay.price.regions` override shows in Play Console as the price
+      players pay. The purchase-option reference only says the price "Must be
+      set in the currency that is linked to the specified region".
 - [ ] A product created earlier in Play Console (or through the older
       `inappproducts` API) is listed with one buy purchase option, and the
       sync picks it as the managed option.
