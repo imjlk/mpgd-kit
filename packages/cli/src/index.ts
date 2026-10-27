@@ -1322,10 +1322,10 @@ const storeCommand = defineI18n({
         }),
         apply: defineI18n({
           name: 'apply',
-          description: 'Write the reviewed plan in one edit; refuses when the store or the files changed since.',
+          description: 'Write the reviewed plan (one Play edit); refuses when the store or the files changed since.',
           resource: commandResource({
-            en: 'Write the reviewed plan in one edit; refuses when the store or the files changed since.',
-            ko: '검토한 계획을 한 번의 편집으로 적용합니다. 이후 스토어나 파일이 바뀌었으면 거부합니다.',
+            en: 'Write the reviewed plan (one Play edit); refuses when the store or the files changed since.',
+            ko: '검토한 계획을 적용합니다(Play는 한 번의 편집). 이후 스토어나 파일이 바뀌었으면 거부합니다.',
           }),
           args: {
             plan: { type: 'string', required: true, description: 'Plan JSON written by "store presence plan --out".' },

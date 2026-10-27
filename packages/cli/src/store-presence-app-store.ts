@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -407,11 +407,23 @@ function planLocale(input: {
       const displayType = appStorePresenceDisplayTypes[display];
       const remoteSet = input.remoteSets.find((candidate) => candidate.displayType === displayType);
       const remote = remoteSet?.screenshots ?? [];
+      const processing = remote.find((screenshot) =>
+        (screenshot.deliveryState === 'COMPLETE' && (screenshot.sourceFileChecksum ?? '') === '')
+        || screenshot.deliveryState === 'AWAITING_UPLOAD' || screenshot.deliveryState === 'UPLOAD_COMPLETE');
+      if (processing !== undefined) {
+        throw new Error(
+          `App Store Connect is still processing ${locale} ${display} screenshot ${processing.id} `
+          + `(${String(processing.deliveryState)}); plan again when it is delivered.`,
+        );
+      }
       const plan = planStoreImageSet({
         local: set.images.map((image) => ({ path: image.path, digest: image.md5 })),
+        // A failed delivery counts as no image: a complete set replaces it.
         remote: remote.map((screenshot) => ({
           id: screenshot.id,
-          digest: String(screenshot.sourceFileChecksum ?? '').toLowerCase(),
+          digest: screenshot.deliveryState === undefined || screenshot.deliveryState === 'COMPLETE'
+            ? String(screenshot.sourceFileChecksum ?? '').toLowerCase()
+            : '',
         })),
         complete: set.complete,
         single: false,
@@ -588,14 +600,20 @@ export async function applyAppStorePresence(input: {
         }
         const versionLocalizationId = localizationId;
         deletedSet = undefined;
+        // Every file of the set is checked before the set is cleared, and asc
+        // gets the real path: it refuses a source reached through a symbolic link.
+        const files = set.upload.map((image) => {
+          const file = realpathSync(path.resolve(input.plan.directory, image.path));
+          assertMd5Unchanged(file, image.md5);
+          return { image, file };
+        });
         for (const id of set.deleteIds) {
           await step(`${locale.locale} ${set.display} delete ${id}`, () =>
             port.deleteScreenshot(id),
           );
           deletedSet = `${locale.locale} ${set.display}`;
         }
-        for (const image of set.upload) {
-          const file = path.resolve(input.plan.directory, image.path);
+        for (const { image, file } of files) {
           stage = `${locale.locale} ${set.display} upload of ${image.path}`;
           assertMd5Unchanged(file, image.md5);
           await step(stage, () =>

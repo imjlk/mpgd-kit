@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -447,6 +455,39 @@ try {
     assert.match(set?.notes.join('\n') ?? '', /keeps 1 image/u);
     assert.match(set?.notes.join('\n') ?? '', /broken is FAILED/u);
     assert.equal(plan.imageRemovals, 0);
+
+    // A failed delivery whose checksum matches is not "present": a complete set replaces it.
+    const failed = seeded();
+    const iphone1 = md5(images['store/iphone-1.png'] as Buffer);
+    failed.state.sets.set('vl-en', [
+      {
+        id: 'set-iphone',
+        displayType: 'APP_IPHONE_67',
+        screenshots: [{ id: 'failed', sourceFileChecksum: iphone1, deliveryState: 'FAILED' }],
+      },
+    ]);
+    const completeFile = presence({
+      'en-US': {
+        ...english,
+        screenshots: { iphone69: { files: ['store/iphone-1.png'], complete: true } },
+      },
+    });
+    const repaired = await planAppStorePresence(input(completeFile), failed.port);
+    assert.equal(repaired.locales[0]?.screenshots[0]?.action, 'replace');
+    assert.deepEqual(repaired.locales[0]?.screenshots[0]?.deleteIds, ['failed']);
+
+    // A screenshot App Store Connect is still processing: plan again later.
+    failed.state.sets.set('vl-en', [
+      {
+        id: 'set-iphone',
+        displayType: 'APP_IPHONE_67',
+        screenshots: [{ id: 'settling', deliveryState: 'COMPLETE' }],
+      },
+    ]);
+    await assert.rejects(
+      planAppStorePresence(input(completeFile), failed.port),
+      /still processing .*settling/u,
+    );
   }
 
   // Stale plans and failures.
@@ -509,6 +550,62 @@ try {
       path.join(directory, 'store/iphone-2.png'),
       images['store/iphone-2.png'] as Buffer,
     );
+
+    // A replaced set's files are all checked before the set is cleared.
+    const replaced = seeded();
+    const replacedPlan = await planAppStorePresence(input(fullFile), replaced.port);
+    const ipadFile = path.join(directory, 'store/ipad-1.png');
+    const originalIpad = readFileSync(ipadFile);
+    const changingPort: AscStorePresencePort = {
+      ...replaced.port,
+      async uploadScreenshot(upload) {
+        if (path.basename(upload.file) === 'iphone-2.png') {
+          writeFileSync(ipadFile, png(2064, 2752, 55));
+        }
+        return replaced.port.uploadScreenshot(upload);
+      },
+    };
+    await assert.rejects(
+      applyAppStorePresence({
+        saved: replacedPlan,
+        plan: input(fullFile),
+        port: changingPort,
+        approved: true,
+        confirmImageRemoval: true,
+      }),
+      /ipad-1\.png changed since the plan/u,
+    );
+    assert.ok(
+      !replaced.writes.includes('delete old-ipad'),
+      'the set is not cleared for a changed file',
+    );
+    writeFileSync(ipadFile, originalIpad);
+
+    // asc gets the real path of a screenshot reached through a symbolic link inside the game.
+    symlinkSync(
+      path.join(directory, 'store/iphone-3.png'),
+      path.join(directory, 'store/linked.png'),
+    );
+    const linked = fakeAsc();
+    const uploaded: string[] = [];
+    const linkedPort: AscStorePresencePort = {
+      ...linked.port,
+      async uploadScreenshot(upload) {
+        uploaded.push(upload.file);
+        return linked.port.uploadScreenshot(upload);
+      },
+    };
+    const linkedFile = presence({
+      'en-US': { ...english, screenshots: { iphone69: ['store/linked.png'] } },
+    });
+    const linkedPlan = await planAppStorePresence(input(linkedFile), linkedPort);
+    await applyAppStorePresence({
+      saved: linkedPlan,
+      plan: input(linkedFile),
+      port: linkedPort,
+      approved: true,
+    });
+    assert.deepEqual(uploaded, [realpathSync(path.join(directory, 'store/iphone-3.png'))]);
 
     // Image rules apply before App Store Connect is asked anything.
     writeFileSync(path.join(directory, 'store/wrong.png'), png(1080, 1920, 7));
@@ -909,6 +1006,14 @@ try {
     await assert.rejects(
       applyStorePresence({ planFile, approved: true }, environment, ports),
       /--confirm-image-removal/u,
+    );
+    await assert.rejects(
+      applyStorePresence(
+        { planFile, approved: true, confirmImageRemoval: true, changesNotSentForReview: true },
+        environment,
+        ports,
+      ),
+      /Google Play only/u,
     );
     const applied = await applyStorePresence(
       { planFile, approved: true, confirmImageRemoval: true },

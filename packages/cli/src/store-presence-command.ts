@@ -184,6 +184,9 @@ export async function applyStorePresence(
         });
       }
       if (session.store === 'app-store' && saved.plan.store === 'app-store') {
+        if (options.changesNotSentForReview === true) {
+          throw new Error('--changes-not-sent-for-review applies to Google Play only.');
+        }
         return applyAppStorePresence({
           saved: saved.plan,
           plan: {

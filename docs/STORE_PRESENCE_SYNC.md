@@ -245,9 +245,18 @@ Screenshots are compared by MD5 (App Store Connect's `sourceFileChecksum`).
 Each upload is one file: `asc` appends it to the set (creating the set),
 waits until the asset delivery reaches `COMPLETE` and fails on `FAILED`; the
 sync then requires the result to report `COMPLETE`. A screenshot whose
-delivery is not `COMPLETE` is reported in the plan; a complete set replaces
-it. A complete set that is not a prefix of the store's is replaced by
-deleting the set's screenshots and uploading the file's in order.
+delivery `FAILED` counts as missing: the plan reports it and a complete set
+replaces it. While App Store Connect is still processing a screenshot
+(awaiting upload, or delivered without a checksum yet), `plan` refuses and
+asks to plan again later. When the store's screenshots are not the first
+ones of a complete set, the set is replaced: every file is checked first,
+then the set's screenshots are deleted and the file's uploaded in order.
+`asc` gets each file's real path (it refuses a source reached through a
+symbolic link).
+
+Locale keys are App Store Connect's codes (`en-US`, `ko`, `ja`, `de-DE`,
+`zh-Hans`): `asc` rejects a bare language root such as `de` that App Store
+Connect spells with a region, and only at apply time.
 
 App Store Connect has no transaction. `apply` writes per locale (app
 information, version localization, screenshots) and, on a failure, names
