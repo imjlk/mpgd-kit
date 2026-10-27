@@ -68,9 +68,11 @@ store UI, and a key reused for another product or source rejects;
 available purchases decide. A `requested` record left behind by a crash
 before the store answer was journaled, and a `launched` record with no store
 purchase after `staleLaunchedAfterMs` (24 hours by default; pass `Infinity`
-to keep the RFC rule without expiry), end as `failed` with the
-`OUTCOME_UNKNOWN` class so the product is not serialized behind them; a
-purchase the store reports later is still journaled under its derived key.
+to keep the RFC rule without expiry; `createGameServicesRuntime` and
+`createGameServicesClient` take it as `commerceStaleLaunchedAfterMs`), end as
+`failed` with the `OUTCOME_UNKNOWN` class so the product is not serialized
+behind them; a purchase the store reports later is still journaled under its
+derived key.
 An error event never ends a record that already holds a store purchase or a
 saved verify request. Transport failures on verify or finish keep the
 state, are reported as `failure` events, and are retried on the next pass;

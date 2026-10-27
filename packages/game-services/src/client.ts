@@ -231,6 +231,8 @@ export interface CreateGameServicesClientInput {
   readonly warn?: (message: string) => void;
   /** Catalog kinds and SKUs the reconciler resolves without a store read. */
   readonly commerceProducts?: readonly CommerceReconcilerProduct[];
+  /** The reconciler's `staleLaunchedAfterMs` (24 hours by default). */
+  readonly commerceStaleLaunchedAfterMs?: number;
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
 }
 
@@ -274,6 +276,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       target: input.target,
       ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
       ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
+      ...(input.commerceStaleLaunchedAfterMs === undefined
+        ? {}
+        : { staleLaunchedAfterMs: input.commerceStaleLaunchedAfterMs }),
       now: requestNow,
     });
     if (input.onCommerceEvent !== undefined) {

@@ -2017,6 +2017,57 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   assertEqual(record?.productKind, 'durable', 'the configured catalog kind is journaled');
 }
 
+// 23c. createGameServicesRuntime hands `commerceStaleLaunchedAfterMs` to the reconciler: a
+// launched attempt with no store purchase expires after it (24 hours by default), and a
+// non-positive value is refused like the reconciler option.
+{
+  let clock = Date.parse('2026-10-02T00:00:00.000Z');
+  const runtimeOf = (store: MonetizationOperationStore, staleMs?: number) =>
+    createGameServicesRuntime({
+      gateway: createGateway(createFakeProvider()),
+      playerId: 'player-1',
+      authorityMode: 'non-production',
+      allowLocalBackend: true,
+      localBackend: createBackendApi(createFakeBackend()),
+      operationStore: store,
+      now: () => new Date(clock).toISOString(),
+      ...(staleMs === undefined ? {} : { commerceStaleLaunchedAfterMs: staleMs }),
+    });
+  const shortStore = createInMemoryMonetizationOperationStore();
+  const defaultStore = createInMemoryMonetizationOperationStore();
+  const short = runtimeOf(shortStore, 60_000);
+  const defaulted = runtimeOf(defaultStore);
+  for (const runtime of [short, defaulted]) {
+    const result = await runtime.client?.purchase({
+      productId: 'gems_small',
+      source: 'shop',
+      idempotencyKey: 'op-23c',
+    });
+    assertEqual(result?.status, 'pending', 'launched');
+  }
+  clock += 3_600_000;
+  await short.monetizationRecovery?.reconcile();
+  await defaulted.monetizationRecovery?.reconcile();
+  const stateIn = async (store: MonetizationOperationStore) =>
+    ((await store.read(
+      createCommercePurchaseOperationKey(
+        short.target ?? 'android',
+        'op-23c',
+      ),
+    )) as CommercePurchaseOperationRecord | undefined)?.state;
+  assertEqual(
+    [await stateIn(shortStore), await stateIn(defaultStore)],
+    ['failed', 'launched'],
+    'the configured expiry ends the attempt; the 24-hour default keeps it',
+  );
+  await short.client?.commerceReconciler?.stop();
+  await defaulted.client?.commerceReconciler?.stop();
+  assertThrowsSync(
+    () => runtimeOf(createInMemoryMonetizationOperationStore(), 0),
+    /staleLaunchedAfterMs must be a positive duration/u,
+  );
+}
+
 // Review fixes.
 
 // 24. A leftover v1 purchase record is retired: nothing resumes it through the reconciler, but it
