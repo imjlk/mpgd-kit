@@ -82,6 +82,7 @@ export {
   type CreateCommerceServiceProviderInput,
 } from './commerce-bridge.js';
 export {
+  accountBindingLookupFailedStoreCode,
   createStoreCommerceProvider,
   purchaseGateFailedStoreCode,
   purchasesPausedStoreCode,

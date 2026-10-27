@@ -95,6 +95,8 @@ export type StorePurchaseGate = (
 export const purchasesPausedStoreCode = 'PURCHASES_PAUSED' as const;
 /** `storeCode` of a purchase refused because the gate threw or answered nonsense. */
 export const purchaseGateFailedStoreCode = 'PURCHASE_GATE_FAILED' as const;
+/** `storeCode` of a purchase refused because the account binding lookup threw. */
+export const accountBindingLookupFailedStoreCode = 'ACCOUNT_BINDING_LOOKUP_FAILED' as const;
 
 export interface CreateStoreCommerceProviderInput {
   readonly sdk: StoreSdk;
@@ -406,7 +408,7 @@ export function createStoreCommerceProvider(
       try {
         accountBinding = await input.accountBinding?.();
       } catch (error) {
-        return { outcome: 'failed', error: normalize(error).toCommerceErrorInfo() };
+        return { outcome: 'failed', error: accountBindingFailure(error, store) };
       }
       if (input.authority.accountBinding === 'required' && accountBinding === undefined) {
         return {
@@ -556,37 +558,52 @@ function defaultEvidencePayload(purchase: StoreSdkPurchase): PlatformEvidenceEnv
 }
 
 /**
- * Asks the gate about one new purchase; undefined means allowed. Anything but
- * `{ allowed: true }` refuses: a thrown `CommerceError` keeps its own code,
- * any other throw or answer is `PURCHASE_GATE_FAILED`.
+ * Codes a pre-launch hook (the purchase gate or the account binding) must not
+ * report: they claim a store sheet was shown or may hold a purchase, and
+ * nothing was launched. A hook that throws one is reported under the hook's
+ * own refusal code instead.
+ */
+function misleadsBeforeLaunch(code: CommerceErrorCode): boolean {
+  return recoverableErrorCodes.has(code) || code === 'USER_CANCELLED';
+}
+
+/**
+ * Asks the gate about one new purchase; undefined means allowed. A refusal
+ * (`allowed: false`) is the gate's definitive answer: `PURCHASES_PAUSED` or
+ * its own code, retryable only when it says so. A gate that could not answer
+ * (it threw, or returned anything malformed) is `PURCHASE_GATE_FAILED`, and
+ * always retryable: the sales flag is unknown, not closed, so asking again
+ * may succeed. A thrown `CommerceError` keeps its code unless the code
+ * claims a launched or cancelled sheet.
  */
 async function askPurchaseGate(
   gate: StorePurchaseGate,
   request: StorePurchaseGateRequest,
 ): Promise<CommerceErrorInfo | undefined> {
+  const gateFailed = (message: string, cause?: unknown): CommerceErrorInfo =>
+    new CommerceError('ITEM_UNAVAILABLE', {
+      message,
+      storeCode: purchaseGateFailedStoreCode,
+      retryable: true,
+      ...(cause === undefined ? {} : { cause }),
+    }).toCommerceErrorInfo();
   let decision: unknown;
   try {
     decision = await gate(request);
   } catch (error) {
-    if (error instanceof CommerceError) {
+    if (error instanceof CommerceError && !misleadsBeforeLaunch(error.code)) {
       return error.toCommerceErrorInfo();
     }
-    return new CommerceError('ITEM_UNAVAILABLE', {
-      message: `The purchase gate of ${request.store} failed; ${request.logicalId} is not sold now.`,
-      storeCode: purchaseGateFailedStoreCode,
-      retryable: true,
-      cause: error,
-    }).toCommerceErrorInfo();
+    return gateFailed(
+      `The purchase gate of ${request.store} failed; ${request.logicalId} is not sold now.`,
+      error,
+    );
   }
   if (isRecord(decision) && decision.allowed === true) {
     return undefined;
   }
   if (!isRecord(decision) || decision.allowed !== false) {
-    return new CommerceError('ITEM_UNAVAILABLE', {
-      message: `The purchase gate of ${request.store} returned an invalid decision.`,
-      storeCode: purchaseGateFailedStoreCode,
-      retryable: false,
-    }).toCommerceErrorInfo();
+    return gateFailed(`The purchase gate of ${request.store} returned an invalid decision.`);
   }
   const storeCode = typeof decision.storeCode === 'string' && decision.storeCode.length > 0
     ? decision.storeCode
@@ -597,6 +614,25 @@ async function askPurchaseGate(
       : `New purchases of ${request.logicalId} are paused.`,
     storeCode,
     retryable: decision.retryable === true,
+  }).toCommerceErrorInfo();
+}
+
+/**
+ * A failed account binding lookup. A `CommerceError` keeps its code (a store
+ * provider names its own lookup failure) unless the code claims a launched or
+ * cancelled sheet; anything else is `ACCOUNT_BINDING_REQUIRED` with
+ * `ACCOUNT_BINDING_LOOKUP_FAILED`, retryable, so every store reports the
+ * same reason.
+ */
+function accountBindingFailure(error: unknown, store: string): CommerceErrorInfo {
+  if (error instanceof CommerceError && !misleadsBeforeLaunch(error.code)) {
+    return error.toCommerceErrorInfo();
+  }
+  return new CommerceError('ACCOUNT_BINDING_REQUIRED', {
+    message: `Store ${store} could not resolve the account binding.`,
+    storeCode: accountBindingLookupFailedStoreCode,
+    retryable: true,
+    cause: error,
   }).toCommerceErrorInfo();
 }
 

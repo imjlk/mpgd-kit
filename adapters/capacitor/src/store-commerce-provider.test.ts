@@ -247,15 +247,37 @@ describe('createStoreCommerceProvider', () => {
       outcome: 'failed',
       error: { code: 'ACCOUNT_BINDING_REQUIRED', storeCode: 'LOOKUP_FAILED' },
     });
-    // A binding that fails with an uncertain code still opened nothing: failed, never launched.
-    const uncertain = createProvider(sdk, {
+    // A binding that fails with a code claiming a launched or cancelled sheet
+    // opened nothing: it is a binding failure, never launched or cancelled.
+    for (const code of ['OUTCOME_UNKNOWN', 'ALREADY_OWNED', 'USER_CANCELLED'] as const) {
+      const misleading = createProvider(sdk, {
+        accountBinding: async () => {
+          throw new CommerceError(code);
+        },
+      });
+      await expect(misleading.requestPurchase({
+        logicalId: 'gems_small', idempotencyKey: `op-5-${code}`, source: 'shop',
+      })).resolves.toMatchObject({
+        outcome: 'failed',
+        error: {
+          code: 'ACCOUNT_BINDING_REQUIRED', storeCode: 'ACCOUNT_BINDING_LOOKUP_FAILED', retryable: true,
+        },
+      });
+    }
+    // Any other thrown lookup is the same reason on every store.
+    const generic = createProvider(sdk, {
       accountBinding: async () => {
-        throw new CommerceError('OUTCOME_UNKNOWN');
+        throw new Error('session expired');
       },
     });
-    await expect(uncertain.requestPurchase({
-      logicalId: 'gems_small', idempotencyKey: 'op-5', source: 'shop',
-    })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'OUTCOME_UNKNOWN' } });
+    await expect(generic.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-6', source: 'shop',
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: {
+        code: 'ACCOUNT_BINDING_REQUIRED', storeCode: 'ACCOUNT_BINDING_LOOKUP_FAILED', retryable: true,
+      },
+    });
     expect(sdk.requestCalls).toHaveLength(2);
   });
 
@@ -652,22 +674,26 @@ describe('purchase gate', () => {
       outcome: 'failed',
       error: { code: 'NETWORK', storeCode: 'SALES_FLAG_OFFLINE', retryable: true },
     });
-    // An uncertain code from the gate still opened nothing: failed, never launched.
-    const uncertain = createProvider(sdk, {
-      purchaseGate: () => {
-        throw new CommerceError('OUTCOME_UNKNOWN');
-      },
-    });
-    await expect(uncertain.requestPurchase(request)).resolves.toMatchObject({
-      outcome: 'failed', error: { code: 'OUTCOME_UNKNOWN' },
-    });
+    // A code claiming a launched or cancelled sheet opened nothing: the gate failed.
+    for (const code of ['OUTCOME_UNKNOWN', 'ALREADY_OWNED', 'USER_CANCELLED'] as const) {
+      const misleading = createProvider(sdk, {
+        purchaseGate: () => {
+          throw new CommerceError(code);
+        },
+      });
+      await expect(misleading.requestPurchase(request)).resolves.toMatchObject({
+        outcome: 'failed',
+        error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: true },
+      });
+    }
+    // A gate that could not answer is retryable whether it threw or answered nonsense.
     for (const answer of [undefined, null, {}, { allowed: 'yes' }, [true]]) {
       const invalid = createProvider(sdk, {
         purchaseGate: () => answer as never,
       });
       await expect(invalid.requestPurchase(request)).resolves.toMatchObject({
         outcome: 'failed',
-        error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: false },
+        error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: true },
       });
     }
     expect(sdk.requestCalls).toEqual([]);
