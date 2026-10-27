@@ -323,11 +323,13 @@ export interface CreateCommerceReconcilerInput {
   readonly sessionCheck?: () => CommerceError | undefined;
   /**
    * Whether the reconciler's owner closed for good (`createGameServicesRuntime`
-   * passes its disposed or player-changed state). Read synchronously at each
-   * `start()`: while it answers true, `start()` subscribes nothing and starts
-   * nothing, so a caller that reaches `start()` after `stop()` (a recovery
-   * pass that outlived its owner's dispose) leaves no store subscription. A
-   * start already under way is the one `stop()` waits for and unsubscribes.
+   * passes its disposed or player-changed state). Read synchronously when
+   * `start()` is called and again right before it subscribes (after the
+   * journal read): while it answers true, `start()` subscribes nothing and
+   * starts nothing, and resolves without an error. So a caller that reaches
+   * `start()` after `stop()` (a recovery pass that outlived its owner's
+   * dispose), or a start that was still reading the journal when its owner
+   * stopped waiting for it, leaves no store subscription.
    * Unlike `sessionCheck`, a signed-out session is not closed: the reconciler
    * still subscribes then and its work waits for the session. Omitted, a
    * stopped reconciler can be started again.
@@ -2059,8 +2061,17 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
       starting = (async () => {
         try {
-          await withLock(async () => {
+          const subscribed = await withLock(async () => {
             await loadRecords();
+            // The owner closed while this start waited for the lock or the
+            // journal (its `stop()` may have stopped waiting already): leave
+            // as a refused start does, with nothing subscribed or started and
+            // no error. The records read stay cached, as after a `reconcile()`
+            // before any start. Nothing awaits between this check and the
+            // subscription.
+            if (input.closed?.() === true) {
+              return false;
+            }
             // Subscribe first, then read: an event delivered before the listener is found either way.
             unsubscribe = provider.subscribe(listener);
             started = true;
@@ -2071,8 +2082,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             initialScanPending = capabilitiesNow === undefined
               || (capabilitiesNow.lifecycle.events && !(await readAvailable(capabilitiesNow)));
             await pass({ explicit: true, refreshCapabilities: false });
+            return true;
           });
-          await runUntilIdle();
+          if (subscribed) {
+            await runUntilIdle();
+          }
         } catch (error) {
           // A failed start is retryable: nothing stays subscribed or started.
           started = false;

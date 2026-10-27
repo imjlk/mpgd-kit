@@ -115,14 +115,20 @@ const verifies = (harness: Harness) =>
     (request) => request.endpoint === gameServicesBackendEndpoints.verifyPurchase,
   );
 
-/** A provider whose subscriptions the test counts. */
-function countingProvider(): { readonly provider: TestCommerceProvider; readonly listeners: unknown[] } {
+/** A provider whose subscriptions the test counts: open now, and made ever. */
+function countingProvider(): {
+  readonly provider: TestCommerceProvider;
+  readonly listeners: unknown[];
+  readonly subscribed: () => number;
+} {
   const listeners: ((event: CommerceEvent) => void)[] = [];
+  let subscribed = 0;
   const base = createTestCommerceProvider({ store: 'android-store' });
   const provider: TestCommerceProvider = Object.assign(
     Object.create(base) as TestCommerceProvider,
     {
       subscribe(listener: (event: CommerceEvent) => void) {
+        subscribed += 1;
         listeners.push(listener);
         return () => {
           listeners.splice(listeners.indexOf(listener), 1);
@@ -130,7 +136,7 @@ function countingProvider(): { readonly provider: TestCommerceProvider; readonly
       },
     },
   );
-  return { provider, listeners };
+  return { provider, listeners, subscribed: () => subscribed };
 }
 
 /** A journal whose next `listRecoverable` waits for `release()` once `hold()` armed it. */
@@ -1128,6 +1134,49 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   await reconciling;
   assert.equal(listeners.length, 0, 'the late start subscribes nothing');
   assert.equal(runtimeA.client?.commerceReconciler?.started, false, 'the reconciler stays stopped');
+}
+
+// A start that began before dispose() and was still reading the journal when
+// dispose() stopped waiting for it subscribes nothing once the read returns.
+{
+  const { provider, listeners, subscribed } = countingProvider();
+  const journal = holdingStore();
+  const harness = createHarness({ provider, store: journal.store });
+  const runtimeA = harness.create(playerA);
+  const reconciler = runtimeA.client?.commerceReconciler;
+  const reached = journal.hold();
+  const starting = reconciler?.start();
+  await reached;
+  // Both dispose waits run out at once: their timers fire when the test says so.
+  const realSetTimeout = globalThis.setTimeout;
+  const disposeTimers: (() => void)[] = [];
+  globalThis.setTimeout = ((handler: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms === gameServicesDisposeWaitMs) {
+      disposeTimers.push(handler);
+      return realSetTimeout(() => undefined, 0);
+    }
+    return realSetTimeout(handler, ms, ...rest);
+  }) as typeof setTimeout;
+  try {
+    let disposed = false;
+    const disposing = runtimeA.dispose().then(() => {
+      disposed = true;
+    });
+    for (let turn = 0; turn < 100 && !disposed; turn += 1) {
+      disposeTimers.shift()?.();
+      await Promise.resolve();
+    }
+    assert.equal(disposed, true, 'dispose gave up waiting for the stalled start');
+    await disposing;
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  journal.release();
+  await starting;
+  await reconciler?.runUntilIdle();
+  assert.equal(subscribed(), 0, 'the stalled start never subscribes');
+  assert.equal(listeners.length, 0);
+  assert.equal(reconciler?.started, false, 'and never starts');
 }
 
 console.info('Game services runtime session checks passed.');
