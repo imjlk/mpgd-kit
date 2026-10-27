@@ -81,6 +81,17 @@ export interface AppStoreListing {
   readonly reviewScreenshot?: string & tags.MinLength<1>;
   /** Family Sharing; Apple allows it for non-consumables only. */
   readonly familySharable?: boolean;
+  /**
+   * Territories (ISO 3166-1 alpha-3) a new in-app purchase is sold in, and
+   * whether territories Apple adds later are included. Defaults to every
+   * App Store territory and new territories.
+   */
+  readonly availability?: AppStoreListingAvailability;
+}
+
+export interface AppStoreListingAvailability {
+  readonly territories?: readonly (string & tags.Pattern<'^[A-Z]{3}$'>)[] & tags.MinItems<1>;
+  readonly availableInNewTerritories?: boolean;
 }
 
 export interface StoreListingEntry {
@@ -155,6 +166,12 @@ export function assertStoreListingCatalog(
           `Store listing ${productId}: the base territory ${territory} is priced by customerPrice, not territories.`,
         );
       }
+    }
+    const availability = entry.appStore?.availability?.territories ?? [];
+    if (new Set(availability).size !== availability.length) {
+      throw new Error(
+        `Store listing ${productId}: appStore.availability.territories lists a territory twice.`,
+      );
     }
     const screenshot = entry.appStore?.reviewScreenshot;
     if (screenshot !== undefined && !isRelativeChildPath(screenshot)) {

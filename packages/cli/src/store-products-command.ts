@@ -1,6 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import type { AscIapPort } from './app-store-iap-port.js';
+import { openAscIapSession, type AscCredential } from './app-store-iap-asc.js';
 import { planNativeDeployment } from './deploy-planning.js';
 import { readStoreCredential } from './native-deploy-run.js';
 import type { PlayProductCatalogPort } from './play-product-port.js';
@@ -9,7 +11,14 @@ import {
   readStoreProductSources,
   StoreProductPlanStaleError,
   writeStoreProductPlan,
+  type StoreProductSources,
 } from './store-products.js';
+import {
+  applyAppStoreProductPlan,
+  planAppStoreProducts,
+  type AppStoreProductApplyResult,
+  type AppStoreProductPlan,
+} from './store-products-app-store.js';
 import {
   applyPlayProductPlan,
   planPlayProducts,
@@ -23,7 +32,7 @@ import {
  * game's catalog and store listing file name the products.
  */
 
-export type StoreProductStore = 'google-play';
+export type StoreProductStore = 'google-play' | 'app-store';
 
 export interface StoreProductPlanOptions {
   readonly game: string;
@@ -44,59 +53,52 @@ export interface StoreProductPlanFile {
   readonly profile: string;
   readonly catalogFile: string;
   readonly listingsFile: string;
-  readonly plan: PlayProductPlan;
+  readonly plan: PlayProductPlan | AppStoreProductPlan;
 }
 
-export type PlayPortFactory = (serviceAccountFile: string) => Promise<PlayProductCatalogPort>;
+/** Store clients; the tests replace them with fakes. */
+export interface StoreProductPorts {
+  readonly googlePlay: (serviceAccountFile: string) => Promise<PlayProductCatalogPort>;
+  readonly appStore: (
+    credential: AscCredential,
+    signal?: AbortSignal,
+  ) => Promise<{ readonly port: AscIapPort; close(): void }>;
+}
+
+const defaultPorts: StoreProductPorts = {
+  googlePlay: loadPlayProductCatalog,
+  appStore: openAscIapSession,
+};
+
+type StoreSession =
+  | {
+      readonly store: 'google-play';
+      readonly packageName: string;
+      readonly port: PlayProductCatalogPort;
+      readonly sources: StoreProductSources;
+    }
+  | {
+      readonly store: 'app-store';
+      readonly appId: string;
+      readonly bundleId: string;
+      readonly port: AscIapPort;
+      readonly sources: StoreProductSources;
+    };
 
 export async function planStoreProducts(
   options: StoreProductPlanOptions,
   environment: NodeJS.ProcessEnv = process.env,
-  createPort: PlayPortFactory = loadPlayProductCatalog,
+  ports: Partial<StoreProductPorts> = {},
 ): Promise<StoreProductPlanFile> {
-  if (options.store !== 'google-play') {
-    throw new Error('--store must be google-play.');
-  }
-  const gameRoot = path.resolve(options.game);
-  const deployment = planNativeDeployment({
-    game: gameRoot,
-    profile: options.profile,
-    targets: ['android'],
-  });
-  const android = deployment.targets.find((entry) => entry.target === 'android');
-  if (android === undefined) {
-    throw new Error(`Deployment profile ${options.profile} has no Android target.`);
-  }
-  const sources = readStoreProductSources({
-    gameRoot,
-    ...(options.catalogFile === undefined ? {} : { catalogFile: options.catalogFile }),
-    ...(options.listingsFile === undefined ? {} : { listingsFile: options.listingsFile }),
-  });
-  const credential = readStoreCredential(deployment, 'android', environment);
-  if (credential.target !== 'android') {
-    throw new Error('Google Play product sync needs the Android submission credential.');
-  }
-  const port = await createPort(credential.serviceAccountFile);
-  const plan = await planPlayProducts(
-    {
-      packageName: android.appId,
-      catalog: sources.catalog,
-      listings: sources.listings,
-      ...(options.catalogTarget === undefined ? {} : { catalogTarget: options.catalogTarget }),
-      ...(options.keepLivePrices === true ? { keepLivePrices: true } : {}),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    },
-    port,
-  );
-  return {
+  return withStoreSession(options, environment, ports, async (session) => ({
     schemaVersion: 1,
     kind: 'mpgd-store-products-plan',
-    gameRoot,
+    gameRoot: path.resolve(options.game),
     profile: options.profile,
-    catalogFile: sources.catalogFile,
-    listingsFile: sources.listingsFile,
-    plan,
-  };
+    catalogFile: session.sources.catalogFile,
+    listingsFile: session.sources.listingsFile,
+    plan: await planWithSession(session, options),
+  }));
 }
 
 export function saveStoreProductPlan(file: string, plan: StoreProductPlanFile): string {
@@ -115,8 +117,8 @@ export interface StoreProductApplyOptions {
 export async function applyStoreProducts(
   options: StoreProductApplyOptions,
   environment: NodeJS.ProcessEnv = process.env,
-  createPort: PlayPortFactory = loadPlayProductCatalog,
-): Promise<PlayProductApplyResult> {
+  ports: Partial<StoreProductPorts> = {},
+): Promise<PlayProductApplyResult | AppStoreProductApplyResult> {
   if (!options.approved) {
     throw new Error('Writing store products requires --approve.');
   }
@@ -134,52 +136,150 @@ export async function applyStoreProducts(
     }
     return path.resolve(gameRoot, relative);
   };
-  const current = await planStoreProducts(
+  const planOptions: StoreProductPlanOptions = {
+    game: gameRoot,
+    profile: saved.profile,
+    store: saved.plan.store,
+    catalogFile: relocate(saved.catalogFile),
+    listingsFile: relocate(saved.listingsFile),
+    catalogTarget: saved.plan.catalogTarget,
+    keepLivePrices: saved.plan.keepLivePrices,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  };
+  return withStoreSession(planOptions, environment, ports, async (session) => {
+    const current = await planWithSession(session, planOptions);
+    if (session.store === 'google-play' && current.store === 'google-play'
+      && saved.plan.store === 'google-play') {
+      if (current.packageName !== saved.plan.packageName) {
+        throw new StoreProductPlanStaleError(
+          `The deployment profile now names ${current.packageName}, not ${saved.plan.packageName}.`,
+        );
+      }
+      return applyPlayProductPlan({
+        saved: saved.plan,
+        current,
+        port: session.port,
+        approved: true,
+        ...(options.confirmPriceChange === true ? { confirmPriceChange: true } : {}),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+    }
+    if (session.store === 'app-store' && current.store === 'app-store' && saved.plan.store === 'app-store') {
+      if (current.appId !== saved.plan.appId || current.bundleId !== saved.plan.bundleId) {
+        throw new StoreProductPlanStaleError(
+          `The deployment profile now names app ${current.appId} (${current.bundleId}), not ${
+            saved.plan.appId} (${saved.plan.bundleId}).`,
+        );
+      }
+      return applyAppStoreProductPlan({
+        saved: saved.plan,
+        current,
+        port: session.port,
+        approved: true,
+        ...(options.confirmPriceChange === true ? { confirmPriceChange: true } : {}),
+      });
+    }
+    throw new Error('Saved store product plan is malformed.');
+  });
+}
+
+async function withStoreSession<T>(
+  options: StoreProductPlanOptions,
+  environment: NodeJS.ProcessEnv,
+  overrides: Partial<StoreProductPorts>,
+  action: (session: StoreSession) => Promise<T>,
+): Promise<T> {
+  if (options.store !== 'google-play' && options.store !== 'app-store') {
+    throw new Error('--store must be google-play or app-store.');
+  }
+  const ports = { ...defaultPorts, ...overrides };
+  const gameRoot = path.resolve(options.game);
+  const target = options.store === 'google-play' ? 'android' : 'ios';
+  const deployment = planNativeDeployment({
+    game: gameRoot,
+    profile: options.profile,
+    targets: [target],
+  });
+  const planned = deployment.targets.find((entry) => entry.target === target);
+  if (planned === undefined) {
+    throw new Error(`Deployment profile ${options.profile} has no ${target} target.`);
+  }
+  const sources = readStoreProductSources({
+    gameRoot,
+    ...(options.catalogFile === undefined ? {} : { catalogFile: options.catalogFile }),
+    ...(options.listingsFile === undefined ? {} : { listingsFile: options.listingsFile }),
+  });
+  const credential = readStoreCredential(deployment, target, environment);
+  if (credential.target === 'android') {
+    const port = await ports.googlePlay(credential.serviceAccountFile);
+    return action({ store: 'google-play', packageName: planned.appId, port, sources });
+  }
+  const session = await ports.appStore(
     {
-      game: gameRoot,
-      profile: saved.profile,
-      store: 'google-play',
-      catalogFile: relocate(saved.catalogFile),
-      listingsFile: relocate(saved.listingsFile),
-      catalogTarget: saved.plan.catalogTarget,
-      keepLivePrices: saved.plan.keepLivePrices,
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ascBinary: credential.ascBinary,
+      apiKeyId: credential.apiKeyId,
+      apiIssuerId: credential.apiIssuerId,
+      apiPrivateKeyBase64: credential.apiPrivateKeyBase64,
     },
-    environment,
-    createPort,
+    options.signal,
   );
-  if (current.plan.packageName !== saved.plan.packageName) {
-    throw new StoreProductPlanStaleError(
-      `The deployment profile now names ${current.plan.packageName}, not ${saved.plan.packageName}.`,
+  try {
+    return await action({
+      store: 'app-store',
+      appId: credential.appStoreAppId,
+      bundleId: planned.appId,
+      port: session.port,
+      sources,
+    });
+  } finally {
+    session.close();
+  }
+}
+
+async function planWithSession(
+  session: StoreSession,
+  options: StoreProductPlanOptions,
+): Promise<PlayProductPlan | AppStoreProductPlan> {
+  const common = {
+    catalog: session.sources.catalog,
+    listings: session.sources.listings,
+    ...(options.catalogTarget === undefined ? {} : { catalogTarget: options.catalogTarget }),
+    ...(options.keepLivePrices === true ? { keepLivePrices: true } : {}),
+  };
+  if (session.store === 'google-play') {
+    return planPlayProducts(
+      {
+        packageName: session.packageName,
+        ...common,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
+      session.port,
     );
   }
-  const credential = readStoreCredential(
-    planNativeDeployment({ game: gameRoot, profile: saved.profile, targets: ['android'] }),
-    'android',
-    environment,
+  return planAppStoreProducts(
+    {
+      appId: session.appId,
+      bundleId: session.bundleId,
+      listingsDirectory: path.dirname(session.sources.listingsFile),
+      ...common,
+    },
+    session.port,
   );
-  if (credential.target !== 'android') {
-    throw new Error('Google Play product sync needs the Android submission credential.');
-  }
-  return applyPlayProductPlan({
-    saved: saved.plan,
-    current: current.plan,
-    port: await createPort(credential.serviceAccountFile),
-    approved: true,
-    ...(options.confirmPriceChange === true ? { confirmPriceChange: true } : {}),
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  });
 }
 
 function readSavedPlan(file: string): StoreProductPlanFile {
   const raw = readStoreProductPlanFile(file);
   const plan = raw.plan as Record<string, unknown> | undefined;
+  const storeFields = typeof plan === 'object' && plan !== null && (
+    (plan.store === 'google-play' && typeof plan.packageName === 'string')
+    || (plan.store === 'app-store' && typeof plan.appId === 'string' && typeof plan.bundleId === 'string')
+  );
   if (raw.schemaVersion !== 1 || raw.kind !== 'mpgd-store-products-plan'
     || typeof raw.gameRoot !== 'string' || !path.isAbsolute(raw.gameRoot)
     || typeof raw.profile !== 'string' || typeof raw.catalogFile !== 'string'
     || typeof raw.listingsFile !== 'string' || typeof plan !== 'object' || plan === null
-    || plan.schemaVersion !== 1 || plan.store !== 'google-play'
-    || typeof plan.packageName !== 'string' || typeof plan.catalogTarget !== 'string'
+    || plan.schemaVersion !== 1 || !storeFields
+    || typeof plan.catalogTarget !== 'string'
     || typeof plan.keepLivePrices !== 'boolean' || !Array.isArray(plan.products)
     || !plan.products.every(isSavedProduct)) {
     throw new Error('Saved store product plan is malformed.');

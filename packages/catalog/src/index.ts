@@ -274,6 +274,7 @@ export {
   assertStoreListingCatalog,
   resolveStoreListingLocalizations,
   type AppStoreListing,
+  type AppStoreListingAvailability,
   type AppStoreListingPrice,
   type GooglePlayListing,
   type GooglePlayListingPrice,

@@ -586,7 +586,7 @@ async function preflight(input: IosTestFlightSubmissionInput): Promise<ResolvedP
 }
 
 export function isolatedAscEnvironment(
-  input: IosTestFlightSubmissionInput,
+  input: Pick<IosTestFlightSubmissionInput, 'apiKeyId' | 'apiIssuerId' | 'apiPrivateKeyBase64'>,
   directory: string,
   source: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {

@@ -94,6 +94,17 @@ export function decimalToUnitsAndNanos(amount: string): { units: string; nanos: 
   };
 }
 
+/** Decimal strings compared by value: `0.99` equals `0.990`. */
+export function sameDecimal(left: string, right: string): boolean {
+  const normal = (value: string): string => {
+    const [whole = '0', fraction = ''] = value.trim().split('.');
+    const trimmedFraction = fraction.replace(/0+$/u, '');
+    const trimmedWhole = whole.replace(/^0+(?=\d)/u, '');
+    return trimmedFraction === '' ? trimmedWhole : `${trimmedWhole}.${trimmedFraction}`;
+  };
+  return normal(left) === normal(right);
+}
+
 function readJson(file: string): unknown {
   try {
     return JSON.parse(readFileSync(file, 'utf8')) as unknown;
