@@ -149,9 +149,20 @@ re-plans inside it, writes the contact details (`edits.details.update`), each
 language's text (`edits.listings.update`, which also creates a new language)
 and its images (`edits.images.deleteall` and `edits.images.upload`), then
 commits once (`edits.commit` with `changesInReviewBehavior=ERROR_IF_IN_REVIEW`).
-When any step fails, apply deletes the edit, so nothing is published; when
-the commit itself fails, its outcome is unknown and the next `plan` shows
-what is left.
+When any step fails, apply deletes the edit, so nothing is published. When
+Play refuses the commit with a definitive 4xx (for example changes already
+in review under `ERROR_IF_IN_REVIEW`), nothing landed: the edit is deleted
+and Play's reason is reported. When the commit fails without an answer, its
+outcome is unknown: the edit is left alone (it may have been committed) and
+the next `plan` shows what is left.
+
+Images are matched by Play's `sha256`; when Play reports only `sha1`, by
+that. An image Play reports with neither stops the plan, and an upload Play
+answers with neither or with another digest stops the apply, because the
+slot could never be matched again. Text is compared and written with LF line
+breaks (a file saved with CRLF matches Play's text). Updating the contact
+details needs a contact email: when Play has none and the file gives none,
+`plan` says so instead of letting the apply fail.
 
 - `video` absent in the file keeps the video Play has.
 - `contact` fields absent in the file stay as Play has them; Play's default
@@ -222,6 +233,11 @@ Mock-tested only. Check on the first run against a real Play app:
       included), and the contact email, website and phone are not
       normalised (a trailing slash, a phone format), so a second `plan`
       reports the listing and details `unchanged`.
+- [ ] Whether Play normalizes the video and contact website URLs. URLs are
+      compared exactly; the plan notes when one differs from Play's only in
+      URL form (host case, trailing slash).
+- [ ] Which digests `edits.images.list` and `upload` return (`sha256`, or
+      only `sha1`).
 - [ ] The file size limits the kit enforces (feature graphic 15 MB,
       screenshots 8 MB) match what `edits.images.upload` accepts; the help
       page states only the icon's 1 MB.

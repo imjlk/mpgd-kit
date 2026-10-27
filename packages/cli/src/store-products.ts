@@ -8,12 +8,7 @@ import {
   type StoreListingCatalog,
 } from '@mpgd/catalog';
 
-import {
-  readJsonFile,
-  readStorePlanFile,
-  StorePlanStaleError,
-  writeStorePlanFile,
-} from './store-sync.js';
+import { readJsonFile, StorePlanStaleError } from './store-sync.js';
 
 export {
   canonicalLanguageTag,
@@ -65,15 +60,6 @@ export function readStoreProductSources(input: {
   const catalog = assertProductCatalog(readJsonFile(catalogFile));
   const listings = assertStoreListingCatalog(readJsonFile(listingsFile), catalog);
   return { catalogFile, listingsFile, catalog, listings };
-}
-
-/** A new plan file, never overwriting one (the same rule as `deploy plan --out`). */
-export function writeStoreProductPlan(file: string, plan: unknown): string {
-  return writeStorePlanFile(file, plan);
-}
-
-export function readStoreProductPlanFile(file: string): Record<string, unknown> {
-  return readStorePlanFile(file, 'store product plan');
 }
 
 export class StoreProductPlanStaleError extends StorePlanStaleError {

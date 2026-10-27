@@ -33,7 +33,7 @@ import {
   PlayPresenceApplyError,
   type PlayPresencePlan,
 } from './store-presence-play.js';
-import { StorePlanStaleError } from './store-sync.js';
+import { relocateStoreSyncFile, StorePlanStaleError } from './store-sync.js';
 
 const packageName = 'dev.mpgd.store';
 
@@ -73,6 +73,10 @@ interface FakePlay {
   failOn?: string | undefined;
   /** Play answers uploads with another digest, as if it re-encoded them. */
   reencode?: boolean;
+  /** Which digests Play reports for images (default both). */
+  digests?: 'both' | 'sha1' | 'none';
+  /** Thrown by the next commit instead of committing. */
+  commitError?: Error | undefined;
 }
 
 const clone = (state: PlayState): PlayState => ({
@@ -114,6 +118,11 @@ function fakePlay(initial: Partial<PlayState> = {}): FakePlay {
       async commitEdit(input) {
         edits.push(`commit ${input.editId}${input.changesNotSentForReview ? ' not-sent' : ''}`);
         fail('commit');
+        if (fake.commitError !== undefined) {
+          const error = fake.commitError;
+          fake.commitError = undefined;
+          throw error;
+        }
         const state = edit(input.editId);
         fake.state = state;
         open.delete(input.editId);
@@ -140,9 +149,7 @@ function fakePlay(initial: Partial<PlayState> = {}): FakePlay {
           state.listings.has(input.language),
           `images of ${input.language} read before it exists`,
         );
-        return (state.images.get(`${input.language}/${input.imageType}`) ?? []).map((image) => ({
-          ...image,
-        }));
+        return (state.images.get(`${input.language}/${input.imageType}`) ?? []).map(view);
       },
       async uploadImage(input) {
         writes.push(`upload ${input.language}/${input.imageType} ${path.basename(input.file)}`);
@@ -151,11 +158,15 @@ function fakePlay(initial: Partial<PlayState> = {}): FakePlay {
         assert.ok(state.listings.has(input.language), 'images go to an existing listing');
         assert.ok(input.mimeType === 'image/png');
         nextImage += 1;
-        const digest = fake.reencode === true ? 'f'.repeat(64) : sha256(readFileSync(input.file));
-        const image = { id: `img-${nextImage}`, sha256: digest };
+        const bytes = readFileSync(input.file);
+        const image = {
+          id: `img-${nextImage}`,
+          sha256: fake.reencode === true ? 'f'.repeat(64) : sha256(bytes),
+          sha1: createHash('sha1').update(bytes).digest('hex'),
+        };
         const key = `${input.language}/${input.imageType}`;
         state.images.set(key, [...(state.images.get(key) ?? []), image]);
-        return image;
+        return view(image);
       },
       async deleteAllImages(input) {
         writes.push(`deleteall ${input.language}/${input.imageType}`);
@@ -167,6 +178,14 @@ function fakePlay(initial: Partial<PlayState> = {}): FakePlay {
     const state = open.get(editId);
     assert.ok(state !== undefined, `edit ${editId} is open`);
     return state;
+  }
+  function view(image: PlayImage): PlayImage {
+    const { sha256: digest256, sha1, ...rest } = image;
+    return fake.digests === 'none'
+      ? rest
+      : fake.digests === 'sha1'
+        ? { ...rest, sha1 }
+        : { ...image, sha256: digest256 };
   }
   function fail(step: string): void {
     if (fake.failOn === step) {
@@ -609,8 +628,25 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
     );
     assert.deepEqual(failing.edits, ['insert edit-2', 'delete edit-2']);
     assert.deepEqual(failing.state, before);
-    // The commit fails: the outcome is unknown, and a fresh plan shows what is left.
+    // Play refuses the commit (a definitive 4xx, for example changes already in
+    // review): nothing landed, the edit is discarded and the reason is kept.
+    failing.commitError = Object.assign(new Error('Changes are already in review.'), { code: 400 });
+    failing.edits.length = 0;
+    await assert.rejects(
+      applyPlayPresence({
+        saved: failingPlan,
+        plan: input(fixture, file),
+        port: failing.port,
+        approved: true,
+      }),
+      (error: unknown) => error instanceof PlayPresenceApplyError && error.outcome === 'discarded'
+        && /already in review/u.test(error.message),
+    );
+    assert.deepEqual(failing.edits, ['insert edit-3', 'commit edit-3', 'delete edit-3']);
+    // The commit fails without an answer: the outcome is unknown, the edit is
+    // left alone (it may have been committed), and a fresh plan shows what is left.
     failing.failOn = 'commit';
+    failing.edits.length = 0;
     await assert.rejects(
       applyPlayPresence({
         saved: failingPlan,
@@ -619,6 +655,11 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
         approved: true,
       }),
       (error: unknown) => error instanceof PlayPresenceApplyError && error.outcome === 'unknown',
+    );
+    assert.deepEqual(
+      failing.edits,
+      ['insert edit-4', 'commit edit-4'],
+      'an uncertain commit is not deleted',
     );
     const committed = await applyPlayPresence({
       saved: failingPlan,
@@ -643,7 +684,7 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
         approved: true,
       }),
       (error: unknown) => error instanceof PlayPresenceApplyError && error.outcome === 'discarded'
-        && /matches images by SHA-256/u.test(error.message),
+        && /matches images by digest/u.test(error.message),
     );
     assert.deepEqual(reencoding.state, untouchedState);
 
@@ -734,6 +775,110 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
   }
 }
 
+// Digests Play may leave out, line breaks, URL forms, and the contact email.
+{
+  const fixture = makeFixture();
+  try {
+    const phone = onlyEnglish({ phoneScreenshots: ['store/phone-1.png', 'store/phone-2.png'] });
+    // Play reports only SHA-1: images are matched through it.
+    const sha1Only = seededPlay(fixture, ['store/phone-1.png']);
+    sha1Only.digests = 'sha1';
+    for (const images of sha1Only.state.images.values()) {
+      for (const image of images) {
+        const name = Object.keys(fixture.images).find(
+          (candidate) => sha256(fixture.images[candidate] as Buffer) === image.sha256,
+        );
+        Object.assign(image, {
+          sha1: createHash('sha1').update(fixture.images[name ?? ''] ?? Buffer.alloc(0)).digest(
+            'hex',
+          ),
+        });
+      }
+    }
+    const sha1Plan = await planPlayPresence(input(fixture, phone), sha1Only.port);
+    assert.deepEqual(
+      sha1Plan.languages[0]?.images[0]?.upload.map((image) => image.path),
+      ['store/phone-2.png'],
+    );
+    await applyPlayPresence({
+      saved: sha1Plan,
+      plan: input(fixture, phone),
+      port: sha1Only.port,
+      approved: true,
+    });
+    assert.equal(
+      (await planPlayPresence(input(fixture, phone), sha1Only.port)).changed,
+      false,
+      'converges on SHA-1',
+    );
+    // Play reports neither: the plan stops instead of re-uploading forever.
+    const noDigest = seededPlay(fixture, ['store/phone-1.png']);
+    noDigest.digests = 'none';
+    await assert.rejects(
+      planPlayPresence(input(fixture, phone), noDigest.port),
+      /without a SHA-256 or SHA-1/u,
+    );
+    const noDigestUpload = seededPlay(fixture, []);
+    const noDigestPlan = await planPlayPresence(input(fixture, phone), noDigestUpload.port);
+    noDigestUpload.digests = 'none';
+    await assert.rejects(
+      applyPlayPresence({
+        saved: noDigestPlan,
+        plan: input(fixture, phone),
+        port: noDigestUpload.port,
+        approved: true,
+      }),
+      (error: unknown) => error instanceof PlayPresenceApplyError && /cannot confirm it/u.test(error.message),
+    );
+
+    // A file saved with CRLF line breaks matches Play's LF text and is written with LF.
+    const crlf = assertStorePresence({
+      version: '1',
+      googlePlay: {
+        listings: {
+          'en-US': {
+            title: 'Block Party',
+            shortDescription: 'Stack blocks with friends.',
+            fullDescription: longDescription.replace(/\n/gu, '\r\n'),
+            video: 'https://YOUTU.BE/old/',
+          },
+        },
+      },
+    });
+    const lf = seededPlay(fixture, []);
+    const crlfPlan = await planPlayPresence(input(fixture, crlf), lf.port);
+    assert.deepEqual(
+      crlfPlan.languages[0]?.text.map((change) => change.field),
+      ['video'],
+    );
+    assert.equal(crlfPlan.languages[0]?.listing?.fullDescription, longDescription);
+    assert.match(crlfPlan.notes.join('\n'), /video differs from Play's only in URL form/u);
+
+    // Contact details without an email Play needs.
+    const websiteOnly = onlyEnglish({}, { website: 'https://example.com' });
+    await assert.rejects(
+      planPlayPresence(input(fixture, websiteOnly), seededPlay(fixture, []).port),
+      /Add googlePlay\.contact\.email/u,
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+// A plan moved with --game cannot read outside the saved game directory; "..x" names are inside.
+assert.equal(
+  relocateStoreSyncFile('/work/game', '/moved', '/work/game/..x.json'),
+  path.resolve('/moved', '..x.json'),
+);
+assert.throws(
+  () => relocateStoreSyncFile('/work/game', '/moved', '/work/other.json'),
+  /outside its game directory/u,
+);
+assert.equal(
+  relocateStoreSyncFile('/work/game', undefined, '/work/other.json'),
+  '/work/other.json',
+);
+
 // The command: deployment profile, credential, saved plan, --game.
 {
   const fixture = makeFixture();
@@ -779,6 +924,17 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
         { googlePlay: factory },
       ),
       /MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT/u,
+    );
+    // A malformed file reports its own error before any credential is read.
+    const brokenFile = path.join(fixture.root, 'broken-presence.json');
+    writeFileSync(brokenFile, '{"version":"1","googlePlay":{"listings":{}}}\n');
+    await assert.rejects(
+      planStorePresence(
+        { game, profile: 'beta', store: 'google-play', presenceFile: brokenFile },
+        {},
+        { googlePlay: factory },
+      ),
+      /needs at least one language/u,
     );
     await assert.rejects(
       planStorePresence({ game, profile: 'beta', store: 'app-store' }, environment, {

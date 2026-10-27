@@ -5,10 +5,8 @@ import type { AscIapPort } from './app-store-iap-port.js';
 import { openAscIapSession, type AscCredential } from './app-store-iap-asc.js';
 import type { PlayProductCatalogPort } from './play-product-port.js';
 import {
-  readStoreProductPlanFile,
   readStoreProductSources,
   StoreProductPlanStaleError,
-  writeStoreProductPlan,
   type StoreProductSources,
 } from './store-products.js';
 import {
@@ -23,7 +21,14 @@ import {
   type PlayProductApplyResult,
   type PlayProductPlan,
 } from './store-products-play.js';
-import { relocateStoreSyncFile, resolveStoreSyncApp, type StoreSyncStore } from './store-sync.js';
+import {
+  assertStoreSyncStore,
+  readStorePlanFile,
+  relocateStoreSyncFile,
+  resolveStoreSyncApp,
+  writeStorePlanFile,
+  type StoreSyncStore,
+} from './store-sync.js';
 
 /**
  * `mpgd store products plan|apply`: the game's deployment profile names the
@@ -101,7 +106,7 @@ export async function planStoreProducts(
 }
 
 export function saveStoreProductPlan(file: string, plan: StoreProductPlanFile): string {
-  return writeStoreProductPlan(file, plan);
+  return writeStorePlanFile(file, plan);
 }
 
 export interface StoreProductApplyOptions {
@@ -181,13 +186,15 @@ async function withStoreSession<T>(
   overrides: Partial<StoreProductPorts>,
   action: (session: StoreSession) => Promise<T>,
 ): Promise<T> {
+  assertStoreSyncStore(options.store);
   const ports = { ...defaultPorts, ...overrides };
-  const app = resolveStoreSyncApp(options, environment);
+  // The game files first: a malformed file reports its own error without a credential.
   const sources = readStoreProductSources({
     gameRoot: path.resolve(options.game),
     ...(options.catalogFile === undefined ? {} : { catalogFile: options.catalogFile }),
     ...(options.listingsFile === undefined ? {} : { listingsFile: options.listingsFile }),
   });
+  const app = resolveStoreSyncApp(options, environment);
   if (app.store === 'google-play') {
     const port = await ports.googlePlay(app.serviceAccountFile);
     return action({ store: 'google-play', packageName: app.packageName, port, sources });
@@ -238,7 +245,7 @@ async function planWithSession(
 }
 
 function readSavedPlan(file: string): StoreProductPlanFile {
-  const raw = readStoreProductPlanFile(file);
+  const raw = readStorePlanFile(file, 'store product plan');
   const plan = raw.plan as Record<string, unknown> | undefined;
   const storeFields = typeof plan === 'object' && plan !== null && (
     (plan.store === 'google-play' && typeof plan.packageName === 'string')

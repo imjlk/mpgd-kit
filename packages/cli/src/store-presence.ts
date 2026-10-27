@@ -54,6 +54,8 @@ export interface LocalStoreImage {
   /** Absolute path on this checkout. */
   readonly file: string;
   readonly sha256: string;
+  /** For a store that reports only SHA-1. */
+  readonly sha1: string;
   readonly md5: string;
   readonly byteLength: number;
   readonly info: StoreImageInfo;
@@ -96,6 +98,7 @@ export function readLocalStoreImage(
     path: relative,
     file,
     sha256: createHash('sha256').update(bytes).digest('hex'),
+    sha1: createHash('sha1').update(bytes).digest('hex'),
     md5: createHash('md5').update(bytes).digest('hex'),
     byteLength: bytes.byteLength,
     info,
@@ -128,12 +131,34 @@ export interface StorePresenceTextChange {
 
 const shortText = 80;
 
+/** CRLF and lone CR as LF, so a file saved on Windows and the store's text compare equal. */
+export function normalizeLineBreaks(value: string): string {
+  return value.replace(/\r\n?/gu, '\n');
+}
+
+/**
+ * Two URLs that differ only in form (host case, a trailing slash, default
+ * port): a store may normalize the URL it was given.
+ */
+export function sameUrlForm(left: string, right: string): boolean {
+  const normal = (value: string): string | undefined => {
+    try {
+      return new URL(value).href.replace(/\/$/u, '');
+    } catch {
+      return undefined;
+    }
+  };
+  const a = normal(left);
+  return a !== undefined && a === normal(right);
+}
+
+/** Compares after normalizing line breaks; `to` is expected normalized already. */
 export function describeTextChange(
   field: string,
   from: string | null | undefined,
   to: string,
 ): StorePresenceTextChange | undefined {
-  const before = typeof from === 'string' ? from : null;
+  const before = typeof from === 'string' ? normalizeLineBreaks(from) : null;
   if (before === to) {
     return undefined;
   }

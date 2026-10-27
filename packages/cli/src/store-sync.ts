@@ -37,9 +37,7 @@ export function resolveStoreSyncApp(
   options: { readonly game: string; readonly profile: string; readonly store: StoreSyncStore },
   environment: NodeJS.ProcessEnv,
 ): StoreSyncApp {
-  if (options.store !== 'google-play' && options.store !== 'app-store') {
-    throw new Error('--store must be google-play or app-store.');
-  }
+  assertStoreSyncStore(options.store);
   const target = options.store === 'google-play' ? 'android' : 'ios';
   const deployment = planNativeDeployment({
     game: path.resolve(options.game),
@@ -71,6 +69,12 @@ export function resolveStoreSyncApp(
   };
 }
 
+export function assertStoreSyncStore(store: string): asserts store is StoreSyncStore {
+  if (store !== 'google-play' && store !== 'app-store') {
+    throw new Error('--store must be google-play or app-store.');
+  }
+}
+
 /**
  * A file a saved plan read, moved to the game directory apply runs in
  * (`apply --game`). Files outside the saved game directory cannot move.
@@ -84,7 +88,7 @@ export function relocateStoreSyncFile(
     return file;
   }
   const relative = path.relative(savedGameRoot, file);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(
       `The saved plan reads ${file}, outside its game directory; --game cannot move it. Plan again.`,
     );
