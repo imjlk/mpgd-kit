@@ -22,6 +22,7 @@ import {
   type FinishTransactionResult,
   type GetAvailablePurchasesInput,
   type PurchaseKind,
+  type PurchaseSource,
   type RequestPurchaseInput,
   type RequestPurchaseResult,
   type StoreId,
@@ -56,6 +57,45 @@ export interface StoreCommerceCapabilityOverrides {
   readonly lifecycle?: Partial<CommerceLifecycleCapabilities>;
 }
 
+/** What a purchase gate is asked about: one new purchase, before any store UI opens. */
+export interface StorePurchaseGateRequest {
+  readonly store: StoreId;
+  readonly logicalId: CommerceLogicalProductId;
+  readonly storeSku: string;
+  readonly kind: PurchaseKind;
+  readonly source: PurchaseSource;
+}
+
+/**
+ * A purchase gate's answer. A refusal becomes a `failed` purchase result with
+ * `ITEM_UNAVAILABLE` and `storeCode` (default `PURCHASES_PAUSED`), returned as
+ * data so the reason survives the bridge; `retryable` defaults to false.
+ */
+export type StorePurchaseGateDecision =
+  | { readonly allowed: true }
+  | {
+      readonly allowed: false;
+      readonly storeCode?: string;
+      readonly message?: string;
+      readonly retryable?: boolean;
+    };
+
+/**
+ * The game's sales switch: asked before a NEW purchase opens the store UI,
+ * after the product, availability, and kind checks and before the account
+ * binding. Recovery, restore, finishing, events, and `getAvailablePurchases`
+ * never consult it, so purchases already paid for keep reconciling while new
+ * sales are refused. A gate that throws refuses the purchase (fail closed).
+ */
+export type StorePurchaseGate = (
+  request: StorePurchaseGateRequest,
+) => StorePurchaseGateDecision | Promise<StorePurchaseGateDecision>;
+
+/** `storeCode` of a purchase the gate refused without naming its own. */
+export const purchasesPausedStoreCode = 'PURCHASES_PAUSED' as const;
+/** `storeCode` of a purchase refused because the gate threw or answered nonsense. */
+export const purchaseGateFailedStoreCode = 'PURCHASE_GATE_FAILED' as const;
+
 export interface CreateStoreCommerceProviderInput {
   readonly sdk: StoreSdk;
   /** Defaults to `sdk.store`. */
@@ -68,8 +108,15 @@ export interface CreateStoreCommerceProviderInput {
    * and SKU; a store provider replaces it to match its backend verifier.
    */
   readonly evidencePayload?: (purchase: StoreSdkPurchase) => PlatformEvidenceEnvelope['payload'];
-  /** Resolves the player's store account binding before a purchase opens. */
+  /**
+   * Resolves the player's store account binding before a purchase opens. A
+   * failure (thrown, or no binding while `authority.accountBinding` is
+   * `required`) is answered as a `failed` purchase result, not thrown, so its
+   * `storeCode` survives the bridge.
+   */
   readonly accountBinding?: () => Promise<StorePurchaseAccountBinding | undefined>;
+  /** Optional sales switch for new purchases; see `StorePurchaseGate`. */
+  readonly purchaseGate?: StorePurchaseGate;
   readonly capabilities?: StoreCommerceCapabilityOverrides;
   readonly authority: CommerceAuthorityCapabilities;
   /** Per-store error codes merged over `defaultStoreSdkErrorCodeMap`. */
@@ -341,11 +388,33 @@ export function createStoreCommerceProvider(
       const capabilities = await getCapabilities();
       assertAvailable(capabilities.availability, store);
       assertRequestPurchaseSupported(capabilities, request, mapping.kind);
-      const accountBinding = await input.accountBinding?.();
-      if (input.authority.accountBinding === 'required' && accountBinding === undefined) {
-        throw new CommerceError('ACCOUNT_BINDING_REQUIRED', {
-          message: `Store ${store} requires an account binding before a purchase.`,
+      // Pre-launch refusals below are data, not throws: a `failed` result
+      // keeps its `storeCode` across the bridge, a thrown error does not.
+      if (input.purchaseGate !== undefined) {
+        const refusal = await askPurchaseGate(input.purchaseGate, {
+          store,
+          logicalId: mapping.logicalId,
+          storeSku: mapping.storeSku,
+          kind: mapping.kind,
+          source: request.source,
         });
+        if (refusal !== undefined) {
+          return { outcome: 'failed', error: refusal };
+        }
+      }
+      let accountBinding: StorePurchaseAccountBinding | undefined;
+      try {
+        accountBinding = await input.accountBinding?.();
+      } catch (error) {
+        return { outcome: 'failed', error: normalize(error).toCommerceErrorInfo() };
+      }
+      if (input.authority.accountBinding === 'required' && accountBinding === undefined) {
+        return {
+          outcome: 'failed',
+          error: new CommerceError('ACCOUNT_BINDING_REQUIRED', {
+            message: `Store ${store} requires an account binding before a purchase.`,
+          }).toCommerceErrorInfo(),
+        };
       }
       const offerId = request.offerId ?? mapping.offerId;
       let result: StoreSdkRequestPurchaseResult;
@@ -484,6 +553,51 @@ function defaultEvidencePayload(purchase: StoreSdkPurchase): PlatformEvidenceEnv
       ? {}
       : { originalTransactionId: purchase.originalTransactionId }),
   };
+}
+
+/**
+ * Asks the gate about one new purchase; undefined means allowed. Anything but
+ * `{ allowed: true }` refuses: a thrown `CommerceError` keeps its own code,
+ * any other throw or answer is `PURCHASE_GATE_FAILED`.
+ */
+async function askPurchaseGate(
+  gate: StorePurchaseGate,
+  request: StorePurchaseGateRequest,
+): Promise<CommerceErrorInfo | undefined> {
+  let decision: unknown;
+  try {
+    decision = await gate(request);
+  } catch (error) {
+    if (error instanceof CommerceError) {
+      return error.toCommerceErrorInfo();
+    }
+    return new CommerceError('ITEM_UNAVAILABLE', {
+      message: `The purchase gate of ${request.store} failed; ${request.logicalId} is not sold now.`,
+      storeCode: purchaseGateFailedStoreCode,
+      retryable: true,
+      cause: error,
+    }).toCommerceErrorInfo();
+  }
+  if (isRecord(decision) && decision.allowed === true) {
+    return undefined;
+  }
+  if (!isRecord(decision) || decision.allowed !== false) {
+    return new CommerceError('ITEM_UNAVAILABLE', {
+      message: `The purchase gate of ${request.store} returned an invalid decision.`,
+      storeCode: purchaseGateFailedStoreCode,
+      retryable: false,
+    }).toCommerceErrorInfo();
+  }
+  const storeCode = typeof decision.storeCode === 'string' && decision.storeCode.length > 0
+    ? decision.storeCode
+    : purchasesPausedStoreCode;
+  return new CommerceError('ITEM_UNAVAILABLE', {
+    message: typeof decision.message === 'string' && decision.message.length > 0
+      ? decision.message
+      : `New purchases of ${request.logicalId} are paused.`,
+    storeCode,
+    retryable: decision.retryable === true,
+  }).toCommerceErrorInfo();
 }
 
 function assertAvailable(availability: PlatformProviderAvailability, store: string): void {

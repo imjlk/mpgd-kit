@@ -540,6 +540,36 @@ describe('commerce v2 launched purchase activity', () => {
     expect(sdk.listenerCount).toBe(2);
   });
 
+  it('resumes at once when the purchase gate refuses before the store opens', async () => {
+    const fake = new FakeApp();
+    const sdk = createFakeStoreSdk();
+    const commerce = createStoreCommerceProvider({
+      sdk,
+      products: [{ logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' }],
+      evidenceSchema: 'fixture.store.v1',
+      authority: { evidence: 'client-token', accountBinding: 'optional' },
+      purchaseGate: () => ({ allowed: false }),
+    });
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'gate-ui',
+      app: asApp(fake), visibility: null,
+      providers: [createCommerceServiceProvider({ id: 'store', commerce })],
+      bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
+    });
+    const counts = { pauses: 0, resumes: 0 };
+    gateway.lifecycle.onPause(() => { counts.pauses += 1; });
+    gateway.lifecycle.onResume(() => { counts.resumes += 1; });
+    await settle();
+    await expect(gateway.commerce?.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
+    })).resolves.toMatchObject({ outcome: 'failed', error: { storeCode: 'PURCHASES_PAUSED' } });
+    await settle();
+    // No store UI opened, so no launched hold keeps the game paused.
+    expect(counts.pauses).toBe(counts.resumes);
+    expect(sdk.requestCalls).toEqual([]);
+    await gateway.lifecycle.dispose?.();
+  });
+
   it('ends a launched purchase hold on commerce envelopes only', async () => {
     const fake = new FakeApp();
     const sdk = createFakeStoreSdk();

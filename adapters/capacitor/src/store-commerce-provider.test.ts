@@ -231,9 +231,31 @@ describe('createStoreCommerceProvider', () => {
       accountBinding: async () => undefined,
       authority: { evidence: 'client-token', accountBinding: 'required' },
     });
+    // A missing or failed binding is a failed result, not a throw, so the
+    // store code survives the bridge.
     await expect(unbound.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-3', source: 'shop',
-    })).rejects.toMatchObject({ code: 'ACCOUNT_BINDING_REQUIRED' });
+    })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'ACCOUNT_BINDING_REQUIRED' } });
+    const failing = createProvider(sdk, {
+      accountBinding: async () => {
+        throw new CommerceError('ACCOUNT_BINDING_REQUIRED', { storeCode: 'LOOKUP_FAILED' });
+      },
+    });
+    await expect(failing.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-4', source: 'shop',
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ACCOUNT_BINDING_REQUIRED', storeCode: 'LOOKUP_FAILED' },
+    });
+    // A binding that fails with an uncertain code still opened nothing: failed, never launched.
+    const uncertain = createProvider(sdk, {
+      accountBinding: async () => {
+        throw new CommerceError('OUTCOME_UNKNOWN');
+      },
+    });
+    await expect(uncertain.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-5', source: 'shop',
+    })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'OUTCOME_UNKNOWN' } });
     expect(sdk.requestCalls).toHaveLength(2);
   });
 
@@ -532,6 +554,142 @@ describe('createStoreCommerceProvider', () => {
       .toThrow(/mapped twice/);
     expect(() => createProvider(sdk, { evidenceSchema: '' })).toThrow(/evidence schema/);
     expect(() => createProvider(sdk, { store: '' })).toThrow(/store id/);
+  });
+});
+
+describe('purchase gate', () => {
+  const request = { logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' } as const;
+
+  it('asks the gate after the store checks and before the binding', async () => {
+    const calls: unknown[] = [];
+    const sdk = createFakeStoreSdk();
+    const provider = createProvider(sdk, {
+      purchaseGate: (gateRequest) => {
+        calls.push(['gate', gateRequest]);
+        return { allowed: true };
+      },
+      accountBinding: async () => {
+        calls.push(['binding']);
+        return { kind: 'obfuscated-account-id', value: 'player-1' };
+      },
+    });
+    await expect(provider.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    expect(calls).toEqual([
+      ['gate', {
+        store: 'fixture.store', logicalId: 'gems_small', storeSku: 'gems.small',
+        kind: 'consumable', source: 'shop',
+      }],
+      ['binding'],
+    ]);
+    expect(sdk.requestCalls).toHaveLength(1);
+
+    // An unknown product, an unavailable store, or an unsupported kind
+    // answers before the gate is asked.
+    await expect(provider.requestPurchase({ ...request, logicalId: 'nope' }))
+      .rejects.toMatchObject({ code: 'ITEM_UNAVAILABLE' });
+    await expect(provider.requestPurchase({ ...request, logicalId: 'pass_monthly' }))
+      .rejects.toMatchObject({ code: 'ITEM_UNAVAILABLE' });
+    const offline = createProvider(createFakeStoreSdk({
+      availability: async () => 'temporarily-unavailable',
+    }), {
+      purchaseGate: () => {
+        calls.push(['offline gate']);
+        return { allowed: false };
+      },
+    });
+    await expect(offline.requestPurchase(request)).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(calls).toHaveLength(2);
+  });
+
+  it('answers a refusal as a failed result and never opens the store', async () => {
+    const sdk = createFakeStoreSdk();
+    const binding = vi.fn(async () => ({ kind: 'obfuscated-account-id', value: 'player-1' } as const));
+    const paused = createProvider(sdk, {
+      purchaseGate: () => ({ allowed: false }),
+      accountBinding: binding,
+    });
+    await expect(paused.requestPurchase(request)).resolves.toEqual({
+      outcome: 'failed',
+      error: {
+        code: 'ITEM_UNAVAILABLE',
+        retryable: false,
+        storeCode: 'PURCHASES_PAUSED',
+        message: 'New purchases of gems_small are paused.',
+      },
+    });
+    const named = createProvider(sdk, {
+      purchaseGate: async () => ({
+        allowed: false, storeCode: 'COIN_SALES_DISABLED', message: 'Closed.', retryable: true,
+      }),
+    });
+    await expect(named.requestPurchase(request)).resolves.toEqual({
+      outcome: 'failed',
+      error: {
+        code: 'ITEM_UNAVAILABLE', retryable: true, storeCode: 'COIN_SALES_DISABLED', message: 'Closed.',
+      },
+    });
+    expect(binding).not.toHaveBeenCalled();
+    expect(sdk.requestCalls).toEqual([]);
+  });
+
+  it('fails closed when the gate throws or answers nonsense', async () => {
+    const sdk = createFakeStoreSdk();
+    const throwing = createProvider(sdk, {
+      purchaseGate: async () => {
+        throw new Error('server unreachable');
+      },
+    });
+    await expect(throwing.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: true },
+    });
+    const commerceFailure = createProvider(sdk, {
+      purchaseGate: () => {
+        throw new CommerceError('NETWORK', { storeCode: 'SALES_FLAG_OFFLINE' });
+      },
+    });
+    await expect(commerceFailure.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'NETWORK', storeCode: 'SALES_FLAG_OFFLINE', retryable: true },
+    });
+    // An uncertain code from the gate still opened nothing: failed, never launched.
+    const uncertain = createProvider(sdk, {
+      purchaseGate: () => {
+        throw new CommerceError('OUTCOME_UNKNOWN');
+      },
+    });
+    await expect(uncertain.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed', error: { code: 'OUTCOME_UNKNOWN' },
+    });
+    for (const answer of [undefined, null, {}, { allowed: 'yes' }, [true]]) {
+      const invalid = createProvider(sdk, {
+        purchaseGate: () => answer as never,
+      });
+      await expect(invalid.requestPurchase(request)).resolves.toMatchObject({
+        outcome: 'failed',
+        error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: false },
+      });
+    }
+    expect(sdk.requestCalls).toEqual([]);
+  });
+
+  it('is never asked by recovery, events, finishing, restore, or catalog reads', async () => {
+    const sdk = createFakeStoreSdk({ products: sdkProducts });
+    const gate = vi.fn(() => ({ allowed: false } as const));
+    const provider = createProvider(sdk, { purchaseGate: gate });
+    const events: CommerceEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdk.report(fakePurchase({ transactionId: 'tx-paid' }));
+    expect(events).toHaveLength(1);
+    expect((await provider.getAvailablePurchases()).map((purchase) => purchase.transactionId))
+      .toEqual(['tx-paid']);
+    await expect(provider.finishTransaction?.({
+      transactionId: 'tx-paid', ledgerEntryId: 'le-1', isConsumable: true,
+    })).resolves.toEqual({ finished: true });
+    await provider.restorePurchases?.();
+    expect((await provider.fetchProducts({})).length).toBeGreaterThan(0);
+    expect((await provider.getCapabilities()).availability).toBe('available');
+    expect(gate).not.toHaveBeenCalled();
   });
 });
 
