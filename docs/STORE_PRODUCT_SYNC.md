@@ -72,7 +72,8 @@ pricing never ship to players, and the game runtime never reads this file.
   price there, which must be one of Apple's price points; Apple equalizes
   the other territories from it. `territories` sets manual customer prices
   that replace the equalized price of single territories.
-- `appStore.referenceName` (defaults to the logical ID, 64 characters),
+- `appStore.referenceName` (64 characters; when absent an existing in-app
+  purchase keeps its name, and a new one is named after the logical ID),
   `reviewNote` (4,000), `reviewScreenshot` (PNG or JPEG, relative to the
   listing file), `familySharable` (non-consumables only; cannot be turned
   off again), `availability` (`territories`, `availableInNewTerritories`;
@@ -202,19 +203,29 @@ Changes: `create`, `reference-name`, `family-sharing`, `version`,
   back to Apple's equalized price (the plan shows it as `-> equalized`).
   When App Store Connect holds a price change scheduled for a later date,
   or a temporary price that ends later, the sync leaves the prices alone
-  and says so, because a new schedule would drop it. Apply resolves each price point by territory and customer
-  price; a price that is not an App Store price point fails before the
-  schedule is written. "On sale", for `--confirm-price-change`, means the
+  and says so, because a new schedule would drop it. For an existing in-app
+  purchase the plan resolves each price point by territory and customer
+  price, so a price that is not an App Store price point fails the plan and
+  the saved plan carries the price point IDs. A new in-app purchase has no
+  price points until it exists: apply looks them up right after creating
+  it, before any other write of that product, so a wrong price stops with
+  only the bare in-app purchase created (the next plan then checks the
+  price itself). "On sale", for `--confirm-price-change`, means the
   in-app purchase or any of its versions was approved.
-- **Availability** is set when there is none (a new in-app purchase). After
-  that it changes only when the file names `appStore.availability` and it
-  differs; the plan prints the territory count. A file availability must
-  include every priced territory.
+- **Availability** is set when there is none (a new in-app purchase, or one
+  not yet approved), by default to every territory and new ones. An
+  approved in-app purchase without an availability record is not defaulted
+  to every territory: the plan says so, and the file must name
+  `appStore.availability`. After that, availability changes only when the
+  file names `appStore.availability` and it differs; the plan prints the
+  territory count. A file availability must include every priced territory.
 - **Review screenshot**: uploaded when missing; when its MD5 differs from
   the file, or App Store Connect reports its delivery `FAILED` or still
-  awaiting upload, the old one is deleted and the new one uploaded (App
-  Store Connect keeps one). The screenshot must stay inside the listing
-  file's directory, symbolic links included.
+  awaiting upload, the plan announces a replacement: App Store Connect keeps
+  one review screenshot and refuses a second, so apply deletes the old one
+  and then uploads. If the upload fails, the error says the old screenshot
+  was deleted; run `plan` and `apply` again to upload it. The screenshot must
+  stay inside the listing file's directory, symbolic links included.
 - **Never automatic**: submission. The first consumable and the first
   non-consumable must each go to App Review with a new app version; later
   ones can be submitted on their own

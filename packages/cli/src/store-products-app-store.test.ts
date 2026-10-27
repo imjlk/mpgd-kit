@@ -31,7 +31,7 @@ import {
   planAppStoreProducts,
   type AppStoreProductPlan,
 } from './store-products-app-store.js';
-import { StoreProductPlanStaleError } from './store-products.js';
+import { mapWithConcurrency, StoreProductPlanStaleError } from './store-products.js';
 
 const appId = '1234567890';
 const bundleId = 'dev.mpgd.store';
@@ -71,6 +71,8 @@ interface FakeAsc {
   readonly port: AscIapPort;
   readonly state: FakeState;
   readonly writes: string[];
+  /** Writes and price point lookups, in call order. */
+  readonly log: string[];
   failNext?: { method: string; error: Error } | undefined;
 }
 
@@ -89,10 +91,12 @@ function fakeAsc(initial: Partial<FakeState> = {}, options: { provisionVersion?:
     screenshots: new Map(initial.screenshots ?? []),
   };
   const writes: string[] = [];
+  const log: string[] = [];
   let counter = 0;
-  const fake: FakeAsc = { state, writes, port: undefined as never };
+  const fake: FakeAsc = { state, writes, log, port: undefined as never };
   const write = (method: string, detail: string): void => {
     writes.push(`${method} ${detail}`);
+    log.push(`${method} ${detail}`);
     if (fake.failNext?.method === method) {
       const { error } = fake.failNext;
       fake.failNext = undefined;
@@ -222,7 +226,7 @@ function fakeAsc(initial: Partial<FakeState> = {}, options: { provisionVersion?:
       assert.fail(`localization ${input.localizationId}`);
     },
     async findPricePoint(input) {
-      writes.push(`findPricePoint ${input.territory} ${input.customerPrice}`);
+      log.push(`findPricePoint ${input.territory} ${input.customerPrice}`);
       if (!(pricePoints[input.territory] ?? []).includes(input.customerPrice)) {
         throw new Error(`no price point ${input.customerPrice} in ${input.territory}`);
       }
@@ -439,12 +443,14 @@ try {
       port: asc.port,
       approved: true,
     });
-    assert.deepEqual(asc.writes, [
+    // A new in-app purchase has price points only once it exists: they are
+    // resolved right after the create, before any other write.
+    assert.deepEqual(asc.log, [
       'createIap dev.mpgd.store.coins100',
-      'createLocalization iap-1-v1 en-US',
-      'createLocalization iap-1-v1 ko',
       'findPricePoint USA 0.99',
       'findPricePoint KOR 1500',
+      'createLocalization iap-1-v1 en-US',
+      'createLocalization iap-1-v1 ko',
       'createPriceSchedule iap-1 USA pp:USA:0.99,pp:KOR:1500',
       'setAvailability iap-1 JPN,KOR,USA new=true',
       'uploadReviewScreenshot iap-1 coins.png',
@@ -550,10 +556,9 @@ try {
       approved: true,
       confirmPriceChange: true,
     });
-    assert.deepEqual(asc.writes, [
-      'findPricePoint USA 1.99',
-      'createPriceSchedule iap-live USA pp:USA:1.99',
-    ]);
+    // An existing in-app purchase's price points were resolved by the plan.
+    assert.deepEqual(asc.writes, ['createPriceSchedule iap-live USA pp:USA:1.99']);
+    assert.equal(removeAds.write?.prices?.prices[0]?.pricePointId, 'pp:USA:1.99');
     const held = await planAppStoreProducts(
       { ...planInput, listings: cheaper, keepLivePrices: true },
       fakeAsc(approvedRemoveAds()).port,
@@ -687,9 +692,18 @@ try {
       'the created in-app purchase counts as written; unchanged ones do not',
     );
     assert.match(error.message, /store products plan/u);
-    // The next plan sees the created in-app purchase and plans only what is left.
-    const next = await planAppStoreProducts({ ...planInput, listings: odd }, fresh.port);
+    // The price points were looked up before any other write of the product.
+    assert.deepEqual(fresh.writes, ['createIap dev.mpgd.store.coins100']);
+    // The in-app purchase now exists, so the next plan checks the price itself
+    // and fails before any write.
+    await assert.rejects(
+      planAppStoreProducts({ ...planInput, listings: odd }, fresh.port),
+      /1\.23 is not an App Store price point in USA/u,
+    );
+    // With a real price point it plans only what is left.
+    const next = await planAppStoreProducts(planInput, fresh.port);
     assert.deepEqual(find(next, 'dev.mpgd.store.coins100').changes, [
+      'localizations',
       'prices',
       'availability',
       'review-screenshot',
@@ -886,6 +900,99 @@ try {
       /resolves outside/u,
     );
     rmSync(outsideDir, { recursive: true, force: true });
+  }
+
+  // --- merge review of #465 ---------------------------------------------------
+  {
+    // An approved in-app purchase without an availability record is not put
+    // on sale everywhere unless the file names where.
+    const noAvailability = approvedRemoveAds();
+    delete noAvailability.iaps?.[0]?.availability;
+    const quiet = await planAppStoreProducts(planInput, fakeAsc(noAvailability).port);
+    assert.equal(find(quiet, 'dev.mpgd.store.remove_ads').action, 'unchanged');
+    assert.match(
+      find(quiet, 'dev.mpgd.store.remove_ads').notes.join(' '),
+      /no availability record/u,
+    );
+    const named = assertStoreListingCatalog(
+      {
+        version: 'test',
+        products: {
+          REMOVE_ADS: {
+            ...listingsInput.products.REMOVE_ADS,
+            appStore: {
+              ...listingsInput.products.REMOVE_ADS.appStore,
+              availability: { territories: ['USA'] },
+            },
+          },
+        },
+      },
+      catalog,
+    );
+    const namedPlan = await planAppStoreProducts(
+      { ...planInput, listings: named },
+      fakeAsc(noAvailability).port,
+    );
+    assert.deepEqual(find(namedPlan, 'dev.mpgd.store.remove_ads').write?.availability, {
+      territories: ['USA'],
+      availableInNewTerritories: true,
+    });
+
+    // Without appStore.referenceName, an in-app purchase made by hand keeps its name.
+    const handMade = approvedRemoveAds();
+    handMade.iaps?.push({
+      id: 'iap-hand',
+      productId: 'dev.mpgd.store.coins100',
+      name: 'Coins (made by hand)',
+      inAppPurchaseType: 'CONSUMABLE',
+      state: 'APPROVED',
+      availability: { territories: ['USA'], availableInNew: true },
+    });
+    const kept = await planAppStoreProducts(planInput, fakeAsc(handMade).port);
+    assert.equal(find(kept, 'dev.mpgd.store.coins100').changes.includes('reference-name'), false);
+
+    // A replaced screenshot is announced, and a failed upload after the
+    // delete says the old one is gone.
+    const stale = approvedRemoveAds();
+    stale.screenshots = new Map([['iap-live', { id: 'shot-old', checksum: '0'.repeat(32) }]]);
+    const replacing = fakeAsc(stale);
+    const replacePlan = await planAppStoreProducts(planInput, replacing.port);
+    assert.match(
+      find(replacePlan, 'dev.mpgd.store.remove_ads').notes.join(' '),
+      /Replaces the review screenshot/u,
+    );
+    const only = {
+      ...replacePlan,
+      products: replacePlan.products.filter((product) => product.productId.endsWith('remove_ads')),
+    };
+    replacing.failNext = { method: 'uploadReviewScreenshot', error: new Error('upload timed out') };
+    const uploadError = await applyAppStoreProductPlan({ saved: only, current: only, port: replacing.port, approved: true })
+      .then(() => undefined, (caught: unknown) => caught);
+    assert.ok(uploadError instanceof AppStoreProductApplyError);
+    assert.equal(uploadError.stage, 'review-screenshot upload after delete');
+    assert.match(uploadError.message, /old review screenshot was deleted/u);
+    assert.deepEqual(replacing.writes, [
+      'deleteReviewScreenshot shot-old',
+      'uploadReviewScreenshot iap-live coins.png',
+    ]);
+
+    // mapWithConcurrency keeps input order and never runs more than the limit.
+    let running = 0;
+    let peak = 0;
+    const gates: (() => void)[] = [];
+    const pending = mapWithConcurrency([1, 2, 3, 4, 5, 6], 4, async (value) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      running -= 1;
+      return value * 10;
+    });
+    while (gates.length > 0 || running > 0) {
+      await Promise.resolve();
+      gates.pop()?.();
+    }
+    assert.deepEqual(await pending, [10, 20, 30, 40, 50, 60]);
+    assert.equal(peak, 4);
   }
 
   // --- the asc commands behind the port ----------------------------------------

@@ -74,7 +74,11 @@ export interface AppStoreListingPrice {
 export interface AppStoreListing {
   /** Replaces the shared localizations on the App Store when given. */
   readonly localizations?: Readonly<Record<StoreListingLocale, StoreListingLocalization>>;
-  /** App Store Connect reference name; defaults to the logical product ID. */
+  /**
+   * App Store Connect reference name. When absent, an existing in-app
+   * purchase keeps its name and a new one is named after the logical
+   * product ID.
+   */
   readonly referenceName?: string & tags.MinLength<1>;
   readonly price?: AppStoreListingPrice;
   /** Notes for App Review. Not shown to customers. */

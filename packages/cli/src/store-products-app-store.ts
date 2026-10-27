@@ -13,13 +13,12 @@ import type {
   AscIap,
   AscIapLocalization,
   AscIapPort,
-  AscIapPriceSchedule,
-  AscIapReviewScreenshot,
   AscIapType,
   AscIapVersion,
 } from './app-store-iap-port.js';
-import { canonicalLanguageTag } from './store-products-play.js';
 import {
+  canonicalLanguageTag,
+  mapWithConcurrency,
   sameDecimal,
   stableSha256,
   StoreProductPlanStaleError,
@@ -72,7 +71,12 @@ export interface AppStoreProductWrite {
   /** A new schedule effective now; the base territory's price comes first. */
   readonly prices?: {
     readonly baseTerritory: string;
-    readonly prices: readonly { readonly territory: string; readonly customerPrice: string }[];
+    /** `pricePointId` is resolved at plan time for an existing in-app purchase. */
+    readonly prices: readonly {
+      readonly territory: string;
+      readonly customerPrice: string;
+      readonly pricePointId?: string;
+    }[];
   };
   readonly availability?: {
     readonly territories: readonly string[];
@@ -154,6 +158,8 @@ export interface AppStoreProductPlanInput {
 // product ID 100 (letters, numbers, hyphens, periods, underscores), display
 // name 2-30, description 45, review notes 4,000.
 const maxReferenceName = 64;
+/** Products planned at once; each is several asc subprocesses. */
+const planConcurrency = 4;
 const productIdPattern = /^[A-Za-z0-9._-]{1,100}$/u;
 const minDisplayName = 2;
 const maxDisplayName = 30;
@@ -189,10 +195,10 @@ export async function planAppStoreProducts(
     return territories;
   };
 
-  const products: PlannedAppStoreProduct[] = [];
   const skipped: AppStoreProductPlan['skipped'][number][] = [];
   const manual: string[] = [];
   const named = new Set<string>();
+  const tasks: PlanOneInput[] = [];
   for (const product of input.catalog.products) {
     const productId = resolveProductPlatformId(product, catalogTarget);
     if (productId === undefined) {
@@ -217,20 +223,24 @@ export async function planAppStoreProducts(
         `App Store product ID ${productId} (${product.id}) may hold up to 100 letters, digits, ".", "-" and "_".`,
       );
     }
-    const type: AscIapType = product.type === 'consumable' ? 'CONSUMABLE' : 'NON_CONSUMABLE';
-    const planned = await planOne({
+    tasks.push({
       logicalId: product.id,
       productId,
-      type,
+      type: product.type === 'consumable' ? 'CONSUMABLE' : 'NON_CONSUMABLE',
       entry,
       remote: remoteByProductId.get(productId),
       listingsDirectory: input.listingsDirectory,
       keepLivePrices,
       allTerritories,
       port,
-      manual,
     });
-    products.push(planned);
+  }
+  // Each product is a handful of asc subprocesses; a few run at once, and
+  // the results keep catalog order.
+  const planned = await mapWithConcurrency(tasks, planConcurrency, planOne);
+  const products = planned.map((entry) => entry.product);
+  for (const entry of planned) {
+    manual.push(...entry.manual);
   }
   const remoteOnly = remote
     .map((iap) => iap.productId)
@@ -267,17 +277,22 @@ interface PlanOneInput {
   readonly keepLivePrices: boolean;
   readonly allTerritories: () => Promise<string[]>;
   readonly port: AscIapPort;
-  readonly manual: string[];
 }
 
-async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
+async function planOne(
+  input: PlanOneInput,
+): Promise<{ readonly product: PlannedAppStoreProduct; readonly manual: readonly string[] }> {
   const { productId, remote, port } = input;
   const appStore = input.entry.appStore ?? {};
   const label = `App Store product ${productId} (${input.logicalId})`;
   const notes: string[] = [];
+  const manual: string[] = [];
   const changes: AppStoreProductChange[] = [];
 
-  const referenceName = appStore.referenceName ?? input.logicalId;
+  // Without appStore.referenceName an existing in-app purchase keeps its
+  // name (one made by hand is not renamed); a new one is named after the
+  // logical product ID.
+  const referenceName = appStore.referenceName ?? remote?.name ?? input.logicalId;
   if ([...referenceName].length > maxReferenceName) {
     throw new Error(`${label}: the reference name is longer than ${maxReferenceName} characters.`);
   }
@@ -334,34 +349,35 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     }
   }
   if ((appStore.reviewNote ?? '') !== (remote?.reviewNote ?? '') && appStore.reviewNote !== undefined) {
-    input.manual.push(
+    manual.push(
       `Set the review note of ${productId} in App Store Connect (asc 5.5.0 cannot write it).`,
     );
     notes.push('The review note differs; it is listed under manual steps.');
   }
 
+  // The remote reads are independent: versions (then the localizations of
+  // the version that counts), the price schedule, availability and the
+  // review screenshot run at once.
+  const [versionRead, schedule, availability, remoteScreenshot] = remote === undefined
+    ? [undefined, undefined, undefined, undefined]
+    : await Promise.all([
+        readVersions(port, remote.id, label),
+        port.readPriceSchedule(remote.id),
+        port.readAvailability(remote.id),
+        port.readReviewScreenshot(remote.id),
+      ]);
+  const versions: AscIapVersion[] = versionRead?.versions ?? [];
+  const baseLocalizations: AscIapLocalization[] = versionRead?.baseLocalizations ?? [];
+
   // Localizations live on the in-app purchase version (API 4.4.1).
-  let versions: AscIapVersion[] = [];
-  let baseLocalizations: AscIapLocalization[] = [];
   if (remote === undefined) {
     if (desiredLocalizations.length > 0) {
       changes.push('localizations');
       write.localizations = { version: 'resolve', entries: desiredLocalizations };
     }
   } else {
-    versions = [...await port.listVersions(remote.id)]
-      .sort((left, right) => (right.version ?? 0) - (left.version ?? 0) || left.id.localeCompare(right.id));
-    const editable = versions.filter((version) => editableVersionStates.has(String(version.state)));
-    if (editable.length > 1) {
-      throw new Error(
-        `${label} has ${editable.length} editable in-app purchase versions; finish or remove all but one in App Store Connect.`,
-      );
-    }
-    const target = editable[0];
+    const target = versionRead?.target;
     const base = target ?? versions[0];
-    baseLocalizations = base === undefined
-      ? []
-      : [...await port.listLocalizations(base.id)].sort((left, right) => left.locale.localeCompare(right.locale));
     const byLocale = new Map(
       baseLocalizations.map((localization) => [localization.locale.toLowerCase(), localization]),
     );
@@ -407,10 +423,6 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
   // A new schedule replaces the old one: a territory the file does not name
   // goes back to Apple's equalized price.
   const priceChanges: AppStorePriceChange[] = [];
-  let schedule: AscIapPriceSchedule | undefined;
-  if (remote !== undefined) {
-    schedule = await port.readPriceSchedule(remote.id);
-  }
   let livePriceChange = false;
   if (appStore.price === undefined) {
     if (remote === undefined || schedule === undefined) {
@@ -455,16 +467,27 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
       } else {
         changes.push('prices');
         livePriceChange = live;
-        write.prices = {
-          baseTerritory: appStore.price.baseTerritory,
-          prices: [...desired].map(([territory, customerPrice]) => ({ territory, customerPrice })),
-        };
+        // An existing in-app purchase has price points: resolve them now, so
+        // a price that is no App Store price point fails the plan and the
+        // digest covers the IDs. A new one has none until it is created.
+        const prices = await Promise.all([...desired].map(async ([territory, customerPrice]) => {
+          if (remote === undefined) {
+            return { territory, customerPrice };
+          }
+          try {
+            const pricePointId = await port.findPricePoint({ iapId: remote.id, territory, customerPrice });
+            return { territory, customerPrice, pricePointId };
+          } catch (error) {
+            throw new Error(`${label}: ${customerPrice} is not an App Store price point in ${territory} (${
+              error instanceof Error ? error.message : String(error)}).`, { cause: error });
+          }
+        }));
+        write.prices = { baseTerritory: appStore.price.baseTerritory, prices };
       }
     }
   }
 
   // Availability: set when there is none; changed only when the file names it.
-  const availability = remote === undefined ? undefined : await port.readAvailability(remote.id);
   const desiredAvailability = async (): Promise<NonNullable<AppStoreProductWrite['availability']>> => ({
     territories: [...(appStore.availability?.territories ?? await input.allTerritories())].sort(),
     availableInNewTerritories: appStore.availability?.availableInNewTerritories ?? true,
@@ -479,7 +502,14 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
       );
     }
   }
-  if (availability === undefined) {
+  if (availability === undefined && live && appStore.availability === undefined) {
+    // An approved in-app purchase without an availability record is not put
+    // on sale everywhere by default; the file has to name where.
+    notes.push(
+      'This approved in-app purchase has no availability record; name appStore.availability to set it. '
+      + 'The sync does not default an approved in-app purchase to every territory.',
+    );
+  } else if (availability === undefined) {
     changes.push('availability');
     write.availability = await desiredAvailability();
   } else if (appStore.availability !== undefined) {
@@ -496,10 +526,6 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
   }
 
   // Review screenshot: upload when missing, replace when the bytes differ.
-  let remoteScreenshot: AscIapReviewScreenshot | undefined;
-  if (remote !== undefined) {
-    remoteScreenshot = await port.readReviewScreenshot(remote.id);
-  }
   if (screenshot !== undefined) {
     // A failed or never-finished upload keeps its checksum; only a delivered one counts.
     const delivered = remoteScreenshot?.deliveryState === undefined
@@ -519,6 +545,12 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
         md5: screenshot.md5,
         ...(remoteScreenshot === undefined ? {} : { replaceId: remoteScreenshot.id }),
       };
+      if (remoteScreenshot !== undefined) {
+        notes.push(
+          'Replaces the review screenshot: App Store Connect keeps one, so apply deletes the current one, '
+          + 'then uploads the file. If the upload fails, the in-app purchase has none until apply runs again.',
+        );
+      }
     }
   } else if (remoteScreenshot === undefined) {
     notes.push('No appStore.reviewScreenshot: App Review needs one before the first submission.');
@@ -539,7 +571,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     : changes.length === 0
       ? 'unchanged'
       : 'update';
-  return {
+  const product: PlannedAppStoreProduct = {
     logicalId: input.logicalId,
     productId,
     action,
@@ -564,6 +596,35 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
     }),
     ...(changes.length === 0 ? {} : { write }),
   };
+  return { product, manual };
+}
+
+/** Versions newest first, the one editable version, and the localizations that count. */
+async function readVersions(
+  port: AscIapPort,
+  iapId: string,
+  label: string,
+): Promise<{
+  readonly versions: AscIapVersion[];
+  readonly target: AscIapVersion | undefined;
+  readonly baseLocalizations: AscIapLocalization[];
+}> {
+  const versions = [...await port.listVersions(iapId)]
+    .sort((left, right) => (right.version ?? 0) - (left.version ?? 0) || left.id.localeCompare(right.id));
+  const editable = versions.filter((version) => editableVersionStates.has(String(version.state)));
+  if (editable.length > 1) {
+    throw new Error(
+      `${label} has ${editable.length} editable in-app purchase versions; finish or remove all but one in App Store Connect.`,
+    );
+  }
+  const target = editable[0];
+  const base = target ?? versions[0];
+  const baseLocalizations = base === undefined
+    ? []
+    : [...await port.listLocalizations(base.id)].sort((left, right) =>
+        left.locale.localeCompare(right.locale),
+      );
+  return { versions, target, baseLocalizations };
 }
 
 export interface AppStoreProductApplyResult {
@@ -582,11 +643,13 @@ export class AppStoreProductApplyError extends Error {
     readonly stage: string,
     readonly done: AppStoreProductApplyResult['products'],
     cause: unknown,
+    detail?: string,
   ) {
     super(
       `App Store Connect ${stage} of ${productId} failed or its result is unknown (${
         cause instanceof Error ? cause.message : String(cause)}). Products already written: ${
-        done.map((entry) => entry.productId).join(', ') || 'none'}. Run "mpgd store products plan" `
+        done.map((entry) => entry.productId).join(', ') || 'none'}. ${
+        detail === undefined ? '' : `${detail} `}Run "mpgd store products plan" `
       + 'again: it reads App Store Connect and lists what is left.',
       { cause },
     );
@@ -667,6 +730,18 @@ export async function applyAppStoreProductPlan(input: {
         throw new Error('the plan has no in-app purchase ID');
       }
       const id = iapId;
+      // Price points before any other write of this product: a new in-app
+      // purchase has none until it exists, so this is right after the create.
+      const pricePointIds: string[] = [];
+      if (write.prices !== undefined) {
+        for (const price of write.prices.prices) {
+          pricePointIds.push(price.pricePointId ?? await step('prices', () => port.findPricePoint({
+            iapId: id,
+            territory: price.territory,
+            customerPrice: price.customerPrice,
+          }), false));
+        }
+      }
       if (write.update !== undefined) {
         const update = write.update;
         await step('update', () => port.updateIap({ iapId: id, ...update }));
@@ -695,14 +770,6 @@ export async function applyAppStoreProductPlan(input: {
       }
       if (write.prices !== undefined) {
         const prices = write.prices;
-        const pricePointIds: string[] = [];
-        for (const price of prices.prices) {
-          pricePointIds.push(await step('prices', () => port.findPricePoint({
-            iapId: id,
-            territory: price.territory,
-            customerPrice: price.customerPrice,
-          }), false));
-        }
         await step('prices', () =>
           port.createPriceSchedule({
             iapId: id,
@@ -722,12 +789,17 @@ export async function applyAppStoreProductPlan(input: {
             `Review screenshot ${screenshot.file} changed since the plan.`,
           );
         }
+        // App Store Connect keeps one review screenshot and refuses a second,
+        // so a replacement deletes first.
         if (screenshot.replaceId !== undefined) {
           const replaceId = screenshot.replaceId;
-          await step('review-screenshot', () => port.deleteReviewScreenshot(replaceId));
+          await step('review-screenshot delete', () => port.deleteReviewScreenshot(replaceId));
         }
-        await step('review-screenshot', () =>
-          port.uploadReviewScreenshot({ iapId: id, file: screenshot.file }),
+        await step(
+          screenshot.replaceId === undefined
+            ? 'review-screenshot upload'
+            : 'review-screenshot upload after delete',
+          () => port.uploadReviewScreenshot({ iapId: id, file: screenshot.file }),
         );
       }
       done.push({
@@ -747,7 +819,15 @@ export async function applyAppStoreProductPlan(input: {
           status: product.action === 'create' ? 'created' : 'updated',
         });
       }
-      throw new AppStoreProductApplyError(product.productId, stage, written, error);
+      throw new AppStoreProductApplyError(
+        product.productId,
+        stage,
+        written,
+        error,
+        stage === 'review-screenshot upload after delete'
+          ? 'The old review screenshot was deleted; run "mpgd store products plan" and apply again to upload the new one.'
+          : undefined,
+      );
     }
   }
   return { appId: current.appId, products: done, manual: current.manual };

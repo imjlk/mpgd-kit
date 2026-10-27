@@ -108,6 +108,41 @@ export function sameDecimal(left: string, right: string): boolean {
   return normal(left) === normal(right);
 }
 
+/** BCP-47 casing: language lowercase, script title case, region uppercase. */
+export function canonicalLanguageTag(tag: string): string {
+  return tag.split('-').map((part, index) => {
+    if (index === 0) {
+      return part.toLowerCase();
+    }
+    if (/^[A-Za-z]{4}$/u.test(part)) {
+      return `${part.slice(0, 1).toUpperCase()}${part.slice(1).toLowerCase()}`;
+    }
+    if (/^[A-Za-z]{2}$/u.test(part)) {
+      return part.toUpperCase();
+    }
+    return part.toLowerCase();
+  }).join('-');
+}
+
+/** `map` with at most `limit` calls in flight; results keep input order. */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  map: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await map(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function readJson(file: string): unknown {
   try {
     return JSON.parse(readFileSync(file, 'utf8')) as unknown;

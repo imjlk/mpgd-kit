@@ -25,13 +25,16 @@ import {
 } from './store-products-command.js';
 import {
   applyPlayProductPlan,
-  canonicalLanguageTag,
   formatPlayProductPlan,
   planPlayProducts,
   PlayProductApplyError,
   type PlayProductPlan,
 } from './store-products-play.js';
-import { decimalToUnitsAndNanos, StoreProductPlanStaleError } from './store-products.js';
+import {
+  canonicalLanguageTag,
+  decimalToUnitsAndNanos,
+  StoreProductPlanStaleError,
+} from './store-products.js';
 
 const packageName = 'dev.mpgd.store';
 
