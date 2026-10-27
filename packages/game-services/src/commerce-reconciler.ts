@@ -753,22 +753,28 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   /**
    * Where this player's record of an idempotency key lives, and what that key
    * holds now. A record is under the shared key, or under this player's
-   * player-scoped key, which only the player's Restore Purchases ever takes,
-   * for a durable another player journaled first (`ingestPurchase`). The
-   * scoped key is read when the shared one is free (retention may have
-   * dropped the other player's record) and, with `takeScoped`, when another
-   * player's record holds the shared one; then the scoped key is the slot.
-   * Without `takeScoped`, another player's record is what the slot holds, and
-   * `recordIn` refuses it.
+   * player-scoped key, which only the player's Restore Purchases takes, for a
+   * durable another player journaled first (`ingestPurchase`). The scoped key
+   * is read only where such a record can be, so a journal is never asked for
+   * one on a game key or a consumable:
+   *
+   * - `takeHeld`: when another player's record holds the shared key, the
+   *   scoped key is the slot. Without it, another player's record is what
+   *   the slot holds, and `recordIn` refuses it.
+   * - `probeFree`: when the shared key is free, a record under the scoped key
+   *   still answers (retention may have dropped the other player's record).
    */
   const resolveSlot = async (
     idempotencyKey: string,
-    takeScoped: boolean,
+    options: { readonly takeHeld?: boolean; readonly probeFree?: boolean } = {},
   ): Promise<{ readonly key: string; readonly found: unknown; readonly heldByAnother: boolean }> => {
     const sharedKey = createCommercePurchaseOperationKey(target, idempotencyKey);
     const shared = await journal.read(sharedKey);
     const heldByAnother = shared !== undefined && heldByAnotherPlayer(shared);
-    if (shared !== undefined && !(heldByAnother && takeScoped)) {
+    const probeScoped = heldByAnother
+      ? options.takeHeld === true
+      : shared === undefined && options.probeFree === true;
+    if (!probeScoped) {
       return { key: sharedKey, found: shared, heldByAnother };
     }
     const scopedKey = createCommercePurchaseOperationKey(target, idempotencyKey, playerId);
@@ -802,7 +808,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const readRecord = async (
     idempotencyKey: string,
   ): Promise<CommercePurchaseOperationRecord | undefined> =>
-    recordIn(await resolveSlot(idempotencyKey, false), idempotencyKey);
+    recordIn(await resolveSlot(idempotencyKey), idempotencyKey);
 
   const ownedRecordsOf = (
     listed: readonly unknown[],
@@ -1014,7 +1020,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       // earlier player (Play lists an unacknowledged one whoever is signed in)
       // is never shared without the player asking, and one player's
       // consumable is never sent for another.
-      const slot = await resolveSlot(idempotencyKey, restoring && product.kind === 'durable');
+      const durable = product.kind === 'durable';
+      const slot = await resolveSlot(idempotencyKey, {
+        takeHeld: restoring && durable,
+        probeFree: durable,
+      });
       record = recordIn(slot, idempotencyKey);
       if (
         record !== undefined
@@ -1889,7 +1899,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     // A restored durable under this player's player-scoped key answers; any
     // other key another player's record holds is refused as before.
     read: async (idempotencyKey) => {
-      const slot = await resolveSlot(idempotencyKey, true);
+      const slot = await resolveSlot(idempotencyKey, { takeHeld: true });
       return slot.heldByAnother && slot.found === undefined
         ? readRecord(idempotencyKey)
         : recordIn(slot, idempotencyKey);

@@ -3577,6 +3577,8 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
 
   // A restart over a journal without the transaction index or the granted list reaches the
   // player-scoped key through the derived key, and sends nothing again.
+  // The store still lists the owned durable on a restore read.
+  provider.available.push(removeAds());
   const {
     findByTransaction: _findByTransaction,
     listGranted: _listGranted,
@@ -3629,14 +3631,14 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     backend,
     overrides: { playerId: 'player-2' },
   });
-  assertEqual(
-    (await afterRetention.reconciler.read(adsKey))?.playerId,
-    'player-2',
-    'with the shared key free, read still finds the player-scoped record',
-  );
   await afterRetention.reconciler.start();
   await afterRetention.reconciler.restorePurchases();
   assertEqual(backend.requests.length, 3, 'the restored durable is not sent again');
+  assertEqual(
+    (await afterRetention.reconciler.read(adsKey))?.playerId,
+    'player-2',
+    'with the shared key free, the player-scoped record is the one matched',
+  );
   assertEqual(
     await pruned.read(createCommercePurchaseOperationKey('android', adsKey)),
     undefined,
