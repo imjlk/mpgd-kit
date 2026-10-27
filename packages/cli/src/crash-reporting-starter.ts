@@ -38,15 +38,18 @@ export const crashReportingAndroidSteps: readonly string[] = Object.freeze([
 ]);
 
 /**
- * The iOS steps the CLI leaves to the game: the plugin captures crashes once
- * `GoogleService-Info.plist` is in the App target, but readable native stack
- * traces need the dSYMs uploaded (docs/CRASH_REPORTING.md#symbols).
+ * The iOS dSYM note: the plugin captures crashes once `GoogleService-Info.plist`
+ * is in the App target, and readable native stack traces need the dSYMs
+ * uploaded. `mpgd deploy run` records and uploads them for the archives it
+ * builds; an archive made another way needs Firebase's run script or
+ * `upload-symbols` (docs/CRASH_REPORTING.md#symbols).
  */
 export const crashReportingIosSteps: readonly string[] = Object.freeze([
-  'Upload dSYMs for every App Store build: add the Crashlytics run script build phase '
-    + '("${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run") as the '
-    + 'last phase of the App target, or run upload-symbols after each archive; see '
-    + 'docs/CRASH_REPORTING.md in mpgd-kit.',
+  'dSYMs: mpgd deploy run uploads them for every App Store build it makes (retry with mpgd '
+    + 'deploy symbols). For an archive made in Xcode or another pipeline, add the Crashlytics run '
+    + 'script build phase ("${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/'
+    + 'Crashlytics/run") as the last phase of the App target, or run upload-symbols after the '
+    + 'archive; see docs/CRASH_REPORTING.md in mpgd-kit.',
 ]);
 
 export interface PlannedCrashReporting {

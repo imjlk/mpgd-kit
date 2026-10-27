@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { inspectCrashReportingShell } from '../../packages/cli/src/crash-reporting-starter.js';
+import {
+  inspectCrashReportingShell,
+  shellUsesCrashlytics,
+} from '../../packages/cli/src/crash-reporting-starter.js';
 import { readIosReleaseInfoPlist } from '../../packages/cli/src/native-shell-identity.js';
 import { readIosPushWiringInput } from '../../packages/cli/src/native-shell-ios-push-files.js';
 import {
@@ -116,6 +119,15 @@ export function inspectNativeStorePolicy(input: {
 export function shellInstallsFirebaseMessaging(shellApp: string): boolean {
   const shellPackage = join(shellApp, 'package.json');
   return existsSync(shellPackage) && shellUsesFirebaseMessaging(readJson(shellPackage));
+}
+
+/**
+ * Whether the shell's package.json installs `@capacitor-firebase/crashlytics`
+ * (`--providers crash-reporting`): its iOS archive then records and uploads dSYMs.
+ */
+export function shellInstallsCrashlytics(shellApp: string): boolean {
+  const shellPackage = join(shellApp, 'package.json');
+  return existsSync(shellPackage) && shellUsesCrashlytics(readJson(shellPackage));
 }
 
 function readJson(file: string): unknown {

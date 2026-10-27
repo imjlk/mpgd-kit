@@ -124,7 +124,14 @@ production` prints what it lacks and fails on contradictions
 - [ ] Crash reporting (add `crash-reporting` to `--providers`): the
       Crashlytics plugin in the shell, the Crashlytics Gradle plugin in the
       Android project (an existing project gets the two lines by hand), and
-      the iOS dSYM upload ([crash reporting](./CRASH_REPORTING.md)).
+      the iOS dSYM upload: `mpgd deploy run` records and uploads the dSYMs of
+      each App Store build; check `symbolUploads` in `mpgd deploy status` and
+      retry a failure with `mpgd deploy symbols`
+      ([crash reporting](./CRASH_REPORTING.md#symbols)).
+- [ ] R8 (only if the game turns `minifyEnabled` on): `mpgd deploy run`
+      records `mapping.txt` with the build and sends it to Play; do not pass
+      another `--mapping-file` to `deploy submit`
+      ([R8 mapping](./GOOGLE_PLAY_RELEASES.md#r8-mapping-deobfuscation-file)).
 - [ ] AdMob only: Android `com.google.android.gms.ads.APPLICATION_ID`
       meta-data, iOS `GADApplicationIdentifier` and `SKAdNetworkItems`
       ([AdMob setup](https://github.com/imjlk/mpgd-kit/blob/main/adapters/capacitor/README.md#opt-in-admob-rewarded-ads)).
@@ -337,7 +344,8 @@ App Store Connect:
       TestFlight, buy with a license tester and a sandbox account, see the
       grant from the ledger, restore on a second install, receive a push.
 - [ ] Crash reporting: `mpgd target init capacitor --providers
-      crash-reporting`, the Firebase files in both projects, iOS dSYM upload,
+      crash-reporting`, the Firebase files in both projects, the iOS dSYM
+      upload recorded as `uploaded` for the release,
       a forced test crash seen in the Crashlytics console from each
       platform, and the crash rows of the privacy answers
       ([crash reporting](./CRASH_REPORTING.md)). Without it, at least watch

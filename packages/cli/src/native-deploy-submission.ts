@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import type { NativeDeploymentPlan } from './deploy-planning.js';
@@ -114,6 +114,42 @@ export function assertSettledAndroidReleaseOptions(
   }
 }
 
+/**
+ * The Google Play request with the R8 mapping recorded with the build: it is
+ * used when no `--mapping-file` is given, and an explicit one must have the
+ * same bytes. A build without a recorded mapping keeps the request as it is.
+ */
+export function withRecordedR8Mapping(
+  request: PlayReleaseRequest | undefined,
+  record: Pick<ImmutableNativeBuildRecord, 'r8Mapping'> | undefined,
+  gameRoot: string,
+): PlayReleaseRequest | undefined {
+  const recorded = record?.r8Mapping;
+  if (recorded === undefined) {
+    return request;
+  }
+  if (request?.mappingSha256 !== undefined) {
+    if (request.mappingSha256 !== recorded.sha256) {
+      throw new Error(
+        `--mapping-file differs from the R8 mapping recorded with this build (${recorded.location}, `
+          + `sha256 ${recorded.sha256}); omit it to use the recorded mapping.`,
+      );
+    }
+    return request;
+  }
+  // A missing file is reported when the submission hashes it; an existing one
+  // must not resolve outside the game through a symlink.
+  const candidate = path.resolve(gameRoot, recorded.location);
+  const mappingFile = existsSync(candidate)
+    ? resolveRecordedArtifact(gameRoot, recorded.location)
+    : candidate;
+  return {
+    ...(request ?? defaultPlayReleaseRequest),
+    mappingFile,
+    mappingSha256: recorded.sha256,
+  };
+}
+
 /** Resume exactly one verified build; never rebuild or allocate another version here. */
 export async function submitRecordedNativeTarget(
   input: SubmitRecordedNativeTargetInput,
@@ -130,11 +166,12 @@ export async function planRecordedAndroidSubmission(
   if (input.environment?.MPGD_VERIFY_RELEASE_MANIFEST === '1') {
     verifyRecordedReleaseManifest(input.plan.gameRoot, recorded.record);
   }
+  const release = withRecordedR8Mapping(input.androidRelease, recorded.record, input.plan.gameRoot);
   return planVerifiedAndroidBundleSubmission({
     record: recorded.record,
     aabFile: recorded.artifactFile,
     packageName: recorded.planned.appId,
-    ...(input.androidRelease === undefined ? {} : { release: input.androidRelease }),
+    ...(release === undefined ? {} : { release }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 }
@@ -187,14 +224,13 @@ export async function submitRecordedNativeTargetWithPorts(
   if (planned === undefined || !input.approved) {
     throw new Error('Native store submission requires a planned target and explicit approval.');
   }
-  const androidRelease = input.androidRelease ?? defaultPlayReleaseRequest;
   if (target === 'android') {
     // Refuse an invalid or unconfirmed production/staged request before the
     // release state is read or a checkpoint is written.
-    assertPlayReleaseRequest(androidRelease);
-    assertPlayReleaseConfirmed(androidRelease, input.confirmProduction === true);
+    const requested = input.androidRelease ?? defaultPlayReleaseRequest;
+    assertPlayReleaseRequest(requested);
+    assertPlayReleaseConfirmed(requested, input.confirmProduction === true);
   }
-  const releaseDigest = target === 'android' ? playReleaseRequestDigest(androidRelease) : undefined;
   const stateInput = {
     gameRoot: input.plan.gameRoot,
     gameId: input.gameId,
@@ -206,6 +242,12 @@ export async function submitRecordedNativeTargetWithPorts(
     target,
     ports.readStatus,
   );
+  // The build's recorded R8 mapping goes with it, the same way --mapping-file does.
+  const effectiveAndroidRelease = target === 'android'
+    ? withRecordedR8Mapping(input.androidRelease, record, input.plan.gameRoot)
+    : undefined;
+  const androidRelease = effectiveAndroidRelease ?? defaultPlayReleaseRequest;
+  const releaseDigest = target === 'android' ? playReleaseRequestDigest(androidRelease) : undefined;
   let checkpoint = status.submissions[target];
   assertSettledAndroidReleaseOptions(checkpoint, androidRelease);
   // An attempt that never checkpointed a Play edit changed nothing remotely,
@@ -222,6 +264,14 @@ export async function submitRecordedNativeTargetWithPorts(
   }
   if (checkpoint !== undefined && isNativeSubmissionSettled(checkpoint.status)) {
     return checkpoint;
+  }
+  if (record.r8Mapping !== undefined && effectiveAndroidRelease?.mappingFile !== undefined
+    && !existsSync(effectiveAndroidRelease.mappingFile)) {
+    throw new Error(
+      `The R8 mapping recorded with this build is missing: ${record.r8Mapping.location}. Restore `
+        + 'the release bundle (.mpgd/releases/<release>) next to the bundle, or pass the same file '
+        + 'with --mapping-file.',
+    );
   }
   if (input.environment?.MPGD_VERIFY_RELEASE_MANIFEST === '1') {
     verifyRecordedReleaseManifest(input.plan.gameRoot, record);
@@ -308,7 +358,7 @@ export async function submitRecordedNativeTargetWithPorts(
         onEditCreated: async (editId) => {
           await save({ status: 'edit-open', remoteEditId: editId });
         },
-        ...(input.androidRelease === undefined ? {} : { release: input.androidRelease }),
+        ...(effectiveAndroidRelease === undefined ? {} : { release: effectiveAndroidRelease }),
         ...(input.confirmProduction === undefined ? {} : {
           confirmProduction: input.confirmProduction,
         }),
@@ -433,7 +483,8 @@ export function verifyRecordedReleaseManifest(
   }
 }
 
-function resolveRecordedArtifact(gameRoot: string, recordedLocation: string): string {
+/** A recorded game-relative file, resolved without leaving the game directory. */
+export function resolveRecordedArtifact(gameRoot: string, recordedLocation: string): string {
   if (path.isAbsolute(recordedLocation)) {
     throw new Error('Native artifact location must be game-relative.');
   }
