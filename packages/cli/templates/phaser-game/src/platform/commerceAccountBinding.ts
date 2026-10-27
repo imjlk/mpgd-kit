@@ -30,18 +30,35 @@ export function setStarterCommerceServerPlayer(source: (() => string | undefined
   serverPlayer = source;
 }
 
-/** The player the run's game services (and so its purchase journal) belong to. */
-let servicesPlayer: string | undefined;
+/** The open pins: one per game services instance, all for the same player. */
+const pins = new Set<{ readonly playerId: string }>();
+
+/** Another player's game services are still open; dispose them before creating these. */
+export class StarterCommercePinConflictError extends Error {
+  constructor() {
+    super("Another player's game services are still open; dispose them before creating these.");
+    this.name = 'StarterCommercePinConflictError';
+  }
+}
 
 /**
- * Pins purchases to the player the game services were created for
- * (`createStarterGameServices` sets it): while the session names anyone
- * else, a purchase binds nothing and is refused before any store sheet, so
- * no purchase is journaled under one player and bound to another's store
- * account. `undefined` removes the pin.
+ * Pins purchases to the player a game services instance was created for
+ * (`createStarterGameServices` does, and releases it once those services
+ * were disposed): while the session names anyone else, a purchase binds
+ * nothing and is refused before any store sheet, so no purchase is
+ * journaled under one player and bound to another's store account. Returns
+ * the release (idempotent). Throws `StarterCommercePinConflictError` while
+ * an earlier instance for another player is still open.
  */
-export function setStarterCommerceServicesPlayer(playerId: string | undefined): void {
-  servicesPlayer = playerId;
+export function pinStarterCommercePlayer(playerId: string): () => void {
+  if ([...pins].some((pin) => pin.playerId !== playerId)) {
+    throw new StarterCommercePinConflictError();
+  }
+  const pin = { playerId };
+  pins.add(pin);
+  return () => {
+    pins.delete(pin);
+  };
 }
 
 /**
@@ -51,16 +68,16 @@ export function setStarterCommerceServicesPlayer(playerId: string | undefined): 
  * platform-anonymous session (the native shell's `android-local-player` /
  * `ios-local-player`) or a locally asserted id would give every install the
  * same binding, so it binds nothing; the backend binds the purchase to the
- * player its ingress authentication resolved anyway. While the game services
- * are pinned to a player (`setStarterCommerceServicesPlayer`), any other
- * player binds nothing too.
+ * player its ingress authentication resolved anyway. While game services
+ * are pinned to a player (`pinStarterCommercePlayer`), any other player
+ * binds nothing too.
  */
 export async function resolveStarterCommercePlayerId(
   gateway: Pick<PlatformGateway, 'identity'>,
 ): Promise<string | undefined> {
   const playerId = await resolveSessionPlayerId(gateway);
   // Another player than the services' (an account switch): bind nothing.
-  return servicesPlayer !== undefined && playerId !== servicesPlayer ? undefined : playerId;
+  return [...pins].some((pin) => pin.playerId !== playerId) ? undefined : playerId;
 }
 
 async function resolveSessionPlayerId(
@@ -111,6 +128,27 @@ export async function resolveStoreKitAppAccountToken(
     );
   }
   return toUuid(await digestPlayerId(playerId));
+}
+
+/**
+ * The store account binding the native providers above give `playerId`'s
+ * purchases on `target` (`android`: Google Play's obfuscated account id,
+ * `ios`: StoreKit's app account token), derived from the player id alone;
+ * `undefined` on other targets. The game services runtime compares store
+ * purchases with it (`commerceAccountBinding`) so another player's purchase
+ * is never verified for this one.
+ */
+export async function resolveStarterStoreAccountBindingFor(
+  target: string,
+  playerId: string,
+): Promise<StorePurchaseAccountBinding | undefined> {
+  if (target === 'android') {
+    return { kind: 'obfuscated-account-id', value: toHex(await digestPlayerId(playerId)) };
+  }
+  if (target === 'ios') {
+    return { kind: 'app-account-token', value: toUuid(await digestPlayerId(playerId)) };
+  }
+  return undefined;
 }
 
 async function digestPlayerId(playerId: string): Promise<Uint8Array> {

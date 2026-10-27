@@ -3192,7 +3192,8 @@ function validateTemplateGuestIdentityWiring(): void {
         'createStarterGameServices({',
         // One player per run: the runtime and the store binding refuse anyone else.
         'sessionPlayerId: () => session.current()?.playerId',
-        'setStarterCommerceServicesPlayer(input.playerId)',
+        'pinStarterCommercePlayer(input.playerId)',
+        'commerceAccountBinding: () => resolveStarterStoreAccountBindingFor(',
         'return bindStarterServicesToPlayer({',
       ],
     ],
@@ -3215,6 +3216,7 @@ function validateTemplateGuestIdentityWiring(): void {
         'onActivated: () => {',
         'void gameRuntime?.reconcile()',
         'identityLevel: guestIdentity.identityLevel',
+        'onPlayerChanging: () => {',
         'onPlayerChanged: restartForAnotherPlayer',
       ],
     ],

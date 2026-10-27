@@ -28,6 +28,7 @@ export type GameMessageKey =
   | 'restoreNeedsSession'
   | 'restoreNeedsConnection'
   | 'restoreFailed'
+  | 'switchingPlayer'
   | 'deleteAccount'
   | 'deleteAccountConfirm'
   | 'deleteAccountPendingPurchase'
@@ -72,6 +73,7 @@ const messages = {
     restoreNeedsSession: 'Restoring purchases needs a game server session',
     restoreNeedsConnection: 'Could not reach the game server. Tap to try again.',
     restoreFailed: 'Could not restore purchases. Try again later.',
+    switchingPlayer: 'Switching player...',
     deleteAccount: 'Delete account',
     deleteAccountConfirm:
       'Delete your account? Your progress, scores, and notification settings are erased and you are signed out. '
@@ -120,6 +122,7 @@ const messages = {
     restoreNeedsSession: '구매를 복원하려면 게임 서버 세션이 필요합니다',
     restoreNeedsConnection: '게임 서버에 연결하지 못했습니다. 다시 시도하려면 누르세요.',
     restoreFailed: '구매를 복원하지 못했습니다. 나중에 다시 시도하세요.',
+    switchingPlayer: '플레이어를 전환하는 중...',
     deleteAccount: '계정 삭제',
     deleteAccountConfirm:
       '계정을 삭제할까요? 진행 상황, 점수, 알림 설정이 지워지고 로그아웃됩니다. '

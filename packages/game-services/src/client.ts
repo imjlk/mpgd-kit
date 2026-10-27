@@ -44,6 +44,7 @@ import type {
 import { observeGameServicesOperation } from './operation-progress.js';
 import {
   GameServicesHeaderResolutionError,
+  GameServicesRuntimeClosedError,
   resolveGameServicesRequestHeaders,
   type GameServicesHeaderResolver,
 } from './request-headers.js';
@@ -235,6 +236,8 @@ export interface CreateGameServicesClientInput {
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
   /** The reconciler's `sessionCheck` (see `CreateCommerceReconcilerInput`). */
   readonly commerceSessionCheck?: CreateCommerceReconcilerInput['sessionCheck'];
+  /** The reconciler's `accountBinding` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceAccountBinding?: CreateCommerceReconcilerInput['accountBinding'];
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
@@ -278,6 +281,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
       ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
       ...(input.commerceSessionCheck === undefined ? {} : { sessionCheck: input.commerceSessionCheck }),
+      ...(input.commerceAccountBinding === undefined ? {} : { accountBinding: input.commerceAccountBinding }),
       now: requestNow,
     });
     if (input.onCommerceEvent !== undefined) {
@@ -769,7 +773,7 @@ async function sendGameServicesBackendRequest<TRequest, TResponse>(
       body,
     });
   } catch (error) {
-    if (error instanceof GameServicesHeaderResolutionError) {
+    if (error instanceof GameServicesHeaderResolutionError || error instanceof GameServicesRuntimeClosedError) {
       throw error;
     }
     // Do not leak SDK or native transport exceptions (which can contain

@@ -10,11 +10,13 @@ import {
 import type { IdentitySession, PlatformGateway, SecureCredentialStore } from '@mpgd/platform';
 
 import {
+  pinStarterCommercePlayer,
   resolvePlayBillingAccountBinding,
   resolveStarterCommercePlayerId,
+  resolveStarterStoreAccountBindingFor,
   resolveStoreKitAppAccountToken,
   setStarterCommerceServerPlayer,
-  setStarterCommerceServicesPlayer,
+  StarterCommercePinConflictError,
 } from '../templates/phaser-game/src/platform/commerceAccountBinding.js';
 import {
   createStarterGuestSignIn,
@@ -461,6 +463,9 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     onActivated: () => {
       activations += 1;
     },
+    onPlayerChanging: (playerId) => {
+      changedTo.push(`changing:${playerId}`);
+    },
     onPlayerChanged: (playerId) => {
       changedTo.push(playerId);
     },
@@ -528,7 +533,11 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.deepEqual(disposed, ['p_server'], "the first player's services were disposed");
   await Promise.resolve();
   await Promise.resolve();
-  assert.deepEqual(changedTo, ['p_other'], 'the host hears the change once the services stopped');
+  assert.deepEqual(
+    changedTo,
+    ['changing:p_other', 'p_other'],
+    'told at once, restarted once the services stopped',
+  );
   assert.deepEqual(
     await gated.client.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k4' }),
     {
@@ -550,7 +559,7 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     StarterSessionRequiredError,
   );
   notify?.('p_third');
-  assert.deepEqual(changedTo, ['p_other'], 'reported once');
+  assert.deepEqual(changedTo, ['changing:p_other', 'p_other'], 'reported once');
   await gated.dispose();
   assert.deepEqual(disposed, ['p_server', 'p_server'], 'dispose reaches the inner services');
 }
@@ -703,21 +712,32 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     },
     playerId: 'p_a',
     session,
+    onPlayerChanging: (playerId) => order.push(`changing:${playerId}`),
     onPlayerChanged: (playerId) => order.push(`restart:${playerId}`),
+    onDisposed: () => order.push('released'),
     warn,
   });
   announce('p_a');
   assert.deepEqual(order, [], 'a refresh of the same player changes nothing');
   announce('p_b');
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.deepEqual(order, ['disposed', 'restart:p_b'], 'closed first, then the host restarts');
+  // The host hears the change at once, before the (possibly slow) dispose ends.
+  assert.deepEqual(order, ['changing:p_b', 'disposed']);
+  for (let turn = 0; turn < 5; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.deepEqual(
+    order,
+    ['changing:p_b', 'disposed', 'released', 'restart:p_b'],
+    'closed and released first, then the host restarts',
+  );
   assert.equal(listeners.size, 0, 'stops watching after the change');
   announce('p_c');
-  assert.deepEqual(order, ['disposed', 'restart:p_b'], 'reported once');
   await bound.dispose();
-  assert.deepEqual(order, ['disposed', 'restart:p_b', 'disposed']);
+  assert.deepEqual(
+    order,
+    ['changing:p_b', 'disposed', 'released', 'restart:p_b'],
+    'reported, disposed, and released once',
+  );
 
   // Created for another player than the session's (a local placeholder): it says so.
   const before = warnings.length;
@@ -737,19 +757,40 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
 {
   let sessionPlayer = 'p_pinned';
   setStarterCommerceServerPlayer(() => sessionPlayer);
-  setStarterCommerceServicesPlayer('p_pinned');
+  const release = pinStarterCommercePlayer('p_pinned');
+  const releaseSame = pinStarterCommercePlayer('p_pinned');
   assert.equal(await resolveStarterCommercePlayerId(nativeShell), 'p_pinned');
-  assert.ok((await resolvePlayBillingAccountBinding(nativeShell)) !== undefined);
+  const pinnedBinding = await resolvePlayBillingAccountBinding(nativeShell);
+  // The runtime's comparison binding is the one the provider gives this player's purchases.
+  assert.deepEqual(
+    await resolveStarterStoreAccountBindingFor('android', 'p_pinned'),
+    pinnedBinding,
+  );
+  assert.deepEqual(await resolveStarterStoreAccountBindingFor('ios', 'p_pinned'), {
+    kind: 'app-account-token',
+    value: await resolveStoreKitAppAccountToken(nativeShell),
+  });
+  assert.equal(await resolveStarterStoreAccountBindingFor('browser', 'p_pinned'), undefined);
+  // Another player's services cannot pin while these are open.
+  assert.throws(() => pinStarterCommercePlayer('p_other'), StarterCommercePinConflictError);
   sessionPlayer = 'p_switched';
   assert.equal(await resolveStarterCommercePlayerId(nativeShell), undefined);
   assert.equal(await resolvePlayBillingAccountBinding(nativeShell), undefined);
   await assert.rejects(resolveStoreKitAppAccountToken(nativeShell));
-  setStarterCommerceServicesPlayer(undefined);
+  release();
+  release();
+  assert.equal(
+    await resolveStarterCommercePlayerId(nativeShell),
+    undefined,
+    'one open pin still holds',
+  );
+  releaseSame();
   assert.equal(
     await resolveStarterCommercePlayerId(nativeShell),
     'p_switched',
-    'the pin is removable',
+    'released with its services',
   );
+  pinStarterCommercePlayer('p_switched')();
 }
 
 setStarterCommerceServerPlayer(undefined);

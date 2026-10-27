@@ -21,6 +21,7 @@ import {
   type StoreId,
   type StoreProduct,
   type StorePurchase,
+  type StorePurchaseAccountBinding,
 } from '@mpgd/platform/commerce';
 
 import type { PurchaseVerificationApi } from './client.js';
@@ -318,6 +319,23 @@ export interface CreateCommerceReconcilerInput {
    * binding are current. Return a retryable `CommerceError`.
    */
   readonly sessionCheck?: () => CommerceError | undefined;
+  /**
+   * This player's store account binding: the value the store provider binds
+   * the player's new purchases to (Google Play's obfuscated account id,
+   * StoreKit's app account token). A store purchase the journal does not
+   * hold yet whose binding names another account is another player's: it is
+   * reported (stage `match`) and left alone, never journaled or verified for
+   * this player (a backend would reject it for good as an account mismatch,
+   * and its derived key would then block that player's own recovery). The
+   * player's explicit Restore Purchases pass still takes a durable bound to
+   * another account (restore sharing). A purchase without a binding, or with
+   * a binding of another kind, is not compared. While this answers nothing
+   * (or throws), a bound purchase is left alone too, for the next pass.
+   */
+  readonly accountBinding?: () =>
+    | StorePurchaseAccountBinding
+    | undefined
+    | Promise<StorePurchaseAccountBinding | undefined>;
 }
 
 export const defaultStaleLaunchedAfterMs = 24 * 60 * 60 * 1000;
@@ -986,6 +1004,30 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     };
   };
 
+  /** Whether a store purchase is bound to another account than this player's (`accountBinding`). */
+  const boundToAnotherAccount = async (purchase: StorePurchase): Promise<boolean> => {
+    const bound = purchase.accountBinding;
+    if (input.accountBinding === undefined || bound?.value === undefined) {
+      return false;
+    }
+    let own: StorePurchaseAccountBinding | undefined;
+    try {
+      own = await input.accountBinding();
+    } catch {
+      own = undefined;
+    }
+    if (own?.value === undefined) {
+      // This player's binding is unknown: the purchase cannot be shown to be theirs.
+      return true;
+    }
+    if (own.kind !== bound.kind) {
+      return false;
+    }
+    const normalize = (value: string): string =>
+      bound.kind === 'app-account-token' ? value.toLowerCase() : value;
+    return normalize(own.value) !== normalize(bound.value);
+  };
+
   // Reconciler step 2: match a reported purchase to a journal record.
   const ingestPurchase = async (purchase: StorePurchase, restoring: boolean): Promise<void> => {
     if (purchase.store !== storeId) {
@@ -1027,6 +1069,22 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       if (stored !== undefined && isCommercePurchaseOperationRecord(stored) && ownsRecord(stored)) {
         record = remember(stored);
       }
+    }
+    if (
+      record === undefined
+      && !(restoring && product.kind === 'durable')
+      && await boundToAnotherAccount(purchase)
+    ) {
+      // Another player's purchase (Play lists unacknowledged purchases of
+      // every app account on the device): neither attached to this player's
+      // open attempt nor journaled under a derived key.
+      fail(
+        'match',
+        new Error(
+          `Purchase ${purchase.transactionId} is bound to another store account; it is left for that player.`,
+        ),
+      );
+      return;
     }
     if (record === undefined) {
       const open = openRecordsFor(product.logicalId);
@@ -1885,11 +1943,6 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     },
     async start() {
       if (started) {
-        return;
-      }
-      if (sessionBlocked()) {
-        // Nothing subscribes for a player the session does not name; a later
-        // permitted start or explicit trigger does.
         return;
       }
       if (starting !== undefined) {

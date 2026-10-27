@@ -8,7 +8,7 @@ import {
   type TestCommerceProvider,
 } from './commerce-test-provider.test.js';
 import type { PlatformGateway } from '@mpgd/platform';
-import type { RequestPurchaseResult } from '@mpgd/platform/commerce';
+import type { CommerceEvent, RequestPurchaseResult } from '@mpgd/platform/commerce';
 
 import { AccountDeletionError } from './account-deletion.js';
 import {
@@ -53,6 +53,8 @@ function createHarness(
     readonly provider?: TestCommerceProvider;
     readonly store?: MonetizationOperationStore;
     readonly ads?: PlatformGateway['ads'];
+    /** This player's store account binding, by player. */
+    readonly accountBindings?: Readonly<Record<string, string>>;
   } = {},
 ): Harness {
   const harness: Harness = {
@@ -74,6 +76,14 @@ function createHarness(
         operationStore: harness.store,
         commerceProducts: [{ logicalId: 'COINS_100', kind: 'consumable', storeSku: 'coins_100' }],
         sessionPlayerId: () => harness.session.player,
+        ...(input.accountBindings === undefined
+          ? {}
+          : {
+              commerceAccountBinding: () => {
+                const value = input.accountBindings?.[playerId];
+                return value === undefined ? undefined : { kind: 'obfuscated-account-id' as const, value };
+              },
+            }),
         getHeaders: () => {
           harness.onHeaders?.();
           return { authorization: `Bearer ${harness.session.player ?? 'none'}` };
@@ -541,6 +551,222 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
       (error: unknown) => error instanceof AccountDeletionError && !error.requestSent,
     );
     assert.equal(fetched, 0, 'nothing was sent');
+    await runtime.dispose();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+// After a restart as another player, Google Play still lists the previous
+// player's unacknowledged purchases. One bound to another account is left
+// alone (no record, no verify), so that player's own runtime recovers it.
+{
+  const harness = createHarness({ accountBindings: { [playerA]: 'acct-a', [playerB]: 'acct-b' } });
+  const bound = (key: string, account: string | undefined, logicalId = 'COINS_100') =>
+    createTestStorePurchase(
+      { idempotencyKey: key, logicalId },
+      account === undefined
+        ? {}
+        : { accountBinding: { kind: 'obfuscated-account-id', value: account } },
+      'android-store',
+    );
+  harness.provider.available.push(
+    bound('of-a', 'acct-a'),
+    bound('of-b', 'acct-b'),
+    bound('unbound', undefined),
+  );
+  harness.session.player = playerB;
+  const runtimeB = harness.create(playerB);
+  const failures: string[] = [];
+  runtimeB.client?.commerceReconciler?.subscribe((event) => {
+    if (event.type === 'failure' && event.error instanceof Error) {
+      failures.push(event.error.message);
+    }
+  });
+  await runtimeB.monetizationRecovery?.reconcile();
+  const sentByB = verifies(harness).map((request) =>
+    (request.body as { readonly platformTransactionId: string }).platformTransactionId);
+  assert.deepEqual(
+    sentByB.sort(),
+    ['tx-of-b', 'tx-unbound'],
+    "A's purchase is never sent with B's session",
+  );
+  assert.ok(
+    failures.some(
+      (message) => message.includes('tx-of-a') && message.includes('another store account'),
+    ),
+  );
+  const journaledByB = [
+    ...(await recordsOf(harness.store, playerB)),
+    ...(await recordsOf(harness.store, playerA)),
+  ];
+  assert.ok(
+    journaledByB.every((record) => record.purchase?.transactionId !== 'tx-of-a'),
+    "A's purchase holds no record (its derived key stays free)",
+  );
+  await runtimeB.dispose();
+
+  // A, later: its purchase is verified with its own session and granted.
+  harness.session.player = playerA;
+  const sentBefore = harness.sent.length;
+  const runtimeA = harness.create(playerA);
+  await runtimeA.monetizationRecovery?.reconcile();
+  const sentByA = harness.sent.slice(sentBefore).filter(
+    (request) => request.endpoint === gameServicesBackendEndpoints.verifyPurchase,
+  );
+  assert.deepEqual(
+    sentByA.map(
+      (request) => (request.body as { readonly platformTransactionId: string }).platformTransactionId,
+    ),
+    ['tx-of-a'],
+  );
+  assert.equal(sentByA[0]?.headers?.authorization, `Bearer ${playerA}`);
+  await runtimeA.dispose();
+}
+
+// The player's Restore Purchases still takes a durable bound to another account (restore sharing).
+{
+  const harness = createHarness({ accountBindings: { [playerB]: 'acct-b' } });
+  const runtimeB = createGameServicesRuntime({
+    gateway: createTestGateway({ target: 'android', playerId: playerB, provider: harness.provider }),
+    playerId: playerB,
+    authorityMode: 'non-production',
+    allowLocalBackend: true,
+    localBackend: {
+      purchases: {
+        async verifyPurchase(request) {
+          harness.sent.push({
+            method: 'POST',
+            endpoint: gameServicesBackendEndpoints.verifyPurchase,
+            body: request,
+          });
+          return {
+            verified: true,
+            ledgerEntryId: `ledger-${request.idempotencyKey}`,
+            alreadyProcessed: false,
+          };
+        },
+      },
+      adRewards: { claimAdReward: () => Promise.reject(new Error('not called')) },
+      leaderboard: { recordScore: () => Promise.reject(new Error('not called')) },
+    },
+    operationStore: harness.store,
+    commerceProducts: [
+      { logicalId: 'COINS_100', kind: 'consumable', storeSku: 'coins_100' },
+      { logicalId: 'REMOVE_ADS', kind: 'durable', storeSku: 'remove_ads' },
+    ],
+    commerceAccountBinding: () => ({ kind: 'obfuscated-account-id', value: 'acct-b' }),
+  });
+  harness.provider.available.push(
+    createTestStorePurchase(
+      { idempotencyKey: 'durable-of-a', logicalId: 'REMOVE_ADS' },
+      { accountBinding: { kind: 'obfuscated-account-id', value: 'acct-a' } },
+      'android-store',
+    ),
+    createTestStorePurchase(
+      { idempotencyKey: 'coins-of-a', logicalId: 'COINS_100' },
+      { accountBinding: { kind: 'obfuscated-account-id', value: 'acct-a' } },
+      'android-store',
+    ),
+  );
+  await runtimeB.monetizationRecovery?.reconcile();
+  assert.equal(verifies(harness).length, 0, 'recovery sends neither');
+  await runtimeB.monetizationRecovery?.restorePurchases();
+  const restored = verifies(harness).map((request) => request.body as {
+    readonly platformTransactionId: string;
+    readonly intent?: string;
+  });
+  assert.deepEqual(
+    restored.map((body) => [body.platformTransactionId, body.intent]),
+    [['tx-durable-of-a', 'restore']],
+    'only the durable, as a restore; never the consumable',
+  );
+  await runtimeB.dispose();
+}
+
+// A reconciler started before sign-in subscribes at once; its work waits for
+// the session, and a store event after sign-in is reconciled.
+{
+  const listeners: ((event: CommerceEvent) => void)[] = [];
+  const base = createTestCommerceProvider({ store: 'android-store' });
+  const provider: TestCommerceProvider = Object.assign(
+    Object.create(base) as TestCommerceProvider,
+    {
+      subscribe(listener: (event: CommerceEvent) => void) {
+        listeners.push(listener);
+        return () => {
+          listeners.splice(listeners.indexOf(listener), 1);
+        };
+      },
+    },
+  );
+  const harness = createHarness({ provider });
+  harness.session.player = undefined;
+  const runtimeA = harness.create(playerA);
+  const reconciler = runtimeA.client?.commerceReconciler;
+  await reconciler?.start();
+  assert.equal(listeners.length, 1, 'subscribed while signed out');
+  assert.equal(reconciler?.started, true);
+  assert.equal(harness.sent.length, 0, 'no work while signed out');
+  harness.session.player = playerA;
+  listeners[0]?.({
+    type: 'purchaseUpdated',
+    purchase: createTestStorePurchase(
+      { idempotencyKey: 'after-sign-in', logicalId: 'COINS_100' },
+      {},
+      'android-store',
+    ),
+  });
+  await reconciler?.runUntilIdle();
+  assert.equal(verifies(harness).length, 1, 'the event after sign-in is reconciled');
+  assert.equal(verifies(harness)[0]?.headers?.authorization, `Bearer ${playerA}`);
+  await runtimeA.dispose();
+  assert.equal(listeners.length, 0, 'dispose unsubscribes');
+  await reconciler?.start();
+  assert.equal(listeners.length, 0, 'a closed runtime does not subscribe again');
+}
+
+// oRPC: a switch while the headers are resolved surfaces the runtime's code,
+// not a generic header resolution failure, and nothing is sent.
+{
+  const realFetch = globalThis.fetch;
+  let fetched = 0;
+  globalThis.fetch = (async () => {
+    fetched += 1;
+    return new Response('{}');
+  }) as unknown as typeof fetch;
+  try {
+    const session: { player: string | undefined } = { player: playerA };
+    const runtime = createGameServicesRuntime({
+      gateway: createTestGateway({
+        target: 'android',
+        playerId: playerA,
+        provider: createTestCommerceProvider({ store: 'android-store' }),
+      }),
+      playerId: playerA,
+      authorityMode: 'production',
+      baseUrl: 'https://services.example.com/rpc',
+      transport: 'orpc',
+      operationStore: createInMemoryMonetizationOperationStore(),
+      sessionPlayerId: () => session.player,
+      getHeaders: () => {
+        session.player = playerB;
+        return { authorization: 'Bearer player-b' };
+      },
+    });
+    const errors: unknown[] = [];
+    runtime.client?.commerceReconciler?.subscribe((event) => {
+      if (event.type === 'failure') {
+        errors.push(event.error);
+      }
+    });
+    await runtime.monetizationRecovery?.reconcile();
+    assert.equal(fetched, 0, 'nothing was sent');
+    assert.ok(
+      errors.some((error) => error instanceof GameServicesRuntimeClosedError
+        && error.code === gameServicesPlayerChangedCode),
+      'the read failed with GAME_SERVICES_PLAYER_CHANGED',
+    );
     await runtime.dispose();
   } finally {
     globalThis.fetch = realFetch;

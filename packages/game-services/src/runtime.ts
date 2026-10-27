@@ -19,9 +19,20 @@ import {
   type GameServicesClient,
   type GameServicesHeaderResolver,
 } from './client.js';
+import {
+  gameServicesPlayerChangedCode,
+  GameServicesRuntimeClosedError,
+  gameServicesRuntimeDisposedCode,
+  gameServicesSessionRequiredCode,
+  type GameServicesRuntimeClosedCode,
+} from './request-headers.js';
 import type { GameServicesLedgerTarget } from './types.js';
 import type { ClientRewardEvidenceRegistry } from './client-reward-evidence.js';
-import type { CommerceReconciler, CommerceReconcilerProduct } from './commerce-reconciler.js';
+import type {
+  CommerceReconciler,
+  CommerceReconcilerProduct,
+  CreateCommerceReconcilerInput,
+} from './commerce-reconciler.js';
 import type { GameServicesPurchaseResult, GameServicesRewardedAdResult } from './operations.js';
 import {
   createRecoverableMonetizationClient,
@@ -74,44 +85,13 @@ export interface GameServicesRuntime {
  */
 export const gameServicesDisposeWaitMs = 3 * 60 * 1000;
 
-/** A runtime refused an operation because it was disposed (see `GameServicesRuntime.dispose`). */
-export const gameServicesRuntimeDisposedCode = 'GAME_SERVICES_RUNTIME_DISPOSED';
-/**
- * A runtime refused an operation because `sessionPlayerId` names another
- * player: it closed itself, as `dispose()` does, and the host creates a
- * runtime for the signed-in player (retryable there).
- */
-export const gameServicesPlayerChangedCode = 'GAME_SERVICES_PLAYER_CHANGED';
-/** A runtime refused an operation because `sessionPlayerId` names no player (signed out); it stays open. */
-export const gameServicesSessionRequiredCode = 'GAME_SERVICES_SESSION_REQUIRED';
-
-export type GameServicesRuntimeClosedCode =
-  | typeof gameServicesRuntimeDisposedCode
-  | typeof gameServicesPlayerChangedCode
-  | typeof gameServicesSessionRequiredCode;
-
-/**
- * An operation the runtime refused before it reached the backend or the
- * store: it was disposed, its player is no longer the session's, or the
- * session is signed out. Always retryable (with a runtime for the signed-in
- * player); nothing was sent and no record was ended.
- */
-export class GameServicesRuntimeClosedError extends Error {
-  readonly code: GameServicesRuntimeClosedCode;
-  readonly retryable = true;
-
-  constructor(code: GameServicesRuntimeClosedCode) {
-    super(
-      code === gameServicesPlayerChangedCode
-        ? 'The session now names another player; this game services runtime is closed.'
-        : code === gameServicesSessionRequiredCode
-          ? 'The session names no player; sign in before using game services.'
-          : 'This game services runtime was disposed.',
-    );
-    this.name = 'GameServicesRuntimeClosedError';
-    this.code = code;
-  }
-}
+export {
+  gameServicesPlayerChangedCode,
+  gameServicesRuntimeDisposedCode,
+  GameServicesRuntimeClosedError,
+  gameServicesSessionRequiredCode,
+  type GameServicesRuntimeClosedCode,
+} from './request-headers.js';
 
 interface CreateGameServicesRuntimeCommonInput {
   readonly gateway: PlatformGateway;
@@ -161,6 +141,19 @@ interface CreateGameServicesRuntimeCommonInput {
    * the runtime resolved for each request.
    */
   readonly sessionPlayerId?: () => string | undefined;
+  /**
+   * This player's store account binding, derived from `playerId` the way
+   * the store provider binds the player's new purchases (Google Play's
+   * obfuscated account id, StoreKit's app account token). With it the
+   * commerce reconciler leaves a store purchase bound to another account
+   * alone instead of journaling and verifying it for this player (a backend
+   * rejects that for good as an account mismatch): after a restart as
+   * another player, Google Play still lists the previous player's
+   * unacknowledged purchases. The player's Restore Purchases still takes a
+   * durable bound to another account (restore sharing). Derive it from
+   * `playerId`, not from the live session.
+   */
+  readonly commerceAccountBinding?: CreateCommerceReconcilerInput['accountBinding'];
 }
 
 export type CreateGameServicesRuntimeInput = CreateGameServicesRuntimeCommonInput & (
@@ -258,6 +251,7 @@ export function createGameServicesRuntime(
     ...(input.now === undefined ? {} : { now: input.now }),
     ...(input.rewardEvidenceRegistry === undefined ? {} : { rewardEvidenceRegistry: input.rewardEvidenceRegistry }),
     ...(input.commerceProducts === undefined ? {} : { commerceProducts: input.commerceProducts }),
+    ...(input.commerceAccountBinding === undefined ? {} : { commerceAccountBinding: input.commerceAccountBinding }),
     commerceSessionCheck: () => {
       const refusal = gate.check();
       return refusal === undefined
@@ -293,6 +287,9 @@ export function createGameServicesRuntime(
     };
   }
   const reconciler = routedClient.commerceReconciler;
+  const exposedReconciler = reconciler === undefined
+    ? undefined
+    : guardReconciler(reconciler, gate);
   const purchases = new Set<Promise<unknown>>();
   const track = <T>(running: Promise<T>): Promise<T> => {
     purchases.add(running);
@@ -309,10 +306,10 @@ export function createGameServicesRuntime(
     mode,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     target,
-    client: guardClient(routedClient, gate, track),
+    client: guardClient(routedClient, gate, track, exposedReconciler),
     ...(monetizationRecovery === undefined
       ? {}
-      : { monetizationRecovery: guardRecovery(monetizationRecovery, gate, reconciler, track) }),
+      : { monetizationRecovery: guardRecovery(monetizationRecovery, gate, exposedReconciler, track) }),
     ...(baseUrl === undefined
       ? {}
       : {
@@ -339,6 +336,8 @@ interface RuntimeGate {
   check(): GameServicesRuntimeClosedError | undefined;
   /** Throws the refusal, if any. */
   assert(): void;
+  /** Closed for good (disposed, or another player); signed out is not closed. */
+  readonly closed: boolean;
   close(code: GameServicesRuntimeClosedCode): Promise<void>;
   onClose(teardown: () => Promise<void>): void;
 }
@@ -372,6 +371,9 @@ function createRuntimeGate(
         return closed;
       }
       return undefined;
+    },
+    get closed() {
+      return closed !== undefined;
     },
     assert() {
       const refusal = gate.check();
@@ -575,10 +577,35 @@ async function guardedPurchase(
   return late === undefined ? result : refusedPurchase(late);
 }
 
+/**
+ * The reconciler a runtime exposes: once the runtime closed for good, a
+ * `start()` (a caller that passed its check just before) subscribes nothing.
+ * While only signed out it starts as usual and its work waits for the
+ * session (the reconciler's `sessionCheck`).
+ */
+function guardReconciler(reconciler: CommerceReconciler, gate: RuntimeGate): CommerceReconciler {
+  // The reconciler's getters and methods are closures: the prototype chain serves them.
+  return Object.create(reconciler, {
+    start: {
+      value: async () => {
+        if (!gate.closed) {
+          await reconciler.start();
+        }
+      },
+    },
+  }) as CommerceReconciler;
+}
+
 /** The client of an open runtime; refusals answer before any store UI or ad opens. */
-function guardClient(client: GameServicesClient, gate: RuntimeGate, track: PurchaseTracker): GameServicesClient {
+function guardClient(
+  client: GameServicesClient,
+  gate: RuntimeGate,
+  track: PurchaseTracker,
+  reconciler: CommerceReconciler | undefined,
+): GameServicesClient {
   return {
     ...client,
+    ...(reconciler === undefined ? {} : { commerceReconciler: reconciler }),
     purchase: (purchase, options) =>
       guardedPurchase(gate, track, () => client.purchase(purchase, options)),
     claimRewardedAd: (reward, options) =>

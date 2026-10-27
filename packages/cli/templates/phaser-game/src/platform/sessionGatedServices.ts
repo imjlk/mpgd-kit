@@ -103,6 +103,8 @@ export function createSessionGatedGameServices(input: {
    * one a purchase or restore started): run the game runtime's `reconcile()`.
    */
   readonly onActivated?: () => void;
+  /** Called at once when a later sign-in names another player: block input or show a switching screen. */
+  readonly onPlayerChanging?: (playerId: string) => void;
   /** Called once, after a sign-in named another player closed the services: boot again for it. */
   readonly onPlayerChanged?: (playerId: string) => void;
   readonly warn?: (message: string, error?: unknown) => void;
@@ -129,6 +131,7 @@ export function createSessionGatedGameServices(input: {
         warn(
           '[game-services] a later sign-in named another player; the services closed until restart.',
         );
+        notifyChanging(input.onPlayerChanging, playerId, warn);
         // Fail closed first; the host restarts once the old reconciler has stopped.
         void inner.dispose().catch((error: unknown) => {
           warn('[game-services] the services could not be closed cleanly', error);
@@ -256,12 +259,15 @@ export function createSessionGatedGameServices(input: {
 
 /**
  * Closes `services` once the server session names another player than
- * `playerId` (an account switch within the run) and then calls
- * `onPlayerChanged` with that player; the runtime's own `sessionPlayerId`
- * check already refuses every request from that moment, and this closes it
- * at once and stops its reconciler before the host restarts. Services
+ * `playerId` (an account switch within the run): `onPlayerChanging` hears it
+ * at once (the runtime's own `sessionPlayerId` check already refuses every
+ * request from that moment; block input or show a switching screen), then
+ * the services are disposed (an open store sheet first journals its answer)
+ * and `onPlayerChanged` asks the host to restart for that player. Services
  * created for another player than the session's current one stay closed,
- * which `warn` reports. `dispose()` also stops watching.
+ * which `warn` reports. `onDisposed` runs once, after the services were
+ * disposed either way (the store binding pin is released there).
+ * `dispose()` also stops watching.
  */
 export function bindStarterServicesToPlayer(input: {
   readonly services: GameServicesRuntime;
@@ -270,7 +276,9 @@ export function bindStarterServicesToPlayer(input: {
     current(): { readonly playerId: string } | undefined;
     onAuthenticated(listener: (session: { readonly playerId: string }) => void): () => void;
   };
+  readonly onPlayerChanging?: (playerId: string) => void;
   readonly onPlayerChanged?: (playerId: string) => void;
+  readonly onDisposed?: () => void;
   readonly warn?: (message: string, error?: unknown) => void;
 }): GameServicesRuntime {
   const warn = input.warn ?? ((message: string, error?: unknown) => console.warn(message, error ?? ''));
@@ -282,6 +290,13 @@ export function bindStarterServicesToPlayer(input: {
         + "Create them with the session's player.",
     );
   }
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closing ??= services.dispose().catch((error: unknown) => {
+      warn('[game-services] the services could not be closed cleanly', error);
+    }).finally(() => input.onDisposed?.());
+    return closing;
+  };
   let changed = false;
   /** The unsubscribe, once `onAuthenticated` returned it. */
   const watching: { stop?: () => void } = {};
@@ -291,9 +306,8 @@ export function bindStarterServicesToPlayer(input: {
     }
     changed = true;
     watching.stop?.();
-    void services.dispose().catch((error: unknown) => {
-      warn('[game-services] the services could not be closed cleanly', error);
-    }).finally(() => input.onPlayerChanged?.(next.playerId));
+    notifyChanging(input.onPlayerChanging, next.playerId, warn);
+    void close().finally(() => input.onPlayerChanged?.(next.playerId));
   };
   watching.stop = input.session.onAuthenticated(onSession);
   if (changed) {
@@ -304,7 +318,20 @@ export function bindStarterServicesToPlayer(input: {
     ...services,
     async dispose() {
       watching.stop?.();
-      await services.dispose();
+      await close();
     },
   };
+}
+
+/** Tells the host at once that another player signed in; a throwing callback is only reported. */
+function notifyChanging(
+  callback: ((playerId: string) => void) | undefined,
+  playerId: string,
+  warn: (message: string, error?: unknown) => void,
+): void {
+  try {
+    callback?.(playerId);
+  } catch (error) {
+    warn('[game-services] the player change callback failed', error);
+  }
 }

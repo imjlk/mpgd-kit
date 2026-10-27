@@ -268,7 +268,32 @@ sheet is open has journaled its answer and the reconciler has stopped (each
 wait bounded by `gameServicesDisposeWaitMs`, 3 minutes); call it, and wait,
 before creating the runtime for another player or reloading. A custom
 `httpTransport` must send only the headers the runtime resolved for each
-request, or the after-resolution check cannot cover it.
+request, or the after-resolution check cannot cover it. A refusal keeps its
+`GameServicesRuntimeClosedError` through header resolution and the HTTP
+transport (it is not turned into `GameServicesHeaderResolutionError` or
+`GameServicesBackendTransportError`). A reconciler started while the session
+is signed out still subscribes to the store; its work waits for the session.
+
+Pass `commerceAccountBinding` too: this player's store account binding,
+derived from `playerId` the way the store provider binds the player's new
+purchases (Google Play's obfuscated account id, StoreKit's app account
+token). The reconciler then leaves a store purchase bound to another account
+alone (reported, never journaled or verified for this player). After a
+restart as another player, Google Play still lists the previous player's
+unacknowledged purchases; sending one with this player's session would be
+rejected for good, and its derived key would then block the other player's
+own recovery. The player's explicit Restore Purchases still takes a durable
+bound to another account (restore sharing). StoreKit's provider already
+filters transactions by app account token the same way.
+
+`dispose()` is a required member of `GameServicesRuntime`: a runtime built by
+hand (a test fake, a custom wrapper) adds `dispose: async () => undefined`.
+
+A game adopting this creates its runtime from its server session's player
+(never a platform placeholder), passes `sessionPlayerId` and
+`commerceAccountBinding`, keeps its store account binding resolver on the
+same player (bind nothing for anyone else), and disposes the runtime (and
+waits) before it creates one for another player.
 
 ## Guest session and account binding foundation
 

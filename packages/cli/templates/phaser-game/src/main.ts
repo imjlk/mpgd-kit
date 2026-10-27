@@ -154,7 +154,15 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
           analytics: analyticsSink,
           analyticsSessionId,
           // The services are one player's for the run: another player signing in closes them
-          // (purchases fail closed, retryably) and the game boots again for that player.
+          // (purchases fail closed, retryably). Play stops at once; the game boots again for
+          // that player once the old services have stopped.
+          onPlayerChanging: () => {
+            gameRuntime?.execution.acquireBlock({
+              reason: 'game-services:player-change',
+              channels: ['simulation', 'gameplay-input', 'audio'],
+            });
+            renderPlayerSwitch(locale);
+          },
           onPlayerChanged: restartForAnotherPlayer,
         };
         // Configured but not signed in yet: the services wait for the server player, never
@@ -236,6 +244,18 @@ function restartForAnotherPlayer(): void {
     restartingForAnotherPlayer = true;
     globalThis.location?.reload();
   }
+}
+
+/** Cover the game while it restarts for another player (taps never reach it meanwhile). */
+function renderPlayerSwitch(locale: Locale): void {
+  if (document.querySelector('.player-switch') !== null) {
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'player-switch';
+  overlay.setAttribute('role', 'status');
+  overlay.textContent = t(locale, 'switchingPlayer');
+  document.body.append(overlay);
 }
 
 /** Resolve a verified platform session or fall back to a local guest. */
