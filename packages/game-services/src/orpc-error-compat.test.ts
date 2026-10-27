@@ -131,6 +131,31 @@ for (const expected of newServerErrors) {
   assertEqual(beta14ClientAccepts(body.json), true, `${expected.code} is decodable by beta.14`);
 }
 
+// CORS headers configured on the handler survive the error-body rebuild.
+const corsHeaders = {
+  'access-control-allow-origin': 'https://game.example',
+  'access-control-allow-headers': 'authorization, content-type',
+  vary: 'Origin',
+};
+const corsServer = createGameServicesRpcFetchHandler(createGameServicesRouter(backend), {
+  corsHeaders,
+});
+for (const [path, status] of [
+  ['/commerce/verifyPurchase', 400],
+  ['/commerce/getCapabilities', 404],
+] as const) {
+  const corsError = await corsServer(post(path, path.endsWith('getCapabilities') ? undefined : {}));
+  assertEqual(corsError.status, status, `${path} CORS error status`);
+  for (const [name, value] of Object.entries(corsHeaders)) {
+    assertEqual(corsError.headers.get(name), value, `${path} keeps ${name} after the flag rebuild`);
+  }
+  assertEqual(
+    ((await corsError.json()) as { readonly json: Record<string, unknown> }).json.inferable,
+    false,
+    `${path} CORS error body carries the legacy flag`,
+  );
+}
+
 // The server leaves success responses untouched.
 const success = await newServer(post('/leaderboard/recordScore', {}));
 assertEqual(success.status, 200, 'success status');
