@@ -368,7 +368,8 @@ item after they "switch devices"
   default, 1 to 100) hold one purchase at the same time, the buyer included.
   A restore past it answers `pending` with `PURCHASE_HOLDER_LIMIT_REACHED`
   (retryable; the starter says the purchase is already in use on the maximum
-  number of devices) and evicts nobody. The limit holds when restores race:
+  number of devices) and evicts nobody. The client asks again only when the
+  player taps Restore Purchases, not on every launch. The limit holds when restores race:
   every share takes the next slot of the purchase, so two writers that
   read the same holders collide and one reads again. It replaces a time-based
   rate limit: holders are never taken away, so a token passed around reaches

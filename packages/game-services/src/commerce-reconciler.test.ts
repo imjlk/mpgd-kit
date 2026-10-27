@@ -3393,6 +3393,272 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
 }
 
+// Restore follow-ups (L6a).
+
+// 51. A restore pending at the holder limit is resent by Restore Purchases only: a reconcile, an
+// event pass after the retry interval, and a restart leave it; other pending reasons still retry.
+{
+  let clock = '2026-10-02T00:00:00.000Z';
+  const provider = createFakeProvider({ withRestore: true });
+  const h = createHarness({ provider, overrides: { now: () => clock, retryIntervalMs: 60_000 } });
+  await h.reconciler.start();
+  h.backend.queue({ status: 'pending', reason: 'PURCHASE_HOLDER_LIMIT_REACHED' });
+  provider.available.push(
+    purchaseOf({ transactionId: 'tx-51', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await h.reconciler.restorePurchases();
+  const key = 'store:fake-store:tx-51';
+  assertEqual(h.backend.requests.length, 1, 'Restore Purchases sends the restore once');
+  assertEqual(h.history(key).at(-1), 'pending', 'the backend answered pending at the holder limit');
+
+  await h.reconciler.reconcile();
+  clock = '2026-10-02T00:05:00.000Z';
+  provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  await h.reconciler.stop();
+  const relaunched = createHarness({
+    provider,
+    backend: h.backend,
+    store: h.store,
+    overrides: { now: () => clock, retryIntervalMs: 60_000 },
+  });
+  await relaunched.reconciler.start();
+  assertEqual(
+    h.backend.requests.length,
+    1,
+    'a reconcile, an event pass after the retry interval, and a restart never resend it',
+  );
+  assertEqual(
+    (await relaunched.reconciler.listRecoverable()).map((record) => record.state),
+    ['pending'],
+    'the restore stays pending for the game to report',
+  );
+
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-51' });
+  await relaunched.reconciler.restorePurchases();
+  assertEqual(h.backend.requests.length, 2, "the player's Restore Purchases resends it");
+  assertEqual(
+    h.backend.requests[1],
+    h.backend.requests[0],
+    'the saved request is resent unchanged',
+  );
+  assertEqual(
+    relaunched.history(key).slice(-2),
+    ['finishing', 'finished'],
+    'a freed holder lets the restore land',
+  );
+
+  // Another backend-pending reason keeps the automatic retry.
+  h.backend.queue({ status: 'pending', reason: 'PURCHASE_HOLDER_CONFLICT' });
+  provider.report(
+    purchaseOf({ transactionId: 'tx-51b', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await relaunched.reconciler.runUntilIdle();
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-51b' });
+  await relaunched.reconciler.reconcile();
+  assertEqual(
+    relaunched.history('store:fake-store:tx-51b'),
+    ['purchased', 'verifying', 'pending', 'verifying', 'granted', 'finishing', 'finished'],
+    'a restore pending after lost races is resent by the next reconcile',
+  );
+  assertEqual([...h.failures, ...relaunched.failures], [], 'no stage failed');
+  await relaunched.reconciler.stop();
+
+  // A polled provider: the Restore Purchases pass reads and resends; its later polls do not.
+  const polledProvider = createFakeProvider({
+    capabilities: capabilitiesOf({ lifecycle: { events: false } }),
+  });
+  const polled = createHarness({ provider: polledProvider });
+  await polled.reconciler.start();
+  polled.backend.queue({ status: 'pending', reason: 'PURCHASE_HOLDER_LIMIT_REACHED' });
+  polledProvider.available.push(
+    purchaseOf({ transactionId: 'tx-51p', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await polled.reconciler.restorePurchases();
+  await polled.reconciler.reconcile();
+  await polled.reconciler.reconcile();
+  assertEqual(polled.backend.requests.length, 1, 'polling passes never resend it');
+  polled.backend.queue({ status: 'granted', ledgerEntryId: 'le-51p' });
+  await polled.reconciler.restorePurchases();
+  assertEqual(
+    polled.history('store:fake-store:tx-51p').at(-1),
+    'finished',
+    "a polled provider's Restore Purchases resends it",
+  );
+  await polled.reconciler.stop();
+}
+
+// 52. Logout, then another player on the same install: a durable the earlier player journaled
+// first under the shared derived key is the new player's own restore, journaled under its
+// player-scoped key; the earlier player's consumable is never sent for it, and the earlier
+// player's records (the pre-L6a journal format) are read and resumed unchanged.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const removeAds = (): StorePurchase =>
+    purchaseOf({ transactionId: 'tx-52', storeSku: 'remove.ads', logicalId: 'remove_ads' });
+  const adsKey = 'store:fake-store:tx-52';
+  const gemsKey = 'store:fake-store:tx-52c';
+  const earlier = createHarness({ store, provider, backend });
+  await earlier.reconciler.start();
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-52' });
+  backend.queue({ status: 'pending' });
+  provider.available.push(removeAds(), purchaseOf({ transactionId: 'tx-52c' }));
+  await earlier.reconciler.restorePurchases();
+  assertEqual(
+    [earlier.history(adsKey).at(-1), earlier.history(gemsKey).at(-1)],
+    ['finished', 'pending'],
+    "the earlier player's durable is granted and its consumable waits on the backend",
+  );
+  await earlier.reconciler.stop();
+
+  // Logout. The store still lists the owned durable on a restore read.
+  provider.available.push(removeAds());
+  const next = createHarness({ store, provider, backend, overrides: { playerId: 'player-2' } });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-52-next' });
+  await next.reconciler.start();
+  await next.reconciler.reconcile();
+  assertEqual(
+    backend.requests.length,
+    2,
+    "automatic passes never take the earlier player's durable: only Restore Purchases does",
+  );
+  assertEqual(
+    await store.read(createCommercePurchaseOperationKey('android', adsKey, 'player-2')),
+    undefined,
+    'nothing is journaled under the player-scoped key before Restore Purchases',
+  );
+  await next.reconciler.restorePurchases();
+  assertEqual(
+    backend.requests.slice(2).map((request) => [
+      request.playerId,
+      request.idempotencyKey,
+      request.intent,
+    ]),
+    [['player-2', adsKey, 'restore']],
+    "only the durable is sent for the next player, as its own restore; the earlier player's consumable is not",
+  );
+  assertEqual(next.history(adsKey).at(-1), 'finished', "the next player's restore lands");
+  assertEqual(
+    next.failures.every((failure) => failure === 'journal') && next.failures.length > 0,
+    true,
+    "the earlier player's consumable under the shared key is still refused",
+  );
+  const shared = await store.read(createCommercePurchaseOperationKey('android', adsKey));
+  const scoped = await store.read(
+    createCommercePurchaseOperationKey('android', adsKey, 'player-2'),
+  );
+  assertEqual(
+    [
+      shared?.playerId,
+      scoped?.playerId,
+      scoped?.kind === 'commerce-purchase' ? scoped.state : undefined,
+    ],
+    ['player-1', 'player-2', 'finished'],
+    "the earlier player keeps the shared key; the next player's record is under its player-scoped key",
+  );
+  assertEqual(
+    (await store.read(createCommercePurchaseOperationKey('android', gemsKey)))?.revision,
+    earlier.history(gemsKey).length - 1,
+    "the earlier player's consumable record is never rewritten",
+  );
+  assertEqual(
+    (await next.reconciler.read(adsKey))?.playerId,
+    'player-2',
+    'read answers the scoped record',
+  );
+  await assertRejects(
+    () => next.reconciler.read(gemsKey),
+    /bound to another player/u,
+    "read still refuses a key only the earlier player's consumable record holds",
+  );
+  await next.reconciler.stop();
+
+  // A restart over a journal without the transaction index or the granted list reaches the
+  // player-scoped key through the derived key, and sends nothing again.
+  // The store still lists the owned durable on a restore read.
+  provider.available.push(removeAds());
+  const {
+    findByTransaction: _findByTransaction,
+    listGranted: _listGranted,
+    ...unindexed
+  } = store;
+  const restarted = createHarness({
+    store: unindexed,
+    provider,
+    backend,
+    overrides: { playerId: 'player-2' },
+  });
+  assertEqual(
+    (await restarted.reconciler.read(adsKey))?.playerId,
+    'player-2',
+    'before any pass, read finds the player-scoped record in the journal',
+  );
+  await restarted.reconciler.start();
+  await restarted.reconciler.restorePurchases();
+  assertEqual(backend.requests.length, 3, 'the restored durable is matched to its scoped record');
+  await restarted.reconciler.stop();
+  assertEqual(
+    createCommercePurchaseOperationKey('android', adsKey, 'player-2')
+      === createCommercePurchaseOperationKey('android', adsKey),
+    false,
+    'the player-scoped key never equals the shared key',
+  );
+
+  // The journal's retention dropped the earlier player's finished record (open ones are kept): the
+  // shared key is free, and the next player's record is still found under its player-scoped key,
+  // not journaled again.
+  const pruned = createInMemoryMonetizationOperationStore();
+  for (const key of [
+    createCommercePurchaseOperationKey('android', adsKey, 'player-2'),
+    createCommercePurchaseOperationKey('android', gemsKey),
+  ]) {
+    const kept = await store.read(key);
+    if (kept === undefined) {
+      throw new Error(`${key} is journaled`);
+    }
+    await pruned.reserve(kept);
+  }
+  const {
+    findByTransaction: _prunedIndex,
+    listGranted: _prunedGranted,
+    ...prunedUnindexed
+  } = pruned;
+  const afterRetention = createHarness({
+    store: prunedUnindexed,
+    provider,
+    backend,
+    overrides: { playerId: 'player-2' },
+  });
+  await afterRetention.reconciler.start();
+  await afterRetention.reconciler.restorePurchases();
+  assertEqual(backend.requests.length, 3, 'the restored durable is not sent again');
+  assertEqual(
+    (await afterRetention.reconciler.read(adsKey))?.playerId,
+    'player-2',
+    'with the shared key free, the player-scoped record is the one matched',
+  );
+  assertEqual(
+    await pruned.read(createCommercePurchaseOperationKey('android', adsKey)),
+    undefined,
+    'nothing is journaled under the freed shared key',
+  );
+  await afterRetention.reconciler.stop();
+
+  // The earlier player logs back in: its own records under the shared key resume unchanged.
+  const back = createHarness({ store, provider, backend });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-52c' });
+  await back.reconciler.start();
+  assertEqual(
+    backend.requests.slice(3).map((request) => [request.playerId, request.idempotencyKey]),
+    [['player-1', gemsKey]],
+    "only the earlier player's own pending consumable is resent, for that player",
+  );
+  assertEqual(back.failures, [], 'nothing of the next player blocks the earlier one');
+  await back.reconciler.stop();
+}
+
 function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   let thrown: unknown;
   try {

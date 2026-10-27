@@ -239,7 +239,7 @@ Rules every provider follows:
   that raced the ledger grant can still be verified. The server ledger
   dedupes that verify. A finished consumable is not listed.
 
-<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction. -->
+<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction, or a durable of another token (Restore sharing). -->
 - **No grants on the client.** A provider never credits a wallet or unlocks an
   entitlement. `settlement` on an adapter-settled purchase is a pointer for
   the reconciler, not a grant.
@@ -396,7 +396,7 @@ requested ──▶ launched ──▶ purchased ──▶ verifying ──▶ g
 | `purchased` | `verifying` | The verify request was saved and sent. |
 | `verifying` | `granted` | The backend returned a ledger entry (new or already processed). |
 | `verifying` | `pending` | The backend returned `pending`, for example a server-push store whose fulfillment has not arrived. |
-| `pending` | `verifying` | The next reconcile resends the same saved request. |
+| `pending` | `verifying` | The next reconcile resends the same saved request; a restore pending at the [holder limit](#restore-sharing) waits for the player's next Restore Purchases. |
 | `verifying` | `rejected` | The backend returned a definitive non-grant. |
 | `granted` | `finishing` | The finish owner is `client`, `host`, or `server`. For `server` this means waiting for the backend to report `finalization: 'completed'`. |
 | `granted` | `finished` | The finish owner is `none`. |
@@ -482,6 +482,36 @@ purchase alone, so every runtime derives the same key:
 When a game key and a derived key ever reach the backend for the same
 purchase, the existing platform-evidence unique index
 (`EVIDENCE_ALREADY_PROCESSED`) remains the backstop.
+
+The journal stores a record under `[target, kind, idempotencyKey]`
+(`createCommercePurchaseOperationKey`), one key for every player of the
+install, while the backend keys a grant by player and idempotency key. A
+derived key is therefore the same for two players who see the same store
+purchase on one install, the case of a logout followed by the next guest's
+Restore Purchases. The rules:
+
+- A key another player's record holds is refused, as before, for a game key,
+  for a discovered consumable, subscription, or product of unknown kind, and
+  on every start, resume, and event pass: one player's purchase is never
+  matched to, sent for, or replayed as another's, and a purchase a normal
+  read lists for the earlier player (Google Play lists an unacknowledged one
+  whoever is signed in) is never shared without the player asking.
+- On the player's Restore Purchases pass, a discovered **durable** whose
+  derived key another player's record holds is this player's own restore. It
+  is journaled under the player-scoped key
+  `[target, kind, idempotencyKey, playerId]` and sent with this player's id
+  and the same derived idempotency key; the backend's
+  [restore sharing](#restore-sharing) decides it. Lookups read the shared
+  key first and the player-scoped key only where such a record can be: for a
+  discovered durable whose shared key is free or (on Restore Purchases)
+  another player's, and in `reconciler.read()` when another player's record
+  holds the shared key. Game keys and consumables never touch it, and
+  `reconciler.read()` refuses any other key another player's record holds.
+- Nothing is migrated. A journal written before the player-scoped key keeps
+  every record under the shared key, where each player still finds its own;
+  only a new restore that meets another player's record takes the
+  player-scoped key, and the transaction index (`findByTransaction`, by
+  player) finds it there on later passes.
 
 ## Server: commerce service protocol {#server}
 
@@ -595,10 +625,23 @@ restoring player gets its own grant of it:
   every launch, and a restore read the store or a bridge host rejects falls
   back to the recovery read. A restore of a purchase this install's journal
   matches (the same transaction or token) sends nothing; one it cannot match
-  is sent under its derived key, and the backend answers it idempotently. On
+  is sent under its derived key, and the backend answers it idempotently; after
+  a logout, a durable the earlier player journaled under that key is
+  journaled under the next player's [player-scoped key](#idempotency-keys). On
   StoreKit the shared grant's finish ends on the entitlement StoreKit already
-  finished (`unfinished: false`, `{ finished: true }` without a native call);
-  an unfinished transaction of another token is never finished.
+  finished (`unfinished: false`, `{ finished: true }` without a native call).
+  A durable still unfinished under another token (the earlier guest crashed
+  between its grant and its finish, then the app was reinstalled; or a native
+  build omits `unfinished`) is finished with its own token once this
+  player's grant is journaled: the reconciler finishes only a `granted` or
+  `finishing` record, which the backend's `verified` answer (a new grant,
+  `restoredAcrossPlayers`, or `alreadyProcessed`) wrote. Finishing a durable
+  takes nothing from any player, because StoreKit keeps it in
+  `Transaction.currentEntitlements`, where the earlier guest's own read still
+  finds it. The native plugin keeps its token match unchanged and is handed
+  the transaction's own token, read from the native list. A consumable or
+  subscription of another token, and a transaction bound to no token, are
+  never finished.
 - **Verifier.** A decision, `{ status: 'restorable', reason, ...verified
   fields }`: every check passed except the account binding, which names
   another player or none; `reason` is the binding mismatch. Reference
@@ -623,7 +666,11 @@ restoring player gets its own grant of it:
   a purchase a store refund, chargeback, or voided purchase ended (a share
   written while that refund fans out is revoked right after its write; an
   `admin` entry ends one holder only); `pending` `PURCHASE_HOLDER_LIMIT_REACHED` at the
-  limit; `pending` `PURCHASE_HOLDER_CONFLICT` after repeated lost races.
+  limit; `pending` `PURCHASE_HOLDER_CONFLICT` after repeated lost races. The
+  reconciler resends a restore pending at the limit only on the player's next
+  Restore Purchases (a holder may have been freed since); start, resume, and
+  event passes leave it, since nothing they observe frees a holder. Every other
+  backend-pending answer is resent by the next reconcile as before.
 - **Never shared.** Consumables and subscriptions.
 
 ## Credit wallet {#credit-wallet}

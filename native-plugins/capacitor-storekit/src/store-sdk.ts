@@ -377,16 +377,33 @@ export function createCapacitorStoreKitStoreSdk(
   /**
    * Mirrors the native finish gate: the transaction must be listed, not
    * revoked, and bound to the session app account token. A missing list is
-   * an invalid response, not a quiet "not finished". A listed, non-revoked
-   * durable StoreKit already finished (`unfinished: false`) has nothing left
-   * to finish whatever its token: a restore shared to this player from an
-   * earlier guest's purchase ends there instead of retrying a finish the
-   * native token match refuses.
+   * an invalid response, not a quiet "not finished". Two exceptions for a
+   * listed, non-revoked durable, the only kind the restore read admits from
+   * another token:
+   *
+   * - StoreKit already finished it (`unfinished: false`): nothing is left to
+   *   finish whatever its token, so a restore shared to this player ends
+   *   there without a native call.
+   * - It is unfinished (or the build omits the flag), the catalog declares
+   *   its SKU durable, and it is bound to another token: an earlier guest
+   *   crashed between its grant and its finish, then the app was
+   *   reinstalled. The caller holds this player's ledger grant
+   *   (the reconciler finishes only `granted` or `finishing` records), and a
+   *   durable stays in `Transaction.currentEntitlements` after its finish, so
+   *   finishing it takes nothing from any player: the earlier guest's next
+   *   read still lists it (`unfinished: false`) for its own verification. It
+   *   is finished with its own token, which the native gate matches.
+   *
+   * A consumable of another token, or a transaction bound to no token, is
+   * never finished here.
    */
   const finishPermitted = async (
     transactionId: string,
     appAccountToken: string,
-  ): Promise<'finish' | 'finished' | 'refused'> => {
+  ): Promise<
+    | { readonly verdict: 'finish'; readonly appAccountToken: string }
+    | { readonly verdict: 'finished' | 'refused' }
+  > => {
     const response: unknown = await sdk.getTransactions();
     if (!isRecord(response) || !Array.isArray(response.transactions)) {
       throw evidenceInvalid('StoreKit returned an invalid transaction list.');
@@ -396,12 +413,23 @@ export function createCapacitorStoreKitStoreSdk(
         isValidStoreKitTransaction(candidate) && candidate.transactionId === transactionId,
     );
     if (transaction === undefined || transaction.revokedAt !== undefined) {
-      return 'refused';
+      return { verdict: 'refused' };
     }
     if (transaction.type === 'non_consumable' && transaction.unfinished === false) {
-      return 'finished';
+      return { verdict: 'finished' };
     }
-    return transaction.appAccountToken?.toLowerCase() === appAccountToken ? 'finish' : 'refused';
+    const bound = transaction.appAccountToken?.toLowerCase();
+    if (bound === appAccountToken) {
+      return { verdict: 'finish', appAccountToken };
+    }
+    if (
+      bound !== undefined
+      && transaction.type === 'non_consumable'
+      && kinds.get(transaction.productId) === 'durable'
+    ) {
+      return { verdict: 'finish', appAccountToken: bound };
+    }
+    return { verdict: 'refused' };
   };
 
   return {
@@ -504,7 +532,8 @@ export function createCapacitorStoreKitStoreSdk(
     ): Promise<StoreSdkFinishTransactionResult> {
       requireIos();
       // The session token is the binding. A bridge or plugin caller cannot
-      // substitute another account's token on this path.
+      // substitute another account's token on this path: the only other
+      // token used is a durable's own, read from the native list.
       const appAccountToken = await Promise.resolve(resolveAppAccountToken());
       const { transactionId, ledgerEntryId } = request;
       if (
@@ -523,15 +552,16 @@ export function createCapacitorStoreKitStoreSdk(
       }
       const promise = (async (): Promise<StoreSdkFinishTransactionResult> => {
         // Same match the native plugin applies: missing, revoked, unbound, or
-        // another account never reaches `transaction.finish()`.
+        // another account never reaches `transaction.finish()`, except a
+        // durable of another token (see `finishPermitted`).
         const permitted = await finishPermitted(transactionId, appAccountToken);
-        if (permitted !== 'finish') {
-          return { finished: permitted === 'finished' };
+        if (permitted.verdict !== 'finish') {
+          return { finished: permitted.verdict === 'finished' };
         }
         const reported: unknown = await sdk.finishTransaction({
           transactionId,
           ledgerEntryId,
-          appAccountToken,
+          appAccountToken: permitted.appAccountToken,
         });
         if (!isRecord(reported) || typeof reported.finished !== 'boolean') {
           throw evidenceInvalid('StoreKit returned an invalid finish result.');

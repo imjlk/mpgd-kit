@@ -684,7 +684,10 @@ async function settled(): Promise<void> {
 
   // A durable StoreKit already finished has nothing left to finish, whatever
   // its token: a restore shared from an earlier guest's purchase ends there.
-  // An unfinished one of another token is still never finished.
+  // An unfinished one of another token (a crash between the earlier guest's
+  // grant and its finish, then a reinstall) is finished with its own token;
+  // a revoked one, one bound to no token, a consumable, and a SKU the catalog
+  // does not declare durable are not.
   const restoredPlugin = createFakeStoreKitPlugin({
     transactions: [
       fakeTransaction({
@@ -709,6 +712,49 @@ async function settled(): Promise<void> {
         unfinished: false,
         revokedAt: '2026-07-17T12:00:00Z',
       }),
+      {
+        transactionId: '28',
+        originalTransactionId: '28',
+        productId: removeAdsSku,
+        type: 'non_consumable',
+        purchasedAt: '2026-07-16T12:00:00Z',
+        signedTransaction: 'header.payload.signature-28',
+        unfinished: true,
+      },
+      fakeTransaction({
+        transactionId: '29',
+        type: 'consumable',
+        productId: sku,
+        appAccountToken: otherAccount,
+        unfinished: true,
+      }),
+      fakeTransaction({
+        transactionId: '30',
+        type: 'non_consumable',
+        productId: sku,
+        appAccountToken: otherAccount,
+        unfinished: true,
+      }),
+      fakeTransaction({
+        transactionId: '31',
+        type: 'non_consumable',
+        productId: 'com.example.game.retired',
+        appAccountToken: otherAccount,
+        unfinished: true,
+      }),
+      fakeTransaction({
+        transactionId: '32',
+        type: 'non_consumable',
+        productId: removeAdsSku,
+        appAccountToken: otherAccount.toUpperCase(),
+      }),
+      fakeTransaction({
+        transactionId: '33',
+        type: 'consumable',
+        productId: removeAdsSku,
+        appAccountToken: otherAccount,
+        unfinished: true,
+      }),
     ],
   });
   const restoredSdk = createSdk({ plugin: restoredPlugin }).sdk;
@@ -716,16 +762,32 @@ async function settled(): Promise<void> {
   if (restoredFinish === undefined) {
     throw new Error('finishTransaction is required for finish: client.');
   }
+  const restoredIds = ['25', '26', '27', '28', '29', '30', '31', '32', '33'];
+  const restoredResults = [];
+  for (const transactionId of restoredIds) {
+    restoredResults.push(
+      await restoredFinish.call(restoredSdk, {
+        transactionId,
+        isConsumable: false,
+        ledgerEntryId: 'le-share',
+      }),
+    );
+  }
   assertEqual(
-    await Promise.all(['25', '26', '27'].map((transactionId) =>
-      restoredFinish.call(restoredSdk, { transactionId, isConsumable: false, ledgerEntryId: 'le-share' }))),
-    [{ finished: true }, { finished: false }, { finished: false }],
-    'an already finished durable is finished; an unfinished or revoked one of another token is not',
+    restoredResults.map((result) => result.finished),
+    [true, true, false, false, false, false, false, true, false],
+    'a finished durable, and an unfinished one of another token (a build without the flag too), '
+      + 'are finished; a revoked, unbound, consumable, kind-mismatched (either way), or unmapped one is not',
   );
   assertEqual(
     restoredPlugin.calls.filter((call) => call.startsWith('finish:')),
-    [],
-    'none of them reaches the native finish',
+    [`finish:26:le-share:${otherAccount}`, `finish:32:le-share:${otherAccount}`],
+    'only the unfinished durables reach the native finish, each with its own token, lowercased',
+  );
+  assertEqual(
+    restoredPlugin.transactions.map((transaction) => transaction.transactionId),
+    ['25', '27', '28', '29', '30', '31', '33'],
+    'the native finish took the unfinished durables off the unfinished list',
   );
 }
 

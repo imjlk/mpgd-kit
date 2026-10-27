@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createCommercePurchaseOperationKey,
   createCommerceReconciler,
   createInMemoryMonetizationOperationStore,
   type CommerceReconcilerEvent,
   type EvidenceVerificationDecision,
   type GameServicesBackendApi,
+  type MonetizationOperationStore,
 } from '@mpgd/game-services';
 import {
   createGameServicesBackend,
@@ -146,8 +148,16 @@ async function createWorld(maxHolders?: number): Promise<World> {
   return { plugin, backend, store, requests: [] };
 }
 
-/** A fresh install's reconciler for `playerId`: an empty journal, the same store account. */
-function install(world: World, playerId: string) {
+/**
+ * A fresh install's reconciler for `playerId`: an empty journal, the same
+ * store account. `journal` is the install's journal when the app relaunches
+ * or another guest signs in on the same install.
+ */
+function install(
+  world: World,
+  playerId: string,
+  journal: MonetizationOperationStore = createInMemoryMonetizationOperationStore(),
+) {
   const provider = createCapacitorPlayBillingCommerceProvider({
     plugin: world.plugin,
     isAndroid: () => true,
@@ -166,7 +176,7 @@ function install(world: World, playerId: string) {
         return response;
       },
     },
-    store: createInMemoryMonetizationOperationStore(),
+    store: journal,
     playerId,
     target: 'android',
     products,
@@ -176,7 +186,7 @@ function install(world: World, playerId: string) {
       }
     },
   });
-  return { reconciler, responses, failures };
+  return { reconciler, responses, failures, journal };
 }
 
 /** The players holding an active REMOVE_ADS grant (the only entitlement in this catalog). */
@@ -239,7 +249,111 @@ describe('Play Billing restore after a reinstall', () => {
     });
     const [pending] = await third.reconciler.listRecoverable();
     expect(pending?.state).toBe('pending');
+    const sentAtLimit = world.requests.length;
+    await third.reconciler.reconcile();
     await third.reconciler.stop();
     expect(await holdersOf(world)).toEqual([earlierGuest, 'guest-second-device'].sort());
+
+    // A relaunch and a resume never resend the restore at the holder limit.
+    const relaunched = install(world, 'guest-third-device', third.journal);
+    await relaunched.reconciler.start();
+    await relaunched.reconciler.reconcile();
+    expect(world.requests).toHaveLength(sentAtLimit);
+
+    // The second device's guest deletes its account, which frees its place;
+    // the player's next Restore Purchases asks again and lands.
+    await world.store.erasePlayerData({
+      playerId: 'guest-second-device',
+      retainedPlayerId: 'deleted:guest-second-device',
+    });
+    await relaunched.reconciler.restorePurchases();
+    expect(world.requests).toHaveLength(sentAtLimit + 1);
+    expect(relaunched.responses.at(-1)).toMatchObject({ verified: true, restoredAcrossPlayers: true });
+    expect(await relaunched.reconciler.listRecoverable()).toEqual([]);
+    await relaunched.reconciler.stop();
+    expect(relaunched.failures).toEqual([]);
+  });
+
+  it("restores the durable after a logout on the same install, under the next guest's own key", async () => {
+    const world = await createWorld();
+    const first = install(world, 'guest-after-reinstall');
+    await first.reconciler.start();
+    await first.reconciler.restorePurchases();
+    await first.reconciler.stop();
+    const derivedKey = world.requests[0]?.idempotencyKey ?? '';
+
+    // Logout; the next guest signs in on the same install, over the same journal.
+    const next = install(world, 'guest-after-logout', first.journal);
+    await next.reconciler.start();
+    expect(world.requests).toHaveLength(1);
+    await next.reconciler.restorePurchases();
+    // REMOVE_ADS is the next guest's own restore under the same derived key;
+    // the earlier guest's consumable is never sent.
+    expect(world.requests.slice(1).map((request) => [
+      request.playerId,
+      request.productId,
+      request.intent,
+      request.idempotencyKey,
+    ])).toEqual([['guest-after-logout', 'REMOVE_ADS', 'restore', derivedKey]]);
+    expect(next.responses.at(-1)).toMatchObject({ verified: true, restoredAcrossPlayers: true });
+    expect(await holdersOf(world))
+      .toEqual([earlierGuest, 'guest-after-logout', 'guest-after-reinstall'].sort());
+    expect(await next.reconciler.listRecoverable()).toEqual([]);
+    expect(next.failures).toEqual([]);
+    // The earlier guest's record keeps the shared key; the next guest's is player-scoped.
+    expect((await first.journal.read(createCommercePurchaseOperationKey('android', derivedKey)))?.playerId)
+      .toBe('guest-after-reinstall');
+    expect((await first.journal.read(
+      createCommercePurchaseOperationKey('android', derivedKey, 'guest-after-logout'),
+    ))?.playerId).toBe('guest-after-logout');
+    await next.reconciler.restorePurchases();
+    expect(world.requests).toHaveLength(2);
+    await next.reconciler.stop();
+
+    // The earlier guest signs back in on the same install: its own record answers.
+    const back = install(world, 'guest-after-reinstall', first.journal);
+    await back.reconciler.start();
+    await back.reconciler.restorePurchases();
+    expect(world.requests).toHaveLength(2);
+    await back.reconciler.stop();
+    expect(back.failures).toEqual([]);
+  });
+
+  it("leaves another guest's unacknowledged durable to the next guest's Restore Purchases", async () => {
+    const world = await createWorld();
+    const first = install(world, 'guest-after-reinstall');
+    await first.reconciler.start();
+    await first.reconciler.restorePurchases();
+    await first.reconciler.stop();
+    const derivedKey = world.requests[0]?.idempotencyKey ?? '';
+    // The backend's acknowledgement has not reached Google Play yet, so a
+    // normal read lists the purchase again, whoever is signed in.
+    world.plugin.upsert(
+      fakePlayPurchase({
+        purchaseToken: 'token-ads',
+        products: ['remove_ads'],
+        orderId: 'GPA.ads',
+        isAcknowledged: false,
+        obfuscatedAccountId: earlierGuest,
+      }),
+    );
+
+    // Logout; the next guest's startup and resume passes leave the earlier
+    // guest's record alone and send nothing.
+    const next = install(world, 'guest-after-logout', first.journal);
+    await next.reconciler.start();
+    await next.reconciler.reconcile();
+    expect(world.requests).toHaveLength(1);
+    expect(await first.journal.read(
+      createCommercePurchaseOperationKey('android', derivedKey, 'guest-after-logout'),
+    )).toBeUndefined();
+
+    // Only the player's Restore Purchases restores it, under that guest's own key.
+    await next.reconciler.restorePurchases();
+    expect(world.requests.slice(1).map((request) => [request.playerId, request.intent, request.idempotencyKey]))
+      .toEqual([['guest-after-logout', 'restore', derivedKey]]);
+    expect(next.responses.at(-1)).toMatchObject({ verified: true, restoredAcrossPlayers: true });
+    expect(await next.reconciler.listRecoverable()).toEqual([]);
+    await next.reconciler.stop();
   });
 });

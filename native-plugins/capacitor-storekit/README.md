@@ -63,7 +63,8 @@ listed. A `revokedAt` maps to `state: 'revoked'`, and one malformed
 transaction is reported as a `purchaseError` without blocking its siblings);
 `finishTransaction({ transactionId, ledgerEntryId })` resolves the session
 app account token and finishes only a listed, non-revoked transaction bound
-to that token;
+to that token, or a durable of another token a restore shared to this
+player (see Recovery);
 `restorePurchases` over `sync`; `transactionUpdated` as `purchaseUpdated`;
 and an availability probe as `getAvailability`, probing the configured
 SKUs batch by batch until one is sold. Every purchase carries the
@@ -182,12 +183,25 @@ each one on the backend under its original idempotency key or returns the
 existing ledger grant, and calls `finishTransaction` only after a verified
 response with a ledger entry id. The StoreKit SDK and the native plugin both
 refuse to call `transaction.finish()` on a transaction whose app account
-token is missing or does not match that session. A caller who can read the token from the plugin can
+token is missing or does not match the token they are given; the SDK gives the
+session's, except for a durable of another token (below). A caller who can read the token from the plugin can
 still present it with a forged ledger entry id; that remaining hole needs a
 signed server finish capability. A listed, non-revoked durable StoreKit
 already finished (`unfinished: false`) answers `{ finished: true }` without a
 native call whatever its token, so a purchase shared to this guest from an
-earlier guest's restore ends there. Permanently rejected and account-mismatched
+earlier guest's restore ends there. A durable of the configured catalog still
+unfinished under another token (the earlier guest crashed between its grant
+and its finish, then the app was reinstalled; or a native build omits
+`unfinished`) is finished with that transaction's own token, which the native
+token match accepts, so the shared grant's record does not retry forever. The
+reconciler calls it only for this player's ledger grant, and finishing a
+durable takes nothing from the earlier guest: StoreKit keeps it in
+`Transaction.currentEntitlements`, where that guest's own read still lists it
+(`unfinished: false`). The native plugin is unchanged and still filters
+nothing by token on reads. A webview caller can therefore finish another
+token's unfinished durable, which, for the same reason, grants or removes
+nothing. A consumable of another token and a transaction bound to no token
+are never finished. Permanently rejected and account-mismatched
 transactions are not finished: the client cannot prove content delivery for
 them, so persist that terminal result in the game-owned operation journal and
 do not run an automatic retry loop for it. An unknown backend result stays
