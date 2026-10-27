@@ -3,6 +3,7 @@ import type { AnalyticsSink } from '@mpgd/analytics';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 import {
+  assertCommerceStaleLaunchedAfterMs,
   createGameServicesClient,
   createGameServicesFetchBackendTransport,
   createGameServicesHttpBackendApi,
@@ -71,6 +72,12 @@ interface CreateGameServicesRuntimeCommonInput {
    * product catalog's `platformProductIds` for the gateway target.
    */
   readonly commerceProducts?: readonly CommerceReconcilerProduct[];
+  /**
+   * The reconciler's `staleLaunchedAfterMs`: how long a `launched` purchase
+   * with no store purchase keeps serializing its product before it ends
+   * `failed`. Defaults to 24 hours; `Infinity` never expires it.
+   */
+  readonly commerceStaleLaunchedAfterMs?: number;
 }
 
 export type CreateGameServicesRuntimeInput = CreateGameServicesRuntimeCommonInput & (
@@ -90,6 +97,7 @@ export function createGameServicesRuntime(
 ): GameServicesRuntime {
   assertAuthorityMode(input.authorityMode);
   assertTransport(input.transport);
+  assertCommerceStaleLaunchedAfterMs(input.commerceStaleLaunchedAfterMs);
   if (input.transport === 'orpc' && input.httpTransport !== undefined) {
     throw new Error('Game Services httpTransport cannot be used with oRPC.');
   }
@@ -163,6 +171,9 @@ export function createGameServicesRuntime(
     ...(input.now === undefined ? {} : { now: input.now }),
     ...(input.rewardEvidenceRegistry === undefined ? {} : { rewardEvidenceRegistry: input.rewardEvidenceRegistry }),
     ...(input.commerceProducts === undefined ? {} : { commerceProducts: input.commerceProducts }),
+    ...(input.commerceStaleLaunchedAfterMs === undefined
+      ? {}
+      : { commerceStaleLaunchedAfterMs: input.commerceStaleLaunchedAfterMs }),
   };
   const monetizationRecovery = input.operationStore === undefined
     ? undefined

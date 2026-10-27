@@ -257,6 +257,12 @@ export interface CreateBridgeCommerceProviderInput {
   /** Sends one validated bridge request; the gateway's `request` fits. */
   readonly request: <TData>(method: BridgeCommerceV2Method, payload: unknown) => Promise<TData>;
   readonly subscribe: (listener: (event: BridgeCommerceEvent) => void) => () => void;
+  /**
+   * The bridge host accepts `FinishTransactionInput.retry` (it is built on the
+   * same contract and its provider declares `acceptsFinishRetry`). Absent, the
+   * provider does not declare it and callers never send `retry`.
+   */
+  readonly acceptsFinishRetry?: boolean;
 }
 
 /**
@@ -289,6 +295,7 @@ export function createBridgeCommerceProvider(
   };
   return {
     store: input.store,
+    ...(input.acceptsFinishRetry === true ? { acceptsFinishRetry: true } : {}),
     async getCapabilities() {
       return (await send('commerce.v2.getCapabilities', { protocol: commerceProtocol }))
         .capabilities;

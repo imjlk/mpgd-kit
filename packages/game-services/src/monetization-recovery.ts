@@ -201,6 +201,7 @@ export function createRecoverableMonetizationClient(
     operationStore: _journal,
     onCommerceEvent: _onCommerceEvent,
     commerceProducts: _commerceProducts,
+    commerceStaleLaunchedAfterMs: _commerceStaleLaunchedAfterMs,
     ...legacyClientInput
   } = input;
   const { commerce: _commerce, ...legacyGateway } = input.gateway;

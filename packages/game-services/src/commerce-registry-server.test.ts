@@ -5,6 +5,7 @@ import { commerceProtocolVersion } from '@mpgd/platform/commerce';
 
 import { createGameServicesHttpBackendApi, gameServicesBackendEndpoints } from './client.js';
 import {
+  createAppStoreCommerceEvidenceEntry,
   createCommerceEvidenceRegistry,
   createDevvitOrderLookupCommerceEvidenceEntry,
   createGooglePlayCommerceEvidenceEntry,
@@ -625,5 +626,108 @@ assert.equal(
   responses.every((response) => response.verified),
   true,
 );
+
+// A client-finish consumable the client asks for again under another key (its
+// finished record left the journal, and the store still lists the transaction)
+// is answered with this player's recorded grant, so the client can finish it;
+// nothing is granted twice. Another player and a durable stay refused (a
+// reversed grant is refused before this, with LEDGER_GRANT_REVERSED).
+{
+  const appStoreLedger = createInMemoryGameServicesStore();
+  const appStore = createGameServicesBackend({
+    catalog: {
+      version: 'registry-test-app-store',
+      products: [
+        ...catalog.products,
+        {
+          id: 'THEME_FROST',
+          type: 'non_consumable',
+          grant: { type: 'entitlement', entitlement: 'theme.frost' },
+          platformProductIds: { ios: 'com.example.theme.frost' },
+        },
+      ],
+    },
+    placements,
+    store: appStoreLedger,
+    commerceEvidenceRegistry: createCommerceEvidenceRegistry([
+      createAppStoreCommerceEvidenceEntry({
+        verifier: {
+          async verifyPurchase({ request }) {
+            return verified(`app-store:${request.platformTransactionId}`);
+          },
+        },
+      }),
+    ]),
+    evidenceVerifier: adRewardVerifier,
+    now: () => verifiedAt,
+  });
+  const iosRequest = (patch: Partial<VerifyPurchaseRequest> = {}): VerifyPurchaseRequest => ({
+    target: 'ios',
+    store: 'app-store',
+    playerId: 'player-1',
+    productId: 'COINS_100',
+    platformTransactionId: '2000000000000001',
+    idempotencyKey: 'op-coins-1',
+    purchasedAt: verifiedAt,
+    evidence: {
+      schema: 'app-store.signed-transaction.v1',
+      payload: { signedTransaction: 'header.payload.signature', transactionId: '2000000000000001' },
+    },
+    ...patch,
+  });
+  const first = await appStore.purchases.verifyPurchase(iosRequest());
+  assert.equal(first.verified, true);
+  const again = await appStore.purchases.verifyPurchase(
+    iosRequest({ idempotencyKey: 'store:app-store:2000000000000001', intent: 'restore' }),
+  );
+  assert.equal(again.verified, true, 'the derived-key ask reports the grant');
+  assert.equal(again.alreadyProcessed, true);
+  assert.equal(again.ledgerEntryId, first.ledgerEntryId, 'the same grant');
+  assert.equal(again.finalization, undefined, 'the client finishes');
+  assert.equal(
+    (await appStoreLedger.listEntitlementTransactions())
+      .filter((entry) => entry.grantId === 'COINS_100').length,
+    1,
+    'one grant in the ledger',
+  );
+
+  const otherPlayer = await appStore.purchases.verifyPurchase(
+    iosRequest({ playerId: 'player-2', idempotencyKey: 'store:app-store:2000000000000001' }),
+  );
+  assert.equal(otherPlayer.verified, false, "another player never gets this player's grant");
+  assert.equal(otherPlayer.reason, 'EVIDENCE_ALREADY_PROCESSED');
+
+  const durable = await appStore.purchases.verifyPurchase(
+    iosRequest({
+      productId: 'THEME_FROST',
+      platformTransactionId: '2000000000000002',
+      idempotencyKey: 'op-theme-1',
+      evidence: {
+        schema: 'app-store.signed-transaction.v1',
+        payload: {
+          signedTransaction: 'header.payload.signature',
+          transactionId: '2000000000000002',
+        },
+      },
+    }),
+  );
+  assert.equal(durable.verified, true);
+  const durableAgain = await appStore.purchases.verifyPurchase(
+    iosRequest({
+      productId: 'THEME_FROST',
+      platformTransactionId: '2000000000000002',
+      idempotencyKey: 'op-theme-2',
+      evidence: {
+        schema: 'app-store.signed-transaction.v1',
+        payload: {
+          signedTransaction: 'header.payload.signature',
+          transactionId: '2000000000000002',
+        },
+      },
+    }),
+  );
+  assert.equal(durableAgain.verified, false, 'a durable keeps the evidence replay refusal');
+  assert.equal(durableAgain.reason, 'EVIDENCE_ALREADY_PROCESSED');
+}
 
 console.log('commerce evidence registry server tests passed');
