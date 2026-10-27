@@ -97,12 +97,17 @@ other, and `finishTransaction` is only ever called for a `granted` or
 is unfinished, so the reconciler finishes it again with the journaled ledger
 entry, once per session (a call that failed in transport is tried again on
 the next report), without verifying it again and without rewriting the record
-(StoreKit answers a consumable that already left `Transaction.unfinished` as
+(on a retry, `retry: true` for a record already `finishing` before the call,
+StoreKit answers a consumable that already left `Transaction.unfinished` as
 finished, which can end a record before a late or unverifiable entry shows up
-in the list). This needs the finished record: once the journal has dropped
-it, the transaction is verified under its derived key, which the ledger
-refuses (`EVIDENCE_ALREADY_PROCESSED`), so it is never granted twice but stays
-unfinished in the store.
+in the list; a first finish never sets it). Once the journal has dropped the
+finished record, the transaction is verified under its derived key: for a
+consumable of a `client`-finish registry entry (the App Store) the reference
+backend answers this player's recorded grant (`verified`, `alreadyProcessed:
+true`, the same ledger entry) instead of `EVIDENCE_ALREADY_PROCESSED`, so the
+reconciler finishes it and nothing is granted twice; another player, a
+durable, a reversed grant, and a backend without a registry keep the
+refusal.
 
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal

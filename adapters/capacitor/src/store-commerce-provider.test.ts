@@ -370,6 +370,15 @@ describe('createStoreCommerceProvider', () => {
     })).rejects.toThrow();
     expect(sdk.finishCalls).toHaveLength(1);
 
+    expect(provider.acceptsFinishRetry).toBe(true);
+    sdk.upsert(fakePurchase({ transactionId: 'tx-2' }));
+    await expect(provider.finishTransaction?.({
+      transactionId: 'tx-2', ledgerEntryId: 'le-2', isConsumable: true, retry: true,
+    })).resolves.toEqual({ finished: true });
+    expect(sdk.finishCalls.at(-1)).toEqual(
+      { transactionId: 'tx-2', isConsumable: true, ledgerEntryId: 'le-2', retry: true },
+    );
+
     sdk.queueFinish({ throws: { code: 'NETWORK' } });
     await expect(provider.finishTransaction?.({
       transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true,
@@ -382,6 +391,7 @@ describe('createStoreCommerceProvider', () => {
 
     const serverFinished = createFakeStoreSdk({ finish: false });
     expect(createProvider(serverFinished).finishTransaction).toBeUndefined();
+    expect(createProvider(serverFinished).acceptsFinishRetry).toBeUndefined();
     expect(() => createProvider(serverFinished, {
       capabilities: { lifecycle: { finish: 'client' } },
     })).toThrow(/no finishTransaction/);

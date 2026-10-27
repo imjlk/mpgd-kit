@@ -121,6 +121,8 @@ function createFakeProvider(input: {
   readonly getCapabilities?: () => Promise<CommerceCapabilities>;
   readonly withFinish?: boolean;
   readonly withRestore?: boolean;
+  /** Declares `acceptsFinishRetry`; defaults to true. */
+  readonly acceptsFinishRetry?: boolean;
 } = {}): FakeProvider {
   const store = input.store ?? 'fake-store';
   const capabilities = input.capabilities ?? capabilitiesOf();
@@ -154,6 +156,7 @@ function createFakeProvider(input: {
   };
   const provider: FakeProvider = {
     store,
+    ...(input.acceptsFinishRetry === false ? {} : { acceptsFinishRetry: true }),
     available,
     finishCalls,
     get purchaseUiOpened() {
@@ -1166,8 +1169,8 @@ const fullClientHistory = [
   assertEqual(second.backend.requests.length, 0, 'no second verify after a restart');
   assertEqual(
     second.provider.finishCalls,
-    [{ transactionId: 'tx-13', ledgerEntryId: 'le-13', isConsumable: true }],
-    'the finish was retried with the journaled ledger entry',
+    [{ transactionId: 'tx-13', ledgerEntryId: 'le-13', isConsumable: true, retry: true }],
+    'the finish was retried with the journaled ledger entry, marked as a retry',
   );
   assertEqual(
     (await store.read(createCommercePurchaseOperationKey('android', 'op-13')))?.revision,
@@ -3827,6 +3830,78 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
   assertEqual(server.backend.requests.length, 1, 'nor verified again');
   await server.reconciler.stop();
+}
+
+// 54. Only a finish of a record that was already `finishing` carries `retry`, only for a
+// `client` owner, and only to a provider that declares `acceptsFinishRetry`: the first finish
+// after the grant never does, so a store cannot read a transaction its list does not carry yet
+// as a lost acknowledgement, and a provider on the earlier contract never sees the field.
+{
+  const h = createHarness();
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-54' });
+  h.provider.queueFinish({ finished: false });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-54',
+    source: 'shop',
+  });
+  h.provider.report(purchaseOf({ transactionId: 'tx-54' }));
+  await h.reconciler.runUntilIdle();
+  await h.reconciler.reconcile();
+  assertEqual(
+    h.provider.finishCalls,
+    [
+      { transactionId: 'tx-54', ledgerEntryId: 'le-54', isConsumable: true },
+      { transactionId: 'tx-54', ledgerEntryId: 'le-54', isConsumable: true, retry: true },
+    ],
+    'the first finish is not a retry; the next one is',
+  );
+  assertEqual(h.history('op-54').at(-1), 'finished', 'the retry finished it');
+  await h.reconciler.stop();
+
+  const host = createHarness({
+    provider: createFakeProvider({
+      capabilities: capabilitiesOf({ lifecycle: { finish: 'host' } }),
+    }),
+  });
+  host.backend.queue({ status: 'granted', ledgerEntryId: 'le-54h' });
+  host.provider.queueFinish({ finished: false });
+  await host.reconciler.start();
+  await host.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-54h',
+    source: 'shop',
+  });
+  host.provider.report(purchaseOf({ transactionId: 'tx-54h' }));
+  await host.reconciler.runUntilIdle();
+  await host.reconciler.reconcile();
+  assertEqual(
+    host.provider.finishCalls.map((call) => call.retry),
+    [undefined, undefined],
+    'a host finish never carries the hint',
+  );
+  await host.reconciler.stop();
+
+  const earlier = createHarness({ provider: createFakeProvider({ acceptsFinishRetry: false }) });
+  earlier.backend.queue({ status: 'granted', ledgerEntryId: 'le-54e' });
+  earlier.provider.queueFinish({ finished: false });
+  await earlier.reconciler.start();
+  await earlier.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-54e',
+    source: 'shop',
+  });
+  earlier.provider.report(purchaseOf({ transactionId: 'tx-54e' }));
+  await earlier.reconciler.runUntilIdle();
+  await earlier.reconciler.reconcile();
+  assertEqual(
+    earlier.provider.finishCalls.map((call) => call.retry),
+    [undefined, undefined],
+    'a provider that does not declare acceptsFinishRetry never gets the hint',
+  );
+  assertEqual(earlier.history('op-54e').at(-1), 'finished', 'and still finishes');
+  await earlier.reconciler.stop();
 }
 
 function assertThrowsSync(run: () => unknown, pattern: RegExp): void {

@@ -25,7 +25,9 @@ import type { StoreKitTransaction } from './definitions.js';
  * SDK keeps no finish allow-list of its own: the reconciler is the finish gate.
  * A finish whose answer was lost after StoreKit applied it ends `finished` on
  * the next run, a transaction StoreKit lists again later is finished again
- * without a second verify, and an Ask to Buy purchase finishes once approved.
+ * without a second verify, a first finish of a transaction the list does not
+ * carry yet is refused and retried, and an Ask to Buy purchase finishes once
+ * approved.
  */
 
 const storeSku = 'com.example.game.coins100';
@@ -277,6 +279,29 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
   assertEqual(verifiedKeys, [discovered], 'the ledger is asked once in all');
   assertEqual((await second.read(discovered))?.state, 'finished', 'the record stays finished');
 
+  // A transaction delivered before StoreKit's unfinished list carries it: the
+  // first finish after the grant is refused (never read as a lost
+  // acknowledgement), and the retry finishes it natively once it is listed.
+  const earlyId = '2000000123456792';
+  plugin.emit(fakeTransaction({ transactionId: earlyId, unfinished: true }));
+  await second.runUntilIdle();
+  const early = `store:app-store:${earlyId}`;
+  assertEqual(
+    (await second.read(early))?.state,
+    'finishing',
+    'the first finish of an unlisted transaction leaves the grant finishing',
+  );
+  assertEqual(finishCalls().length, 2, 'and calls no native finish for it');
+  plugin.upsert(fakeTransaction({ transactionId: earlyId, unfinished: true }));
+  await second.reconcile();
+  assertEqual((await second.read(early))?.state, 'finished', 'the retry finishes it');
+  assertEqual(
+    finishCalls().at(-1),
+    `finish:${earlyId}:ledger-${earlyId}:${fakeAccountToken}`,
+    'natively, with its ledger entry',
+  );
+  assertEqual(plugin.transactions, [], 'and it leaves the unfinished list');
+
   // Ask to Buy: no transaction exists until approval, so nothing is finished
   // before it; the approved transaction is verified and finished once.
   const launched = await second.requestPurchase({
@@ -291,7 +316,7 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
     'and leaves the attempt launched',
   );
   await second.runUntilIdle();
-  assertEqual(finishCalls().length, 2, 'nothing is finished while the parent decides');
+  assertEqual(finishCalls().length, 3, 'nothing is finished while the parent decides');
   const approvedId = '2000000123456791';
   plugin.report(fakeTransaction({ transactionId: approvedId, unfinished: true }));
   await second.runUntilIdle();
@@ -300,7 +325,7 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
     'finished',
     'the approved purchase is granted and finished under the game key',
   );
-  assertEqual(verifiedKeys, [discovered, 'ask-to-buy-1'], 'verified once');
+  assertEqual(verifiedKeys, [discovered, early, 'ask-to-buy-1'], 'verified once');
   assertEqual(
     finishCalls().at(-1),
     `finish:${approvedId}:ledger-${approvedId}:${fakeAccountToken}`,

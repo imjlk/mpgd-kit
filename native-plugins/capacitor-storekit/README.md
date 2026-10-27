@@ -61,12 +61,12 @@ once (a current non-consumable entitlement the native side marks
 still be verified; the server ledger dedupes. A finished consumable is not
 listed. A `revokedAt` maps to `state: 'revoked'`, and one malformed
 transaction is reported as a `purchaseError` without blocking its siblings);
-`finishTransaction({ transactionId, ledgerEntryId })` resolves the session
-app account token and finishes only a listed, non-revoked transaction bound
-to that token, or a durable of another token a restore shared to this
-player (see Recovery), and answers `finished: true` without a native call
-for a consumable the list no longer carries (a lost acknowledgement, see
-Recovery);
+`finishTransaction({ transactionId, ledgerEntryId, isConsumable, retry? })`
+resolves the session app account token and finishes only a listed,
+non-revoked transaction bound to that token, or a durable of another token a
+restore shared to this player (see Recovery), and on a retry (`retry: true`)
+answers `finished: true` without a native call for a consumable the list no
+longer carries (a lost acknowledgement, see Recovery);
 `restorePurchases` over `sync`; `transactionUpdated` as `purchaseUpdated`;
 and an availability probe as `getAvailability`, probing the configured
 SKUs batch by batch until one is sold. Every purchase carries the
@@ -219,27 +219,38 @@ separate subscription status and renewal flow.
 
 A finish whose answer is lost after StoreKit applied it (the app is closed
 between the native finish and the journal write) leaves the record
-`finishing`. On the next pass the SDK finds the consumable missing from
-`getTransactions`: StoreKit keeps a transaction in
+`finishing`. The reconciler's next finish of a record that was already
+`finishing` carries `retry: true`, and on a retry the SDK reads the
+consumable missing from `getTransactions` as finished: StoreKit keeps a
+transaction in
 [`Transaction.unfinished`](https://developer.apple.com/documentation/storekit/transaction/unfinished)
 until `finish()`, and a finished consumable is in neither that list nor
 `currentEntitlements`, so the SDK answers `finished: true` without a native
-call and the record ends `finished`. The reconciler finishes only records
-holding a ledger grant, and nothing is verified again. A durable missing from
-the list is never answered finished (a finished durable stays listed with
-`unfinished: false`, so a missing one is revoked or unverifiable), nor is an
-entry of that id in a malformed shape. Should StoreKit list the consumable
-again (an entry the native read skipped as unverifiable, or a list read
-before StoreKit carried the transaction), the reconciler finishes it again
-with the journaled ledger entry, once per session, without a second verify,
-for as long as the journal holds the finished record (the generated game's
-journal keeps terminal records for 30 days); the backend ledger answers a
-replayed idempotency key with the first grant and refuses the same
-transaction under another key (`EVIDENCE_ALREADY_PROCESSED`), so it is never
-granted twice, and a transaction listed again only after the record left the
-journal stays unfinished in StoreKit without a grant. The re-finish is the
-reconciler's (`@mpgd/game-services`), so take both packages from the same kit
-release. Ask to Buy is unaffected: a deferred purchase has no transaction
+call and the record ends `finished`. The first finish after the grant never
+does: right after a purchase the list may not carry the new transaction yet,
+so a missing one stays `{ finished: false }` and the reconciler retries (by
+then StoreKit lists it and it is finished natively). A caller that never
+sets `retry` (an older reconciler) keeps the earlier behaviour. The
+reconciler finishes only records holding a ledger grant, and nothing is
+verified again. A durable missing from the list is never answered finished
+(a finished durable stays listed with `unfinished: false`, so a missing one
+is revoked or unverifiable), nor is an entry of that id in a malformed
+shape. The kind of a missing transaction is the caller's `isConsumable`
+(the list no longer says, and reading `Transaction.all` would need a native
+change); a durable the catalog maps as a consumable never reaches a grant
+through this SDK, which excludes kind mismatches (`kind-mismatch`).
+
+Should StoreKit list the consumable again (an entry the native read skipped
+as unverifiable), the reconciler finishes it again with the journaled ledger
+entry, once per session, without a second verify. If the finished record has
+already left the journal (the generated game's journal keeps terminal
+records for 30 days), the transaction is verified under its derived key; the
+reference backend answers that with this player's recorded grant
+(`alreadyProcessed: true`, the same ledger entry, no second grant) because
+the App Store entry is a `client`-finish consumable, and the reconciler then
+finishes it. Another player's ask under another key stays refused
+(`EVIDENCE_ALREADY_PROCESSED`), so nothing is granted twice. Ask to Buy is
+unaffected: a deferred purchase has no transaction
 until it is approved, so its `launched` record holds no ledger grant and is
 never finished; the approved transaction arrives through `transactionUpdated`
 and is verified and finished once.

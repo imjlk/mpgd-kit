@@ -956,8 +956,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
    * and refuses the same evidence under another one). Durables, which a
    * store keeps listing after their finish, and other finish owners are left
    * alone. It needs the finished record: past the journal's retention the
-   * transaction takes the derived-key path, which the ledger refuses, so it is
-   * still never granted twice but stays unfinished in the store.
+   * transaction takes the derived-key path, where the reference backend
+   * answers a `client`-finish consumable with this player's recorded grant
+   * (never a second one), and the record finishes it like any grant.
    */
   const finishReportedAgain = async (
     record: CommercePurchaseOperationRecord,
@@ -1352,6 +1353,16 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
                 transactionId: finish.transactionId,
                 ledgerEntryId: finish.ledgerEntryId,
                 isConsumable: kind === 'consumable',
+                // A record already `finishing` when this drive began was asked
+                // to finish before (an earlier attempt or session): a `client`
+                // store may read a consumable gone from its unfinished list as
+                // that finish's lost acknowledgement. A first finish never is,
+                // and a provider that does not declare the field never gets it.
+                ...(owner === 'client'
+                    && initial.state === 'finishing'
+                    && provider.acceptsFinishRetry === true
+                  ? { retry: true }
+                  : {}),
               })).finished;
             } catch (error) {
               // Transport-class failure: keep `finishing` for the next pass.

@@ -793,10 +793,12 @@ async function settled(): Promise<void> {
 
 // A lost acknowledgement: the native finish reached StoreKit, but its answer
 // never reached the caller. StoreKit keeps a transaction in
-// `Transaction.unfinished` until `finish()`, so a consumable that left the
-// list is already finished; a durable that left it is not (a finished durable
-// stays listed with `unfinished: false`), nor is an entry of that id the
-// native side reports in a malformed shape.
+// `Transaction.unfinished` until `finish()`, so on a retried finish a
+// consumable that left the list is already finished. A first finish never
+// reads it that way (right after the grant the list may not carry the
+// transaction yet); a durable that left the list is not finished (a finished
+// durable stays listed with `unfinished: false`), nor is an entry of that id
+// the native side reports in a malformed shape.
 {
   const plugin = createFakeStoreKitPlugin({
     transactions: [
@@ -838,24 +840,44 @@ async function settled(): Promise<void> {
   const callsBeforeRetry = plugin.calls.length;
   assertEqual(
     await finish.call(sdk, { transactionId: '40', isConsumable: true, ledgerEntryId: 'le-40' }),
+    { finished: false },
+    'a first finish of a consumable the list does not carry stays unfinished',
+  );
+  assertEqual(
+    await finish.call(sdk, {
+      transactionId: '40',
+      isConsumable: true,
+      ledgerEntryId: 'le-40',
+      retry: true,
+    }),
     { finished: true },
     'the retried finish of a consumable no longer unfinished reports finished',
   );
   assertEqual(
     plugin.calls.slice(callsBeforeRetry),
-    ['getTransactions'],
-    'the lost acknowledgement is closed without a second native finish',
+    ['getTransactions', 'getTransactions'],
+    'neither reaches the native finish: the lost acknowledgement closes without a second one',
   );
 
   plugin.remove('41');
   const callsBeforeDurable = plugin.calls.length;
   assertEqual(
-    await finish.call(sdk, { transactionId: '41', isConsumable: false, ledgerEntryId: 'le-41' }),
+    await finish.call(sdk, {
+      transactionId: '41',
+      isConsumable: false,
+      ledgerEntryId: 'le-41',
+      retry: true,
+    }),
     { finished: false },
     'a durable missing from the list (revoked or unverifiable) is not reported finished',
   );
   assertEqual(
-    await finish.call(sdk, { transactionId: '42', isConsumable: true, ledgerEntryId: 'le-42' }),
+    await finish.call(sdk, {
+      transactionId: '42',
+      isConsumable: true,
+      ledgerEntryId: 'le-42',
+      retry: true,
+    }),
     { finished: false },
     'a malformed entry of the id keeps the consumable unfinished',
   );

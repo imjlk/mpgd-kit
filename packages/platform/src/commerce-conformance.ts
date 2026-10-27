@@ -358,12 +358,20 @@ export function createCommerceConformanceStore(
     },
     async finishTransaction(request: FinishTransactionInput): Promise<FinishTransactionResult> {
       const by = finishOwner === 'host' ? 'host' : 'client';
+      // The vectors record what the store is asked to finish; the `retry`
+      // hint is not part of it.
+      const call = {
+        by,
+        transactionId: request.transactionId,
+        ledgerEntryId: request.ledgerEntryId,
+        isConsumable: request.isConsumable,
+      } as const;
       const queued = finishQueue.shift() ?? { finished: true };
       if ('error' in queued) {
-        finishCalls.push({ by, ...request, result: queued.error });
+        finishCalls.push({ ...call, result: queued.error });
         throw new CommerceError(queued.error, { message: 'Fixture finish failure.' });
       }
-      finishCalls.push({ by, ...request, result: queued.finished ? 'finished' : 'unfinished' });
+      finishCalls.push({ ...call, result: queued.finished ? 'finished' : 'unfinished' });
       if (queued.finished) {
         remove(request.transactionId);
       }

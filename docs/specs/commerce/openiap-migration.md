@@ -182,11 +182,12 @@ on this contract:
    finished consumables only on iOS 18+ with
    `SKIncludeConsumableInAppPurchaseHistory`); otherwise it answers
    `finished: false`, as with the 0.3 plugin, which searched the same
-   history. The TypeScript SDK does not ask: a consumable missing from the
-   `getTransactions` list is already finished (StoreKit keeps a transaction
-   in `Transaction.unfinished` until `finish()`), so the SDK answers
-   `finished: true` without a native call, and the reconciler finishes it
-   again should StoreKit list it later.
+   history. On a retried finish (`retry: true`) the TypeScript SDK does not
+   ask: a consumable missing from the `getTransactions` list is already
+   finished (StoreKit keeps a transaction in `Transaction.unfinished` until
+   `finish()`), so the SDK answers `finished: true` without a native call,
+   and the reconciler finishes it again should StoreKit list it later. A
+   first finish keeps the native answer.
 7. **Purchase presentation.** On iOS 17+ OpenIAP calls
    `purchase(confirmIn:)` with the active window scene and fails before the
    sheet when there is none (line 2574); a Capacitor app always has one. When

@@ -116,6 +116,8 @@ export interface StoreSdkPurchase {
 export interface StoreSdkFinishTransactionInput {
   readonly transactionId: string;
   readonly isConsumable: boolean;
+  /** `FinishTransactionInput.retry`: an earlier finish of this purchase was asked for. */
+  readonly retry?: boolean;
   /** The ledger entry that authorized the finish; a plugin may record it. */
   readonly ledgerEntryId: string;
 }

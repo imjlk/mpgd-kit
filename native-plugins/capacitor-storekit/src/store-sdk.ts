@@ -379,21 +379,28 @@ export function createCapacitorStoreKitStoreSdk(
    * revoked, and bound to the session app account token. A missing list is
    * an invalid response, not a quiet "not finished".
    *
-   * A consumable the list no longer carries is already finished: StoreKit
-   * keeps a transaction in `Transaction.unfinished` until `finish()`, and a
-   * finished consumable is in neither that list nor `currentEntitlements`.
-   * That is the lost acknowledgement: an earlier finish reached StoreKit but
-   * its answer never reached the journal (the app was closed between the two),
-   * and the record would otherwise stay `finishing` forever. The caller holds
-   * the ledger grant (the reconciler finishes only `granted` or `finishing`
-   * records, and a `finished` consumable listed again), nothing native is
-   * called, and an entry of that id the native side reports in any shape
-   * keeps it refused. If the transaction is listed again later (an
-   * unverifiable entry the native read skipped, or a list read before
+   * On a retried finish (`retry`: the caller asked to finish this purchase
+   * before, in an earlier attempt or session), a consumable the list no
+   * longer carries is already finished: StoreKit keeps a transaction in
+   * `Transaction.unfinished` until `finish()`, and a finished consumable is in
+   * neither that list nor `currentEntitlements`. That is the lost
+   * acknowledgement: an earlier finish reached StoreKit but its answer never
+   * reached the journal (the app was closed between the two), and the record
+   * would otherwise stay `finishing` forever. A first finish never reads a
+   * missing transaction that way: right after the grant the list may not
+   * carry the new transaction yet, so it stays refused and the caller retries.
+   * Nothing native is called, and an entry of that id the native side reports
+   * in any shape keeps it refused. If the transaction is listed again later
+   * (an unverifiable entry the native read skipped, or a list read before
    * StoreKit carried it), the reconciler finishes it again without a second
-   * verify. A durable missing from the list is refused: a durable
-   * stays in `currentEntitlements` after its finish, so a missing one is
-   * revoked or unverifiable, never a lost acknowledgement.
+   * verify. A durable missing from the list is refused: a durable stays in
+   * `currentEntitlements` after its finish, so a missing one is revoked or
+   * unverifiable, never a lost acknowledgement. The kind of a missing
+   * transaction is the caller's `isConsumable` (the list no longer says), so a
+   * catalog that maps a durable as a consumable would be answered finished
+   * here; the SDK never admits such a transaction (`kind-mismatch`), so the
+   * reconciler cannot hold a grant for it from this SDK, and the answer
+   * neither grants nor takes anything.
    *
    * Two exceptions for a listed, non-revoked durable, the only kind the
    * restore read admits from another token:
@@ -417,7 +424,7 @@ export function createCapacitorStoreKitStoreSdk(
   const finishPermitted = async (
     transactionId: string,
     appAccountToken: string,
-    isConsumable: boolean,
+    lostAcknowledgement: boolean,
   ): Promise<
     | { readonly verdict: 'finish'; readonly appAccountToken: string }
     | { readonly verdict: 'finished' | 'refused' }
@@ -431,7 +438,7 @@ export function createCapacitorStoreKitStoreSdk(
     );
     const transaction = entries.find(isValidStoreKitTransaction);
     if (transaction === undefined) {
-      return { verdict: entries.length === 0 && isConsumable ? 'finished' : 'refused' };
+      return { verdict: entries.length === 0 && lostAcknowledgement ? 'finished' : 'refused' };
     }
     if (transaction.revokedAt !== undefined) {
       return { verdict: 'refused' };
@@ -574,12 +581,13 @@ export function createCapacitorStoreKitStoreSdk(
       const promise = (async (): Promise<StoreSdkFinishTransactionResult> => {
         // Same match the native plugin applies: missing, revoked, unbound, or
         // another account never reaches `transaction.finish()`, except a
-        // durable of another token (see `finishPermitted`). A consumable that
-        // left the unfinished list is already finished (a lost acknowledgement).
+        // durable of another token (see `finishPermitted`). On a retry, a
+        // consumable that left the unfinished list is already finished (a
+        // lost acknowledgement).
         const permitted = await finishPermitted(
           transactionId,
           appAccountToken,
-          request.isConsumable === true,
+          request.isConsumable === true && request.retry === true,
         );
         if (permitted.verdict !== 'finish') {
           return { finished: permitted.verdict === 'finished' };
