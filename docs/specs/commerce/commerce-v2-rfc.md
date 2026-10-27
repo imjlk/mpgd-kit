@@ -502,9 +502,11 @@ Restore Purchases. The rules:
   `[target, kind, idempotencyKey, playerId]` and sent with this player's id
   and the same derived idempotency key; the backend's
   [restore sharing](#restore-sharing) decides it. Lookups read the shared
-  key first, and the player-scoped key when the shared one is free or
-  another player's; `reconciler.read()` answers a record there and refuses
-  any other key another player's record holds.
+  key first and the player-scoped key only where such a record can be: for a
+  discovered durable whose shared key is free or (on Restore Purchases)
+  another player's, and in `reconciler.read()` when another player's record
+  holds the shared key. Game keys and consumables never touch it, and
+  `reconciler.read()` refuses any other key another player's record holds.
 - Nothing is migrated. A journal written before the player-scoped key keeps
   every record under the shared key, where each player still finds its own;
   only a new restore that meets another player's record takes the
