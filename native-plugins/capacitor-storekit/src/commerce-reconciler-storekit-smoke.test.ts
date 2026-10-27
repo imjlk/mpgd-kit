@@ -2,6 +2,7 @@ import {
   createCommerceReconciler,
   createInMemoryMonetizationOperationStore,
   type CommerceReconcilerEvent,
+  type MonetizationOperationStore,
 } from '@mpgd/game-services';
 import type { PurchaseVerificationApi } from '@mpgd/game-services/client';
 
@@ -22,6 +23,11 @@ import type { StoreKitTransaction } from './definitions.js';
  * ledger entry, a rejection and an outage never finish, a failed finish is
  * retried, and another account's transaction is never submitted. The StoreKit
  * SDK keeps no finish allow-list of its own: the reconciler is the finish gate.
+ * A finish whose answer was lost after StoreKit applied it ends `finished` on
+ * the next run, a transaction StoreKit lists again later is finished again
+ * without a second verify, a first finish of a transaction the list does not
+ * carry yet is refused and retried, and an Ask to Buy purchase finishes once
+ * approved.
  */
 
 const storeSku = 'com.example.game.coins100';
@@ -184,6 +190,148 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
     'the SDK keeps the transaction away from the reconciler',
   );
   assertEqual(outcome.history, [], 'no journal record');
+}
+
+// A lost acknowledgement, a transaction StoreKit lists again, and Ask to Buy, over one journal.
+{
+  const transactionId = '2000000123456790';
+  const plugin = createFakeStoreKitPlugin({
+    products: [fakeProduct({ productId: storeSku })],
+    transactions: [fakeTransaction({ transactionId, unfinished: true })],
+  });
+  const nativeFinish = plugin.finishTransaction.bind(plugin);
+  let loseNextAnswer = true;
+  plugin.finishTransaction = async (input) => {
+    const result = await nativeFinish(input);
+    if (loseNextAnswer) {
+      // StoreKit finished the transaction; the app was closed before the
+      // answer reached the journal.
+      loseNextAnswer = false;
+      throw Object.assign(new Error('bridge closed'), { code: 'NETWORK' });
+    }
+    return result;
+  };
+  const provider = createCapacitorStoreKitCommerceProvider({
+    products,
+    getAppAccountToken: () => fakeAccountToken,
+    isIos: () => true,
+    sdk: plugin,
+  });
+  const verifiedKeys: string[] = [];
+  const backend: PurchaseVerificationApi = {
+    async verifyPurchase(request) {
+      verifiedKeys.push(request.idempotencyKey);
+      return {
+        verified: true,
+        alreadyProcessed: false,
+        ledgerEntryId: `ledger-${request.platformTransactionId}`,
+      };
+    },
+  };
+  const journal = createInMemoryMonetizationOperationStore();
+  const run = (store: MonetizationOperationStore) =>
+    createCommerceReconciler({
+      provider,
+      backend,
+      store,
+      playerId: 'player-1',
+      target: 'ios',
+      products,
+      retryIntervalMs: 0,
+    });
+  const finishCalls = (): string[] => plugin.calls.filter((call) => call.startsWith('finish:'));
+  const discovered = `store:app-store:${transactionId}`;
+
+  const first = run(journal);
+  await first.start();
+  assertEqual(
+    (await first.read(discovered))?.state,
+    'finishing',
+    'the lost answer leaves the grant finishing',
+  );
+  await first.stop();
+  assertEqual(plugin.transactions, [], 'StoreKit finished it all the same');
+
+  const second = run(journal);
+  await second.start();
+  assertEqual(
+    (await second.read(discovered))?.state,
+    'finished',
+    'the next run reads the consumable off the unfinished list and ends the record',
+  );
+  assertEqual(finishCalls().length, 1, 'without a second native finish');
+  assertEqual(verifiedKeys, [discovered], 'and without a second verify');
+
+  // StoreKit lists it again (an entry the earlier read skipped as unverifiable,
+  // or a list read before StoreKit carried it): it is finished again with the
+  // journaled ledger entry, never verified or granted again.
+  plugin.report(fakeTransaction({ transactionId, unfinished: true }));
+  await second.runUntilIdle();
+  assertEqual(
+    finishCalls(),
+    [
+      `finish:${transactionId}:ledger-${transactionId}:${fakeAccountToken}`,
+      `finish:${transactionId}:ledger-${transactionId}:${fakeAccountToken}`,
+    ],
+    'the transaction listed again is finished with the same ledger entry',
+  );
+  assertEqual(plugin.transactions, [], 'and leaves the unfinished list');
+  assertEqual(verifiedKeys, [discovered], 'the ledger is asked once in all');
+  assertEqual((await second.read(discovered))?.state, 'finished', 'the record stays finished');
+
+  // A transaction delivered before StoreKit's unfinished list carries it: the
+  // first finish after the grant is refused (never read as a lost
+  // acknowledgement), and the retry finishes it natively once it is listed.
+  const earlyId = '2000000123456792';
+  plugin.emit(fakeTransaction({ transactionId: earlyId, unfinished: true }));
+  await second.runUntilIdle();
+  const early = `store:app-store:${earlyId}`;
+  assertEqual(
+    (await second.read(early))?.state,
+    'finishing',
+    'the first finish of an unlisted transaction leaves the grant finishing',
+  );
+  assertEqual(finishCalls().length, 2, 'and calls no native finish for it');
+  plugin.upsert(fakeTransaction({ transactionId: earlyId, unfinished: true }));
+  await second.reconcile();
+  assertEqual((await second.read(early))?.state, 'finished', 'the retry finishes it');
+  assertEqual(
+    finishCalls().at(-1),
+    `finish:${earlyId}:ledger-${earlyId}:${fakeAccountToken}`,
+    'natively, with its ledger entry',
+  );
+  assertEqual(plugin.transactions, [], 'and it leaves the unfinished list');
+
+  // Ask to Buy: no transaction exists until approval, so nothing is finished
+  // before it; the approved transaction is verified and finished once.
+  const launched = await second.requestPurchase({
+    logicalId: 'COINS_100',
+    idempotencyKey: 'ask-to-buy-1',
+    source: 'shop',
+  });
+  assertEqual(launched.outcome, 'launched', 'Ask to Buy answers launched');
+  assertEqual(
+    (await second.read('ask-to-buy-1'))?.state,
+    'launched',
+    'and leaves the attempt launched',
+  );
+  await second.runUntilIdle();
+  assertEqual(finishCalls().length, 3, 'nothing is finished while the parent decides');
+  const approvedId = '2000000123456791';
+  plugin.report(fakeTransaction({ transactionId: approvedId, unfinished: true }));
+  await second.runUntilIdle();
+  assertEqual(
+    (await second.read('ask-to-buy-1'))?.state,
+    'finished',
+    'the approved purchase is granted and finished under the game key',
+  );
+  assertEqual(verifiedKeys, [discovered, early, 'ask-to-buy-1'], 'verified once');
+  assertEqual(
+    finishCalls().at(-1),
+    `finish:${approvedId}:ledger-${approvedId}:${fakeAccountToken}`,
+    'finished once with its ledger entry',
+  );
+  await second.stop();
 }
 
 console.info('StoreKit commerce reconciler smoke passed.');

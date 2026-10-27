@@ -328,6 +328,8 @@ export function createStoreCommerceProvider(
   const restorePurchases = sdk.restorePurchases;
   const provider: StoreCommerceProvider = {
     store,
+    // `retry` is forwarded to the SDK below.
+    ...(finishTransaction === undefined ? {} : { acceptsFinishRetry: true }),
     getCapabilities,
     async fetchProducts(request: FetchProductsInput = {}): Promise<readonly StoreProduct[]> {
       const type = request.type ?? 'all';
@@ -496,6 +498,7 @@ export function createStoreCommerceProvider(
             transactionId: finish.transactionId,
             isConsumable: finish.isConsumable,
             ledgerEntryId: finish.ledgerEntryId,
+            ...(finish.retry === true ? { retry: true } : {}),
           });
         } catch (error) {
           throw normalize(error);

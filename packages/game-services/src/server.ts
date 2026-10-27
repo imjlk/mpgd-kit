@@ -1535,6 +1535,24 @@ async function verifyPurchaseForRetry(
           finalization,
         });
       }
+      if (
+        product.type === 'consumable'
+        && routedEntry?.status === 'routed'
+        && routedEntry.entry.finish === 'client'
+      ) {
+        // This player's own grant of a consumable the client finishes
+        // (StoreKit): the store still lists the transaction, so its finish
+        // never happened or never reached the client's journal, and the
+        // client's record of it is gone (journal retention), so it asks
+        // under the derived key. The recorded grant is reported, never a
+        // second one, so the client can finish the transaction instead of
+        // the store re-delivering it on every launch.
+        return assertVerifyPurchaseResponse({
+          verified: true,
+          ledgerEntryId: existingEvidence.ledgerEntryId,
+          alreadyProcessed: true,
+        });
+      }
     }
 
     return assertVerifyPurchaseResponse({

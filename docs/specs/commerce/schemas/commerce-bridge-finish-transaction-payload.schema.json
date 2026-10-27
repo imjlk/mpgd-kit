@@ -21,6 +21,11 @@
           "isConsumable": {
             "type": "boolean",
             "readOnly": true
+          },
+          "retry": {
+            "type": "boolean",
+            "description": "The caller already asked to finish this purchase, in an earlier attempt\nor an earlier session (the reconciler sets it for a `client` finish of a\nrecord that was `finishing` before the call). A store may then read a\nconsumable missing from its unfinished list as one an earlier finish\ncompleted (a lost acknowledgement); a first finish never does. Absent\nmeans a first finish; a store without such a rule ignores it. Sent only to\na provider that declares `acceptsFinishRetry`.",
+            "readOnly": true
           }
         },
         "required": [

@@ -8,6 +8,7 @@ import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 import { CommerceError } from '@mpgd/platform/commerce';
 
 import {
+  assertCommerceStaleLaunchedAfterMs,
   createGameServicesClient,
   createGameServicesFetchBackendTransport,
   createGameServicesHttpBackendApi,
@@ -154,6 +155,12 @@ interface CreateGameServicesRuntimeCommonInput {
    * `playerId`, not from the live session.
    */
   readonly commerceAccountBinding?: CreateCommerceReconcilerInput['accountBinding'];
+  /**
+   * The reconciler's `staleLaunchedAfterMs`: how long a `launched` purchase
+   * with no store purchase keeps serializing its product before it ends
+   * `failed`. Defaults to 24 hours; `Infinity` never expires it.
+   */
+  readonly commerceStaleLaunchedAfterMs?: number;
 }
 
 export type CreateGameServicesRuntimeInput = CreateGameServicesRuntimeCommonInput & (
@@ -173,6 +180,7 @@ export function createGameServicesRuntime(
 ): GameServicesRuntime {
   assertAuthorityMode(input.authorityMode);
   assertTransport(input.transport);
+  assertCommerceStaleLaunchedAfterMs(input.commerceStaleLaunchedAfterMs);
   if (input.transport === 'orpc' && input.httpTransport !== undefined) {
     throw new Error('Game Services httpTransport cannot be used with oRPC.');
   }
@@ -262,6 +270,9 @@ export function createGameServicesRuntime(
             message: refusal.message,
           });
     },
+    ...(input.commerceStaleLaunchedAfterMs === undefined
+      ? {}
+      : { commerceStaleLaunchedAfterMs: input.commerceStaleLaunchedAfterMs }),
   };
   const monetizationRecovery = input.operationStore === undefined
     ? undefined
@@ -287,15 +298,15 @@ export function createGameServicesRuntime(
     };
   }
   const reconciler = routedClient.commerceReconciler;
-  const exposedReconciler = reconciler === undefined
-    ? undefined
-    : guardReconciler(reconciler, gate);
   const purchases = new Set<Promise<unknown>>();
   const track = <T>(running: Promise<T>): Promise<T> => {
     purchases.add(running);
     void running.finally(() => purchases.delete(running)).catch(() => undefined);
     return running;
   };
+  const exposedReconciler = reconciler === undefined
+    ? undefined
+    : guardReconciler(reconciler, gate, track);
   gate.onClose(async () => {
     // A purchase whose store sheet is open journals the store answer first
     // (its record stays this player's to recover), then the reconciler stops.
@@ -581,11 +592,20 @@ async function guardedPurchase(
  * The reconciler a runtime exposes: once the runtime closed for good, a
  * `start()` (a caller that passed its check just before) subscribes nothing.
  * While only signed out it starts as usual and its work waits for the
- * session (the reconciler's `sessionCheck`).
+ * session (the reconciler's `sessionCheck`). Its purchases are tracked like
+ * the client's, so `dispose()` waits for an open store sheet's answer.
  */
-function guardReconciler(reconciler: CommerceReconciler, gate: RuntimeGate): CommerceReconciler {
+function guardReconciler(
+  reconciler: CommerceReconciler,
+  gate: RuntimeGate,
+  track: PurchaseTracker,
+): CommerceReconciler {
   // The reconciler's getters and methods are closures: the prototype chain serves them.
   return Object.create(reconciler, {
+    requestPurchase: {
+      value: (request: Parameters<CommerceReconciler['requestPurchase']>[0]) =>
+        track(reconciler.requestPurchase(request)),
+    },
     start: {
       value: async () => {
         if (!gate.closed) {

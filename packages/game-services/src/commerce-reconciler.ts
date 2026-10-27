@@ -146,7 +146,9 @@ function isRetryableBeforeLaunch(record: CommercePurchaseOperationRecord): boole
  * finish allow-list of its own (the removed v1 driver paired transactions in
  * `finishGrantedTransaction`), so this is the finish gate for every `client`
  * and `host` owner: the ledger entry id comes from the journal revision the
- * backend grant wrote.
+ * backend grant wrote. The one other finish call is a `finished` consumable a
+ * `client` store reports again, finished with the same journaled ledger entry
+ * (see `finishReportedAgain` in `createCommerceReconciler`).
  */
 export function assertCommerceFinishAllowed(
   record: CommercePurchaseOperationRecord,
@@ -1028,6 +1030,65 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     return normalize(own.value) !== normalize(bound.value);
   };
 
+  /** Transactions `finishReportedAgain` already finished again this session. */
+  const finishedAgain = new Set<string>();
+  /**
+   * A client-finish store reports a consumable only while it is unfinished,
+   * so one reported again after its record finished was never finished in
+   * the store: its finish was reported done without a native call (a lost
+   * acknowledgement the store's list could not tell apart from an
+   * unverifiable entry or a list read too early), or the store re-delivered
+   * it. It is finished again with the ledger entry the grant wrote, once per
+   * session (a call that failed in transport is tried again on the next
+   * report); it is never verified or granted again (the ledger replays a key
+   * and refuses the same evidence under another one). Durables, which a
+   * store keeps listing after their finish, and other finish owners are left
+   * alone. It needs the finished record: past the journal's retention the
+   * transaction takes the derived-key path, where the reference backend
+   * answers a `client`-finish consumable with this player's recorded grant
+   * (never a second one), and the record finishes it like any grant.
+   */
+  const finishReportedAgain = async (
+    record: CommercePurchaseOperationRecord,
+    kind: PurchaseKind | undefined,
+  ): Promise<void> => {
+    const ledgerEntryId = record.ledgerEntryId;
+    const transactionId = record.purchase?.transactionId;
+    if (
+      (record.productKind ?? kind) !== 'consumable'
+      || capabilities?.lifecycle.finish !== 'client'
+      || provider.finishTransaction === undefined
+      || ledgerEntryId === undefined
+      || ledgerEntryId.trim() === ''
+      || transactionId === undefined
+      || transactionId.trim() === ''
+      || finishedAgain.has(transactionId)
+    ) {
+      return;
+    }
+    finishedAgain.add(transactionId);
+    try {
+      const { finished } = await provider.finishTransaction({
+        transactionId,
+        ledgerEntryId,
+        isConsumable: true,
+      });
+      if (!finished) {
+        // The store refused it (for StoreKit: revoked or another token); the
+        // next session asks again. The record stays finished.
+        fail(
+          'finish',
+          new Error(`The store did not finish ${transactionId} it reported again.`),
+          record.idempotencyKey,
+        );
+      }
+    } catch (error) {
+      // Transport-class failure: the next report of the transaction tries again.
+      finishedAgain.delete(transactionId);
+      fail('finish', error, record.idempotencyKey);
+    }
+  };
+
   // Reconciler step 2: match a reported purchase to a journal record.
   const ingestPurchase = async (purchase: StorePurchase, restoring: boolean): Promise<void> => {
     if (purchase.store !== storeId) {
@@ -1161,6 +1222,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         );
         return;
       }
+    }
+    if (record.state === 'finished' && purchase.state === 'purchased') {
+      await finishReportedAgain(record, product.kind);
+      return;
     }
     if (purchase.state === 'pending' && record.state === 'launched') {
       await write(record, 'pending', { purchase });
@@ -1399,6 +1464,16 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
                 transactionId: finish.transactionId,
                 ledgerEntryId: finish.ledgerEntryId,
                 isConsumable: kind === 'consumable',
+                // A record already `finishing` when this drive began was asked
+                // to finish before (an earlier attempt or session): a `client`
+                // store may read a consumable gone from its unfinished list as
+                // that finish's lost acknowledgement. A first finish never is,
+                // and a provider that does not declare the field never gets it.
+                ...(owner === 'client'
+                    && initial.state === 'finishing'
+                    && provider.acceptsFinishRetry === true
+                  ? { retry: true }
+                  : {}),
               })).finished;
             } catch (error) {
               // Transport-class failure: keep `finishing` for the next pass.

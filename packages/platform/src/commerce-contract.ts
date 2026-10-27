@@ -222,6 +222,16 @@ export interface FinishTransactionInput {
   readonly transactionId: NonEmptyString;
   readonly ledgerEntryId: NonEmptyString;
   readonly isConsumable: boolean;
+  /**
+   * The caller already asked to finish this purchase, in an earlier attempt
+   * or an earlier session (the reconciler sets it for a `client` finish of a
+   * record that was `finishing` before the call). A store may then read a
+   * consumable missing from its unfinished list as one an earlier finish
+   * completed (a lost acknowledgement); a first finish never does. Absent
+   * means a first finish; a store without such a rule ignores it. Sent only to
+   * a provider that declares `acceptsFinishRetry`.
+   */
+  readonly retry?: boolean;
 }
 
 export interface FinishTransactionResult {
@@ -254,6 +264,13 @@ export interface CommerceProvider {
    * answers `{ finished: true }` rather than failing.
    */
   finishTransaction?(input: FinishTransactionInput): Promise<FinishTransactionResult>;
+  /**
+   * The provider accepts `FinishTransactionInput.retry`. A caller sends
+   * `retry` only to a provider that declares this, so a provider or bridge
+   * host built on an earlier contract, whose input check refuses unknown
+   * fields, never receives it.
+   */
+  readonly acceptsFinishRetry?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   /** Designed, not implemented by any reference store provider. */

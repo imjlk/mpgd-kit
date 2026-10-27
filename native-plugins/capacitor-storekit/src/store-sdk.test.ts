@@ -791,6 +791,103 @@ async function settled(): Promise<void> {
   );
 }
 
+// A lost acknowledgement: the native finish reached StoreKit, but its answer
+// never reached the caller. StoreKit keeps a transaction in
+// `Transaction.unfinished` until `finish()`, so on a retried finish a
+// consumable that left the list is already finished. A first finish never
+// reads it that way (right after the grant the list may not carry the
+// transaction yet); a durable that left the list is not finished (a finished
+// durable stays listed with `unfinished: false`), nor is an entry of that id
+// the native side reports in a malformed shape.
+{
+  const plugin = createFakeStoreKitPlugin({
+    transactions: [
+      fakeTransaction({ transactionId: '40', unfinished: true }),
+      fakeTransaction({
+        transactionId: '41',
+        type: 'non_consumable',
+        productId: removeAdsSku,
+        unfinished: true,
+      }),
+    ],
+  });
+  plugin.transactions.push({ transactionId: '42', productId: sku } as never);
+  const { sdk } = createSdk({ plugin });
+  const finish = sdk.finishTransaction;
+  if (finish === undefined) {
+    throw new Error('finishTransaction is required for finish: client.');
+  }
+  const nativeFinish = plugin.finishTransaction.bind(plugin);
+  let loseAnswer = true;
+  plugin.finishTransaction = async (input) => {
+    const result = await nativeFinish(input);
+    if (loseAnswer) {
+      loseAnswer = false;
+      throw Object.assign(new Error('bridge closed'), { code: 'NETWORK' });
+    }
+    return result;
+  };
+  await assertThrowsCode(
+    () => finish.call(sdk, { transactionId: '40', isConsumable: true, ledgerEntryId: 'le-40' }),
+    'NETWORK',
+    'the answer of a finish StoreKit applied is lost',
+  );
+  assertEqual(
+    plugin.transactions.map((transaction) => transaction.transactionId),
+    ['41', '42'],
+    'StoreKit finished the consumable before the answer was lost',
+  );
+  const callsBeforeRetry = plugin.calls.length;
+  assertEqual(
+    await finish.call(sdk, { transactionId: '40', isConsumable: true, ledgerEntryId: 'le-40' }),
+    { finished: false },
+    'a first finish of a consumable the list does not carry stays unfinished',
+  );
+  assertEqual(
+    await finish.call(sdk, {
+      transactionId: '40',
+      isConsumable: true,
+      ledgerEntryId: 'le-40',
+      retry: true,
+    }),
+    { finished: true },
+    'the retried finish of a consumable no longer unfinished reports finished',
+  );
+  assertEqual(
+    plugin.calls.slice(callsBeforeRetry),
+    ['getTransactions', 'getTransactions'],
+    'neither reaches the native finish: the lost acknowledgement closes without a second one',
+  );
+
+  plugin.remove('41');
+  const callsBeforeDurable = plugin.calls.length;
+  assertEqual(
+    await finish.call(sdk, {
+      transactionId: '41',
+      isConsumable: false,
+      ledgerEntryId: 'le-41',
+      retry: true,
+    }),
+    { finished: false },
+    'a durable missing from the list (revoked or unverifiable) is not reported finished',
+  );
+  assertEqual(
+    await finish.call(sdk, {
+      transactionId: '42',
+      isConsumable: true,
+      ledgerEntryId: 'le-42',
+      retry: true,
+    }),
+    { finished: false },
+    'a malformed entry of the id keeps the consumable unfinished',
+  );
+  assertEqual(
+    plugin.calls.slice(callsBeforeDurable),
+    ['getTransactions', 'getTransactions'],
+    'neither reaches the native finish',
+  );
+}
+
 // restorePurchases asks the App Store to synchronize.
 {
   const { plugin, sdk } = createSdk();

@@ -489,6 +489,46 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   assert.equal(verifies(harness).length, 0);
 }
 
+// The same through the reconciler the runtime exposes.
+{
+  const sheet: { answer?: () => void } = {};
+  let opened: () => void = () => undefined;
+  const sheetOpen = new Promise<void>((resolve) => {
+    opened = resolve;
+  });
+  const provider = createTestCommerceProvider({
+    store: 'android-store',
+    answer: (request) =>
+      new Promise<RequestPurchaseResult>((resolve) => {
+        sheet.answer = () =>
+          resolve({ outcome: 'purchased', purchase: createTestStorePurchase(request, {}, 'android-store') });
+        opened();
+      }),
+  });
+  const harness = createHarness({ provider });
+  const runtimeA = harness.create(playerA);
+  const reconciler = runtimeA.client?.commerceReconciler;
+  const buying = reconciler?.requestPurchase({
+    logicalId: 'COINS_100',
+    idempotencyKey: 'direct-sheet',
+    source: 'shop',
+  });
+  await sheetOpen;
+  harness.session.player = playerB;
+  let disposed = false;
+  const disposing = runtimeA.dispose().then(() => {
+    disposed = true;
+  });
+  for (let turn = 0; turn < 20; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(disposed, false, 'dispose waits for the sheet opened through the reconciler');
+  sheet.answer?.();
+  await buying;
+  await disposing;
+  assert.equal((await reconciler?.read('direct-sheet'))?.state, 'purchased');
+}
+
 // A restore the session switch cut short rejects instead of reporting success.
 {
   const harness = createHarness();
