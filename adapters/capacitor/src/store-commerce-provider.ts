@@ -131,6 +131,13 @@ export interface StoreCommerceProvider extends CommerceProvider {
 }
 
 const availabilityTimeoutMs = 3_000;
+/**
+ * Upper bound on one purchase gate answer. The gate runs while the gateway
+ * holds the purchase's external activity, so a gate that never settles would
+ * keep the game paused; past this bound the purchase is refused
+ * (`PURCHASE_GATE_FAILED`, retryable) and a late answer is ignored.
+ */
+export const purchaseGateTimeoutMs = 3_000;
 const availabilitySet = new Set<PlatformProviderAvailability>([
   'unsupported',
   'configuration-required',
@@ -568,10 +575,11 @@ function misleadsBeforeLaunch(code: CommerceErrorCode): boolean {
 }
 
 /**
- * Asks the gate about one new purchase; undefined means allowed. A refusal
+ * Asks the gate about one new purchase, bounded by `purchaseGateTimeoutMs`;
+ * undefined means allowed. A refusal
  * (`allowed: false`) is the gate's definitive answer: `PURCHASES_PAUSED` or
  * its own code, retryable only when it says so. A gate that could not answer
- * (it threw, or returned anything malformed) is `PURCHASE_GATE_FAILED`, and
+ * (it threw, timed out, or returned anything malformed) is `PURCHASE_GATE_FAILED`, and
  * always retryable: the sales flag is unknown, not closed, so asking again
  * may succeed. A thrown `CommerceError` keeps its code unless the code
  * claims a launched or cancelled sheet.
@@ -588,8 +596,17 @@ async function askPurchaseGate(
       ...(cause === undefined ? {} : { cause }),
     }).toCommerceErrorInfo();
   let decision: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    decision = await gate(request);
+    decision = await Promise.race([
+      Promise.resolve().then(() => gate(request)),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`The purchase gate did not answer within ${purchaseGateTimeoutMs} ms.`)),
+          purchaseGateTimeoutMs,
+        );
+      }),
+    ]);
   } catch (error) {
     if (error instanceof CommerceError && !misleadsBeforeLaunch(error.code)) {
       return error.toCommerceErrorInfo();
@@ -598,6 +615,10 @@ async function askPurchaseGate(
       `The purchase gate of ${request.store} failed; ${request.logicalId} is not sold now.`,
       error,
     );
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
   }
   if (isRecord(decision) && decision.allowed === true) {
     return undefined;

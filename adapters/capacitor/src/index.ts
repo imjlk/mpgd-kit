@@ -85,6 +85,7 @@ export {
   accountBindingLookupFailedStoreCode,
   createStoreCommerceProvider,
   purchaseGateFailedStoreCode,
+  purchaseGateTimeoutMs,
   purchasesPausedStoreCode,
   recoverableErrorCodes,
   type CreateStoreCommerceProviderInput,

@@ -142,8 +142,10 @@ retryable? }`. A refusal never opens the store UI and is answered as data:
 `{ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE', storeCode:
 'PURCHASES_PAUSED' } }` (or the gate's own `storeCode`), `retryable` false
 unless the gate says otherwise. A gate that could not answer refuses too,
-with `PURCHASE_GATE_FAILED` and always retryable, whether it threw or returned
-something malformed: the sales flag is unknown rather than closed. A thrown
+with `PURCHASE_GATE_FAILED` and always retryable, whether it threw, returned
+something malformed, or did not answer within `purchaseGateTimeoutMs` (three
+seconds): the sales flag is unknown rather than closed. An answer that
+arrives after the timeout is ignored and never opens the store. A thrown
 `CommerceError` keeps its own code, except a code that claims a launched or
 cancelled sheet (`OUTCOME_UNKNOWN`, `ALREADY_OWNED`, `USER_CANCELLED`), which
 becomes `PURCHASE_GATE_FAILED` because nothing was launched. The reconciler
@@ -156,7 +158,7 @@ coordinator would take it as a closure source and quarantine the game after
 every launched purchase. The gate runs while the gateway already holds the
 purchase's external activity (the game is paused, with no sheet shown), so it
 should answer from a flag the game already holds rather than a slow network
-call. Recovery, restore, finishing, events, `fetchProducts`, and
+call; the timeout bounds that pause. Recovery, restore, finishing, events, `fetchProducts`, and
 `getAvailablePurchases` never
 ask the gate, so purchases already paid for keep reconciling while new sales
 are refused. A failed or missing account binding is a `failed` result too,

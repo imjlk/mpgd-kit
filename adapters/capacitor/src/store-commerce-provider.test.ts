@@ -11,7 +11,9 @@ import {
 import { createFakeStoreSdk, fakePurchase, type FakeStoreSdk } from '../test/store-sdk-fixture.js';
 import {
   createStoreCommerceProvider,
+  purchaseGateTimeoutMs,
   type CreateStoreCommerceProviderInput,
+  type StorePurchaseGateDecision,
 } from './store-commerce-provider.js';
 import { defaultStoreSdkErrorCodeMap, normalizeStoreSdkError } from './store-sdk.js';
 
@@ -697,6 +699,51 @@ describe('purchase gate', () => {
       });
     }
     expect(sdk.requestCalls).toEqual([]);
+  });
+
+  it('refuses a gate that does not answer in time and ignores its late answer', async () => {
+    vi.useFakeTimers();
+    const sdk = createFakeStoreSdk();
+    const settle: Array<(decision: StorePurchaseGateDecision) => void> = [];
+    const fail: Array<(error: unknown) => void> = [];
+    const provider = createProvider(sdk, {
+      purchaseGate: () => new Promise<StorePurchaseGateDecision>((resolve, reject) => {
+        settle.push(resolve);
+        fail.push(reject);
+      }),
+    });
+    let answer: unknown;
+    const pending = provider.requestPurchase(request).then((result) => {
+      answer = result;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(purchaseGateTimeoutMs - 1);
+    expect(answer).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: true },
+    });
+    // A late allow (or a late failure) after the bound changes nothing.
+    settle[0]?.({ allowed: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sdk.requestCalls).toEqual([]);
+
+    const second = provider.requestPurchase({ ...request, idempotencyKey: 'op-2' });
+    await vi.advanceTimersByTimeAsync(purchaseGateTimeoutMs);
+    await expect(second).resolves.toMatchObject({
+      outcome: 'failed', error: { storeCode: 'PURCHASE_GATE_FAILED' },
+    });
+    fail[1]?.(new Error('late failure'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sdk.requestCalls).toEqual([]);
+    // An answer inside the bound clears the timer and opens the store.
+    const third = provider.requestPurchase({ ...request, idempotencyKey: 'op-3' });
+    await vi.advanceTimersByTimeAsync(0);
+    settle[2]?.({ allowed: true });
+    await expect(third).resolves.toEqual({ outcome: 'launched' });
+    expect(sdk.requestCalls).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('is never asked by recovery, events, finishing, restore, or catalog reads', async () => {
