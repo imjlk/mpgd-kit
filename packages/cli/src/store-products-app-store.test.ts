@@ -681,6 +681,11 @@ try {
       .then(() => undefined, (caught: unknown) => caught);
     assert.ok(error instanceof AppStoreProductApplyError);
     assert.equal(error.stage, 'prices');
+    assert.deepEqual(
+      error.done,
+      [{ productId: 'dev.mpgd.store.coins100', status: 'created' }],
+      'the created in-app purchase counts as written; unchanged ones do not',
+    );
     assert.match(error.message, /store products plan/u);
     // The next plan sees the created in-app purchase and plans only what is left.
     const next = await planAppStoreProducts({ ...planInput, listings: odd }, fresh.port);

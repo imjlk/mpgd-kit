@@ -18,6 +18,7 @@ import type {
   AscIapType,
   AscIapVersion,
 } from './app-store-iap-port.js';
+import { canonicalLanguageTag } from './store-products-play.js';
 import {
   sameDecimal,
   stableSha256,
@@ -291,7 +292,7 @@ async function planOne(input: PlanOneInput): Promise<PlannedAppStoreProduct> {
       if ([...text.description].length > maxDescription) {
         throw new Error(`${label}: the ${locale} description is longer than ${maxDescription} characters.`);
       }
-      return { locale, name: text.title, description: text.description };
+      return { locale: canonicalLanguageTag(locale), name: text.title, description: text.description };
     })
     .sort((left, right) => left.locale.localeCompare(right.locale));
   if (appStore.reviewNote !== undefined && [...appStore.reviewNote].length > maxReviewNote) {
@@ -643,9 +644,12 @@ export async function applyAppStoreProductPlan(input: {
       continue;
     }
     let stage = 'start';
-    const step = async <T>(name: string, action: () => Promise<T>): Promise<T> => {
+    let wrote = false;
+    const step = async <T>(name: string, action: () => Promise<T>, writes = true): Promise<T> => {
       stage = name;
-      return action();
+      const result = await action();
+      wrote ||= writes;
+      return result;
     };
     try {
       let iapId = product.iapId;
@@ -671,7 +675,7 @@ export async function applyAppStoreProductPlan(input: {
         const localizations = write.localizations;
         const versionId = await step('version', () => resolveVersion(port, id, localizations));
         const existing = new Map(
-          (await step('localizations', () => port.listLocalizations(versionId)))
+          (await step('localizations', () => port.listLocalizations(versionId), false))
             .map((localization) => [localization.locale.toLowerCase(), localization]),
         );
         for (const entry of localizations.entries) {
@@ -697,7 +701,7 @@ export async function applyAppStoreProductPlan(input: {
             iapId: id,
             territory: price.territory,
             customerPrice: price.customerPrice,
-          })));
+          }), false));
         }
         await step('prices', () =>
           port.createPriceSchedule({
@@ -735,7 +739,15 @@ export async function applyAppStoreProductPlan(input: {
       if (error instanceof StoreProductPlanStaleError) {
         throw error;
       }
-      throw new AppStoreProductApplyError(product.productId, stage, done, error);
+      // Only products something was written for count as "already written".
+      const written = done.filter((entry) => entry.status !== 'unchanged');
+      if (wrote) {
+        written.push({
+          productId: product.productId,
+          status: product.action === 'create' ? 'created' : 'updated',
+        });
+      }
+      throw new AppStoreProductApplyError(product.productId, stage, written, error);
     }
   }
   return { appId: current.appId, products: done, manual: current.manual };
