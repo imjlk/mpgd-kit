@@ -490,7 +490,16 @@ with `authoritativeGameServices: false` keeps native identity, storage, sharing,
 and Game Center while disabling IAP and ads, so it does not require a backend
 URL. Enabling authoritative AIT grants, monetization on a deployed `web`
 runtime, or producing Android and iOS releases requires
-`VITE_MPGD_GAME_SERVICES_URL` to be a public HTTPS URL without credentials.
+`VITE_MPGD_GAME_SERVICES_URL` to identify an authoritative backend. Hosted
+`kind: web` targets with runtime `web` or `microsoft-store-pwa` may use `/api`
+or a clean path below it, such as `/api/game-services`, for a same-origin
+Pages/edge proxy. The host must forward to its environment-matched service
+binding and fail closed if it is absent. Relative URLs must be resolved against
+the actual page origin before passing them to clients that require absolute URLs.
+This build check does not verify the deployed proxy, identity, or reward ledger.
+AIT, Android, iOS and externally hosted runtimes still require a public HTTPS
+URL without credentials; they may use the public Pages ingress URL. Protocol-relative,
+encoded, dot-segment and query/fragment-bearing relative paths are rejected.
 Canonical path validation blocks symbolic-link escapes; localhost and literal
 private or reserved IP addresses are also rejected.
 

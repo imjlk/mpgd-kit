@@ -98,7 +98,11 @@ export function assertProductionTargetReadiness(
 
   if (ownerPathKey === undefined) {
     if (requiresMonetizationAuthority || targetConfig.authoritativeGameServices !== false) {
-      assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
+      assertAuthoritativeGameServicesUrl(
+        input.gameServicesUrl,
+        input.target,
+        targetConfig.kind === 'web' && requiresWebMonetizationAuthority,
+      );
     }
     return;
   }
@@ -272,12 +276,20 @@ function readCanonicalPathAllowingMissingTail(candidate: string, label: string):
 function assertAuthoritativeGameServicesUrl(
   value: string | undefined,
   target: string,
+  allowSameOrigin = false,
 ): void {
   if (value === undefined || value.length === 0) {
     throw new Error(
       `Production target ${target} requires VITE_MPGD_GAME_SERVICES_URL for an `
         + 'authoritative remote backend.',
     );
+  }
+
+  // Hosted web/PWA clients can reach an authoritative service through their
+  // own Pages/edge ingress. Never apply this allowance to third-party/native
+  // hosts, or accept paths that URL normalization can turn into another host.
+  if (allowSameOrigin && value === value.trim() && /^\/api(?:\/[A-Za-z0-9_-]+)*\/?$/u.test(value)) {
+    return;
   }
 
   let url: URL;

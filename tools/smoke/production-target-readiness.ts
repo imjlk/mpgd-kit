@@ -44,6 +44,10 @@ try {
   });
 
   for (const target of ['android', 'ios']) {
+    expectReadinessError(
+      { target, profile: 'production', gameServicesUrl: '/api/game-services' },
+      'invalid game-services URL',
+    );
     const nativePlatformDir = join(gameRoot, 'apps', 'mobile-capacitor', target);
 
     symlinkSync(outsideRoot, nativePlatformDir);
@@ -210,6 +214,51 @@ try {
     gameServicesUrl: publicBackend,
     targetPolicy: webCommercePolicy,
   });
+  for (const gameServicesUrl of ['/api', '/api/', '/api/game-services', '/api/game-services/v1']) {
+    assertProductionTargetReadiness({
+      target: 'storefront',
+      profile: 'production',
+      targetsFile,
+      gameRoot,
+      gameServicesUrl,
+      targetPolicy: webCommercePolicy,
+    });
+  }
+  for (const gameServicesUrl of [
+    '//example.com/api',
+    '/\\example.com/api',
+    'api/game-services',
+    '/other',
+    '/api//example.com',
+    '/api/../admin',
+    '/api/./game-services',
+    '/api/%2e%2e/admin',
+    '/api/%2f%2fexample.com',
+    '/api?redirect=other',
+    '/api#fragment',
+    '/api\n',
+    ' /api',
+  ]) {
+    expectReadinessError(
+      {
+        target: 'storefront',
+        profile: 'production',
+        gameServicesUrl,
+        targetPolicy: webCommercePolicy,
+      },
+      'invalid game-services URL',
+    );
+  }
+  // A kind:web export alone is insufficient when its runtime is externally hosted.
+  expectReadinessError(
+    {
+      target: 'storefront',
+      profile: 'production',
+      gameServicesUrl: '/api',
+      targetPolicy: verse8RewardPolicy,
+    },
+    'invalid game-services URL',
+  );
   writeTargets({
     storefront: {
       kind: 'web',
@@ -261,6 +310,14 @@ try {
     },
     'requires VITE_MPGD_GAME_SERVICES_URL',
   );
+  assertProductionTargetReadiness({
+    target: 'microsoft-store',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    gameServicesUrl: '/api/game-services',
+    targetPolicy: microsoftStoreCommercePolicy,
+  });
 
   expectReadinessError(
     { target: 'ait', profile: ' production ', gameServicesUrl: publicBackend },
@@ -277,6 +334,10 @@ try {
   expectReadinessError(
     { target: 'ait', profile: 'production' },
     'requires VITE_MPGD_GAME_SERVICES_URL',
+  );
+  expectReadinessError(
+    { target: 'ait', profile: 'production', gameServicesUrl: '/api/game-services' },
+    'invalid game-services URL',
   );
 
   for (const url of [
