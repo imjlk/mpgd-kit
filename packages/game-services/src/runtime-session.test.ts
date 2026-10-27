@@ -957,4 +957,60 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   await runtime.dispose();
 }
 
+// dispose() waits for an open rewarded ad, so its platform result is
+// journaled under the player before the host restarts.
+{
+  const ad: { finish?: () => void } = {};
+  let opened: () => void = () => undefined;
+  const adOpen = new Promise<void>((resolve) => {
+    opened = resolve;
+  });
+  const harness = createHarness({
+    ads: {
+      async preload() {},
+      showRewarded: (request) =>
+        new Promise((resolve) => {
+          ad.finish = () =>
+            resolve({
+              status: 'completed',
+              rewardGranted: true,
+              ledgerEntryId: `impression-${request.idempotencyKey}`,
+              evidence: { schema: 'test.reward.v1', payload: { signedCallback: 'test-signed-callback' } },
+            });
+          opened();
+        }),
+    },
+  });
+  const runtimeA = harness.create(playerA);
+  const watching = runtimeA.client?.claimRewardedAd({
+    placementId: 'CONTINUE',
+    idempotencyKey: 'open-ad',
+  });
+  await adOpen;
+  harness.session.player = playerB;
+  let disposed = false;
+  const disposing = runtimeA.dispose().then(() => {
+    disposed = true;
+  });
+  for (let turn = 0; turn < 20; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(disposed, false, 'dispose waits for the open ad');
+  ad.finish?.();
+  await watching;
+  await disposing;
+  const reward = (await harness.store.listRecoverable(playerA)).find(
+    (record) => record.kind === 'rewarded-ad',
+  );
+  assert.ok(
+    reward !== undefined && (reward as { platform?: unknown }).platform !== undefined,
+    "the ad's result is journaled under A for recovery",
+  );
+  assert.equal(
+    harness.sent.filter((request) => request.endpoint === gameServicesBackendEndpoints.claimAdReward).length,
+    0,
+    'no claim left with B in session',
+  );
+}
+
 console.info('Game services runtime session checks passed.');

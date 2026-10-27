@@ -302,6 +302,7 @@ export function createGameServicesRuntime(
     };
   }
   const reconciler = routedClient.commerceReconciler;
+  /** Purchases and rewarded-ad claims running now: `dispose()` lets them journal first. */
   const purchases = new Set<Promise<unknown>>();
   const track = <T>(running: Promise<T>): Promise<T> => {
     purchases.add(running);
@@ -312,8 +313,9 @@ export function createGameServicesRuntime(
     ? undefined
     : guardReconciler(reconciler, gate, track);
   gate.onClose(async () => {
-    // A purchase whose store sheet is open journals the store answer first
-    // (its record stays this player's to recover), then the reconciler stops.
+    // A purchase whose store sheet is open journals the store answer first,
+    // and an open rewarded ad its platform result (both stay this player's
+    // to recover), then the reconciler stops.
     await settleWithin(Promise.allSettled([...purchases]), gameServicesDisposeWaitMs);
     await settleWithin(reconciler?.stop() ?? Promise.resolve(), gameServicesDisposeWaitMs);
   });
@@ -538,13 +540,14 @@ function guardRewardedAds(gateway: PlatformGateway, gate: RuntimeGate): Platform
 /** A reward claim through an open runtime; a dispatch the runtime refused answers `unavailable`. */
 async function guardedReward(
   gate: RuntimeGate,
+  track: PurchaseTracker,
   run: () => Promise<GameServicesRewardedAdResult>,
 ): Promise<GameServicesRewardedAdResult> {
   if (gate.check() !== undefined) {
     return refusedReward();
   }
   try {
-    return await run();
+    return await track(run());
   } catch (error) {
     if (error instanceof GameServicesRuntimeClosedError) {
       return refusedReward();
@@ -633,7 +636,7 @@ function guardClient(
     purchase: (purchase, options) =>
       guardedPurchase(gate, track, () => client.purchase(purchase, options)),
     claimRewardedAd: (reward, options) =>
-      guardedReward(gate, () => client.claimRewardedAd(reward, options)),
+      guardedReward(gate, track, () => client.claimRewardedAd(reward, options)),
     async submitLeaderboardScore(score) {
       gate.assert();
       return client.submitLeaderboardScore(score);
@@ -651,7 +654,8 @@ function guardRecovery(
     ...recovery,
     ...(reconciler === undefined ? {} : { commerceReconciler: reconciler }),
     purchase: (purchase, options) => guardedPurchase(gate, track, () => recovery.purchase(purchase, options)),
-    claimRewardedAd: (reward, options) => guardedReward(gate, () => recovery.claimRewardedAd(reward, options)),
+    claimRewardedAd: (reward, options) =>
+      guardedReward(gate, track, () => recovery.claimRewardedAd(reward, options)),
     // A late ad callback is journaled; its claim is refused until a runtime
     // for the player resends it, so it stays pending, never ended.
     recoverRewardResult: (idempotencyKey, platform) => recovery.recoverRewardResult(idempotencyKey, platform),
