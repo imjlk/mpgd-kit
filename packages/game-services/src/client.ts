@@ -42,6 +42,8 @@ import type {
   GameServicesContractClient,
 } from './contract.js';
 import { observeGameServicesOperation } from './operation-progress.js';
+import { withLegacyOrpcErrorCompat } from './orpc-error-compat.js';
+export { withLegacyOrpcErrorCompat } from './orpc-error-compat.js';
 import {
   GameServicesHeaderResolutionError,
   GameServicesRuntimeClosedError,
@@ -706,9 +708,16 @@ export function createGameServicesFetchBackendTransport(
 export function createGameServicesOrpcClient(
   input: CreateGameServicesOrpcClientInput,
 ): GameServicesContractClient {
+  const fetcher = input.fetch;
   const link = new RPCLink({
     origin: input.url,
-    ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+    // Every response passes the oRPC error-body compatibility shim so errors from a Worker on
+    // an older oRPC beta keep their codes; the default fetch is resolved per call, as oRPC does.
+    fetch: withLegacyOrpcErrorCompat((url, init, ...rest) => {
+      return fetcher === undefined
+        ? globalThis.fetch(url, init)
+        : (fetcher as (...args: unknown[]) => Promise<Response>)(url, init, ...rest);
+    }),
     ...(input.headers === undefined && input.getHeaders === undefined
       ? {}
       : {

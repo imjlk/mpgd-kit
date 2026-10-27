@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { BodyLimitHandlerPlugin, RPCHandler } from '@orpc/server/node';
+import { RPCHandler } from '@orpc/server/node';
+import { RequestLimitHandlerPlugin } from '@orpc/server/plugins';
 
 import { defaultBridgeRpcEndpoint, type BridgeRpcPrefix, type BridgeRpcRouter } from './orpc.js';
 
@@ -24,7 +25,7 @@ export function createBridgeRpcNodeHandler(
 ): BridgeRpcNodeHandler {
   const handler = new RPCHandler(router, {
     plugins: [
-      new BodyLimitHandlerPlugin({
+      new RequestLimitHandlerPlugin({
         maxBodySize: options.maxBodySize ?? 1_000_000,
       }),
     ],

@@ -1,5 +1,6 @@
 import { implement, ORPCError } from '@orpc/server';
-import { BodyLimitHandlerPlugin, RPCHandler } from '@orpc/server/fetch';
+import { RPCHandler } from '@orpc/server/fetch';
+import { RequestLimitHandlerPlugin } from '@orpc/server/plugins';
 
 import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
 import {
@@ -44,6 +45,7 @@ import {
   type PlayerDataErasureResult,
 } from './account-deletion.js';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
+import { addLegacyOrpcErrorFlag } from './orpc-error-compat.js';
 import {
   createRejectingGameServicesEvidenceVerifier,
   type EvidenceVerificationDecision,
@@ -277,6 +279,15 @@ export interface CreateGameServicesRouterOptions {
 export interface CreateGameServicesRpcFetchHandlerOptions
   extends CreateGameServicesFetchHandlerOptions {
   readonly prefix?: string;
+  /**
+   * Writes the pre-beta.34 `inferable: false` flag into oRPC error bodies so game clients
+   * from `@mpgd/game-services` 0.30.5 or older (oRPC 2.0.0-beta.14) still decode error
+   * codes. A plain oRPC 2.0.0-beta.34+ client rejects that flag: such clients must wrap their
+   * fetch with `withLegacyOrpcErrorCompat`, as `createGameServicesOrpcClient` from 0.31.0 or
+   * later does. Set this to false once every supported game client comes from 0.31.0 or
+   * later. Defaults to true.
+   */
+  readonly legacyOrpcErrorFlag?: boolean;
 }
 
 export interface GameServicesOrpcContext {
@@ -1027,13 +1038,14 @@ export function createGameServicesRpcFetchHandler(
 ): (request: Request) => Promise<Response> {
   const rpcHandler = new RPCHandler<GameServicesOrpcContext>(router as never, {
     plugins: [
-      new BodyLimitHandlerPlugin({
+      new RequestLimitHandlerPlugin({
         maxBodySize: resolveMaxBodyBytes(options.maxBodyBytes),
       }),
     ],
   });
   const prefix = options.prefix ?? '/rpc';
   const healthPath = options.healthPath ?? '/health';
+  const legacyOrpcErrorFlag = options.legacyOrpcErrorFlag ?? true;
 
   return async (request) => {
     const requestUrl = new URL(request.url);
@@ -1060,7 +1072,12 @@ export function createGameServicesRpcFetchHandler(
       return textResponse('Not Found', 404, options.corsHeaders);
     }
 
-    return withCors(result.response, options.corsHeaders);
+    // Error bodies keep the pre-beta.34 `inferable` flag so older game clients decode them.
+    const response = legacyOrpcErrorFlag
+      ? await addLegacyOrpcErrorFlag(result.response)
+      : result.response;
+
+    return withCors(response, options.corsHeaders);
   };
 }
 

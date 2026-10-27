@@ -183,6 +183,37 @@ and retry policy are not redesigned by this observer API.
 The root `pnpm test` pipeline includes compiled client JS and public declaration
 consumption checks alongside the client and target conformance suites.
 
+## oRPC version and error compatibility
+
+The oRPC transport (`createGameServicesOrpcClient`, `createGameServicesRouter`,
+`createGameServicesRpcFetchHandler`) is built on oRPC `2.0.0-beta.46`, pinned
+exactly. Pin the same exact version if a game or Worker also uses oRPC directly.
+
+oRPC 2.0.0-beta.34 removed the `inferable` flag from RPC error bodies, and each
+side rejects the other's shape: an older client would see a malformed response
+instead of `BAD_REQUEST` or `NOT_FOUND`, and so would a newer client talking to
+an older Worker. Games and Workers deploy separately, so this package bridges
+the change in `src/orpc-error-compat.ts`:
+
+- `createGameServicesRpcFetchHandler` adds `inferable: false` to oRPC error
+  bodies, so clients from `@mpgd/game-services` 0.30.5 or older (oRPC
+  2.0.0-beta.14) still decode error codes;
+- `createGameServicesOrpcClient` (0.31.0 or later) removes a boolean `inferable`
+  from error bodies before oRPC validates them, so it still decodes errors from
+  Workers on 0.30.5 or older.
+
+Success responses are unchanged. Any other oRPC 2.0.0-beta.34+ client that calls
+a game-services Worker's `/rpc` route (for example a plain `RPCLink` in a game)
+must wrap its fetch with `withLegacyOrpcErrorCompat` from
+`@mpgd/game-services/client`, or it sees the legacy flag as a malformed error. A
+Worker that no longer serves clients from 0.30.5 or older can pass
+`legacyOrpcErrorFlag: false` to `createGameServicesRpcFetchHandler`. The shim is
+removed once the oldest supported game client and every supported Worker come
+from `@mpgd/game-services` 0.31.0 or later (oRPC 2.0.0-beta.46). Other oRPC changes picked up with it: RPC routes accept
+only POST, PUT, PATCH, and DELETE (a GET answers 404, and the kit clients always
+POST), and `Infinity` inputs are encoded with their own meta marker, which a Worker
+on 0.30.5 or older (oRPC 2.0.0-beta.14) cannot decode.
+
 ## Runtime backend transport
 
 `createGameServicesRuntime` accepts `httpTransport` for its HTTP JSON backend
