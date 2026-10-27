@@ -28,10 +28,6 @@
         "type": "string",
         "minLength": 1
       },
-      "NonEmptyString.o1": {
-        "type": "string",
-        "minLength": 1
-      },
       "NonNegativeInteger": {
         "type": "integer",
         "minimum": 0
@@ -244,7 +240,7 @@
             "readOnly": true
           },
           "templateData": {
-            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o2",
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean-o3",
             "readOnly": true
           },
           "data": {
@@ -512,7 +508,7 @@
             "readOnly": true
           },
           "payload": {
-            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o1",
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
             "readOnly": true
           }
         },
@@ -1051,7 +1047,7 @@
             "readOnly": true
           },
           "mapping": {
-            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o1",
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
             "readOnly": true
           },
           "link": {
@@ -1657,7 +1653,7 @@
                     "readOnly": true
                   },
                   "templateData": {
-                    "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o2",
+                    "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean-o3",
                     "readOnly": true
                   },
                   "link": {
@@ -2411,7 +2407,7 @@
         "type": "object",
         "properties": {
           "topic": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "description": "A remote `service` topic that keeps only the delivery settings.",
             "readOnly": true
           },
@@ -2775,11 +2771,11 @@
         "type": "object",
         "properties": {
           "title": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "readOnly": true
           },
           "body": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "readOnly": true
           }
         },
@@ -2793,7 +2789,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "readOnly": true
           },
           "purpose": {
@@ -2809,12 +2805,12 @@
             "readOnly": true
           },
           "route": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "description": "The route the open leads to; it must pass `isRootRelativeNotificationRoute`.",
             "readOnly": true
           },
           "optOutRoute": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "description": "Required for `advertising`: the screen where the player withdraws advertising consent.",
             "readOnly": true
           },
@@ -2837,7 +2833,7 @@
             "readOnly": true
           },
           "mapping": {
-            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean-o2",
             "readOnly": true
           }
         },
@@ -2854,7 +2850,7 @@
         "type": "object",
         "properties": {
           "maxPerDay": {
-            "$ref": "#/components/schemas/PositiveInteger.o1",
+            "$ref": "#/components/schemas/PositiveInteger",
             "description": "Deliveries of the topic to one player within any 24 hours.",
             "readOnly": true
           }
@@ -2885,10 +2881,6 @@
         "description": "Readiness of an installed platform provider, independent of target policy."
       },
       "PositiveInteger": {
-        "type": "integer",
-        "minimum": 1
-      },
-      "PositiveInteger.o1": {
         "type": "integer",
         "minimum": 1
       },
@@ -2964,7 +2956,7 @@
           ]
         }
       },
-      "ReadonlyRecordstringstringnumberboolean.o1": {
+      "ReadonlyRecordstringstringnumberboolean-o2": {
         "type": "object",
         "additionalProperties": {
           "oneOf": [
@@ -2980,7 +2972,7 @@
           ]
         }
       },
-      "ReadonlyRecordstringstringnumberboolean.o2": {
+      "ReadonlyRecordstringstringnumberboolean-o3": {
         "type": "object",
         "additionalProperties": {
           "oneOf": [

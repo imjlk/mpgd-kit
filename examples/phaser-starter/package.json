@@ -31,9 +31,9 @@
     "@mpgd/game-runtime": "workspace:*"
   },
   "devDependencies": {
-    "@ttsc/unplugin": "0.32.1",
+    "@ttsc/unplugin": "0.34.2",
     "@types/node": "^24.0.0",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vite": "8.1.3"
   }

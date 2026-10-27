@@ -16,6 +16,18 @@ import {
   type NotificationConformanceStep,
 } from './notifications-vectors.js';
 
+/**
+ * typia 15's `date-time` and `date` formats themselves refuse a day the month
+ * does not have and a space for `T`, so for those inputs typia's error, naming
+ * the same field, can come before the kit's own check. Either refusal passes.
+ */
+function timeFieldRefusal(kit: RegExp, typiaPath: string): RegExp {
+  return new RegExp(
+    `${kit.source}|invalid type on \\$input\\.${typiaPath}, expect to be string & `,
+    'u',
+  );
+}
+
 const vectorsDir = join(
   import.meta.dirname,
   '..',
@@ -233,15 +245,15 @@ describe('notifications conformance vectors', () => {
         ? { ...step, input: { ...step.input, fireAt: '2026-04-31T06:00:00Z' } }
         : step);
     expect(() => assertNotificationConformanceVector({ ...base, steps }))
-      .toThrow(/steps\[\d+\]\.input\.fireAt must be RFC 3339/u);
+      .toThrow(timeFieldRefusal(/steps\[\d+\]\.input\.fireAt must be RFC 3339/u, 'steps\\[\\d+\\]\\.input\\.fireAt'));
     expect(() => assertNotificationConformanceVector({
       ...base,
       expect: { ...base.expect, reminders: [{ fireAt: '2026-10-12 06:00:00Z' }] },
-    })).toThrow(/expect\.reminders\[0\]\.fireAt must be RFC 3339/u);
+    })).toThrow(timeFieldRefusal(/expect\.reminders\[0\]\.fireAt must be RFC 3339/u, 'expect\\.reminders\\[0\\]\\.fireAt'));
     expect(() => assertNotificationConformanceVector({
       ...base,
       expect: { ...base.expect, notices: [{ dueBy: '2026-02-30' }] },
-    })).toThrow(/expect\.notices\[0\]\.dueBy must be a date that exists/u);
+    })).toThrow(timeFieldRefusal(/expect\.notices\[0\]\.dueBy must be a date that exists/u, 'expect\\.notices\\[0\\]\\.dueBy'));
   });
 
   it('runs the OS denial vectors only where the endpoint, not a record, holds the permission', () => {

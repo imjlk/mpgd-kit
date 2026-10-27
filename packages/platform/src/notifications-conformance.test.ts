@@ -37,6 +37,18 @@ import {
   type NotificationConformanceVector,
 } from './notifications-vectors.js';
 
+/**
+ * typia 15's `date-time` and `date` formats themselves refuse a day the month
+ * does not have and a space for `T`, so for those inputs typia's error, naming
+ * the same field, can come before the kit's own check. Either refusal passes.
+ */
+function timeFieldRefusal(kit: RegExp, typiaPath: string): RegExp {
+  return new RegExp(
+    `${kit.source}|invalid type on \\$input\\.${typiaPath}, expect to be string & `,
+    'u',
+  );
+}
+
 const vectorsDir = join(
   import.meta.dirname,
   '..',
@@ -2180,7 +2192,7 @@ describe('notifications reference runtime and fakes: series and ownership', () =
   it('fails, rather than rejects, a vector whose clock cannot start', async () => {
     const vector = vectorNamed('unsupported-target');
     const broken = { ...vector, context: { ...vector.context, now: '2026-02-31T00:00:00Z' } };
-    expect(() => assertNotificationConformanceVector(broken)).toThrow(/context\.now must be RFC 3339/u);
+    expect(() => assertNotificationConformanceVector(broken)).toThrow(timeFieldRefusal(/context\.now must be RFC 3339/u, 'context\\.now'));
     const result = await runNotificationConformanceVector(broken);
     expect(result).toMatchObject({ status: 'failed', failures: [{ path: 'context.now' }] });
   });

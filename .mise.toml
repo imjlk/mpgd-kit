@@ -1,5 +1,7 @@
 [tools]
-go = "1.26.5"
+# ttsc 0.34's module (`go 1.27` in node_modules/ttsc/go.mod) and typia 15.2's
+# native plugin need Go 1.27; this matches the go1.27.3 ttsc 0.34.2 bundles.
+go = "1.27.3"
 node = "24.22.0"
 pnpm = "11.7.0"
 

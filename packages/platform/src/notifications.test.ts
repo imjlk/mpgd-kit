@@ -66,6 +66,18 @@ import {
 } from './notifications.js';
 import { notificationTimeFields, type NotificationTimeFields } from './notifications-policy.js';
 
+/**
+ * typia 15's `date-time` and `date` formats themselves refuse a day the month
+ * does not have and a space for `T`, so for those inputs typia's error, naming
+ * the same field, can come before the kit's own check. Either refusal passes.
+ */
+function timeFieldRefusal(kit: RegExp, typiaPath: string): RegExp {
+  return new RegExp(
+    `${kit.source}|invalid type on \\$input\\.${typiaPath}, expect to be string & `,
+    'u',
+  );
+}
+
 const osCapabilities: NotificationCapabilities = {
   availability: 'available',
   permission: {
@@ -282,9 +294,9 @@ describe('notifications contract', () => {
     expect(() => assertNotificationBackendBridgeRecordConsentPayload({
       expectedPlayer: 't2_a',
       record: { ...record, at: '2026-02-30T03:00:00Z' },
-    })).toThrow(/record\.at must be RFC 3339/u);
+    })).toThrow(timeFieldRefusal(/record\.at must be RFC 3339/u, 'record\\.at'));
     expect(() => assertNotificationBackendBridgeListConsentResult({ records: [{ ...record, at: '2026-10-12 03:00:00Z' }] }))
-      .toThrow(/records\[0\]\.at must be RFC 3339/u);
+      .toThrow(timeFieldRefusal(/records\[0\]\.at must be RFC 3339/u, 'records\\[0\\]\\.at'));
     expect(assertNotificationBackendBridgeRegisterEndpointPayload({
       expectedPlayer: 't2_a',
       registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Asia/Seoul' },
@@ -326,7 +338,7 @@ describe('notifications contract', () => {
         dueBy: '2026-02-30',
         variant: 'consent-result.advertising.granted',
       }],
-    })).toThrow(/notices\[0\]\.dueBy must be a date that exists/u);
+    })).toThrow(timeFieldRefusal(/notices\[0\]\.dueBy must be a date that exists/u, 'notices\\[0\\]\\.dueBy'));
     const notice = { kind: 'consent-result', record: { kind: 'advertising', at: '2026-10-12T03:00:00Z' }, dueBy: '2026-10-26' };
     expect(assertNotificationBackendBridgeRecordNoticePayload({ expectedPlayer: 't2_a', notice, channel: 'in-game' })
       .notice).toEqual(notice);
@@ -771,7 +783,7 @@ describe('strict notification timestamps', () => {
     expect(isNotificationTimestamp('2026-04-30t09:00:00.123456+09:00')).toBe(true);
   });
 
-  it('refuses in every validator what typia alone accepts', () => {
+  it('refuses a loose timestamp in every validator', () => {
     for (const at of loose) {
       expect(() => assertNotificationConsentRecord({
         kind: 'advertising',
@@ -779,37 +791,37 @@ describe('strict notification timestamps', () => {
         source: 'player',
         at,
         textVersion: 'ads-v1',
-      })).toThrow(/Invalid consent record: at must be RFC 3339/u);
+      })).toThrow(timeFieldRefusal(/Invalid consent record: at must be RFC 3339/u, 'at'));
       expect(() => assertLocalNotificationEntry({ key: 'k', topic: 'energy-full', fireAt: at }))
-        .toThrow(/fireAt must be RFC 3339/u);
+        .toThrow(timeFieldRefusal(/fireAt must be RFC 3339/u, 'fireAt'));
       expect(() => assertLocalNotificationRequest({
         key: 'k',
         topic: 'energy-full',
         fireAt: at,
         title: 'Energy',
         body: 'Full.',
-      })).toThrow(/fireAt must be RFC 3339/u);
+      })).toThrow(timeFieldRefusal(/fireAt must be RFC 3339/u, 'fireAt'));
       expect(() => assertNotificationBridgeListLocalResult({
         pending: [{ key: 'k', topic: 'energy-full', fireAt: at }],
-      })).toThrow(/pending\[0\]\.fireAt must be RFC 3339/u);
+      })).toThrow(timeFieldRefusal(/pending\[0\]\.fireAt must be RFC 3339/u, 'pending\\[0\\]\\.fireAt'));
       expect(() => assertNotificationNotice({
         kind: 'consent-result',
         record: { kind: 'advertising', state: 'granted', at, textVersion: 'ads-v1' },
         dueBy: '2026-10-26',
         variant: 'consent-result.advertising.granted',
-      })).toThrow(/record\.at must be RFC 3339/u);
+      })).toThrow(timeFieldRefusal(/record\.at must be RFC 3339/u, 'record\\.at'));
       expect(() => assertRecordNotificationNoticeInput({
         kind: 'consent-result',
         record: { kind: 'advertising', at },
         dueBy: '2026-10-26',
-      })).toThrow(/record\.at must be RFC 3339/u);
+      })).toThrow(timeFieldRefusal(/record\.at must be RFC 3339/u, 'record\\.at'));
     }
     expect(() => assertNotificationNotice({
       kind: 'consent-result',
       record: { kind: 'advertising', state: 'granted', at: '2026-10-12T03:00:00Z', textVersion: 'ads-v1' },
       dueBy: '2026-02-30',
       variant: 'consent-result.advertising.granted',
-    })).toThrow(/dueBy must be a date that exists/u);
+    })).toThrow(timeFieldRefusal(/dueBy must be a date that exists/u, 'dueBy'));
   });
 
   it('reads strictly every date-time and date field the published JSON Schemas declare', () => {

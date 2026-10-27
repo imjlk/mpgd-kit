@@ -29,7 +29,7 @@ export type CommerceMinLength<Value extends number> = CommerceTag<{
   target: 'string';
   kind: 'minLength';
   value: Value;
-  validate: `${Value} <= $input.length`;
+  validate: `$importInternal("_stringLengthGte")($input, ${Value})`;
   exclusive: true;
   schema: { minLength: Value };
 }>;
@@ -59,7 +59,10 @@ export type CommerceInt64 = CommerceTag<{
   target: 'bigint' | 'number';
   kind: 'type';
   value: 'int64';
-  validate: { number: '$importInternal("isTypeInt64")($input)'; bigint: 'true' };
+  validate: {
+    number: '$importInternal("isTypeInt64")($input)';
+    bigint: '$importInternal("isTypeInt64Bigint")($input)';
+  };
   exclusive: true;
   schema: { type: 'integer' };
 }>;
