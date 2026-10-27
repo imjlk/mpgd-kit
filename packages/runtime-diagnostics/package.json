@@ -48,7 +48,7 @@
     "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/runtime-diagnostics"
   },
   "devDependencies": {
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2"
   }
 }

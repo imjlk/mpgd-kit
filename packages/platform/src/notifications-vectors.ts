@@ -1,3 +1,10 @@
+/**
+ * Conformance vector format for docs/specs/notifications/vectors/*.json (RFC
+ * "Vector format"). Every expectation item is partial: only the listed fields
+ * are asserted, while each list is matched exactly in length and order, and a
+ * field set to `null` asserts that the field is absent.
+ */
+
 import typia, { type tags } from 'typia';
 
 import {
@@ -25,19 +32,13 @@ import {
   type NotificationUnavailableReason,
   type RecordNotificationNoticeInput,
 } from './notifications.js';
-import { notificationTimeFieldIssue, notificationTimeFields } from './notifications-policy.js';
+import type { IsoTimestamp, NonEmptyString, NonNegativeInteger } from './commerce-contract.js';
+import {
+  notificationTimeFieldIssue,
+  notificationTimeFields,
+  type PositiveInteger,
+} from './notifications-policy.js';
 
-/**
- * Conformance vector format for docs/specs/notifications/vectors/*.json (RFC
- * "Vector format"). Every expectation item is partial: only the listed fields
- * are asserted, while each list is matched exactly in length and order, and a
- * field set to `null` asserts that the field is absent.
- */
-
-type NonEmptyString = string & tags.MinLength<1>;
-type IsoTimestamp = string & tags.Format<'date-time'>;
-type NonNegativeInteger = number & tags.Type<'uint32'>;
-type PositiveInteger = number & tags.Type<'uint32'> & tags.Minimum<1>;
 type TemplateData = Readonly<Record<string, string | number | boolean>>;
 type CalendarDate = string & tags.Format<'date'>;
 

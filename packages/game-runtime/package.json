@@ -81,7 +81,7 @@
     "fix": "ttsc fix"
   },
   "devDependencies": {
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0",
     "phaser": "^4.2.0",

@@ -11,10 +11,6 @@
         "type": "string",
         "minLength": 1
       },
-      "NonEmptyString.o1": {
-        "type": "string",
-        "minLength": 1
-      },
       "NotificationBridgeGetCapabilitiesResult": {
         "type": "object",
         "properties": {
@@ -23,7 +19,7 @@
             "readOnly": true
           },
           "provider": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "readOnly": true
           },
           "capabilities": {

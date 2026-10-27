@@ -27,13 +27,13 @@ This repository is `mpgd-kit`: a Multi-Platform Game Distribution / Development 
 - Keep root/workspace/template ttsc pins aligned and run `pnpm validate:toolchain` after toolchain edits.
 - Use `pnpm format` to include tools, target configs, and shipped template sources; cache ownership is documented in `docs/TTSC_TOOLCHAIN.md`.
 - The typed lint entry is `lint.config.ts`; checkout-scoped source rules live in `lint.source.config.ts`. Keep the source `files` scope to exclude external linked dependency sources, and check both configs and Evidence options with `satisfies`.
-- The active `@ttsc/strip` config is `strip.config.js` with checked JSDoc types. Its 0.32.1 TS loader fails with symlinked macOS temporary directories; retain this narrow exception until that case passes without environment overrides. Preserve assertion calls in tests.
+- The active `@ttsc/strip` config is `strip.config.js` with checked JSDoc types. Its 0.32.1 TS loader failed with symlinked macOS temporary directories; a minimal case passes on 0.34.2, but retain this narrow exception until the generated-template cases pass without environment overrides. Preserve assertion calls in tests.
 - Do not put Phaser, Capacitor, Apps in Toss, Google Play Billing, StoreKit, or ad SDK imports in pure packages.
 - Do not call platform SDKs directly from Phaser scenes. Use `PlatformGateway`.
 - Do not grant purchases or ad rewards solely from client callbacks. All grants must go through backend ledger APIs.
 - Do not put side effects inside debug calls that may be removed by `@ttsc/strip`.
 
-Windows package builds default to one compiler process because the 0.32.1 config loader races on source ownership during parallel emission. Do not bypass ownership checks.
+Windows package builds default to one compiler process because the 0.32.1 config loader raced on source ownership during parallel emission; this has not been re-measured on 0.34.2. Do not bypass ownership checks.
 
 ## Pure Packages
 
