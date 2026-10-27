@@ -1,6 +1,12 @@
-import { MalformedResponseError, ORPCError } from '@orpc/client';
+import { createORPCClient, MalformedResponseError, ORPCError } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
 
-import { createGameServicesOrpcClient, type GameServicesBackendApi } from './client.js';
+import {
+  createGameServicesOrpcClient,
+  withLegacyOrpcErrorCompat,
+  type GameServicesBackendApi,
+} from './client.js';
+import type { GameServicesContractClient } from './contract.js';
 import { addLegacyOrpcErrorFlag, stripLegacyOrpcErrorFlag } from './orpc-error-compat.js';
 import {
   createGameServicesRouter,
@@ -10,8 +16,9 @@ import {
 
 // The oRPC error-body skew across 2.0.0-beta.34 (middleapi/orpc#1987), checked for every
 // pairing of an oRPC 2.0.0-beta.14 peer ("old") and the current one ("new"). The old side is
-// a recording: response bodies captured from an oRPC 2.0.0-beta.14 RPCHandler, and the
-// acceptance rule of the beta.14 client (`isORPCErrorJson` in @orpc/client 2.0.0-beta.14).
+// not run here: its error bodies are copied from a probe of the 0.30.5 handlers on oRPC
+// 2.0.0-beta.14, and its client is represented by a copy of that release's acceptance rule
+// (`isORPCErrorJson` in @orpc/client 2.0.0-beta.14). Only the new side runs real code.
 
 const recordedBeta14Errors = {
   badRequest: {
@@ -241,6 +248,63 @@ assertEqual(
   false,
   'a body labelled JSON that does not parse is never decoded as an ORPCError',
 );
+
+// A plain oRPC client (not createGameServicesOrpcClient) must wrap its fetch with the exported
+// shim while the Worker writes the legacy flag; without it every error is malformed.
+const plainLink = (wrap: boolean): GameServicesContractClient => {
+  const send = (url: string, init: RequestInit): Promise<Response> => {
+    return newServer(new Request(url, init));
+  };
+  return createORPCClient(
+    new RPCLink({ origin: rpcUrl, fetch: wrap ? withLegacyOrpcErrorCompat(send) : send } as never),
+  ) as GameServicesContractClient;
+};
+assertEqual(
+  errorCode(await captureError(() => plainLink(true).commerce.getCapabilities())),
+  'NOT_FOUND',
+  'a plain client with the exported shim keeps NOT_FOUND',
+);
+assertEqual(
+  (await captureError(() => plainLink(false).commerce.getCapabilities()))
+    instanceof MalformedResponseError,
+  true,
+  'a plain client without the shim cannot decode the legacy flag',
+);
+
+// A Worker that no longer serves pre-beta.34 clients turns the flag off; plain clients decode.
+const flaglessServer = createGameServicesRpcFetchHandler(createGameServicesRouter(backend), {
+  legacyOrpcErrorFlag: false,
+});
+const flaglessAnswer = await flaglessServer(post('/commerce/getCapabilities', undefined));
+assertEqual(
+  ((await flaglessAnswer.clone().json()) as { readonly json: Record<string, unknown> }).json
+    .inferable,
+  undefined,
+  'legacyOrpcErrorFlag: false writes the current error body',
+);
+const flaglessClient = createORPCClient(
+  new RPCLink({
+    origin: rpcUrl,
+    fetch: (url: string, init: RequestInit) => flaglessServer(new Request(url, init)),
+  } as never),
+) as GameServicesContractClient;
+assertEqual(
+  errorCode(await captureError(() => flaglessClient.commerce.getCapabilities())),
+  'NOT_FOUND',
+  'a plain client decodes the flagless Worker',
+);
+
+// A custom fetch still receives the extra arguments oRPC passes (client options, path).
+let forwardedArguments = 0;
+const forwardingClient = createGameServicesOrpcClient({
+  url: rpcUrl,
+  fetch: (async (...args: unknown[]) => {
+    forwardedArguments = args.length;
+    return newServer(new Request(args[0] as string, args[1] as RequestInit));
+  }) as typeof fetch,
+});
+await captureError(() => forwardingClient.commerce.getCapabilities());
+assertEqual(forwardedArguments, 4, 'a custom fetch receives url, init, options, and path');
 
 // Unit edges of the two shims.
 const passthrough = jsonResponse(200, '{"json":{"inferable":true}}');

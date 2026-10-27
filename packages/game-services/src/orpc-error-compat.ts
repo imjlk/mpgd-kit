@@ -69,11 +69,16 @@ export async function stripLegacyOrpcErrorFlag(response: Response): Promise<Resp
   return rebuild(response, JSON.stringify({ ...envelope.root, json }));
 }
 
-/** Wraps a fetch so every response passes through {@link stripLegacyOrpcErrorFlag}. */
-export function withLegacyOrpcErrorCompat(
-  fetcher: (url: string, init: RequestInit) => Promise<Response>,
-): (url: string, init: RequestInit) => Promise<Response> {
-  return async (url, init) => stripLegacyOrpcErrorFlag(await fetcher(url, init));
+/**
+ * Wraps an oRPC link `fetch` so every response passes through
+ * {@link stripLegacyOrpcErrorFlag}. Any oRPC 2.0.0-beta.34+ client that talks to a
+ * game-services Worker must use it while the Worker writes the legacy flag. Extra arguments
+ * oRPC passes (client options, procedure path) are forwarded unchanged.
+ */
+export function withLegacyOrpcErrorCompat<Rest extends unknown[]>(
+  fetcher: (url: string, init: RequestInit, ...rest: Rest) => Promise<Response>,
+): (url: string, init: RequestInit, ...rest: Rest) => Promise<Response> {
+  return async (url, init, ...rest) => stripLegacyOrpcErrorFlag(await fetcher(url, init, ...rest));
 }
 
 function isJsonErrorResponse(response: Response): boolean {

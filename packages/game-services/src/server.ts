@@ -279,6 +279,14 @@ export interface CreateGameServicesRouterOptions {
 export interface CreateGameServicesRpcFetchHandlerOptions
   extends CreateGameServicesFetchHandlerOptions {
   readonly prefix?: string;
+  /**
+   * Writes the pre-beta.34 `inferable: false` flag into oRPC error bodies so game clients
+   * from `@mpgd/game-services` 0.30.5 and older (oRPC 2.0.0-beta.14) still decode error
+   * codes. A plain oRPC 2.0.0-beta.34+ client rejects that flag: such clients must wrap their
+   * fetch with `withLegacyOrpcErrorCompat`, as `createGameServicesOrpcClient` does, or the
+   * Worker must set this to false once no older game client is supported. Defaults to true.
+   */
+  readonly legacyOrpcErrorFlag?: boolean;
 }
 
 export interface GameServicesOrpcContext {
@@ -1036,6 +1044,7 @@ export function createGameServicesRpcFetchHandler(
   });
   const prefix = options.prefix ?? '/rpc';
   const healthPath = options.healthPath ?? '/health';
+  const legacyOrpcErrorFlag = options.legacyOrpcErrorFlag ?? true;
 
   return async (request) => {
     const requestUrl = new URL(request.url);
@@ -1063,7 +1072,11 @@ export function createGameServicesRpcFetchHandler(
     }
 
     // Error bodies keep the pre-beta.34 `inferable` flag so older game clients decode them.
-    return withCors(await addLegacyOrpcErrorFlag(result.response), options.corsHeaders);
+    const response = legacyOrpcErrorFlag
+      ? await addLegacyOrpcErrorFlag(result.response)
+      : result.response;
+
+    return withCors(response, options.corsHeaders);
   };
 }
 

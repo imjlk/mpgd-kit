@@ -41,8 +41,10 @@ The bridge client (game `@mpgd/adapter-devvit`) and the bridge server
 and therefore one oRPC version. oRPC error bodies are not compatible across
 oRPC 2.0.0-beta.34 (`@mpgd/bridge` 0.16.4 and older used 2.0.0-beta.14), so a
 client and server from different kit releases would turn every oRPC error into a
-malformed-response failure. Bridge method errors travel inside the bridge
-response envelope and are unaffected.
+malformed-response failure. Bridge method errors and request-validation
+failures travel inside the bridge response envelope and are unaffected; only
+internal server errors and oRPC transport errors (413, undecodable bodies) use
+the oRPC error body.
 
 The bridge method handlers live in `src/server/bridge.ts` so they can be tested
 with an in-memory Redis double (`pnpm test`); `src/server/index.ts` only wires

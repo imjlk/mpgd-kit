@@ -83,6 +83,32 @@ try {
 
   assertEqual(notFoundResponse.status, 404, 'unmatched Node HTTP routes should remain available');
 
+  // The default 1 MB body limit answers 413 PAYLOAD_TOO_LARGE through oRPC's request limit plugin.
+  const oversizedResponse = await fetch(`${baseUrl}${defaultBridgeRpcEndpoint}/request`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ json: { ...request, payload: { padding: 'x'.repeat(1_000_001) } } }),
+  });
+
+  assertEqual(oversizedResponse.status, 413, 'oversized Node HTTP bodies should return 413');
+  assertEqual(
+    ((await oversizedResponse.json()) as { readonly json?: { readonly code?: unknown } }).json?.code,
+    'PAYLOAD_TOO_LARGE',
+    'oversized Node HTTP bodies should use the oRPC payload error code',
+  );
+
+  // Since oRPC 2.0.0-beta.25 RPC routes accept only POST, PUT, PATCH, and DELETE: a GET is
+  // left unmatched for the next route.
+  const getResponse = await fetch(
+    `${baseUrl}${defaultBridgeRpcEndpoint}/request?data=${encodeURIComponent(
+      JSON.stringify({ json: request }),
+    )}`,
+  );
+
+  assertEqual(getResponse.status, 404, 'GET bridge requests should not reach the procedure');
+
   const originalConsoleError = console.error;
   const capturedErrors: unknown[][] = [];
   let internalErrorResponse: Response;

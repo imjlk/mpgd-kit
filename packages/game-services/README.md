@@ -201,9 +201,14 @@ the change in `src/orpc-error-compat.ts`:
 - `createGameServicesOrpcClient` removes a boolean `inferable` from error bodies
   before oRPC validates them, so it still decodes errors from such Workers.
 
-Success responses are unchanged. The shim is removed once the oldest supported
-game client and every supported Worker come from a release that ships oRPC
-2.0.0-beta.46 or later. Other oRPC changes picked up with it: RPC routes accept
+Success responses are unchanged. Any other oRPC 2.0.0-beta.34+ client that calls
+a game-services Worker's `/rpc` route (for example a plain `RPCLink` in a game)
+must wrap its fetch with `withLegacyOrpcErrorCompat` from
+`@mpgd/game-services/client`, or it sees the legacy flag as a malformed error. A
+Worker that no longer serves 0.30.5-or-older clients can pass
+`legacyOrpcErrorFlag: false` to `createGameServicesRpcFetchHandler`. The shim is
+removed once the oldest supported game client and every supported Worker come
+from a release that ships oRPC 2.0.0-beta.46 or later. Other oRPC changes picked up with it: RPC routes accept
 only POST, PUT, PATCH, and DELETE (a GET answers 404, and the kit clients always
 POST), and `Infinity` inputs are encoded with their own meta marker, which an
 oRPC 2.0.0-beta.14 Worker cannot decode.
