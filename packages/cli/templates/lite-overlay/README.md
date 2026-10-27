@@ -16,6 +16,10 @@ pnpm accept
 Standalone games install the public `@mpgd/lite-shell` package. Add `--workspace --kit-path <mpgd-kit>` to generate a game linked to a local Kit checkout.
 The CLI supports the canvas renderer; DOM and SVG renderers are planned.
 
+ttsc 0.34 compiles its type-transform plugins with Go 1.27 or later. It uses
+the Go it bundles unless `TTSC_GO_BINARY` names another one; if your mise or
+CI configuration pins Go for ttsc, pin 1.27 or later (the Kit uses 1.27.3).
+
 ## Ownership
 
 - `src/game/state.ts`: deterministic state.

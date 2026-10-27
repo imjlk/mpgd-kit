@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { timeFieldRefusal } from '../test/time-field-refusal.js';
+
 import {
   createNotificationConformanceBackend,
   createNotificationConformanceClock,
@@ -2180,7 +2182,7 @@ describe('notifications reference runtime and fakes: series and ownership', () =
   it('fails, rather than rejects, a vector whose clock cannot start', async () => {
     const vector = vectorNamed('unsupported-target');
     const broken = { ...vector, context: { ...vector.context, now: '2026-02-31T00:00:00Z' } };
-    expect(() => assertNotificationConformanceVector(broken)).toThrow(/context\.now must be RFC 3339/u);
+    expect(() => assertNotificationConformanceVector(broken)).toThrow(timeFieldRefusal(/context\.now must be RFC 3339/u, 'context\\.now'));
     const result = await runNotificationConformanceVector(broken);
     expect(result).toMatchObject({ status: 'failed', failures: [{ path: 'context.now' }] });
   });

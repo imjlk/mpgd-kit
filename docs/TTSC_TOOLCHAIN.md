@@ -19,9 +19,9 @@ JSON as `unknown`, narrow it at the boundary, and use concrete internal contract
 Generated Phaser and Lite games have a `tsconfig.tools.json` selecting
 `tools/**/*.ts`. Their `check`, `lint`, `format`, and `fix` commands include both
 the game and tools projects. `pnpm accept` executes the typed acceptance entry
-through that project with no authored JavaScript bootstrap. The pinned ttsx
-0.32.1 forwards terminal flags such as `--help` after the entry; the old 0.30.4
-runner intercepted them even after `--`. Keep the argument-forwarding regression
+through that project with no authored JavaScript bootstrap. ttsx 0.32.1 and
+later (the pin is 0.34.2) forward terminal flags such as `--help` after the
+entry; the old 0.30.4 runner intercepted them even after `--`. Keep the argument-forwarding regression
 check when changing the runner.
 `pnpm test:template-tools` creates both templates in
 supported standalone/workspace modes (Lite currently requires workspace), checks
@@ -43,8 +43,11 @@ boundaries, not a precedent for unrelated scripts:
 - The authored `.js` sibling fixture tests that runners preserve existing
   JavaScript sources.
 - `strip.config.js` remains a small, type-checked loader boundary: the 0.32.1
-  native strip loader resolves the config under the wrong root when macOS
-  `TMPDIR` is a symlink. Its `@satisfies` contract is checked by the maintenance
+  native strip loader resolved the config under the wrong root when macOS
+  `TMPDIR` is a symlink. A minimal `strip.config.ts` project under the symlinked
+  `/var/folders` temporary directory strips correctly with 0.34.2, but the
+  generated-template cases have not been rerun with a TS config, so the boundary
+  stays until they pass. Its `@satisfies` contract is checked by the maintenance
   project. Do not normalize users' environments just to hide this limitation.
   The lint entry is `lint.config.ts` with typed Evidence options. Source rules
   live in `lint.source.config.ts` with `satisfies` and a checkout-relative
@@ -52,7 +55,8 @@ boundaries, not a precedent for unrelated scripts:
 
 Windows package builds default to one compiler process. The 0.32.1 isolated
 config evaluator uses ttsx for JS as well as TS, so a JS wrapper does not avoid
-its parallel emitted-source ownership race. Keep TS configs and ownership
+its parallel emitted-source ownership race. The race has not been re-measured on
+0.34.2, whose notes mention concurrent-emit work only for independent Programs. Keep TS configs and ownership
 checks; restore Windows parallelism only after the upstream race is fixed and
 both installed starter variants pass. Other platforms retain parallel builds.
 
@@ -165,6 +169,54 @@ Generated standalone games use their own root; `--workspace` games explicitly
 use the common ancestor of the game and kit. Target wrappers inherit that game
 setting, so a sibling checkout does not inherit the kit's narrower root.
 
+## Go and typia requirements
+
+ttsc builds its plugins (typia, lint, strip, paths) from Go source on each
+machine. ttsc 0.34's own module declares `go 1.27` and its platform package
+bundles go1.27.3; typia 15.2 states that its native plugin needs Go 1.27 or
+later, even though typia's own `native/go.mod` still says `go 1.26` (the build
+runs inside ttsc's module). `.mise.toml` therefore pins `go = "1.27.3"`, the
+bundled release, and its `TTSC_GO_BINARY` points ttsc at that SDK so the
+compiler and `GOROOT` agree. With Go 1.26.x and `GOTOOLCHAIN=local` the typia
+plugin build stops with `go.mod requires go >= 1.27`; with the default
+`GOTOOLCHAIN=auto` Go would fetch another toolchain instead, outside the pinned
+SDK. A shell that still exports an older mise `GOROOT` makes the build fail
+with `compile: version "go1.26.5" does not match go tool version "go1.27.3"`;
+run builds through `mise exec --` (or re-activate mise) after a Go bump. Jobs
+without mise leave `TTSC_GO_BINARY` unset and use the bundled compiler. CI's
+mise-action jobs install the `.mise.toml` Go, so they get 1.27.3 too. Games on
+ttsc 0.34 have the same floor: a game whose own mise or CI pins Go for ttsc
+(through `TTSC_GO_BINARY`) must pin Go 1.27 or later; the generated README
+says so. The
+Windows plugin cache key hashes `pnpm-lock.yaml` and `.mise.toml`, which cover
+the ttsc, typia, and Go versions the plugin binaries depend on.
+
+typia 15 changes generated output that the Kit commits or pins:
+
+- JSON Schema components are keyed by declaration, and an alias's JSDoc becomes
+  its `description`. Share one alias declaration (as `@mpgd/platform` does for
+  `NonEmptyString`, `IsoTimestamp`, `NonNegativeInteger`, and
+  `PositiveInteger`) instead of redeclaring it per module, and keep module
+  comments above the imports, or the schemas gain `-oN` duplicates and a
+  module comment as a type description. Distinct aliases that remain are
+  suffixed `-oN` instead of 13.x's `.oN`.
+- `tags.MinLength`/`MaxLength` count code points, and `Type<'int64'>` checks
+  bigint ranges. `@mpgd/platform`'s typia-free commerce contract mirrors those
+  tag records under typia's own alias names (`MinLength`, `Format`, `Type`,
+  `Minimum`), because typia prints the alias name in validation errors; its
+  parity test fails when they drift.
+- The `date-time` and `date` formats refuse a day the month does not have and a
+  space for `T`, so typia's error can precede the Kit's own timestamp checks.
+- Kit packages ship typia-transformed JavaScript, so a game needs no typia to
+  consume them. A game that runs its own typia transform over Kit types (for
+  example `typia.assert<StorePurchase>()` in its own contract package) needs
+  typia 15.2 or later: the `@mpgd/platform` commerce mirrors and the typia 15
+  tags in Kit declarations emit runtime helpers such as `_stringLengthGte` and
+  `isTypeInt64Bigint` that typia 13 does not have.
+
+typia 14 removed the `typia` CLI (`typia setup`, `typia generate`); the Kit and
+its templates use only the ttsc transform.
+
 ## Entries must belong to the selected project
 
 `run-ttsx.mjs` runs the entry through the project named by `--project` (or
@@ -181,7 +233,7 @@ target, still yield a file set and are reported by ttsx when it builds.
 
 The gate originally protected against ttsx 0.30.x's trailing-path-stem fallback:
 an excluded `commerce-provider.test.ts` could run another project's same-named
-file. The pinned 0.32.1 runtime fixes source ownership. An untransformed test in
+file. The 0.32.1 and later runtimes fix source ownership. An untransformed test in
 `tools/run-ttsx.test.mjs` now proves the raw runner executes the requested source.
 We retain the wrapper's narrower inclusion rule as repository policy: scripts
 must also be covered by the selected project during ordinary `check`, not just
