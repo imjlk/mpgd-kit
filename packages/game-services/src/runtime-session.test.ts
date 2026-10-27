@@ -357,7 +357,44 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   assert.deepEqual(shown, [], 'no ad was shown for the closed runtime');
   assert.notEqual(reward?.status, 'granted');
   assert.equal(harness.sent.length, 0, 'no claim left');
+  // The reserved operation is not ended: no platform outcome or result was journaled.
+  const reserved = (await journal.listRecoverable(playerA)).find(
+    (record) => record.kind === 'rewarded-ad',
+  );
+  assert.ok(reserved !== undefined, 'the reserved operation stays open');
+  assert.equal((reserved as { platform?: unknown }).platform, undefined);
+  assert.equal((reserved as { result?: unknown }).result, undefined);
   await runtimeA.dispose();
+
+  // Without a journal the refusal answers `unavailable` too, with no ad.
+  const plainShown: string[] = [];
+  const plain = createGameServicesRuntime({
+    gateway: createTestGateway({
+      target: 'android',
+      playerId: playerA,
+      ads: {
+        async preload() {},
+        async showRewarded(request) {
+          plainShown.push(request.idempotencyKey);
+          return { status: 'completed', rewardGranted: true };
+        },
+      },
+    }),
+    playerId: playerA,
+    authorityMode: 'non-production',
+    allowLocalBackend: true,
+    localBackend: {
+      purchases: { verifyPurchase: () => Promise.reject(new Error('not called')) },
+      adRewards: { claimAdReward: () => Promise.reject(new Error('not called')) },
+      leaderboard: { recordScore: () => Promise.reject(new Error('not called')) },
+    },
+  });
+  await plain.dispose();
+  assert.equal(
+    (await plain.client?.claimRewardedAd({ placementId: 'CONTINUE', idempotencyKey: 'ad-2' }))?.status,
+    'unavailable',
+  );
+  assert.deepEqual(plainShown, []);
 }
 
 // A provider that refuses the account binding because the session changed

@@ -498,7 +498,12 @@ async function settleWithin(work: Promise<unknown>, ms: number): Promise<void> {
   }
 }
 
-/** The gateway with a rewarded-ad dispatch that answers `unavailable` once the runtime refuses. */
+/**
+ * The gateway with a rewarded-ad dispatch that throws the refusal once the
+ * runtime refuses, so no ad opens. It is not an ad outcome: a journaled
+ * operation stays unstarted (not ended), and `claimRewardedAd` answers
+ * `unavailable`.
+ */
 function guardRewardedAds(gateway: PlatformGateway, gate: RuntimeGate): PlatformGateway {
   const ads = gateway.ads;
   return {
@@ -506,13 +511,29 @@ function guardRewardedAds(gateway: PlatformGateway, gate: RuntimeGate): Platform
     ads: {
       ...ads,
       async showRewarded(request) {
-        if (gate.check() !== undefined) {
-          return { status: 'unavailable', rewardGranted: false };
-        }
+        gate.assert();
         return ads.showRewarded(request);
       },
     },
   };
+}
+
+/** A reward claim through an open runtime; a dispatch the runtime refused answers `unavailable`. */
+async function guardedReward(
+  gate: RuntimeGate,
+  run: () => Promise<GameServicesRewardedAdResult>,
+): Promise<GameServicesRewardedAdResult> {
+  if (gate.check() !== undefined) {
+    return refusedReward();
+  }
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof GameServicesRuntimeClosedError) {
+      return refusedReward();
+    }
+    throw error;
+  }
 }
 
 function refusedPurchase(refusal: GameServicesRuntimeClosedError): GameServicesPurchaseResult {
@@ -560,9 +581,8 @@ function guardClient(client: GameServicesClient, gate: RuntimeGate, track: Purch
     ...client,
     purchase: (purchase, options) =>
       guardedPurchase(gate, track, () => client.purchase(purchase, options)),
-    async claimRewardedAd(reward, options) {
-      return gate.check() === undefined ? client.claimRewardedAd(reward, options) : refusedReward();
-    },
+    claimRewardedAd: (reward, options) =>
+      guardedReward(gate, () => client.claimRewardedAd(reward, options)),
     async submitLeaderboardScore(score) {
       gate.assert();
       return client.submitLeaderboardScore(score);
@@ -580,9 +600,7 @@ function guardRecovery(
     ...recovery,
     ...(reconciler === undefined ? {} : { commerceReconciler: reconciler }),
     purchase: (purchase, options) => guardedPurchase(gate, track, () => recovery.purchase(purchase, options)),
-    async claimRewardedAd(reward, options) {
-      return gate.check() === undefined ? recovery.claimRewardedAd(reward, options) : refusedReward();
-    },
+    claimRewardedAd: (reward, options) => guardedReward(gate, () => recovery.claimRewardedAd(reward, options)),
     // A late ad callback is journaled; its claim is refused until a runtime
     // for the player resends it, so it stays pending, never ended.
     recoverRewardResult: (idempotencyKey, platform) => recovery.recoverRewardResult(idempotencyKey, platform),
