@@ -9,6 +9,7 @@ import {
   type StorePresence,
 } from '@mpgd/catalog';
 
+import { isDefinitiveHttpError } from './play-internal-submission.js';
 import type {
   PlayAppDetails,
   PlayImage,
@@ -21,8 +22,10 @@ import {
   describeTextChange,
   formatTextChange,
   imageMimeType,
+  normalizeLineBreaks,
   planStoreImageSet,
   readLocalStoreImage,
+  sameUrlForm,
   storePresencePlanCommand,
   type LocalStoreImage,
   type StorePresenceTextChange,
@@ -214,8 +217,10 @@ async function planInEdit(
     remoteImages.set(`${read.language}\n${read.imageType}`, imageLists[index] ?? []);
   });
 
+  const notes: string[] = [];
   const planned = languages.map((language) =>
     planLanguage({
+      notes,
       language,
       entry: play.listings[language] as GooglePlayPresenceListing,
       remote: remoteByLanguage.get(language.toLowerCase()),
@@ -229,7 +234,6 @@ async function planInEdit(
     .filter((language) => !named.has(language.toLowerCase()))
     .sort();
 
-  const notes: string[] = [];
   const defaultLanguage = typeof details.defaultLanguage === 'string'
     ? details.defaultLanguage
     : undefined;
@@ -238,7 +242,7 @@ async function planInEdit(
       `Play's default language ${defaultLanguage} is not in the file; its listing stays as Play has it.`,
     );
   }
-  const plannedDetails = planDetails(details, play);
+  const plannedDetails = planDetails(details, play, notes);
   const manual = manualSteps(input.presence);
   const imageRemovals = planned.reduce(
     (sum, language) => sum + language.images.reduce(
@@ -259,7 +263,10 @@ async function planInEdit(
     images: Object.fromEntries(
       [...remoteImages.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, images]) => [key, images.map((image) => ({ id: image.id, sha256: image.sha256 }))]),
+        .map(([key, images]) => [
+          key,
+          images.map((image) => ({ id: image.id, sha256: image.sha256, sha1: image.sha1 })),
+        ]),
     ),
   });
   const desiredSha256 = stableSha256({ details: plannedDetails?.write, languages: planned });
@@ -280,6 +287,8 @@ async function planInEdit(
 }
 
 function planLanguage(input: {
+  /** Plan-level notes. */
+  readonly notes: string[];
   readonly language: string;
   readonly entry: GooglePlayPresenceListing;
   readonly remote: PlayListing | undefined;
@@ -291,12 +300,19 @@ function planLanguage(input: {
     ? remote.language
     : canonicalLanguageTag(input.language);
   const video = entry.video ?? (typeof remote?.video === 'string' && remote.video !== '' ? remote.video : undefined);
+  const fullDescription = normalizeLineBreaks(entry.fullDescription);
   const text = [
     describeTextChange('title', remote?.title, entry.title),
     describeTextChange('shortDescription', remote?.shortDescription, entry.shortDescription),
-    describeTextChange('fullDescription', remote?.fullDescription, entry.fullDescription),
+    describeTextChange('fullDescription', remote?.fullDescription, fullDescription),
     entry.video === undefined ? undefined : describeTextChange('video', remote?.video, entry.video),
   ].filter((change) => change !== undefined);
+  if (entry.video !== undefined && typeof remote?.video === 'string' && remote.video !== entry.video
+    && sameUrlForm(remote.video, entry.video)) {
+    input.notes.push(
+      `${language} video differs from Play's only in URL form (${remote.video}); Play may normalize it.`,
+    );
+  }
   const images = googlePlayPresenceImageSlots.flatMap((imageType) => {
     const slot = input.local.get(imageType);
     return slot === undefined
@@ -317,7 +333,7 @@ function planLanguage(input: {
         language,
         title: entry.title,
         shortDescription: entry.shortDescription,
-        fullDescription: entry.fullDescription,
+        fullDescription,
         ...(video === undefined ? {} : { video }),
       },
     }),
@@ -339,7 +355,7 @@ function planImageSlot(
     local: local.map((image) => ({ path: image.path, digest: image.sha256 })),
     remote: remote.map((image) => ({
       id: String(image.id),
-      digest: String(image.sha256 ?? '').toLowerCase(),
+      digest: remoteImageDigest(image, local, imageType),
     })),
     complete,
     single: !isMultiImage(imageType),
@@ -358,7 +374,31 @@ function planImageSlot(
   };
 }
 
-function planDetails(details: PlayAppDetails, play: GooglePlayPresence): PlayPresencePlan['details'] {
+/**
+ * The digest a Play image is compared by: its SHA-256, else (Play reported
+ * only SHA-1) the SHA-256 of the file image with that SHA-1. An image with
+ * neither cannot be compared, so the plan stops instead of re-uploading it
+ * on every run.
+ */
+function remoteImageDigest(image: PlayImage, local: readonly LocalStoreImage[], imageType: PlayImageType): string {
+  if (typeof image.sha256 === 'string' && image.sha256 !== '') {
+    return image.sha256.toLowerCase();
+  }
+  if (typeof image.sha1 === 'string' && image.sha1 !== '') {
+    const sha1 = image.sha1.toLowerCase();
+    return local.find((candidate) => candidate.sha1 === sha1)?.sha256 ?? `sha1:${sha1}`;
+  }
+  throw new Error(
+    `Google Play ${imageType}: Play reports image ${String(image.id)} without a SHA-256 or SHA-1, so the sync `
+    + 'cannot compare it; replace the images of this slot in Play Console.',
+  );
+}
+
+function planDetails(
+  details: PlayAppDetails,
+  play: GooglePlayPresence,
+  notes: string[],
+): PlayPresencePlan['details'] {
   const contact = play.contact;
   if (contact === undefined) {
     return undefined;
@@ -381,6 +421,11 @@ function planDetails(details: PlayAppDetails, play: GooglePlayPresence): PlayPre
     }
     const from = details[field];
     if (from !== value) {
+      if (field === 'contactWebsite' && typeof from === 'string' && sameUrlForm(from, value)) {
+        notes.push(
+          `The contact website differs from Play's only in URL form (${from}); Play may normalize it.`,
+        );
+      }
       changes.push({
         field,
         ...(typeof from === 'string' && from !== '' ? { from } : {}),
@@ -389,7 +434,17 @@ function planDetails(details: PlayAppDetails, play: GooglePlayPresence): PlayPre
       write[field] = value;
     }
   }
-  return changes.length === 0 ? undefined : { changes, write };
+  if (changes.length === 0) {
+    return undefined;
+  }
+  // edits.details.update replaces the whole object, and Play requires a contact email.
+  if (write.contactEmail === undefined) {
+    throw new Error(
+      'Google Play has no contact email for the app and the file gives none; Play needs one to update the '
+      + 'contact details. Add googlePlay.contact.email.',
+    );
+  }
+  return { changes, write };
 }
 
 function manualSteps(presence: StorePresence): string[] {
@@ -460,7 +515,8 @@ export async function applyPlayPresence(input: {
   const local = readLocalGraphics(input.plan.directory, play);
   const editId = await port.insertEdit(packageName, signal);
   let stage = 'read';
-  let committing = false;
+  // A commit that failed without a definitive answer may have landed.
+  let commitUncertain = false;
   try {
     const current = await planInEdit(input.plan, play, local, port, editId);
     if (!current.changed) {
@@ -519,43 +575,74 @@ export async function applyPlayPresence(input: {
           stage = `${language.language} ${slot.imageType} upload of ${image.path}`;
           const file = path.resolve(input.plan.directory, image.path);
           assertLocalStoreImageUnchanged(file, image.sha256);
-          const info = localImage(local, language.language, slot.imageType, image.sha256);
+          const localFile = localImage(local, language.language, slot.imageType, image.sha256);
           const stored = await port.uploadImage({
             ...target,
             file,
-            mimeType: imageMimeType(info),
+            mimeType: imageMimeType(localFile.info),
             timeoutMs: uploadTimeoutMs,
           });
           uploaded += 1;
-          // Images are matched by SHA-256: one Play stores with another digest
-          // (re-encoded) would be uploaded again by every later apply.
-          if (typeof stored.sha256 === 'string' && stored.sha256.toLowerCase() !== image.sha256) {
-            throw new Error(
-              `Play stored ${image.path} with SHA-256 ${stored.sha256}, not the file's ${image.sha256}; `
-              + 'the sync matches images by SHA-256 and cannot keep this slot in step',
-            );
-          }
+          assertStoredDigest(stored, localFile);
         }
       }
       languages.push({ language: language.language, listing: language.action, images: uploaded });
     }
     stage = 'commit';
-    committing = true;
-    await port.commitEdit({
-      packageName,
-      editId,
-      changesNotSentForReview: input.changesNotSentForReview === true,
-      ...optionalSignal,
-    });
+    try {
+      await port.commitEdit({
+        packageName,
+        editId,
+        changesNotSentForReview: input.changesNotSentForReview === true,
+        ...optionalSignal,
+      });
+    } catch (error) {
+      // A definitive 4xx (for example ERROR_IF_IN_REVIEW while a release is
+      // in review) did not commit; anything else may have.
+      commitUncertain = !isDefinitiveHttpError(error);
+      throw error;
+    }
     return { packageName, status: 'committed', languages };
   } catch (error) {
-    await discardEdit(port, packageName, editId);
+    // Never delete an edit that may have been committed (as deploy promote).
+    if (!commitUncertain) {
+      await discardEdit(port, packageName, editId);
+    }
     // Nothing was written before the first write stage: the error stands as it is.
     if (error instanceof StorePlanStaleError || stage === 'read') {
       throw error;
     }
-    throw new PlayPresenceApplyError(stage, committing ? 'unknown' : 'discarded', error);
+    throw new PlayPresenceApplyError(stage, commitUncertain ? 'unknown' : 'discarded', error);
   }
+}
+
+/**
+ * Images are matched by digest: one Play stores under another digest (for
+ * example re-encoded) would be uploaded again by every later apply, and one
+ * without a digest could never be matched.
+ */
+function assertStoredDigest(stored: PlayImage, image: LocalStoreImage): void {
+  if (typeof stored.sha256 === 'string' && stored.sha256 !== '') {
+    if (stored.sha256.toLowerCase() !== image.sha256) {
+      throw new Error(
+        `Play stored ${image.path} with SHA-256 ${stored.sha256}, not the file's ${image.sha256}; `
+        + 'the sync matches images by digest and cannot keep this slot in step',
+      );
+    }
+    return;
+  }
+  if (typeof stored.sha1 === 'string' && stored.sha1 !== '') {
+    if (stored.sha1.toLowerCase() !== image.sha1) {
+      throw new Error(
+        `Play stored ${image.path} with SHA-1 ${stored.sha1}, not the file's ${image.sha1}; `
+        + 'the sync matches images by digest and cannot keep this slot in step',
+      );
+    }
+    return;
+  }
+  throw new Error(
+    `Play answered the upload of ${image.path} without a SHA-256 or SHA-1; the sync cannot confirm it`,
+  );
 }
 
 function localImage(
@@ -563,14 +650,14 @@ function localImage(
   language: string,
   imageType: PlayImageType,
   sha256: string,
-): LocalStoreImage['info'] {
+): LocalStoreImage {
   for (const [fileLanguage, slots] of local) {
     if (fileLanguage.toLowerCase() !== language.toLowerCase()) {
       continue;
     }
     const image = slots.get(imageType)?.images.find((candidate) => candidate.sha256 === sha256);
     if (image !== undefined) {
-      return image.info;
+      return image;
     }
   }
   throw new StorePlanStaleError(

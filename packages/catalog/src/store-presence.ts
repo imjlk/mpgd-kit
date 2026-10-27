@@ -353,7 +353,8 @@ function assertText(value: string, field: string, limit: number, multiline = fal
   if (!multiline && /[\r\n]/u.test(value)) {
     throw new Error(`Store presence ${field} must be one line.`);
   }
-  if ([...value].length > limit) {
+  // The sync writes LF line breaks, so a CRLF file counts as it will be stored.
+  if ([...(multiline ? value.replace(/\r\n?/gu, '\n') : value)].length > limit) {
     throw new Error(`Store presence ${field} is longer than ${limit} characters.`);
   }
 }

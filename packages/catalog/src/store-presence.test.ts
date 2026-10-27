@@ -300,6 +300,8 @@ assert.throws(
   /fullDescription is longer than 4000/u,
 );
 assert.throws(() => assertStorePresence(withPlay({ title: 'Two\nlines' })), /one line/u);
+// CRLF counts as the LF the sync writes: 1,999 + CRLF + 2,000 is 4,000 characters.
+assertStorePresence(withPlay({ fullDescription: `${'x'.repeat(1999)}\r\n${'y'.repeat(2000)}` }));
 assert.throws(() => assertStorePresence(withPlay({ title: ' padded' })), /trimmed/u);
 assert.throws(
   () => assertStorePresence(withPlay({ video: 'https://vimeo.com/1' })),

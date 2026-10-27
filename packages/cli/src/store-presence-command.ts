@@ -23,6 +23,7 @@ import {
   type PlayPresencePlan,
 } from './store-presence-play.js';
 import {
+  assertStoreSyncStore,
   readStorePlanFile,
   relocateStoreSyncFile,
   resolveStoreSyncApp,
@@ -212,11 +213,13 @@ function resolveInputs(
   options: StorePresencePlanOptions,
   environment: NodeJS.ProcessEnv,
 ): { readonly app: StoreSyncApp; readonly source: StorePresenceSource } {
-  const app = resolveStoreSyncApp(options, environment);
+  assertStoreSyncStore(options.store);
+  // The game file first: a malformed file reports its own error without a credential.
   const source = readStorePresenceSource({
     gameRoot: options.game,
     ...(options.presenceFile === undefined ? {} : { presenceFile: options.presenceFile }),
   });
+  const app = resolveStoreSyncApp(options, environment);
   return { app, source };
 }
 
