@@ -134,16 +134,14 @@ export function createStarterSessionGatedGameServices(
   const { signIn, onActivated, onPlayerChanging, onPlayerChanged, ...rest } = input;
   // The inner services (a session switch) and the gate (a later sign-in) may
   // both see the same change; the host hears each step once.
-  const once = (callback: ((playerId: string) => void) | undefined) => {
+  const once = (callback: (playerId: string) => void): ((playerId: string) => void) => {
     let called = false;
-    return callback === undefined
-      ? undefined
-      : (playerId: string) => {
-          if (!called) {
-            called = true;
-            callback(playerId);
-          }
-        };
+    return (playerId) => {
+      if (!called) {
+        called = true;
+        callback(playerId);
+      }
+    };
   };
   const hooks = {
     ...(onPlayerChanging === undefined ? {} : { onPlayerChanging: once(onPlayerChanging) }),
