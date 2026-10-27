@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { timeFieldRefusal } from '../test/time-field-refusal.js';
+
 import {
   createNotificationConformanceBackend,
   createNotificationConformanceClock,
@@ -36,18 +38,6 @@ import {
   type NotificationConformanceProfile,
   type NotificationConformanceVector,
 } from './notifications-vectors.js';
-
-/**
- * typia 15's `date-time` and `date` formats themselves refuse a day the month
- * does not have and a space for `T`, so for those inputs typia's error, naming
- * the same field, can come before the kit's own check. Either refusal passes.
- */
-function timeFieldRefusal(kit: RegExp, typiaPath: string): RegExp {
-  return new RegExp(
-    `${kit.source}|invalid type on \\$input\\.${typiaPath}, expect to be string & Format<"date(?:-time)?">$`,
-    'u',
-  );
-}
 
 const vectorsDir = join(
   import.meta.dirname,

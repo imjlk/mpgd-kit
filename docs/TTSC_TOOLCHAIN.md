@@ -207,6 +207,12 @@ typia 15 changes generated output that the Kit commits or pins:
   parity test fails when they drift.
 - The `date-time` and `date` formats refuse a day the month does not have and a
   space for `T`, so typia's error can precede the Kit's own timestamp checks.
+- Kit packages ship typia-transformed JavaScript, so a game needs no typia to
+  consume them. A game that runs its own typia transform over Kit types (for
+  example `typia.assert<StorePurchase>()` in its own contract package) needs
+  typia 15.2 or later: the `@mpgd/platform` commerce mirrors and the typia 15
+  tags in Kit declarations emit runtime helpers such as `_stringLengthGte` and
+  `isTypeInt64Bigint` that typia 13 does not have.
 
 typia 14 removed the `typia` CLI (`typia setup`, `typia generate`); the Kit and
 its templates use only the ttsc transform.
