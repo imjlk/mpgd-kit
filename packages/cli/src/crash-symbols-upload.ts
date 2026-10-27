@@ -1,14 +1,4 @@
-import { createHash } from 'node:crypto';
-import {
-  chmodSync,
-  copyFileSync,
-  createReadStream,
-  existsSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  statSync,
-} from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -19,9 +9,11 @@ import {
   type ReleaseProcessResult,
 } from './deploy-process.js';
 import type { NativeDsymIdentity } from './native-build-symbols.js';
+import { resolveRecordedArtifact } from './native-deploy-submission.js';
 import {
   readNativeReleaseStatus,
   recordCrashSymbolUpload,
+  sha256File,
   type CrashSymbolUploadRecord,
   type RecordedSymbolFile,
 } from './release-state.js';
@@ -57,7 +49,10 @@ export type CrashSymbolUploadResult =
   | {
       readonly status: 'uploaded';
       readonly plan: CrashSymbolUploadPlan;
-      readonly upload: CrashSymbolUploadRecord;
+      /** Absent when the upload succeeded but its outcome could not be recorded. */
+      readonly upload?: CrashSymbolUploadRecord;
+      /** Why the successful upload could not be recorded; a retry uploads again. */
+      readonly recordError?: string;
       readonly output: string;
     }
   | {
@@ -171,7 +166,7 @@ export async function uploadRecordedCrashSymbols(
     const executable = path.join(workDirectory, 'upload-symbols');
     copyFileSync(tool, executable);
     chmodSync(executable, 0o700);
-    if (await sha256(executable) !== symbols.uploadTool.sha256) {
+    if (await sha256File(executable) !== symbols.uploadTool.sha256) {
       throw new Error('The copied upload-symbols differs from the recorded tool.');
     }
     try {
@@ -204,7 +199,17 @@ export async function uploadRecordedCrashSymbols(
   } finally {
     rmSync(workDirectory, { recursive: true, force: true });
   }
-  return { status: 'uploaded', plan, upload: await record('uploaded'), output };
+  try {
+    return { status: 'uploaded', plan, upload: await record('uploaded'), output };
+  } catch (error) {
+    // The dSYMs reached Crashlytics; only the release state is behind.
+    return {
+      status: 'uploaded',
+      plan,
+      recordError: error instanceof Error ? error.message : String(error),
+      output,
+    };
+  }
 }
 
 /** Only what the tool needs (and network proxy settings): no store, signing or Git credentials. */
@@ -249,37 +254,37 @@ async function verifiedRecordedFile(
   recorded: RecordedSymbolFile,
   label: string,
 ): Promise<string> {
-  const root = realpathSync(gameRoot);
-  const candidate = path.resolve(root, recorded.location);
+  const candidate = path.resolve(gameRoot, recorded.location);
   if (!existsSync(candidate) || !statSync(candidate).isFile()) {
     throw new Error(
       `The recorded ${label} is missing: ${recorded.location}. Restore the release bundle `
         + '(.mpgd/releases/<release>) the build wrote.',
     );
   }
-  const file = realpathSync(candidate);
-  const relative = path.relative(root, file);
-  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`)
-    || path.isAbsolute(relative)) {
+  let file: string;
+  try {
+    file = resolveRecordedArtifact(gameRoot, recorded.location);
+  } catch {
     throw new Error(`The recorded ${label} resolves outside the game directory.`);
   }
-  if (await sha256(file) !== recorded.sha256) {
+  if (await sha256File(file) !== recorded.sha256) {
     throw new Error(`The recorded ${label} differs from the immutable build record.`);
   }
   return file;
 }
 
-async function sha256(file: string): Promise<string> {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(file)) {
-    hash.update(chunk);
-  }
-  return hash.digest('hex');
+/** The command that retries a failed upload for one release, for the game directory used. */
+export function crashSymbolsRetryCommand(input: {
+  readonly gameRoot: string;
+  readonly gameId: string;
+  readonly releaseKey: string;
+}): string {
+  return `mpgd deploy symbols --game ${shellWord(input.gameRoot)} --game-id ${
+    shellWord(input.gameId)} --release ${shellWord(input.releaseKey)}`;
 }
 
-/** The command that retries a failed upload for one release. */
-export function crashSymbolsRetryCommand(input: { readonly gameId: string; readonly releaseKey: string }): string {
-  return `mpgd deploy symbols --game . --game-id ${input.gameId} --release ${input.releaseKey}`;
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 /**
@@ -296,7 +301,11 @@ export async function uploadCrashSymbolsForDeployRun(
   const retry = crashSymbolsRetryCommand(input);
   try {
     const result = await upload(input);
-    if (result.status === 'uploaded') {
+    if (result.status === 'uploaded' && result.recordError !== undefined) {
+      report(`warning: Crashlytics: uploaded the iOS dSYMs, but the release state could not record `
+        + `it (${result.recordError}); "mpgd deploy status" still shows it as not uploaded, and `
+        + `${retry} would upload them again.`);
+    } else if (result.status === 'uploaded') {
       report(`Crashlytics: uploaded the iOS dSYMs (${result.plan.dsyms
         .map((entry) => entry.bundle).join(', ')}).`);
     } else if (result.status === 'failed') {

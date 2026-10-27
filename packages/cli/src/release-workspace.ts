@@ -15,7 +15,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import { planNativeDeployment, type NativeDeploymentPlan } from './deploy-planning.js';
-import { assertNativeBuildSymbols, type NativeBuildSymbols } from './native-build-symbols.js';
+import {
+  assertNativeBuildSymbols,
+  isNativeOutputPath,
+  type NativeBuildSymbols,
+} from './native-build-symbols.js';
 import {
   runReleaseProcess,
   type ReleaseProcessInput,
@@ -403,9 +407,7 @@ function resolvePinnedBuildSymbols(
   target: 'android' | 'ios',
   value: unknown,
 ): NativeBuildSymbols {
-  assertNativeBuildSymbols(value, (file) => file.startsWith(`release-output/native/${target}/`)
-    && !path.isAbsolute(file)
-    && !file.split(/[\\/]/u).some((segment) => segment === '' || segment === '..'));
+  assertNativeBuildSymbols(value, (file) => isNativeOutputPath(file, target));
   const canonicalGameRoot = realpathSync(gameRoot);
   const resolve = (file: string): string => {
     const absolute = assertInsideWorkspace(gameRoot, file);

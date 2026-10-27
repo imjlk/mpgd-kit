@@ -96,6 +96,15 @@ export function isDsymBundleName(name: string): boolean {
   return name.length <= 255 && /^[^./\\\u0000-\u001f\u007f][^/\\\u0000-\u001f\u007f]*\.dSYM$/u.test(name);
 }
 
+/**
+ * A game-relative path under the target's native build output root
+ * (`release-output/native/<target>/`), without empty or `..` segments.
+ */
+export function isNativeOutputPath(file: string, target: string): boolean {
+  return file.startsWith(`release-output/native/${target}/`) && !path.isAbsolute(file)
+    && !file.split(/[\\/]/u).some((segment) => segment === '' || segment === '..');
+}
+
 /** Where AGP writes the release variant's R8 mapping file. */
 export const androidReleaseMappingPath = 'app/build/outputs/mapping/release/mapping.txt';
 

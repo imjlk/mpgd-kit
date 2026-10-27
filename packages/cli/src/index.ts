@@ -800,6 +800,11 @@ const deployCommand = defineI18n({
         if (result.status === 'failed') {
           throw new Error(`Crashlytics dSYM upload failed: ${result.error}`);
         }
+        if (result.status === 'uploaded' && result.recordError !== undefined) {
+          throw new Error(
+            `The dSYMs were uploaded, but the release state could not record it: ${result.recordError}`,
+          );
+        }
       },
     }),
     submit: defineI18n({

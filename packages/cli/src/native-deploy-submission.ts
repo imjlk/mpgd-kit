@@ -483,7 +483,8 @@ export function verifyRecordedReleaseManifest(
   }
 }
 
-function resolveRecordedArtifact(gameRoot: string, recordedLocation: string): string {
+/** A recorded game-relative file, resolved without leaving the game directory. */
+export function resolveRecordedArtifact(gameRoot: string, recordedLocation: string): string {
   if (path.isAbsolute(recordedLocation)) {
     throw new Error('Native artifact location must be game-relative.');
   }

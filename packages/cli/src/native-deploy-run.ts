@@ -200,8 +200,10 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
   withRecordedR8Mapping(input.androidRelease, status.builds.android, input.plan.gameRoot);
-  try {
-    for (const entry of input.plan.targets) {
+  let fresh = true;
+  for (const entry of input.plan.targets) {
+    // The status read above serves the first target; later ones re-read it.
+    if (!fresh) {
       status = await readNativeReleaseStatus({
         gameRoot: input.plan.gameRoot,
         gameId: input.gameId,
@@ -209,50 +211,53 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
         environment,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
-      if (status.builds[entry.target] === undefined) {
-        throw new Error(`${entry.target} has no verified build after the native build stage.`);
-      }
-      const submission = status.submissions[entry.target];
-      if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
-        assertSettledAndroidReleaseOptions(
-          submission,
-          withRecordedR8Mapping(input.androidRelease, status.builds.android, input.plan.gameRoot),
-        );
-        continue;
-      }
-      await submitRecordedNativeTarget({
-        plan: input.plan,
+    }
+    fresh = false;
+    if (status.builds[entry.target] === undefined) {
+      throw new Error(`${entry.target} has no verified build after the native build stage.`);
+    }
+    const submission = status.submissions[entry.target];
+    if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
+      assertSettledAndroidReleaseOptions(
+        submission,
+        withRecordedR8Mapping(input.androidRelease, status.builds.android, input.plan.gameRoot),
+      );
+      continue;
+    }
+    await submitRecordedNativeTarget({
+      plan: input.plan,
+      gameId: input.gameId,
+      releaseKey: input.releaseKey,
+      credential: readStoreCredential(input.plan, entry.target, environment),
+      approved: input.approved,
+      ...(input.androidRelease === undefined ? {} : { androidRelease: input.androidRelease }),
+      ...(input.confirmProduction === undefined ? {} : {
+        confirmProduction: input.confirmProduction,
+      }),
+      ...(input.onDraftAppFallback === undefined ? {} : {
+        onDraftAppFallback: input.onDraftAppFallback,
+      }),
+      environment,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  }
+  // Crashlytics dSYMs of the recorded iOS build, once, only after every store
+  // submission went through (a failed or cancelled run reports its own error
+  // at once; the next run or `mpgd deploy symbols` uploads them). A slow upload
+  // never delays a submission, and the step never throws: a failure is
+  // reported and retryable.
+  if (input.plan.targets.some((entry) => entry.target === 'ios')
+    && input.signal?.aborted !== true) {
+    await uploadCrashSymbolsForDeployRun(
+      {
+        gameRoot: input.plan.gameRoot,
         gameId: input.gameId,
         releaseKey: input.releaseKey,
-        credential: readStoreCredential(input.plan, entry.target, environment),
-        approved: input.approved,
-        ...(input.androidRelease === undefined ? {} : { androidRelease: input.androidRelease }),
-        ...(input.confirmProduction === undefined ? {} : {
-          confirmProduction: input.confirmProduction,
-        }),
-        ...(input.onDraftAppFallback === undefined ? {} : {
-          onDraftAppFallback: input.onDraftAppFallback,
-        }),
         environment,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
-      });
-    }
-  } finally {
-    if (input.plan.targets.some((entry) => entry.target === 'ios')) {
-      // Crashlytics dSYMs of the recorded iOS build, once, after the store
-      // submission so a slow upload never delays it. It never throws: a
-      // failure is reported and retryable (`mpgd deploy symbols`).
-      await uploadCrashSymbolsForDeployRun(
-        {
-          gameRoot: input.plan.gameRoot,
-          gameId: input.gameId,
-          releaseKey: input.releaseKey,
-          environment,
-          ...(input.signal === undefined ? {} : { signal: input.signal }),
-        },
-        input.onCrashSymbolsReport,
-      );
-    }
+      },
+      input.onCrashSymbolsReport,
+    );
   }
   return readNativeReleaseStatus({
     gameRoot: input.plan.gameRoot,

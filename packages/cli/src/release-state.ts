@@ -524,7 +524,7 @@ export async function recordNativeReleaseBuild(
           uploadTool: await recordSymbolFile(input.crashlyticsSymbols.uploadTool),
           googleServiceInfo: await recordSymbolFile(input.crashlyticsSymbols.googleServiceInfo),
         };
-  const artifactSha256 = await sha256(input.artifactFile);
+  const artifactSha256 = await sha256File(input.artifactFile);
   const manifestBytes = readFileSync(input.releaseManifestFile);
   const releaseManifestSha256 = createHash('sha256').update(manifestBytes).digest('hex');
   if (artifactSha256 !== input.expectedArtifactSha256
@@ -1418,7 +1418,7 @@ async function recordSymbolFile(input: RecordSymbolFileInput): Promise<RecordedS
     || !statSync(input.file).isFile() || statSync(input.file).size === 0) {
     throw new Error('Native build symbol file is missing or has an invalid location.');
   }
-  return { location: input.location, sha256: await sha256(input.file) };
+  return { location: input.location, sha256: await sha256File(input.file) };
 }
 
 function assertReservationHistory(
@@ -1497,7 +1497,8 @@ function assertReleaseKey(key: string): void {
   }
 }
 
-async function sha256(file: string): Promise<string> {
+/** Streamed SHA-256 of a file, hex. */
+export async function sha256File(file: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) {
     hash.update(chunk);

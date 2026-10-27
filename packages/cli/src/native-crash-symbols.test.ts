@@ -644,6 +644,12 @@ try {
   assert.match(reports.join('\n'), /dSYM upload failed \(upload-symbols exited with code 3\)/u);
   assert.match(reports.join('\n'), /simulated network error/u);
   assert.ok(reports.join('\n').includes(crashSymbolsRetryCommand(uploadInput)));
+  // The retry command names the game directory that was used.
+  assert.ok(crashSymbolsRetryCommand(uploadInput).includes(`--game ${game} `));
+  assert.equal(
+    crashSymbolsRetryCommand({ gameRoot: '/games/my game', gameId: 'alpha', releaseKey: 'beta-01' }),
+    "mpgd deploy symbols --game '/games/my game' --game-id alpha --release beta-01",
+  );
   const afterFailure = await readNativeReleaseStatus(uploadInput);
   assert.equal(afterFailure.symbolUploads?.ios?.status, 'failed');
   assert.equal(afterFailure.symbolUploads?.ios?.failure, 'upload-symbols exited with code 3');
@@ -655,6 +661,33 @@ try {
   assert.equal(statSync(tool).mode & 0o111, 0, 'the recorded tool is not modified');
 
   rmSync(path.join(home, 'fail'));
+  // An upload whose outcome cannot be recorded is reported as uploaded, not as not run.
+  const unrecorded: string[] = [];
+  const uploadedUnrecorded = await uploadCrashSymbolsForDeployRun(
+    uploadInput,
+    (message) => unrecorded.push(message),
+    (input) =>
+      uploadRecordedCrashSymbols(input, {
+        ...darwinPorts,
+        recordUpload: async (record) => {
+          if (record.status === 'uploaded') {
+            throw new Error('release-state push response lost');
+          }
+          return recordCrashSymbolUpload(record);
+        },
+      }),
+  );
+  assert.equal(uploadedUnrecorded?.status, 'uploaded');
+  assert.equal(
+    uploadedUnrecorded?.status === 'uploaded' ? uploadedUnrecorded.recordError : undefined,
+    'release-state push response lost',
+  );
+  assert.match(
+    unrecorded.join('\n'),
+    /uploaded the iOS dSYMs, but the release state could not record it \(release-state push response lost\)/u,
+  );
+  assert.doesNotMatch(unrecorded.join('\n'), /did not run/u);
+  assert.equal((await readNativeReleaseStatus(uploadInput)).symbolUploads?.ios?.status, 'failed');
   const uploaded = await uploadRecordedCrashSymbols(uploadInput, darwinPorts);
   assert.equal(uploaded.status, 'uploaded');
   assert.match(uploaded.status === 'uploaded' ? uploaded.output : '', /Successfully uploaded/u);

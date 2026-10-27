@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import {
   assertNativeBuildSymbols,
+  isNativeOutputPath,
   type NativeBuildSymbols,
 } from '../../packages/cli/src/native-build-symbols';
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
@@ -116,11 +117,6 @@ export function beginNativeBuildAttempt(gameRoot: string, target: string): Nativ
       settle('failed');
     },
   };
-}
-
-function isNativeOutputPath(file: string, target: string): boolean {
-  return file.startsWith(`release-output/native/${target}/`) && !path.isAbsolute(file)
-    && !file.split(/[\\/]/u).some((segment) => segment === '' || segment === '..');
 }
 
 function isNativeBuildSymbols(value: unknown, target: string): value is NativeBuildSymbols {
