@@ -315,8 +315,12 @@ pnpm exec mpgd deploy status --game . --game-id mygame --release beta-001
 
 Google Play Console:
 
-- [ ] Create the app; store listing (title, descriptions, screenshots for
-      phone and, if offered, tablets), developer website = the legal site.
+- [ ] Create the app. Store listing (title, descriptions, icon, feature
+      graphic, phone and tablet screenshots, contact website = the legal
+      site): `mpgd store presence apply --store google-play` writes them from
+      `mpgd.store-presence.json` after the first bundle is uploaded
+      ([store page sync](./STORE_PRESENCE_SYNC.md)); the privacy policy URL
+      under App content stays in the console.
 - [ ] Content rating (IARC questionnaire), target audience and content,
       ads declaration ("contains ads" if AdMob), advertising ID declaration
       (matches the manifest, see above), app access (instructions if review
@@ -379,6 +383,7 @@ App Store Connect:
 - [Google Play internal submission](./GOOGLE_PLAY_INTERNAL_SUBMISSION.md) and
   [Google Play releases](./GOOGLE_PLAY_RELEASES.md)
 - [Store product sync](./STORE_PRODUCT_SYNC.md)
+- [Store page sync](./STORE_PRESENCE_SYNC.md)
 - [TestFlight internal submission](./TESTFLIGHT_INTERNAL_SUBMISSION.md)
 - [Game services backend](./GAME_SERVICES_BACKEND.md)
 - [Store privacy disclosures](./STORE_PRIVACY_DISCLOSURES.md)
