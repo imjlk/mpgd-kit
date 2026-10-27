@@ -202,7 +202,9 @@ typia 15 changes generated output that the Kit commits or pins:
   suffixed `-oN` instead of 13.x's `.oN`.
 - `tags.MinLength`/`MaxLength` count code points, and `Type<'int64'>` checks
   bigint ranges. `@mpgd/platform`'s typia-free commerce contract mirrors those
-  tag records, and its parity test fails when they drift.
+  tag records under typia's own alias names (`MinLength`, `Format`, `Type`,
+  `Minimum`), because typia prints the alias name in validation errors; its
+  parity test fails when they drift.
 - The `date-time` and `date` formats refuse a day the month does not have and a
   space for `T`, so typia's error can precede the Kit's own timestamp checks.
 

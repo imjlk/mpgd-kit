@@ -73,7 +73,7 @@ import { notificationTimeFields, type NotificationTimeFields } from './notificat
  */
 function timeFieldRefusal(kit: RegExp, typiaPath: string): RegExp {
   return new RegExp(
-    `${kit.source}|invalid type on \\$input\\.${typiaPath}, expect to be string & (?:Format<"date(?:-time)?">|CommerceDateTimeFormat)$`,
+    `${kit.source}|invalid type on \\$input\\.${typiaPath}, expect to be string & Format<"date(?:-time)?">$`,
     'u',
   );
 }
