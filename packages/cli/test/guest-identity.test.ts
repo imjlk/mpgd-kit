@@ -14,6 +14,7 @@ import {
   resolveStarterCommercePlayerId,
   resolveStoreKitAppAccountToken,
   setStarterCommerceServerPlayer,
+  setStarterCommerceServicesPlayer,
 } from '../templates/phaser-game/src/platform/commerceAccountBinding.js';
 import {
   createStarterGuestSignIn,
@@ -728,6 +729,27 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   });
   assert.equal(warnings.length, before + 1);
   assert.match(warnings.at(-1) ?? '', /not the server session's/u);
+}
+
+// The store account binding is pinned to the services' player: after an account switch a
+// purchase binds nothing (refused before any store sheet), so it is never journaled under
+// one player and bound to the other's store account.
+{
+  let sessionPlayer = 'p_pinned';
+  setStarterCommerceServerPlayer(() => sessionPlayer);
+  setStarterCommerceServicesPlayer('p_pinned');
+  assert.equal(await resolveStarterCommercePlayerId(nativeShell), 'p_pinned');
+  assert.ok((await resolvePlayBillingAccountBinding(nativeShell)) !== undefined);
+  sessionPlayer = 'p_switched';
+  assert.equal(await resolveStarterCommercePlayerId(nativeShell), undefined);
+  assert.equal(await resolvePlayBillingAccountBinding(nativeShell), undefined);
+  await assert.rejects(resolveStoreKitAppAccountToken(nativeShell));
+  setStarterCommerceServicesPlayer(undefined);
+  assert.equal(
+    await resolveStarterCommercePlayerId(nativeShell),
+    'p_switched',
+    'the pin is removable',
+  );
 }
 
 setStarterCommerceServerPlayer(undefined);

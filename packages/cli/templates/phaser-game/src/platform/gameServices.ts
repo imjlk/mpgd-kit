@@ -13,6 +13,7 @@ import type { PlatformGateway } from '@mpgd/platform';
 import type { GameActionReconciliationPort } from '@mpgd/game-runtime/actions';
 import type { PurchasePresentationEvent } from '@mpgd/game-runtime/ads';
 
+import { setStarterCommerceServicesPlayer } from './commerceAccountBinding';
 import { resolveStarterCommerceProducts } from './commerceProducts';
 import type { StarterGuestSignIn } from './guestIdentity';
 import { createStorageMonetizationOperationStore } from './monetizationJournal';
@@ -85,6 +86,8 @@ export function createStarterGameServices(input: StarterGameServicesInput): Star
   if (session === undefined || services.mode === 'disabled') {
     return services;
   }
+  // The store account binding follows the same player as the journal.
+  setStarterCommerceServicesPlayer(input.playerId);
   return bindStarterServicesToPlayer({
     services,
     playerId: input.playerId,
