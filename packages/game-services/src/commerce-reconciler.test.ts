@@ -3989,4 +3989,47 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   }
 }
 
+// 55. `closed`: while it answers true, `start()` subscribes nothing and starts nothing (an
+// owner closed for good, after its `stop()`); without the input a stopped reconciler starts
+// again.
+{
+  const countSubscriptions = (provider: FakeProvider): { readonly open: () => number } => {
+    let open = 0;
+    const subscribe = provider.subscribe;
+    provider.subscribe = (next) => {
+      open += 1;
+      const release = subscribe.call(provider, next);
+      return () => {
+        open -= 1;
+        release();
+      };
+    };
+    return { open: () => open };
+  };
+
+  let closed = false;
+  const owned = createFakeProvider();
+  const ownedSubscriptions = countSubscriptions(owned);
+  const h = createHarness({ provider: owned, overrides: { closed: () => closed } });
+  await h.reconciler.start();
+  assertEqual(ownedSubscriptions.open(), 1, 'an open owner starts as usual');
+  closed = true;
+  await h.reconciler.stop();
+  assertEqual(ownedSubscriptions.open(), 0, 'stop unsubscribes');
+  await h.reconciler.start();
+  assertEqual(ownedSubscriptions.open(), 0, 'a closed owner subscribes nothing');
+  assertEqual(h.reconciler.started, false, 'and starts nothing');
+
+  const plain = createFakeProvider();
+  const plainSubscriptions = countSubscriptions(plain);
+  const restartable = createHarness({ provider: plain });
+  await restartable.reconciler.start();
+  await restartable.reconciler.stop();
+  assertEqual(plainSubscriptions.open(), 0, 'stop unsubscribes');
+  await restartable.reconciler.start();
+  assertEqual(plainSubscriptions.open(), 1, 'without `closed` a stopped reconciler starts again');
+  assertEqual(restartable.reconciler.started, true, 'and is started');
+  await restartable.reconciler.stop();
+}
+
 console.info('commerce reconciler tests passed');

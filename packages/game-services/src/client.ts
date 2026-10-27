@@ -240,6 +240,8 @@ export interface CreateGameServicesClientInput {
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
   /** The reconciler's `sessionCheck` (see `CreateCommerceReconcilerInput`). */
   readonly commerceSessionCheck?: CreateCommerceReconcilerInput['sessionCheck'];
+  /** The reconciler's `closed` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceClosed?: CreateCommerceReconcilerInput['closed'];
   /** The reconciler's `accountBinding` (see `CreateCommerceReconcilerInput`). */
   readonly commerceAccountBinding?: CreateCommerceReconcilerInput['accountBinding'];
 }
@@ -298,6 +300,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
       ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
       ...(input.commerceSessionCheck === undefined ? {} : { sessionCheck: input.commerceSessionCheck }),
+      ...(input.commerceClosed === undefined ? {} : { closed: input.commerceClosed }),
       ...(input.commerceAccountBinding === undefined ? {} : { accountBinding: input.commerceAccountBinding }),
       ...(input.commerceStaleLaunchedAfterMs === undefined
         ? {}
