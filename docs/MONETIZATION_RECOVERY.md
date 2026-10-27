@@ -68,9 +68,11 @@ store UI, and a key reused for another product or source rejects;
 available purchases decide. A `requested` record left behind by a crash
 before the store answer was journaled, and a `launched` record with no store
 purchase after `staleLaunchedAfterMs` (24 hours by default; pass `Infinity`
-to keep the RFC rule without expiry), end as `failed` with the
-`OUTCOME_UNKNOWN` class so the product is not serialized behind them; a
-purchase the store reports later is still journaled under its derived key.
+to keep the RFC rule without expiry; `createGameServicesRuntime` and
+`createGameServicesClient` take it as `commerceStaleLaunchedAfterMs`), end as
+`failed` with the `OUTCOME_UNKNOWN` class so the product is not serialized
+behind them; a purchase the store reports later is still journaled under its
+derived key.
 An error event never ends a record that already holds a store purchase or a
 saved verify request. Transport failures on verify or finish keep the
 state, are reported as `failure` events, and are retried on the next pass;
@@ -90,7 +92,22 @@ Nothing is granted from a provider result: an adapter-settled purchase and a
 wallet spend (`credit-wallet.spend.v1`, no `settlement`) are verified like any
 other, and `finishTransaction` is only ever called for a `granted` or
 `finishing` record that holds the backend's ledger entry id
-(`assertCommerceFinishAllowed`).
+(`assertCommerceFinishAllowed`), or for a `finished` consumable that a
+`client`-finish store reports again: a store lists a consumable only while it
+is unfinished, so the reconciler finishes it again with the journaled ledger
+entry, once per session (a call that failed in transport is tried again on
+the next report), without verifying it again and without rewriting the record
+(on a retry, `retry: true` for a record already `finishing` before the call,
+StoreKit answers a consumable that already left `Transaction.unfinished` as
+finished, which can end a record before a late or unverifiable entry shows up
+in the list; a first finish never sets it). Once the journal has dropped the
+finished record, the transaction is verified under its derived key: for a
+consumable of a `client`-finish registry entry (the App Store) the reference
+backend answers this player's recorded grant (`verified`, `alreadyProcessed:
+true`, the same ledger entry) instead of `EVIDENCE_ALREADY_PROCESSED`, so the
+reconciler finishes it and nothing is granted twice; another player, a
+durable, a reversed grant, and a backend without a registry keep the
+refusal.
 
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal
@@ -119,6 +136,21 @@ unique index remains the backstop when it is not). A
 in memory for the session only and warns once (`warn`, default
 `console.warn`); duplicates are then caught by the backend ledger, not by
 the client.
+
+A runtime and its reconciler act for one `playerId`. When the session can
+change player within a run, pass `createGameServicesRuntime({ sessionPlayerId })`
+(the reconciler's `sessionCheck`): from the moment the session names another
+player, the old runtime closes before that player's headers or store account
+binding reach the old player's records, and every refusal is retryable and
+ends no record (see "One player per runtime" in the `@mpgd/game-services`
+README). Verifying one player's purchase with another player's session is not
+a transient error: the kit's Google Play and App Store verification answers it
+(for anything but a restored non-consumable) as a permanent `rejected`
+account mismatch (`GOOGLE_PLAY_ACCOUNT_MISMATCH`,
+`APP_STORE_ACCOUNT_TOKEN_MISMATCH`), which would end a valid purchase.
+`runtime.dispose()` closes a runtime the same way before the host creates one
+for the new player; the generated game reloads instead (template README,
+"Guest identity").
 
 ### The retired v1 purchase record
 

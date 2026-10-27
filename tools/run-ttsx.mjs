@@ -33,7 +33,7 @@ const inheritedEntry = emittedEntryIn(inheritedEmitRoot);
 const useInheritedEmit = !forceTtsx && toolsEntry && inheritedEntry !== undefined && existsSync(inheritedEntry);
 
 // Require the entry in its check project so ordinary checks also cover it.
-// ttsx 0.32.1 fixes the old same-name emit substitution, but this repository
+// ttsx 0.32.1 and later (pinned: 0.34.2) fix the old same-name emit substitution, but this repository
 // deliberately keeps the narrower inclusion policy (tools/ttsx-project-entry.mjs).
 // The compiled lane already selects the entry's exact mirrored output.
 if (!useInheritedEmit && sourceEntry !== undefined && /\.[cm]?tsx?$/i.test(sourceEntry)) {

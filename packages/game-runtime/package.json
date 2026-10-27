@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/game-runtime",
-  "version": "0.8.8",
+  "version": "0.8.10",
   "description": "Gameplay execution, scoped UI and action coordination with optional Phaser scene bindings.",
   "license": "MIT",
   "keywords": [
@@ -81,7 +81,7 @@
     "fix": "ttsc fix"
   },
   "devDependencies": {
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0",
     "phaser": "^4.2.0",

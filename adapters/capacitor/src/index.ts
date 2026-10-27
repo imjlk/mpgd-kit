@@ -82,12 +82,19 @@ export {
   type CreateCommerceServiceProviderInput,
 } from './commerce-bridge.js';
 export {
+  accountBindingLookupFailedStoreCode,
   createStoreCommerceProvider,
+  purchaseGateFailedStoreCode,
+  purchaseGateTimeoutMs,
+  purchasesPausedStoreCode,
   recoverableErrorCodes,
   type CreateStoreCommerceProviderInput,
   type StoreCommerceCapabilityOverrides,
   type StoreCommerceProductMapping,
   type StoreCommerceProvider,
+  type StorePurchaseGate,
+  type StorePurchaseGateDecision,
+  type StorePurchaseGateRequest,
 } from './store-commerce-provider.js';
 export {
   defaultStoreSdkErrorCodeMap,
@@ -203,6 +210,8 @@ export function createCapacitorPlatformGateway(input: {
     ? undefined
     : createBridgeCommerceProvider({
         store: commerceProvider.commerce.store,
+        // The host below is this package's, on the same contract.
+        acceptsFinishRetry: commerceProvider.commerce.acceptsFinishRetry === true,
         request: (method, payload) => request(method, payload),
         // The provider's channel (`NativeBridge`) may carry other protocols.
         // Only an envelope that names another protocol is dropped; anything

@@ -21,6 +21,7 @@ import {
   type CommerceReconciler,
   type CommerceReconcilerEvent,
   type CommerceReconcilerProduct,
+  type CreateCommerceReconcilerInput,
 } from './commerce-reconciler.js';
 import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import { createInMemoryMonetizationOperationStore } from './monetization-operation-store.js';
@@ -41,8 +42,11 @@ import type {
   GameServicesContractClient,
 } from './contract.js';
 import { observeGameServicesOperation } from './operation-progress.js';
+import { withLegacyOrpcErrorCompat } from './orpc-error-compat.js';
+export { withLegacyOrpcErrorCompat } from './orpc-error-compat.js';
 import {
   GameServicesHeaderResolutionError,
+  GameServicesRuntimeClosedError,
   resolveGameServicesRequestHeaders,
   type GameServicesHeaderResolver,
 } from './request-headers.js';
@@ -231,7 +235,27 @@ export interface CreateGameServicesClientInput {
   readonly warn?: (message: string) => void;
   /** Catalog kinds and SKUs the reconciler resolves without a store read. */
   readonly commerceProducts?: readonly CommerceReconcilerProduct[];
+  /** The reconciler's `staleLaunchedAfterMs` (24 hours by default). */
+  readonly commerceStaleLaunchedAfterMs?: number;
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
+  /** The reconciler's `sessionCheck` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceSessionCheck?: CreateCommerceReconcilerInput['sessionCheck'];
+  /** The reconciler's `closed` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceClosed?: CreateCommerceReconcilerInput['closed'];
+  /** The reconciler's `accountBinding` (see `CreateCommerceReconcilerInput`). */
+  readonly commerceAccountBinding?: CreateCommerceReconcilerInput['accountBinding'];
+}
+
+/**
+ * `commerceStaleLaunchedAfterMs` is checked where it enters, so a bad value
+ * fails even when no reconciler is built (a gateway without `commerce`).
+ */
+export function assertCommerceStaleLaunchedAfterMs(value: number | undefined): void {
+  if (value !== undefined && !(typeof value === 'number' && value > 0)) {
+    throw new RangeError(
+      'commerceStaleLaunchedAfterMs must be a positive duration in milliseconds, or Infinity.',
+    );
+  }
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
@@ -245,6 +269,7 @@ export interface GameServicesLeaderboardResult {
 }
 
 export function createGameServicesClient(input: CreateGameServicesClientInput): GameServicesClient {
+  assertCommerceStaleLaunchedAfterMs(input.commerceStaleLaunchedAfterMs);
   const now = input.now ?? (() => new Date().toISOString());
   const requestNow = input.requestNow ?? now;
   const rewardEvidenceRegistry = input.rewardEvidenceRegistry ?? createDefaultClientRewardEvidenceRegistry();
@@ -274,6 +299,12 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       target: input.target,
       ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
       ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
+      ...(input.commerceSessionCheck === undefined ? {} : { sessionCheck: input.commerceSessionCheck }),
+      ...(input.commerceClosed === undefined ? {} : { closed: input.commerceClosed }),
+      ...(input.commerceAccountBinding === undefined ? {} : { accountBinding: input.commerceAccountBinding }),
+      ...(input.commerceStaleLaunchedAfterMs === undefined
+        ? {}
+        : { staleLaunchedAfterMs: input.commerceStaleLaunchedAfterMs }),
       now: requestNow,
     });
     if (input.onCommerceEvent !== undefined) {
@@ -680,9 +711,16 @@ export function createGameServicesFetchBackendTransport(
 export function createGameServicesOrpcClient(
   input: CreateGameServicesOrpcClientInput,
 ): GameServicesContractClient {
+  const fetcher = input.fetch;
   const link = new RPCLink({
     origin: input.url,
-    ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+    // Every response passes the oRPC error-body compatibility shim so errors from a Worker on
+    // an older oRPC beta keep their codes; the default fetch is resolved per call, as oRPC does.
+    fetch: withLegacyOrpcErrorCompat((url, init, ...rest) => {
+      return fetcher === undefined
+        ? globalThis.fetch(url, init)
+        : (fetcher as (...args: unknown[]) => Promise<Response>)(url, init, ...rest);
+    }),
     ...(input.headers === undefined && input.getHeaders === undefined
       ? {}
       : {
@@ -765,7 +803,7 @@ async function sendGameServicesBackendRequest<TRequest, TResponse>(
       body,
     });
   } catch (error) {
-    if (error instanceof GameServicesHeaderResolutionError) {
+    if (error instanceof GameServicesHeaderResolutionError || error instanceof GameServicesRuntimeClosedError) {
       throw error;
     }
     // Do not leak SDK or native transport exceptions (which can contain

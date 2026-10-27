@@ -1,3 +1,11 @@
+/**
+ * Conformance vector format for docs/specs/commerce/vectors/*.json. A3 adds
+ * the runner; A2 fixes the file shape so every provider and the reference
+ * runtime read the same fixtures. Step inputs are fixture shorthand: the
+ * runner fills the profile's store, quantity 1, request source `shop`, and
+ * fake evidence before calling the typed provider.
+ */
+
 import typia, { type tags } from 'typia';
 
 import type {
@@ -16,18 +24,7 @@ import type {
   PurchaseSource,
   StorePurchaseState,
 } from './commerce.js';
-
-/**
- * Conformance vector format for docs/specs/commerce/vectors/*.json. A3 adds
- * the runner; A2 fixes the file shape so every provider and the reference
- * runtime read the same fixtures. Step inputs are fixture shorthand: the
- * runner fills the profile's store, quantity 1, request source `shop`, and
- * fake evidence before calling the typed provider.
- */
-
-type NonEmptyString = string & tags.MinLength<1>;
-type IsoTimestamp = string & tags.Format<'date-time'>;
-type NonNegativeInteger = number & tags.Type<'uint32'>;
+import type { IsoTimestamp, NonEmptyString, NonNegativeInteger } from './commerce-contract.js';
 
 export interface CommerceConformanceProfile {
   readonly store: NonEmptyString;

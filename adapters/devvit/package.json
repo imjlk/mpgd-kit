@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-devvit",
-  "version": "0.14.6",
+  "version": "0.14.8",
   "description": "Reddit Devvit Web platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -68,7 +68,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },

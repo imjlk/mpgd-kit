@@ -1,5 +1,17 @@
 # @mpgd/adapter-devvit
 
+## 0.14.8 — 2026-10-28
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.17.0, @mpgd/game-services@0.31.0, @mpgd/platform@0.33.0
+
+## 0.14.7 — 2026-10-27
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-services@0.30.5
+
 ## 0.14.6 — 2026-10-27
 
 ### Patch changes

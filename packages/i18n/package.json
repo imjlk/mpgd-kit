@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/i18n",
-  "version": "0.6.26",
+  "version": "0.6.27",
   "description": "Paraglide-backed message catalog for mpgd demos and target-aware UI.",
   "license": "MIT",
   "repository": {
@@ -58,7 +58,7 @@
     "@inlang/paraglide-js": "2.25.1",
     "@inlang/plugin-message-format": "4.4.0",
     "@types/node": "^24.0.0",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

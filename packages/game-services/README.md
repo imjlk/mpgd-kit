@@ -183,6 +183,37 @@ and retry policy are not redesigned by this observer API.
 The root `pnpm test` pipeline includes compiled client JS and public declaration
 consumption checks alongside the client and target conformance suites.
 
+## oRPC version and error compatibility
+
+The oRPC transport (`createGameServicesOrpcClient`, `createGameServicesRouter`,
+`createGameServicesRpcFetchHandler`) is built on oRPC `2.0.0-beta.46`, pinned
+exactly. Pin the same exact version if a game or Worker also uses oRPC directly.
+
+oRPC 2.0.0-beta.34 removed the `inferable` flag from RPC error bodies, and each
+side rejects the other's shape: an older client would see a malformed response
+instead of `BAD_REQUEST` or `NOT_FOUND`, and so would a newer client talking to
+an older Worker. Games and Workers deploy separately, so this package bridges
+the change in `src/orpc-error-compat.ts`:
+
+- `createGameServicesRpcFetchHandler` adds `inferable: false` to oRPC error
+  bodies, so clients from `@mpgd/game-services` 0.30.5 or older (oRPC
+  2.0.0-beta.14) still decode error codes;
+- `createGameServicesOrpcClient` (0.31.0 or later) removes a boolean `inferable`
+  from error bodies before oRPC validates them, so it still decodes errors from
+  Workers on 0.30.5 or older.
+
+Success responses are unchanged. Any other oRPC 2.0.0-beta.34+ client that calls
+a game-services Worker's `/rpc` route (for example a plain `RPCLink` in a game)
+must wrap its fetch with `withLegacyOrpcErrorCompat` from
+`@mpgd/game-services/client`, or it sees the legacy flag as a malformed error. A
+Worker that no longer serves clients from 0.30.5 or older can pass
+`legacyOrpcErrorFlag: false` to `createGameServicesRpcFetchHandler`. The shim is
+removed once the oldest supported game client and every supported Worker come
+from `@mpgd/game-services` 0.31.0 or later (oRPC 2.0.0-beta.46). Other oRPC changes picked up with it: RPC routes accept
+only POST, PUT, PATCH, and DELETE (a GET answers 404, and the kit clients always
+POST), and `Infinity` inputs are encoded with their own meta marker, which a Worker
+on 0.30.5 or older (oRPC 2.0.0-beta.14) cannot decode.
+
 ## Runtime backend transport
 
 `createGameServicesRuntime` accepts `httpTransport` for its HTTP JSON backend
@@ -232,6 +263,71 @@ them into analytics or logs.
 
 All published entrypoints use explicit internal ESM module paths and are smoke-tested
 with native Node imports, without a bundler or TypeScript runtime loader.
+
+## One player per runtime
+
+A runtime, its purchase journal records, and its reconciler belong to
+`playerId` for their whole life, while `getHeaders` and a store provider's
+account binding follow the live session. When the session can change player
+within a run (an account switch), pass `sessionPlayerId: () => session.current()?.playerId`:
+
+- It is read before every backend request and again once that request's
+  headers are resolved, and by the commerce reconciler before each pass,
+  queued event, record step, store read, restore, and finish, and right
+  before a store UI opens.
+- Another player closes the runtime for good: nothing more is verified,
+  restored, or finished for this player with the other player's credentials
+  (a backend answers that with a permanent account-mismatch rejection), and
+  no store UI opens for a purchase journaled here once the session names
+  someone else. The provider resolves its account binding a few steps after
+  that last check, so the binding resolver must follow the runtime's player
+  too (bind nothing for anyone else, as the generated game's
+  `pinStarterCommercePlayer` does) for a purchase never to be
+  journaled here and bound to the other account; a binding refused while the
+  session changed keeps the attempt retryable. Purchases
+  answer `failed` with the retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`
+  before any store UI, rewarded-ad claims answer `unavailable` before any
+  ad, recovery runs nothing, and Restore Purchases rejects with
+  `GameServicesRuntimeClosedError`.
+- No player (signed out) refuses the same way with
+  `GAME_SERVICES_SESSION_REQUIRED` and leaves the runtime open for its player.
+
+Refusals end no journal record: a runtime created for the player later
+resumes them. `runtime.dispose()` closes a runtime the same way
+(`GAME_SERVICES_RUNTIME_DISPOSED`) and resolves once a purchase whose store
+sheet is open has journaled its answer, a recovery pass under way
+(`monetizationRecovery.reconcile()`) has finished, and the reconciler has
+stopped (each wait bounded by `gameServicesDisposeWaitMs`, 3 minutes); call
+it, and wait, before creating the runtime for another player or reloading.
+A recovery pass that outlives that wait starts no store subscription
+afterwards. A custom
+`httpTransport` must send only the headers the runtime resolved for each
+request, or the after-resolution check cannot cover it. A refusal keeps its
+`GameServicesRuntimeClosedError` through header resolution and the HTTP
+transport (it is not turned into `GameServicesHeaderResolutionError` or
+`GameServicesBackendTransportError`). A reconciler started while the session
+is signed out still subscribes to the store; its work waits for the session.
+
+Pass `commerceAccountBinding` too: this player's store account binding,
+derived from `playerId` the way the store provider binds the player's new
+purchases (Google Play's obfuscated account id, StoreKit's app account
+token). The reconciler then leaves a store purchase bound to another account
+alone (reported, never journaled or verified for this player). After a
+restart as another player, Google Play still lists the previous player's
+unacknowledged purchases; sending one with this player's session would be
+rejected for good, and its derived key would then block the other player's
+own recovery. The player's explicit Restore Purchases still takes a durable
+bound to another account (restore sharing). StoreKit's provider already
+filters transactions by app account token the same way.
+
+`dispose()` is a required member of `GameServicesRuntime`: a runtime built by
+hand (a test fake, a custom wrapper) adds `dispose: async () => undefined`.
+
+A game adopting this creates its runtime from its server session's player
+(never a platform placeholder), passes `sessionPlayerId` and
+`commerceAccountBinding`, keeps its store account binding resolver on the
+same player (bind nothing for anyone else), and disposes the runtime (and
+waits) before it creates one for another player.
 
 ## Guest session and account binding foundation
 

@@ -9,6 +9,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-native-packed-'));
 const packRoot = join(fixtureRoot, 'packs');
 const consumerRoot = join(fixtureRoot, 'consumer');
+// The consumer compiles with the Kit's own exact ttsc pin, so a toolchain upgrade
+// cannot leave this smoke on a stale compiler.
+const rootToolchainPins = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).devDependencies;
 const entryPackages = [
   '@mpgd/adapter-capacitor',
   '@mpgd/capacitor-game-services',
@@ -148,7 +151,7 @@ function writeConsumer(packed) {
       '@capacitor/app': '8.1.1',
     },
     devDependencies: {
-      ttsc: '0.32.1',
+      ttsc: rootToolchainPins.ttsc,
       typescript: '7.0.2',
       vite: '8.1.3',
     },

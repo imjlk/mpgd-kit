@@ -1,5 +1,25 @@
 # @mpgd/capacitor-storekit
 
+## 0.5.0 — 2026-10-28
+
+### Added
+
+- [c0066ece](https://github.com/imjlk/mpgd-kit/commit/c0066eceb9b8a2d10d4cd311c7eb758883fdb3e0) `createCapacitorStoreKitCommerceProvider` and `createCapacitorStoreKitServiceProvider` take an optional `purchaseGate`, separate from `getAppAccountToken`: it is asked only before a new purchase opens the StoreKit sheet, while recovery, restore, and finishing keep filtering by the app account token alone, so a game can pause new sales without blocking the recovery of paid transactions. A refusal is a `failed` result with `ITEM_UNAVAILABLE` and `PURCHASES_PAUSED`. A token lookup that throws a `CommerceError` keeps its code, and binding failures are answered as `failed` results whose store code survives the bridge. With an `@mpgd/adapter-capacitor` from before the gate, which would ignore it, the plugin detects the missing gate support (`purchasesPausedStoreCode` is not exported) and refuses every new purchase with `ITEM_UNAVAILABLE` and `PURCHASE_GATE_UNSUPPORTED` (exported as `purchaseGateUnsupportedStoreCode`) instead of selling; recovery is unaffected. — Thanks @imjlk!
+
+### Fixed
+
+- [ae7b0f77](https://github.com/imjlk/mpgd-kit/commit/ae7b0f77120c1eb73c92c0249c9048cafa8a9d4f) A consumable whose finish reached StoreKit but whose answer was lost (the app closed between the native finish and the journal write) no longer stays `finishing` forever. On a retried finish (`retry: true`, which the `@mpgd/game-services` reconciler sets for a record that was already `finishing`), `finishTransaction` answers `{ finished: true }` without a native call for a consumable that `getTransactions` no longer lists, since StoreKit keeps a transaction in `Transaction.unfinished` until `finish()`. A first finish keeps the earlier answer (`{ finished: false }` for a missing transaction, since right after a purchase the list may not carry it yet), as does a caller that never sets `retry`. A durable missing from the list (revoked or unverifiable) and an entry of that id in a malformed shape still answer `{ finished: false }`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.17.0, @mpgd/bridge@0.17.0, @mpgd/game-services@0.31.0, @mpgd/platform@0.33.0
+
+## 0.4.5 — 2026-10-27
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.16.3, @mpgd/game-services@0.30.5
+
 ## 0.4.4 — 2026-10-27
 
 ### Patch changes

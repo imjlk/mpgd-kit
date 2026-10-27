@@ -940,7 +940,7 @@ assert.equal(
       planStorePresence({ game, profile: 'beta', store: 'app-store' }, environment, {
         googlePlay: factory,
       }),
-      /google-play/u,
+      /does not configure ios/u,
     );
     const planned = await planStorePresence(
       { game, profile: 'beta', store: 'google-play' },

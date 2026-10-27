@@ -1,5 +1,22 @@
 # @mpgd/adapter-capacitor
 
+## 0.17.0 — 2026-10-28
+
+### Added
+
+- [ae7b0f77](https://github.com/imjlk/mpgd-kit/commit/ae7b0f77120c1eb73c92c0249c9048cafa8a9d4f) `FinishTransactionInput` (and the `commerce.v2.finishTransaction` bridge payload) takes an optional `retry`: the caller already asked to finish this purchase, in an earlier attempt or session. A store may then read a consumable missing from its unfinished list as the lost acknowledgement of that earlier finish; a first finish never carries it. `createStoreCommerceProvider` forwards it to `StoreSdk.finishTransaction`. A bridge host on an earlier `@mpgd/platform` rejects the unknown field, so update the host and the webview together. — Thanks @imjlk!
+- [c0066ece](https://github.com/imjlk/mpgd-kit/commit/c0066eceb9b8a2d10d4cd311c7eb758883fdb3e0) `createStoreCommerceProvider` takes an optional `purchaseGate`, a sales switch for new purchases separate from the account binding. It is asked once per `requestPurchase` with `{ store, logicalId, storeSku, kind, source }`, after the product, availability, and kind checks and before `accountBinding`, and never by recovery, restore, finishing, events, `fetchProducts`, or `getAvailablePurchases`, so paid purchases keep reconciling while new sales are refused. A refusal never opens the store UI and answers `{ outcome: 'failed' }` with `ITEM_UNAVAILABLE` and `storeCode` `PURCHASES_PAUSED` (or the gate's own code); a gate that throws, answers something malformed, or does not answer within `purchaseGateTimeoutMs` (3 s; a late answer is ignored and never opens the store) refuses with `PURCHASE_GATE_FAILED`, retryable (a thrown `CommerceError` keeps its code unless it claims a launched or cancelled sheet: `OUTCOME_UNKNOWN`, `ALREADY_OWNED`, and `USER_CANCELLED` become `PURCHASE_GATE_FAILED`). A failed or missing account binding is now also answered as a `failed` result instead of a thrown error, so its `storeCode` survives the bridge (a thrown error crosses it without one); a lookup that throws anything but a `CommerceError` is `ACCOUNT_BINDING_REQUIRED` with `ACCOUNT_BINDING_LOOKUP_FAILED`, retryable, and launched or cancelled codes become that too. New exports: `StorePurchaseGate`, `StorePurchaseGateRequest`, `StorePurchaseGateDecision`, `purchasesPausedStoreCode`, `purchaseGateFailedStoreCode`, `accountBindingLookupFailedStoreCode`, `purchaseGateTimeoutMs`. A refused attempt is journaled as terminal `failed` by the reconciler, so a retry uses a new idempotency key (trusted `not-started` facts across the bridge are left to a later change). Capabilities are unchanged: a shop hides buy buttons from the same server flag it hands the gate. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.17.0, @mpgd/capacitor-game-services@0.9.4, @mpgd/game-runtime@0.8.10, @mpgd/game-services@0.31.0, @mpgd/platform@0.33.0, @mpgd/target-config@0.24.4
+
+## 0.16.3 — 2026-10-27
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-runtime@0.8.9, @mpgd/game-services@0.30.5, @mpgd/target-config@0.24.3
+
 ## 0.16.2 — 2026-10-27
 
 ### Patch changes

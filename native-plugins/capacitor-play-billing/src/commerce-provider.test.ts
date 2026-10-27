@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BridgeEvent, BridgeMethod, BridgeRequest } from '@mpgd/bridge';
 import { createCapacitorPlatformGateway, type NativeBridge } from '@mpgd/adapter-capacitor';
@@ -10,6 +10,7 @@ import {
 import type { VerifyPurchaseRequest } from '@mpgd/game-services/types';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import {
+  CommerceError,
   commerceProtocol,
   commerceProtocolVersion,
   createGooglePlayTokenPurchaseKey,
@@ -205,10 +206,12 @@ describe('createCapacitorPlayBillingCommerceProvider', () => {
       productId: 'remove.ads', offerToken: 'intro', obfuscatedAccountId: 'player-hash-1',
     }]);
 
+    // Binding failures are failed results, not throws, so the store code
+    // survives the bridge.
     const missing = createProvider(createPlugin(), { accountBinding: () => undefined });
     await expect(missing.provider.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop',
-    })).rejects.toMatchObject({ code: 'ACCOUNT_BINDING_REQUIRED' });
+    })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'ACCOUNT_BINDING_REQUIRED' } });
     expect(missing.plugin.purchaseCalls).toEqual([]);
 
     const failing = createProvider(createPlugin(), {
@@ -218,11 +221,29 @@ describe('createCapacitorPlayBillingCommerceProvider', () => {
     });
     await expect(failing.provider.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-3', source: 'shop',
-    })).rejects.toMatchObject({
-      code: 'ACCOUNT_BINDING_REQUIRED',
-      storeCode: 'PLAY_BILLING_ACCOUNT_LOOKUP_FAILED',
-      retryable: false,
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: {
+        code: 'ACCOUNT_BINDING_REQUIRED',
+        storeCode: 'PLAY_BILLING_ACCOUNT_LOOKUP_FAILED',
+        retryable: false,
+      },
     });
+
+    // A lookup that throws its own commerce error keeps it.
+    const signedOut = createProvider(createPlugin(), {
+      accountBinding: async () => {
+        throw new CommerceError('NETWORK', { storeCode: 'GAME_BINDING_OFFLINE' });
+      },
+    });
+    await expect(signedOut.provider.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-3b', source: 'shop',
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'NETWORK', storeCode: 'GAME_BINDING_OFFLINE', retryable: true },
+    });
+    expect(failing.plugin.purchaseCalls).toEqual([]);
+    expect(signedOut.plugin.purchaseCalls).toEqual([]);
 
     const wrongKind = createProvider(createPlugin(), {
       accountBinding: () => ({ kind: 'host-identity' }),
@@ -235,6 +256,51 @@ describe('createCapacitorPlayBillingCommerceProvider', () => {
       error: { code: 'ACCOUNT_BINDING_REQUIRED', storeCode: 'PLAY_BILLING_ACCOUNT_REQUIRED' },
     });
     expect(wrongKind.plugin.purchaseCalls).toEqual([]);
+  });
+
+  it('asks the purchase gate before the binding and never during recovery', async () => {
+    const calls: string[] = [];
+    let open = false;
+    const plugin = createPlugin();
+    const paid = fakePlayPurchase({ products: ['gems.small'], purchaseToken: 'paid-token' });
+    plugin.upsert(paid);
+    const { provider } = createProvider(plugin, {
+      accountBinding: () => {
+        calls.push('binding');
+        return accountBinding;
+      },
+      purchaseGate: (request) => {
+        calls.push(`gate:${request.store}:${request.logicalId}:${request.storeSku}:${request.source}`);
+        return open
+          ? { allowed: true }
+          : { allowed: false, storeCode: 'COIN_SALES_DISABLED', message: 'Sales are closed.' };
+      },
+    });
+    await expect(provider.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
+    })).resolves.toEqual({
+      outcome: 'failed',
+      error: {
+        code: 'ITEM_UNAVAILABLE',
+        retryable: false,
+        storeCode: 'COIN_SALES_DISABLED',
+        message: 'Sales are closed.',
+      },
+    });
+    expect(calls).toEqual(['gate:google-play:gems_small:gems.small:shop']);
+    expect(plugin.purchaseCalls).toEqual([]);
+    // Recovery reads the paid purchase while sales are paused, without the gate.
+    expect((await provider.getAvailablePurchases()).map((purchase) => purchase.token))
+      .toEqual(['paid-token']);
+    expect(calls).toHaveLength(1);
+
+    open = true;
+    plugin.queuePurchase({ status: 'cancelled' });
+    await expect(provider.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop',
+    })).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(calls.slice(1)).toEqual(['gate:google-play:gems_small:gems.small:shop', 'binding']);
+    expect(plugin.purchaseCalls).toHaveLength(1);
   });
 
   it('keeps a pending purchase open until the plugin reports it purchased', async () => {
@@ -368,6 +434,91 @@ describe('createCapacitorPlayBillingCommerceProvider with the reference reconcil
     });
     return { provider, backend, journal, runtime };
   }
+
+  it('recovers a paid purchase while the purchase gate refuses new sales', async () => {
+    const plugin = createPlugin();
+    plugin.upsert(fakePlayPurchase({ products: ['gems.small'], purchaseToken: 'token-paid', orderId: 'GPA.p' }));
+    const { provider } = createProvider(plugin, {
+      purchaseGate: () => ({ allowed: false }),
+    });
+    const verified: string[] = [];
+    const reconciler = createCommerceReconciler({
+      provider,
+      backend: {
+        async verifyPurchase(request) {
+          verified.push(request.platformTransactionId);
+          return {
+            verified: true,
+            alreadyProcessed: false,
+            ledgerEntryId: 'le-paid',
+            finalization: { status: 'completed', action: 'consume', alreadyCompleted: false },
+          };
+        },
+      },
+      store: createInMemoryMonetizationOperationStore(),
+      playerId: 'player-1',
+      target: 'android',
+      products: catalog.map((entry) => ({ ...entry })),
+    });
+    await reconciler.start();
+    expect((await reconciler.read(await createGooglePlayTokenPurchaseKey('token-paid')))?.state)
+      .toBe('finished');
+    await expect(reconciler.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-new', source: 'shop',
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASES_PAUSED' },
+    });
+    expect((await reconciler.read('op-new'))?.state).toBe('failed');
+    await reconciler.stop();
+    expect(verified).toEqual(['GPA.p']);
+    expect(plugin.purchaseCalls).toEqual([]);
+  });
+
+  it('journals a retryable gate failure as failed; a new key retries once the gate answers', async () => {
+    // Without trusted presentation facts (bridge presentation is K4), the
+    // reconciler cannot tell a pre-launch refusal from a closed sheet, so it
+    // keeps the attempt terminal and the game retries under a new key.
+    const plugin = createPlugin();
+    let gateUp = false;
+    const gate = vi.fn(async () => {
+      if (!gateUp) {
+        throw new Error('sales flag unreachable');
+      }
+      return { allowed: true } as const;
+    });
+    const { provider } = createProvider(plugin, { purchaseGate: gate });
+    const reconciler = createCommerceReconciler({
+      provider,
+      backend: {
+        async verifyPurchase() {
+          return { verified: false, alreadyProcessed: false, reason: 'not used' };
+        },
+      },
+      store: createInMemoryMonetizationOperationStore(),
+      playerId: 'player-1',
+      target: 'android',
+      products: catalog.map((entry) => ({ ...entry })),
+    });
+    await reconciler.start();
+    const request = { logicalId: 'gems_small', idempotencyKey: 'op-gate', source: 'shop' } as const;
+    await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: true },
+    });
+    expect((await reconciler.read('op-gate'))?.state).toBe('failed');
+    gateUp = true;
+    // The same key answers from the journal without asking the gate again.
+    await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed', error: { storeCode: 'PURCHASE_GATE_FAILED' },
+    });
+    expect(gate).toHaveBeenCalledTimes(1);
+    plugin.queuePurchase({ status: 'cancelled' });
+    await expect(reconciler.requestPurchase({ ...request, idempotencyKey: 'op-gate-2' }))
+      .resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(plugin.purchaseCalls).toHaveLength(1);
+    await reconciler.stop();
+  });
 
   it('reconciles a valid purchase next to an unfinished purchase for a retired SKU', async () => {
     const plugin = createPlugin();

@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/bridge",
-  "version": "0.16.4",
+  "version": "0.17.0",
   "description": "Typed native bridge protocol for mpgd platform adapters.",
   "license": "MIT",
   "repository": {
@@ -58,14 +58,14 @@
   },
   "dependencies": {
     "@mpgd/platform": "workspace:*",
-    "@orpc/client": "2.0.0-beta.14",
-    "@orpc/contract": "2.0.0-beta.14",
-    "@orpc/server": "2.0.0-beta.14",
-    "typia": "13.0.2"
+    "@orpc/client": "2.0.0-beta.46",
+    "@orpc/contract": "2.0.0-beta.46",
+    "@orpc/server": "2.0.0-beta.46",
+    "typia": "15.2.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

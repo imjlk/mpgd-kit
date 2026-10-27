@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/platform",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "Shared platform gateway, monetization, ads, leaderboard, identity, lifecycle, and storage contracts for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -113,11 +113,11 @@
     "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs && node test/crash-reporting-dist-import.mjs && node test/commerce-dist-import.mjs && node test/commerce-conformance-dist-import.mjs && node test/wallet-commerce-dist-import.mjs && node test/notifications-dist-import.mjs && node test/notifications-conformance-dist-import.mjs && node test/routes-dist-import.mjs && node test/share-link-conformance-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/platform/test/commerce-derived-key-parity.ts"
   },
   "dependencies": {
-    "typia": "13.0.2"
+    "typia": "15.2.1"
   },
   "devDependencies": {
-    "@ttsc/unplugin": "0.32.1",
-    "ttsc": "0.32.1",
+    "@ttsc/unplugin": "0.34.2",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },

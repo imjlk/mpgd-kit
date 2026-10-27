@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-verse8",
-  "version": "0.7.15",
+  "version": "0.7.17",
   "description": "Verse8 iframe platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -57,7 +57,7 @@
   "devDependencies": {
     "@mpgd/game-runtime": "workspace:*",
     "@types/node": "^24.0.0",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },

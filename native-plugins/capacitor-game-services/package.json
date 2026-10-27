@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/capacitor-game-services",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Capacitor native plugin bridge for mpgd game services.",
   "license": "MIT",
   "repository": {
@@ -58,7 +58,7 @@
   },
   "devDependencies": {
     "@capacitor/core": "8.5.2",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

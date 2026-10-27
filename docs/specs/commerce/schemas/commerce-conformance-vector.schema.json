@@ -1703,7 +1703,7 @@
             "readOnly": true
           },
           "period": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "description": "ISO 8601 duration, for example P30D.",
             "readOnly": true
           }
@@ -1719,7 +1719,7 @@
         "type": "object",
         "properties": {
           "currency": {
-            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "$ref": "#/components/schemas/NonEmptyString",
             "readOnly": true
           },
           "amount": {
@@ -1739,10 +1739,6 @@
         "format": "date-time"
       },
       "NonEmptyString": {
-        "type": "string",
-        "minLength": 1
-      },
-      "NonEmptyString.o1": {
         "type": "string",
         "minLength": 1
       },

@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-browser",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Browser preview platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -64,7 +64,7 @@
     "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },

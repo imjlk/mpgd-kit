@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/cli",
-  "version": "0.63.0",
+  "version": "0.65.0",
   "description": "Gunshi CLI for mpgd-kit starter generation and target workflow orchestration.",
   "license": "MIT",
   "repository": {
@@ -73,7 +73,7 @@
     "gunshi": "^0.35.1",
     "semver": "^7.8.5",
     "sharp": "0.35.5",
-    "typia": "13.0.2",
+    "typia": "15.2.1",
     "undici": "^7.29.1",
     "vite": "8.1.3",
     "yauzl": "3.4.0",
@@ -98,7 +98,7 @@
     "@types/node": "^24.0.0",
     "@types/semver": "^7.8.0",
     "@types/yauzl": "3.4.0",
-    "ttsc": "0.32.1",
+    "ttsc": "0.34.2",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

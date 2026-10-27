@@ -1,6 +1,5 @@
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
-import type { StandardUrl } from '@orpc/client/standard';
 import { oc, type as orpcType, type RouterContractClient } from '@orpc/contract';
 import { implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
@@ -12,7 +11,16 @@ import {
   type BridgeResponse,
 } from './index.js';
 
-export type BridgeRpcEndpoint = StandardUrl;
+/**
+ * A same-origin RPC URL path, optionally with a query or fragment. This is the shape oRPC's
+ * RPCLink accepts for `url`; it is spelled out here because oRPC 2.0.0-beta.46 stopped
+ * re-exporting the standard-server `StandardUrl` type.
+ */
+export type BridgeRpcEndpoint =
+  | `/${string}`
+  | `/${string}?${string}`
+  | `/${string}#${string}`
+  | `/${string}?${string}#${string}`;
 export type BridgeRpcPrefix = `/${string}`;
 
 export const defaultBridgeRpcEndpoint = '/api/mpgd/rpc' satisfies BridgeRpcPrefix;

@@ -24,48 +24,47 @@ import type {
 
 type CommerceTag<Props extends object> = { 'typia.tag'?: Props };
 
+// The mirrors carry typia's own alias names, which typia prints in validation
+// errors (`expected (string & MinLength<1>)`), so a contract type reads the
+// same as one built from `typia.tags`. They stay module-private; the exported
+// `Commerce*` names below are the public spelling.
+
 /** `tags.MinLength<Value>` */
-export type CommerceMinLength<Value extends number> = CommerceTag<{
+type MinLength<Value extends number> = CommerceTag<{
   target: 'string';
   kind: 'minLength';
   value: Value;
-  validate: `${Value} <= $input.length`;
+  validate: `$importInternal("_stringLengthGte")($input, ${Value})`;
   exclusive: true;
   schema: { minLength: Value };
 }>;
 
 /** `tags.Format<'date-time'>` */
-export type CommerceDateTimeFormat = CommerceTag<{
+type Format<Value extends 'date-time'> = CommerceTag<{
   target: 'string';
   kind: 'format';
-  value: 'date-time';
+  value: Value;
   validate: '$importInternal("isFormatDateTime")($input)';
   exclusive: ['format', 'pattern'];
-  schema: { format: 'date-time' };
+  schema: { format: Value };
 }>;
 
-/** `tags.Type<'uint32'>` */
-export type CommerceUint32 = CommerceTag<{
-  target: 'number';
+/** `tags.Type<'uint32'>` and `tags.Type<'int64'>` */
+type Type<Value extends 'uint32' | 'int64'> = CommerceTag<{
+  target: Value extends 'int64' ? 'bigint' | 'number' : 'number';
   kind: 'type';
-  value: 'uint32';
-  validate: '$importInternal("isTypeUint32")($input)';
+  value: Value;
+  validate: Value extends 'uint32' ? '$importInternal("isTypeUint32")($input)'
+    : {
+      number: '$importInternal("isTypeInt64")($input)';
+      bigint: '$importInternal("isTypeInt64Bigint")($input)';
+    };
   exclusive: true;
-  schema: { type: 'integer'; minimum: 0 };
-}>;
-
-/** `tags.Type<'int64'>` */
-export type CommerceInt64 = CommerceTag<{
-  target: 'bigint' | 'number';
-  kind: 'type';
-  value: 'int64';
-  validate: { number: '$importInternal("isTypeInt64")($input)'; bigint: 'true' };
-  exclusive: true;
-  schema: { type: 'integer' };
+  schema: Value extends 'uint32' ? { type: 'integer'; minimum: 0 } : { type: 'integer' };
 }>;
 
 /** `tags.Minimum<Value>` for a number literal */
-export type CommerceMinimum<Value extends number> = CommerceTag<{
+type Minimum<Value extends number> = CommerceTag<{
   target: 'number';
   kind: 'minimum';
   value: Value;
@@ -74,10 +73,21 @@ export type CommerceMinimum<Value extends number> = CommerceTag<{
   schema: { minimum: Value };
 }>;
 
-export type NonEmptyString = string & CommerceMinLength<1>;
-export type IsoTimestamp = string & CommerceDateTimeFormat;
-export type PositiveQuantity = number & CommerceUint32 & CommerceMinimum<1>;
-export type NonNegativeInteger = number & CommerceUint32;
+/** `tags.MinLength<Value>` */
+export type CommerceMinLength<Value extends number> = MinLength<Value>;
+/** `tags.Format<'date-time'>` */
+export type CommerceDateTimeFormat = Format<'date-time'>;
+/** `tags.Type<'uint32'>` */
+export type CommerceUint32 = Type<'uint32'>;
+/** `tags.Type<'int64'>` */
+export type CommerceInt64 = Type<'int64'>;
+/** `tags.Minimum<Value>` for a number literal */
+export type CommerceMinimum<Value extends number> = Minimum<Value>;
+
+export type NonEmptyString = string & MinLength<1>;
+export type IsoTimestamp = string & Format<'date-time'>;
+export type PositiveQuantity = number & Type<'uint32'> & Minimum<1>;
+export type NonNegativeInteger = number & Type<'uint32'>;
 
 /**
  * Open store identifier. Reference providers use 'google-play', 'app-store',
@@ -94,13 +104,13 @@ export type PurchaseKind = 'consumable' | 'durable' | 'subscription';
  * plain `LogicalProductId` values remain assignable.
  */
 export type CommerceLogicalProductId = Exclude<LogicalProductId, StarterLogicalProductId>
-  & CommerceMinLength<1>;
+  & MinLength<1>;
 
 export interface StorePrice {
   readonly formatted: string;
   /** ISO 4217 code or a project-declared code such as a wallet currency. */
   readonly currencyCode: NonEmptyString;
-  readonly amountMicros?: number & CommerceInt64;
+  readonly amountMicros?: number & Type<'int64'>;
 }
 
 export interface StoreOffer {
@@ -222,6 +232,16 @@ export interface FinishTransactionInput {
   readonly transactionId: NonEmptyString;
   readonly ledgerEntryId: NonEmptyString;
   readonly isConsumable: boolean;
+  /**
+   * The caller already asked to finish this purchase, in an earlier attempt
+   * or an earlier session (the reconciler sets it for a `client` finish of a
+   * record that was `finishing` before the call). A store may then read a
+   * consumable missing from its unfinished list as one an earlier finish
+   * completed (a lost acknowledgement); a first finish never does. Absent
+   * means a first finish; a store without such a rule ignores it. Sent only to
+   * a provider that declares `acceptsFinishRetry`.
+   */
+  readonly retry?: boolean;
 }
 
 export interface FinishTransactionResult {
@@ -254,6 +274,13 @@ export interface CommerceProvider {
    * answers `{ finished: true }` rather than failing.
    */
   finishTransaction?(input: FinishTransactionInput): Promise<FinishTransactionResult>;
+  /**
+   * The provider accepts `FinishTransactionInput.retry`. A caller sends
+   * `retry` only to a provider that declares this, so a provider or bridge
+   * host built on an earlier contract, whose input check refuses unknown
+   * fields, never receives it.
+   */
+  readonly acceptsFinishRetry?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   /** Designed, not implemented by any reference store provider. */

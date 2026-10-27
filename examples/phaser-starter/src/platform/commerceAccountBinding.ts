@@ -30,6 +30,37 @@ export function setStarterCommerceServerPlayer(source: (() => string | undefined
   serverPlayer = source;
 }
 
+/** The open pins: one per game services instance, all for the same player. */
+const pins = new Set<{ readonly playerId: string }>();
+
+/** Another player's game services are still open; dispose them before creating these. */
+export class StarterCommercePinConflictError extends Error {
+  constructor() {
+    super("Another player's game services are still open; dispose them before creating these.");
+    this.name = 'StarterCommercePinConflictError';
+  }
+}
+
+/**
+ * Pins purchases to the player a game services instance was created for
+ * (`createStarterGameServices` does, and releases it once those services
+ * were disposed): while the session names anyone else, a purchase binds
+ * nothing and is refused before any store sheet, so no purchase is
+ * journaled under one player and bound to another's store account. Returns
+ * the release (idempotent). Throws `StarterCommercePinConflictError` while
+ * an earlier instance for another player is still open.
+ */
+export function pinStarterCommercePlayer(playerId: string): () => void {
+  if ([...pins].some((pin) => pin.playerId !== playerId)) {
+    throw new StarterCommercePinConflictError();
+  }
+  const pin = { playerId };
+  pins.add(pin);
+  return () => {
+    pins.delete(pin);
+  };
+}
+
 /**
  * The player id a purchase is bound to: the server session's player when
  * the game set one (`setStarterCommerceServerPlayer`), else an
@@ -37,9 +68,19 @@ export function setStarterCommerceServerPlayer(source: (() => string | undefined
  * platform-anonymous session (the native shell's `android-local-player` /
  * `ios-local-player`) or a locally asserted id would give every install the
  * same binding, so it binds nothing; the backend binds the purchase to the
- * player its ingress authentication resolved anyway.
+ * player its ingress authentication resolved anyway. While game services
+ * are pinned to a player (`pinStarterCommercePlayer`), any other player
+ * binds nothing too.
  */
 export async function resolveStarterCommercePlayerId(
+  gateway: Pick<PlatformGateway, 'identity'>,
+): Promise<string | undefined> {
+  const playerId = await resolveSessionPlayerId(gateway);
+  // Another player than the services' (an account switch): bind nothing.
+  return [...pins].some((pin) => pin.playerId !== playerId) ? undefined : playerId;
+}
+
+async function resolveSessionPlayerId(
   gateway: Pick<PlatformGateway, 'identity'>,
 ): Promise<string | undefined> {
   if (serverPlayer !== undefined) {
@@ -87,6 +128,45 @@ export async function resolveStoreKitAppAccountToken(
     );
   }
   return toUuid(await digestPlayerId(playerId));
+}
+
+/**
+ * The store account binding the native providers above give `playerId`'s
+ * purchases on `target` (`android`: Google Play's obfuscated account id,
+ * `ios`: StoreKit's app account token), derived from the player id alone;
+ * `undefined` on other targets. The game services runtime compares store
+ * purchases with it (`commerceAccountBinding`) so another player's purchase
+ * is never verified for this one.
+ */
+export async function resolveStarterStoreAccountBindingFor(
+  target: string,
+  playerId: string,
+): Promise<StorePurchaseAccountBinding | undefined> {
+  const kind = starterStoreAccountBindingKind(target);
+  if (kind === undefined) {
+    return undefined;
+  }
+  const digest = await digestPlayerId(playerId);
+  return kind === 'obfuscated-account-id'
+    ? { kind, value: toHex(digest) }
+    : { kind, value: toUuid(digest) };
+}
+
+/**
+ * The kind of store account binding this module derives for `target`'s
+ * purchases, or `undefined` where it binds none (every target but the
+ * native stores: Microsoft Store purchases, for one, carry their own
+ * claimed scope). Pass `commerceAccountBinding` only where this answers a
+ * kind: a runtime given a binding source that never answers would leave every
+ * bound purchase alone.
+ */
+export function starterStoreAccountBindingKind(
+  target: string,
+): 'obfuscated-account-id' | 'app-account-token' | undefined {
+  if (target === 'android') {
+    return 'obfuscated-account-id';
+  }
+  return target === 'ios' ? 'app-account-token' : undefined;
 }
 
 async function digestPlayerId(playerId: string): Promise<Uint8Array> {

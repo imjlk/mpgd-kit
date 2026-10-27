@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  gameServicesPlayerChangedCode,
   GuestSessionRejectedError,
   type GameServicesRuntime,
   type GuestSessionBackend,
@@ -9,10 +10,14 @@ import {
 import type { IdentitySession, PlatformGateway, SecureCredentialStore } from '@mpgd/platform';
 
 import {
+  pinStarterCommercePlayer,
   resolvePlayBillingAccountBinding,
   resolveStarterCommercePlayerId,
+  resolveStarterStoreAccountBindingFor,
   resolveStoreKitAppAccountToken,
   setStarterCommerceServerPlayer,
+  StarterCommercePinConflictError,
+  starterStoreAccountBindingKind,
 } from '../templates/phaser-game/src/platform/commerceAccountBinding.js';
 import {
   createStarterGuestSignIn,
@@ -21,6 +26,7 @@ import {
   startStarterGuestIdentity,
 } from '../templates/phaser-game/src/platform/guestIdentity.js';
 import {
+  bindStarterServicesToPlayer,
   createSessionGatedGameServices,
   starterSessionRequiredCode,
   StarterSessionRequiredError,
@@ -400,8 +406,12 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   const purchases: string[] = [];
   const reconciles: string[] = [];
   const deletionFor = new Map<string, NonNullable<GameServicesRuntime['accountDeletion']>>();
+  const disposed: string[] = [];
   const runtimeFor = (playerId: string): GameServicesRuntime => ({
     mode: 'http',
+    async dispose() {
+      disposed.push(playerId);
+    },
     accountDeletion: deletionFor.get(playerId) ?? deletionFor.set(playerId, {
       deleteAccount: () => Promise.reject(new Error('not called')),
     }).get(playerId)!,
@@ -437,6 +447,7 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     },
   });
   const signedInAs: { player?: string } = {};
+  const changedTo: string[] = [];
   let activations = 0;
   let notify: ((playerId: string) => void) | undefined;
   const gated = createSessionGatedGameServices({
@@ -452,6 +463,12 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     },
     onActivated: () => {
       activations += 1;
+    },
+    onPlayerChanging: (playerId) => {
+      changedTo.push(`changing:${playerId}`);
+    },
+    onPlayerChanged: (playerId) => {
+      changedTo.push(playerId);
     },
     warn,
   });
@@ -507,12 +524,75 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   assert.equal(gated.accountDeletion, deletionFor.get('p_server'));
   assert.equal(readyCalls, 1, 'Delete account hears the services come up');
   assert.equal(await gated.ensureSession?.(), true);
-  // A background sign-in naming another player is ignored for the run.
+  // A later sign-in naming another player closes the services (fail closed):
+  // nothing is created for it in this run, and the host restarts for it.
   notify?.('p_other');
   assert.deepEqual(created, ['p_server']);
   assert.equal(activations, 1, 'activated once');
   assert.equal(readyCalls, 1, 'ready once');
   assert.match(warnings.at(-1) ?? '', /another player/u);
+  assert.deepEqual(disposed, ['p_server'], "the first player's services were disposed");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(
+    changedTo,
+    ['changing:p_other', 'p_other'],
+    'told at once, restarted once the services stopped',
+  );
+  assert.deepEqual(
+    await gated.client.purchase({ productId: 'REMOVE_ADS', source: 'shop', idempotencyKey: 'k4' }),
+    {
+      status: 'failed',
+      purchase: {
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: gameServicesPlayerChangedCode, retryable: true },
+      },
+    },
+  );
+  assert.deepEqual(purchases, ['p_server:REMOVE_ADS'], 'no purchase reached the closed services');
+  assert.equal(gated.monetizationRecovery, undefined, 'recovery is gone');
+  assert.equal(gated.accountDeletion, undefined, 'Delete account is gone');
+  assert.equal(gated.client.commerceReconciler, undefined);
+  assert.equal(await gated.ensureSession?.(), false);
+  await assert.rejects(
+    gated.client.submitLeaderboardScore({} as never),
+    StarterSessionRequiredError,
+  );
+  notify?.('p_third');
+  assert.deepEqual(changedTo, ['changing:p_other', 'p_other'], 'reported once');
+  await gated.dispose();
+  assert.deepEqual(disposed, ['p_server', 'p_server'], 'dispose reaches the inner services');
+}
+
+// dispose() closes services that never came up, so a late sign-in creates nothing.
+{
+  const created: string[] = [];
+  let notify: ((playerId: string) => void) | undefined;
+  const gated = createSessionGatedGameServices({
+    probe: {
+      mode: 'disabled',
+      reason: 'missing_authoritative_backend',
+      dispose: async () => undefined,
+    },
+    ensurePlayer: async () => undefined,
+    onPlayer: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    create: (playerId) => {
+      created.push(playerId);
+      return {
+        mode: 'disabled',
+        reason: 'missing_authoritative_backend',
+        dispose: async () => undefined,
+      };
+    },
+    warn,
+  });
+  await gated.dispose();
+  notify?.('p_late');
+  assert.deepEqual(created, []);
 }
 
 // Services that cannot be created after sign-in stay gated with the stable error.
@@ -520,6 +600,7 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   const gated = createSessionGatedGameServices({
     probe: {
       mode: 'http',
+      dispose: async () => undefined,
       client: {
         async purchase() {
           return { status: 'granted' } as never;
@@ -550,13 +631,17 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
 {
   let notify: ((playerId: string) => void) | undefined;
   const gated = createSessionGatedGameServices({
-    probe: { mode: 'disabled', reason: 'missing_authoritative_backend' },
+    probe: {
+      mode: 'disabled',
+      reason: 'missing_authoritative_backend',
+      dispose: async () => undefined,
+    },
     ensurePlayer: async () => undefined,
     onPlayer: (listener) => {
       notify = listener;
       return () => undefined;
     },
-    create: () => ({ mode: 'http' }),
+    create: () => ({ mode: 'http', dispose: async () => undefined }),
     onActivated: () => {
       throw new Error('reconcile wiring failed');
     },
@@ -572,7 +657,11 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   const created: string[] = [];
   let notify: ((playerId: string) => void) | undefined;
   const gated = createSessionGatedGameServices({
-    probe: { mode: 'disabled', reason: 'missing_authoritative_backend' },
+    probe: {
+      mode: 'disabled',
+      reason: 'missing_authoritative_backend',
+      dispose: async () => undefined,
+    },
     ensurePlayer: async () => undefined,
     onPlayer: (listener) => {
       notify = listener;
@@ -580,7 +669,11 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
     },
     create: (playerId) => {
       created.push(playerId);
-      return { mode: 'disabled', reason: 'missing_authoritative_backend' };
+      return {
+        mode: 'disabled',
+        reason: 'missing_authoritative_backend',
+        dispose: async () => undefined,
+      };
     },
     warn,
   });
@@ -589,6 +682,137 @@ await assert.rejects(resolveStoreKitAppAccountToken(authenticatedShell), /server
   notify?.('p_background');
   assert.deepEqual(created, ['p_background']);
   assert.equal(gated.reason, 'missing_authoritative_backend');
+}
+
+// Services bound to the session's player close once it names another one, then the host restarts.
+{
+  let current: { playerId: string } | undefined = { playerId: 'p_a' };
+  const listeners = new Set<(session: { readonly playerId: string }) => void>();
+  const session = {
+    current: () => current,
+    onAuthenticated(listener: (session: { readonly playerId: string }) => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  const announce = (playerId: string) => {
+    current = { playerId };
+    for (const listener of [...listeners]) {
+      listener({ playerId });
+    }
+  };
+  const order: string[] = [];
+  const bound = bindStarterServicesToPlayer({
+    services: {
+      mode: 'http',
+      async dispose() {
+        order.push('disposed');
+      },
+    },
+    playerId: 'p_a',
+    session,
+    onPlayerChanging: (playerId) => order.push(`changing:${playerId}`),
+    onPlayerChanged: (playerId) => order.push(`restart:${playerId}`),
+    onDisposed: () => order.push('released'),
+    warn,
+  });
+  announce('p_a');
+  assert.deepEqual(order, [], 'a refresh of the same player changes nothing');
+  announce('p_b');
+  // The host hears the change at once, before the (possibly slow) dispose ends.
+  assert.deepEqual(order, ['changing:p_b', 'disposed']);
+  for (let turn = 0; turn < 5; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.deepEqual(
+    order,
+    ['changing:p_b', 'disposed', 'released', 'restart:p_b'],
+    'closed and released first, then the host restarts',
+  );
+  assert.equal(listeners.size, 0, 'stops watching after the change');
+  announce('p_c');
+  await bound.dispose();
+  assert.deepEqual(
+    order,
+    ['changing:p_b', 'disposed', 'released', 'restart:p_b'],
+    'reported, disposed, and released once',
+  );
+
+  // Created for another player than the session's (a local placeholder): it says so.
+  const before = warnings.length;
+  const misused: string[] = [];
+  bindStarterServicesToPlayer({
+    services: {
+      mode: 'http',
+      dispose: async () => {
+        misused.push('disposed');
+      },
+    },
+    playerId: 'android-local-player',
+    session,
+    onPlayerChanging: () => misused.push('changing'),
+    onPlayerChanged: () => misused.push('restart'),
+    onDisposed: () => misused.push('released'),
+    warn,
+  });
+  assert.equal(warnings.length, before + 1);
+  assert.match(warnings.at(-1) ?? '', /not the server session's/u);
+  for (let turn = 0; turn < 5; turn += 1) {
+    await Promise.resolve();
+  }
+  // Closed and released at once, without a restart (it would only repeat the mistake).
+  assert.deepEqual(misused, ['disposed', 'released']);
+}
+
+// The store account binding is pinned to the services' player: after an account switch a
+// purchase binds nothing (refused before any store sheet), so it is never journaled under
+// one player and bound to the other's store account.
+{
+  let sessionPlayer = 'p_pinned';
+  setStarterCommerceServerPlayer(() => sessionPlayer);
+  const release = pinStarterCommercePlayer('p_pinned');
+  const releaseSame = pinStarterCommercePlayer('p_pinned');
+  assert.equal(await resolveStarterCommercePlayerId(nativeShell), 'p_pinned');
+  const pinnedBinding = await resolvePlayBillingAccountBinding(nativeShell);
+  // The runtime's comparison binding is the one the provider gives this player's purchases.
+  assert.deepEqual(
+    await resolveStarterStoreAccountBindingFor('android', 'p_pinned'),
+    pinnedBinding,
+  );
+  assert.deepEqual(await resolveStarterStoreAccountBindingFor('ios', 'p_pinned'), {
+    kind: 'app-account-token',
+    value: await resolveStoreKitAppAccountToken(nativeShell),
+  });
+  assert.equal(await resolveStarterStoreAccountBindingFor('browser', 'p_pinned'), undefined);
+  // The runtime gets a binding to compare only where the template binds purchases.
+  assert.equal(starterStoreAccountBindingKind('android'), 'obfuscated-account-id');
+  assert.equal(starterStoreAccountBindingKind('ios'), 'app-account-token');
+  for (const target of ['microsoft-store', 'browser', 'ait', 'reddit']) {
+    assert.equal(starterStoreAccountBindingKind(target), undefined, target);
+    assert.equal(await resolveStarterStoreAccountBindingFor(target, 'p_pinned'), undefined, target);
+  }
+  // Another player's services cannot pin while these are open.
+  assert.throws(() => pinStarterCommercePlayer('p_other'), StarterCommercePinConflictError);
+  sessionPlayer = 'p_switched';
+  assert.equal(await resolveStarterCommercePlayerId(nativeShell), undefined);
+  assert.equal(await resolvePlayBillingAccountBinding(nativeShell), undefined);
+  await assert.rejects(resolveStoreKitAppAccountToken(nativeShell));
+  release();
+  release();
+  assert.equal(
+    await resolveStarterCommercePlayerId(nativeShell),
+    undefined,
+    'one open pin still holds',
+  );
+  releaseSame();
+  assert.equal(
+    await resolveStarterCommercePlayerId(nativeShell),
+    'p_switched',
+    'released with its services',
+  );
+  pinStarterCommercePlayer('p_switched')();
 }
 
 setStarterCommerceServerPlayer(undefined);

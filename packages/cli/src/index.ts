@@ -128,6 +128,7 @@ import {
   type StorePresenceStore,
 } from './store-presence-command.js';
 import { formatPlayPresencePlan } from './store-presence-play.js';
+import { formatAppStorePresencePlan } from './store-presence-app-store.js';
 import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
 import { uploadRecordedCrashSymbols } from './crash-symbols-upload.js';
@@ -303,6 +304,29 @@ export {
   type PlayPresencePlan,
   type PlayPresencePlanInput,
 } from './store-presence-play.js';
+
+export {
+  applyAppStorePresence,
+  AppStorePresenceApplyError,
+  formatAppStorePresencePlan,
+  planAppStorePresence,
+  type AppStorePresenceApplyResult,
+  type AppStorePresencePlan,
+  type AppStorePresencePlanInput,
+  type PlannedAppStoreLocale,
+  type PlannedAscScreenshotSet,
+} from './store-presence-app-store.js';
+
+export type {
+  AscAppInfo,
+  AscAppInfoLocalization,
+  AscAppStoreVersion,
+  AscScreenshot,
+  AscScreenshotSet,
+  AscStorePresencePort,
+  AscVersionLocalization,
+  AscVersionLocalizationFields,
+} from './app-store-presence-port.js';
 
 export type {
   PlayAppDetails,
@@ -1275,7 +1299,7 @@ const storeCommand = defineI18n({
           args: {
             game: { type: 'string', required: false, description: 'Game project directory.' },
             profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
-            store: { type: 'string', required: true, description: 'google-play.' },
+            store: { type: 'string', required: true, description: 'google-play or app-store.' },
             presence: { type: 'string', required: false, description: 'Store presence file path, relative to the current directory; defaults to mpgd.store-presence.json in the game.' },
             out: { type: 'string', required: false, description: 'New plan JSON path for apply; existing files are not overwritten.' },
           },
@@ -1287,7 +1311,9 @@ const storeCommand = defineI18n({
               store: readRequiredCliOption(ctx.values.store, '--store') as StorePresenceStore,
               ...(presence === undefined ? {} : { presenceFile: presence }),
             });
-            console.info(formatPlayPresencePlan(result.plan));
+            console.info(result.plan.store === 'google-play'
+              ? formatPlayPresencePlan(result.plan)
+              : formatAppStorePresencePlan(result.plan));
             const out = readOptionalString(ctx.values.out);
             if (out !== undefined) {
               console.info(`Wrote store presence plan: ${saveStorePresencePlan(out, result)}`);
@@ -1296,10 +1322,10 @@ const storeCommand = defineI18n({
         }),
         apply: defineI18n({
           name: 'apply',
-          description: 'Write the reviewed plan in one edit; refuses when the store or the files changed since.',
+          description: 'Write the reviewed plan (one Play edit); refuses when the store or the files changed since.',
           resource: commandResource({
-            en: 'Write the reviewed plan in one edit; refuses when the store or the files changed since.',
-            ko: '검토한 계획을 한 번의 편집으로 적용합니다. 이후 스토어나 파일이 바뀌었으면 거부합니다.',
+            en: 'Write the reviewed plan (one Play edit); refuses when the store or the files changed since.',
+            ko: '검토한 계획을 적용합니다(Play는 한 번의 편집). 이후 스토어나 파일이 바뀌었으면 거부합니다.',
           }),
           args: {
             plan: { type: 'string', required: true, description: 'Plan JSON written by "store presence plan --out".' },

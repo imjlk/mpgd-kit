@@ -530,14 +530,56 @@ describe('gateway with a commerce provider', () => {
     ]);
     expect((await commerce.getAvailablePurchases()).map((purchase) => purchase.transactionId))
       .toEqual(['tx-1']);
+    // The host is this package's: the retry hint crosses the bridge to the SDK.
+    expect(commerce.acceptsFinishRetry).toBe(true);
     await expect(commerce.finishTransaction?.({
-      transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true,
+      transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true, retry: true,
     })).resolves.toEqual({ finished: true });
+    expect(sdk.finishCalls.at(-1)).toEqual(
+      { transactionId: 'tx-1', isConsumable: true, ledgerEntryId: 'le-1', retry: true },
+    );
     await expect(commerce.requestPurchase({
       logicalId: 'nope', idempotencyKey: 'op-2', source: 'shop',
     })).rejects.toMatchObject({ code: 'ITEM_UNAVAILABLE' });
     unsubscribe();
     expect(sdk.requestCalls).toHaveLength(1);
+  });
+
+  it('keeps the store code of a pre-launch refusal across the bridge path', async () => {
+    const sdk = createFakeStoreSdk();
+    let paused = true;
+    const commerce = createStoreCommerceProvider({
+      sdk,
+      products: [{ logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' }],
+      evidenceSchema: 'fixture.store.v1',
+      authority: { evidence: 'client-token', accountBinding: 'required' },
+      purchaseGate: () => (paused ? { allowed: false } : { allowed: true }),
+      accountBinding: async () => {
+        throw new CommerceError('ACCOUNT_BINDING_REQUIRED', { storeCode: 'SESSION_EXPIRED' });
+      },
+    });
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '3', buildId: 'v2', bridge: baseBridge(),
+      providers: [createCommerceServiceProvider({ id: 'store', commerce })],
+    });
+    const bridged = gateway.commerce;
+    if (bridged === undefined) {
+      throw new Error('expected a commerce provider');
+    }
+    await expect(bridged.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASES_PAUSED', retryable: false },
+    });
+    paused = false;
+    await expect(bridged.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop',
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ACCOUNT_BINDING_REQUIRED', storeCode: 'SESSION_EXPIRED' },
+    });
+    expect(sdk.requestCalls).toEqual([]);
   });
 
   it('reports the commerce capability block and passes capability conformance', async () => {

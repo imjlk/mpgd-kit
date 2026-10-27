@@ -1,5 +1,0 @@
----
-npm/@mpgd/cli: minor (Added)
----
-
-New `mpgd store presence plan --store google-play [--presence file] [--out plan.json]` and `mpgd store presence apply --plan plan.json --approve [--confirm-image-removal] [--changes-not-sent-for-review]` sync the Google Play main store listing from the game's `mpgd.store-presence.json`: per language the title, descriptions and promo video (`edits.listings`), the icon, feature graphic and phone and tablet screenshots (`edits.images`, compared by SHA-256) and the contact details (`edits.details`). `plan` reads through a discarded edit and prints per language the text changes (lengths, and short texts in full) and the image uploads and removals. `apply` re-plans inside one edit, refuses when Play or the files changed since the plan, writes, and commits once; on a failure it discards the edit. Images Play holds that the file does not list are kept unless the set is marked complete, and removing them needs `--confirm-image-removal`. The shared store sync plumbing moves to `StorePlanStaleError` (exported), which `StoreProductPlanStaleError` now extends. See `docs/STORE_PRESENCE_SYNC.md`.

@@ -209,7 +209,11 @@ export interface CommerceProvider {
     readonly transactionId: string;
     readonly ledgerEntryId: string;
     readonly isConsumable: boolean;
+    /** An earlier finish of this purchase was asked for (a `client` retry). */
+    readonly retry?: boolean;
   }): Promise<{ readonly finished: boolean }>;
+  /** Accepts `retry`; a caller sends it only to a provider declaring this. */
+  readonly acceptsFinishRetry?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   /** Designed, not implemented by any reference store provider. */
@@ -239,7 +243,7 @@ Rules every provider follows:
   that raced the ledger grant can still be verified. The server ledger
   dedupes that verify. A finished consumable is not listed.
 
-<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction, or a durable of another token (Restore sharing). -->
+<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction, or a durable of another token (Restore sharing); on a retried finish, a consumable no longer listed answers finished without a native call (a lost acknowledgement). -->
 - **No grants on the client.** A provider never credits a wallet or unlocks an
   entitlement. `settlement` on an adapter-settled purchase is a pointer for
   the reconciler, not a grant.
@@ -372,6 +376,16 @@ stays open and the [reconciler](#reconciler) resolves it from
 `getAvailablePurchases` without reopening the store UI (B1 implements this
 rule in `createStoreCommerceProvider`).
 
+A purchase that the game's sales switch or its account binding refuses
+before the store UI opens is the opposite case: nothing was launched, so
+`createStoreCommerceProvider` answers `failed`, never `launched`, and
+answers it as a result rather than a throw so `storeCode` crosses the
+bridge.
+`createStoreCommerceProvider`'s optional `purchaseGate` refuses with
+`ITEM_UNAVAILABLE` and `storeCode` `PURCHASES_PAUSED` (or the game's own
+code; `PURCHASE_GATE_FAILED` when the gate itself fails) and is never
+consulted by recovery, restore, finishing, or `getAvailablePurchases`.
+
 ## Purchase lifecycle {#lifecycle}
 
 Every purchase, whether started by the game or discovered by the reconciler,
@@ -451,7 +465,15 @@ One pass:
    waiting on the store and is never sent.
 4. For `granted` and `finishing` records, act on `lifecycle.finish`: call
    `finishTransaction` for `client` and `host`; resend the verify request to
-   read finalization for `server`; mark `finished` for `none`.
+   read finalization for `server`; mark `finished` for `none`. A `client`
+   finish of a record that was already `finishing` before the call (an
+   earlier attempt or session) carries `retry: true` when the provider
+   declares `acceptsFinishRetry`; the first never does.
+   A `finished`
+   consumable a `client` store reports again (a store lists a consumable only
+   while it is unfinished) is finished again with the record's ledger entry,
+   once per session; it is never verified again and the record is not
+   rewritten.
 5. For records whose grant is still within the journal retention window, ask
    the backend for ledger status and move reversed grants to `revoked`.
 
@@ -481,7 +503,12 @@ purchase alone, so every runtime derives the same key:
 
 When a game key and a derived key ever reach the backend for the same
 purchase, the existing platform-evidence unique index
-(`EVIDENCE_ALREADY_PROCESSED`) remains the backstop.
+(`EVIDENCE_ALREADY_PROCESSED`) remains the backstop. One exception reports
+instead of refusing: the same player's consumable of a `client`-finish store
+(the App Store), asked again under another key once the client's journal has
+dropped the finished record while the store still lists the transaction, is
+answered with the recorded grant (`verified`, `alreadyProcessed: true`, the
+same ledger entry) so the client can finish it; nothing new is granted.
 
 The journal stores a record under `[target, kind, idempotencyKey]`
 (`createCommercePurchaseOperationKey`), one key for every player of the
