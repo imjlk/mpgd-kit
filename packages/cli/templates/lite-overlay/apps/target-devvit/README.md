@@ -41,6 +41,14 @@ replace the `devvit.json` scheduler endpoint and should not use process-local
 memory when delivery must cross instances. The generated target exposes only
 the oRPC bridge route; the former JSON compatibility route is not generated.
 
+The bridge client (game `@mpgd/adapter-devvit`) and the bridge server
+(`src/server`) must ship in the same app build: they share one `@mpgd/bridge`
+and therefore one oRPC version. oRPC error bodies are not compatible across
+oRPC 2.0.0-beta.34 (`@mpgd/bridge` 0.16.4 and older used 2.0.0-beta.14), so a
+client and server from different kit releases would turn every oRPC error into a
+malformed-response failure. Bridge method errors travel inside the bridge
+response envelope and are unaffected.
+
 The default post entry uses `index.html` for a playable Canvas2D surface.
 Play full screen requests the `game` entrypoint, which loads the full game from
 the separate `game.html` document. Keep heavy imports behind the expanded entry

@@ -153,10 +153,11 @@ try {
 
 assertEqual(internalErrorThrown, true, 'internal oRPC handler errors should reject the client');
 assertEqual(internalErrorResponse?.status, 500, 'internal oRPC handler errors should return 500');
+// oRPC 2.0.0-beta.34 dropped the `inferable` flag from error bodies. The bridge client and
+// server ship in the same app build, so the bridge carries no compatibility shim for it.
 assertDeepEqual(await internalErrorResponse?.json(), {
   json: {
     defined: false,
-    inferable: false,
     code: 'INTERNAL_SERVER_ERROR',
     message: 'Internal Server Error',
   },
