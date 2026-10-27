@@ -1,5 +1,24 @@
 # @mpgd/bridge
 
+## 0.17.0 — 2026-10-28
+
+### Changed
+
+- [e984b9fe](https://github.com/imjlk/mpgd-kit/commit/e984b9fede2a1aabe9bb820e27debe31570fb170) oRPC moves from 2.0.0-beta.14 to exactly `2.0.0-beta.46` (`@orpc/client`, `@orpc/contract`, and `@orpc/server`, all pinned with no range). Three wire changes come with it:
+  
+  - **oRPC error bodies drop the `inferable` field** (oRPC 2.0.0-beta.34). A bridge client and server on different oRPC versions see each other's errors as malformed responses. The bridge client and server ship in the same Devvit app build, so the bridge carries no compatibility shim: keep `@mpgd/adapter-devvit` and the Devvit server on the same kit release. Bridge method errors and request-validation failures travel inside the bridge response envelope and are unaffected; only internal server errors (500) and oRPC transport errors (413, 400 for an undecodable body) use the oRPC error body.
+  - **RPC routes accept only POST, PUT, PATCH, and DELETE.** A GET now gets the unmatched result: 404 from `createBridgeRpcFetchHandler`, `false` from `createBridgeRpcNodeHandler`. The bridge client always POSTs.
+  - **`Infinity` gets its own meta marker** in the encoding.
+  
+  `createBridgeRpcNodeHandler`'s `maxBodySize` is now enforced by oRPC's `RequestLimitHandlerPlugin`, and oversized bodies still answer 413 `PAYLOAD_TOO_LARGE`. `BridgeRpcEndpoint` is now spelled out as the same URL-path template type that oRPC 2.0.0-beta.46 stopped exporting as `StandardUrl`.
+  
+  This is a minor release because the error body and GET behaviour change on the wire. — Thanks @imjlk!
+- [d684308f](https://github.com/imjlk/mpgd-kit/commit/d684308f4eff54e2ea772bed8dcda4b1ea528630) The runtime `typia` dependency moves from 13.0.2 to 15.2.1, and the shipped validators are rebuilt with typia 15 through ttsc 0.34.2. A game that runs its own typia transform over these packages' types needs typia 15.2 or later. typia 15's `date-time` and `date` formats refuse a day the month does not have and a space for `T`, and its length tags count code points. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.33.0
+
 ## 0.16.4 — 2026-10-27
 
 ### Patch changes

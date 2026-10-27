@@ -1,5 +1,15 @@
 # @mpgd/capacitor-play-billing
 
+## 0.5.0 — 2026-10-28
+
+### Added
+
+- [c0066ece](https://github.com/imjlk/mpgd-kit/commit/c0066eceb9b8a2d10d4cd311c7eb758883fdb3e0) `createCapacitorPlayBillingCommerceProvider` and `createCapacitorPlayBillingServiceProvider` take an optional `purchaseGate` (the adapter's sales switch): asked before a new purchase opens the Play sheet and never during recovery, a refusal is a `failed` result with `ITEM_UNAVAILABLE` and `PURCHASES_PAUSED`. An `accountBinding` lookup that throws a `CommerceError` keeps its code instead of becoming `ACCOUNT_BINDING_REQUIRED`, and every binding failure is answered as a `failed` result whose store code survives the bridge. With an `@mpgd/adapter-capacitor` from before the gate, which would ignore it, the plugin detects the missing gate support (`purchasesPausedStoreCode` is not exported) and refuses every new purchase with `ITEM_UNAVAILABLE` and `PURCHASE_GATE_UNSUPPORTED` (exported as `purchaseGateUnsupportedStoreCode`) instead of selling; recovery is unaffected. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.17.0, @mpgd/bridge@0.17.0, @mpgd/game-services@0.31.0, @mpgd/platform@0.33.0
+
 ## 0.4.5 — 2026-10-27
 
 ### Patch changes
