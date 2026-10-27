@@ -337,11 +337,11 @@ assert.throws(
       googlePlay: {
         listings: {
           'en-US': valid.googlePlay?.listings['en-US'],
-          'EN-us': valid.googlePlay?.listings['en-US'],
+          'en-us': valid.googlePlay?.listings['en-US'],
         },
       },
     }),
-  /not a BCP-47|twice/u,
+  /lists en-us twice/u,
 );
 assert.throws(
   () => assertStorePresence({ ...valid, privacyPolicyUrl: 'http://example.com/privacy' }),
@@ -375,6 +375,15 @@ assert.throws(
       }),
     ),
   /at most 10/u,
+);
+
+assert.throws(
+  () =>
+    assertStorePresence({
+      version: '1',
+      googlePlay: { listings: { EN: valid.googlePlay?.listings['en-US'] } },
+    }),
+  /not a BCP-47 language tag/u,
 );
 
 console.info('Store presence schema tests passed.');

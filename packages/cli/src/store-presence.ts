@@ -75,7 +75,7 @@ export function readLocalStoreImage(
     throw new Error(`${label}: ${relative} is missing.`);
   }
   const real = path.relative(realpathSync(directory), realpathSync(file));
-  if (real.startsWith('..') || path.isAbsolute(real)) {
+  if (real === '..' || real.startsWith(`..${path.sep}`) || path.isAbsolute(real)) {
     throw new Error(`${label}: ${relative} resolves outside the store presence file's directory.`);
   }
   const bytes = readFileSync(file);

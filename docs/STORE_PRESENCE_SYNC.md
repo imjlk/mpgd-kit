@@ -125,8 +125,8 @@ pnpm exec mpgd store presence apply --plan play-presence.json --approve
 
 `plan` prints, per language, `create`, `update` or `unchanged`, the text
 fields that change (old and new length, and the texts themselves only while
-both are at most 80 characters), and per image slot the uploads (`+`) and
-removals (`-`) by path and SHA-256. Languages only in the store are listed as
+both are at most 80 characters), and per image slot the uploads (`+`, by
+path and SHA-256) and removals (`-`, by the store's image ID and SHA-256). Languages only in the store are listed as
 `remote` and never deleted. `manual` lines are what the reviewer does in the
 console.
 
@@ -164,11 +164,11 @@ Edits and releases share one rule: "if anyone commits an edit or makes
 changes to an app through the Play Console, all other edits for the app
 (owned by any user) are invalidated", and a user may have only a single edit
 open, so a new edit replaces the service account's other open edit
-([Edits](https://developers.google.com/android-publisher/edits)). Do not run
-`store presence apply` while `mpgd deploy run`, `deploy promote` or
-`deploy rollout` is in progress with the same service account, and do not
-edit the store listing in Play Console during an apply: the other edit fails
-and has to be run again. The Edits API also works only for an app with at
+([Edits](https://developers.google.com/android-publisher/edits)). `plan`
+opens an edit too. Do not run `store presence plan` or `apply` while
+`mpgd deploy run`, `deploy promote` or `deploy rollout` is in progress with
+the same service account, and do not edit the store listing in Play Console
+during an apply: the other edit fails and has to be run again. The Edits API also works only for an app with at
 least one uploaded bundle: upload the first build (`mpgd deploy run`, which
 commits a draft release for a never-published app) before the first apply.
 
@@ -209,14 +209,19 @@ The sync itself arrives in a follow-up change.
 
 Mock-tested only. Check on the first run against a real Play app:
 
-- [ ] `edits.images.list` returns each image's `sha256` as the SHA-256 of the
-      uploaded file, so a second `plan` after an apply reports every slot
-      `unchanged`. If Play re-encodes images, `apply` warns ("the next plan
-      will show it as changed") and the comparison needs another key.
+- [ ] `edits.images.upload` and `edits.images.list` return each image's
+      `sha256` as the SHA-256 of the uploaded file, so a second `plan` after
+      an apply reports every slot `unchanged`. Images are matched by that
+      digest; if Play answers an upload with another one (re-encoding),
+      `apply` stops before the commit and discards the edit rather than let
+      every later run upload the image again, and the comparison needs
+      another key.
 - [ ] `edits.images.list` returns images in the order Play Console shows
       them, and uploads are appended in upload order.
 - [ ] Texts read back exactly as written (line breaks in `fullDescription`
-      included), so a second `plan` reports the listing `unchanged`.
+      included), and the contact email, website and phone are not
+      normalised (a trailing slash, a phone format), so a second `plan`
+      reports the listing and details `unchanged`.
 - [ ] The file size limits the kit enforces (feature graphic 15 MB,
       screenshots 8 MB) match what `edits.images.upload` accepts; the help
       page states only the icon's 1 MB.

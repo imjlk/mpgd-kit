@@ -292,8 +292,9 @@ The store page text and graphics are a third resource:
 `mpgd store presence plan --store google-play` and `apply --approve` write
 them from `mpgd.store-presence.json` in one edit
 ([store page sync](./STORE_PRESENCE_SYNC.md)). A service account has only one
-open edit, and committing any edit invalidates the others, so run it when no
-`deploy run`, `deploy promote` or `deploy rollout` is in progress.
+open edit, and committing any edit invalidates the others, so run `plan` and
+`apply` when no `deploy run`, `deploy promote` or `deploy rollout` is in
+progress.
 
 ## Verify on the first live run
 

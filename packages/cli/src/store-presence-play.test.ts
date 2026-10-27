@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -295,7 +303,6 @@ const input = (fixture: Fixture, file: StorePresence = presence()) => ({
       approved: true,
     });
     assert.equal(result.status, 'committed');
-    assert.deepEqual(result.warnings, []);
     assert.deepEqual(play.writes, [
       'listing en-US',
       'upload en-US/icon icon.png',
@@ -503,6 +510,11 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
       port: reorder.port,
       approved: true,
     });
+    const digest = (name: string): string => sha256(fixture.images[name] as Buffer);
+    assert.deepEqual(
+      reorder.state.images.get('en-US/phoneScreenshots')?.map((image) => image.sha256),
+      [digest('store/phone-2.png'), digest('store/phone-1.png')],
+    );
     // A complete set Play already starts with only appends.
     const prefix = seededPlay(fixture, ['store/phone-1.png']);
     const longer = onlyEnglish({
@@ -510,6 +522,17 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
     });
     const prefixPlan = await planPlayPresence(input(fixture, longer), prefix.port);
     assert.equal(prefixPlan.languages[0]?.images[0]?.action, 'add');
+    await applyPlayPresence({
+      saved: prefixPlan,
+      plan: input(fixture, longer),
+      port: prefix.port,
+      approved: true,
+    });
+    assert.deepEqual(prefix.writes, ['upload en-US/phoneScreenshots phone-2.png']);
+    assert.deepEqual(
+      prefix.state.images.get('en-US/phoneScreenshots')?.map((image) => image.sha256),
+      [digest('store/phone-1.png'), digest('store/phone-2.png')],
+    );
     // A new icon replaces Play's without a removal confirmation.
     fixture.write('store/icon.png', png(512, 512, 99, 6));
     const icon = await planPlayPresence(
@@ -606,18 +629,46 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
     assert.equal(committed.status, 'committed');
     assert.equal(failing.state.details.contactEmail, 'help@example.com');
 
-    // Play answers with another digest: apply warns, the next plan shows the images again.
+    // Play answers with another digest (re-encoded): every later apply would
+    // upload the image again, so apply stops and discards the edit.
     const reencoding = seededPlay(fixture, []);
     reencoding.reencode = true;
     const reencodePlan = await planPlayPresence(input(fixture, file), reencoding.port);
-    const warned = await applyPlayPresence({
-      saved: reencodePlan,
-      plan: input(fixture, file),
-      port: reencoding.port,
-      approved: true,
-    });
-    assert.equal(warned.warnings.length, 2);
-    assert.match(warned.warnings[0] ?? '', /next plan will show it as changed/u);
+    const untouchedState = clone(reencoding.state);
+    await assert.rejects(
+      applyPlayPresence({
+        saved: reencodePlan,
+        plan: input(fixture, file),
+        port: reencoding.port,
+        approved: true,
+      }),
+      (error: unknown) => error instanceof PlayPresenceApplyError && error.outcome === 'discarded'
+        && /matches images by SHA-256/u.test(error.message),
+    );
+    assert.deepEqual(reencoding.state, untouchedState);
+
+    // A file named "..something" inside the directory is fine; a symbolic link out of it is not.
+    fixture.write('store/..dots.png', fixture.images['store/phone-3.png'] as Buffer);
+    const dotted = await planPlayPresence(
+      input(fixture, onlyEnglish({ phoneScreenshots: ['store/..dots.png'] })),
+      seededPlay(fixture, []).port,
+    );
+    assert.equal(dotted.languages[0]?.images[0]?.upload[0]?.path, 'store/..dots.png');
+    writeFileSync(
+      path.join(fixture.root, 'outside.png'),
+      fixture.images['store/phone-3.png'] as Buffer,
+    );
+    symlinkSync(
+      path.join(fixture.root, 'outside.png'),
+      path.join(fixture.directory, 'store/link.png'),
+    );
+    await assert.rejects(
+      planPlayPresence(
+        input(fixture, onlyEnglish({ phoneScreenshots: ['store/link.png'] })),
+        seededPlay(fixture, []).port,
+      ),
+      /resolves outside/u,
+    );
 
     // Images are checked before Play is asked anything.
     fixture.write('store/phone-1.png', png(1080, 2400, 3));

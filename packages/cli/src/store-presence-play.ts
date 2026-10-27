@@ -249,13 +249,16 @@ async function planInEdit(
   const changed = plannedDetails !== undefined || planned.some((language) =>
     language.action !== 'unchanged' || language.images.some((slot) => slot.action !== 'unchanged'),
   );
+  // Images by ID and digest only: their preview URLs may differ per request.
   const remoteSha256 = stableSha256({
     details,
     listings: [...remoteListings].sort((left, right) =>
       String(left.language).localeCompare(String(right.language)),
     ),
     images: Object.fromEntries(
-      [...remoteImages.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      [...remoteImages.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, images]) => [key, images.map((image) => ({ id: image.id, sha256: image.sha256 }))]),
     ),
   });
   const desiredSha256 = stableSha256({ details: plannedDetails?.write, languages: planned });
@@ -458,8 +461,6 @@ export interface PlayPresenceApplyResult {
   readonly packageName: string;
   readonly status: 'committed' | 'unchanged';
   readonly languages: readonly { readonly language: string; readonly listing: PlayPresenceAction; readonly images: number }[];
-  /** Images Play stored with another SHA-256 than the file's (for example after re-encoding). */
-  readonly warnings: readonly string[];
 }
 
 export class PlayPresenceApplyError extends Error {
@@ -514,7 +515,7 @@ export async function applyPlayPresence(input: {
     const current = await planInEdit(input.plan, play, local, port, editId);
     if (!current.changed) {
       await discardEdit(port, packageName, editId);
-      return { packageName, status: 'unchanged', languages: [], warnings: [] };
+      return { packageName, status: 'unchanged', languages: [] };
     }
     if (current.remoteSha256 !== saved.remoteSha256 || current.desiredSha256 !== saved.desiredSha256) {
       throw new StorePlanStaleError(
@@ -537,7 +538,6 @@ export async function applyPlayPresence(input: {
         ...optionalSignal,
       });
     }
-    const warnings: string[] = [];
     const languages: PlayPresenceApplyResult['languages'][number][] = [];
     for (const language of current.languages) {
       if (language.listing !== undefined) {
@@ -577,10 +577,12 @@ export async function applyPlayPresence(input: {
             timeoutMs: uploadTimeoutMs,
           });
           uploaded += 1;
+          // Images are matched by SHA-256: one Play stores with another digest
+          // (re-encoded) would be uploaded again by every later apply.
           if (typeof stored.sha256 === 'string' && stored.sha256.toLowerCase() !== image.sha256) {
-            warnings.push(
-              `Play stored ${image.path} (${language.language} ${slot.imageType}) with SHA-256 ${stored.sha256}, `
-              + "not the file's; the next plan will show it as changed.",
+            throw new Error(
+              `Play stored ${image.path} with SHA-256 ${stored.sha256}, not the file's ${image.sha256}; `
+              + 'the sync matches images by SHA-256 and cannot keep this slot in step',
             );
           }
         }
@@ -595,7 +597,7 @@ export async function applyPlayPresence(input: {
       changesNotSentForReview: input.changesNotSentForReview === true,
       ...optionalSignal,
     });
-    return { packageName, status: 'committed', languages, warnings };
+    return { packageName, status: 'committed', languages };
   } catch (error) {
     await discardEdit(port, packageName, editId);
     // Nothing was written before the first write stage: the error stands as it is.

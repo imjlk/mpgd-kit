@@ -317,7 +317,8 @@ Google Play Console:
 
 - [ ] Create the app. Store listing (title, descriptions, icon, feature
       graphic, phone and tablet screenshots, contact website = the legal
-      site): `mpgd store presence apply --store google-play` writes them from
+      site): `mpgd store presence plan --store google-play --out <plan>` and
+      `apply --plan <plan> --approve` write them from
       `mpgd.store-presence.json` after the first bundle is uploaded
       ([store page sync](./STORE_PRESENCE_SYNC.md)); the privacy policy URL
       under App content stays in the console.
