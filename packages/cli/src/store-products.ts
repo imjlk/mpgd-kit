@@ -27,20 +27,23 @@ export interface StoreProductSources {
   readonly listings: StoreListingCatalog;
 }
 
-/** Read and cross-check the game's product catalog and store listing file. */
+/**
+ * Read and cross-check the game's product catalog and store listing file.
+ * Given paths resolve against the current directory, like every other mpgd
+ * file flag (`deploy --plan`, `--release-notes`); the defaults are the
+ * game's own files.
+ */
 export function readStoreProductSources(input: {
   readonly gameRoot: string;
   readonly catalogFile?: string;
   readonly listingsFile?: string;
 }): StoreProductSources {
-  const catalogFile = path.resolve(
-    input.gameRoot,
-    input.catalogFile ?? defaultProductCatalogFileName,
-  );
-  const listingsFile = path.resolve(
-    input.gameRoot,
-    input.listingsFile ?? defaultStoreListingFileName,
-  );
+  const catalogFile = input.catalogFile === undefined
+    ? path.join(path.resolve(input.gameRoot), defaultProductCatalogFileName)
+    : path.resolve(input.catalogFile);
+  const listingsFile = input.listingsFile === undefined
+    ? path.join(path.resolve(input.gameRoot), defaultStoreListingFileName)
+    : path.resolve(input.listingsFile);
   for (const file of [catalogFile, listingsFile]) {
     if (!existsSync(file)) {
       throw new Error(`Store product sync needs ${file}.`);

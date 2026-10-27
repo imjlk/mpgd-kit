@@ -25,6 +25,7 @@ import {
 } from './store-products-command.js';
 import {
   applyPlayProductPlan,
+  canonicalLanguageTag,
   formatPlayProductPlan,
   planPlayProducts,
   PlayProductApplyError,
@@ -821,11 +822,139 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
     .then(() => undefined, (caught: unknown) => caught);
   assert.ok(error instanceof PlayProductApplyError);
   assert.equal(error.stage, 'activate');
+  assert.deepEqual(
+    error.done,
+    [{ productId: 'coins_100', status: 'created' }],
+    'the patch before it landed',
+  );
   const next = await planPlayProducts({ packageName, catalog, listings: only }, play.port);
   assert.deepEqual(find(next, 'coins_100').changes, ['activate']);
   play.writes.length = 0;
   await applyPlayProductPlan({ saved: next, current: next, port: play.port, approved: true });
   assert.deepEqual(play.writes, ['activate coins_100/buy']);
+}
+
+// --- merge review: region opt-in, locale casing, written products ----------
+{
+  const same = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          ...listingsInput.products.REMOVE_ADS,
+          localizations: { 'en-us': { title: 'Remove ads', description: 'Old text.' } },
+        },
+      },
+    },
+    catalog,
+  );
+  // An existing option that lists US and KR and opted out of new regions:
+  // Play's conversion also covers JP, which the option must not gain.
+  const tuned = convertedOption('legacy-base', '2.99', 'ACTIVE');
+  const { newRegionsConfig: _optedOut, ...withoutNewRegions } = tuned;
+  const narrow: PlayOneTimeProduct = {
+    ...liveRemoveAds,
+    listings: [liveRemoveAds.listings?.[0] ?? {}],
+    purchaseOptions: [
+      {
+        ...withoutNewRegions,
+        regionalPricingAndAvailabilityConfigs: tuned.regionalPricingAndAvailabilityConfigs?.filter(
+          (config) => config.regionCode !== 'JP',
+        ),
+      },
+    ],
+  };
+  const play = fakePlay([narrow]);
+  const plan = await planPlayProducts({ packageName, catalog, listings: same }, play.port);
+  const removeAds = find(plan, 'remove_ads');
+  assert.equal(removeAds.action, 'unchanged', "en-us matches Play's en-US, and JP is not added");
+  assert.match(removeAds.notes.join(' '), /1 region\(s\) this purchase option does not list.*JP/u);
+
+  // Naming JP in the file opts the option in to it.
+  const withJapan = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          ...same.products.REMOVE_ADS,
+          googlePlay: {
+            price: {
+              base: { currency: 'USD', amount: '2.99' },
+              regions: { JP: { currency: 'JPY', amount: '480' } },
+            },
+          },
+        },
+      },
+    },
+    catalog,
+  );
+  const japanPlan = await planPlayProducts(
+    { packageName, catalog, listings: withJapan },
+    play.port,
+  );
+  assert.deepEqual(find(japanPlan, 'remove_ads').priceChanges, [{ region: 'JP', to: '480 JPY' }]);
+
+  // A language Play does not list yet is written in BCP-47 casing.
+  const newLanguage = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          ...same.products.REMOVE_ADS,
+          localizations: {
+            'en-us': { title: 'Remove ads', description: 'Old text.' },
+            'zh-hant-tw': { title: '移除廣告', description: '不再有橫幅。' },
+          },
+        },
+      },
+    },
+    catalog,
+  );
+  const languagePlan = await planPlayProducts(
+    { packageName, catalog, listings: newLanguage },
+    play.port,
+  );
+  assert.deepEqual(
+    find(languagePlan, 'remove_ads').write?.patch?.product.listings?.map(
+      (listing) => listing.languageCode,
+    ),
+    ['en-US', 'zh-Hant-TW'],
+  );
+  assert.equal(canonicalLanguageTag('SR-latn-rs'), 'sr-Latn-RS');
+  assert.equal(canonicalLanguageTag('es-419'), 'es-419');
+
+  // A failed write lists only the products written before it, not unchanged ones.
+  const both = fakePlay([narrow]);
+  const coinsOnly = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: { COINS_100: listingsInput.products.COINS_100 },
+    },
+    catalog,
+  );
+  const first = await planPlayProducts({ packageName, catalog, listings: coinsOnly }, both.port);
+  await applyPlayProductPlan({ saved: first, current: first, port: both.port, approved: true });
+  const changed = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        COINS_100: listingsInput.products.COINS_100,
+        REMOVE_ADS: {
+          ...same.products.REMOVE_ADS,
+          localizations: { 'en-US': { title: 'Remove ads', description: 'Changed.' } },
+        },
+      },
+    },
+    catalog,
+  );
+  const second = await planPlayProducts({ packageName, catalog, listings: changed }, both.port);
+  assert.equal(find(second, 'coins_100').action, 'unchanged');
+  both.failNextPatch = new Error('socket hang up');
+  const error = await applyPlayProductPlan({ saved: second, current: second, port: both.port, approved: true })
+    .then(() => undefined, (caught: unknown) => caught);
+  assert.ok(error instanceof PlayProductApplyError);
+  assert.deepEqual(error.done, []);
+  assert.match(error.message, /Products already written: none/u);
 }
 
 // --- a failed write names what landed --------------------------------------
@@ -924,6 +1053,7 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
       path.join(game, 'mpgd.store-listings.json'),
       `${JSON.stringify({ version: 'gone', products: {} }, null, 2)}\n`,
     );
+    ports.length = 0;
     const applied = await applyStoreProducts(
       { planFile, game: moved, approved: true },
       environment,
@@ -933,6 +1063,20 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
       applied.products.map((product) => product.status),
       ['created', 'updated'],
     );
+    assert.equal(ports.length, 1, 'apply writes through the port it planned with');
+    // --catalog and --listings given on the command line resolve against the
+    // current directory, like other mpgd file flags; the defaults stay in the game.
+    const relativeListings = path.relative(
+      process.cwd(),
+      path.join(moved, 'mpgd.store-listings.json'),
+    );
+    const relativePlan = await planStoreProducts(
+      { game: moved, profile: 'beta', store: 'google-play', listingsFile: relativeListings },
+      environment,
+      { googlePlay: factory },
+    );
+    assert.equal(relativePlan.listingsFile, path.join(moved, 'mpgd.store-listings.json'));
+    assert.equal(relativePlan.catalogFile, path.join(moved, 'mpgd.catalog.json'));
     await assert.rejects(
       planStoreProducts({ game, profile: 'beta', store: 'steam' as never }, environment, {
         googlePlay: factory,

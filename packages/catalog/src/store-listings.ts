@@ -39,7 +39,9 @@ export interface GooglePlayListingPrice {
   /**
    * Explicit prices that replace the converted price of a region, keyed by
    * ISO 3166-1 alpha-2 region code (`KR`). Each must be in that region's
-   * currency.
+   * currency, and is the **tax-inclusive** price players pay there: it
+   * replaces Play's converted price, which `convertRegionPrices` returns
+   * tax inclusive. A tax-exclusive figure would undercharge by the tax.
    */
   readonly regions?: Readonly<Record<string, StoreListingMoney>>;
 }
