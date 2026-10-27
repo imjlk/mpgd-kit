@@ -951,10 +951,13 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
    * acknowledgement the store's list could not tell apart from an
    * unverifiable entry or a list read too early), or the store re-delivered
    * it. It is finished again with the ledger entry the grant wrote, once per
-   * session; it is never verified or granted again (the ledger replays a key
+   * session (a call that failed in transport is tried again on the next
+   * report); it is never verified or granted again (the ledger replays a key
    * and refuses the same evidence under another one). Durables, which a
    * store keeps listing after their finish, and other finish owners are left
-   * alone.
+   * alone. It needs the finished record: past the journal's retention the
+   * transaction takes the derived-key path, which the ledger refuses, so it is
+   * still never granted twice but stays unfinished in the store.
    */
   const finishReportedAgain = async (
     record: CommercePurchaseOperationRecord,
@@ -976,9 +979,23 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     }
     finishedAgain.add(transactionId);
     try {
-      await provider.finishTransaction({ transactionId, ledgerEntryId, isConsumable: true });
+      const { finished } = await provider.finishTransaction({
+        transactionId,
+        ledgerEntryId,
+        isConsumable: true,
+      });
+      if (!finished) {
+        // The store refused it (for StoreKit: revoked or another token); the
+        // next session asks again. The record stays finished.
+        fail(
+          'finish',
+          new Error(`The store did not finish ${transactionId} it reported again.`),
+          record.idempotencyKey,
+        );
+      }
     } catch (error) {
-      // The next session tries again; the record stays finished.
+      // Transport-class failure: the next report of the transaction tries again.
+      finishedAgain.delete(transactionId);
       fail('finish', error, record.idempotencyKey);
     }
   };

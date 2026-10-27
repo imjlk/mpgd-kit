@@ -239,7 +239,7 @@ Rules every provider follows:
   that raced the ledger grant can still be verified. The server ledger
   dedupes that verify. A finished consumable is not listed.
 
-<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction, or a durable of another token (Restore sharing). -->
+<!-- @link ../../../native-plugins/capacitor-storekit/src/store-sdk.ts#createCapacitorStoreKitStoreSdk Lists unfinished:false non-consumables and finishes only when the session app account token matches the transaction, or a durable of another token (Restore sharing); a consumable no longer listed answers finished without a native call (a lost acknowledgement). -->
 - **No grants on the client.** A provider never credits a wallet or unlocks an
   entitlement. `settlement` on an adapter-settled purchase is a pointer for
   the reconciler, not a grant.
@@ -452,9 +452,10 @@ One pass:
 4. For `granted` and `finishing` records, act on `lifecycle.finish`: call
    `finishTransaction` for `client` and `host`; resend the verify request to
    read finalization for `server`; mark `finished` for `none`. A `finished`
-   consumable a `client` store reports again (available means unfinished) is
-   finished again with the record's ledger entry, once per session; it is
-   never verified again and the record is not rewritten.
+   consumable a `client` store reports again (a store lists a consumable only
+   while it is unfinished) is finished again with the record's ledger entry,
+   once per session; it is never verified again and the record is not
+   rewritten.
 5. For records whose grant is still within the journal retention window, ask
    the backend for ledger status and move reversed grants to `revoked`.
 

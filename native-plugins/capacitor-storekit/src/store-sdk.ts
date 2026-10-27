@@ -386,11 +386,12 @@ export function createCapacitorStoreKitStoreSdk(
    * its answer never reached the journal (the app was closed between the two),
    * and the record would otherwise stay `finishing` forever. The caller holds
    * the ledger grant (the reconciler finishes only `granted` or `finishing`
-   * records), nothing native is called, and an entry of that id the native
-   * side reports in any shape keeps it refused. If the transaction is listed
-   * again later (an unverifiable entry the native read skipped, or a list read
-   * before StoreKit carried it), the reconciler finishes it again without a
-   * second verify. A durable missing from the list is refused: a durable
+   * records, and a `finished` consumable listed again), nothing native is
+   * called, and an entry of that id the native side reports in any shape
+   * keeps it refused. If the transaction is listed again later (an
+   * unverifiable entry the native read skipped, or a list read before
+   * StoreKit carried it), the reconciler finishes it again without a second
+   * verify. A durable missing from the list is refused: a durable
    * stays in `currentEntitlements` after its finish, so a missing one is
    * revoked or unverifiable, never a lost acknowledgement.
    *

@@ -327,7 +327,7 @@ resolved packages were checked to be the candidates (OpenIAP sources present):
 | iOS unfinished consumable and finished durable | `testListedTransactionsKeepThe03Scope` |
 | iOS unverifiable transaction next to verified ones | `testAnUnverifiableTransactionIsSkippedNextToVerifiedOnes`, `testAnUnverifiableTransactionDoesNotBlockFinishingAVerifiedOne` |
 | iOS rejected query | case 2 (a rejection is no empty list and no `finished: false`) |
-| iOS lost finish reply | game `iosCheckout` (list check plus a fresh server grant) |
+| iOS lost finish reply | StoreSdk lost-acknowledgement test; StoreKit reconciler smoke (two runs, then the transaction listed again); reconciler test 53 |
 | iOS revocation | shim; existing StoreSdk revoked-event tests; server re-verification unchanged |
 | Google order id assigned later | Play case 1; reconciler test 46 |
 | Google consume/ack failure after grant | server-owned, unchanged; Worker `googlePlayCheckout` |

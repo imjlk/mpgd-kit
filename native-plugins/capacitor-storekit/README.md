@@ -231,14 +231,18 @@ the list is never answered finished (a finished durable stays listed with
 entry of that id in a malformed shape. Should StoreKit list the consumable
 again (an entry the native read skipped as unverifiable, or a list read
 before StoreKit carried the transaction), the reconciler finishes it again
-with the journaled ledger entry, once per session, without a second verify;
-the backend ledger answers a replayed idempotency key with the first grant
-and refuses the same transaction under another key
-(`EVIDENCE_ALREADY_PROCESSED`), so it is never granted twice. Ask to Buy is
-unaffected: a deferred purchase has no transaction until it is approved, so
-its `launched` record holds no ledger grant and is never finished; the
-approved transaction arrives through `transactionUpdated` and is verified
-and finished once.
+with the journaled ledger entry, once per session, without a second verify,
+for as long as the journal holds the finished record (the generated game's
+journal keeps terminal records for 30 days); the backend ledger answers a
+replayed idempotency key with the first grant and refuses the same
+transaction under another key (`EVIDENCE_ALREADY_PROCESSED`), so it is never
+granted twice, and a transaction listed again only after the record left the
+journal stays unfinished in StoreKit without a grant. The re-finish is the
+reconciler's (`@mpgd/game-services`), so take both packages from the same kit
+release. Ask to Buy is unaffected: a deferred purchase has no transaction
+until it is approved, so its `launched` record holds no ledger grant and is
+never finished; the approved transaction arrives through `transactionUpdated`
+and is verified and finished once.
 
 ### Migrating from v1
 

@@ -95,10 +95,14 @@ other, and `finishTransaction` is only ever called for a `granted` or
 (`assertCommerceFinishAllowed`), or for a `finished` consumable that a
 `client`-finish store reports again: a store lists a consumable only while it
 is unfinished, so the reconciler finishes it again with the journaled ledger
-entry, once per session, without verifying it again and without rewriting the
-record (StoreKit answers a consumable that already left
-`Transaction.unfinished` as finished, which can end a record before a late
-or unverifiable entry shows up in the list).
+entry, once per session (a call that failed in transport is tried again on
+the next report), without verifying it again and without rewriting the record
+(StoreKit answers a consumable that already left `Transaction.unfinished` as
+finished, which can end a record before a late or unverifiable entry shows up
+in the list). This needs the finished record: once the journal has dropped
+it, the transaction is verified under its derived key, which the ledger
+refuses (`EVIDENCE_ALREADY_PROCESSED`), so it is never granted twice but stays
+unfinished in the store.
 
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal

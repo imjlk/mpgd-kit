@@ -3770,12 +3770,25 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
   await first.reconciler.stop();
 
-  // A failed finish is reported; the next session tries again from the journal.
+  // A finish that failed in transport is reported and tried again on the next report; one the
+  // store refused is reported and left for the next session, which tries again from the journal.
   const failing = createHarness({ store });
   failing.provider.available.push(purchaseOf({ transactionId: 'tx-53' }));
   failing.provider.queueFinish({ throws: new Error('store unavailable') });
+  failing.provider.queueFinish({ finished: false });
   await failing.reconciler.start();
   assertEqual(failing.failures, ['finish(op-53)'], 'the failed finish is reported');
+  failing.provider.report(purchaseOf({ transactionId: 'tx-53' }));
+  await failing.reconciler.runUntilIdle();
+  failing.provider.report(purchaseOf({ transactionId: 'tx-53' }));
+  await failing.reconciler.runUntilIdle();
+  assertEqual(
+    failing.provider.finishCalls.length,
+    2,
+    'the transport failure is tried again on the next report; the refusal is not, this session',
+  );
+  assertEqual(failing.failures, ['finish(op-53)', 'finish(op-53)'], 'the refusal is reported too');
+  assertEqual(failing.backend.requests.length, 0, 'nothing is verified again');
   const next = createHarness({ store });
   next.provider.available.push(purchaseOf({ transactionId: 'tx-53' }));
   await next.reconciler.start();
