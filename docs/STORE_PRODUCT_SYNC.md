@@ -31,8 +31,7 @@ pricing never ship to players, and the game runtime never reads this file.
         "price": {
           "base": { "currency": "USD", "amount": "0.99" },
           "regions": { "KR": { "currency": "KRW", "amount": "1500" } }
-        },
-        "multiQuantity": true
+        }
       },
       "appStore": {
         "localizations": {
@@ -59,8 +58,12 @@ pricing never ship to players, and the game runtime never reads this file.
   one the sync only updates the text of an existing product.
 - `googlePlay.purchaseOptionId`: the purchase option the sync manages.
   Defaults to the product's only buy option, or `buy` for a new product.
-- `googlePlay.productTaxCategoryCode`, `multiQuantity`: optional; Play's
-  defaults apply when absent.
+- `googlePlay.productTaxCategoryCode`: optional; when absent the product
+  keeps its Play category (Play's default for a new product), and the price
+  conversion uses that category.
+- Multi-quantity checkout stays off: the kit backend grants one unit per
+  purchase and rejects larger quantities, so the sync turns it off on a
+  managed option where it was turned on in Play Console.
 - `appStore.*`: base territory (ISO 3166-1 alpha-3) and customer price,
   manual `territories` prices, review note, review screenshot (relative to
   the listing file) and `familySharable` (non-consumables only).

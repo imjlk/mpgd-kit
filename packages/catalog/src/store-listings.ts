@@ -55,8 +55,6 @@ export interface GooglePlayListing {
   readonly purchaseOptionId?: string & tags.Pattern<'^[a-z0-9][a-z0-9-]{0,62}$'>;
   /** Play product tax category code; left to Play's default when absent. */
   readonly productTaxCategoryCode?: string & tags.MinLength<1>;
-  /** Let a buyer purchase more than one unit in one checkout (consumables). */
-  readonly multiQuantity?: boolean;
 }
 
 export interface AppStoreListingPrice {

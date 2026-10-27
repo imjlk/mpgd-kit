@@ -292,7 +292,10 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
     readonly regionsVersion: string;
   } | undefined;
   if (googlePlay.price !== undefined) {
-    const converted = await input.convert(googlePlay.price.base, googlePlay.productTaxCategoryCode);
+    // Convert with the category the product keeps: the file's, else Play's.
+    const conversionTaxCategory = googlePlay.productTaxCategoryCode
+      ?? remote?.taxAndComplianceSettings?.productTaxCategoryCode ?? undefined;
+    const converted = await input.convert(googlePlay.price.base, conversionTaxCategory);
     const regionsVersion = converted.regionVersion?.version;
     if (typeof regionsVersion !== 'string' || regionsVersion === '') {
       throw new Error('Google Play price conversion returned no regions version.');
@@ -387,7 +390,9 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
     ...baseOption,
     buyOption: {
       ...baseOption.buyOption,
-      ...(googlePlay.multiQuantity === undefined ? {} : { multiQuantityEnabled: googlePlay.multiQuantity }),
+      // The backend grants one unit per purchase token and rejects any other
+      // quantity (GOOGLE_PLAY_QUANTITY_UNSUPPORTED), so multi-quantity stays off.
+      multiQuantityEnabled: false,
     },
     ...(pricing === undefined ? {} : {
       regionalPricingAndAvailabilityConfigs: pricing.regional,
@@ -409,9 +414,11 @@ async function planOne(input: PlanOneInput): Promise<PlannedPlayProduct | { read
       changes.push('prices');
     }
   }
-  if (!isNewOption && googlePlay.multiQuantity !== undefined
-    && (remoteOption.buyOption?.multiQuantityEnabled ?? false) !== googlePlay.multiQuantity) {
+  if (!isNewOption && remoteOption.buyOption?.multiQuantityEnabled === true) {
     changes.push('multi-quantity');
+    notes.push(
+      'Multi-quantity is turned off: the kit backend grants one unit per purchase and rejects larger quantities.',
+    );
   }
   const taxCategory = googlePlay.productTaxCategoryCode;
   if (taxCategory !== undefined && remote?.taxAndComplianceSettings?.productTaxCategoryCode !== taxCategory) {

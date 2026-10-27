@@ -42,7 +42,6 @@ const valid = {
           base: { currency: 'USD', amount: '0.99' },
           regions: { KR: { currency: 'KRW', amount: '1500' } },
         },
-        multiQuantity: true,
       },
       appStore: {
         localizations: {

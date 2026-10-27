@@ -70,6 +70,7 @@ interface FakePlay {
   failNextPatch?: Error | undefined;
   failNextActivate?: Error | undefined;
   conversionCalls: number;
+  readonly conversionTaxCategories: (string | undefined)[];
 }
 
 /** In-memory Play: patch creates with `allowMissing`, new options start `DRAFT`. */
@@ -82,6 +83,7 @@ function fakePlay(initial: readonly PlayOneTimeProduct[] = []): FakePlay {
     writes,
     products,
     conversionCalls: 0,
+    conversionTaxCategories: [],
     port: {
       async listOneTimeProducts(name) {
         assert.equal(name, packageName);
@@ -89,6 +91,7 @@ function fakePlay(initial: readonly PlayOneTimeProduct[] = []): FakePlay {
       },
       async convertRegionPrices(input) {
         fake.conversionCalls += 1;
+        fake.conversionTaxCategories.push(input.productTaxCategoryCode);
         return conversion(input.price);
       },
       async patchOneTimeProduct(input) {
@@ -202,7 +205,6 @@ const listingsInput = {
           base: { currency: 'USD', amount: '0.99' },
           regions: { KR: { currency: 'KRW', amount: '1500' } },
         },
-        multiQuantity: true,
       },
     },
     REMOVE_ADS: {
@@ -274,7 +276,7 @@ function find(plan: PlayProductPlan, productId: string) {
   assert.equal(created.allowMissing, true);
   assert.equal(created.regionsVersion, '2025/03');
   const option = created.product.purchaseOptions?.[0];
-  assert.deepEqual(option?.buyOption, { legacyCompatible: true, multiQuantityEnabled: true });
+  assert.deepEqual(option?.buyOption, { legacyCompatible: true, multiQuantityEnabled: false });
   const kr = option?.regionalPricingAndAvailabilityConfigs?.find(
     (config) => config.regionCode === 'KR',
   );
@@ -668,19 +670,15 @@ function find(plan: PlayProductPlan, productId: string) {
     'availability and opt-out are not price changes',
   );
 
-  const multi = assertStoreListingCatalog(
-    {
-      version: 'test',
-      products: {
-        REMOVE_ADS: {
-          ...same.products.REMOVE_ADS,
-          googlePlay: { ...same.products.REMOVE_ADS?.googlePlay, multiQuantity: true },
-        },
-      },
-    },
-    catalog,
+  // Multi-quantity turned on in Play Console is turned off (the backend
+  // rejects quantities above one); the rest of the option is sent back as is.
+  const multiPlay = fakePlay([withMultiQuantity(remote)]);
+  const multiPlan = await planPlayProducts(
+    { packageName, catalog, listings: same },
+    multiPlay.port,
   );
-  const multiPlan = await planPlayProducts({ packageName, catalog, listings: multi }, play.port);
+  assert.deepEqual(find(multiPlan, 'remove_ads').changes, ['multi-quantity']);
+  assert.match(find(multiPlan, 'remove_ads').notes.join(' '), /one unit per purchase/u);
   const option = find(multiPlan, 'remove_ads').write?.patch?.product.purchaseOptions?.[0];
   assert.equal(
     option?.regionalPricingAndAvailabilityConfigs?.find((config) => config.regionCode === 'KR')?.availability,
@@ -693,6 +691,50 @@ function find(plan: PlayProductPlan, productId: string) {
   );
 }
 
+function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
+  return {
+    ...product,
+    purchaseOptions: product.purchaseOptions?.map((option) => ({
+      ...option,
+      buyOption: { ...option.buyOption, multiQuantityEnabled: true },
+    })),
+  };
+}
+
+// --- the conversion uses the tax category the product keeps ----------------
+{
+  const play = fakePlay([
+    {
+      ...liveRemoveAds,
+      taxAndComplianceSettings: { productTaxCategoryCode: 'digital-games' },
+    },
+  ]);
+  await planPlayProducts({ packageName, catalog, listings }, play.port);
+  assert.deepEqual(play.conversionTaxCategories, [undefined, 'digital-games']);
+  const named = assertStoreListingCatalog(
+    {
+      version: 'test',
+      products: {
+        REMOVE_ADS: {
+          ...listingsInput.products.REMOVE_ADS,
+          googlePlay: {
+            ...listingsInput.products.REMOVE_ADS.googlePlay,
+            productTaxCategoryCode: 'apps',
+          },
+        },
+      },
+    },
+    catalog,
+  );
+  const renamed = await planPlayProducts({ packageName, catalog, listings: named }, play.port);
+  assert.equal(play.conversionTaxCategories.at(-1), 'apps');
+  assert.ok(find(renamed, 'remove_ads').changes.includes('tax-category'));
+  assert.equal(
+    find(renamed, 'remove_ads').write?.patch?.product.taxAndComplianceSettings?.productTaxCategoryCode,
+    'apps',
+  );
+}
+
 // --- held live prices go back with Play's own regions version ---------------
 {
   const cheaperMulti = assertStoreListingCatalog(
@@ -701,13 +743,16 @@ function find(plan: PlayProductPlan, productId: string) {
       products: {
         REMOVE_ADS: {
           localizations: { 'en-US': { title: 'Remove ads', description: 'Old text.' } },
-          googlePlay: { price: { base: { currency: 'USD', amount: '1.99' } }, multiQuantity: true },
+          googlePlay: { price: { base: { currency: 'USD', amount: '1.99' } } },
         },
       },
     },
     catalog,
   );
-  const remote = { ...liveRemoveAds, listings: [liveRemoveAds.listings?.[0] ?? {}] };
+  const remote = withMultiQuantity({
+    ...liveRemoveAds,
+    listings: [liveRemoveAds.listings?.[0] ?? {}],
+  });
   const play = fakePlay([remote]);
   const plan = await planPlayProducts(
     { packageName, catalog, listings: cheaperMulti, keepLivePrices: true },
@@ -730,7 +775,7 @@ function find(plan: PlayProductPlan, productId: string) {
       products: {
         REMOVE_ADS: {
           localizations: { 'en-US': { title: 'Remove ads', description: 'Old text.' } },
-          googlePlay: { multiQuantity: true },
+          googlePlay: {},
         },
       },
     },
