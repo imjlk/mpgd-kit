@@ -281,10 +281,11 @@ export interface CreateGameServicesRpcFetchHandlerOptions
   readonly prefix?: string;
   /**
    * Writes the pre-beta.34 `inferable: false` flag into oRPC error bodies so game clients
-   * from `@mpgd/game-services` 0.30.5 and older (oRPC 2.0.0-beta.14) still decode error
+   * from `@mpgd/game-services` 0.30.5 or older (oRPC 2.0.0-beta.14) still decode error
    * codes. A plain oRPC 2.0.0-beta.34+ client rejects that flag: such clients must wrap their
-   * fetch with `withLegacyOrpcErrorCompat`, as `createGameServicesOrpcClient` does, or the
-   * Worker must set this to false once no older game client is supported. Defaults to true.
+   * fetch with `withLegacyOrpcErrorCompat`, as `createGameServicesOrpcClient` from 0.31.0 or
+   * later does. Set this to false once every supported game client comes from 0.31.0 or
+   * later. Defaults to true.
    */
   readonly legacyOrpcErrorFlag?: boolean;
 }

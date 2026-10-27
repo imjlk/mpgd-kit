@@ -19,8 +19,8 @@
  * Success responses are passed through untouched in both directions.
  *
  * Remove this module when the oldest supported game-services client and every supported
- * Worker run oRPC 2.0.0-beta.34 or newer, that is, both come from an `@mpgd/game-services`
- * release that ships oRPC 2.0.0-beta.46 (the release after 0.30.5) or later.
+ * Worker come from `@mpgd/game-services` 0.31.0 or later (oRPC 2.0.0-beta.46), that is, once
+ * no client or Worker from 0.30.5 or older (oRPC 2.0.0-beta.14) is supported.
  */
 
 const legacyErrorFlag = 'inferable';
