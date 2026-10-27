@@ -784,7 +784,7 @@ const onlyEnglish = (graphics: Record<string, unknown>, contact?: Record<string,
       planStorePresence({ game, profile: 'beta', store: 'app-store' }, environment, {
         googlePlay: factory,
       }),
-      /google-play/u,
+      /does not configure ios/u,
     );
     const planned = await planStorePresence(
       { game, profile: 'beta', store: 'google-play' },
