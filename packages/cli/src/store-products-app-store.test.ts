@@ -1001,6 +1001,11 @@ try {
               attributes: { startDate: '2026-12-01', manual: true },
             },
             { type: 'inAppPurchasePrices', id: 'p4', attributes: { manual: true } },
+            {
+              type: 'inAppPurchasePrices',
+              id: 'p5',
+              attributes: { startDate: '2026-01-01', endDate: '2027-01-01', manual: true },
+            },
           ],
           links: {},
         },
@@ -1078,9 +1083,9 @@ try {
         id: 's1',
         baseTerritory: 'USA',
         manualPrices: [{ territory: 'USA', customerPrice: '2.99' }],
-        scheduledChanges: 1,
+        scheduledChanges: 2,
       },
-      'equalized (non-manual) prices are not the schedule; one manual price starts later',
+      'equalized (non-manual) prices are not the schedule; one price starts and one temporary price ends later',
     );
     assert.deepEqual(await port.readAvailability('6000'), {
       id: 'av1',

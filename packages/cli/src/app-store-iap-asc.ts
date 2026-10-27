@@ -176,8 +176,11 @@ export function createAscIapPort(
         listTimeoutMs,
       ), 'iap pricing schedules manual-prices');
       const now = today();
+      // A future start or a future end (a temporary price expiring) is a
+      // transition a new open-ended schedule would remove.
+      const upcoming = (value: unknown): boolean => typeof value === 'string' && value.slice(0, 10) > now;
       const scheduledChanges = all.filter((price) =>
-        typeof price.attributes.startDate === 'string' && price.attributes.startDate.slice(0, 10) > now,
+        upcoming(price.attributes.startDate) || upcoming(price.attributes.endDate),
       ).length;
       return {
         id: schedule.id,

@@ -191,8 +191,8 @@ Changes: `create`, `reference-name`, `family-sharing`, `version`,
   the old one: a manual price for a territory the file does not name goes
   back to Apple's equalized price (the plan shows it as `-> equalized`).
   When App Store Connect holds a price change scheduled for a later date,
-  the sync leaves the prices alone and says so, because a new schedule
-  would drop it. Apply resolves each price point by territory and customer
+  or a temporary price that ends later, the sync leaves the prices alone
+  and says so, because a new schedule would drop it. Apply resolves each price point by territory and customer
   price; a price that is not an App Store price point fails before the
   schedule is written. "On sale", for `--confirm-price-change`, means the
   in-app purchase or any of its versions was approved.
