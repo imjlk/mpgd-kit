@@ -150,6 +150,9 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
           ...(options.monetization === undefined ? {} : { operationStore: options.monetization.operationStore }),
           analytics: analyticsSink,
           analyticsSessionId,
+          // The services are one player's for the run: another player signing in closes them
+          // (purchases fail closed, retryably) and the game boots again for that player.
+          onPlayerChanged: restartForAnotherPlayer,
         };
         // Configured but not signed in yet: the services wait for the server player, never
         // binding purchases or the journal to the platform's local placeholder.
@@ -213,6 +216,23 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
     disposeMicrosoftStorePwa?.();
     renderBootstrapError(error, locale);
     console.error('[bootstrap]', error);
+  }
+}
+
+/**
+ * Another player signed in to the server session within the run (a game's own
+ * account switch; the reference guest never changes player). The game
+ * services already closed for the boot player; the scenes, the action
+ * coordinator, and the notifications still hold it, so the game boots again
+ * and builds them all for the new player. Replace the reload with your own
+ * restart (back to the title, then `bootstrap()`) if a reload does not suit
+ * the target.
+ */
+let restartingForAnotherPlayer = false;
+function restartForAnotherPlayer(): void {
+  if (!restartingForAnotherPlayer) {
+    restartingForAnotherPlayer = true;
+    globalThis.location?.reload();
   }
 }
 

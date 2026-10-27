@@ -1,0 +1,5 @@
+---
+npm/@mpgd/cli: minor (Changed)
+---
+
+Generated games fail closed when another player signs in within a run, instead of keeping the first player's game services with a warning. `createStarterGameServices` passes the server session's player to the runtime (`sessionPlayerId`), so from the moment the session names another player nothing is verified, restored, or finished for the boot player with the new player's credentials and no purchase opens a store sheet (purchases answer `failed` with the retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`); it then disposes the services and calls the new `onPlayerChanged`, which `main.ts` wires to a reload (`restartForAnotherPlayer`) so the game boots again for the new player. The session-gated services (`sessionGatedServices.ts`) close the same way on a later sign-in naming another player, gain `dispose()`, and drop recovery and Delete account once closed. Services created for another player than the server session's (for example the native shell's local placeholder) stay closed and warn. The reference guest session never changes player, so a game without its own account switching sees no change.

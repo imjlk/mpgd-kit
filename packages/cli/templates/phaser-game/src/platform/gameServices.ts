@@ -18,6 +18,7 @@ import type { StarterGuestSignIn } from './guestIdentity';
 import { createStorageMonetizationOperationStore } from './monetizationJournal';
 import { resolveStarterServerSession } from './serverSession';
 import {
+  bindStarterServicesToPlayer,
   createSessionGatedGameServices,
   type StarterSessionGatedServices,
 } from './sessionGatedServices';
@@ -52,6 +53,12 @@ interface StarterGameServicesInput {
   readonly operationStore?: MonetizationOperationStore;
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
+  /**
+   * Called once when the server session names another player than the
+   * services' (an account switch within the run), after the services closed:
+   * restart the game so it boots for that player (`main.ts` reloads).
+   */
+  readonly onPlayerChanged?: (playerId: string) => void;
 }
 
 /**
@@ -60,9 +67,30 @@ interface StarterGameServicesInput {
  * over the platform storage adapter unless the game supplies its own) and
  * verified through the backend ledger, with the catalog's kinds and SKUs for
  * the gateway target resolved without a store read.
+ *
+ * With a server session (`setStarterServerSession`), the services belong to
+ * `playerId` for their whole life and fail closed for anyone else: while the
+ * session names no player, purchases and backend requests are refused
+ * (retryable); once it names another player (an account switch), the
+ * services close for good before that player's headers or store account
+ * binding reach this player's journal (purchases answer `failed` with the
+ * retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`), and
+ * `onPlayerChanged` asks the host to boot again for the new player. Pass the
+ * session's player as `playerId`, never the platform's local placeholder:
+ * services created for another player than the session's stay closed.
  */
 export function createStarterGameServices(input: StarterGameServicesInput): StarterGameServices {
-  return createRuntime(input, resolveStarterServerSession({ once: true }));
+  const session = resolveStarterServerSession({ once: true });
+  const services = createRuntime(input, session);
+  if (session === undefined || services.mode === 'disabled') {
+    return services;
+  }
+  return bindStarterServicesToPlayer({
+    services,
+    playerId: input.playerId,
+    session,
+    ...(input.onPlayerChanged === undefined ? {} : { onPlayerChanged: input.onPlayerChanged }),
+  });
 }
 
 /**
@@ -79,14 +107,19 @@ export function createStarterSessionGatedGameServices(
     readonly onActivated?: () => void;
   },
 ): StarterGameServices {
-  const { signIn, onActivated, ...rest } = input;
+  const { signIn, onActivated, onPlayerChanged, ...rest } = input;
   return createSessionGatedGameServices({
     // Configuration only (mode, target, whether a client exists); never sends a request.
     probe: createRuntime({ ...rest, playerId: 'session-pending' }, undefined),
     ensurePlayer: async () => (await signIn.ensure())?.playerId,
     onPlayer: (listener) => signIn.onSignedIn((signedIn) => listener(signedIn.playerId)),
-    create: (playerId) => createStarterGameServices({ ...rest, playerId }),
+    create: (playerId) => createStarterGameServices({
+      ...rest,
+      playerId,
+      ...(onPlayerChanged === undefined ? {} : { onPlayerChanged }),
+    }),
     ...(onActivated === undefined ? {} : { onActivated }),
+    ...(onPlayerChanged === undefined ? {} : { onPlayerChanged }),
   });
 }
 
@@ -111,6 +144,13 @@ function createRuntime(
       ? {}
       : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),
     transport: resolveGameServicesTransport(import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT),
-    ...(session === undefined ? {} : { getHeaders: () => session.getHeaders() }),
+    ...(session === undefined
+      ? {}
+      : {
+          getHeaders: () => session.getHeaders(),
+          // Requests, the store account binding, and the journal follow this
+          // session's player; the services refuse while it is not theirs.
+          sessionPlayerId: () => session.current()?.playerId,
+        }),
   });
 }

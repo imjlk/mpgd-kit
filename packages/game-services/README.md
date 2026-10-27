@@ -233,6 +233,35 @@ them into analytics or logs.
 All published entrypoints use explicit internal ESM module paths and are smoke-tested
 with native Node imports, without a bundler or TypeScript runtime loader.
 
+## One player per runtime
+
+A runtime, its purchase journal records, and its reconciler belong to
+`playerId` for their whole life, while `getHeaders` and a store provider's
+account binding follow the live session. When the session can change player
+within a run (an account switch), pass `sessionPlayerId: () => session.current()?.playerId`:
+
+- It is read before every backend request and again once that request's
+  headers are resolved, and by the commerce reconciler before each pass,
+  queued event, record step, store read, restore, and finish, and right
+  before a store UI opens.
+- Another player closes the runtime for good: nothing more is verified,
+  restored, or finished for this player with the other player's credentials
+  (a backend answers that with a permanent account-mismatch rejection), and
+  no purchase is journaled here and bound to the other account. Purchases
+  answer `failed` with the retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`
+  before any store UI, rewarded-ad claims answer `unavailable` before any
+  ad, recovery runs nothing, and Restore Purchases rejects with
+  `GameServicesRuntimeClosedError`.
+- No player (signed out) refuses the same way with
+  `GAME_SERVICES_SESSION_REQUIRED` and leaves the runtime open for its player.
+
+Refusals end no journal record: a runtime created for the player later
+resumes them. `runtime.dispose()` closes a runtime the same way
+(`GAME_SERVICES_RUNTIME_DISPOSED`) and resolves once its reconciler has
+stopped; call it before creating the runtime for another player. A custom
+`httpTransport` must send only the headers the runtime resolved for each
+request, or the after-resolution check cannot cover it.
+
 ## Guest session and account binding foundation
 
 `createGuestSessionCoordinator` from `@mpgd/game-services/guest-session`
