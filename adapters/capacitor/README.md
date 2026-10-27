@@ -133,6 +133,29 @@ normalizes every SDK failure through `mapError` into a `CommerceError` whose
 `storeCode` keeps the store's own code. It never grants and never sets
 `settlement`; the backend ledger decides.
 
+`purchaseGate` is an optional sales switch for new purchases, separate from
+the account binding (and from StoreKit's `appAccountToken`). It is asked once
+per `requestPurchase`, after the product, availability, and kind checks and
+before `accountBinding`, with `{ store, logicalId, storeSku, kind, source }`,
+and answers `{ allowed: true }` or `{ allowed: false, storeCode?, message?,
+retryable? }`. A refusal never opens the store UI and is answered as data:
+`{ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE', storeCode:
+'PURCHASES_PAUSED' } }` (or the gate's own `storeCode`), `retryable` false
+unless the gate says otherwise. A gate that throws refuses too
+(`PURCHASE_GATE_FAILED`, retryable; a thrown `CommerceError` keeps its own
+code), and so does any answer other than `{ allowed: true }`. Recovery,
+restore, finishing, events, `fetchProducts`, and `getAvailablePurchases` never
+ask the gate, so purchases already paid for keep reconciling while new sales
+are refused. A failed or missing account binding is a `failed` result too,
+not a throw. Over the bridge a thrown error keeps only `code`, `message`, and
+`retryable`, while a result keeps `storeCode`, so the game can tell
+`PURCHASES_PAUSED` from `PLAY_BILLING_ACCOUNT_LOOKUP_FAILED`. The gate is not
+reflected in `getCapabilities()`: `availability` describes the store and
+gates the reconciler (a paused gate there would read as `STORE_UNAVAILABLE`
+and lose the reason), and a capability read stays free of server round trips.
+A shop hides its buy buttons from the same server flag it hands the gate,
+for example the sales flag of its account binding response.
+
 Two failure classes are not terminal. When `requestPurchase` throws or
 returns a code that normalizes to `OUTCOME_UNKNOWN` (for example
 `PLAY_BILLING_TIMEOUT`, `PLAY_BILLING_INTERRUPTED`,

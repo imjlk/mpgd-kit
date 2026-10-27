@@ -105,13 +105,17 @@ recoverable, so the provider answers `launched` and the reconciler resolves
 the attempt from `getAvailablePurchases` without reopening the store UI.
 
 `createCapacitorPlayBillingCommerceProvider({ products, accountBinding,
-plugin?, isAndroid?, store?, mapError? })` composes the provider: evidence
+purchaseGate?, plugin?, isAndroid?, store?, mapError? })` composes the provider: evidence
 schema `google-play.product-purchase.v2` with payload `{ purchaseToken }`,
 which `createGooglePlayProductPurchaseBoundary` verifies; authority
 `{ evidence: 'client-token', accountBinding: 'required' }`; no
 `finishTransaction` and no `restorePurchases`. A thrown `accountBinding`
 lookup is `ACCOUNT_BINDING_REQUIRED` with `PLAY_BILLING_ACCOUNT_LOOKUP_FAILED`
-kept as the store code. `store` defaults to `google-play`; only a conformance
+kept as the store code (a thrown `CommerceError` keeps its own code), answered
+as a `failed` result before the sheet opens. The optional `purchaseGate` is
+the sales switch: it is asked before a new purchase opens the Play sheet,
+never during recovery, and a refusal is `failed` with `ITEM_UNAVAILABLE` and
+`PURCHASES_PAUSED` (see the adapter-capacitor README). `store` defaults to `google-play`; only a conformance
 harness overrides it, because the derived idempotency key follows the store
 id. `createPlayBillingCommerceCapabilities(availability)` (from
 `src/commerce-profile.ts`, which imports types only and no Capacitor code)
