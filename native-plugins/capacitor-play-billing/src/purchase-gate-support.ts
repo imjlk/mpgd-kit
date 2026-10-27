@@ -1,10 +1,43 @@
 import * as adapterCapacitor from '@mpgd/adapter-capacitor';
-import type { StorePurchaseGate } from '@mpgd/adapter-capacitor';
 import {
   CommerceError,
+  type CommerceLogicalProductId,
   type CommerceProvider,
+  type PurchaseKind,
+  type PurchaseSource,
   type RequestPurchaseResult,
+  type StoreId,
 } from '@mpgd/platform/commerce';
+
+// The gate types mirror `StorePurchaseGate*` of `@mpgd/adapter-capacitor`
+// field for field instead of importing them, so this plugin's published
+// declarations still type-check against an adapter from before the gate
+// (which the runtime probe below refuses to sell through). They are
+// structurally identical, so a gate typed with either fits both.
+
+/** What a purchase gate is asked about: one new purchase, before any store UI opens. */
+export interface StorePurchaseGateRequest {
+  readonly store: StoreId;
+  readonly logicalId: CommerceLogicalProductId;
+  readonly storeSku: string;
+  readonly kind: PurchaseKind;
+  readonly source: PurchaseSource;
+}
+
+/** A purchase gate's answer; see `StorePurchaseGateDecision` in `@mpgd/adapter-capacitor`. */
+export type StorePurchaseGateDecision =
+  | { readonly allowed: true }
+  | {
+      readonly allowed: false;
+      readonly storeCode?: string;
+      readonly message?: string;
+      readonly retryable?: boolean;
+    };
+
+/** The game's sales switch for new purchases; see `StorePurchaseGate` in `@mpgd/adapter-capacitor`. */
+export type StorePurchaseGate = (
+  request: StorePurchaseGateRequest,
+) => StorePurchaseGateDecision | Promise<StorePurchaseGateDecision>;
 
 /** `storeCode` of every new purchase refused because the adapter cannot run the gate. */
 export const purchaseGateUnsupportedStoreCode = 'PURCHASE_GATE_UNSUPPORTED' as const;

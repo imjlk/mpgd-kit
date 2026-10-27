@@ -4,7 +4,6 @@ import {
   type CapacitorCommerceServiceProvider,
   type StoreCommerceProductMapping,
   type StoreCommerceProvider,
-  type StorePurchaseGate,
   type StoreSdkErrorCodeMap,
 } from '@mpgd/adapter-capacitor';
 import type { PlatformEvidenceEnvelope } from '@mpgd/platform';
@@ -18,6 +17,7 @@ import {
 import {
   refuseNewPurchasesUnlessGated,
   resolvePurchaseGateSupport,
+  type StorePurchaseGate,
 } from './purchase-gate-support.js';
 import {
   capacitorStoreKitErrorCodeMap,

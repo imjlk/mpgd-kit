@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import * as adapterCapacitor from '@mpgd/adapter-capacitor';
+import type {
+  StorePurchaseGate as AdapterStorePurchaseGate,
+  StorePurchaseGateDecision as AdapterStorePurchaseGateDecision,
+  StorePurchaseGateRequest as AdapterStorePurchaseGateRequest,
+} from '@mpgd/adapter-capacitor';
 
 import {
   createFakePlayBillingPlugin,
@@ -14,6 +19,9 @@ import {
   adapterSupportsPurchaseGate,
   refuseNewPurchasesUnlessGated,
   resolvePurchaseGateSupport,
+  type StorePurchaseGate,
+  type StorePurchaseGateDecision,
+  type StorePurchaseGateRequest,
 } from './purchase-gate-support.js';
 
 // An adapter from before the purchase gate: the same module whose gate
@@ -26,6 +34,12 @@ vi.mock('@mpgd/adapter-capacitor', async (importOriginal) => ({
 }));
 
 describe('purchase gate on an adapter without gate support', () => {
+  it('declares gate types identical to the adapter without importing them', () => {
+    expectTypeOf<StorePurchaseGate>().toEqualTypeOf<AdapterStorePurchaseGate>();
+    expectTypeOf<StorePurchaseGateDecision>().toEqualTypeOf<AdapterStorePurchaseGateDecision>();
+    expectTypeOf<StorePurchaseGateRequest>().toEqualTypeOf<AdapterStorePurchaseGateRequest>();
+  });
+
   it('detects the missing gate support', () => {
     expect(adapterSupportsPurchaseGate()).toBe(false);
     expect(adapterSupportsPurchaseGate(adapterCapacitor)).toBe(false);

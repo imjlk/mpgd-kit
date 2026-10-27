@@ -4,7 +4,6 @@ import {
   type CapacitorCommerceServiceProvider,
   type StoreCommerceProductMapping,
   type StoreCommerceProvider,
-  type StorePurchaseGate,
   type StoreSdkErrorCodeMap,
   type StoreSdkPurchase,
 } from '@mpgd/adapter-capacitor';
@@ -23,6 +22,7 @@ import type { CapacitorPlayBillingPlugin, PlayPurchase } from './definitions.js'
 import {
   refuseNewPurchasesUnlessGated,
   resolvePurchaseGateSupport,
+  type StorePurchaseGate,
 } from './purchase-gate-support.js';
 import {
   createCapacitorPlayBillingStoreSdk,
