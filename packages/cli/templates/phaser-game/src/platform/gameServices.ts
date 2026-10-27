@@ -110,7 +110,18 @@ export function createStarterSessionGatedGameServices(
     readonly onActivated?: () => void;
   },
 ): StarterGameServices {
-  const { signIn, onActivated, onPlayerChanged, ...rest } = input;
+  const { signIn, onActivated, ...rest } = input;
+  // The inner services (session switch) and the gate (a later sign-in) may both
+  // see the same change; the host hears it once.
+  let changeReported = false;
+  const onPlayerChanged = input.onPlayerChanged === undefined
+    ? undefined
+    : (playerId: string) => {
+        if (!changeReported) {
+          changeReported = true;
+          input.onPlayerChanged?.(playerId);
+        }
+      };
   return createSessionGatedGameServices({
     // Configuration only (mode, target, whether a client exists); never sends a request.
     probe: createRuntime({ ...rest, playerId: 'session-pending' }, undefined),

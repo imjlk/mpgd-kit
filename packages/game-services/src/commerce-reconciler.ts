@@ -308,8 +308,8 @@ export interface CreateCommerceReconcilerInput {
    * why not (`createGameServicesRuntime` passes its session player check).
    * It is read synchronously before every pass, before each queued event and
    * each record a pass handles, before a store read, restore, or finish, and
-   * twice for a purchase: before anything is journaled and right before the
-   * store UI opens. A refusal never ends a record: a pass stops with the
+   * for a purchase at its start, right before its record is reserved, and
+   * right before the store UI opens. A refusal never ends a record: a pass stops with the
    * journal as it is and the events still queued (a `failure` event with
    * stage `session` reports it), a purchase answers the error with no store
    * UI (a reserved attempt stays retryable), and `restorePurchases` rejects
@@ -1663,6 +1663,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         })),
       };
     }
+    const lateRefusal = sessionRefusal();
+    if (lateRefusal !== undefined) {
+      // The session changed while the purchase was prepared: nothing is journaled.
+      fail('session', lateRefusal, request.idempotencyKey);
+      return { kind: 'answered', result: failedOutcome(lateRefusal) };
+    }
     const { created, record } = existing === undefined ? await reserve({
       idempotencyKey: request.idempotencyKey,
       store: storeId,
@@ -1829,6 +1835,18 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           } finally {
             unsubscribePresentation?.();
           }
+          // The provider refuses a missing or foreign account binding before
+          // its store UI opens. Refused because the session changed meanwhile,
+          // the attempt stays retryable instead of ending.
+          const bindingRefusal = answer.outcome === 'failed'
+              && answer.error.code === 'ACCOUNT_BINDING_REQUIRED'
+            ? sessionRefusal()
+            : undefined;
+          if (bindingRefusal !== undefined) {
+            fail('session', bindingRefusal, request.idempotencyKey);
+            answer = failedOutcome(bindingRefusal);
+            notStarted = true;
+          }
         }
         result = await withLock(() => recordAnswer(request, prepared.record, prepared.product, answer, notStarted));
       }
@@ -1867,6 +1885,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     },
     async start() {
       if (started) {
+        return;
+      }
+      if (sessionBlocked()) {
+        // Nothing subscribes for a player the session does not name; a later
+        // permitted start or explicit trigger does.
         return;
       }
       if (starting !== undefined) {
@@ -1983,6 +2006,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         });
       });
       await runUntilIdle();
+      const lateRefusal = sessionRefusal();
+      if (lateRefusal !== undefined) {
+        // The session changed during the restore: the passes stopped early,
+        // so it did not finish for this player.
+        throw lateRefusal;
+      }
     },
     requestPurchase,
     async fetchProducts(request = {}) {

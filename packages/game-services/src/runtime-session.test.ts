@@ -7,6 +7,10 @@ import {
   createTestStorePurchase,
   type TestCommerceProvider,
 } from './commerce-test-provider.test.js';
+import type { PlatformGateway } from '@mpgd/platform';
+import type { RequestPurchaseResult } from '@mpgd/platform/commerce';
+
+import { AccountDeletionError } from './account-deletion.js';
 import {
   createGameServicesRuntime,
   gameServicesBackendEndpoints,
@@ -44,15 +48,26 @@ interface Harness {
   create(playerId: string): GameServicesRuntime;
 }
 
-function createHarness(input: { readonly provider?: TestCommerceProvider } = {}): Harness {
+function createHarness(
+  input: {
+    readonly provider?: TestCommerceProvider;
+    readonly store?: MonetizationOperationStore;
+    readonly ads?: PlatformGateway['ads'];
+  } = {},
+): Harness {
   const harness: Harness = {
     session: { player: playerA },
     sent: [],
     provider: input.provider ?? createTestCommerceProvider({ store: 'android-store' }),
-    store: createInMemoryMonetizationOperationStore(),
+    store: input.store ?? createInMemoryMonetizationOperationStore(),
     create(playerId) {
       return createGameServicesRuntime({
-        gateway: createTestGateway({ target: 'android', playerId, provider: harness.provider }),
+        gateway: createTestGateway({
+          target: 'android',
+          playerId,
+          provider: harness.provider,
+          ...(input.ads === undefined ? {} : { ads: input.ads }),
+        }),
         playerId,
         authorityMode: 'production',
         baseUrl: 'https://services.example.com',
@@ -308,6 +323,156 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   });
   assert.equal(disabled.mode, 'disabled');
   await disabled.dispose();
+}
+
+// A rewarded ad queued before the switch is not shown after it.
+{
+  const shown: string[] = [];
+  const journal = createInMemoryMonetizationOperationStore();
+  const hooks: { onReserve?: () => void } = {};
+  const harness = createHarness({
+    store: {
+      ...journal,
+      async reserve(record) {
+        hooks.onReserve?.();
+        return journal.reserve(record);
+      },
+    },
+    ads: {
+      async preload() {},
+      async showRewarded(request) {
+        shown.push(request.idempotencyKey);
+        return { status: 'completed', rewardGranted: true };
+      },
+    },
+  });
+  const runtimeA = harness.create(playerA);
+  hooks.onReserve = () => {
+    harness.session.player = playerB;
+  };
+  const reward = await runtimeA.client?.claimRewardedAd({
+    placementId: 'CONTINUE',
+    idempotencyKey: 'ad-1',
+  });
+  assert.deepEqual(shown, [], 'no ad was shown for the closed runtime');
+  assert.notEqual(reward?.status, 'granted');
+  assert.equal(harness.sent.length, 0, 'no claim left');
+  await runtimeA.dispose();
+}
+
+// A provider that refuses the account binding because the session changed
+// during its preparation: the attempt stays retryable, with the runtime's code.
+{
+  const hooks: { harness?: Harness } = {};
+  const provider = createTestCommerceProvider({
+    store: 'android-store',
+    answer: () => {
+      if (hooks.harness !== undefined) {
+        hooks.harness.session.player = playerB;
+      }
+      return {
+        outcome: 'failed',
+        error: {
+          code: 'ACCOUNT_BINDING_REQUIRED',
+          retryable: false,
+          storeCode: 'PLAY_BILLING_ACCOUNT_LOOKUP_FAILED',
+        },
+      };
+    },
+  });
+  const harness = createHarness({ provider });
+  hooks.harness = harness;
+  const runtimeA = harness.create(playerA);
+  const result = await runtimeA.client?.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'bind-race',
+  });
+  assert.equal(result?.purchase.diagnostic?.code, gameServicesPlayerChangedCode);
+  assert.equal(result?.purchase.diagnostic?.retryable, true);
+  const attempt = await runtimeA.client?.commerceReconciler?.read('bind-race');
+  assert.equal(attempt?.state, 'requested', 'the unopened attempt is not ended');
+  assert.equal(attempt?.error?.retryable, true);
+  await runtimeA.dispose();
+}
+
+// dispose() waits for a purchase whose store sheet is open, so its answer is
+// journaled under the player before the host restarts.
+{
+  const sheet: { answer?: () => void } = {};
+  let opened: () => void = () => undefined;
+  const sheetOpen = new Promise<void>((resolve) => {
+    opened = resolve;
+  });
+  const provider = createTestCommerceProvider({
+    store: 'android-store',
+    answer: (request) =>
+      new Promise<RequestPurchaseResult>((resolve) => {
+        sheet.answer = () =>
+          resolve({
+            outcome: 'purchased',
+            purchase: createTestStorePurchase(request, {}, 'android-store'),
+          });
+        opened();
+      }),
+  });
+  const harness = createHarness({ provider });
+  const runtimeA = harness.create(playerA);
+  const buying = runtimeA.client?.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'open-sheet',
+  });
+  await sheetOpen;
+  harness.session.player = playerB;
+  let disposed = false;
+  const disposing = runtimeA.dispose().then(() => {
+    disposed = true;
+  });
+  for (let turn = 0; turn < 20; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(disposed, false, 'dispose waits for the open sheet');
+  sheet.answer?.();
+  await buying;
+  await disposing;
+  const record = await runtimeA.client?.commerceReconciler?.read('open-sheet');
+  assert.equal(record?.state, 'purchased', 'the answer is journaled under A, not verified with B');
+  assert.equal(record?.playerId, playerA);
+  assert.equal(verifies(harness).length, 0);
+}
+
+// A restore the session switch cut short rejects instead of reporting success.
+{
+  const harness = createHarness();
+  harness.provider.available.push(
+    createTestStorePurchase({ idempotencyKey: 'r-a', logicalId: 'COINS_100' }, {}, 'android-store'),
+  );
+  const runtimeA = harness.create(playerA);
+  await runtimeA.monetizationRecovery?.reconcile();
+  harness.provider.available.push(
+    createTestStorePurchase({ idempotencyKey: 'r-b', logicalId: 'COINS_100' }, {}, 'android-store'),
+  );
+  harness.onVerify = () => {
+    harness.session.player = playerB;
+  };
+  await assert.rejects(
+    runtimeA.monetizationRecovery?.restorePurchases() ?? Promise.resolve(),
+    GameServicesRuntimeClosedError,
+  );
+  await runtimeA.dispose();
+}
+
+// Account deletion while signed out still reports the missing session.
+{
+  const harness = createHarness();
+  const runtimeA = harness.create(playerA);
+  harness.session.player = undefined;
+  await assert.rejects(
+    runtimeA.accountDeletion?.deleteAccount() ?? Promise.resolve(),
+    (error: unknown) => error instanceof AccountDeletionError && error.code === 'UNAUTHORIZED',
+  );
+  await runtimeA.dispose();
 }
 
 console.info('Game services runtime session checks passed.');

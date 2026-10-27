@@ -247,7 +247,13 @@ within a run (an account switch), pass `sessionPlayerId: () => session.current()
 - Another player closes the runtime for good: nothing more is verified,
   restored, or finished for this player with the other player's credentials
   (a backend answers that with a permanent account-mismatch rejection), and
-  no purchase is journaled here and bound to the other account. Purchases
+  no store UI opens for a purchase journaled here once the session names
+  someone else. The provider resolves its account binding a few steps after
+  that last check, so the binding resolver must follow the runtime's player
+  too (bind nothing for anyone else, as the generated game's
+  `setStarterCommerceServicesPlayer` does) for a purchase never to be
+  journaled here and bound to the other account; a binding refused while the
+  session changed keeps the attempt retryable. Purchases
   answer `failed` with the retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`
   before any store UI, rewarded-ad claims answer `unavailable` before any
   ad, recovery runs nothing, and Restore Purchases rejects with
@@ -257,8 +263,10 @@ within a run (an account switch), pass `sessionPlayerId: () => session.current()
 
 Refusals end no journal record: a runtime created for the player later
 resumes them. `runtime.dispose()` closes a runtime the same way
-(`GAME_SERVICES_RUNTIME_DISPOSED`) and resolves once its reconciler has
-stopped; call it before creating the runtime for another player. A custom
+(`GAME_SERVICES_RUNTIME_DISPOSED`) and resolves once a purchase whose store
+sheet is open has journaled its answer and the reconciler has stopped (each
+wait bounded by `gameServicesDisposeWaitMs`, 3 minutes); call it, and wait,
+before creating the runtime for another player or reloading. A custom
 `httpTransport` must send only the headers the runtime resolved for each
 request, or the after-resolution check cannot cover it.
 
