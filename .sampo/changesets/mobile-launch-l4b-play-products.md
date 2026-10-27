@@ -1,5 +1,0 @@
----
-npm/@mpgd/cli: minor (Added)
----
-
-New `mpgd store products plan --store google-play [--out plan.json] [--keep-live-prices]` and `mpgd store products apply --plan plan.json --approve [--confirm-price-change]` create and update Google Play one-time products (`monetization.onetimeproducts`) from the game's `mpgd.catalog.json` and `mpgd.store-listings.json`, using the deployment profile's package name and Play service account. `plan` never writes: it prints create / update / unchanged per product, skipped products with the reason, and products only on Play (never deleted); the base price goes through `convertRegionPrices` and the file's regional prices replace single regions. `apply` re-reads Play and refuses when a product changed on Play or in the files since the plan, skips products already written, activates new and `DRAFT` purchase options (an `INACTIVE` one is reported, never reactivated), and refuses a price change on a live product without `--confirm-price-change`. See `docs/STORE_PRODUCT_SYNC.md`.

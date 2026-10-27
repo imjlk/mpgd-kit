@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.63.0 — 2026-10-27
+
+### Added
+
+- [dad46c97](https://github.com/imjlk/mpgd-kit/commit/dad46c97ac14592d86fb2024f06015aceb17f14d) `mpgd store products plan|apply` now also takes `--store app-store`: it creates and updates App Store Connect in-app purchases (consumable and non-consumable) from `mpgd.catalog.json` and `mpgd.store-listings.json`, through the pinned `asc` 5.5.0 binary with the TestFlight submission's checksum pin, isolated environment and API key (`MPGD_ASC_BINARY`, `MPGD_ASC_APP_ID`, `MPGD_ASC_KEY_ID`, `MPGD_ASC_ISSUER_ID`, the profile's key variable). The plan checks the app's bundle ID and covers the reference name, turning Family Sharing on, version-scoped localizations (on the editable version, or a new draft version after approval), a new price schedule from the base-territory price point and manual territory prices, availability for new in-app purchases, and the review screenshot (uploaded, or replaced when its MD5 differs). `apply` has the Google Play rules (`--approve`, refuses a stale plan, `--confirm-price-change` for an `APPROVED` in-app purchase, `--keep-live-prices`). Submission for review and review notes stay manual and are listed in the plan. — Thanks @imjlk!
+- [0bb03c08](https://github.com/imjlk/mpgd-kit/commit/0bb03c08d2764c383feb91c18d9573c434617ec7) New `mpgd store products plan --store google-play [--out plan.json] [--keep-live-prices]` and `mpgd store products apply --plan plan.json --approve [--confirm-price-change]` create and update Google Play one-time products (`monetization.onetimeproducts`) from the game's `mpgd.catalog.json` and `mpgd.store-listings.json`, using the deployment profile's package name and Play service account. `plan` never writes: it prints create / update / unchanged per product, skipped products with the reason, and products only on Play (never deleted); the base price goes through `convertRegionPrices` and the file's regional prices replace single regions. `apply` re-reads Play and refuses when a product changed on Play or in the files since the plan, skips products already written, activates new and `DRAFT` purchase options (an `INACTIVE` one is reported, never reactivated), and refuses a price change on a live product without `--confirm-price-change`. See `docs/STORE_PRODUCT_SYNC.md`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.21.4, @mpgd/adapter-capacitor@0.16.2, @mpgd/adapter-devvit@0.14.6, @mpgd/adapter-verse8@0.7.15, @mpgd/capacitor-play-billing@0.4.4, @mpgd/capacitor-storekit@0.4.4, @mpgd/catalog@0.12.0, @mpgd/game-runtime@0.8.8, @mpgd/game-services@0.30.4, @mpgd/target-config@0.24.2
+
 ## 0.62.0 — 2026-10-27
 
 ### Added
