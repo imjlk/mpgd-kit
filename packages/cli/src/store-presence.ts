@@ -153,3 +153,97 @@ export function formatTextChange(change: StorePresenceTextChange): string {
   }
   return `${change.field}: ${JSON.stringify(change.from ?? null)} -> ${JSON.stringify(change.to)}`;
 }
+
+/** One image the store holds, by its ID and the digest the store reports for it. */
+export interface RemoteStoreImage {
+  readonly id: string;
+  /** Lowercase hex; empty when the store reports none. */
+  readonly digest: string;
+}
+
+export interface StoreImageSetPlan {
+  /** `add` uploads after the store's images; `replace` deletes the store's first. */
+  readonly action: 'unchanged' | 'add' | 'replace';
+  /** Uploads, in order. */
+  readonly upload: readonly { readonly path: string; readonly digest: string }[];
+  /** Digests of the store's images that stay. */
+  readonly keep: readonly string[];
+  /** The store's images the write removes and does not upload again. */
+  readonly remove: readonly RemoteStoreImage[];
+  readonly notes: readonly string[];
+}
+
+/**
+ * Plan one image slot. A single-image slot (an icon) is replaced when it
+ * differs. A list adds the images the store lacks after the ones it holds;
+ * a complete set appends when the store holds a prefix of it, else replaces
+ * the slot so the store holds exactly the set in order.
+ */
+export function planStoreImageSet(input: {
+  readonly local: readonly { readonly path: string; readonly digest: string }[];
+  readonly remote: readonly RemoteStoreImage[];
+  readonly complete: boolean;
+  readonly single: boolean;
+  readonly maxImages: number;
+  /** For messages: the slot, for example "Google Play phoneScreenshots". */
+  readonly label: string;
+  /** For messages: "Play" or "App Store Connect". */
+  readonly storeName: string;
+}): StoreImageSetPlan {
+  const { local, remote, storeName } = input;
+  const remoteDigests = remote.map((image) => image.digest);
+  const desiredDigests = local.map((image) => image.digest);
+  const notes: string[] = [];
+  const unchanged = (): StoreImageSetPlan => ({
+    action: 'unchanged',
+    upload: [],
+    keep: remoteDigests,
+    remove: [],
+    notes,
+  });
+  const replace = (): StoreImageSetPlan => ({
+    action: 'replace',
+    upload: local,
+    keep: [],
+    remove: remote.filter((image) => !desiredDigests.includes(image.digest)),
+    notes,
+  });
+  const same = remoteDigests.length === desiredDigests.length
+    && remoteDigests.every((digest, index) => digest === desiredDigests[index]);
+  if (same) {
+    return unchanged();
+  }
+  if (input.single) {
+    return remote.length === 0
+      ? { action: 'add', upload: local, keep: [], remove: [], notes }
+      : replace();
+  }
+  const isPrefix = remoteDigests.length < desiredDigests.length
+    && remoteDigests.every((digest, index) => digest === desiredDigests[index]);
+  if (input.complete && !isPrefix) {
+    if (remote.some((image) => desiredDigests.includes(image.digest))) {
+      notes.push(
+        `${storeName}'s images are deleted and the set uploaded again in the file's order.`,
+      );
+    }
+    return replace();
+  }
+  const missing = local.filter((image) => !remoteDigests.includes(image.digest));
+  if (missing.length === 0) {
+    notes.push(
+      `${storeName} holds the file's images in another order or with others; mark the set complete to match it.`,
+    );
+    return unchanged();
+  }
+  if (remote.length + missing.length > input.maxImages) {
+    throw new Error(
+      `${input.label}: ${storeName} holds ${remote.length} and the file adds ${missing.length}; a set takes at `
+      + `most ${input.maxImages}. Mark the set complete to replace ${storeName}'s images.`,
+    );
+  }
+  const kept = remote.length - (local.length - missing.length);
+  if (!input.complete && kept > 0) {
+    notes.push(`${storeName} keeps ${kept} image(s) the file does not list.`);
+  }
+  return { action: 'add', upload: missing, keep: remoteDigests, remove: [], notes };
+}
