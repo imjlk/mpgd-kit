@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
@@ -616,6 +617,7 @@ export async function applyAppStorePresence(input: {
     );
   }
   const steps: string[] = [];
+  let staging: string | undefined;
   let stage = 'start';
   let deletedSet: string | undefined;
   const step = async <T>(name: string, action: () => Promise<T>): Promise<T> => {
@@ -662,11 +664,23 @@ export async function applyAppStorePresence(input: {
         }
         const versionLocalizationId = localizationId;
         deletedSet = undefined;
-        // Every file of the set is checked before the set is cleared, and asc
-        // gets the real path: it refuses a source reached through a symbolic link.
-        const files = set.upload.map((image) => {
-          const file = realpathSync(path.resolve(input.plan.directory, image.path));
-          assertMd5Unchanged(file, image.md5);
+        // Every file of the set is read once, checked and copied to a private
+        // directory before the set is cleared; asc uploads the copies, so
+        // the bytes cannot change during the (minutes-long) uploads, and asc
+        // never sees a symbolic link (it refuses a source reached through one).
+        const files = set.upload.map((image, index) => {
+          const bytes = readFileSync(path.resolve(input.plan.directory, image.path));
+          if (createHash('md5').update(bytes).digest('hex') !== image.md5) {
+            throw new StorePlanStaleError(
+              `${image.path} changed since the plan.`,
+              storePresencePlanCommand,
+            );
+          }
+          staging ??= realpathSync(mkdtempSync(path.join(tmpdir(), 'mpgd-asc-screenshots-')));
+          const directory = path.join(staging, `${locale.locale}-${set.display}-${index}`);
+          mkdirSync(directory, { mode: 0o700 });
+          const file = path.join(directory, path.basename(image.path));
+          writeFileSync(file, bytes, { mode: 0o600 });
           return { image, file };
         });
         for (const id of set.deleteIds) {
@@ -703,6 +717,10 @@ export async function applyAppStorePresence(input: {
       // even a refused one may have left a reservation behind.
       !stage.includes(' upload of ') && isDefinitiveAscFailure(error),
     );
+  } finally {
+    if (staging !== undefined) {
+      rmSync(staging, { recursive: true, force: true });
+    }
   }
   return { appId, status: 'updated', steps, manual: current.manual };
 }
@@ -720,13 +738,6 @@ function isDefinitiveAscFailure(error: unknown): boolean {
   const code = error.exitCode;
   const timeoutOrRateLimit = code === 10 + (408 - 400) || code === 10 + (429 - 400);
   return (code >= 2 && code <= 5) || (code >= 10 && code < 60 && !timeoutOrRateLimit);
-}
-
-/** Refuse to upload a screenshot whose bytes changed after the plan was checked. */
-function assertMd5Unchanged(file: string, md5: string): void {
-  if (createHash('md5').update(readFileSync(file)).digest('hex') !== md5) {
-    throw new StorePlanStaleError(`${file} changed since the plan.`, storePresencePlanCommand);
-  }
 }
 
 /** The plan for the terminal: per locale, the text and screenshot changes. */

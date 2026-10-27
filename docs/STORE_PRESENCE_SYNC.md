@@ -271,8 +271,10 @@ then the set's screenshots are deleted and the file's uploaded in order.
 Every screenshot such a replacement deletes counts toward
 `--confirm-image-removal`, a pure reorder included, because the set is
 empty until the uploads finish.
-`asc` gets each file's real path (it refuses a source reached through a
-symbolic link).
+Each file is read once, checked against the plan and copied to a private
+directory before the set is cleared; `asc` uploads the copies, so a file
+changed during the minutes-long uploads is not picked up (and `asc`, which
+refuses a source reached through a symbolic link, never sees one).
 
 Locale keys are App Store Connect's codes (`en-US`, `ko`, `ja`, `de-DE`,
 `zh-Hans`): `asc` rejects a bare language root such as `de` that App Store

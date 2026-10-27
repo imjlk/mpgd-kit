@@ -767,7 +767,48 @@ try {
       port: linkedPort,
       approved: true,
     });
-    assert.deepEqual(uploaded, [realpathSync(path.join(directory, 'store/iphone-3.png'))]);
+    assert.equal(uploaded.length, 1);
+    assert.equal(
+      path.basename(uploaded[0] ?? ''),
+      'linked.png',
+      'asc gets a private copy under the file name',
+    );
+    assert.ok(!(uploaded[0] ?? '').startsWith(directory), 'not the game file or its link');
+
+    // A file changed while the uploads run is not picked up: the set's bytes were copied when checked.
+    const racing = seeded();
+    const racingFile = presence({
+      'en-US': {
+        ...english,
+        screenshots: { iphone69: ['store/iphone-1.png', 'store/iphone-2.png'] },
+      },
+    });
+    const racingPlan = await planAppStorePresence(input(racingFile), racing.port);
+    const iphone2 = path.join(directory, 'store/iphone-2.png');
+    const racingPort: AscStorePresencePort = {
+      ...racing.port,
+      async uploadScreenshot(upload) {
+        if (path.basename(upload.file) === 'iphone-1.png') {
+          writeFileSync(iphone2, png(1290, 2796, 77));
+        }
+        return racing.port.uploadScreenshot(upload);
+      },
+    };
+    await applyAppStorePresence({
+      saved: racingPlan,
+      plan: input(racingFile),
+      port: racingPort,
+      approved: true,
+    });
+    writeFileSync(iphone2, images['store/iphone-2.png'] as Buffer);
+    const racedSet = racing.state.sets.get('vl-en')?.find(
+      (set) => set.displayType === 'APP_IPHONE_67',
+    );
+    assert.deepEqual(
+      racedSet?.screenshots.map((shot) => shot.sourceFileChecksum),
+      [md5(images['store/iphone-1.png'] as Buffer), md5(images['store/iphone-2.png'] as Buffer)],
+      'the reviewed bytes are uploaded',
+    );
 
     // Image rules apply before App Store Connect is asked anything.
     writeFileSync(path.join(directory, 'store/wrong.png'), png(1080, 1920, 7));
