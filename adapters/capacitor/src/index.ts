@@ -82,12 +82,19 @@ export {
   type CreateCommerceServiceProviderInput,
 } from './commerce-bridge.js';
 export {
+  accountBindingLookupFailedStoreCode,
   createStoreCommerceProvider,
+  purchaseGateFailedStoreCode,
+  purchaseGateTimeoutMs,
+  purchasesPausedStoreCode,
   recoverableErrorCodes,
   type CreateStoreCommerceProviderInput,
   type StoreCommerceCapabilityOverrides,
   type StoreCommerceProductMapping,
   type StoreCommerceProvider,
+  type StorePurchaseGate,
+  type StorePurchaseGateDecision,
+  type StorePurchaseGateRequest,
 } from './store-commerce-provider.js';
 export {
   defaultStoreSdkErrorCodeMap,

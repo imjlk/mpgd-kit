@@ -376,6 +376,16 @@ stays open and the [reconciler](#reconciler) resolves it from
 `getAvailablePurchases` without reopening the store UI (B1 implements this
 rule in `createStoreCommerceProvider`).
 
+A purchase that the game's sales switch or its account binding refuses
+before the store UI opens is the opposite case: nothing was launched, so
+`createStoreCommerceProvider` answers `failed`, never `launched`, and
+answers it as a result rather than a throw so `storeCode` crosses the
+bridge.
+`createStoreCommerceProvider`'s optional `purchaseGate` refuses with
+`ITEM_UNAVAILABLE` and `storeCode` `PURCHASES_PAUSED` (or the game's own
+code; `PURCHASE_GATE_FAILED` when the gate itself fails) and is never
+consulted by recovery, restore, finishing, or `getAvailablePurchases`.
+
 ## Purchase lifecycle {#lifecycle}
 
 Every purchase, whether started by the game or discovered by the reconciler,

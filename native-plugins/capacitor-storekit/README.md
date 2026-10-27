@@ -107,7 +107,7 @@ consumables of another token stay excluded. The native
 or a `purchaseError` subscriber exists.
 
 `createCapacitorStoreKitCommerceProvider({ products, getAppAccountToken,
-bundleId?, sdk?, isIos?, mapError?, onDiagnostic? })` builds the provider
+purchaseGate?, bundleId?, sdk?, isIos?, mapError?, onDiagnostic? })` builds the provider
 with `authority: { evidence: 'client-token', accountBinding: 'required' }`
 and evidence `{ schema: 'app-store.signed-transaction.v1', payload: {
 signedTransaction, transactionId, originalTransactionId?, bundleId? } }`,
@@ -117,7 +117,18 @@ its `signedTransactionVerifier` (authenticity and transaction id binding)
 and then, by default, decides the grant on the transaction's current status
 from the App Store Server API, so a JWS retained from before a refund never
 grants; see the backend guide for the opt-in offline-only mode. Subscription
-mappings are rejected at construction. `createCapacitorStoreKitServiceProvider`
+mappings are rejected at construction. `getAppAccountToken` also filters
+recovery and finishing to the current player, so it must keep answering
+while sales are paused: pause new sales with the optional `purchaseGate`
+instead, which is asked only before a new purchase opens the StoreKit sheet
+(never by recovery, restore, or finishing) and refuses with `failed`,
+`ITEM_UNAVAILABLE`, and `PURCHASES_PAUSED` (see the adapter-capacitor
+README). With an adapter-capacitor from before
+the gate, which would ignore it, the plugin detects the missing gate support
+and answers every new purchase itself with a `failed` result, `ITEM_UNAVAILABLE` and
+`PURCHASE_GATE_UNSUPPORTED` instead of selling; recovery is unaffected.
+A token that cannot be resolved is a `failed` result with
+`STOREKIT_ACCOUNT_LOOKUP_FAILED` (a thrown `CommerceError` keeps its own code). `createCapacitorStoreKitServiceProvider`
 wraps the provider as a `CapacitorServiceProvider` (id `apple-storekit` by
 default, no `features`, no `methods`) so the gateway serves the six
 `commerce.v2.*` bridge methods from it, exposes it as `gateway.commerce`, and
