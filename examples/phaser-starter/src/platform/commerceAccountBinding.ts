@@ -30,6 +30,20 @@ export function setStarterCommerceServerPlayer(source: (() => string | undefined
   serverPlayer = source;
 }
 
+/** The player the run's game services (and so its purchase journal) belong to. */
+let servicesPlayer: string | undefined;
+
+/**
+ * Pins purchases to the player the game services were created for
+ * (`createStarterGameServices` sets it): while the session names anyone
+ * else, a purchase binds nothing and is refused before any store sheet, so
+ * no purchase is journaled under one player and bound to another's store
+ * account. `undefined` removes the pin.
+ */
+export function setStarterCommerceServicesPlayer(playerId: string | undefined): void {
+  servicesPlayer = playerId;
+}
+
 /**
  * The player id a purchase is bound to: the server session's player when
  * the game set one (`setStarterCommerceServerPlayer`), else an
@@ -37,9 +51,19 @@ export function setStarterCommerceServerPlayer(source: (() => string | undefined
  * platform-anonymous session (the native shell's `android-local-player` /
  * `ios-local-player`) or a locally asserted id would give every install the
  * same binding, so it binds nothing; the backend binds the purchase to the
- * player its ingress authentication resolved anyway.
+ * player its ingress authentication resolved anyway. While the game services
+ * are pinned to a player (`setStarterCommerceServicesPlayer`), any other
+ * player binds nothing too.
  */
 export async function resolveStarterCommercePlayerId(
+  gateway: Pick<PlatformGateway, 'identity'>,
+): Promise<string | undefined> {
+  const playerId = await resolveSessionPlayerId(gateway);
+  // Another player than the services' (an account switch): bind nothing.
+  return servicesPlayer !== undefined && playerId !== servicesPlayer ? undefined : playerId;
+}
+
+async function resolveSessionPlayerId(
   gateway: Pick<PlatformGateway, 'identity'>,
 ): Promise<string | undefined> {
   if (serverPlayer !== undefined) {

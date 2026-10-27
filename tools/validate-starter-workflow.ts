@@ -3186,7 +3186,15 @@ function validateTemplateGuestIdentityWiring(): void {
     ],
     [
       `${root}/src/platform/gameServices.ts`,
-      ['export function createStarterSessionGatedGameServices(', 'create: (playerId) => createStarterGameServices({ ...rest, playerId })'],
+      [
+        'export function createStarterSessionGatedGameServices(',
+        'create: (playerId) =>',
+        'createStarterGameServices({',
+        // One player per run: the runtime and the store binding refuse anyone else.
+        'sessionPlayerId: () => session.current()?.playerId',
+        'setStarterCommerceServicesPlayer(input.playerId)',
+        'return bindStarterServicesToPlayer({',
+      ],
     ],
     [
       `${root}/src/scenes/LobbyScene.ts`,
@@ -3207,6 +3215,7 @@ function validateTemplateGuestIdentityWiring(): void {
         'onActivated: () => {',
         'void gameRuntime?.reconcile()',
         'identityLevel: guestIdentity.identityLevel',
+        'onPlayerChanged: restartForAnotherPlayer',
       ],
     ],
     [`${root}/src/env.d.ts`, ['readonly VITE_MPGD_IDENTITY_URL?: string;']],
