@@ -39,7 +39,7 @@
   ],
   "scripts": {
     "check": "ttsc --noEmit",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/catalog/src/index.test.ts && node tools/run-ttsx.mjs packages/catalog/src/store-listings.test.ts && node tools/run-ttsx.mjs packages/catalog/src/notification-topics.test.ts && node tools/run-ttsx.mjs tools/validate-notification-topics.test.ts",
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/catalog/src/index.test.ts && node tools/run-ttsx.mjs packages/catalog/src/store-listings.test.ts && node tools/run-ttsx.mjs packages/catalog/src/store-presence.test.ts && node tools/run-ttsx.mjs packages/catalog/src/notification-topics.test.ts && node tools/run-ttsx.mjs tools/validate-notification-topics.test.ts",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix"
