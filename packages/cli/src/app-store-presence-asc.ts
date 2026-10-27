@@ -88,6 +88,7 @@ export function createAscStorePresencePort(run: AscCommandRunner): AscStorePrese
         id: resource.id,
         ...optionalString('versionString', resource.attributes.versionString),
         ...optionalString('state', resource.attributes.appVersionState ?? resource.attributes.appStoreState),
+        ...optionalString('appStoreState', resource.attributes.appStoreState),
         ...optionalString('createdDate', resource.attributes.createdDate),
       }));
     },

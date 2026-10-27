@@ -234,8 +234,14 @@ The sync never creates a version, never submits for review, and never
 touches pricing, availability or release settings. When nothing is
 editable, `plan` marks the parts `blocked`, shows what would change, and
 prints the step as `manual` (create the next version in App Store Connect,
-then plan again). The app's first version takes no what's new text, so the
-sync leaves it out there.
+then plan again); the plan header counts the blocked parts. A locale that is
+not on App Store Connect yet waits whole while no app information record is
+editable, so it is never half added without a name. App Store Connect takes
+what's new only once a version of the app has been released
+(`READY_FOR_DISTRIBUTION`, `READY_FOR_SALE`, `REPLACED_WITH_NEW_VERSION` or
+removed from sale, in either state field), so until then the sync leaves it
+out. Without an editable app information record, the plan compares against
+the live one. Text is compared and written with LF line breaks.
 
 Commands (pinned `asc` 5.5.0, one session per command):
 
@@ -258,10 +264,13 @@ waits until the asset delivery reaches `COMPLETE` and fails on `FAILED`; the
 sync then requires the result to report `COMPLETE`. A screenshot whose
 delivery `FAILED` counts as missing: the plan reports it and a complete set
 replaces it. While App Store Connect is still processing a screenshot
-(awaiting upload, or delivered without a checksum yet), `plan` refuses and
-asks to plan again later. When the store's screenshots are not the first
+(awaiting upload, or delivered without a checksum yet), only that set is
+blocked with a note; the text and the other sets still plan. When the store's screenshots are not the first
 ones of a complete set, the set is replaced: every file is checked first,
 then the set's screenshots are deleted and the file's uploaded in order.
+Every screenshot such a replacement deletes counts toward
+`--confirm-image-removal`, a pure reorder included, because the set is
+empty until the uploads finish.
 `asc` gets each file's real path (it refuses a source reached through a
 symbolic link).
 
@@ -272,7 +281,11 @@ Connect spells with a region, and only at apply time.
 App Store Connect has no transaction. `apply` writes per locale (app
 information, version localization, screenshots) and, on a failure, names
 the steps already written; when screenshots were deleted before a failed
-upload it says so. `plan` then shows what is left.
+upload it says so. When `asc` exits with a code for a refused request
+(2 to 5, or a 4xx code other than timeout and rate limit), the failed step
+is reported as not landed; other failures, and any failed upload (several
+App Store Connect calls), are reported as unknown. `plan` then shows what is
+left.
 
 `asc` cannot clear a field (an empty flag means "leave it"), so removing a
 subtitle or promotional text stays manual. App previews (videos) are not
@@ -343,6 +356,11 @@ And against a real App Store Connect app:
 - [ ] Texts read back exactly as written (line breaks, trailing spaces that
       `asc` trims), and `localizations update` accepts every field on a
       `PREPARE_FOR_SUBMISSION` version.
+- [ ] Whether App Store Connect normalizes keywords (spaces after commas)
+      or the support, marketing and privacy policy URLs; they are compared
+      exactly, so a normalized value would plan as changed on every run.
+- [ ] Which state field (`appVersionState` or `appStoreState`) carries the
+      released states the what's new rule reads.
 - [ ] `app-setup info set` creates a new app information locale on the
       editable record, and App Store Connect accepts the locale codes the file
       uses (`ko`, not `ko-KR`).

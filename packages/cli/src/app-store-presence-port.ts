@@ -30,6 +30,8 @@ export interface AscAppStoreVersion {
   readonly versionString?: string | undefined;
   /** `appVersionState`, or `appStoreState` when App Store Connect sends only that. */
   readonly state?: string | undefined;
+  /** The legacy `appStoreState`; App Store Connect fills the two inconsistently. */
+  readonly appStoreState?: string | undefined;
   readonly createdDate?: string | undefined;
 }
 

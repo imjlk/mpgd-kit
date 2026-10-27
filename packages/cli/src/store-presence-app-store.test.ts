@@ -24,6 +24,7 @@ import type {
   AscVersionLocalization,
 } from './app-store-presence-port.js';
 import { initializeDeployConfig } from './deploy-planning.js';
+import { ReleaseProcessError } from './deploy-process.js';
 import {
   applyStorePresence,
   planStorePresence,
@@ -378,7 +379,34 @@ try {
     const plan = await planAppStorePresence(input(presence({ 'en-US': english })), first.port);
     assert.equal(plan.version?.first, true);
     assert.equal(plan.locales[0]?.version.write?.whatsNew, undefined);
-    assert.match(plan.notes.join('\n'), /first version/u);
+    assert.match(plan.notes.join('\n'), /No version of the app has been released yet/u);
+    // A version that never reached the store (here an invalid binary) does not count as a release.
+    const unreleased = fakeAsc({
+      versions: [
+        { id: 'v1', versionString: '1.0.0', state: 'INVALID_BINARY' },
+        { id: 'v2', versionString: '1.0.1', state: 'PREPARE_FOR_SUBMISSION' },
+      ],
+    });
+    assert.equal(
+      (await planAppStorePresence(input(presence({ 'en-US': english })), unreleased.port)).version?.first,
+      true,
+    );
+    // A release reported only through the legacy appStoreState counts.
+    const legacy = fakeAsc({
+      versions: [
+        {
+          id: 'v1',
+          versionString: '1.0.0',
+          state: 'UNKNOWN_STATE',
+          appStoreState: 'READY_FOR_SALE',
+        },
+        { id: 'v2', versionString: '1.0.1', state: 'PREPARE_FOR_SUBMISSION' },
+      ],
+    });
+    assert.equal(
+      (await planAppStorePresence(input(presence({ 'en-US': english })), legacy.port)).version?.first,
+      false,
+    );
 
     const live = fakeAsc({
       appInfos: [{ id: 'info-live', state: 'READY_FOR_DISTRIBUTION' }],
@@ -394,6 +422,8 @@ try {
       live.port,
     );
     assert.equal(blocked.changed, false, 'nothing is writable');
+    assert.equal(blocked.blocked, 2);
+    assert.match(formatAppStorePresencePlan(blocked), /nothing writable now \(2 blocked\)/u);
     assert.equal(blocked.locales[0]?.appInfo.action, 'blocked');
     assert.equal(blocked.locales[0]?.version.action, 'blocked');
     assert.deepEqual(blocked.locales[0]?.screenshots, []);
@@ -484,10 +514,113 @@ try {
         screenshots: [{ id: 'settling', deliveryState: 'COMPLETE' }],
       },
     ]);
-    await assert.rejects(
-      planAppStorePresence(input(completeFile), failed.port),
-      /still processing .*settling/u,
+    // Only that set waits; the text and the other sets still plan.
+    const waiting = await planAppStorePresence(input(completeFile), failed.port);
+    assert.equal(waiting.blocked, 1);
+    assert.equal(waiting.locales[0]?.screenshots[0]?.action, 'unchanged');
+    assert.match(
+      waiting.locales[0]?.screenshots[0]?.notes.join('\n') ?? '',
+      /still processing screenshot settling/u,
     );
+    assert.equal(waiting.locales[0]?.version.action, 'update', 'the text still plans');
+
+    // A complete set that only changes order deletes and re-uploads the whole set: it needs the confirmation.
+    const ordered = seeded();
+    ordered.state.sets.set('vl-en', [
+      {
+        id: 'set-iphone',
+        displayType: 'APP_IPHONE_67',
+        screenshots: [
+          {
+            id: 's1',
+            sourceFileChecksum: md5(images['store/iphone-1.png'] as Buffer),
+            deliveryState: 'COMPLETE',
+          },
+          {
+            id: 's2',
+            sourceFileChecksum: md5(images['store/iphone-2.png'] as Buffer),
+            deliveryState: 'COMPLETE',
+          },
+        ],
+      },
+    ]);
+    const swapped = presence({
+      'en-US': {
+        ...english,
+        screenshots: {
+          iphone69: { files: ['store/iphone-2.png', 'store/iphone-1.png'], complete: true },
+        },
+      },
+    });
+    const reorder = await planAppStorePresence(input(swapped), ordered.port);
+    assert.equal(reorder.imageRemovals, 2);
+    assert.match(
+      reorder.locales[0]?.screenshots[0]?.notes.join('\n') ?? '',
+      /whole set \(2\) is deleted/u,
+    );
+    await assert.rejects(
+      applyAppStorePresence({
+        saved: reorder,
+        plan: input(swapped),
+        port: ordered.port,
+        approved: true,
+      }),
+      /--confirm-image-removal/u,
+    );
+    assert.ok(!ordered.writes.some((write) => write.startsWith('delete')));
+
+    // A new locale with no editable app information record waits whole: no half-added locale.
+    const noInfo = fakeAsc({ appInfos: [{ id: 'info-live', state: 'READY_FOR_DISTRIBUTION' }] });
+    const newLocale = await planAppStorePresence(
+      input(
+        presence({
+          ko: {
+            name: '블록',
+            description: 'd',
+            keywords: 'k',
+            supportUrl: 'https://example.com',
+            screenshots: { iphone69: ['store/iphone-1.png'] },
+          },
+        }),
+      ),
+      noInfo.port,
+    );
+    assert.equal(newLocale.locales[0]?.appInfo.action, 'blocked');
+    assert.equal(newLocale.locales[0]?.version.action, 'blocked');
+    assert.deepEqual(newLocale.locales[0]?.screenshots, []);
+    assert.equal(newLocale.changed, false);
+    assert.match(newLocale.notes.join('\n'), /ko: not on App Store Connect yet/u);
+
+    // Without an editable record the live one is read, not a replaced older one; CRLF text matches LF.
+    const stale = fakeAsc({
+      appInfos: [
+        { id: 'info-old', state: 'REPLACED_WITH_NEW_INFO' },
+        { id: 'info-live', state: 'READY_FOR_DISTRIBUTION' },
+      ],
+    });
+    stale.state.appInfoLocalizations.set('info-old', [
+      { id: 'old', locale: 'en-US', name: 'Ancient' },
+    ]);
+    stale.state.appInfoLocalizations.set('info-live', [
+      {
+        id: 'live',
+        locale: 'en-US',
+        name: english.name,
+        subtitle: english.subtitle,
+        privacyPolicyUrl: 'https://example.com/privacy',
+      },
+    ]);
+    stale.state.versionLocalizations.set('v2', [{ id: 'vl-en', locale: 'en-US', ...english }]);
+    const crlf = await planAppStorePresence(
+      input(
+        presence({
+          'en-US': { ...english, description: english.description.replace(/\n/gu, '\r\n') },
+        }),
+      ),
+      stale.port,
+    );
+    assert.equal(crlf.locales[0]?.appInfo.action, 'unchanged', 'compared with the live record');
+    assert.equal(crlf.locales[0]?.version.action, 'unchanged', 'CRLF matches LF');
   }
 
   // Stale plans and failures.
@@ -523,6 +656,35 @@ try {
         && /ipad13 screenshots were deleted before the upload/u.test(error.message)
         && error.written.includes('en-US app information'),
     );
+    // App Store Connect refuses a text write (asc exits with a 4xx code): nothing from that step landed.
+    const refusing = seeded();
+    const refusingPlan = await planAppStorePresence(input(fullFile), refusing.port);
+    const refusingPort: AscStorePresencePort = {
+      ...refusing.port,
+      async updateVersionLocalization() {
+        throw new ReleaseProcessError('exit', 'ENTITY_ERROR.ATTRIBUTE.INVALID', 32);
+      },
+    };
+    await assert.rejects(
+      applyAppStorePresence({ saved: refusingPlan, plan: input(fullFile), port: refusingPort, approved: true, confirmImageRemoval: true }),
+      (error: unknown) => error instanceof AppStorePresenceApplyError && error.definitive
+        && /nothing from this step landed/u.test(error.message),
+    );
+    // A generic asc failure (exit 1, for example a network error) stays uncertain.
+    const unsure = seeded();
+    const unsurePlan = await planAppStorePresence(input(fullFile), unsure.port);
+    await assert.rejects(
+      applyAppStorePresence({
+        saved: unsurePlan,
+        plan: input(fullFile),
+        port: { ...unsure.port, async updateVersionLocalization() { throw new ReleaseProcessError('exit', 'timeout', 1); } },
+        approved: true,
+        confirmImageRemoval: true,
+      }),
+      (error: unknown) => error instanceof AppStorePresenceApplyError && !error.definitive
+        && /result is unknown/u.test(error.message),
+    );
+
     // The next plan shows only what is left.
     const rest = await planAppStorePresence(input(fullFile), failing.port);
     assert.equal(rest.locales[0]?.appInfo.action, 'unchanged');
@@ -803,6 +965,7 @@ try {
         id: 'v2',
         versionString: '1.1.0',
         state: 'PREPARE_FOR_SUBMISSION',
+        appStoreState: 'PREPARE_FOR_SUBMISSION',
         createdDate: '2026-10-01T00:00:00Z',
       },
     ]);

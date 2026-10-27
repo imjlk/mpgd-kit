@@ -24,12 +24,14 @@ import type {
 import {
   describeTextChange,
   formatTextChange,
+  normalizeLineBreaks,
   planStoreImageSet,
   readLocalStoreImage,
   storePresencePlanCommand,
   type LocalStoreImage,
   type StorePresenceTextChange,
 } from './store-presence.js';
+import { ReleaseProcessError } from './deploy-process.js';
 import {
   canonicalLanguageTag,
   mapWithConcurrency,
@@ -67,6 +69,8 @@ export interface PlannedAscScreenshotSet {
   readonly remove: readonly { readonly id: string; readonly md5: string }[];
   /** `replace`: every screenshot of the set, deleted before the uploads. */
   readonly deleteIds: readonly string[];
+  /** The set cannot be planned now (App Store Connect is still processing it). */
+  readonly blocked?: true;
   readonly notes: readonly string[];
 }
 
@@ -106,9 +110,14 @@ export interface AppStorePresencePlan {
   readonly locales: readonly PlannedAppStoreLocale[];
   /** Locales on App Store Connect that the file does not name. Never deleted. */
   readonly remoteOnlyLocales: readonly string[];
-  /** Screenshots a complete set removes; apply needs --confirm-image-removal. */
+  /**
+   * Screenshots apply deletes: the ones a complete set drops, and every one
+   * of a set it replaces (re-uploaded after). Apply needs --confirm-image-removal.
+   */
   readonly imageRemovals: number;
   readonly changed: boolean;
+  /** Parts that differ but cannot be written now (nothing editable, still processing). */
+  readonly blocked: number;
   readonly notes: readonly string[];
   /** What the sync cannot do; the reviewer does it in App Store Connect. */
   readonly manual: readonly string[];
@@ -134,6 +143,17 @@ const editableVersionStates = new Set([
   'REJECTED',
   'METADATA_REJECTED',
 ]);
+/** Version states after a release (both spellings): what's new is accepted from then on. */
+const releasedVersionStates = new Set([
+  'READY_FOR_DISTRIBUTION',
+  'PROCESSING_FOR_DISTRIBUTION',
+  'REPLACED_WITH_NEW_VERSION',
+  'READY_FOR_SALE',
+  'DEVELOPER_REMOVED_FROM_SALE',
+  'REMOVED_FROM_SALE',
+]);
+/** App information states of the live record (asc `isNonLiveAppInfoState`). */
+const liveAppInfoStates = new Set(['READY_FOR_DISTRIBUTION', 'READY_FOR_SALE']);
 const readConcurrency = 4;
 
 /** Read App Store Connect and plan; never writes. */
@@ -207,7 +227,11 @@ async function planWithLocal(
     );
   }
   const appInfo = editableInfos[0];
-  const readInfo = appInfo ?? appInfos[0];
+  // Without an editable record, read the live one, not a replaced older one.
+  const readInfo = appInfo
+    ?? appInfos.find((info) => liveAppInfoStates.has(String(info.state)))
+    ?? appInfos.find((info) => info.state !== 'REPLACED_WITH_NEW_INFO')
+    ?? appInfos[0];
   const appInfoLocalizations = readInfo === undefined
     ? []
     : await port.listAppInfoLocalizations(input.appId, readInfo.id);
@@ -229,7 +253,9 @@ async function planWithLocal(
     );
   }
   const version = editableVersions[0];
-  const first = version !== undefined && versions.length === 1;
+  // App Store Connect takes what's new only once a version has been released.
+  const first = version !== undefined && !versions.some((candidate) =>
+    releasedVersionStates.has(String(candidate.state)) || releasedVersionStates.has(String(candidate.appStoreState)));
   if (version === undefined) {
     manual.push(
       'No iOS version is editable (PREPARE_FOR_SUBMISSION or rejected): create the next version in App Store '
@@ -274,7 +300,8 @@ async function planWithLocal(
   );
   if (first && locales.some((locale) => appStore.localizations[locale]?.whatsNew !== undefined)) {
     notes.push(
-      "This is the app's first version: App Store Connect takes no what's new text, so the sync leaves it out.",
+      "No version of the app has been released yet: App Store Connect takes no what's new text, so the sync "
+      + 'leaves it out.',
     );
   }
   const named = new Set(locales.map((locale) => locale.toLowerCase()));
@@ -287,9 +314,14 @@ async function planWithLocal(
   );
   const imageRemovals = planned.reduce(
     (sum, locale) => sum + locale.screenshots.reduce(
-      (count, set) => count + (set.complete ? set.remove.length : 0),
+      (count, set) => count + (set.action === 'replace' ? set.deleteIds.length : 0),
       0,
     ),
+    0,
+  );
+  const blocked = planned.reduce(
+    (sum, locale) => sum + [locale.appInfo.action, locale.version.action].filter((action) => action === 'blocked').length
+      + locale.screenshots.filter((set) => set.blocked === true).length,
     0,
   );
   const writes = (action: AppStorePresenceAction): boolean => action === 'create' || action === 'update';
@@ -327,6 +359,7 @@ async function planWithLocal(
     remoteOnlyLocales,
     imageRemovals,
     changed,
+    blocked,
     notes,
     manual,
     remoteSha256,
@@ -370,11 +403,13 @@ function planLocale(input: {
 
   // Version localization: only the fields the file gives; what's new not on a first version.
   const desired: AscVersionLocalizationFields = {
-    description: entry.description,
+    description: normalizeLineBreaks(entry.description),
     keywords: entry.keywords,
     supportUrl: entry.supportUrl,
-    ...(entry.promotionalText === undefined ? {} : { promotionalText: entry.promotionalText }),
-    ...(entry.whatsNew === undefined || input.first ? {} : { whatsNew: entry.whatsNew }),
+    ...(entry.promotionalText === undefined
+      ? {}
+      : { promotionalText: normalizeLineBreaks(entry.promotionalText) }),
+    ...(entry.whatsNew === undefined || input.first ? {} : { whatsNew: normalizeLineBreaks(entry.whatsNew) }),
     ...(entry.marketingUrl === undefined ? {} : { marketingUrl: entry.marketingUrl }),
   };
   const versionText: StorePresenceTextChange[] = [];
@@ -388,7 +423,16 @@ function planLocale(input: {
       changedFields[field] = value;
     }
   }
-  const versionAction: AppStorePresenceAction = input.version === undefined
+  // A new locale needs its app information (the name) first: without an
+  // editable record it would be half added, so its version part waits too.
+  const waitsForAppInfo = remoteInfo === undefined && !input.appInfoEditable && remoteVersion === undefined;
+  if (waitsForAppInfo && input.version !== undefined) {
+    input.notes.push(
+      `${locale}: not on App Store Connect yet and no app information record is editable, so its version `
+      + 'localization and screenshots wait too.',
+    );
+  }
+  const versionAction: AppStorePresenceAction = input.version === undefined || waitsForAppInfo
     ? 'blocked'
     : remoteVersion === undefined
       ? 'create'
@@ -398,7 +442,7 @@ function planLocale(input: {
 
   // Screenshot sets of the version localization.
   const screenshots: PlannedAscScreenshotSet[] = [];
-  if (input.version !== undefined) {
+  if (input.version !== undefined && !waitsForAppInfo) {
     for (const display of appStorePresenceDisplays) {
       const set = input.local.get(display);
       if (set === undefined) {
@@ -411,10 +455,23 @@ function planLocale(input: {
         (screenshot.deliveryState === 'COMPLETE' && (screenshot.sourceFileChecksum ?? '') === '')
         || screenshot.deliveryState === 'AWAITING_UPLOAD' || screenshot.deliveryState === 'UPLOAD_COMPLETE');
       if (processing !== undefined) {
-        throw new Error(
-          `App Store Connect is still processing ${locale} ${display} screenshot ${processing.id} `
-          + `(${String(processing.deliveryState)}); plan again when it is delivered.`,
-        );
+        // Only this set waits; the text and the other sets still plan.
+        screenshots.push({
+          display,
+          displayType,
+          action: 'unchanged',
+          blocked: true,
+          complete: set.complete,
+          upload: [],
+          keep: [],
+          remove: [],
+          deleteIds: [],
+          notes: [
+            `App Store Connect is still processing screenshot ${processing.id} (${String(processing.deliveryState)}); `
+            + 'plan again when it is delivered.',
+          ],
+        });
+        continue;
       }
       const plan = planStoreImageSet({
         local: set.images.map((image) => ({ path: image.path, digest: image.md5 })),
@@ -444,12 +501,15 @@ function planLocale(input: {
         deleteIds: plan.action === 'replace' ? remote.map((screenshot) => screenshot.id) : [],
         notes: [
           ...plan.notes,
+          ...(plan.action === 'replace' && remote.length > 0
+            ? [`The whole set (${remote.length}) is deleted, then the file's ${plan.upload.length} uploaded in order.`]
+            : []),
           ...pending.map((screenshot) =>
             `Screenshot ${screenshot.id} is ${String(screenshot.deliveryState)}; mark the set complete to replace it.`),
         ],
       });
     }
-  } else if (input.local.size > 0) {
+  } else if (input.local.size > 0 && input.version === undefined) {
     input.notes.push(`${locale}: screenshots wait for an editable version.`);
   }
 
@@ -501,9 +561,11 @@ export class AppStorePresenceApplyError extends Error {
     readonly written: readonly string[],
     cause: unknown,
     detail?: string,
+    /** App Store Connect refused the step (asc exited with a 4xx-class code): nothing from it landed. */
+    readonly definitive = false,
   ) {
     super(
-      `App Store Connect ${stage} failed or its result is unknown (${
+      `App Store Connect ${stage} ${definitive ? 'failed; nothing from this step landed' : 'failed or its result is unknown'} (${
         cause instanceof Error ? cause.message : String(cause)}). Written before it: ${
         written.join('; ') || 'nothing'}. ${detail === undefined ? '' : `${detail} `}Run "${
         storePresencePlanCommand}" again: it reads App Store Connect and lists what is left.`,
@@ -615,7 +677,6 @@ export async function applyAppStorePresence(input: {
         }
         for (const { image, file } of files) {
           stage = `${locale.locale} ${set.display} upload of ${image.path}`;
-          assertMd5Unchanged(file, image.md5);
           await step(stage, () =>
             port.uploadScreenshot({
               versionLocalizationId,
@@ -638,9 +699,27 @@ export async function applyAppStorePresence(input: {
       deletedSet === undefined
         ? undefined
         : `The ${deletedSet} screenshots were deleted before the upload; apply the new plan to upload them again.`,
+      // An upload is several App Store Connect calls (reserve, send, commit):
+      // even a refused one may have left a reservation behind.
+      !stage.includes(' upload of ') && isDefinitiveAscFailure(error),
     );
   }
   return { appId, status: 'updated', steps, manual: current.manual };
+}
+
+/**
+ * asc 5.5.0 exit codes (`cmd/exit_codes.go`): 2 usage, 3 auth, 4 not found,
+ * 5 conflict, and 10 + (status - 400) for other 4xx answers. Those are App
+ * Store Connect (or asc) refusing the request; 1 (generic, including network
+ * failures), 5xx codes, a timeout or an abort leave the result unknown.
+ */
+function isDefinitiveAscFailure(error: unknown): boolean {
+  if (!(error instanceof ReleaseProcessError) || error.reason !== 'exit' || error.exitCode === undefined) {
+    return false;
+  }
+  const code = error.exitCode;
+  const timeoutOrRateLimit = code === 10 + (408 - 400) || code === 10 + (429 - 400);
+  return (code >= 2 && code <= 5) || (code >= 10 && code < 60 && !timeoutOrRateLimit);
 }
 
 /** Refuse to upload a screenshot whose bytes changed after the plan was checked. */
@@ -655,7 +734,8 @@ export function formatAppStorePresencePlan(plan: AppStorePresencePlan): string {
   const lines = [
     `App Store Connect app ${plan.appId} (${plan.bundleId})${
       plan.version === undefined ? '' : `, version ${plan.version.versionString ?? plan.version.id} ${plan.version.state}`}${
-      plan.changed ? '' : ': no changes'}`,
+      plan.changed ? '' : plan.blocked > 0 ? ': nothing writable now' : ': no changes'}${
+      plan.blocked > 0 ? ` (${plan.blocked} blocked)` : ''}`,
   ];
   for (const locale of plan.locales) {
     lines.push(`  ${locale.locale}`);
