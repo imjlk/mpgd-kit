@@ -1,5 +1,6 @@
 import { implement, ORPCError } from '@orpc/server';
-import { BodyLimitHandlerPlugin, RPCHandler } from '@orpc/server/fetch';
+import { RPCHandler } from '@orpc/server/fetch';
+import { RequestLimitHandlerPlugin } from '@orpc/server/plugins';
 
 import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
 import {
@@ -1027,7 +1028,7 @@ export function createGameServicesRpcFetchHandler(
 ): (request: Request) => Promise<Response> {
   const rpcHandler = new RPCHandler<GameServicesOrpcContext>(router as never, {
     plugins: [
-      new BodyLimitHandlerPlugin({
+      new RequestLimitHandlerPlugin({
         maxBodySize: resolveMaxBodyBytes(options.maxBodyBytes),
       }),
     ],
