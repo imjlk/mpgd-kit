@@ -829,10 +829,13 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   );
   const journal = createInMemoryMonetizationOperationStore();
   const hooks: { onFind?: () => void } = {};
+  // Without `listGranted` a new session does not hold the finished record in
+  // memory, so matching the report reads it through `findByTransaction`.
+  const { listGranted: _listGranted, ...withoutGranted } = journal;
   const harness = createHarness({
     provider,
     store: {
-      ...journal,
+      ...withoutGranted,
       async findByTransaction(query) {
         hooks.onFind?.();
         return journal.findByTransaction?.(query);
@@ -851,10 +854,13 @@ async function recordsOf(store: MonetizationOperationStore, playerId: string) {
   await first.dispose();
   // A new session for A: the store lists it again; B signs in while it is matched.
   const second = harness.create(playerA);
+  let found = 0;
   hooks.onFind = () => {
+    found += 1;
     harness.session.player = playerB;
   };
   await second.monetizationRecovery?.reconcile();
+  assert.ok(found > 0, 'the switch happened while the report was matched');
   assert.deepEqual(finishes, ['tx-again'], 'not finished again for the closed runtime');
   await second.dispose();
 }
