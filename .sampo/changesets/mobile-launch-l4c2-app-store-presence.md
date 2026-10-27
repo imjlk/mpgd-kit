@@ -1,0 +1,5 @@
+---
+npm/@mpgd/cli: minor (Added)
+---
+
+`mpgd store presence plan|apply` now also takes `--store app-store`: through the pinned `asc` 5.5.0 and the same session and credential as the in-app purchase sync, it writes per locale the app information localization (name, subtitle, privacy policy URL) to the editable app information record, the version localization (description, keywords, promotional text, what's new, support and marketing URLs) to the one editable iOS version (`PREPARE_FOR_SUBMISSION` or rejected), and the 6.9", 6.5" and 6.3" iPhone and 13" iPad screenshot sets (compared by MD5; each upload waits for the asset delivery and fails on `FAILED`). It never creates or submits a version and never touches pricing, availability or release settings; when nothing is editable the plan marks the parts `blocked` and prints the manual step. What's new is left out on an app's first version. A failed apply names the steps already written. The asc session and JSON helpers move to a shared module (`openAscIapSession` is unchanged).

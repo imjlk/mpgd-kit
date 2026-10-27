@@ -338,11 +338,16 @@ Google Play Console:
 
 App Store Connect:
 
-- [ ] App information, age rating questionnaire, App Privacy answers, privacy
-      policy URL, support URL, marketing URL (the legal site).
-- [ ] Screenshots in the sizes App Store Connect asks for (currently the
-      6.9-inch iPhone set and, for a universal app, the 13-inch iPad set);
-      App Review notes and a demo account if a sign-in gates content.
+- [ ] Name, subtitle, privacy policy URL, description, keywords, support and
+      marketing URLs (the legal site) and screenshots (the iPhone sets App
+      Store Connect asks for and, for a universal app, the 13-inch iPad set):
+      `mpgd store presence plan --store app-store --out <plan>` and
+      `apply --plan <plan> --approve` write them from
+      `mpgd.store-presence.json` to the version in preparation
+      ([store page sync](./STORE_PRESENCE_SYNC.md)); create that version
+      first.
+- [ ] Age rating questionnaire, App Privacy answers, App Review notes and a
+      demo account if a sign-in gates content.
 - [ ] In-app purchases: `mpgd store products apply --store app-store`
       creates and prices them, with localizations, availability and review
       screenshots ([store product sync](./STORE_PRODUCT_SYNC.md)). Still by
