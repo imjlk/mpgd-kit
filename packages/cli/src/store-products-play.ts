@@ -18,6 +18,7 @@ import type {
   PlayRegionalPricingConfig,
 } from './play-product-port.js';
 import {
+  canonicalLanguageTag,
   decimalToUnitsAndNanos,
   stableJson,
   stableSha256,
@@ -855,22 +856,6 @@ function sortRegions(configs: readonly PlayRegionalPricingConfig[]): PlayRegiona
 function withoutState(option: PlayPurchaseOption): PlayPurchaseOption {
   const { state: _state, ...rest } = option;
   return rest;
-}
-
-/** BCP-47 casing: language lowercase, script title case, region uppercase. */
-export function canonicalLanguageTag(tag: string): string {
-  return tag.split('-').map((part, index) => {
-    if (index === 0) {
-      return part.toLowerCase();
-    }
-    if (/^[A-Za-z]{4}$/u.test(part)) {
-      return `${part.slice(0, 1).toUpperCase()}${part.slice(1).toLowerCase()}`;
-    }
-    if (/^[A-Za-z]{2}$/u.test(part)) {
-      return part.toUpperCase();
-    }
-    return part.toLowerCase();
-  }).join('-');
 }
 
 function fold(value: string | null | undefined): string {

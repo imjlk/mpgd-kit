@@ -25,13 +25,16 @@ import {
 } from './store-products-command.js';
 import {
   applyPlayProductPlan,
-  canonicalLanguageTag,
   formatPlayProductPlan,
   planPlayProducts,
   PlayProductApplyError,
   type PlayProductPlan,
 } from './store-products-play.js';
-import { decimalToUnitsAndNanos, StoreProductPlanStaleError } from './store-products.js';
+import {
+  canonicalLanguageTag,
+  decimalToUnitsAndNanos,
+  StoreProductPlanStaleError,
+} from './store-products.js';
 
 const packageName = 'dev.mpgd.store';
 
@@ -1007,22 +1010,26 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
     };
 
     await assert.rejects(
-      planStoreProducts({ game, profile: 'beta', store: 'google-play' }, {}, factory),
+      planStoreProducts(
+        { game, profile: 'beta', store: 'google-play' },
+        {},
+        { googlePlay: factory },
+      ),
       /MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT/u,
     );
     const planned = await planStoreProducts(
       { game, profile: 'beta', store: 'google-play' },
       environment,
-      factory,
+      { googlePlay: factory },
     );
-    assert.equal(planned.plan.packageName, packageName);
+    assert.equal(planned.plan.store === 'google-play' ? planned.plan.packageName : '', packageName);
     assert.deepEqual(ports, [serviceAccount]);
     const planFile = path.join(fixture, 'products-plan.json');
     saveStoreProductPlan(planFile, planned);
     assert.throws(() => saveStoreProductPlan(planFile, planned), /EEXIST/u);
 
     await assert.rejects(
-      applyStoreProducts({ planFile, approved: false }, environment, factory),
+      applyStoreProducts({ planFile, approved: false }, environment, { googlePlay: factory }),
       /--approve/u,
     );
     // The listing file changed after review: apply refuses.
@@ -1034,7 +1041,7 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
       } },
     }, null, 2)}\n`);
     await assert.rejects(
-      applyStoreProducts({ planFile, approved: true }, environment, factory),
+      applyStoreProducts({ planFile, approved: true }, environment, { googlePlay: factory }),
       StoreProductPlanStaleError,
     );
     assert.deepEqual(play.writes, []);
@@ -1053,7 +1060,7 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
     const applied = await applyStoreProducts(
       { planFile, game: moved, approved: true },
       environment,
-      factory,
+      { googlePlay: factory },
     );
     assert.deepEqual(
       applied.products.map((product) => product.status),
@@ -1069,16 +1076,14 @@ function withMultiQuantity(product: PlayOneTimeProduct): PlayOneTimeProduct {
     const relativePlan = await planStoreProducts(
       { game: moved, profile: 'beta', store: 'google-play', listingsFile: relativeListings },
       environment,
-      factory,
+      { googlePlay: factory },
     );
     assert.equal(relativePlan.listingsFile, path.join(moved, 'mpgd.store-listings.json'));
     assert.equal(relativePlan.catalogFile, path.join(moved, 'mpgd.catalog.json'));
     await assert.rejects(
-      planStoreProducts(
-        { game, profile: 'beta', store: 'app-store' as never },
-        environment,
-        factory,
-      ),
+      planStoreProducts({ game, profile: 'beta', store: 'steam' as never }, environment, {
+        googlePlay: factory,
+      }),
       /--store/u,
     );
   } finally {

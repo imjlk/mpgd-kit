@@ -119,6 +119,7 @@ import {
   saveStoreProductPlan,
   type StoreProductStore,
 } from './store-products-command.js';
+import { formatAppStoreProductPlan } from './store-products-app-store.js';
 import { formatPlayProductPlan } from './store-products-play.js';
 import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
@@ -242,6 +243,7 @@ export {
   type StoreProductApplyOptions,
   type StoreProductPlanFile,
   type StoreProductPlanOptions,
+  type StoreProductPorts,
   type StoreProductStore,
 } from './store-products-command.js';
 
@@ -256,6 +258,18 @@ export {
   type PlayProductPlan,
   type PlayProductPlanInput,
 } from './store-products-play.js';
+
+export {
+  AppStoreProductApplyError,
+  applyAppStoreProductPlan,
+  formatAppStoreProductPlan,
+  planAppStoreProducts,
+  type AppStoreProductApplyResult,
+  type AppStoreProductChange,
+  type AppStoreProductPlan,
+  type AppStoreProductPlanInput,
+  type PlannedAppStoreProduct,
+} from './store-products-app-store.js';
 
 export { StoreProductPlanStaleError } from './store-products.js';
 
@@ -1149,10 +1163,10 @@ const storeCommand = defineI18n({
           args: {
             game: { type: 'string', required: false, description: 'Game project directory.' },
             profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
-            store: { type: 'string', required: true, description: 'google-play.' },
+            store: { type: 'string', required: true, description: 'google-play or app-store.' },
             catalog: { type: 'string', required: false, description: 'Product catalog path, relative to the current directory; defaults to mpgd.catalog.json in the game.' },
             listings: { type: 'string', required: false, description: 'Store listing file path, relative to the current directory; defaults to mpgd.store-listings.json in the game.' },
-            'catalog-target': { type: 'string', required: false, description: 'Catalog platformProductIds key of the store; defaults to android.' },
+            'catalog-target': { type: 'string', required: false, description: 'Catalog platformProductIds key of the store; defaults to android (Google Play) or ios (App Store).' },
             'keep-live-prices': { type: 'boolean', required: false, description: 'Leave the prices of products players can already buy unchanged.' },
             out: { type: 'string', required: false, description: 'New plan JSON path for apply; existing files are not overwritten.' },
           },
@@ -1169,7 +1183,9 @@ const storeCommand = defineI18n({
               ...(catalogTarget === undefined ? {} : { catalogTarget }),
               ...(ctx.values['keep-live-prices'] === true ? { keepLivePrices: true } : {}),
             });
-            console.info(formatPlayProductPlan(result.plan));
+            console.info(result.plan.store === 'google-play'
+              ? formatPlayProductPlan(result.plan)
+              : formatAppStoreProductPlan(result.plan));
             const out = readOptionalString(ctx.values.out);
             if (out !== undefined) {
               console.info(`Wrote store product plan: ${saveStoreProductPlan(out, result)}`);

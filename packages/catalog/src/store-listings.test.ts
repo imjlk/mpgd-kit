@@ -147,6 +147,9 @@ rejects(
   /base territory/u,
 );
 rejects(withCoins({ appStore: { reviewScreenshot: '../outside.png' } }), /relative path/u);
+rejects(withCoins({ appStore: { availability: { territories: ['USA', 'USA'] } } }), /twice/u);
+rejects(withCoins({ appStore: { availability: { territories: ['US'] } } }), /territories/u);
+rejects(withCoins({ appStore: { availability: { territories: [] } } }), /territories/u);
 rejects(withCoins({ appStore: { reviewScreenshot: '/abs/shot.png' } }), /relative path/u);
 rejects({ version: '', products: {} }, /version/u, false);
 

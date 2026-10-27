@@ -94,9 +94,9 @@ Cloudflare:
 - [ ] Catalog products (`packages/catalog/catalog.json` or the game's copy)
       with the store SKUs, and `mpgd.store-listings.json` with each
       product's titles, descriptions and prices. `mpgd store products plan`
-      then `apply --approve` creates the Google Play one-time products
-      ([store product sync](./STORE_PRODUCT_SYNC.md)); App Store Connect
-      in-app purchases are still created by hand.
+      then `apply --approve` creates the Google Play one-time products and
+      the App Store Connect in-app purchases (`--store google-play`,
+      `--store app-store`; [store product sync](./STORE_PRODUCT_SYNC.md)).
 - [ ] Ads: `ads.admob.publisherId` in `mpgd.game.json` if AdMob is used;
       `ads.admob.advertisingId: "removed"` only for a deliberate
       no-advertising-ID policy such as a child-directed game.
@@ -338,7 +338,11 @@ App Store Connect:
 - [ ] Screenshots in the sizes App Store Connect asks for (currently the
       6.9-inch iPhone set and, for a universal app, the 13-inch iPad set);
       App Review notes and a demo account if a sign-in gates content.
-- [ ] In-app purchases created, priced, and attached to the version; sandbox
+- [ ] In-app purchases: `mpgd store products apply --store app-store`
+      creates and prices them, with localizations, availability and review
+      screenshots ([store product sync](./STORE_PRODUCT_SYNC.md)). Still by
+      hand: the review notes the plan lists, attaching the first consumable
+      and first non-consumable to the app version for review, and sandbox
       testers.
 - [ ] Export compliance: answered by `ITSAppUsesNonExemptEncryption`.
 - [ ] Submit for review; choose manual or phased release.

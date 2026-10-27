@@ -66,3 +66,13 @@ pnpm smoke:cli-testflight-submission
 These tests do not contact App Store Connect. Live signing, upload, processing,
 tester availability, and device installation remain separate D-12 release
 evidence requiring the game owner's account and approval.
+
+## In-app purchases (`store products`)
+
+The same `asc` binary, key and isolated session also create and update the
+game's in-app purchases: `mpgd store products plan --store app-store` and
+`apply --approve` read the catalog and `mpgd.store-listings.json`
+([store product sync](./STORE_PRODUCT_SYNC.md)). TestFlight and sandbox
+purchases need the in-app purchase to exist in App Store Connect; App Review
+of the first consumable and non-consumable still goes with an app version,
+by hand.
