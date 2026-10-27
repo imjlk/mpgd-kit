@@ -1,5 +1,18 @@
 # @mpgd/cli
 
+## 0.65.0 — 2026-10-28
+
+### Changed
+
+- [6458a154](https://github.com/imjlk/mpgd-kit/commit/6458a154a7b31a1a09b89ee52b378797508a9320) Generated games fail closed when another player signs in within a run, instead of keeping the first player's game services with a warning. `createStarterGameServices` passes the server session's player to the runtime (`sessionPlayerId`), so from the moment the session names another player nothing is verified, restored, or finished for the boot player with the new player's credentials and no purchase opens a store sheet (purchases answer `failed` with the retryable diagnostic `GAME_SERVICES_PLAYER_CHANGED`). The new `onPlayerChanging` hears the change at once (`main.ts` stops play with an execution block and shows "Switching player..."), the services are disposed (an open store sheet first records its answer), and the new `onPlayerChanged` then restarts the game for the new player (`main.ts` reloads, `restartForAnotherPlayer`). Each services instance pins the store account binding to its player until it is disposed (new `pinStarterCommercePlayer` in `commerceAccountBinding.ts`): while the session names anyone else a purchase binds nothing and is refused before any store sheet, and services for a second player cannot be created while the first player's are open (`StarterCommercePinConflictError`). The runtime also gets the player's own store account binding (new `resolveStarterStoreAccountBindingFor`), so a store purchase bound to another player's account (Google Play lists the previous player's unacknowledged purchases after a restart) is left for that player instead of being verified with this one's session. The session-gated services (`sessionGatedServices.ts`) close the same way on a later sign-in naming another player, gain `dispose()`, and drop recovery and Delete account once closed. Services created for another player than the server session's (for example the native shell's local placeholder) are closed at once, release their pin, and warn (no restart). The reference guest session never changes player, so a game without its own account switching sees no change except the binding comparison.
+  
+  A game that copied the template's `src/platform` files and adopts this keeps `createStarterGameServices` on the server session's player, wires `onPlayerChanging` and `onPlayerChanged` (or its own restart), and, with its own account binding scheme, replaces `resolveStarterStoreAccountBindingFor` together with the binding functions and the backend resolvers. — Thanks @imjlk!
+- [d684308f](https://github.com/imjlk/mpgd-kit/commit/d684308f4eff54e2ea772bed8dcda4b1ea528630) Generated games, and `mpgd kit migrate-tools`, now pin `ttsc` and `@ttsc/unplugin` 0.34.2 (from 0.32.1), and the CLI's runtime `typia` dependency moves to 15.2.1. ttsc 0.34 builds its plugins with Go 1.27. It uses the Go 1.27.3 it bundles unless `TTSC_GO_BINARY` names another Go, which then must be 1.27 or later. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.21.6, @mpgd/adapter-browser@0.12.2, @mpgd/adapter-capacitor@0.17.0, @mpgd/adapter-devvit@0.14.8, @mpgd/adapter-verse8@0.7.17, @mpgd/analytics@0.5.6, @mpgd/bridge@0.17.0, @mpgd/capacitor-play-billing@0.5.0, @mpgd/capacitor-storekit@0.5.0, @mpgd/catalog@0.14.0, @mpgd/game-runtime@0.8.10, @mpgd/game-services@0.31.0, @mpgd/i18n@0.6.27, @mpgd/platform@0.33.0, @mpgd/target-config@0.24.4
+
 ## 0.64.0 — 2026-10-27
 
 ### Added

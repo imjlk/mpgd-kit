@@ -1,5 +1,15 @@
 # @mpgd/target-config
 
+## 0.24.4 — 2026-10-28
+
+### Changed
+
+- [d684308f](https://github.com/imjlk/mpgd-kit/commit/d684308f4eff54e2ea772bed8dcda4b1ea528630) The runtime `typia` dependency moves from 13.0.2 to 15.2.1, and the shipped validators are rebuilt with typia 15 through ttsc 0.34.2. A game that runs its own typia transform over these packages' types needs typia 15.2 or later. typia 15's `date-time` and `date` formats refuse a day the month does not have and a space for `T`, and its length tags count code points. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/catalog@0.14.0, @mpgd/i18n@0.6.27, @mpgd/platform@0.33.0
+
 ## 0.24.3 — 2026-10-27
 
 ### Patch changes

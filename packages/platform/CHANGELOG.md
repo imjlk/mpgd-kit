@@ -1,5 +1,15 @@
 # @mpgd/platform
 
+## 0.33.0 — 2026-10-28
+
+### Added
+
+- [ae7b0f77](https://github.com/imjlk/mpgd-kit/commit/ae7b0f77120c1eb73c92c0249c9048cafa8a9d4f) `FinishTransactionInput` (and the `commerce.v2.finishTransaction` bridge payload) takes an optional `retry`: the caller already asked to finish this purchase, in an earlier attempt or session. A store may then read a consumable missing from its unfinished list as the lost acknowledgement of that earlier finish; a first finish never carries it. `createStoreCommerceProvider` forwards it to `StoreSdk.finishTransaction`. A bridge host on an earlier `@mpgd/platform` rejects the unknown field, so update the host and the webview together. — Thanks @imjlk!
+
+### Changed
+
+- [d684308f](https://github.com/imjlk/mpgd-kit/commit/d684308f4eff54e2ea772bed8dcda4b1ea528630) The runtime `typia` dependency moves from 13.0.2 to 15.2.1, and the shipped validators are rebuilt with typia 15 through ttsc 0.34.2. A game that runs its own typia transform over `@mpgd/platform` types (for example `typia.assert<StorePurchase>()`) now needs typia 15.2 or later. The contract's tag records emit typia 15 runtime helpers (`_stringLengthGte`, `isTypeInt64Bigint`) that typia 13 does not have. The typia-free commerce contract mirrors typia 15's tag records under typia's alias names, so commerce validation errors read `expected (string & MinLength<1>)` like the other validators, instead of `CommerceMinLength<1>`; the exported `Commerce*` tag types are unchanged. `MinLength` counts code points instead of UTF-16 units, and `Type<'int64'>` checks the range of a bigint. The `date-time` and `date` formats now refuse a day the month does not have and a space for `T`. The notifications validators already refused such timestamps, but the error now comes from typia (`invalid type on $input.<field>`) instead of the kit's `<field> must be RFC 3339` or `must be a date that exists`. The committed commerce and notifications JSON Schemas drop their duplicate `NonEmptyString.o1` and `PositiveInteger.o1` components, and name the remaining `ReadonlyRecord…` variants `-oN` instead of `.oN`. — Thanks @imjlk!
+
 ## 0.32.0 — 2026-10-27
 
 ### Added

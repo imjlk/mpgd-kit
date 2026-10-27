@@ -1,5 +1,11 @@
 # @mpgd/adapter-ait
 
+## 0.21.6 — 2026-10-28
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.17.0, @mpgd/catalog@0.14.0, @mpgd/game-runtime@0.8.10, @mpgd/platform@0.33.0
+
 ## 0.21.5 — 2026-10-27
 
 ### Patch changes
