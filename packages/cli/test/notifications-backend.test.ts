@@ -124,6 +124,59 @@ const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const originalError = console.error;
 console.error = () => undefined;
 try {
+  // The shipped composition resolves a hosted /api before the public-HTTPS check,
+  // including credentialed requests, but does not infer an origin for native apps.
+  {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'https://game.example.com' },
+    });
+    try {
+      const requests: string[] = [];
+      const backend = createStarterWorkerNotificationBackend(
+        gateway('play-web', 'browser'),
+        input({
+          baseUrl: '/api',
+          mode: 'production',
+          fetch: async (url, init) => {
+            requests.push(url);
+            if (url.endsWith('/providers')) {
+              return {
+                status: 200,
+                text: async () =>
+                  JSON.stringify({ protocolVersion: '2.0.0-draft.1', providers: [], targets: {} }),
+              };
+            }
+            assert.equal(init.headers['authorization'], 'Bearer token');
+            return { status: 200, text: async () => JSON.stringify({ records: [] }) };
+          },
+        }),
+      );
+      assert.ok(backend);
+      assert.deepEqual(await backend.listConsent(), []);
+      await settle();
+      assert.ok(requests.length >= 2);
+      assert.ok(
+        requests.every((url) =>
+          url.startsWith('https://game.example.com/api/game-services/notifications/'),
+        ),
+      );
+      assert.equal(
+        createStarterWorkerNotificationBackend(
+          gateway('android'),
+          input({ baseUrl: '/api', mode: 'production' }),
+        ),
+        undefined,
+      );
+    } finally {
+      if (previous === undefined) {
+        Reflect.deleteProperty(globalThis, 'location');
+      } else {
+        Object.defineProperty(globalThis, 'location', previous);
+      }
+    }
+  }
   // Reddit's backend is its Devvit server: no Worker runtime, even with a URL and a session.
   {
     const { fetch, requests } = worker(() => ({

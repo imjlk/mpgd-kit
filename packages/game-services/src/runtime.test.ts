@@ -9,6 +9,7 @@ import {
   GameServicesHeaderResolutionError,
   isPublicGameServicesUrl,
   resolveGameServicesAuthorityMode,
+  resolveGameServicesBaseUrl,
   resolveGameServicesTransport,
   type GameServicesBackendApi,
   type GameServicesBackendTransportRequest,
@@ -17,6 +18,81 @@ import {
 import { isMonetizationOperationRecoverable } from './monetization-operation-store.js';
 
 const playerId = 'runtime-player';
+
+for (const target of ['browser', 'microsoft-store'] as const) {
+  for (const path of ['/api', '/api/game-services']) {
+    const baseUrl = resolveGameServicesBaseUrl(path, {
+      target,
+      pageOrigin: 'https://game.example.com',
+    });
+    assertEqual(
+      baseUrl,
+      `https://game.example.com${path}`,
+      'hosted URL resolves before runtime validation',
+    );
+    const runtime = createGameServicesRuntime({
+      gateway: createGateway(target),
+      playerId,
+      authorityMode: 'production',
+      ...(baseUrl === undefined ? {} : { baseUrl }),
+    });
+    assertEqual(
+      runtime.mode,
+      'http',
+      'hosted relative configuration keeps authoritative runtime enabled',
+    );
+    assertEqual(runtime.baseUrl, baseUrl, 'all clients receive the resolved absolute base');
+  }
+}
+for (const target of ['android', 'ios', 'ait', 'verse8'] as const) {
+  assertEqual(
+    resolveGameServicesBaseUrl('/api', { target, pageOrigin: 'https://game.example.com' }),
+    '/api',
+    'native relative configuration is not resolved',
+  );
+}
+for (const path of [
+  '//evil.example.com/api',
+  '/\\evil.example.com',
+  '/api/../admin',
+  '/api/%2f%2fevil',
+  '/api?x=1',
+  '/api#x',
+  '/api\n',
+]) {
+  const baseUrl = resolveGameServicesBaseUrl(path, {
+    target: 'browser',
+    pageOrigin: 'https://game.example.com',
+  });
+  assertEqual(
+    isPublicGameServicesUrl(baseUrl ?? ''),
+    false,
+    'unsafe relative paths cannot carry credentials',
+  );
+}
+for (const pageOrigin of [
+  'https://user:secret@game.example.com',
+  'https://game.example.com/path',
+  'https://game.example.com?x=1',
+  'null',
+  'file://',
+]) {
+  assertEqual(
+    resolveGameServicesBaseUrl('/api', { target: 'browser', pageOrigin }),
+    '/api',
+    'only an exact http(s) page origin resolves',
+  );
+}
+assertEqual(
+  resolveGameServicesBaseUrl('/api', { target: 'browser' }),
+  '/api',
+  'SSR cannot invent an origin',
+);
+assertEqual(
+  resolveGameServicesBaseUrl('https://services.example.com', { target: 'android' }),
+  'https://services.example.com',
+  'native HTTPS remains unchanged',
+);
 let purchaseCalls = 0;
 let rewardCalls = 0;
 let leaderboardCalls = 0;

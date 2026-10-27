@@ -496,6 +496,10 @@ or a clean path below it, such as `/api/game-services`, for a same-origin
 Pages/edge proxy. The host must forward to its environment-matched service
 binding and fail closed if it is absent. Relative URLs must be resolved against
 the actual page origin before passing them to clients that require absolute URLs.
+The supplied starter commerce and notification wiring uses the DOM-free
+`resolveGameServicesBaseUrl(value, { target: gateway.target, pageOrigin: location.origin })`
+helper before the absolute-URL runtime checks. Custom composition roots must do
+the same; the runtime itself never reads the DOM or invents an origin.
 This build check does not verify the deployed proxy, identity, or reward ledger.
 AIT, Android, iOS and externally hosted runtimes still require a public HTTPS
 URL without credentials; they may use the public Pages ingress URL. Protocol-relative,

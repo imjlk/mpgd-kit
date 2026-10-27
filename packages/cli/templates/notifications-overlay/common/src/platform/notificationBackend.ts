@@ -1,6 +1,7 @@
 import {
   isPublicGameServicesUrl,
   resolveGameServicesAuthorityMode,
+  resolveGameServicesBaseUrl,
   type GameServicesHeaderResolver,
 } from '@mpgd/game-services';
 import {
@@ -82,7 +83,10 @@ export function createStarterWorkerNotificationBackend(
   if (platform.target === 'reddit' || targetsWithoutWorkerBackend.has(platform.configTarget)) {
     return undefined;
   }
-  const baseUrl = input.baseUrl?.trim();
+  const baseUrl = resolveGameServicesBaseUrl(input.baseUrl, {
+    target: platform.target,
+    ...(globalThis.location?.origin === undefined ? {} : { pageOrigin: globalThis.location.origin }),
+  });
   const provider = platform.notificationsV2;
   if (baseUrl === undefined || baseUrl === '' || provider === undefined) {
     return undefined;
