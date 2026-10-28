@@ -48,6 +48,7 @@ import {
 import {
   createPurchaseBoundToAnotherAccountBody,
   GameServicesPurchaseBoundToAnotherAccountError,
+  isStoreAccountMismatchReason,
   purchaseBoundToAnotherAccountCode,
   purchaseBoundToAnotherAccountStatus,
 } from './another-account.js';
@@ -810,9 +811,10 @@ export function createGameServicesBackend(
           ...(registry === undefined ? {} : { registry }),
         }, async (verification) => {
           if (verification instanceof GameServicesPurchaseBoundToAnotherAccountError) {
-            // Not this player's purchase, and not decided for its account.
+            // Refused for this player, not decided for its account: tracked
+            // as a refusal with the mark, never as a pending purchase.
             await analytics.track({
-              name: 'purchase_pending',
+              name: 'purchase_rejected',
               properties: {
                 target: request.target,
                 store: resolveCommerceStoreId(request),
@@ -1025,7 +1027,8 @@ export function createGameServicesRouter(
       }
       if (error instanceof GameServicesPurchaseBoundToAnotherAccountError) {
         // A retryable answer, not an internal error: the code and reason reach the client.
-        // `createGameServicesRpcFetchHandler` maps the code to HTTP 409.
+        // oRPC beta.46 errors carry no status: `gameServicesRpcErrorStatusMap`
+        // (used by `createGameServicesRpcFetchHandler`) maps the code to 409.
         throw new ORPCError(purchaseBoundToAnotherAccountCode, {
           message: error.message,
           data: { reason: error.reason },
@@ -1073,15 +1076,26 @@ export function createGameServicesRouter(
   });
 }
 
+/**
+ * The RPC handler's error status map: oRPC's common codes and
+ * `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` at 409. oRPC 2.0.0-beta.46 derives the
+ * HTTP status of an error from its code through this map (an `ORPCError`
+ * carries no status of its own), so a host that mounts
+ * `createGameServicesRouter` in its own `RPCHandler` passes it as
+ * `errorStatusMap` to answer 409 too; without it the code still reaches the
+ * client, with status 500.
+ */
+export const gameServicesRpcErrorStatusMap: Readonly<Record<string, number>> = Object.freeze({
+  ...COMMON_ERROR_STATUS_MAP,
+  [purchaseBoundToAnotherAccountCode]: purchaseBoundToAnotherAccountStatus,
+});
+
 export function createGameServicesRpcFetchHandler(
   router: ReturnType<typeof createGameServicesRouter>,
   options: CreateGameServicesRpcFetchHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
   const rpcHandler = new RPCHandler<GameServicesOrpcContext>(router as never, {
-    errorStatusMap: {
-      ...COMMON_ERROR_STATUS_MAP,
-      [purchaseBoundToAnotherAccountCode]: purchaseBoundToAnotherAccountStatus,
-    },
+    errorStatusMap: { ...gameServicesRpcErrorStatusMap },
     plugins: [
       new RequestLimitHandlerPlugin({
         maxBodySize: resolveMaxBodyBytes(options.maxBodyBytes),
@@ -1347,7 +1361,11 @@ async function verifyPurchaseWithStore(
       verification = await verifyPurchaseForRetry(request, retryIdentity, context);
     } catch (error) {
       if (error instanceof GameServicesPurchaseBoundToAnotherAccountError) {
-        await onDecision(error);
+        try {
+          await onDecision(error);
+        } catch {
+          // Analytics is best-effort: a failed report never replaces the answer.
+        }
       }
       throw error;
     }
@@ -1446,12 +1464,7 @@ async function verifyPurchaseForRetry(
     : resolveCommerceStoreId(request);
 
   if (verification.status === 'restorable') {
-    // A verified restore of a purchase the store binds to another player.
-    if (!sharesRestoredPurchase(request, product, context)) {
-      // No share for this player: the purchase stays its account's, which
-      // can still restore it (RFC "Another account's purchase").
-      throw new GameServicesPurchaseBoundToAnotherAccountError(verification.reason);
-    }
+    // A verified restore of a purchase the store binds to another player, or to none.
     return shareRestoredPurchase(
       request,
       {
@@ -1459,12 +1472,21 @@ async function verifyPurchaseForRetry(
         platformProductId,
         verification,
         verifiedStore,
-        refusal: assertVerifyPurchaseResponse({
-          verified: false,
-          alreadyProcessed: false,
-          disposition: 'rejected',
-          reason: verification.reason,
-        }),
+        refusal: () => {
+          if (isStoreAccountMismatchReason(verification.reason)) {
+            // No share for this player: the purchase stays its account's,
+            // which can still restore it (RFC "Another account's purchase").
+            throw new GameServicesPurchaseBoundToAnotherAccountError(verification.reason);
+          }
+          // Bound to no account (`*_MISSING`) or a custom verifier's reason:
+          // no account can claim it, so the refusal is final.
+          return assertVerifyPurchaseResponse({
+            verified: false,
+            alreadyProcessed: false,
+            disposition: 'rejected',
+            reason: verification.reason,
+          });
+        },
       },
       context,
     );
@@ -1808,7 +1830,8 @@ async function shareRestoredPurchase(
     readonly platformProductId: string;
     readonly verification: PurchaseEvidenceDecision;
     readonly verifiedStore: string;
-    readonly refusal: VerifyPurchaseResponse;
+    /** The answer when the share policy does not apply; it may throw another account's answer. */
+    readonly refusal: VerifyPurchaseResponse | (() => VerifyPurchaseResponse);
     /** The store binds the purchase to this player (a `verified` decision): no restore intent needed. */
     readonly bindingMatches?: boolean;
   },
@@ -1817,7 +1840,7 @@ async function shareRestoredPurchase(
   const { store, restoreSharing: policy } = context;
   const { product, verification } = input;
   if (!sharesRestoredPurchase(request, product, context, input.bindingMatches === true)) {
-    return input.refusal;
+    return typeof input.refusal === 'function' ? input.refusal() : input.refusal;
   }
   const purchaseVerificationId = verification.verificationId;
   const notGranted = (

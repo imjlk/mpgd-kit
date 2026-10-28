@@ -5,6 +5,8 @@ import {
   gameServicesBackendEndpoints,
 } from '@mpgd/game-services';
 
+import { RPCHandler } from '@orpc/server/fetch';
+
 import {
   createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesBackend,
@@ -18,6 +20,7 @@ import {
   GameServicesBackendError,
   GameServicesPurchaseBoundToAnotherAccountError,
   gameServicesRequestLimits,
+  gameServicesRpcErrorStatusMap,
   InMemoryGameServicesStore,
   readPurchaseBoundToAnotherAccount,
   type EvidenceVerificationDecision,
@@ -3006,12 +3009,41 @@ await assertRejects(
   );
   assertEqual(
     anotherAccountEvents.every((event) =>
-      event.name === 'purchase_pending'
+      event.name === 'purchase_rejected'
       && event.properties.reason === 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT'
       && event.properties.boundToAnotherAccount === 'GOOGLE_PLAY_ACCOUNT_MISMATCH')
       && anotherAccountEvents.length === 5,
     true,
-    'each answer is tracked as pending for its account, never as rejected',
+    'each answer is tracked as a refusal with the mark, never as pending',
+  );
+
+  // A host mounting the router in its own RPC handler answers 409 with the exported map.
+  const ownHandler = new RPCHandler(
+    createGameServicesRouter(createGameServicesBackend(anotherAccountInput)) as never,
+    { errorStatusMap: { ...gameServicesRpcErrorStatusMap } },
+  );
+  const ownHandled = await ownHandler.handle(
+    new Request('https://game-services.test/rpc/commerce/verifyPurchase', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ json: anotherAccountRequest }),
+    }),
+    { prefix: '/rpc', context: {} } as never,
+  );
+  assertEqual(ownHandled.response?.status, 409, 'the exported status map answers 409');
+
+  // A failing analytics report never replaces the answer.
+  const clockFailure = await captureError(() =>
+    createGameServicesBackend({
+      ...anotherAccountInput,
+      now: () => {
+        throw new Error('clock unavailable');
+      },
+    }).purchases.verifyPurchase(anotherAccountRequest));
+  assertEqual(
+    clockFailure instanceof GameServicesPurchaseBoundToAnotherAccountError,
+    true,
+    'the answer survives an analytics failure',
   );
 
   // A verifier that answers `anotherAccount` with anything but true is a verifier error.
