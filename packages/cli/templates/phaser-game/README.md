@@ -564,8 +564,8 @@ The game services belong to one server player for the run
 its own and lets the player switch accounts within a run gets them closed, not
 moved to the new account: from the moment the session names another player,
 nothing is verified, restored, or finished with the new player's credentials
-for the old player's purchases (a backend rejects those for good as an
-account mismatch), no purchase is journaled under one player and bound to the
+for the old player's purchases (a backend answers those as another account's
+purchase), no purchase is journaled under one player and bound to the
 other's store account, and purchases answer `failed` with the retryable
 diagnostic `GAME_SERVICES_PLAYER_CHANGED` before any store sheet opens.
 `main.ts` stops play at once (`onPlayerChanging`: an execution block and a

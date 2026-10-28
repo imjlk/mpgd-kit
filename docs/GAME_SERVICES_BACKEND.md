@@ -523,7 +523,8 @@ platform are in
 
 - `createGameServicesBackend({ restoreSharing })` sets the policy:
   `{ mode: 'share', maxHolders?: 5 }` (1 to 100) or `{ mode: 'refuse' }`,
-  the library default, which answers the binding mismatch as before. The
+  the library default, which answers it as
+  [another account's purchase](#another-accounts-purchase). The
   reference Worker shares unless `GAME_SERVICES_RESTORE_SHARING = "refuse"`;
   `GAME_SERVICES_RESTORE_MAX_HOLDERS` sets the limit (an invalid value turns
   sharing off).
@@ -544,7 +545,9 @@ platform are in
   (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `GOOGLE_PLAY_PROFILE_MISMATCH`, including
   a purchase made outside the app with no ids, or
   `APP_STORE_ACCOUNT_TOKEN_MISMATCH` with the client's verified JWS present).
-  A custom verifier can answer it too; anything else stays `rejected`.
+  A custom verifier can answer it too. Anything else bound to another account
+  is [another account's purchase](#another-accounts-purchase); a purchase
+  bound to no account stays `rejected`.
 - The backend shares it with ordinary ledger grants, on any store: the
   purchase's holders are its first grant (the evidence id the verifier names)
   and the shares, `listPurchaseHolders`. A share is written at the next
@@ -567,7 +570,7 @@ platform are in
   restoring player as its first grant (`restoredAcrossAccounts: true`). The
   answer is `verified` with `restoredAcrossPlayers: true`, on retries too.
 - The answers that are not a share: a consumable or a game-started checkout
-  gets the verifier's reason (`rejected`); a purchase a store event ended
+  is [another account's purchase](#another-accounts-purchase); a purchase a store event ended
   (refund, chargeback, voided purchase on any holder) `LEDGER_GRANT_REVERSED`,
   also for a share that lands while that refund fans out, or after every
   other holder was revoked (it is revoked right after its write); a purchase `maxHolders` players hold `pending`
@@ -591,6 +594,71 @@ platform are in
 
 Subscriptions are never shared (no subscription verifier yet), and the legacy
 `createAppStoreRecoveryBackend` keeps refusing.
+
+### Another account's purchase
+
+A verify can carry one player's session and another player's store purchase:
+a client that could not read its store account binding, an older client, a
+game's own wrapper, or a race at a player change. The purchase is valid, it
+is only not this player's, and its own account can still recover it
+([RFC](specs/commerce/commerce-v2-rfc.md#another-account)).
+
+- The Google Play boundary and the App Store verifier answer
+  `{ status: 'rejected', reason, anotherAccount: true }` when every other check
+  passed and the binding names another account (`GOOGLE_PLAY_ACCOUNT_MISMATCH`,
+  `GOOGLE_PLAY_PROFILE_MISMATCH`, `APP_STORE_ACCOUNT_TOKEN_MISMATCH`). A
+  purchase bound to no account is refused as before, with its own reason:
+  `GOOGLE_PLAY_ACCOUNT_ID_MISSING`, `GOOGLE_PLAY_PROFILE_ID_MISSING`,
+  `APP_STORE_ACCOUNT_TOKEN_MISSING`, or, on a backend that binds nobody
+  (`allowUnboundAuthenticatedPlayer`), `GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED`.
+  A restored non-consumable is still `restorable`, bound to no account
+  included (with the `*_MISSING` reason; the share policy still covers it).
+  When no share covers it, a mismatch reason gets this answer and a
+  `*_MISSING` reason stays `rejected`.
+- `createGameServicesBackend` grants and records nothing for it (no ledger
+  entry, no owner claim, nothing for a deletion tombstone to refuse) and throws
+  `GameServicesPurchaseBoundToAnotherAccountError` (`code`
+  `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`, `reason`, `status` 409). The HTTP
+  handler answers it as 409 `{ "error": "PURCHASE_BOUND_TO_ANOTHER_ACCOUNT",
+  "reason": "GOOGLE_PLAY_ACCOUNT_MISMATCH" }`, the oRPC router as that error
+  code with `data.reason` (409 through `createGameServicesRpcFetchHandler`;
+  oRPC 2.0.0-beta.46 errors carry no status of their own, so a host that
+  mounts `createGameServicesRouter` in its own `RPCHandler` passes
+  `errorStatusMap: gameServicesRpcErrorStatusMap`, or answers 500 with the
+  same code), and the Worker's service-binding method throws it
+  (Workers RPC keeps `code` and `reason` from compatibility date 2026-04-21 on
+  both Workers, and the message, which starts with the code, before it).
+  Analytics tracks `purchase_rejected` with `boundToAnotherAccount: <reason>`
+  (never a pending count); a failed analytics report never replaces the
+  answer.
+- It is an error rather than a receipt so released clients keep the record
+  open: every `@mpgd/game-services` client before this one ends a non-pending
+  receipt as `rejected` for good, and journals a `pending` one as an open
+  attempt that refuses new purchases of the product. On a transport error
+  they keep the record in `verifying` and resend it on the next reconcile. The
+  current reconciler recognizes the answer (`readPurchaseBoundToAnotherAccount`)
+  and parks the record instead, reporting an `another-account` event rather
+  than a `failure`; it also parks a `rejected` receipt whose
+  reason is one of the three mismatches, so a backend or game server from
+  before this answer gets the same client behaviour.
+
+**A game server that wraps the verifiers** answers it the same way instead of
+mapping it to `rejected`:
+
+- Calling `backend.purchases.verifyPurchase` (the Google Play path most games
+  use): catch the error and answer 409 with
+  `createPurchaseBoundToAnotherAccountBody(error.reason)`, or rethrow it into a
+  transport that answers any error as retryable. Do not catch it into a
+  `{ verified: false, disposition: 'rejected' }` body. Run any owner claim only
+  on a `verified` decision, as before.
+- Calling a verifier directly (an App Store wrapper that decides before it
+  creates the backend): on `decision.status === 'rejected' &&
+  decision.anotherAccount === true`, answer that 409 instead of a `rejected`
+  receipt, and write nothing.
+- A game client with its own transport keeps the 409 answer an error (retry
+  later), never a rejected receipt. With the kit's transports nothing changes:
+  `createGameServicesHttpBackendApi` and the oRPC client raise it, and the
+  reconciler parks the record.
 
 If any target-specific binding is configured, the Worker enters strict
 target-specific mode for purchase routing. Each purchase request is sent only

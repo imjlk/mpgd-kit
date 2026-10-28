@@ -85,11 +85,15 @@ type GooglePlayPurchaseInspection =
   | {
       readonly status: 'verified';
       readonly purchase: InspectedGooglePlayPurchase;
-      /** The binding mismatch of a purchase bound to another account, when `reportForeignBinding` asked for it. */
+      /**
+       * When `reportForeignBinding` asked for it: the binding mismatch of a
+       * purchase bound to another account, or the `*_ID_MISSING` reason of
+       * one bound to no account.
+       */
       readonly foreignBinding?: string;
     }
   | { readonly status: 'pending'; readonly reason: string }
-  | { readonly status: 'rejected'; readonly reason: string };
+  | { readonly status: 'rejected'; readonly reason: string; readonly anotherAccount?: true };
 
 export function createGooglePlayProductPurchaseBoundary(
   input: CreateGooglePlayProductPurchaseBoundaryInput,
@@ -528,6 +532,8 @@ async function inspectGooglePlayPurchase(input: {
     return rejected('GOOGLE_PLAY_PROFILE_INVALID');
   }
   let foreignBinding: string | undefined;
+  /** The purchase carries no id where the player's binding has one (bought outside the app). */
+  let missingBinding: string | undefined;
   if (input.accountBinding.status === 'bound') {
     // Defensive invariant: every bound context must carry at least one
     // identifier, even though the constructors below already enforce it.
@@ -544,14 +550,26 @@ async function inspectGooglePlayPurchase(input: {
       && obfuscatedExternalAccountId !== input.accountBinding.accountId
     ) {
       foreignBinding = 'GOOGLE_PLAY_ACCOUNT_MISMATCH';
+      missingBinding = obfuscatedExternalAccountId === undefined
+        ? 'GOOGLE_PLAY_ACCOUNT_ID_MISSING'
+        : undefined;
     } else if (
       input.accountBinding.profileId !== undefined
       && obfuscatedExternalProfileId !== input.accountBinding.profileId
     ) {
       foreignBinding = 'GOOGLE_PLAY_PROFILE_MISMATCH';
+      missingBinding = obfuscatedExternalProfileId === undefined
+        ? 'GOOGLE_PLAY_PROFILE_ID_MISSING'
+        : undefined;
     }
     if (foreignBinding !== undefined && input.reportForeignBinding !== true) {
-      return rejected(foreignBinding);
+      // A purchase with no binding is no account's: refused for every
+      // player. One bound to another account is that account's, which can
+      // still recover it: it is reported, not refused for good (RFC
+      // "Another account's purchase"). Every check before this one passed.
+      return missingBinding === undefined
+        ? { status: 'rejected', reason: foreignBinding, anotherAccount: true }
+        : rejected(missingBinding);
     }
     if (
       foreignBinding === undefined
@@ -568,7 +586,9 @@ async function inspectGooglePlayPurchase(input: {
       return rejected('GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
     }
   }
-  // The unbound opt-in is safe only when the provider response is also unbound.
+  // The unbound opt-in is safe only when the provider response is also
+  // unbound. This backend binds no player, so no player of it can claim a
+  // bound purchase: refused for every player, never as another account's.
   if (
     input.accountBinding.status === 'unbound'
     && (
@@ -576,12 +596,14 @@ async function inspectGooglePlayPurchase(input: {
       || obfuscatedExternalProfileId !== undefined
     )
   ) {
-    return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
+    return rejected('GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED');
   }
 
   return {
     status: 'verified',
-    ...(foreignBinding === undefined ? {} : { foreignBinding }),
+    // A restore reports which: another account's binding, or none at all
+    // (the backend refuses the latter for good when no share covers it).
+    ...(foreignBinding === undefined ? {} : { foreignBinding: missingBinding ?? foreignBinding }),
     purchase: {
       purchaseToken: input.purchaseToken,
       purchaseTokenDigest: await digestPurchaseToken(

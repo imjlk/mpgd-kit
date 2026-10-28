@@ -256,6 +256,33 @@ assertDecision(
   'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
   'signed transactions must bind to the expected game account',
 );
+// Another account's valid purchase is reported as that account's (RFC
+// "Another account's purchase"): the backend answers it as a retryable error.
+assertEqual(
+  wrongAccount.status === 'rejected' ? wrongAccount.anotherAccount : undefined,
+  true,
+  "a transaction bound to another token is another account's purchase",
+);
+// Every other check still decides first: a revoked transaction of another
+// account is refused for every player.
+const revokedWrongAccount = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    appAccountToken: 'c3353250-0bd1-4424-bc84-b119868d85f0',
+    revocationDate: baseTransaction.purchaseDate + 1_000,
+  },
+}).verifyPurchase(baseInput);
+assertDecision(
+  revokedWrongAccount,
+  'rejected',
+  'APP_STORE_TRANSACTION_REVOKED',
+  "a revoked transaction of another account is refused, not reported as that account's",
+);
+assertEqual(
+  revokedWrongAccount.status === 'rejected' ? revokedWrongAccount.anotherAccount : undefined,
+  undefined,
+  "a refused transaction is not another account's purchase",
+);
 
 const missingAccount = await createVerifier({
   transaction: createAppStoreTransactionConformanceFixture({
@@ -266,8 +293,13 @@ const missingAccount = await createVerifier({
 assertDecision(
   missingAccount,
   'rejected',
-  'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+  'APP_STORE_ACCOUNT_TOKEN_MISSING',
   'a signed transaction without the required account binding must fail closed',
+);
+assertEqual(
+  missingAccount.status === 'rejected' ? missingAccount.anotherAccount : undefined,
+  undefined,
+  "a transaction without a token is no account's purchase",
 );
 
 const canonicalAccountToken = await createVerifier({
@@ -1089,11 +1121,17 @@ assertEqual(
     client: otherAccountPayload,
     fresh: otherAccountPayload,
   });
+  const otherAccountDecision = await otherAccount.verifier.verifyPurchase(evidenceInput);
   assertDecision(
-    await otherAccount.verifier.verifyPurchase(evidenceInput),
+    otherAccountDecision,
     'rejected',
     'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
     'the evidence path applies the same account binding check as the evidence-less path',
+  );
+  assertEqual(
+    otherAccountDecision.status === 'rejected' ? otherAccountDecision.anotherAccount : undefined,
+    true,
+    "the evidence path reports another account's purchase",
   );
 
   // Offline-only: the client JWS alone decides, within the freshness window.
