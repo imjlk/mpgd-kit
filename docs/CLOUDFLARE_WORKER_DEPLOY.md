@@ -395,8 +395,10 @@ item after they "switch devices"
   often than the limit reaches it.
 
 Set `GAME_SERVICES_RESTORE_SHARING = "refuse"` to keep refusing restores
-across guests (`GOOGLE_PLAY_ACCOUNT_MISMATCH`,
-`APP_STORE_ACCOUNT_TOKEN_MISMATCH`); then do not sell non-consumables, or say
+across guests (409 `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` with reason
+`GOOGLE_PLAY_ACCOUNT_MISMATCH` or `APP_STORE_ACCOUNT_TOKEN_MISMATCH`; see
+[another account's purchase](./GAME_SERVICES_BACKEND.md#another-accounts-purchase));
+then do not sell non-consumables, or say
 in the store copy that a reinstall on Android, a new device, or a logout loses
 them. No migration is needed: shares are ordinary grants.
 
