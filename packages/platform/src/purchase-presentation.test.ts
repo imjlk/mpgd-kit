@@ -118,6 +118,30 @@ describe('purchase presentation relay', () => {
     expect(listeners.size).toBe(0);
   });
 
+  it('claims no not-started for a refused call of a key whose sheet is still up', async () => {
+    const { source, emit } = fakeSource();
+    const relay = createPurchasePresentationRelay(source);
+    const log: string[] = [];
+    relay.presentation.subscribe((event) => log.push(`${event.idempotencyKey}:${event.state}`));
+    await relay.track('k', async () => {
+      emit({ idempotencyKey: 'k', sequence: 1, state: 'unknown' });
+    });
+    // A same-key call the provider refuses without a fact.
+    await relay.track('k', async () => undefined);
+    emit({ idempotencyKey: 'k', sequence: 2, state: 'not-started' });
+    // The key is free again: a refused call now ends not-started.
+    await relay.track('k', async () => undefined);
+    // A concurrent same-key call does not end the running one either.
+    let finish: (() => void) | undefined;
+    const running = relay.track('r', () => new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+    await relay.track('r', async () => undefined);
+    finish?.();
+    await running;
+    expect(log).toEqual(['k:unknown', 'k:not-started', 'k:not-started', 'r:not-started']);
+  });
+
   it('reports a throwing listener and keeps delivering', async () => {
     const onListenerError = vi.fn();
     const { source } = fakeSource();

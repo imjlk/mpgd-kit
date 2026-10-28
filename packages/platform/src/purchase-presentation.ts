@@ -135,7 +135,8 @@ export interface PurchasePresentationRelay {
    * Runs one purchase call of `idempotencyKey`. When it settles without any
    * fact from the source for its key (the wrapper refused it, or failed,
    * before the source ran), the relay reports `not-started` before the
-   * caller sees the answer.
+   * caller sees the answer, unless another call of the key is still running
+   * or left its sheet up (`open` or `unknown`).
    */
   track<T>(idempotencyKey: string, run: () => Promise<T>): Promise<T>;
 }
@@ -157,6 +158,9 @@ export function createPurchasePresentationRelay(
   const channel = createPurchasePresentationChannel(options);
   const fresh = createPurchasePresentationSequenceGuard();
   const calls = new Map<string, { seen: boolean }[]>();
+  // Keys whose last relayed fact left a sheet up (`open`) or possibly up
+  // (`unknown`): a refused same-key call does not end them.
+  const live = new Set<string>();
   let listenerCount = 0;
   let detach: (() => void) | undefined;
   const onFact: PurchasePresentationListener = (event) => {
@@ -166,6 +170,11 @@ export function createPurchasePresentationRelay(
     }
     for (const call of calls.get(event.idempotencyKey) ?? []) {
       call.seen = true;
+    }
+    if (event.state === 'open' || event.state === 'unknown') {
+      live.add(event.idempotencyKey);
+    } else {
+      live.delete(event.idempotencyKey);
     }
     channel.publish({
       idempotencyKey: event.idempotencyKey,
@@ -208,7 +217,11 @@ export function createPurchasePresentationRelay(
         } else {
           calls.set(idempotencyKey, remaining);
         }
-        if (!call.seen) {
+        // No fact for this call: it opened nothing. A key whose earlier
+        // call still has a sheet up, or still runs, keeps that call's facts
+        // as its truth (a provider refuses such a same-key call without a
+        // fact), so no `not-started` is claimed for it.
+        if (!call.seen && remaining.length === 0 && !live.has(idempotencyKey)) {
           channel.publish({ idempotencyKey, state: 'not-started' });
         }
       }
