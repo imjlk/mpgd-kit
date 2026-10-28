@@ -216,6 +216,28 @@ describe('store commerce provider presentation', () => {
     expect(sdk.presentationListenerCount).toBe(0);
   });
 
+  it('ends a call still before its sheet on dispose and never opens that sheet', async () => {
+    const sdk = createFakeStoreSdk({ presentation: true });
+    let answerGate: ((decision: { readonly allowed: true }) => void) | undefined;
+    const provider = createProvider(sdk, {
+      purchaseGate: () => new Promise((resolve) => {
+        answerGate = resolve;
+      }),
+    });
+    const { log, answer } = record(provider);
+    const pending = answer(request('op-1'));
+    for (let turn = 0; turn < 100 && answerGate === undefined; turn += 1) {
+      await Promise.resolve();
+    }
+    expect(answerGate).toBeDefined();
+    provider.dispose();
+    expect(log).toEqual(['op-1:not-started']);
+    answerGate?.({ allowed: true });
+    await expect(pending).rejects.toMatchObject({ code: 'NOT_PREPARED' });
+    expect(sdk.requestCalls).toEqual([]);
+    expect(log).toEqual(['op-1:not-started', 'op-1:answer:throw']);
+  });
+
   it('gives each call its own presentation id and delivers facts only to live listeners', async () => {
     const sdk = createFakeStoreSdk({ presentation: true });
     const provider = createProvider(sdk);

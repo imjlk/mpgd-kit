@@ -701,6 +701,33 @@ describe('commerce v2 purchase activity with sheet facts', () => {
     await gateway.lifecycle.dispose?.();
   });
 
+  it('resumes when the sheet closes while the purchase call still runs', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId } = createPresentedGateway(fake);
+    await settle();
+    let answer: ((result: { readonly outcome: 'launched' }) => void) | undefined;
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    vi.mocked(sdk.requestPurchase).mockImplementationOnce(async (input) => {
+      sdk.requestCalls.push(input);
+      sdk.onRequest?.(input);
+      return await new Promise((resolve) => {
+        answer = resolve;
+      });
+    });
+    const purchased = gateway.commerce?.requestPurchase(purchase);
+    for (let turn = 0; turn < 200 && answer === undefined; turn += 1) {
+      await Promise.resolve();
+    }
+    expect(answer).toBeDefined();
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.present(lastPresentationId(), 'closed');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    answer?.({ outcome: 'launched' });
+    await expect(purchased).resolves.toEqual({ outcome: 'launched' });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
   it('holds nothing after a pending purchase whose sheet already closed', async () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createPresentedGateway(fake);

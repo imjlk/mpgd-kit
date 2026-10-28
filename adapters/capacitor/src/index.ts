@@ -324,6 +324,16 @@ export function createCapacitorPlatformGateway(input: {
       && method === 'commerce.v2.requestPurchase'
       ? watchPurchasePresentation(payload)
       : undefined;
+    // Released once: by the sheet's own end (which may come while the call
+    // still runs, for example a safety-timeout `closed`), or after the call.
+    let released = false;
+    const release = (): void => {
+      if (!released) {
+        released = true;
+        releaseExternalActivity?.();
+      }
+    };
+    presentation?.onEnd(release);
     try {
       const provider = leaderboardRoute === 'remote'
         && (method === 'leaderboard.submitScore' || method === 'leaderboard.open')
@@ -344,7 +354,7 @@ export function createCapacitorPlatformGateway(input: {
             // whose sheet closed holds nothing.
             holdActivity = true;
             holdLaunchedPurchaseActivity(
-              releaseExternalActivity,
+              release,
               isRecord(payload) ? payload.logicalId : undefined,
             );
           }
@@ -362,13 +372,13 @@ export function createCapacitorPlatformGateway(input: {
     } finally {
       if (holdActivity) {
         presentation?.dispose();
-      } else if (releaseExternalActivity !== undefined && presentation?.open() === true) {
+      } else if (!released && presentation?.open() === true) {
         // The sheet is still up, whatever the answer (a result, a pending
         // purchase, or a throw): stay paused until its `closed` fact.
-        holdPresentedPurchaseActivity(releaseExternalActivity, presentation);
+        holdPresentedPurchaseActivity(release, presentation);
       } else {
         presentation?.dispose();
-        releaseExternalActivity?.();
+        release();
       }
     }
   }

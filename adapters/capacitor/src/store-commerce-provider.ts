@@ -144,6 +144,8 @@ interface PresentationFlight {
   readonly idempotencyKey: string;
   readonly presentationId: string;
   open: boolean;
+  /** The SDK was asked to open the sheet. */
+  launched: boolean;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -317,6 +319,7 @@ export function createStoreCommerceProvider(
     ? undefined
     : createPurchasePresentationChannel();
   const flights = new Map<string, PresentationFlight>();
+  let disposed = false;
   const endFlight = (
     flight: PresentationFlight,
     state: 'closed' | 'not-started',
@@ -329,12 +332,13 @@ export function createStoreCommerceProvider(
     if (flight.timer !== undefined) {
       clearTimeout(flight.timer);
     }
+    // A sheet that opened can only close; `not-started` after `open` would
+    // tell a consumer the sheet never showed.
+    const fact = flight.open ? 'closed' : state;
     presentation?.publish({
       idempotencyKey: flight.idempotencyKey,
-      // A sheet that opened can only close; `not-started` after `open` would
-      // tell a consumer the sheet never showed.
-      state: flight.open ? 'closed' : state,
-      ...(reason === undefined ? {} : { reason }),
+      state: fact,
+      ...(reason === undefined || fact !== 'closed' ? {} : { reason }),
     });
   };
   const onPresentationFact = (event: StoreSdkPurchasePresentationEvent): void => {
@@ -459,6 +463,16 @@ export function createStoreCommerceProvider(
       };
     }
     const offerId = request.offerId ?? mapping.offerId;
+    if (disposed) {
+      // Its listeners are gone: a sheet opened now could never be reported.
+      throw new CommerceError('NOT_PREPARED', {
+        message: `Store ${store} was disposed before the purchase opened.`,
+      });
+    }
+    const flight = presentationId === undefined ? undefined : flights.get(presentationId);
+    if (flight !== undefined) {
+      flight.launched = true;
+    }
     let result: StoreSdkRequestPurchaseResult;
     try {
       result = await sdk.requestPurchase({
@@ -561,6 +575,7 @@ export function createStoreCommerceProvider(
         idempotencyKey: request.idempotencyKey,
         presentationId: crypto.randomUUID(),
         open: false,
+        launched: false,
       };
       flights.set(flight.presentationId, flight);
       try {
@@ -655,13 +670,13 @@ export function createStoreCommerceProvider(
       for (const detach of detachers.splice(0, detachers.length)) {
         detach();
       }
-      // No SDK fact arrives any more: a sheet still open is reported closed
-      // so nothing waits for it. A call that has not opened one ends with
-      // `not-started` when it settles.
+      // No SDK fact arrives any more, and the listeners go below: every call
+      // in flight gets its terminal fact now. A sheet that is (or may be)
+      // up is reported closed; a call still before its sheet is not-started,
+      // and it will not open one.
+      disposed = true;
       for (const flight of [...flights.values()]) {
-        if (flight.open) {
-          endFlight(flight, 'closed', 'disposed');
-        }
+        endFlight(flight, flight.open || flight.launched ? 'closed' : 'not-started', 'disposed');
       }
       presentation?.clear();
       listeners.clear();
