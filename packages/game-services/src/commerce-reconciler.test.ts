@@ -4032,4 +4032,251 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   await restartable.reconciler.stop();
 }
 
+// 56. Another account's purchase (RFC "Another account's purchase"): the backend answers
+// PURCHASE_BOUND_TO_ANOTHER_ACCOUNT. The record is parked in `verifying` (never ended,
+// never resent automatically, not listed, `rejected` for this player), its shared key is
+// left to the purchase's account, and only this player's Restore Purchases asks again.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const provider = createFakeProvider();
+  const backend = createFakeBackend();
+  const gemsKey = 'store:fake-store:tx-56';
+  const sharedKey = createCommercePurchaseOperationKey('android', gemsKey);
+  const httpAnswer = Object.assign(new Error('GameServices backend request failed'), {
+    status: 409,
+    body: { error: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' },
+  });
+
+  // Player 2's session reaches player 1's consumable (no client-side binding check).
+  const other = createHarness({ store, provider, backend, overrides: { playerId: 'player-2' } });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56' }));
+  backend.queue({ throws: httpAnswer });
+  await other.reconciler.start();
+  assertEqual(
+    other.history(gemsKey),
+    ['purchased', 'verifying'],
+    "another account's purchase is never ended as rejected",
+  );
+  const parked = await other.reconciler.read(gemsKey);
+  assertEqual(
+    [parked?.state, parked?.anotherAccount?.reason, parked?.request?.playerId],
+    ['verifying', 'GOOGLE_PLAY_ACCOUNT_MISMATCH', 'player-2'],
+    'the record is parked with the binding mismatch and its saved request',
+  );
+  assertEqual(other.failures, [`verify(${gemsKey})`], 'the answer is reported as a verify failure');
+  assertEqual(
+    toGameServicesPurchaseResult(parked as CommercePurchaseOperationRecord).status,
+    'rejected',
+    'nothing was or will be granted to this player',
+  );
+  assertEqual(
+    await other.reconciler.listRecoverable(),
+    [],
+    "a parked record is not this player's to recover",
+  );
+  assertEqual(
+    isMonetizationOperationRecoverable(parked as CommercePurchaseOperationRecord),
+    true,
+    'the journal keeps it open: it is not ended for the store transaction',
+  );
+  await other.reconciler.reconcile();
+  await other.reconciler.reconcile();
+  assertEqual(backend.requests.length, 1, 'start, resume, and events never resend it');
+  // It never serializes this player's own purchases of the product.
+  const ownAttempt = await other.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-56-own',
+    source: 'shop',
+  });
+  assertEqual(
+    ownAttempt,
+    { outcome: 'launched' },
+    'a new purchase of the product is not IN_PROGRESS',
+  );
+  await other.reconciler.stop();
+
+  // A restart over the same journal leaves it parked.
+  const otherAgain = createHarness({
+    store,
+    provider,
+    backend,
+    overrides: { playerId: 'player-2' },
+  });
+  await otherAgain.reconciler.start();
+  assertEqual(backend.requests.length, 1, 'a restart does not resend a parked record');
+  await otherAgain.reconciler.stop();
+
+  // The purchase's own account on the same install: the shared key does not refuse it.
+  const owner = createHarness({ store, provider, backend });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56' });
+  await owner.reconciler.start();
+  assertEqual(
+    backend.requests.slice(1).map((request) => [request.playerId, request.idempotencyKey]),
+    [['player-1', gemsKey]],
+    'the owner sends the same derived key for itself',
+  );
+  assertEqual(
+    owner.history(gemsKey).at(-1),
+    'finished',
+    "the owner's purchase is granted and finished",
+  );
+  assertEqual(
+    [
+      (await store.read(sharedKey))?.playerId,
+      (await store.read(createCommercePurchaseOperationKey('android', gemsKey, 'player-1')))
+        ?.playerId,
+    ],
+    ['player-2', 'player-1'],
+    "the owner's record is under its player-scoped key; the parked record keeps the shared key",
+  );
+  assertEqual(owner.failures, [], 'nothing of the other player blocks the owner');
+  assertEqual(
+    (await owner.reconciler.read(gemsKey))?.playerId,
+    'player-1',
+    "read answers the owner's scoped record",
+  );
+  await owner.reconciler.stop();
+}
+
+// 56b. Only the parked player's Restore Purchases sends it again, once per report; the
+// oRPC shape of the answer parks as the HTTP one does.
+{
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const key = 'store:fake-store:tx-56b';
+  const h = createHarness({ provider, backend });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56b' }));
+  backend.queue({
+    throws: Object.assign(new Error('bound'), {
+      code: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT',
+      data: { reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH' },
+    }),
+  });
+  await h.reconciler.start();
+  assertEqual(
+    (await h.reconciler.read(key))?.anotherAccount?.reason,
+    'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+    'the oRPC error parks the record with its reason',
+  );
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56b' });
+  await h.reconciler.restorePurchases();
+  assertEqual(backend.requests.length, 2, 'Restore Purchases asks the backend again');
+  const restored = await h.reconciler.read(key);
+  assertEqual(
+    [restored?.state, restored?.anotherAccount],
+    ['finished', undefined],
+    'a restore the backend now grants (a changed policy or binding) lands normally',
+  );
+}
+
+// 56c. A backend from before the answer: a `rejected` receipt with a store binding
+// mismatch reason is parked the same way (no other reason is); a journal written before
+// it, holding another player's terminal mismatch record, leaves the key to the owner.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const provider = createFakeProvider();
+  const backend = createFakeBackend();
+  const mismatchKey = 'store:fake-store:tx-56c';
+  const otherKey = 'store:fake-store:tx-56d';
+  const h = createHarness({ store, provider, backend, overrides: { playerId: 'player-2' } });
+  provider.available.push(
+    purchaseOf({ transactionId: 'tx-56c' }),
+    purchaseOf({ transactionId: 'tx-56d', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  backend.queue({ status: 'rejected', reason: 'GOOGLE_PLAY_PROFILE_MISMATCH' });
+  backend.queue({ status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING' });
+  await h.reconciler.start();
+  const legacy = await h.reconciler.read(mismatchKey);
+  assertEqual(
+    [legacy?.state, legacy?.anotherAccount?.reason, legacy?.response?.reason],
+    ['verifying', 'GOOGLE_PLAY_PROFILE_MISMATCH', 'GOOGLE_PLAY_PROFILE_MISMATCH'],
+    "an older backend's mismatch receipt is parked, keeping the receipt",
+  );
+  assertEqual(
+    h.history(otherKey).at(-1),
+    'rejected',
+    'any other rejection, a missing binding included, still ends the record',
+  );
+  await h.reconciler.stop();
+
+  // A journal from before the answer: player 2 ended player 1's purchase as rejected.
+  const pre = createInMemoryMonetizationOperationStore();
+  const preKey = 'store:fake-store:tx-56e';
+  await pre.reserve({
+    kind: 'commerce-purchase',
+    key: createCommercePurchaseOperationKey('android', preKey),
+    playerId: 'player-2',
+    target: 'android',
+    deploymentTarget: 'android',
+    revision: 3,
+    idempotencyKey: preKey,
+    store: 'fake-store',
+    logicalId: 'gems_small',
+    productKind: 'consumable',
+    origin: 'discovered',
+    state: 'rejected',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    purchase: purchaseOf({ transactionId: 'tx-56e' }),
+    response: {
+      verified: false,
+      alreadyProcessed: false,
+      disposition: 'rejected',
+      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    },
+  } satisfies CommercePurchaseOperationRecord);
+  const preProvider = createFakeProvider();
+  const preBackend = createFakeBackend();
+  preProvider.available.push(purchaseOf({ transactionId: 'tx-56e' }));
+  preBackend.queue({ status: 'granted', ledgerEntryId: 'le-56e' });
+  const owner = createHarness({ store: pre, provider: preProvider, backend: preBackend });
+  await owner.reconciler.start();
+  assertEqual(
+    [owner.history(preKey).at(-1), preBackend.requests[0]?.playerId],
+    ['finished', 'player-1'],
+    'the owner recovers its purchase despite the old rejected record',
+  );
+  await owner.reconciler.stop();
+
+  // Another player's terminal record for any other reason still refuses the key.
+  const refused = createInMemoryMonetizationOperationStore();
+  const refusedKey = 'store:fake-store:tx-56f';
+  await refused.reserve({
+    kind: 'commerce-purchase',
+    key: createCommercePurchaseOperationKey('android', refusedKey),
+    playerId: 'player-2',
+    target: 'android',
+    deploymentTarget: 'android',
+    revision: 3,
+    idempotencyKey: refusedKey,
+    store: 'fake-store',
+    logicalId: 'gems_small',
+    productKind: 'consumable',
+    origin: 'discovered',
+    state: 'rejected',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    purchase: purchaseOf({ transactionId: 'tx-56f' }),
+    response: {
+      verified: false,
+      alreadyProcessed: false,
+      disposition: 'rejected',
+      reason: 'GOOGLE_PLAY_PURCHASE_REFUNDED',
+    },
+  } satisfies CommercePurchaseOperationRecord);
+  const refusedProvider = createFakeProvider();
+  const refusedBackend = createFakeBackend();
+  refusedProvider.available.push(purchaseOf({ transactionId: 'tx-56f' }));
+  const refusedOwner = createHarness({
+    store: refused,
+    provider: refusedProvider,
+    backend: refusedBackend,
+  });
+  await refusedOwner.reconciler.start();
+  assertEqual(
+    [refusedBackend.requests.length, refusedOwner.failures],
+    [0, ['journal']],
+    "a key another player's record holds for any other reason is still refused",
+  );
+  await refusedOwner.reconciler.stop();
+}
+
 console.info('commerce reconciler tests passed');

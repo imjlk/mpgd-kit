@@ -456,7 +456,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
                   alreadyProcessed: result.verification?.alreadyProcessed,
                   reason: result.status === 'pending'
                     ? 'purchase_pending'
-                    : (result.verification?.reason ?? record?.error?.code),
+                    : (result.verification?.reason
+                      ?? record?.anotherAccount?.reason
+                      ?? record?.error?.code),
                 },
               });
             }
