@@ -1,6 +1,5 @@
 import {
   bridgeCommerceEventProtocol,
-  bridgeCommercePresentationEventProtocol,
   bridgeNotificationsEventProtocol,
   decodeBridgeCredentialLoadData,
   decodeBridgeStorageLoadData,
@@ -390,12 +389,15 @@ export function createCapacitorPlatformGateway(input: {
 
   /**
    * Follows one purchase's presentation facts (by its idempotency key) from
-   * the provider's bridge. Undefined when the bridge serves no facts or the
+   * `commerce.presentation`: the bridge's facts already validated, with a
+   * superseded or replayed one dropped, so a stale fact cannot end the hold
+   * while the sheet is up. Undefined when the bridge serves no facts or the
    * payload has no key.
    */
   function watchPurchasePresentation(payload: unknown): PurchasePresentationWatch | undefined {
     const idempotencyKey = isRecord(payload) ? payload.idempotencyKey : undefined;
-    if (subscribePresentation === undefined || typeof idempotencyKey !== 'string') {
+    const facts = commerce?.presentation;
+    if (facts === undefined || typeof idempotencyKey !== 'string') {
       return undefined;
     }
     // `held`: the sheet is (`open`) or may be (`unknown`) up; `opened`: seen open.
@@ -411,12 +413,11 @@ export function createCapacitorPlatformGateway(input: {
       unsubscribe?.();
       unsubscribe = undefined;
     };
-    const subscription = subscribePresentation((envelope) => {
-      if (!isRecord(envelope) || envelope.protocol !== bridgeCommercePresentationEventProtocol
-        || !isRecord(envelope.event) || envelope.event.idempotencyKey !== idempotencyKey || ended) {
+    const subscription = facts.subscribe((event) => {
+      if (event.idempotencyKey !== idempotencyKey || ended) {
         return;
       }
-      const { state } = envelope.event;
+      const { state } = event;
       if (state === 'open' || state === 'unknown') {
         // `unknown`: the sheet may still be up; hold as for an open one.
         held = true;

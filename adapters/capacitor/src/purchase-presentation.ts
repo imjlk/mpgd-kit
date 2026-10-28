@@ -94,8 +94,15 @@ export function createNativePurchasePresentation(
       ...(reason === undefined ? {} : { reason }),
     };
     for (const entry of [...listeners]) {
-      if (listeners.has(entry)) {
+      if (!listeners.has(entry)) {
+        continue;
+      }
+      // One failing listener must not keep a later one (the commerce
+      // provider) from its `closed` fact.
+      try {
         entry.listener(event);
+      } catch (error) {
+        console.warn('A purchase presentation listener failed.', error);
       }
     }
   };

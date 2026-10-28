@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginListenerHandle } from '@capacitor/core';
-import type { BridgeEvent, BridgeResponse } from '@mpgd/bridge';
+import type { BridgeCommercePresentationEvent, BridgeEvent, BridgeResponse } from '@mpgd/bridge';
 
 import { createFakeStoreSdk, fakePurchase } from '../test/store-sdk-fixture.js';
 import { createCommerceServiceProvider } from './commerce-bridge.js';
@@ -646,7 +646,7 @@ describe('commerce v2 purchase activity with sheet facts', () => {
 
   function createPresentedGateway(
     fake: FakeApp,
-    options: { readonly servePresentation?: boolean } = {},
+    options: { readonly servePresentation?: boolean | 'replayable' } = {},
   ) {
     const sdk = createFakeStoreSdk({ presentation: true });
     const commerce = createStoreCommerceProvider({
@@ -657,6 +657,14 @@ describe('commerce v2 purchase activity with sheet facts', () => {
     });
     const service = createCommerceServiceProvider({ id: 'store', commerce });
     // A host built before the presentation protocol has no `subscribePresentation`.
+    // `replayable`: a host that may redeliver an earlier fact out of order.
+    const presentationEnvelopes: BridgeCommercePresentationEvent[] = [];
+    const presentationListeners = new Set<(event: BridgeCommercePresentationEvent) => void>();
+    const replay = (envelope: BridgeCommercePresentationEvent): void => {
+      for (const listener of [...presentationListeners]) {
+        listener(envelope);
+      }
+    };
     const provider: CapacitorServiceProvider = options.servePresentation === false
       ? {
           ...service,
@@ -665,7 +673,26 @@ describe('commerce v2 purchase activity with sheet facts', () => {
             subscribe: (listener) => service.bridge.subscribe(listener),
           },
         }
-      : service;
+      : options.servePresentation === 'replayable'
+        ? {
+            ...service,
+            bridge: {
+              request: (input) => service.bridge.request(input),
+              subscribe: (listener) => service.bridge.subscribe(listener),
+              subscribePresentation(listener: (event: BridgeCommercePresentationEvent) => void) {
+                presentationListeners.add(listener);
+                const detach = service.bridge.subscribePresentation?.((envelope) => {
+                  presentationEnvelopes.push(envelope);
+                  listener(envelope);
+                });
+                return () => {
+                  presentationListeners.delete(listener);
+                  detach?.();
+                };
+              },
+            },
+          }
+        : service;
     const gateway = createCapacitorPlatformGateway({
       target: 'android', appVersion: '1', buildId: 'presented-ui',
       app: asApp(fake), visibility: null,
@@ -676,7 +703,7 @@ describe('commerce v2 purchase activity with sheet facts', () => {
     gateway.lifecycle.onPause(() => { counts.pauses += 1; });
     gateway.lifecycle.onResume(() => { counts.resumes += 1; });
     const lastPresentationId = () => sdk.requestCalls.at(-1)?.presentationId;
-    return { sdk, gateway, counts, lastPresentationId };
+    return { sdk, gateway, counts, lastPresentationId, presentationEnvelopes, replay };
   }
 
   const purchase = { logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' } as const;
@@ -757,6 +784,36 @@ describe('commerce v2 purchase activity with sheet facts', () => {
     expect(counts).toEqual({ pauses: 1, resumes: 0 });
     sdk.present(firstSheet, 'closed');
     expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('ignores an earlier call fact the host redelivers during a same-key retry', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId, presentationEnvelopes, replay } =
+      createPresentedGateway(fake, { servePresentation: 'replayable' });
+    await settle();
+    sdk.onRequest = (input) => {
+      sdk.present(input.presentationId, 'open');
+      sdk.present(input.presentationId, 'closed');
+    };
+    sdk.queueRequest({ outcome: 'launched' });
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    const firstClosed = presentationEnvelopes.at(-1);
+    expect(firstClosed?.event).toMatchObject({ idempotencyKey: 'op-1', state: 'closed' });
+
+    // The retry's sheet opens after the host redelivers the first sheet's `closed`.
+    sdk.onRequest = (input) => {
+      if (firstClosed !== undefined) {
+        replay(firstClosed);
+      }
+      sdk.present(input.presentationId, 'open');
+    };
+    sdk.queueRequest({ outcome: 'launched' });
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 2, resumes: 1 });
+    sdk.present(lastPresentationId(), 'closed');
+    expect(counts).toEqual({ pauses: 2, resumes: 2 });
     await gateway.lifecycle.dispose?.();
   });
 

@@ -68,7 +68,11 @@ export function createPurchasePresentationChannel(
         try {
           entry.listener(event);
         } catch (error) {
-          options.onListenerError?.(error);
+          try {
+            options.onListenerError?.(error);
+          } catch {
+            // A failing reporter must not stop delivery to later listeners.
+          }
         }
       }
     },

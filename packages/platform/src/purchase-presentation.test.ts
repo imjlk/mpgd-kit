@@ -51,6 +51,23 @@ describe('purchase presentation channel', () => {
   });
 });
 
+describe('purchase presentation channel reporter', () => {
+  it('keeps delivering when the listener error reporter throws too', () => {
+    const channel = createPurchasePresentationChannel({
+      onListenerError: () => {
+        throw new Error('reporter failed');
+      },
+    });
+    channel.presentation.subscribe(() => {
+      throw new Error('listener failed');
+    });
+    const seen: PlatformPurchasePresentationEvent['state'][] = [];
+    channel.presentation.subscribe((event) => seen.push(event.state));
+    expect(() => channel.publish({ idempotencyKey: 'a', state: 'closed' })).not.toThrow();
+    expect(seen).toEqual(['closed']);
+  });
+});
+
 describe('purchase presentation sequence guard', () => {
   it('drops a superseded fact per key and per attempt', () => {
     const fresh = createPurchasePresentationSequenceGuard();

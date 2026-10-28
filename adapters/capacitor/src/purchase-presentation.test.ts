@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createNativePurchasePresentation } from './purchase-presentation.js';
 
@@ -64,6 +64,23 @@ describe('createNativePurchasePresentation', () => {
     native.emit({ presentationId: 'c', state: 'open' });
     native.emit({ presentationId: 'unknown-id', state: 'open' });
     expect(facts).toEqual(['a:open', 'a:closed:timeout', 'b:unknown', 'b:open', 'b:closed']);
+  });
+
+  it('keeps delivering a fact to later listeners when one throws', () => {
+    const native = nativePlugin();
+    const presentation = createNativePurchasePresentation(native.plugin);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const facts: string[] = [];
+    presentation.purchasePresentation.subscribe(() => {
+      throw new Error('listener failed');
+    });
+    presentation.purchasePresentation.subscribe((event) => facts.push(`${event.presentationId}:${event.state}`));
+    presentation.begin('a');
+    native.emit({ presentationId: 'a', state: 'open' });
+    native.emit({ presentationId: 'a', state: 'closed' });
+    expect(facts).toEqual(['a:open', 'a:closed']);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 
   it('remembers an UNIMPLEMENTED support check and asks again after another failure', async () => {
