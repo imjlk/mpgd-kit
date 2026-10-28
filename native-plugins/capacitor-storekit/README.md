@@ -186,8 +186,10 @@ means "the purchase call ended"; that the sheet is gone by then is unverified
 until device testing.
 
 `getPresentationSupport` declares the facts. A web bundle running on a native
-build from before them (a live update) gets `UNIMPLEMENTED` there, and new
-purchases are refused with `CONFIGURATION_REQUIRED` /
+build from before them (a live update) gets `UNIMPLEMENTED` there: while an
+adapter follows the facts, the store then reads `configuration-required` (the
+shop sells nothing and the reconciler spends no idempotency key), and a
+purchase that still gets through is refused with `CONFIGURATION_REQUIRED` /
 `STOREKIT_PRESENTATION_UNSUPPORTED` instead of opening a sheet the game would
 wait on; recovery is unaffected. `purchasePresentation: false` on the
 provider keeps the result-based pause of earlier releases.

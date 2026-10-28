@@ -110,6 +110,26 @@ describe('Play Billing sheet facts (SDK)', () => {
     }
   });
 
+  it('reports the store as needing a rebuild only when an adapter follows the facts', async () => {
+    const followed = createSdk(createPlugin({ presentationSupport: 'unimplemented' }));
+    await expect(followed.sdk.getAvailability()).resolves.toBe('configuration-required');
+    // An adapter from before the facts never subscribes: the store stays available.
+    followed.unsubscribe?.();
+    await expect(followed.sdk.getAvailability()).resolves.toBe('available');
+    const current = createSdk();
+    await expect(current.sdk.getAvailability()).resolves.toBe('available');
+    const off = createSdk(createPlugin({ presentationSupport: 'unimplemented' }), false);
+    await expect(off.sdk.getAvailability()).resolves.toBe('available');
+  });
+
+  it('keeps a native timeout reason on closed', async () => {
+    const { sdk, plugin, facts } = createSdk();
+    plugin.queuePurchase({ status: 'pending', purchase: fakePlayPurchase({ purchaseToken: 't', purchaseState: 'pending' }), presentation: 'open' });
+    await sdk.requestPurchase({ sku: 'gems.small', accountBinding: binding, presentationId: 'p-1' });
+    plugin.present({ presentationId: 'p-1', state: 'closed', reason: 'timeout' });
+    expect(facts).toEqual(['p-1:open', 'p-1:closed:timeout']);
+  });
+
   it('asks again after a support check that failed for another reason', async () => {
     const plugin = createPlugin();
     let failures = 1;
@@ -182,11 +202,10 @@ describe('Play Billing sheet facts (commerce provider)', () => {
 
   it('refuses before any sheet, not-started, over a native build without facts', async () => {
     const { plugin, provider, facts } = createProvider({ presentationSupport: 'unimplemented' });
+    // The store reads as needing a rebuild, so the provider refuses before the SDK.
+    await expect(provider.getCapabilities()).resolves.toMatchObject({ availability: 'configuration-required' });
     await expect(provider.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' }))
-      .resolves.toMatchObject({
-        outcome: 'failed',
-        error: { code: 'CONFIGURATION_REQUIRED', storeCode: playBillingPresentationUnsupportedCode, retryable: false },
-      });
+      .rejects.toMatchObject({ code: 'CONFIGURATION_REQUIRED', retryable: false });
     expect(facts.map((fact) => fact.state)).toEqual(['not-started']);
     expect(plugin.purchaseCalls).toEqual([]);
   });

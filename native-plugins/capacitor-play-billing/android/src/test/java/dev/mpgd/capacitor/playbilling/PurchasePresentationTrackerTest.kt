@@ -101,6 +101,21 @@ class PurchasePresentationTrackerTest {
     }
 
     @Test
+    fun closesAnOpenSheetOnTheSafetyTimeoutOnly() {
+        tracker.begin("p1")
+        tracker.onLaunchAttempted("p1")
+        tracker.onSafetyTimeout("p1")
+        assertTrue(tracker.active)
+        tracker.onActivityCreated(proxy)
+        assertEquals("p1", tracker.openPresentationId)
+        tracker.onSafetyTimeout("other")
+        tracker.onSafetyTimeout("p1")
+        tracker.onActivityResumed(host)
+        assertEquals(listOf("p1:open", "p1:closed:timeout"), facts)
+        assertFalse(tracker.active)
+    }
+
+    @Test
     fun acceptsOnlyBoundedPresentationIds() {
         assertTrue(PurchasePresentationTracker.isValidPresentationId("0f8fad5b-d9cb-469f-a165-70867728950e"))
         assertFalse(PurchasePresentationTracker.isValidPresentationId(null))

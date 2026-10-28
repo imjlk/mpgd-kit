@@ -61,8 +61,15 @@ class CapacitorPlayBillingPlugin : Plugin() {
 
     /** Sheet facts of the flow in progress; see `PurchasePresentationTracker`. */
     private val presentation = PurchasePresentationTracker { id, state, reason ->
+        if (state == PurchasePresentationTracker.OPEN) {
+            armSheetTimeout(id)
+        } else {
+            sheetTimeout?.cancel()
+            sheetTimeout = null
+        }
         notifyPresentation(id, state, reason)
     }
+    private var sheetTimeout: Job? = null
     private var presentationId: String? = null
     private var lifecycleApplication: Application? = null
 
@@ -95,7 +102,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
             logUnexpected("provider load", error)
             providerError = "OpenIAP could not load the Google Play provider."
         }
-        lifecycleApplication = activity?.application?.also {
+        lifecycleApplication = (context.applicationContext as? Application)?.also {
             it.registerActivityLifecycleCallbacks(activityCallbacks)
         }
     }
@@ -206,8 +213,9 @@ class CapacitorPlayBillingPlugin : Plugin() {
             return
         }
         // OpenIAP holds one flow at a time, including one whose call already
-        // timed out here; a second flow is busy until OpenIAP releases it.
-        if (activePurchase != null || flowInProgress) {
+        // timed out here; a second flow is busy until OpenIAP releases it, and
+        // until the sheet of the last one is gone (its `closed` is still owed).
+        if (activePurchase != null || flowInProgress || presentation.active) {
             rejectNotStarted(call, requestedPresentationId, "Another purchase is already in progress.", "PLAY_BILLING_BUSY")
             return
         }
@@ -384,6 +392,18 @@ class CapacitorPlayBillingPlugin : Plugin() {
         notifyListeners("purchaseUpdated", outcome, true)
     }
 
+    /**
+     * Bounds how long one sheet keeps the plugin busy without the host
+     * resuming; the TypeScript provider has the same bound for the game.
+     */
+    private fun armSheetTimeout(id: String) {
+        sheetTimeout?.cancel()
+        sheetTimeout = scope.launch {
+            delay(SHEET_TIMEOUT_MILLIS)
+            presentation.onSafetyTimeout(id)
+        }
+    }
+
     /** A refusal before any flow began; its sheet never opened. */
     private fun rejectNotStarted(call: PluginCall, id: String?, message: String, code: String) {
         if (id == null) {
@@ -476,6 +496,8 @@ class CapacitorPlayBillingPlugin : Plugin() {
         const val PURCHASE_TIMEOUT_MILLIS = 180_000L
         /** How long a launched flow waits for its billing activity before it counts as never shown. */
         const val LAUNCH_OBSERVATION_GRACE_MILLIS = 500L
+        /** The OpenIAP Google purchase flow timeout, and the TypeScript provider's sheet bound. */
+        const val SHEET_TIMEOUT_MILLIS = 900_000L
         const val UNAVAILABLE_MESSAGE = "Google Play Billing is unavailable."
         const val EMPTY_MESSAGE = "Purchase callback was empty; requery owned purchases."
 

@@ -12,8 +12,11 @@ export type PlayBillingPurchasePresentationState = 'open' | 'closed' | 'not-star
 export interface PlayBillingSdkPurchasePresentationEvent {
   readonly presentationId: string;
   readonly state: PlayBillingPurchasePresentationState;
-  readonly reason?: 'interrupted';
+  readonly reason?: NativePresentationReason;
 }
+
+/** Why native code closed a sheet it did not see close: teardown, or its own safety bound. */
+export type NativePresentationReason = 'interrupted' | 'timeout';
 
 /** The SDK's `purchasePresentation`; see `StoreSdkPurchasePresentation` in `@mpgd/adapter-capacitor`. */
 export interface PlayBillingSdkPurchasePresentation {
@@ -24,6 +27,11 @@ export interface NativePurchasePresentation {
   readonly purchasePresentation: PlayBillingSdkPurchasePresentation;
   /** Whether the native code in the app reports facts; see `getPresentationSupport`. */
   supported(): Promise<boolean>;
+  /**
+   * Someone follows the facts: an adapter that reads them subscribes when it
+   * builds its provider (one from before them never does).
+   */
+  followed(): boolean;
   /** Follows facts for a `purchase` call about to be sent with this id. */
   begin(presentationId: string): void;
   /** Applies the sheet state a `purchase` answer (or a rejection's `data`) carried. */
@@ -55,7 +63,7 @@ export function createNativePurchasePresentation(native: {
   const report = (
     presentationId: string,
     state: PlayBillingPurchasePresentationState,
-    reason?: 'interrupted',
+    reason?: NativePresentationReason,
   ): void => {
     const current = sheets.get(presentationId);
     if (current === undefined || (state === 'open' && current === 'open')) {
@@ -86,7 +94,9 @@ export function createNativePurchasePresentation(native: {
       report(
         event.presentationId,
         state,
-        state === 'closed' && event.reason === 'interrupted' ? 'interrupted' : undefined,
+        state === 'closed' && (event.reason === 'interrupted' || event.reason === 'timeout')
+          ? event.reason
+          : undefined,
       );
     }
   };
@@ -134,6 +144,9 @@ export function createNativePurchasePresentation(native: {
           }
         };
       },
+    },
+    followed() {
+      return listeners.size > 0;
     },
     supported() {
       if (support !== undefined) {

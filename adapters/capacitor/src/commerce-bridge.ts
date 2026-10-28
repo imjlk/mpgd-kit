@@ -114,8 +114,14 @@ export function createCommerceProviderBridge(
     }
     presentationSequence += 1;
     for (const entry of [...presentationListeners]) {
-      if (presentationListeners.has(entry)) {
+      if (!presentationListeners.has(entry)) {
+        continue;
+      }
+      try {
         entry.listener(envelope);
+      } catch (error) {
+        // A failing listener must not keep a `closed` fact from the others.
+        console.warn('A purchase presentation bridge listener failed.', error);
       }
     }
   };
@@ -431,7 +437,9 @@ function withBridgePresentation(
   let listenerCount = 0;
   let detach: (() => void) | undefined;
   // Idempotency keys of `requestPurchase` calls in flight, each call with
-  // whether a fact for its key arrived while it ran.
+  // whether a fact for its key arrived while it ran. Facts are observed only
+  // while a listener is attached; a consumer (the game runtime's gate)
+  // subscribes before its first purchase, so it never misses one.
   const calls = new Map<string, { seen: boolean }[]>();
 
   const onEnvelope = (envelope: BridgeCommercePresentationEvent): void => {
@@ -451,6 +459,7 @@ function withBridgePresentation(
     channel.publish({
       idempotencyKey: event.idempotencyKey,
       state: event.state,
+      ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
       ...(event.reason === undefined ? {} : { reason: event.reason }),
     });
   };

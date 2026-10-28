@@ -548,6 +548,12 @@ export function createCapacitorPlayBillingStoreSdk(
       if (!isAndroid()) {
         return 'unsupported';
       }
+      // An adapter that reads sheet facts over a native build without them
+      // would refuse every purchase: report the store as needing a rebuild,
+      // so the shop sells nothing and no idempotency key is spent.
+      if (presentationEnabled && presentation.followed() && !(await presentation.supported())) {
+        return 'configuration-required';
+      }
       try {
         const response = await plugin.getProducts({ productIds: [...products.keys()] });
         const purchasable = readArray(response, 'products').some((found) => {

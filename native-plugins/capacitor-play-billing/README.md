@@ -163,8 +163,10 @@ from the activity lifecycle, never from `onPurchasesUpdated`:
   translucent activity `launchBillingFlow` starts in the app process once it
   returns OK) is created during the flow;
 - `closed` when an app activity that is not a billing activity resumes after
-  it (the game's activity sits below the sheet in the same task), or with
-  `reason: 'interrupted'` when the plugin is torn down;
+  it (the game's activity sits below the sheet in the same task), with
+  `reason: 'interrupted'` when the plugin is torn down, or with
+  `reason: 'timeout'` after 15 minutes without the game's activity resuming
+  (the plugin refuses a new purchase, `PLAY_BILLING_BUSY`, until then);
 - `not-started` when the flow ended without a billing activity (a launch
   failure, or a refusal before the launch), after a 500 ms grace for an
   activity that was just started.
@@ -176,8 +178,10 @@ and in the `presentation` field of the `purchase` answer or rejection data.
 The adapter adds a 15-minute safety timeout.
 
 `getPresentationSupport` declares the facts. A web bundle running on a native
-build from before them (a live update) gets `UNIMPLEMENTED` there, and new
-purchases are refused with `CONFIGURATION_REQUIRED` /
+build from before them (a live update) gets `UNIMPLEMENTED` there: while an
+adapter follows the facts, the store then reads `configuration-required` (the
+shop sells nothing and the reconciler spends no idempotency key), and a
+purchase that still gets through is refused with `CONFIGURATION_REQUIRED` /
 `PLAY_BILLING_PRESENTATION_UNSUPPORTED` instead of opening a sheet the game
 would wait on; recovery is unaffected. `purchasePresentation: false` on the
 provider keeps the result-based pause of earlier releases. Google documents

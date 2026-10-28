@@ -30,6 +30,8 @@ export interface PurchasePresentationChannel {
   publish(fact: {
     readonly idempotencyKey: string;
     readonly state: PlatformPurchasePresentationEvent['state'];
+    /** A source's attempt generation, kept so a consumer can drop an earlier attempt's fact. */
+    readonly attempt?: number;
     readonly reason?: PlatformPurchasePresentationReason;
   }): void;
   clear(): void;
@@ -56,6 +58,7 @@ export function createPurchasePresentationChannel(): PurchasePresentationChannel
         idempotencyKey: fact.idempotencyKey,
         sequence,
         state: fact.state,
+        ...(fact.attempt === undefined ? {} : { attempt: fact.attempt }),
         ...(fact.reason === undefined ? {} : { reason: fact.reason }),
       });
       for (const listener of [...listeners]) {

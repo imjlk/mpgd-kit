@@ -720,6 +720,12 @@ export function createCapacitorStoreKitStoreSdk(
       if (productIds.length === 0) {
         return 'configuration-required';
       }
+      // An adapter that reads sheet facts over a native build without them
+      // would refuse every purchase: report the store as needing a rebuild,
+      // so the shop sells nothing and no idempotency key is spent.
+      if (presentationEnabled && presentation.followed() && !(await presentation.supported())) {
+        return 'configuration-required';
+      }
       try {
         // Probe batch by batch until one configured product is sold; only a
         // catalog with no sellable product at all is a configuration problem.

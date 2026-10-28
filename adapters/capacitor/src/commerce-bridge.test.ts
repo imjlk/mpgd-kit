@@ -788,6 +788,36 @@ describe('purchase presentation over the bridge', () => {
     expect(sdk.presentationListenerCount).toBe(1);
   });
 
+  it('keeps delivering to other bridge listeners when one throws', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let emit: ((event: PlatformPurchasePresentationEvent) => void) | undefined;
+    const provider: CommerceProvider = {
+      ...createStoreProvider().provider,
+      presentation: {
+        subscribe(listener) {
+          emit = listener;
+          return () => {
+            emit = undefined;
+          };
+        },
+      },
+    };
+    const bridge = createCommerceProviderBridge({ provider });
+    bridge.subscribePresentation?.(() => {
+      throw new Error('listener failed');
+    });
+    const facts: BridgeEvent[] = [];
+    bridge.subscribePresentation?.((envelope) => facts.push(envelope));
+    emit?.({ idempotencyKey: 'op-1', sequence: 1, state: 'closed', attempt: 3 });
+    expect(facts).toEqual([{
+      protocol: 'mpgd.commerce.presentation.v1',
+      sequence: 0,
+      event: { idempotencyKey: 'op-1', sequence: 1, state: 'closed', attempt: 3 },
+    }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
   it('drops a fact the contract rejects', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     let emit: ((event: PlatformPurchasePresentationEvent) => void) | undefined;
@@ -889,7 +919,7 @@ describe('purchase presentation over the bridge', () => {
       listener({
         protocol: 'mpgd.commerce.presentation.v1',
         sequence: 2,
-        event: { idempotencyKey: 'op-1', sequence: 41, state: 'closed', reason: 'timeout' },
+        event: { idempotencyKey: 'op-1', sequence: 41, state: 'closed', attempt: 2, reason: 'timeout' },
       });
     }
     expect(warn).toHaveBeenCalledTimes(1);
@@ -897,7 +927,8 @@ describe('purchase presentation over the bridge', () => {
     // Numbered again on this side.
     expect(facts).toEqual([
       { idempotencyKey: 'op-1', sequence: 1, state: 'open' },
-      { idempotencyKey: 'op-1', sequence: 2, state: 'closed', reason: 'timeout' },
+      // A source's attempt generation is kept for the coordinator's check.
+      { idempotencyKey: 'op-1', sequence: 2, state: 'closed', attempt: 2, reason: 'timeout' },
     ]);
     // A call the host answered without a fact gets not-started before the answer.
     await consumer.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop' });

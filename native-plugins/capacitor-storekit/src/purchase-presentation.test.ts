@@ -116,6 +116,27 @@ for (const presentationSupport of ['unimplemented', 'absent'] as const) {
   assertEqual((await sdk.getAvailablePurchases({})).length, 1, 'recovery is unaffected');
 }
 
+// Over a stale native build, the store needs a rebuild only for an adapter that follows the facts.
+{
+  const followed = createSdk({ presentationSupport: 'unimplemented' });
+  assertEqual(
+    await followed.sdk.getAvailability?.(),
+    'configuration-required',
+    'a followed SDK reports a rebuild',
+  );
+  followed.unsubscribe?.();
+  assertEqual(
+    await followed.sdk.getAvailability?.(),
+    'available',
+    'an unfollowed SDK stays available',
+  );
+  assertEqual(
+    await createSdk().sdk.getAvailability?.(),
+    'available',
+    'a current native build is available',
+  );
+}
+
 // An adapter from before facts sends no id: no support check, no facts. Turned off: no declaration.
 {
   const { plugin, sdk, facts } = createSdk();

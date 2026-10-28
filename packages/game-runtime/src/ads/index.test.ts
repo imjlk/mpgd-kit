@@ -748,8 +748,7 @@ describe('purchase sheet facts from the gateway commerce provider', () => {
   it('keeps an ad from showing while the purchase sheet is open and releases on closed only', async () => {
     const state = environment();
     const native = sdk();
-    let store!: ReturnType<typeof presentingCommerce>;
-    store = presentingCommerce(async (input) => {
+    const store: ReturnType<typeof presentingCommerce> = presentingCommerce(async (input) => {
       store.fact(input.idempotencyKey, 'open');
       return { outcome: 'launched' };
     });
@@ -786,9 +785,8 @@ describe('purchase sheet facts from the gateway commerce provider', () => {
 
   it('frees a retryable refusal reported not-started before its answer', async () => {
     const state = environment();
-    let store!: ReturnType<typeof presentingCommerce>;
     let allow = false;
-    store = presentingCommerce(async (input) => {
+    const store: ReturnType<typeof presentingCommerce> = presentingCommerce(async (input) => {
       if (!allow) {
         store.fact(input.idempotencyKey, 'not-started');
         return { outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE', retryable: true, storeCode: 'PURCHASE_GATE_FAILED' } };

@@ -77,12 +77,14 @@ export type PlayPurchaseAnswerPresentation = PlayPurchasePresentationState | 're
  * observed from the activity lifecycle and never from a purchase result:
  * `open` once the Billing Library's activity is created, `closed` when the
  * game's activity resumes after it (reason `interrupted` when the plugin was
- * torn down instead), `not-started` when the flow ended without it.
+ * torn down, `timeout` past its 15-minute bound), `not-started` when the flow
+ * ended without it.
  */
 export interface PlayPurchasePresentationEvent {
   readonly presentationId: string;
   readonly state: PlayPurchasePresentationState;
-  readonly reason?: 'interrupted';
+  /** Teardown, or the plugin's 15-minute bound on one sheet without the game's activity resuming. */
+  readonly reason?: 'interrupted' | 'timeout';
 }
 
 /** What `getPresentationSupport` declares; `purchasePresentation` is the facts protocol version. */

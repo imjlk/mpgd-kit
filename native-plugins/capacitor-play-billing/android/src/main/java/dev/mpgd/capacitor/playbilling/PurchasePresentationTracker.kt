@@ -34,6 +34,9 @@ internal class PurchasePresentationTracker(
 
     val active: Boolean get() = presentationId != null
 
+    /** The id of the flow whose sheet is open now, if any. */
+    val openPresentationId: String? get() = if (state == State.OPEN) presentationId else null
+
     fun begin(id: String) {
         presentationId = id
         state = State.REQUESTED
@@ -77,6 +80,16 @@ internal class PurchasePresentationTracker(
         }
     }
 
+    /**
+     * The sheet of [id] stayed open past the plugin's safety bound without the
+     * host resuming: report it closed (`timeout`) so a new flow can start.
+     */
+    fun onSafetyTimeout(id: String) {
+        if (presentationId == id && state == State.OPEN) {
+            end(CLOSED, TIMEOUT)
+        }
+    }
+
     /** The plugin is torn down: nothing will be observed any more. */
     fun onTeardown() {
         if (presentationId == null) return
@@ -113,6 +126,7 @@ internal class PurchasePresentationTracker(
         const val NOT_STARTED = "not-started"
         const val REQUESTED_STATE = "requested"
         const val INTERRUPTED = "interrupted"
+        const val TIMEOUT = "timeout"
 
         /** The protocol version `getPresentationSupport` declares. */
         const val PROTOCOL_VERSION = 1
