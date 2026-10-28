@@ -27,12 +27,37 @@ import type {
 } from './definitions.js';
 import { appStoreStoreId, storeKitStoreSdkCapabilities } from './commerce-profile.js';
 import { CapacitorStoreKit } from './plugin.js';
+import {
+  answeredPresentation,
+  createNativePurchasePresentation,
+  type StoreKitSdkPurchasePresentation,
+} from './purchase-presentation.js';
+
+export type {
+  StoreKitSdkPurchasePresentation,
+  StoreKitSdkPurchasePresentationEvent,
+} from './purchase-presentation.js';
 
 /** The plugin surface the commerce v2 SDK drives; `CapacitorStoreKit` by default. */
 export type CapacitorStoreKitStoreSdkPlugin = Pick<
   CapacitorStoreKitPlugin,
-  'getProducts' | 'purchase' | 'getTransactions' | 'sync' | 'finishTransaction' | 'addListener'
+  | 'getProducts'
+  | 'purchase'
+  | 'getTransactions'
+  | 'sync'
+  | 'finishTransaction'
+  | 'addListener'
+  | 'getPresentationSupport'
 >;
+
+/**
+ * The code of a purchase refused because the native plugin in the app binary
+ * reports no sheet facts (a web bundle newer than its native build). The
+ * provider offers `presentation`, so a purchase it could not follow is not
+ * sold; rebuilding the app with this package's native code, or
+ * `purchasePresentation: false`, sells again. Recovery is unaffected.
+ */
+export const storeKitPresentationUnsupportedCode = 'STOREKIT_PRESENTATION_UNSUPPORTED' as const;
 
 /** One-time kinds the App Store sells; `durable` is a StoreKit non-consumable. */
 export type StoreKitOneTimeKind = 'consumable' | 'durable';
@@ -79,7 +104,21 @@ export interface CreateCapacitorStoreKitStoreSdkInput {
   readonly isIos?: () => boolean;
   /** Observes transactions the SDK excludes; never a grant signal. */
   readonly onDiagnostic?: (diagnostic: CapacitorStoreKitDiagnostic) => void;
+  /**
+   * Report the purchase sheet's facts (`purchasePresentation`), so the
+   * adapter's provider offers `CommerceProvider.presentation` and the game
+   * pauses until `Product.purchase()` returns rather than until a result
+   * event. Defaults to true. A native build without the facts then refuses
+   * new purchases with `STOREKIT_PRESENTATION_UNSUPPORTED`; false keeps the
+   * result-based pause of earlier releases.
+   */
+  readonly purchasePresentation?: boolean;
 }
+
+/** The StoreKit `StoreSdk`, with the sheet facts it declares unless turned off. */
+export type CapacitorStoreKitStoreSdk = StoreSdk & {
+  readonly purchasePresentation?: StoreKitSdkPurchasePresentation;
+};
 
 /**
  * Capacitor StoreKit `StoreSdk`: the commerce v2 surface over the native
@@ -102,8 +141,11 @@ export interface CreateCapacitorStoreKitStoreSdkInput {
  */
 export function createCapacitorStoreKitStoreSdk(
   input: CreateCapacitorStoreKitStoreSdkInput,
-): StoreSdk {
+): CapacitorStoreKitStoreSdk {
   const sdk = input.sdk ?? CapacitorStoreKit;
+  // Sheet facts of `purchase` calls that carry a presentation id.
+  const presentationEnabled = input.purchasePresentation !== false;
+  const presentation = createNativePurchasePresentation(sdk);
   const isIos = input.isIos ?? (() => Capacitor.getPlatform() === 'ios');
   const onDiagnostic = input.onDiagnostic ?? (() => undefined);
   if (typeof input.getAppAccountToken !== 'function') {
@@ -462,6 +504,7 @@ export function createCapacitorStoreKitStoreSdk(
 
   return {
     store: appStoreStoreId,
+    ...(presentationEnabled ? { purchasePresentation: presentation.purchasePresentation } : {}),
     capabilities: storeKitStoreSdkCapabilities,
     async fetchProducts(request: StoreSdkFetchProductsInput): Promise<readonly StoreSdkProduct[]> {
       requireIos();
@@ -486,7 +529,36 @@ export function createCapacitorStoreKitStoreSdk(
       requireIos();
       const appAccountToken = readAppAccountToken(request.accountBinding);
       const expected = await assertSellable(request.sku);
-      const outcome: unknown = await sdk.purchase({ productId: request.sku, appAccountToken });
+      // Only an adapter that reads sheet facts sends an id (one from before
+      // them never does, and the purchase runs as in earlier releases).
+      const presentationId = presentationEnabled ? request.presentationId : undefined;
+      if (presentationId !== undefined) {
+        if (!(await presentation.supported())) {
+          throw storeKitError(
+            storeKitPresentationUnsupportedCode,
+            'The app was built with a StoreKit plugin that reports no purchase sheet facts; '
+              + "rebuild it with this package's native code.",
+            false,
+          );
+        }
+        presentation.begin(presentationId);
+      }
+      let outcome: unknown;
+      try {
+        outcome = await sdk.purchase({
+          productId: request.sku,
+          appAccountToken,
+          ...(presentationId === undefined ? {} : { presentationId }),
+        });
+      } catch (error) {
+        if (presentationId !== undefined) {
+          presentation.answered(presentationId, answeredPresentation(error));
+        }
+        throw error;
+      }
+      if (presentationId !== undefined) {
+        presentation.answered(presentationId, answeredPresentation(outcome));
+      }
       if (!isRecord(outcome)) {
         throw evidenceInvalid('StoreKit returned an invalid purchase result.');
       }
@@ -700,6 +772,7 @@ export const storeKitStoreSdkErrorCodeMap: StoreSdkErrorCodeMap = Object.freeze(
   STOREKIT_FINISH_REQUIRES_GRANT: 'CONFIGURATION_REQUIRED',
   STOREKIT_EVIDENCE_INVALID: 'INVALID_RESPONSE',
   STOREKIT_TRANSACTION_UNVERIFIED: 'INVALID_RESPONSE',
+  STOREKIT_PRESENTATION_UNSUPPORTED: 'CONFIGURATION_REQUIRED',
 } satisfies Record<string, CommerceErrorCode>);
 
 /** The default table plus every StoreKit code; what the provider uses. */

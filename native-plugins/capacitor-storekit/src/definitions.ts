@@ -29,9 +29,39 @@ export interface StoreKitTransaction {
   readonly unfinished?: boolean;
 }
 
-export type StoreKitPurchaseOutcome =
+export type StoreKitPurchaseOutcome = (
   | { readonly status: 'purchased'; readonly transaction: StoreKitTransaction }
-  | { readonly status: 'pending' | 'cancelled' };
+  | { readonly status: 'pending' | 'cancelled' }
+) & {
+  /**
+   * The purchase sheet when a `purchase` call with a `presentationId`
+   * answered (also in a rejection's `data`): `closed` once
+   * `Product.purchase()` returned or threw, `not-started` when the plugin
+   * refused before calling it.
+   */
+  readonly presentation?: StoreKitPurchaseAnswerPresentation;
+};
+
+export type StoreKitPurchasePresentationState = 'open' | 'closed' | 'not-started';
+export type StoreKitPurchaseAnswerPresentation = StoreKitPurchasePresentationState | 'requested';
+
+/**
+ * A sheet fact for the `purchase` call that sent `presentationId`: `open`
+ * right before `Product.purchase()`, `closed` when it returns or throws,
+ * `not-started` when the plugin refused before it. Apple documents that the
+ * call presents the confirmation sheet, not that it returns only once the
+ * sheet is gone; see the README.
+ */
+export interface StoreKitPurchasePresentationEvent {
+  readonly presentationId: string;
+  readonly state: StoreKitPurchasePresentationState;
+  readonly reason?: 'interrupted';
+}
+
+/** What `getPresentationSupport` declares; `purchasePresentation` is the facts protocol version. */
+export interface StoreKitPresentationSupport {
+  readonly purchasePresentation: number;
+}
 
 export interface CapacitorStoreKitPlugin {
   getProducts(input: { readonly productIds: readonly string[] }): Promise<{
@@ -40,7 +70,15 @@ export interface CapacitorStoreKitPlugin {
   purchase(input: {
     readonly productId: string;
     readonly appAccountToken: string;
+    /** Asks for this call's sheet facts (`purchasePresentation`); 1-64 of `[A-Za-z0-9-]`. */
+    readonly presentationId?: string;
   }): Promise<StoreKitPurchaseOutcome>;
+  /**
+   * Declares the sheet facts the native code reports. A native build from
+   * before them answers `UNIMPLEMENTED`; optional so a plugin double without
+   * it still type-checks, and then the SDK refuses purchases that need facts.
+   */
+  getPresentationSupport?(): Promise<StoreKitPresentationSupport>;
   /** Includes unfinished consumables and current non-consumable entitlements. */
   getTransactions(): Promise<{ readonly transactions: readonly StoreKitTransaction[] }>;
   /** User-initiated App Store account synchronization before restore. */
@@ -64,5 +102,10 @@ export interface CapacitorStoreKitPlugin {
   addListener(
     eventName: 'transactionUpdated',
     listener: (event: StoreKitTransaction) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Sheet facts of `purchase` calls that sent a `presentationId`. */
+  addListener(
+    eventName: 'purchasePresentation',
+    listener: (event: StoreKitPurchasePresentationEvent) => void,
   ): Promise<PluginListenerHandle>;
 }

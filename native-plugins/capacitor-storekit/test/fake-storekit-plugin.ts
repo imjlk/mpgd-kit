@@ -2,7 +2,9 @@ import type { PluginListenerHandle } from '@capacitor/core';
 
 import type {
   StoreKitProduct,
+  StoreKitPurchaseAnswerPresentation,
   StoreKitPurchaseOutcome,
+  StoreKitPurchasePresentationEvent,
   StoreKitTransaction,
 } from '../src/definitions.js';
 import type { CapacitorStoreKitStoreSdkPlugin } from '../src/store-sdk.js';
@@ -29,6 +31,11 @@ export interface FakeStoreKitPlugin extends CapacitorStoreKitStoreSdkPlugin {
   report(transaction: StoreKitTransaction): void;
   upsert(transaction: StoreKitTransaction): void;
   remove(transactionId: string): void;
+  /** Emits a native `purchasePresentation` fact. */
+  present(event: StoreKitPurchasePresentationEvent): void;
+  readonly presentationListenerCount: number;
+  readonly presentationIds: (string | undefined)[];
+  presentationSupportCalls: number;
 }
 
 export function fakeProduct(overrides: Partial<StoreKitProduct> = {}): StoreKitProduct {
@@ -67,7 +74,15 @@ export function fakeTransaction(
 export function createFakeStoreKitPlugin(input: {
   readonly products?: readonly StoreKitProduct[];
   readonly transactions?: readonly StoreKitTransaction[];
+  /**
+   * How `getPresentationSupport` answers: `supported` (default), `unimplemented`
+   * (a native build from before sheet facts), or `absent` (no such method).
+   */
+  readonly presentationSupport?: 'supported' | 'unimplemented' | 'absent';
 } = {}): FakeStoreKitPlugin {
+  const presentationListeners = new Set<(event: StoreKitPurchasePresentationEvent) => void>();
+  const presentationIds: (string | undefined)[] = [];
+  const presentationSupport = input.presentationSupport ?? 'supported';
   const products: StoreKitProduct[] = [...(input.products ?? [fakeProduct()])];
   const transactions: StoreKitTransaction[] = [...(input.transactions ?? [])];
   const calls: string[] = [];
@@ -118,14 +133,53 @@ export function createFakeStoreKitPlugin(input: {
     },
     async purchase(request) {
       calls.push(`purchase:${request.productId}:${request.appAccountToken}`);
+      presentationIds.push(request.presentationId);
       const script = purchaseQueue.shift() ?? { status: 'pending' as const };
+      // With a presentation id, the native code reports `open` before
+      // `Product.purchase()` and answers `closed` once it returned, unless
+      // the script names another state.
+      const { presentationId } = request;
+      const thrownData: unknown = 'throws' in script && typeof script.throws === 'object' && script.throws !== null
+        ? (script.throws as { readonly data?: unknown }).data
+        : undefined;
+      const scriptedPresentation: StoreKitPurchaseAnswerPresentation | undefined = 'throws' in script
+        ? (typeof thrownData === 'object' && thrownData !== null
+          ? (thrownData as { readonly presentation?: StoreKitPurchaseAnswerPresentation }).presentation
+          : undefined)
+        : script.presentation;
+      if (presentationId !== undefined && scriptedPresentation !== 'not-started') {
+        for (const listener of [...presentationListeners]) {
+          listener({ presentationId, state: 'open' });
+        }
+      }
       if ('throws' in script) {
         throw script.throws;
       }
       if (script.status === 'purchased') {
         upsert(script.transaction);
       }
-      return script;
+      return presentationId === undefined
+        ? script
+        : { ...script, presentation: scriptedPresentation ?? 'closed' };
+    },
+    ...(presentationSupport === 'absent' ? {} : {
+      async getPresentationSupport() {
+        plugin.presentationSupportCalls += 1;
+        if (presentationSupport === 'unimplemented') {
+          throw Object.assign(new Error('not implemented'), { code: 'UNIMPLEMENTED' });
+        }
+        return { purchasePresentation: 1 };
+      },
+    }),
+    presentationSupportCalls: 0,
+    presentationIds,
+    get presentationListenerCount() {
+      return presentationListeners.size;
+    },
+    present(event) {
+      for (const listener of [...presentationListeners]) {
+        listener(event);
+      }
     },
     async getTransactions() {
       calls.push('getTransactions');
@@ -161,12 +215,25 @@ export function createFakeStoreKitPlugin(input: {
       }
       return { finished: script.finished };
     },
-    addListener(_eventName, listener): Promise<PluginListenerHandle> {
-      listeners.add(listener);
+    addListener(
+      eventName: 'transactionUpdated' | 'purchasePresentation',
+      listener: ((event: StoreKitTransaction) => void) | ((event: StoreKitPurchasePresentationEvent) => void),
+    ): Promise<PluginListenerHandle> {
+      if (eventName === 'purchasePresentation') {
+        const presentationListener = listener as (event: StoreKitPurchasePresentationEvent) => void;
+        presentationListeners.add(presentationListener);
+        return Promise.resolve({
+          remove: async () => {
+            presentationListeners.delete(presentationListener);
+          },
+        });
+      }
+      const transactionListener = listener as (event: StoreKitTransaction) => void;
+      listeners.add(transactionListener);
       calls.push('addListener:transactionUpdated');
       return Promise.resolve({
         remove: async () => {
-          listeners.delete(listener);
+          listeners.delete(transactionListener);
           calls.push('removeListener:transactionUpdated');
         },
       });
