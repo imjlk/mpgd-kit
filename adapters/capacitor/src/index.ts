@@ -398,6 +398,8 @@ export function createCapacitorPlatformGateway(input: {
     if (subscribePresentation === undefined || typeof idempotencyKey !== 'string') {
       return undefined;
     }
+    // `held`: the sheet is (`open`) or may be (`unknown`) up; `opened`: seen open.
+    let held = false;
     let opened = false;
     let ended = false;
     let onEnd: (() => void) | undefined;
@@ -417,8 +419,12 @@ export function createCapacitorPlatformGateway(input: {
       const { state } = envelope.event;
       if (state === 'open' || state === 'unknown') {
         // `unknown`: the sheet may still be up; hold as for an open one.
-        opened = true;
-      } else if (state === 'closed' || state === 'not-started') {
+        held = true;
+        opened ||= state === 'open';
+      } else if (state === 'closed' || (state === 'not-started' && !opened)) {
+        // A sheet seen open ends only with `closed` (its provider turns a
+        // later `not-started` into `closed`); a `not-started` then belongs
+        // to another call of the same key.
         ended = true;
         const end = onEnd;
         dispose();
@@ -431,8 +437,8 @@ export function createCapacitorPlatformGateway(input: {
       unsubscribe = subscription;
     }
     return {
-      reported: () => opened || ended,
-      open: () => opened && !ended,
+      reported: () => held || ended,
+      open: () => held && !ended,
       onEnd(callback) {
         if (ended) {
           callback();

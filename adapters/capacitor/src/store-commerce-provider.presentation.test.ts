@@ -209,6 +209,29 @@ describe('store commerce provider presentation', () => {
     ]);
   });
 
+  it('refuses a same-key call while that key has a call in flight, without a fact', async () => {
+    const sdk = createFakeStoreSdk({ presentation: true });
+    const provider = createProvider(sdk);
+    const { log, answer } = record(provider);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    await answer(request('op-1'));
+    await expect(answer(request('op-1'))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'IN_PROGRESS' },
+    });
+    sdk.present(sdk.requestCalls[0]?.presentationId, 'closed');
+    await answer(request('op-1'));
+    expect(log).toEqual([
+      'op-1:open',
+      'op-1:answer:launched',
+      'op-1:answer:failed',
+      'op-1:closed',
+      'op-1:open',
+      'op-1:answer:launched',
+    ]);
+    expect(sdk.requestCalls).toHaveLength(2);
+  });
+
   it('closes a sheet with no closed fact after the safety timeout', async () => {
     vi.useFakeTimers();
     const sdk = createFakeStoreSdk({ presentation: true });

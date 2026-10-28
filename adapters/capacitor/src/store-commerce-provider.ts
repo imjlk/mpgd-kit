@@ -592,6 +592,18 @@ export function createStoreCommerceProvider(
       if (presentation === undefined) {
         return requestStorePurchase(request, undefined);
       }
+      if ([...flights.values()].some((live) => live.idempotencyKey === request.idempotencyKey)) {
+        // Facts are keyed by idempotency key: a second sheet for a key whose
+        // sheet is still in flight could not be told apart from the first,
+        // and its end would end the first one's pause. Answered as data and
+        // without a fact; the first call's facts stay the key's truth.
+        return {
+          outcome: 'failed',
+          error: new CommerceError('IN_PROGRESS', {
+            message: `A purchase for ${request.idempotencyKey} is still in flight.`,
+          }).toCommerceErrorInfo(),
+        };
+      }
       const flight: PresentationFlight = {
         idempotencyKey: request.idempotencyKey,
         presentationId: crypto.randomUUID(),

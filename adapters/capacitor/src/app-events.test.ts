@@ -740,6 +740,26 @@ describe('commerce v2 purchase activity with sheet facts', () => {
     await gateway.lifecycle.dispose?.();
   });
 
+  it('keeps a held sheet paused through a same-key retry until its own closed', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await settle();
+    gateway.commerce?.subscribe(() => undefined);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    await gateway.commerce?.requestPurchase(purchase);
+    const firstSheet = sdk.requestCalls[0]?.presentationId;
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    // The retry is refused while the first sheet is up, without a fact.
+    await expect(gateway.commerce?.requestPurchase(purchase))
+      .resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS' } });
+    expect(sdk.requestCalls).toHaveLength(1);
+    // The game stays paused for the first sheet (the retry's own pause nests in it).
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.present(firstSheet, 'closed');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
   it('holds nothing after a pending purchase whose sheet already closed', async () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createPresentedGateway(fake);
