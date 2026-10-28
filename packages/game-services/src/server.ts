@@ -1,3 +1,4 @@
+import { COMMON_ERROR_STATUS_MAP } from '@orpc/client';
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { RequestLimitHandlerPlugin } from '@orpc/server/plugins';
@@ -44,6 +45,12 @@ import {
   type PlayerDataErasureInput,
   type PlayerDataErasureResult,
 } from './account-deletion.js';
+import {
+  createPurchaseBoundToAnotherAccountBody,
+  GameServicesPurchaseBoundToAnotherAccountError,
+  purchaseBoundToAnotherAccountCode,
+  purchaseBoundToAnotherAccountStatus,
+} from './another-account.js';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
 import { addLegacyOrpcErrorFlag } from './orpc-error-compat.js';
 import {
@@ -168,12 +175,16 @@ export type GameServicesBackendErrorCode =
   | 'PAYLOAD_TOO_LARGE'
   | 'METHOD_NOT_ALLOWED'
   | 'UNKNOWN_ENDPOINT'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  /** 409: the store binds the purchase to another account (RFC "Another account's purchase"). */
+  | typeof purchaseBoundToAnotherAccountCode;
 
 export interface GameServicesBackendErrorResponse {
   readonly error: GameServicesBackendErrorCode;
   /** Present only for `INVALID_REQUEST`; never carries internal failure details. */
   readonly message?: string;
+  /** Present only for `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`: the store's binding mismatch. */
+  readonly reason?: string;
 }
 
 export interface GameServicesStore {
@@ -798,6 +809,22 @@ export function createGameServicesBackend(
             : { purchaseGrantFinalizer }),
           ...(registry === undefined ? {} : { registry }),
         }, async (verification) => {
+          if (verification instanceof GameServicesPurchaseBoundToAnotherAccountError) {
+            // Not this player's purchase, and not decided for its account.
+            await analytics.track({
+              name: 'purchase_pending',
+              properties: {
+                target: request.target,
+                store: resolveCommerceStoreId(request),
+                playerId: request.playerId,
+                productId: request.productId,
+                alreadyProcessed: false,
+                reason: verification.code,
+                boundToAnotherAccount: verification.reason,
+              },
+            });
+            return;
+          }
           await analytics.track({
             name: verification.verified ? 'purchase_granted'
               : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
@@ -923,6 +950,12 @@ export function createGameServicesBackendApiHandler(
         if (error instanceof GameServicesRequestValidationError) {
           return errorResponse(400, 'INVALID_REQUEST', error.message);
         }
+        if (error instanceof GameServicesPurchaseBoundToAnotherAccountError) {
+          return {
+            status: purchaseBoundToAnotherAccountStatus,
+            body: createPurchaseBoundToAnotherAccountBody(error.reason),
+          };
+        }
 
         reportInternalError(input.onInternalError, error);
         return errorResponse(500, 'INTERNAL_ERROR');
@@ -990,6 +1023,14 @@ export function createGameServicesRouter(
       if (error instanceof GameServicesRequestValidationError) {
         throw new ORPCError('BAD_REQUEST', { message: error.message });
       }
+      if (error instanceof GameServicesPurchaseBoundToAnotherAccountError) {
+        // A retryable answer, not an internal error: the code and reason reach the client.
+        // `createGameServicesRpcFetchHandler` maps the code to HTTP 409.
+        throw new ORPCError(purchaseBoundToAnotherAccountCode, {
+          message: error.message,
+          data: { reason: error.reason },
+        });
+      }
 
       reportInternalError(options.onInternalError, error);
       throw error;
@@ -1037,6 +1078,10 @@ export function createGameServicesRpcFetchHandler(
   options: CreateGameServicesRpcFetchHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
   const rpcHandler = new RPCHandler<GameServicesOrpcContext>(router as never, {
+    errorStatusMap: {
+      ...COMMON_ERROR_STATUS_MAP,
+      [purchaseBoundToAnotherAccountCode]: purchaseBoundToAnotherAccountStatus,
+    },
     plugins: [
       new RequestLimitHandlerPlugin({
         maxBodySize: resolveMaxBodyBytes(options.maxBodyBytes),
@@ -1276,7 +1321,9 @@ function assertServedPurchaseRequest(
 async function verifyPurchaseWithStore(
   input: VerifyPurchaseRequest,
   context: PurchaseVerificationContext,
-  onDecision: (verification: VerifyPurchaseResponse) => Promise<void>,
+  onDecision: (
+    verification: VerifyPurchaseResponse | GameServicesPurchaseBoundToAnotherAccountError,
+  ) => Promise<void>,
 ): Promise<VerifyPurchaseResponse> {
   const request = bindRequestDeploymentTarget(
     assertVerifyPurchaseRequest(input),
@@ -1295,7 +1342,15 @@ async function verifyPurchaseWithStore(
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
   return withEntitlementRetryLock(retryIdentity, async () => {
-    const verification = await verifyPurchaseForRetry(request, retryIdentity, context);
+    let verification: VerifyPurchaseResponse;
+    try {
+      verification = await verifyPurchaseForRetry(request, retryIdentity, context);
+    } catch (error) {
+      if (error instanceof GameServicesPurchaseBoundToAnotherAccountError) {
+        await onDecision(error);
+      }
+      throw error;
+    }
     await onDecision(verification);
     return verification;
   });
@@ -1392,6 +1447,11 @@ async function verifyPurchaseForRetry(
 
   if (verification.status === 'restorable') {
     // A verified restore of a purchase the store binds to another player.
+    if (!sharesRestoredPurchase(request, product, context)) {
+      // No share for this player: the purchase stays its account's, which
+      // can still restore it (RFC "Another account's purchase").
+      throw new GameServicesPurchaseBoundToAnotherAccountError(verification.reason);
+    }
     return shareRestoredPurchase(
       request,
       {
@@ -1419,6 +1479,13 @@ async function verifyPurchaseForRetry(
     );
     if (racedExisting !== undefined) {
       return completeExistingRetry(racedExisting);
+    }
+
+    if (verification.status === 'rejected' && verification.anotherAccount === true) {
+      // Another account's valid purchase: nothing is granted or recorded, and
+      // the answer is a retryable error, never a `rejected` receipt that would
+      // end the client's record and block its account's recovery.
+      throw new GameServicesPurchaseBoundToAnotherAccountError(verification.reason);
     }
 
     return assertVerifyPurchaseResponse({
@@ -1709,6 +1776,21 @@ function createPurchaseGrantPayload(
 }
 
 /**
+ * Whether the `share` policy applies: a non-consumable, asked as a restore
+ * unless the store binds it to this player.
+ */
+function sharesRestoredPurchase(
+  request: VerifyPurchaseRequest,
+  product: ProductCatalog['products'][number],
+  context: PurchaseVerificationContext,
+  bindingMatches = false,
+): boolean {
+  return context.restoreSharing.mode === 'share'
+    && (request.intent === 'restore' || bindingMatches)
+    && product.type === 'non_consumable';
+}
+
+/**
  * A verified restore of a non-consumable the store binds to another player
  * (RFC "Restore sharing"). Under the `share` policy, for a request with
  * `intent: 'restore'` of a non-consumable, the restoring player gets its own
@@ -1734,11 +1816,7 @@ async function shareRestoredPurchase(
 ): Promise<VerifyPurchaseResponse> {
   const { store, restoreSharing: policy } = context;
   const { product, verification } = input;
-  if (
-    policy.mode !== 'share'
-    || (request.intent !== 'restore' && input.bindingMatches !== true)
-    || product.type !== 'non_consumable'
-  ) {
+  if (!sharesRestoredPurchase(request, product, context, input.bindingMatches === true)) {
     return input.refusal;
   }
   const purchaseVerificationId = verification.verificationId;
@@ -2510,6 +2588,9 @@ function assertEvidenceVerificationDecision(
 
   if (decision.status === 'rejected') {
     assertNonEmptyDecisionString(decision.reason, 'reason');
+    if (decision.anotherAccount !== undefined && decision.anotherAccount !== true) {
+      throw new Error('Evidence verification anotherAccount must be true when present.');
+    }
     return decision;
   }
 

@@ -15,8 +15,11 @@ import {
   createGameServicesRpcFetchHandler,
   createInMemoryGameServicesStore,
   createInProcessGameServicesBackendTransport,
+  GameServicesBackendError,
+  GameServicesPurchaseBoundToAnotherAccountError,
   gameServicesRequestLimits,
   InMemoryGameServicesStore,
+  readPurchaseBoundToAnotherAccount,
   type EvidenceVerificationDecision,
   type GameServicesBackendErrorResponse,
   type GameServicesEvidenceVerifier,
@@ -2872,6 +2875,161 @@ await assertRejects(
   /CONTINUE_AFTER_FAIL rewards undeclared currency gem/u,
   'an undeclared reward currency should fail at backend construction',
 );
+
+// Another account's purchase (RFC "Another account's purchase"): every
+// transport answers the retryable PURCHASE_BOUND_TO_ANOTHER_ACCOUNT error, the
+// ledger stays empty, and no internal error is reported.
+{
+  const anotherAccountStore = createInMemoryGameServicesStore();
+  const anotherAccountEvents: AnalyticsEvent[] = [];
+  const anotherAccountInternalErrors: unknown[] = [];
+  const anotherAccountInput = {
+    catalog,
+    placements,
+    store: anotherAccountStore,
+    analytics: {
+      async track(event: AnalyticsEvent) {
+        anotherAccountEvents.push(event);
+      },
+    },
+    evidenceVerifier: {
+      async verifyPurchase(): Promise<EvidenceVerificationDecision> {
+        return { status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', anotherAccount: true };
+      },
+      verifyAdReward: (input) => evidenceVerifier.verifyAdReward(input),
+    } satisfies GameServicesEvidenceVerifier,
+    onInternalError: (error: unknown) => {
+      anotherAccountInternalErrors.push(error);
+    },
+  };
+  const anotherAccountRequest = {
+    target: 'android',
+    playerId: 'player-b',
+    productId: 'COINS_100',
+    platformTransactionId: 'GPA.another-account',
+    idempotencyKey: 'play-token-sha256:another-account',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  } as const;
+
+  const anotherAccountHandler = createGameServicesBackendApiHandler(anotherAccountInput);
+  const anotherAccountHttp = await createGameServicesHttpFetchHandler(anotherAccountHandler)(
+    new Request(`https://game-services.test${gameServicesBackendEndpoints.verifyPurchase}`, {
+      method: 'POST',
+      body: JSON.stringify(anotherAccountRequest),
+    }),
+  );
+  assertEqual(anotherAccountHttp.status, 409, "another account's purchase answers HTTP 409");
+  assertEqual(
+    JSON.stringify(await anotherAccountHttp.json()),
+    JSON.stringify({
+      error: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT',
+      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    }),
+    "the 409 body carries the code and the store's binding mismatch",
+  );
+
+  // The HTTP client meets it as a GameServicesBackendError the reconciler recognizes.
+  const anotherAccountHttpClient = createGameServicesHttpBackendApi({
+    transport: createInProcessGameServicesBackendTransport(anotherAccountHandler),
+  });
+  const anotherAccountHttpError = await captureError(() =>
+    anotherAccountHttpClient.purchases.verifyPurchase(anotherAccountRequest),
+  );
+  assertEqual(
+    anotherAccountHttpError instanceof GameServicesBackendError,
+    true,
+    'the HTTP client throws a GameServicesBackendError',
+  );
+  assertEqual(
+    readPurchaseBoundToAnotherAccount(anotherAccountHttpError)?.reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    "the HTTP error is recognized as another account's purchase",
+  );
+
+  // oRPC: the code, status 409, and data.reason reach the client.
+  const anotherAccountRpcFetch = createGameServicesRpcFetchHandler(
+    createGameServicesRouter(createGameServicesBackend(anotherAccountInput), {
+      onInternalError: anotherAccountInput.onInternalError,
+    }),
+  );
+  const anotherAccountRpcResponse = await anotherAccountRpcFetch(
+    new Request('https://game-services.test/rpc/commerce/verifyPurchase', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ json: anotherAccountRequest }),
+    }),
+  );
+  assertEqual(anotherAccountRpcResponse.status, 409, 'the oRPC answer is HTTP 409');
+  const anotherAccountRpcClient = createGameServicesOrpcClient({
+    url: 'https://game-services.test/rpc',
+    fetch: (url, init) => anotherAccountRpcFetch(new Request(url, init)),
+  });
+  const anotherAccountRpcError = await captureError(() =>
+    anotherAccountRpcClient.commerce.verifyPurchase(anotherAccountRequest),
+  );
+  assertEqual(
+    anotherAccountRpcError?.code,
+    'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT',
+    'the oRPC client receives the code',
+  );
+  assertEqual(
+    readPurchaseBoundToAnotherAccount(anotherAccountRpcError)?.reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'the oRPC error is recognized with its reason',
+  );
+
+  // Direct calls (a game server, a Workers RPC method) see the typed error.
+  const anotherAccountDirect = await captureError(() =>
+    createGameServicesBackend(anotherAccountInput).purchases.verifyPurchase(anotherAccountRequest),
+  );
+  assertEqual(
+    anotherAccountDirect instanceof GameServicesPurchaseBoundToAnotherAccountError,
+    true,
+    'the backend throws GameServicesPurchaseBoundToAnotherAccountError',
+  );
+  // A Workers RPC caller without enhanced error serialization keeps only the message.
+  assertEqual(
+    readPurchaseBoundToAnotherAccount(new Error(anotherAccountDirect?.message ?? ''))?.reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'an error rebuilt from the message alone is still recognized',
+  );
+
+  assertEqual(
+    (await anotherAccountStore.listEntitlementTransactions()).length,
+    0,
+    "nothing is recorded for another account's purchase",
+  );
+  assertEqual(
+    anotherAccountInternalErrors.length,
+    0,
+    "another account's purchase is not an internal error",
+  );
+  assertEqual(
+    anotherAccountEvents.every((event) =>
+      event.name === 'purchase_pending'
+      && event.properties.reason === 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT'
+      && event.properties.boundToAnotherAccount === 'GOOGLE_PLAY_ACCOUNT_MISMATCH')
+      && anotherAccountEvents.length === 5,
+    true,
+    'each answer is tracked as pending for its account, never as rejected',
+  );
+
+  // A verifier that answers `anotherAccount` with anything but true is a verifier error.
+  const malformedAnotherAccount = await createGameServicesBackend({
+    ...anotherAccountInput,
+    evidenceVerifier: {
+      async verifyPurchase() {
+        return {
+          status: 'rejected',
+          reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+          anotherAccount: 'yes',
+        } as unknown as EvidenceVerificationDecision;
+      },
+      verifyAdReward: (input) => evidenceVerifier.verifyAdReward(input),
+    },
+  }).purchases.verifyPurchase(anotherAccountRequest);
+  assertEqual(malformedAnotherAccount.reason, 'EVIDENCE_VERIFIER_ERROR', 'malformed flag');
+}
 
 console.log('GameServices backend API handler smoke test passed.');
 

@@ -44,8 +44,9 @@ export type EvidenceVerificationDecision =
        * check passed. The reference verifiers answer it only for a request
        * with `intent: 'restore'` of a non-consumable; the backend then grants
        * the player its own share under its `restoreSharing` policy, or
-       * answers `rejected` with `reason` (the binding mismatch) when the
-       * policy refuses. Fields are those of `verified`.
+       * answers `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` with `reason` (the
+       * binding mismatch) when the policy refuses, as for a `rejected`
+       * decision with `anotherAccount`. Fields are those of `verified`.
        */
       readonly status: 'restorable';
       readonly reason: string;
@@ -61,6 +62,17 @@ export type EvidenceVerificationDecision =
   | {
       readonly status: 'rejected';
       readonly reason: string;
+      /**
+       * The store binds the purchase to another account than the requesting
+       * player's (`reason` is the binding mismatch, for example
+       * `GOOGLE_PLAY_ACCOUNT_MISMATCH`), and every other check passed: the
+       * purchase is valid, only not this player's (RFC "Another account's
+       * purchase"). The backend grants nothing, records nothing, and answers
+       * the retryable `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` error instead of a
+       * `rejected` receipt, so the purchase stays recoverable by its account.
+       * A caller that reads only `status` still refuses it.
+       */
+      readonly anotherAccount?: true;
     };
 
 export interface VerifyPurchaseEvidenceInput {

@@ -10,6 +10,10 @@ import {
   googlePlayProductPurchaseConformanceEvidence,
 } from './google-play-purchase-conformance';
 import {
+  GameServicesPurchaseBoundToAnotherAccountError,
+  readPurchaseBoundToAnotherAccount,
+} from './another-account';
+import {
   createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesBackend,
   InMemoryGameServicesStore,
@@ -205,7 +209,27 @@ function createHarness(input: {
     now: () => '2030-01-02T03:04:07.000Z',
   });
 
-  return { backend, client, events, store };
+  return { backend, boundary, client, events, store };
+}
+
+/** The backend answers another account's purchase as the retryable 409 error, never a receipt. */
+async function assertBoundToAnotherAccount(
+  verify: Promise<unknown>,
+  reason: string,
+  message: string,
+): Promise<void> {
+  let thrown: unknown;
+  try {
+    await verify;
+  } catch (error) {
+    thrown = error;
+  }
+  assert(
+    thrown instanceof GameServicesPurchaseBoundToAnotherAccountError,
+    `${message}: expected PURCHASE_BOUND_TO_ANOTHER_ACCOUNT, received ${String(thrown)}`,
+  );
+  assertEqual(thrown.reason, reason, message);
+  assertEqual(readPurchaseBoundToAnotherAccount(thrown)?.reason, reason, message);
 }
 
 function createRequest(input: {
@@ -736,11 +760,81 @@ const accountMismatch = createHarness({
   }),
   resolveObfuscatedAccountId: () => 'account:expected',
 });
-const accountMismatchResult = await accountMismatch.backend.purchases.verifyPurchase(
-  createRequest({ token: 'token-account-mismatch' }),
+// Another account's valid purchase: reported as that, never refused for good,
+// and nothing is recorded (RFC "Another account's purchase").
+await assertBoundToAnotherAccount(
+  accountMismatch.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-account-mismatch' }),
+  ),
+  'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+  "a purchase bound to another account is answered as that account's",
 );
-assertEqual(accountMismatchResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
 assertEqual((await accountMismatch.store.listEntitlementTransactions()).length, 0);
+const accountMismatchDecision = await accountMismatch.boundary.verifyPurchase({
+  request: createRequest({ token: 'token-account-mismatch' }),
+  product: catalog.products[0],
+  platformProductId: 'coins_100_android',
+  signal: new AbortController().signal,
+  timeoutMs: 1000,
+});
+assertEqual(
+  JSON.stringify(accountMismatchDecision),
+  JSON.stringify({
+    status: 'rejected',
+    reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    anotherAccount: true,
+  }),
+);
+// A restore of a consumable is not restore sharing: still another account's.
+await assertBoundToAnotherAccount(
+  accountMismatch.backend.purchases.verifyPurchase({
+    ...createRequest({ token: 'token-account-mismatch', idempotencyKey: 'restore-consumable' }),
+    intent: 'restore',
+  }),
+  'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+  'a restored consumable of another account is never shared',
+);
+// The mismatch is reported only once every other check passed: a refunded
+// purchase of another account is refused for every player.
+const refundedAccountMismatch = createHarness({
+  token: 'token-refunded-account-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:provider',
+    refundableQuantity: 0,
+  }),
+  resolveObfuscatedAccountId: () => 'account:expected',
+});
+const refundedAccountMismatchResult = await refundedAccountMismatch.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-refunded-account-mismatch' }),
+);
+assertEqual(refundedAccountMismatchResult.disposition, 'rejected');
+assertEqual(refundedAccountMismatchResult.reason, 'GOOGLE_PLAY_PURCHASE_REFUNDED');
+
+// No binding at all (a promo code, a build that set none) is no account's.
+const accountIdMissing = createHarness({
+  token: 'token-account-id-missing',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedAccountId: () => 'account:expected',
+});
+const accountIdMissingResult = await accountIdMissing.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-account-id-missing' }),
+);
+assertEqual(accountIdMissingResult.disposition, 'rejected');
+assertEqual(accountIdMissingResult.reason, 'GOOGLE_PLAY_ACCOUNT_ID_MISSING');
+assertEqual((await accountIdMissing.store.listEntitlementTransactions()).length, 0);
+
+const profileIdMissing = createHarness({
+  token: 'token-profile-id-missing',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+  }),
+  resolveObfuscatedAccountId: () => 'account:shared',
+  resolveObfuscatedProfileId: () => 'profile:current',
+});
+const profileIdMissingResult = await profileIdMissing.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-id-missing' }),
+);
+assertEqual(profileIdMissingResult.reason, 'GOOGLE_PLAY_PROFILE_ID_MISSING');
 
 const boundTokenInUnboundMode = createHarness({
   token: 'token-bound-in-unbound-mode',
@@ -752,7 +846,8 @@ const boundTokenInUnboundMode = createHarness({
 const boundTokenInUnboundModeResult = await boundTokenInUnboundMode.backend.purchases.verifyPurchase(
   createRequest({ token: 'token-bound-in-unbound-mode' }),
 );
-assertEqual(boundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
+assertEqual(boundTokenInUnboundModeResult.disposition, 'rejected');
+assertEqual(boundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED');
 assertEqual((await boundTokenInUnboundMode.store.listEntitlementTransactions()).length, 0);
 
 const profileBoundTokenInUnboundMode = createHarness({
@@ -767,7 +862,7 @@ const profileBoundTokenInUnboundModeResult = await (
     createRequest({ token: 'token-profile-bound-in-unbound-mode' }),
   )
 );
-assertEqual(profileBoundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
+assertEqual(profileBoundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED');
 assertEqual((await profileBoundTokenInUnboundMode.store.listEntitlementTransactions()).length, 0);
 
 const unresolvedProfileBinding = createHarness({
@@ -795,10 +890,13 @@ const profileMismatch = createHarness({
   resolveObfuscatedAccountId: () => 'account:shared',
   resolveObfuscatedProfileId: () => 'profile:current',
 });
-const profileMismatchResult = await profileMismatch.backend.purchases.verifyPurchase(
-  createRequest({ token: 'token-profile-mismatch' }),
+await assertBoundToAnotherAccount(
+  profileMismatch.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-profile-mismatch' }),
+  ),
+  'GOOGLE_PLAY_PROFILE_MISMATCH',
+  "a purchase bound to another profile is answered as that profile's",
 );
-assertEqual(profileMismatchResult.reason, 'GOOGLE_PLAY_PROFILE_MISMATCH');
 assertEqual((await profileMismatch.store.listEntitlementTransactions()).length, 0);
 
 const unresolvedAccountBinding = createHarness({

@@ -510,11 +510,10 @@ async function verifyAppStorePurchase(
   // when every other check passes: the backend's restore sharing policy
   // decides (RFC "Restore sharing"). The client's StoreKit-verified JWS is
   // required, so a transaction id alone never shares a purchase.
-  const foreignBinding = rejection === 'APP_STORE_ACCOUNT_TOKEN_MISMATCH'
-    && input.request.intent === 'restore'
-    && input.product.type === 'non_consumable'
-    && offlineTransaction !== undefined;
-  if (foreignBinding) {
+  const tokenMismatch = rejection === 'APP_STORE_ACCOUNT_TOKEN_MISMATCH';
+  if (tokenMismatch) {
+    // Every other check still decides: only a purchase that passes them all
+    // is reported as restorable or as another account's.
     rejection = validateTransaction(
       input,
       transaction,
@@ -525,8 +524,21 @@ async function verifyAppStorePurchase(
       clockSkewMs,
     );
   }
+  const foreignBinding = tokenMismatch
+    && input.request.intent === 'restore'
+    && input.product.type === 'non_consumable'
+    && offlineTransaction !== undefined;
   if (rejection !== undefined) {
     return { status: 'rejected', reason: rejection };
+  }
+  if (tokenMismatch && !foreignBinding) {
+    // A transaction without an appAccountToken (bought outside the app, or
+    // by a build that set none) is no account's: refused for every player.
+    // One with another token is that account's, which can still recover it
+    // (RFC "Another account's purchase").
+    return transaction.appAccountToken === undefined
+      ? { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISSING' }
+      : { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH', anotherAccount: true };
   }
 
   return {
