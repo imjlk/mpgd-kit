@@ -3,6 +3,7 @@ import {
   createGameServicesOrpcClient,
   createPlatformOrderVerifyRequest,
   microsoftStoreDigitalGoodsEvidenceSchema,
+  readPurchaseBoundToAnotherAccount,
 } from '@mpgd/game-services';
 
 import {
@@ -1803,6 +1804,71 @@ assertEqual(
   false,
   'another key cannot replay a verified impression',
 );
+
+// Another account's purchase: every Worker surface answers the retryable
+// PURCHASE_BOUND_TO_ANOTHER_ACCOUNT error (HTTP 409), never a rejected receipt.
+{
+  const anotherAccountEnv = {
+    MPGD_STORE: 'memory',
+    GAME_SERVICES_EVIDENCE_VERIFIER: {
+      async verifyPurchase() {
+        return {
+          status: 'rejected' as const,
+          reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+          anotherAccount: true as const,
+        };
+      },
+      async verifyAdReward() {
+        return verifiedDecision('another-account:ad-reward');
+      },
+    },
+  } satisfies GameServicesWorkerEnv;
+  const anotherAccountRequest = {
+    target: 'android' as const,
+    playerId: 'player-b',
+    productId: 'COINS_100',
+    platformTransactionId: 'GPA.another-account',
+    idempotencyKey: 'play-token-sha256:another-account',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  };
+  const anotherAccountFetch = createWorkerFetchHandler(anotherAccountEnv);
+  const anotherAccountHttp = await anotherAccountFetch(
+    new Request(`${baseUrl}/game-services/purchases/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(anotherAccountRequest),
+    }),
+  );
+  assertEqual(anotherAccountHttp.status, 409, 'the HTTP route answers 409');
+  assertEqual(
+    JSON.stringify(await anotherAccountHttp.json()),
+    JSON.stringify({
+      error: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT',
+      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    }),
+    'the HTTP body names the answer and the binding mismatch',
+  );
+  const anotherAccountRpc = createGameServicesOrpcClient({
+    url: `${baseUrl}/rpc`,
+    fetch: (url, init) => anotherAccountFetch(new Request(url, init)),
+  });
+  let anotherAccountRpcError: unknown;
+  try {
+    await anotherAccountRpc.commerce.verifyPurchase(anotherAccountRequest);
+  } catch (error) {
+    anotherAccountRpcError = error;
+  }
+  assertEqual(
+    readPurchaseBoundToAnotherAccount(anotherAccountRpcError)?.reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'the oRPC route answers the code with its reason',
+  );
+  await assertRejects(
+    () => createWorkerService(anotherAccountEnv).verifyPurchase(anotherAccountRequest),
+    /^PURCHASE_BOUND_TO_ANOTHER_ACCOUNT: GOOGLE_PLAY_ACCOUNT_MISMATCH$/u,
+    'the service binding throws the answer, its message led by the code',
+  );
+}
 
 console.log('Game services Worker smoke passed: HTTP, oRPC, and private binding surfaces');
 
