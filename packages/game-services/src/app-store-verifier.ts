@@ -543,7 +543,14 @@ async function verifyAppStorePurchase(
 
   return {
     ...(foreignBinding
-      ? { status: 'restorable' as const, reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH' }
+      ? {
+          status: 'restorable' as const,
+          // Bound to no account, or to another one: the backend refuses the
+          // former for good when no share covers it.
+          reason: transaction.appAccountToken === undefined
+            ? 'APP_STORE_ACCOUNT_TOKEN_MISSING'
+            : 'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+        }
       : { status: 'verified' as const }),
     verificationId: createVerificationId(transaction),
     verifiedAt: new Date(nowMs).toISOString(),

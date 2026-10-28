@@ -1112,6 +1112,41 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     (await backend.purchases.verifyPurchase(playRequest('token-3', 'player-b'))).restoredAcrossPlayers,
     true,
   );
+  // Its restorable reason says it is bound to no account: without a share it
+  // is refused for good, never answered as another account's purchase.
+  const unbound = await boundary.verifyPurchase({
+    request: playRequest('token-3', 'player-c'),
+    product,
+    platformProductId: 'remove_ads_android',
+    signal,
+    timeoutMs: 1000,
+  });
+  assert.equal(unbound.status, 'restorable');
+  assert.equal(
+    unbound.status === 'restorable' ? unbound.reason : '',
+    'GOOGLE_PLAY_ACCOUNT_ID_MISSING',
+  );
+  const refusing = createGameServicesBackend({
+    catalog,
+    placements,
+    store: createInMemoryGameServicesStore(),
+    evidenceVerifier: {
+      verifyPurchase: (input) => boundary.verifyPurchase(input),
+      verifyAdReward: async () => ({ status: 'rejected', reason: 'UNUSED' }),
+    },
+    purchaseGrantFinalizer: boundary,
+    restoreSharing: { mode: 'refuse' },
+  });
+  assert.deepEqual(await refusing.purchases.verifyPurchase(playRequest('token-3', 'player-c')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'rejected',
+    reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING',
+  });
+  await assertAnotherAccount(
+    refusing.purchases.verifyPurchase(playRequest('token-1', 'player-c')),
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+  );
 
   // Refunded at Play: refused before any binding is looked at.
   setPurchase('token-4', {
@@ -1208,6 +1243,29 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     backend.purchases.verifyPurchase(iosRequest('player-c', { intent: 'purchase' })),
     'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
   );
+
+  // A transaction bound to no token restores under the share policy (L3c);
+  // without a share it is refused for good as bound to no account.
+  const { appAccountToken: _token, ...tokenless } = transaction;
+  void _token;
+  transaction = tokenless;
+  const tokenlessRestore = await backend.purchases.verifyPurchase(
+    iosRequest('player-c', { idempotencyKey: 'app-store:player-c:tokenless' }),
+  );
+  assert.equal(tokenlessRestore.restoredAcrossPlayers, true);
+  const refusingIos = createGameServicesBackend({
+    catalog,
+    placements,
+    store: createInMemoryGameServicesStore(),
+    evidenceVerifier: verifier,
+    restoreSharing: { mode: 'refuse' },
+  });
+  assert.deepEqual(await refusingIos.purchases.verifyPurchase(iosRequest('player-c')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'rejected',
+    reason: 'APP_STORE_ACCOUNT_TOKEN_MISSING',
+  });
 
   // Refunded at Apple: the checks after the binding still apply to a restore.
   transaction = { ...transaction, revocationDate: Date.parse('2021-01-01T00:00:00.000Z') };

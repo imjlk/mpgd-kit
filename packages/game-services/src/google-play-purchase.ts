@@ -85,7 +85,11 @@ type GooglePlayPurchaseInspection =
   | {
       readonly status: 'verified';
       readonly purchase: InspectedGooglePlayPurchase;
-      /** The binding mismatch of a purchase bound to another account, when `reportForeignBinding` asked for it. */
+      /**
+       * When `reportForeignBinding` asked for it: the binding mismatch of a
+       * purchase bound to another account, or the `*_ID_MISSING` reason of
+       * one bound to no account.
+       */
       readonly foreignBinding?: string;
     }
   | { readonly status: 'pending'; readonly reason: string }
@@ -597,7 +601,9 @@ async function inspectGooglePlayPurchase(input: {
 
   return {
     status: 'verified',
-    ...(foreignBinding === undefined ? {} : { foreignBinding }),
+    // A restore reports which: another account's binding, or none at all
+    // (the backend refuses the latter for good when no share covers it).
+    ...(foreignBinding === undefined ? {} : { foreignBinding: missingBinding ?? foreignBinding }),
     purchase: {
       purchaseToken: input.purchaseToken,
       purchaseTokenDigest: await digestPurchaseToken(
