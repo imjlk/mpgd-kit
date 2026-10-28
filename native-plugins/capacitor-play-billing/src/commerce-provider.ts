@@ -87,6 +87,15 @@ export interface CreateCapacitorPlayBillingCommerceProviderInput {
   readonly mapError?: StoreSdkErrorCodeMap;
   /** Diagnostics for a retired SKU or a multi-line purchase. The purchase is still surfaced; see the SDK input. */
   readonly onUnmappedPurchase?: (purchase: PlayPurchase) => void;
+  /**
+   * Play sheet facts (default true): the provider offers `presentation`,
+   * observed from the activity lifecycle, so the gateway and the game
+   * runtime pause until the Play sheet is gone, not until a result. Needs an
+   * app built with this package's native code (otherwise new purchases are
+   * refused with `PLAY_BILLING_PRESENTATION_UNSUPPORTED`). False keeps the
+   * result-based pause of earlier releases.
+   */
+  readonly purchasePresentation?: boolean;
 }
 
 /**
@@ -121,6 +130,9 @@ export function createCapacitorPlayBillingCommerceProvider(
     ...(input.onUnmappedPurchase === undefined
       ? {}
       : { onUnmappedPurchase: input.onUnmappedPurchase }),
+    ...(input.purchasePresentation === undefined
+      ? {}
+      : { purchasePresentation: input.purchasePresentation }),
   });
   const resolveAccountBinding = input.accountBinding;
   const gate = resolvePurchaseGateSupport(input.purchaseGate);

@@ -203,7 +203,11 @@ describe('createCapacitorPlayBillingCommerceProvider', () => {
     })).toMatchObject({ outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } });
     expect(calls).toEqual(['lookup']);
     expect(plugin.purchaseCalls).toEqual([{
-      productId: 'remove.ads', offerToken: 'intro', obfuscatedAccountId: 'player-hash-1',
+      productId: 'remove.ads',
+      offerToken: 'intro',
+      obfuscatedAccountId: 'player-hash-1',
+      // The adapter asks for this call's sheet facts.
+      presentationId: expect.any(String),
     }]);
 
     // Binding failures are failed results, not throws, so the store code
@@ -475,10 +479,10 @@ describe('createCapacitorPlayBillingCommerceProvider with the reference reconcil
     expect(plugin.purchaseCalls).toEqual([]);
   });
 
-  it('journals a retryable gate failure as failed; a new key retries once the gate answers', async () => {
-    // Without trusted presentation facts (bridge presentation is K4), the
-    // reconciler cannot tell a pre-launch refusal from a closed sheet, so it
-    // keeps the attempt terminal and the game retries under a new key.
+  it('keeps a retryable gate failure retryable under the same key, from its not-started fact', async () => {
+    // The provider reports `not-started` before it answers a refusal that
+    // opened no sheet, so the reconciler keeps the attempt `requested` and the
+    // same key asks again once the gate answers.
     const plugin = createPlugin();
     let gateUp = false;
     const gate = vi.fn(async () => {
@@ -506,17 +510,36 @@ describe('createCapacitorPlayBillingCommerceProvider with the reference reconcil
       outcome: 'failed',
       error: { code: 'ITEM_UNAVAILABLE', storeCode: 'PURCHASE_GATE_FAILED', retryable: true },
     });
-    expect((await reconciler.read('op-gate'))?.state).toBe('failed');
+    expect((await reconciler.read('op-gate'))?.state).toBe('requested');
+    expect(plugin.purchaseCalls).toEqual([]);
     gateUp = true;
-    // The same key answers from the journal without asking the gate again.
-    await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({
-      outcome: 'failed', error: { storeCode: 'PURCHASE_GATE_FAILED' },
-    });
-    expect(gate).toHaveBeenCalledTimes(1);
     plugin.queuePurchase({ status: 'cancelled' });
-    await expect(reconciler.requestPurchase({ ...request, idempotencyKey: 'op-gate-2' }))
-      .resolves.toMatchObject({ outcome: 'cancelled' });
+    await expect(reconciler.requestPurchase(request)).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(gate).toHaveBeenCalledTimes(2);
     expect(plugin.purchaseCalls).toHaveLength(1);
+    expect((await reconciler.read('op-gate'))?.state).toBe('cancelled');
+    await reconciler.stop();
+  });
+
+  it('keeps a definitive gate refusal terminal', async () => {
+    const plugin = createPlugin();
+    const { provider } = createProvider(plugin, { purchaseGate: () => ({ allowed: false }) });
+    const reconciler = createCommerceReconciler({
+      provider,
+      backend: {
+        async verifyPurchase() {
+          return { verified: false, alreadyProcessed: false, reason: 'not used' };
+        },
+      },
+      store: createInMemoryMonetizationOperationStore(),
+      playerId: 'player-1',
+      target: 'android',
+      products: catalog.map((entry) => ({ ...entry })),
+    });
+    await reconciler.start();
+    await expect(reconciler.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-paused', source: 'shop' }))
+      .resolves.toMatchObject({ outcome: 'failed', error: { storeCode: 'PURCHASES_PAUSED', retryable: false } });
+    expect((await reconciler.read('op-paused'))?.state).toBe('failed');
     await reconciler.stop();
   });
 

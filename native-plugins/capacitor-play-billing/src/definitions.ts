@@ -60,6 +60,34 @@ export interface PlayPurchaseOutcome {
   readonly productId?: string;
   /** The `PLAY_BILLING_*` code of a late `failed` result. */
   readonly code?: string;
+  /**
+   * The Play sheet when a `purchase` call with a `presentationId` answered
+   * (also in a rejection's `data`): `open` (still up; `closed` follows as a
+   * `purchasePresentation` event), `closed`, `not-started`, or `requested`
+   * (no fact yet; facts follow as events).
+   */
+  readonly presentation?: PlayPurchaseAnswerPresentation;
+}
+
+export type PlayPurchasePresentationState = 'open' | 'closed' | 'not-started';
+export type PlayPurchaseAnswerPresentation = PlayPurchasePresentationState | 'requested';
+
+/**
+ * A Play sheet fact for the `purchase` call that sent `presentationId`,
+ * observed from the activity lifecycle and never from a purchase result:
+ * `open` once the Billing Library's activity is created, `closed` when the
+ * game's activity resumes after it (reason `interrupted` when the plugin was
+ * torn down instead), `not-started` when the flow ended without it.
+ */
+export interface PlayPurchasePresentationEvent {
+  readonly presentationId: string;
+  readonly state: PlayPurchasePresentationState;
+  readonly reason?: 'interrupted';
+}
+
+/** What `getPresentationSupport` declares; `purchasePresentation` is the facts protocol version. */
+export interface PlayPresentationSupport {
+  readonly purchasePresentation: number;
 }
 
 export interface CapacitorPlayBillingPlugin {
@@ -70,7 +98,15 @@ export interface CapacitorPlayBillingPlugin {
     readonly productId: string;
     readonly offerToken?: string;
     readonly obfuscatedAccountId: string;
+    /** Asks for this call's sheet facts (`purchasePresentation`); 1-64 of `[A-Za-z0-9-]`. */
+    readonly presentationId?: string;
   }): Promise<PlayPurchaseOutcome>;
+  /**
+   * Declares the sheet facts the native code reports. A native build from
+   * before them answers `UNIMPLEMENTED`; optional so a plugin double without
+   * it still type-checks, and then the SDK refuses purchases that need facts.
+   */
+  getPresentationSupport?(): Promise<PlayPresentationSupport>;
   /**
    * Requeries every purchased or pending in-app purchase Play still reports
    * for this user and device (`queryPurchasesAsync`): unconsumed consumables,
@@ -87,5 +123,10 @@ export interface CapacitorPlayBillingPlugin {
   addListener(
     eventName: 'purchaseUpdated',
     listener: (event: PlayPurchaseOutcome) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Sheet facts of `purchase` calls that sent a `presentationId`; retained until a listener attaches. */
+  addListener(
+    eventName: 'purchasePresentation',
+    listener: (event: PlayPurchasePresentationEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
