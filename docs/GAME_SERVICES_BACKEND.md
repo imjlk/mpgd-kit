@@ -611,8 +611,10 @@ is only not this player's, and its own account can still recover it
   `GOOGLE_PLAY_ACCOUNT_ID_MISSING`, `GOOGLE_PLAY_PROFILE_ID_MISSING`,
   `APP_STORE_ACCOUNT_TOKEN_MISSING`, or, on a backend that binds nobody
   (`allowUnboundAuthenticatedPlayer`), `GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED`.
-  A restored non-consumable is still `restorable` (bound to no account
-  included), and gets this answer when no share covers it.
+  A restored non-consumable is still `restorable`, bound to no account
+  included (with the `*_MISSING` reason; the share policy still covers it).
+  When no share covers it, a mismatch reason gets this answer and a
+  `*_MISSING` reason stays `rejected`.
 - `createGameServicesBackend` grants and records nothing for it (no ledger
   entry, no owner claim, nothing for a deletion tombstone to refuse) and throws
   `GameServicesPurchaseBoundToAnotherAccountError` (`code`
@@ -620,18 +622,23 @@ is only not this player's, and its own account can still recover it
   handler answers it as 409 `{ "error": "PURCHASE_BOUND_TO_ANOTHER_ACCOUNT",
   "reason": "GOOGLE_PLAY_ACCOUNT_MISMATCH" }`, the oRPC router as that error
   code with `data.reason` (409 through `createGameServicesRpcFetchHandler`;
-  another RPC handler needs the code in its `errorStatusMap`, or answers
-  500 with the same code), and the Worker's service-binding method throws it
+  oRPC 2.0.0-beta.46 errors carry no status of their own, so a host that
+  mounts `createGameServicesRouter` in its own `RPCHandler` passes
+  `errorStatusMap: gameServicesRpcErrorStatusMap`, or answers 500 with the
+  same code), and the Worker's service-binding method throws it
   (Workers RPC keeps `code` and `reason` from compatibility date 2026-04-21 on
   both Workers, and the message, which starts with the code, before it).
-  Analytics tracks `purchase_pending` with `boundToAnotherAccount: <reason>`.
+  Analytics tracks `purchase_rejected` with `boundToAnotherAccount: <reason>`
+  (never a pending count); a failed analytics report never replaces the
+  answer.
 - It is an error rather than a receipt so released clients keep the record
   open: every `@mpgd/game-services` client before this one ends a non-pending
   receipt as `rejected` for good, and journals a `pending` one as an open
   attempt that refuses new purchases of the product. On a transport error
   they keep the record in `verifying` and resend it on the next reconcile. The
   current reconciler recognizes the answer (`readPurchaseBoundToAnotherAccount`)
-  and parks the record instead; it also parks a `rejected` receipt whose
+  and parks the record instead, reporting an `another-account` event rather
+  than a `failure`; it also parks a `rejected` receipt whose
   reason is one of the three mismatches, so a backend or game server from
   before this answer gets the same client behaviour.
 

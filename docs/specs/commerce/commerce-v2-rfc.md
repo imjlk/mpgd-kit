@@ -679,7 +679,8 @@ restoring player gets its own grant of it:
   never finished.
 - **Verifier.** A decision, `{ status: 'restorable', reason, ...verified
   fields }`: every check passed except the account binding, which names
-  another player or none; `reason` is the binding mismatch. Reference
+  another player or none; `reason` is the binding mismatch, or the
+  `*_MISSING` reason for none. Reference
   verifiers answer it only for a restore of a non-consumable (the App Store one
   only with the client's verified JWS); for everything else they answer
   [another account's purchase](#another-account), or reject a purchase bound
@@ -699,7 +700,8 @@ restoring player gets its own grant of it:
 - **Answers.** `verified` with `restoredAcrossPlayers: true` (retries
   included); [another account's purchase](#another-account) when the policy
   refuses, the request is not a restore, or the product is not a
-  non-consumable; `rejected` `LEDGER_GRANT_REVERSED` for
+  non-consumable (`rejected` with the `*_MISSING` reason instead for a
+  purchase bound to no account); `rejected` `LEDGER_GRANT_REVERSED` for
   a purchase a store refund, chargeback, or voided purchase ended (a share
   written while that refund fans out is revoked right after its write; an
   `admin` entry ends one holder only); `pending` `PURCHASE_HOLDER_LIMIT_REACHED` at the
@@ -731,14 +733,20 @@ owner's own recovery.
   `GOOGLE_PLAY_ACCOUNT_ID_MISSING`, `GOOGLE_PLAY_PROFILE_ID_MISSING`,
   `APP_STORE_ACCOUNT_TOKEN_MISSING`, and on a backend that binds nobody
   `GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED`. A restore of a non-consumable stays
-  `restorable` as above, bound to no account included; when no share covers
-  it, it gets this answer too.
+  `restorable` as above, bound to no account included (its reason is then the
+  `*_MISSING` one, and the share policy still covers it, as since L3c); when
+  no share covers it, a mismatch reason gets this answer and a `*_MISSING`
+  one stays `rejected`.
 - **Backend.** Nothing is granted or recorded, and the answer is a retryable
   error, never a receipt: HTTP 409 `{ error:
   'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason }`, the oRPC error code
   `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` (status 409, `data.reason`), and in
   process `GameServicesPurchaseBoundToAnotherAccountError` (its message starts
-  with the code). Analytics tracks it as `purchase_pending`.
+  with the code). oRPC 2.0.0-beta.46 errors carry no status, so the RPC
+  handler maps the code to 409 (`gameServicesRpcErrorStatusMap`). Analytics
+  tracks it as `purchase_rejected` with `boundToAnotherAccount: <reason>`, so
+  it never counts as pending; a failed analytics report never replaces the
+  answer.
 - **Why an error.** Released clients end every non-pending receipt as
   `rejected`, and journal a `pending` one as an open record that refuses new
   purchases of the product with `IN_PROGRESS` for as long as it waits; both
@@ -753,11 +761,15 @@ owner's own recovery.
   reportedAt }`, is never sent again by start, resume, or event passes, is not
   among the player's recoverable records (so neither recovery summaries nor
   Restore Purchases report it), and `reconciler.read()` and the purchase
-  result summarize it as `rejected` for that player. Only the player's Restore
-  Purchases, when the store reports the purchase again, sends it once more,
-  with the evidence the store reports then (a policy or binding may have
-  changed; a saved signed transaction may have expired). The journal keeps
-  it as an open record; a journal's retention does not drop it.
+  result summarize it as `rejected` for that player. The reconciler reports it
+  with an `another-account` event (`record`, `reason`, and the older
+  backend's `response`), never a `failure`. Only the player's Restore
+  Purchases, when the store reports the purchase again, sends it once more, as
+  a restore and with the evidence the store reports then (a policy or binding
+  may have changed; a saved signed transaction may have expired). It stays
+  parked until the backend answers something else: an offline Restore
+  changes nothing. The journal keeps it as an open record; a journal's
+  retention does not drop it.
   Its shared key no longer refuses another player of the install (below).
 
 | Server answer | Client 0.27-0.31 | This client |
