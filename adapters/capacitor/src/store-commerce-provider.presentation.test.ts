@@ -177,6 +177,38 @@ describe('store commerce provider presentation', () => {
     expect(log).toEqual(['op-1:open', 'op-1:closed', 'op-1:answer:cancelled']);
   });
 
+  it('keeps a call the SDK reported unknown waiting for the native verdict', async () => {
+    vi.useFakeTimers();
+    const sdk = createFakeStoreSdk({ presentation: true });
+    const provider = createProvider(sdk);
+    const { log, answer } = record(provider);
+    // The native flow still runs and has observed nothing when the call answers.
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'unknown');
+    sdk.queueRequest({ throws: { code: 'PLAY_BILLING_TIMEOUT' } });
+    await answer(request('late'));
+    // Not ended as not-started by the answer: the sheet may still come.
+    expect(log).toEqual(['late:unknown', 'late:answer:launched']);
+    sdk.present(sdk.requestCalls[0]?.presentationId, 'not-started');
+    expect(log).toEqual(['late:unknown', 'late:answer:launched', 'late:not-started']);
+
+    // A late sheet opens and closes; a verdict that never comes is bounded.
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'unknown');
+    await answer(request('opened'));
+    sdk.present(sdk.requestCalls[1]?.presentationId, 'open');
+    sdk.present(sdk.requestCalls[1]?.presentationId, 'closed');
+    await answer(request('silent'));
+    vi.advanceTimersByTime(purchasePresentationTimeoutMs);
+    expect(log.slice(3)).toEqual([
+      'opened:unknown',
+      'opened:answer:launched',
+      'opened:open',
+      'opened:closed',
+      'silent:unknown',
+      'silent:answer:launched',
+      'silent:closed:timeout',
+    ]);
+  });
+
   it('closes a sheet with no closed fact after the safety timeout', async () => {
     vi.useFakeTimers();
     const sdk = createFakeStoreSdk({ presentation: true });

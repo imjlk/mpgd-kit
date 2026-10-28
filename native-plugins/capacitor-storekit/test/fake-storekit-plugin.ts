@@ -147,7 +147,8 @@ export function createFakeStoreKitPlugin(input: {
           ? (thrownData as { readonly presentation?: StoreKitPurchaseAnswerPresentation }).presentation
           : undefined)
         : script.presentation;
-      if (presentationId !== undefined && scriptedPresentation !== 'not-started') {
+      if (presentationId !== undefined
+        && scriptedPresentation !== 'not-started' && scriptedPresentation !== 'requested') {
         for (const listener of [...presentationListeners]) {
           listener({ presentationId, state: 'open' });
         }

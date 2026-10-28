@@ -8,6 +8,18 @@ import type { CrashReporter } from './crash-reporting.js';
 import type { NotificationCapabilities, NotificationProvider } from './notifications-contract.js';
 
 export { createUnsupportedCommerceCapabilities };
+export {
+  createPurchasePresentationChannel,
+  createPurchasePresentationRelay,
+  createPurchasePresentationSequenceGuard,
+  isPurchasePresentationReason,
+  purchasePresentationRetiredKeyLimit,
+  type PurchasePresentationChannel,
+  type PurchasePresentationListener,
+  type PurchasePresentationOptions,
+  type PurchasePresentationRelay,
+  type PurchasePresentationSource,
+} from './purchase-presentation.js';
 
 export type PlatformTarget =
   | 'browser'

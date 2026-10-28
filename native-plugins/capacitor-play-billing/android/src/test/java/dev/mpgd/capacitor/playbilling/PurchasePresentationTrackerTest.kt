@@ -116,6 +116,75 @@ class PurchasePresentationTrackerTest {
     }
 
     @Test
+    fun waitsForThePausedGameBeforeCallingALaunchedFlowNotStarted() {
+        tracker.begin("p1")
+        tracker.onLaunchAttempted("p1")
+        // `launchBillingFlow` paused the game; its activity is slow to appear.
+        tracker.onActivityPaused(host)
+        tracker.onFlowEnded("p1")
+        assertTrue(tracker.active)
+        assertEquals("requested", tracker.answerState("p1"))
+        // The billing activity after the grace still opens this flow's sheet.
+        tracker.onActivityCreated(proxy)
+        tracker.onActivityResumed(host)
+        assertEquals(listOf("p1:open", "p1:closed"), facts)
+    }
+
+    @Test
+    fun decidesADeferredFlowWhenTheGameResumesOrTheBoundPasses() {
+        tracker.begin("p1")
+        tracker.onLaunchAttempted("p1")
+        tracker.onActivityPaused(host)
+        tracker.onFlowEnded("p1")
+        tracker.onLateBound("other")
+        tracker.onActivityResumed(host)
+        assertEquals(listOf("p1:not-started"), facts)
+
+        tracker.begin("p2")
+        tracker.onLaunchAttempted("p2")
+        tracker.onActivityPaused(host)
+        tracker.onFlowEnded("p2")
+        tracker.onLateBound("p2")
+        tracker.onActivityCreated(proxy)
+        assertEquals(listOf("p1:not-started", "p2:not-started"), facts)
+        assertFalse(tracker.active)
+    }
+
+    @Test
+    fun aPauseBeforeTheLaunchAttemptDoesNotDeferTheVerdict() {
+        tracker.begin("p1")
+        tracker.onActivityPaused(host)
+        tracker.onLaunchAttempted("p1")
+        tracker.onFlowEnded("p1")
+        assertEquals(listOf("p1:not-started"), facts)
+    }
+
+    @Test
+    fun endsAFlowStuckBeforeTheLaunchOnTheCallTimeoutOnly() {
+        tracker.begin("p1")
+        assertTrue(tracker.cancelBeforeLaunch("p1"))
+        assertFalse(tracker.isTracking("p1"))
+        assertEquals("not-started", tracker.answerState("p1"))
+        tracker.begin("p2")
+        tracker.onLaunchAttempted("p2")
+        assertFalse(tracker.cancelBeforeLaunch("p2"))
+        assertFalse(tracker.cancelBeforeLaunch("other"))
+        assertTrue(tracker.isTracking("p2"))
+        assertEquals("requested", tracker.answerState("p2"))
+        assertEquals(listOf("p1:not-started"), facts)
+    }
+
+    @Test
+    fun claimsNoClosureWhenTheActivityIsOnlyRecreated() {
+        tracker.begin("p1")
+        tracker.onLaunchAttempted("p1")
+        tracker.onActivityCreated(proxy)
+        tracker.onTeardown(reportClosed = false)
+        assertFalse(tracker.active)
+        assertEquals(listOf("p1:open"), facts)
+    }
+
+    @Test
     fun acceptsOnlyBoundedPresentationIds() {
         assertTrue(PurchasePresentationTracker.isValidPresentationId("0f8fad5b-d9cb-469f-a165-70867728950e"))
         assertFalse(PurchasePresentationTracker.isValidPresentationId(null))

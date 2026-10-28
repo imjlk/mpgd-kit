@@ -27,8 +27,7 @@ import type {
 import { googlePlayStoreId, playBillingStoreSdkCapabilities } from './commerce-profile.js';
 import { CapacitorPlayBilling } from './plugin.js';
 import {
-  answeredPresentation,
-  createNativePurchasePresentation,
+  resolvePlayBillingNativePurchasePresentation,
   type PlayBillingSdkPurchasePresentation,
 } from './purchase-presentation.js';
 
@@ -368,13 +367,14 @@ export function createCapacitorPlayBillingStoreSdk(
   };
 
   // Sheet facts of `purchase` calls that carry a presentation id.
-  const presentationEnabled = input.purchasePresentation !== false;
-  const presentation = createNativePurchasePresentation(plugin);
+  const presentation = input.purchasePresentation === false
+    ? undefined
+    : resolvePlayBillingNativePurchasePresentation(plugin);
 
   const sdk: CapacitorPlayBillingStoreSdk = {
     store: googlePlayStoreId,
     capabilities: playBillingStoreSdkCapabilities,
-    ...(presentationEnabled ? { purchasePresentation: presentation.purchasePresentation } : {}),
+    ...(presentation === undefined ? {} : { purchasePresentation: presentation.purchasePresentation }),
     async fetchProducts(request: StoreSdkFetchProductsInput): Promise<readonly StoreSdkProduct[]> {
       assertAndroid(isAndroid);
       if (request.type === 'subscription') {
@@ -451,8 +451,8 @@ export function createCapacitorPlayBillingStoreSdk(
       const offerToken = request.offerId ?? product.offerToken;
       // Only an adapter that reads sheet facts sends an id (one from before
       // them never does, and the purchase runs as in earlier releases).
-      const presentationId = presentationEnabled ? request.presentationId : undefined;
-      if (presentationId !== undefined) {
+      const presentationId = presentation === undefined ? undefined : request.presentationId;
+      if (presentation !== undefined && presentationId !== undefined) {
         if (!(await presentation.supported())) {
           throw new PlayBillingStoreSdkError(
             playBillingPresentationUnsupportedCode,
@@ -473,12 +473,12 @@ export function createCapacitorPlayBillingStoreSdk(
         });
       } catch (error) {
         if (presentationId !== undefined) {
-          presentation.answered(presentationId, answeredPresentation(error));
+          presentation?.answered(presentationId, error);
         }
         return { outcome: 'failed', error: toSdkError(error) };
       }
       if (presentationId !== undefined) {
-        presentation.answered(presentationId, answeredPresentation(outcome));
+        presentation?.answered(presentationId, outcome);
       }
       if (!isRecord(outcome)) {
         throw invalidResponse('Play returned an invalid purchase outcome.');
@@ -551,7 +551,7 @@ export function createCapacitorPlayBillingStoreSdk(
       // An adapter that reads sheet facts over a native build without them
       // would refuse every purchase: report the store as needing a rebuild,
       // so the shop sells nothing and no idempotency key is spent.
-      if (presentationEnabled && presentation.followed() && !(await presentation.supported())) {
+      if (presentation !== undefined && presentation.followed() && !(await presentation.supported())) {
         return 'configuration-required';
       }
       try {

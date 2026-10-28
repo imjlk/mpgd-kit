@@ -9,6 +9,7 @@ import {
   type FakePlayBillingPluginOptions,
 } from '../test/play-billing-plugin-fixture.js';
 import { createCapacitorPlayBillingCommerceProvider } from './commerce-provider.js';
+import { resolvePlayBillingNativePurchasePresentation } from './purchase-presentation.js';
 import {
   createCapacitorPlayBillingStoreSdk,
   playBillingPresentationUnsupportedCode,
@@ -70,7 +71,7 @@ describe('Play Billing sheet facts (SDK)', () => {
     expect(facts).toEqual(['p-1:open', 'p-1:closed:interrupted']);
   });
 
-  it('treats a requested answer (the call timed out first) as an open sheet', async () => {
+  it('keeps a requested answer (the call timed out first) waiting for the native verdict', async () => {
     const { sdk, plugin, facts } = createSdk();
     plugin.queuePurchase({
       throws: Object.assign(new Error('timed out'), {
@@ -80,9 +81,15 @@ describe('Play Billing sheet facts (SDK)', () => {
     });
     await expect(sdk.requestPurchase({ sku: 'gems.small', accountBinding: binding, presentationId: 'p-1' }))
       .resolves.toMatchObject({ outcome: 'failed', error: { code: 'PLAY_BILLING_TIMEOUT' } });
-    expect(facts).toEqual(['p-1:open']);
+    // Not an invented `open`: the sheet may or may not come.
+    expect(facts).toEqual(['p-1:unknown']);
     plugin.present({ presentationId: 'p-1', state: 'not-started' });
-    expect(facts).toEqual(['p-1:open', 'p-1:not-started']);
+    expect(facts).toEqual(['p-1:unknown', 'p-1:not-started']);
+  });
+
+  it('declares no facts with an adapter from before the shared helper', () => {
+    expect(resolvePlayBillingNativePurchasePresentation(createPlugin(), {})).toBeUndefined();
+    expect(resolvePlayBillingNativePurchasePresentation(createPlugin())).toBeDefined();
   });
 
   it('reports not-started from a rejection that carries it', async () => {

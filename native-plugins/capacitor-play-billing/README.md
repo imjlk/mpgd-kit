@@ -161,21 +161,37 @@ from the activity lifecycle, never from `onPurchasesUpdated`:
 - `open` when a Billing Library activity
   (`com.android.billingclient.api.ProxyBillingActivity` or `...V2`, the
   translucent activity `launchBillingFlow` starts in the app process once it
-  returns OK) is created during the flow;
+  returns OK) is created during the flow, however late;
 - `closed` when an app activity that is not a billing activity resumes after
   it (the game's activity sits below the sheet in the same task), with
-  `reason: 'interrupted'` when the plugin is torn down, or with
-  `reason: 'timeout'` after 15 minutes without the game's activity resuming
-  (the plugin refuses a new purchase, `PLAY_BILLING_BUSY`, until then);
-- `not-started` when the flow ended without a billing activity (a launch
-  failure, or a refusal before the launch), after a 500 ms grace for an
-  activity that was just started.
+  `reason: 'interrupted'` when the app is torn down (finishing), or with
+  `reason: 'timeout'` after 15 minutes without the game's activity resuming;
+- `not-started` when the flow ended without a billing activity: a refusal
+  before the launch, or a launch that brought nothing over the game. After a
+  launch attempt the plugin waits 500 ms for the activity, and while the
+  game's activity is paused (something is coming over it) the verdict waits
+  until it resumes (`not-started`), a billing activity appears (`open`), or
+  10 seconds pass.
 
-A pending purchase, a purchase made outside the app, and the 180-second call
-timeout are not sheet facts. Facts reach JavaScript as `purchasePresentation`
+The plugin answers `PLAY_BILLING_BUSY` to a new purchase until the previous
+flow's terminal fact. A pending purchase, a purchase made outside the app,
+and the 180-second call timeout are not sheet facts. When the call times out
+before the flow ever reached `launchBillingFlow` (stuck before the launch),
+the plugin ends that flow `not-started` and cancels it; a flow that launched
+answers `presentation: 'requested'` when nothing was observed yet, and the
+provider then reports the sheet `unknown` and waits for the native verdict
+instead of assuming a sheet. Facts reach JavaScript as `purchasePresentation`
 events (retained until a listener attaches, keyed by a random id per call)
 and in the `presentation` field of the `purchase` answer or rejection data.
 The adapter adds a 15-minute safety timeout.
+
+The host activity must handle configuration changes itself, as Capacitor's
+`BridgeActivity` does by default (`android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"`):
+an activity recreated while the Play sheet is up loses the web view and the
+plugin's observations. The plugin then claims no `closed` for a sheet that
+may still be up (it reports `interrupted` only when the activity is
+finishing), and the reference shell's manifest check
+(`pnpm validate:capacitor-alignment`) keeps the attribute.
 
 `getPresentationSupport` declares the facts. A web bundle running on a native
 build from before them (a live update) gets `UNIMPLEMENTED` there: while an

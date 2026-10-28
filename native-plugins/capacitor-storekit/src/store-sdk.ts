@@ -28,8 +28,7 @@ import type {
 import { appStoreStoreId, storeKitStoreSdkCapabilities } from './commerce-profile.js';
 import { CapacitorStoreKit } from './plugin.js';
 import {
-  answeredPresentation,
-  createNativePurchasePresentation,
+  resolveStoreKitNativePurchasePresentation,
   type StoreKitSdkPurchasePresentation,
 } from './purchase-presentation.js';
 
@@ -144,8 +143,9 @@ export function createCapacitorStoreKitStoreSdk(
 ): CapacitorStoreKitStoreSdk {
   const sdk = input.sdk ?? CapacitorStoreKit;
   // Sheet facts of `purchase` calls that carry a presentation id.
-  const presentationEnabled = input.purchasePresentation !== false;
-  const presentation = createNativePurchasePresentation(sdk);
+  const presentation = input.purchasePresentation === false
+    ? undefined
+    : resolveStoreKitNativePurchasePresentation(sdk);
   const isIos = input.isIos ?? (() => Capacitor.getPlatform() === 'ios');
   const onDiagnostic = input.onDiagnostic ?? (() => undefined);
   if (typeof input.getAppAccountToken !== 'function') {
@@ -504,7 +504,7 @@ export function createCapacitorStoreKitStoreSdk(
 
   return {
     store: appStoreStoreId,
-    ...(presentationEnabled ? { purchasePresentation: presentation.purchasePresentation } : {}),
+    ...(presentation === undefined ? {} : { purchasePresentation: presentation.purchasePresentation }),
     capabilities: storeKitStoreSdkCapabilities,
     async fetchProducts(request: StoreSdkFetchProductsInput): Promise<readonly StoreSdkProduct[]> {
       requireIos();
@@ -531,8 +531,8 @@ export function createCapacitorStoreKitStoreSdk(
       const expected = await assertSellable(request.sku);
       // Only an adapter that reads sheet facts sends an id (one from before
       // them never does, and the purchase runs as in earlier releases).
-      const presentationId = presentationEnabled ? request.presentationId : undefined;
-      if (presentationId !== undefined) {
+      const presentationId = presentation === undefined ? undefined : request.presentationId;
+      if (presentation !== undefined && presentationId !== undefined) {
         if (!(await presentation.supported())) {
           throw storeKitError(
             storeKitPresentationUnsupportedCode,
@@ -552,12 +552,12 @@ export function createCapacitorStoreKitStoreSdk(
         });
       } catch (error) {
         if (presentationId !== undefined) {
-          presentation.answered(presentationId, answeredPresentation(error));
+          presentation?.answered(presentationId, error);
         }
         throw error;
       }
       if (presentationId !== undefined) {
-        presentation.answered(presentationId, answeredPresentation(outcome));
+        presentation?.answered(presentationId, outcome);
       }
       if (!isRecord(outcome)) {
         throw evidenceInvalid('StoreKit returned an invalid purchase result.');
@@ -723,7 +723,7 @@ export function createCapacitorStoreKitStoreSdk(
       // An adapter that reads sheet facts over a native build without them
       // would refuse every purchase: report the store as needing a rebuild,
       // so the shop sells nothing and no idempotency key is spent.
-      if (presentationEnabled && presentation.followed() && !(await presentation.supported())) {
+      if (presentation !== undefined && presentation.followed() && !(await presentation.supported())) {
         return 'configuration-required';
       }
       try {

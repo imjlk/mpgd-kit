@@ -18,6 +18,7 @@ import {
   createCapacitorStoreKitCommerceProvider,
   createCapacitorStoreKitServiceProvider,
 } from './commerce-provider.js';
+import { resolveStoreKitNativePurchasePresentation } from './purchase-presentation.js';
 import {
   createCapacitorStoreKitStoreSdk,
   storeKitPresentationUnsupportedCode,
@@ -76,6 +77,40 @@ function createSdk(
   const result = await sdk.requestPurchase({ sku, accountBinding, presentationId: 'p-1' });
   assertEqual(result, { outcome: 'launched' }, 'Ask to Buy stays launched');
   assertEqual(facts, ['p-1:open', 'p-1:closed'], 'and its sheet is closed');
+}
+
+// With an adapter from before the shared helper, the SDK declares no facts.
+{
+  const plugin = createFakeStoreKitPlugin({ products: [fakeProduct()] });
+  assertEqual(
+    resolveStoreKitNativePurchasePresentation(plugin, {}),
+    undefined,
+    'an old adapter gives no helper',
+  );
+  assertEqual(
+    resolveStoreKitNativePurchasePresentation(plugin) !== undefined,
+    true,
+    'this adapter gives one',
+  );
+}
+
+// A `requested` answer is reported `unknown`, never an invented `open`.
+{
+  const { plugin, sdk, facts } = createSdk();
+  plugin.queuePurchase({
+    throws: Object.assign(new Error('uncertain'), {
+      code: 'STOREKIT_PURCHASE_UNCERTAIN',
+      data: { presentation: 'requested' },
+    }),
+  });
+  await assertThrowsCode(
+    () => sdk.requestPurchase({ sku, accountBinding, presentationId: 'p-9' }),
+    'STOREKIT_PURCHASE_UNCERTAIN',
+    'the rejection reaches the provider',
+  );
+  assertEqual(facts, ['p-9:unknown'], 'requested is unknown');
+  plugin.present({ presentationId: 'p-9', state: 'closed' });
+  assertEqual(facts, ['p-9:unknown', 'p-9:closed'], 'the native verdict ends it');
 }
 
 // A rejection carries the sheet state in its data.

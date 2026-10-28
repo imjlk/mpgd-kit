@@ -21,7 +21,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import org.json.JSONException
 
@@ -70,6 +72,8 @@ class CapacitorPlayBillingPlugin : Plugin() {
         notifyPresentation(id, state, reason)
     }
     private var sheetTimeout: Job? = null
+    private var purchaseJob: Job? = null
+    private var lateLaunchBound: Job? = null
     private var presentationId: String? = null
     private var lifecycleApplication: Application? = null
 
@@ -84,8 +88,11 @@ class CapacitorPlayBillingPlugin : Plugin() {
             presentation.onActivityResumed(activity.javaClass.name)
         }
 
+        override fun onActivityPaused(activity: Activity) {
+            presentation.onActivityPaused(activity.javaClass.name)
+        }
+
         override fun onActivityStarted(activity: Activity) = Unit
-        override fun onActivityPaused(activity: Activity) = Unit
         override fun onActivityStopped(activity: Activity) = Unit
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
         override fun onActivityDestroyed(activity: Activity) = Unit
@@ -108,8 +115,12 @@ class CapacitorPlayBillingPlugin : Plugin() {
     }
 
     override fun handleOnDestroy() {
-        // Nothing is observed after this: a sheet still open is closed here.
-        presentation.onTeardown()
+        // Nothing is observed after this. A finishing app reports a sheet
+        // still open as closed (`interrupted`); an activity that is only
+        // recreated (a configuration change the manifest does not handle)
+        // may leave the Play sheet up, so nothing is claimed for it.
+        presentation.onTeardown(reportClosed = activity?.isChangingConfigurations != true)
+        lateLaunchBound?.cancel()
         activePurchase?.let { call ->
             val id = presentationId
             clearActivePurchase(call)
@@ -229,6 +240,13 @@ class CapacitorPlayBillingPlugin : Plugin() {
             delay(PURCHASE_TIMEOUT_MILLIS)
             if (activePurchase === call) {
                 val id = presentationId
+                // A flow that never reached `launchBillingFlow` (stuck before
+                // the launch) is ended here, `not-started`, and cancelled, so
+                // the game is not held for a sheet that cannot come. A
+                // launched flow keeps running and reports its sheet as events.
+                if (id != null && presentation.cancelBeforeLaunch(id)) {
+                    purchaseJob?.cancel()
+                }
                 timedOutProductId = activeProductId
                 clearActivePurchase(call)
                 // The sheet may still be up: its facts keep arriving as events.
@@ -240,7 +258,7 @@ class CapacitorPlayBillingPlugin : Plugin() {
                 )
             }
         }
-        scope.launch {
+        purchaseJob = scope.launch {
             val resolution = try {
                 val outcome = try {
                     runPurchase(active, productId, accountId, selectedOfferToken, requestedPresentationId)
@@ -266,7 +284,15 @@ class CapacitorPlayBillingPlugin : Plugin() {
                 }
                 outcome
             } finally {
-                requestedPresentationId?.let { presentation.onFlowEnded(it) }
+                requestedPresentationId?.let { id ->
+                    presentation.onFlowEnded(id)
+                    // The game's activity is still paused after a launch
+                    // attempt: the verdict waits for it (or a late billing
+                    // activity), bounded here. The flow stays busy meanwhile.
+                    if (presentation.isTracking(id) && presentation.openPresentationId == null) {
+                        armLateLaunchBound(id)
+                    }
+                }
                 // Released on every path, so one failure never leaves later
                 // purchases answering PLAY_BILLING_BUSY until a restart.
                 flowInProgress = false
@@ -297,6 +323,11 @@ class CapacitorPlayBillingPlugin : Plugin() {
         // the owned purchase; the 0.3 contract rejects instead, and the owned
         // purchase still reaches JavaScript through `purchaseUpdated`.
         val ownedBefore = active.inAppPurchases().mapNotNullTo(HashSet()) { it.purchaseToken }
+        // A flow the call timeout already ended must not open a sheet now.
+        currentCoroutineContext().ensureActive()
+        if (presentationId != null && !presentation.isTracking(presentationId)) {
+            return PurchaseResolution.Failed("PLAY_BILLING_TIMEOUT", "Purchase confirmation timed out; requery owned purchases.")
+        }
         presentationId?.let { presentation.onLaunchAttempted(it) }
         val (purchases, error) = active.purchase(activity, productId, offer.offerTokenAndroid.orEmpty(), accountId)
         val matched = purchases.firstOrNull { it.ids.orEmpty().contains(productId) }
@@ -404,6 +435,14 @@ class CapacitorPlayBillingPlugin : Plugin() {
         }
     }
 
+    private fun armLateLaunchBound(id: String) {
+        lateLaunchBound?.cancel()
+        lateLaunchBound = scope.launch {
+            delay(LATE_LAUNCH_BOUND_MILLIS)
+            presentation.onLateBound(id)
+        }
+    }
+
     /** A refusal before any flow began; its sheet never opened. */
     private fun rejectNotStarted(call: PluginCall, id: String?, message: String, code: String) {
         if (id == null) {
@@ -496,6 +535,8 @@ class CapacitorPlayBillingPlugin : Plugin() {
         const val PURCHASE_TIMEOUT_MILLIS = 180_000L
         /** How long a launched flow waits for its billing activity before it counts as never shown. */
         const val LAUNCH_OBSERVATION_GRACE_MILLIS = 500L
+        /** How long a launched flow's verdict may wait for the game's paused activity. */
+        const val LATE_LAUNCH_BOUND_MILLIS = 10_000L
         /** The OpenIAP Google purchase flow timeout, and the TypeScript provider's sheet bound. */
         const val SHEET_TIMEOUT_MILLIS = 900_000L
         const val UNAVAILABLE_MESSAGE = "Google Play Billing is unavailable."

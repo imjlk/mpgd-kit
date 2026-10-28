@@ -67,7 +67,8 @@ export interface StoreSdk {
  * is up, then exactly one `closed` when it is gone (which may come after the
  * call settled), or `not-started` when no sheet opened. A fact the call
  * settles without (the sheet never opened) means `not-started`, so an SDK
- * reports `open` before it settles whenever a sheet opened. A transaction
+ * reports `open` before it settles whenever a sheet opened, and `unknown`
+ * before it settles when it cannot tell yet (a terminal fact then follows). A transaction
  * update, a pending purchase, or a result is not a `closed` fact.
  */
 export interface StoreSdkPurchasePresentation {
@@ -76,7 +77,13 @@ export interface StoreSdkPurchasePresentation {
 
 export interface StoreSdkPurchasePresentationEvent {
   readonly presentationId: string;
-  readonly state: 'open' | 'closed' | 'not-started';
+  /**
+   * `unknown`: the call is answering while the native flow still runs and
+   * nothing was observed yet; the sheet may still open, and a terminal fact
+   * (`closed` or `not-started`) follows. The provider keeps the call waiting
+   * for it instead of reading the answer as a sheet that never opened.
+   */
+  readonly state: 'open' | 'closed' | 'not-started' | 'unknown';
   /** On a `closed` fact no native observation proved, why; see `PlatformPurchasePresentationReason`. */
   readonly reason?: PlatformPurchasePresentationReason;
 }

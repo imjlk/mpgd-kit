@@ -9,7 +9,11 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
-import { PlatformOperationError, type PlatformPurchasePresentationEvent } from '@mpgd/platform';
+import {
+  createPurchasePresentationRelay,
+  PlatformOperationError,
+  type PlatformPurchasePresentationEvent,
+} from '@mpgd/platform';
 import {
   assertCommerceBridgeFetchProductsPayload,
   assertCommerceBridgeFetchProductsResult,
@@ -38,10 +42,6 @@ import {
 
 import { namesOtherProtocol } from './bridge-events.js';
 import type { CapacitorCommerceServiceProvider } from './providers.js';
-import {
-  createPresentationSequenceGuard,
-  createPurchasePresentationChannel,
-} from './purchase-presentation.js';
 import { normalizeStoreSdkError } from './store-sdk.js';
 
 /** Bridge error for a commerce v2 payload the typia assert rejected. */
@@ -429,91 +429,43 @@ export function createBridgeCommerceProvider(
 }
 
 /**
- * `presentation` over the host's facts. One attachment to the host serves
- * every listener; it is made with the first and dropped with the last.
+ * `presentation` over the host's facts: validated, then relayed by the
+ * platform's `createPurchasePresentationRelay` (a superseded fact dropped,
+ * the rest numbered again, `not-started` added for a call that settled
+ * without a fact). One attachment to the host serves every listener.
  */
 function withBridgePresentation(
   provider: CommerceProvider,
   subscribePresentation: NonNullable<CreateBridgeCommerceProviderInput['subscribePresentation']>,
 ): CommerceProvider {
-  const channel = createPurchasePresentationChannel();
-  const fresh = createPresentationSequenceGuard();
-  let listenerCount = 0;
-  let detach: (() => void) | undefined;
-  // Idempotency keys of `requestPurchase` calls in flight, each call with
-  // whether a fact for its key arrived while it ran. Facts are observed only
-  // while a listener is attached; a consumer (the game runtime's gate)
-  // subscribes before its first purchase, so it never misses one.
-  const calls = new Map<string, { seen: boolean }[]>();
-
-  const onEnvelope = (envelope: BridgeCommercePresentationEvent): void => {
-    if (namesOtherProtocol(envelope, bridgeCommercePresentationEventProtocol)) {
-      return;
-    }
-    let event: PlatformPurchasePresentationEvent;
-    try {
-      event = assertCommercePresentationEventEnvelope(envelope).event;
-    } catch (error) {
-      console.warn('The bridge delivered an invalid purchase presentation fact.', error);
-      return;
-    }
-    if (!fresh(event)) {
-      return;
-    }
-    for (const call of calls.get(event.idempotencyKey) ?? []) {
-      call.seen = true;
-    }
-    channel.publish({
-      idempotencyKey: event.idempotencyKey,
-      state: event.state,
-      ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
-      ...(event.reason === undefined ? {} : { reason: event.reason }),
-    });
-  };
-
-  return {
-    ...provider,
-    presentation: {
-      subscribe(listener) {
-        const unsubscribe = channel.presentation.subscribe(listener);
-        listenerCount += 1;
-        detach ??= subscribePresentation(onEnvelope);
-        let active = true;
-        return () => {
-          if (!active) {
+  const relay = createPurchasePresentationRelay(
+    {
+      subscribe: (listener) =>
+        subscribePresentation((envelope) => {
+          if (namesOtherProtocol(envelope, bridgeCommercePresentationEventProtocol)) {
             return;
           }
-          active = false;
-          unsubscribe();
-          listenerCount -= 1;
-          if (listenerCount === 0 && detach !== undefined) {
-            const unsubscribeHost = detach;
-            detach = undefined;
-            unsubscribeHost();
+          let event: PlatformPurchasePresentationEvent;
+          try {
+            event = assertCommercePresentationEventEnvelope(envelope).event;
+          } catch (error) {
+            console.warn('The bridge delivered an invalid purchase presentation fact.', error);
+            return;
           }
-        };
+          listener(event);
+        }),
+    },
+    {
+      onListenerError: (error) => {
+        console.warn('A purchase presentation listener failed.', error);
       },
     },
-    async requestPurchase(request) {
-      const call = { seen: false };
-      const key = request.idempotencyKey;
-      calls.set(key, [...(calls.get(key) ?? []), call]);
-      try {
-        return await provider.requestPurchase(request);
-      } finally {
-        const remaining = (calls.get(key) ?? []).filter((entry) => entry !== call);
-        if (remaining.length === 0) {
-          calls.delete(key);
-        } else {
-          calls.set(key, remaining);
-        }
-        // No fact by the answer: the host's provider never ran, so no sheet
-        // opened. Published before the caller sees the answer.
-        if (!call.seen) {
-          channel.publish({ idempotencyKey: key, state: 'not-started' });
-        }
-      }
-    },
+  );
+  return {
+    ...provider,
+    presentation: relay.presentation,
+    requestPurchase: (request) =>
+      relay.track(request.idempotencyKey, () => provider.requestPurchase(request)),
   };
 }
 

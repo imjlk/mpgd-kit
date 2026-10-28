@@ -728,6 +728,18 @@ describe('commerce v2 purchase activity with sheet facts', () => {
     await gateway.lifecycle.dispose?.();
   });
 
+  it('stays paused while the sheet is unknown until its native verdict', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId } = createPresentedGateway(fake);
+    await settle();
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'unknown');
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.present(lastPresentationId(), 'not-started');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
   it('holds nothing after a pending purchase whose sheet already closed', async () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createPresentedGateway(fake);

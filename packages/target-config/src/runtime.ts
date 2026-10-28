@@ -1,12 +1,12 @@
 import typia from 'typia';
 
 import type { MpgdLocale } from '@mpgd/i18n';
-import type {
-  CommerceCapabilities,
-  PlatformCapabilities,
-  PlatformGateway,
-  PlatformProviderAvailability,
-  PlatformPurchasePresentationEvent,
+import {
+  createPurchasePresentationRelay,
+  type CommerceCapabilities,
+  type PlatformCapabilities,
+  type PlatformGateway,
+  type PlatformProviderAvailability,
 } from '@mpgd/platform';
 import type { CommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 
@@ -585,103 +585,6 @@ function commerceSellsOneTime(commerce: CommerceCapabilities): boolean {
     && (commerce.purchase.consumable || commerce.purchase.durable);
 }
 
-type PurchasePresentationSource = NonNullable<NonNullable<PlatformGateway['commerce']>['presentation']>;
-type PurchasePresentationListener = (event: PlatformPurchasePresentationEvent) => void;
-
-/**
- * The purchase presentation facts of a commerce source, relayed with this
- * wrapper's own increasing `sequence`, plus a `not-started` fact for each
- * purchase call that ended without any fact from the source: the wrapper
- * refused it (or failed) before the source ran, so no sheet opened. A
- * consumer that waits for a fact after every purchase (the game runtime's
- * presentation gate) would otherwise wait forever. Delivered before the
- * call's answer. One attachment to the source serves every listener.
- */
-function relayPurchasePresentation(source: PurchasePresentationSource): {
-  readonly presentation: PurchasePresentationSource;
-  track<T>(idempotencyKey: string, run: () => Promise<T>): Promise<T>;
-} {
-  const listeners = new Set<{ readonly listener: PurchasePresentationListener }>();
-  const calls = new Map<string, { seen: boolean }[]>();
-  // The last source sequence per key (per attempt when tagged): a fact the
-  // source already superseded is dropped before it is numbered again.
-  const cursors = new Map<string, number>();
-  let sequence = 0;
-  let detach: (() => void) | undefined;
-  const publish = (fact: Omit<PlatformPurchasePresentationEvent, 'sequence'>): void => {
-    sequence += 1;
-    const event = Object.freeze({ ...fact, sequence });
-    for (const entry of [...listeners]) {
-      if (!listeners.has(entry)) {
-        continue;
-      }
-      try {
-        entry.listener(event);
-      } catch (error) {
-        // A failing listener must not keep a fact from the others.
-        console.warn('A purchase presentation listener failed.', error);
-      }
-    }
-  };
-  const onFact: PurchasePresentationListener = (event) => {
-    if (typeof event !== 'object' || event === null || typeof event.idempotencyKey !== 'string'
-      || !Number.isSafeInteger(event.sequence)) {
-      return;
-    }
-    const cursor = typeof event.attempt === 'number'
-      ? `${event.idempotencyKey}\u0000${String(event.attempt)}`
-      : event.idempotencyKey;
-    const last = cursors.get(cursor);
-    if (last !== undefined && event.sequence <= last) {
-      return;
-    }
-    cursors.set(cursor, event.sequence);
-    for (const call of calls.get(event.idempotencyKey) ?? []) {
-      call.seen = true;
-    }
-    publish({
-      idempotencyKey: event.idempotencyKey,
-      state: event.state,
-      ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
-      ...(event.reason === undefined ? {} : { reason: event.reason }),
-    });
-  };
-  return {
-    presentation: {
-      subscribe(listener) {
-        const entry = { listener };
-        listeners.add(entry);
-        detach ??= source.subscribe(onFact);
-        return () => {
-          if (!listeners.delete(entry) || listeners.size > 0 || detach === undefined) {
-            return;
-          }
-          const unsubscribe = detach;
-          detach = undefined;
-          unsubscribe();
-        };
-      },
-    },
-    async track(idempotencyKey, run) {
-      const call = { seen: false };
-      calls.set(idempotencyKey, [...(calls.get(idempotencyKey) ?? []), call]);
-      try {
-        return await run();
-      } finally {
-        const remaining = (calls.get(idempotencyKey) ?? []).filter((entry) => entry !== call);
-        if (remaining.length === 0) {
-          calls.delete(idempotencyKey);
-        } else {
-          calls.set(idempotencyKey, remaining);
-        }
-        if (!call.seen) {
-          publish({ idempotencyKey, state: 'not-started' });
-        }
-      }
-    },
-  };
-}
-
 /**
  * Subscriptions are sold under the same readiness rule as one-time products:
  * the provider is available and declares the kind. A provider that is not
@@ -1026,10 +929,15 @@ export function withTargetAvailability(
   const commerceSource = gateway.commerce;
   // A source with purchase presentation facts answers every purchase call
   // with one; a purchase refused here never reaches it, so this wrapper
-  // reports that call's `not-started` itself (see `relayPurchasePresentation`).
+  // reports that call's `not-started` itself (`createPurchasePresentationRelay`).
   const presentationRelay = commerceSource?.presentation === undefined
     ? undefined
-    : relayPurchasePresentation(commerceSource.presentation);
+    : createPurchasePresentationRelay(commerceSource.presentation, {
+        onListenerError: (error) => {
+          // A failing listener must not keep a fact from the others.
+          console.warn('A purchase presentation listener failed.', error);
+        },
+      });
   // Recovery reads (`getAvailablePurchases`, `finishTransaction`, `subscribe`)
   // always pass through: an already paid purchase must stay recoverable and
   // finishable even when the target stops selling. Catalog reads, new

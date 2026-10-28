@@ -1,114 +1,220 @@
-import type {
-  PlatformPurchasePresentationEvent,
-  PlatformPurchasePresentationReason,
-} from '@mpgd/platform';
+import type { PluginListenerHandle } from '@capacitor/core';
 
-// Purchase presentation facts as the adapter publishes them. Internal: the
-// package entry re-exports only `purchasePresentationTimeoutMs`.
+import type {
+  StoreSdkPurchasePresentation,
+  StoreSdkPurchasePresentationEvent,
+} from './store-sdk.js';
 
 /**
- * Upper bound on how long one store sheet counts as open without a native
- * `closed` fact. Past it the provider reports `closed` with reason `timeout`,
- * so a lost native observation can pause the game, but never forever. It
- * matches the purchase flow timeout of the OpenIAP Google core (15 minutes).
+ * Upper bound on how long one store sheet counts as open (or possibly open)
+ * without a native `closed` fact. Past it the provider reports `closed` with
+ * reason `timeout`, so a lost native observation can pause the game, but
+ * never forever. It matches the purchase flow timeout of the OpenIAP Google
+ * core (15 minutes).
  */
 export const purchasePresentationTimeoutMs = 15 * 60_000;
 
-export type PurchasePresentationListener = (event: PlatformPurchasePresentationEvent) => void;
+/** A store plugin's native surface for sheet facts (Play Billing, StoreKit). */
+export interface NativePurchasePresentationPlugin {
+  addListener(
+    eventName: 'purchasePresentation',
+    listener: (event: unknown) => void,
+  ): Promise<PluginListenerHandle>;
+  readonly getPresentationSupport?: () => Promise<unknown>;
+}
 
-/** `CommerceProvider.presentation` plus the side that publishes into it. */
-export interface PurchasePresentationChannel {
-  readonly presentation: {
-    subscribe(listener: PurchasePresentationListener): () => void;
-  };
+/** What a store plugin's `StoreSdk` uses to report its native sheet facts. */
+export interface NativePurchasePresentation {
+  /** The SDK's `purchasePresentation` declaration. */
+  readonly purchasePresentation: StoreSdkPurchasePresentation;
   /**
-   * Delivers one fact to every current listener, synchronously, numbered
-   * with the next `sequence` of this channel (from 1, increasing across every
-   * key, so each key's facts increase too). Facts are never buffered: a
-   * listener receives the ones published while it is subscribed.
+   * Whether the native code in the app reports facts (`getPresentationSupport`).
+   * A build from before them answers `UNIMPLEMENTED`, which is remembered;
+   * any other failure is asked again next time.
    */
-  publish(fact: {
-    readonly idempotencyKey: string;
-    readonly state: PlatformPurchasePresentationEvent['state'];
-    /** A source's attempt generation, kept so a consumer can drop an earlier attempt's fact. */
-    readonly attempt?: number;
-    readonly reason?: PlatformPurchasePresentationReason;
-  }): void;
-  clear(): void;
-}
-
-export function createPurchasePresentationChannel(): PurchasePresentationChannel {
-  const listeners = new Set<PurchasePresentationListener>();
-  let sequence = 0;
-  return {
-    presentation: {
-      subscribe(listener) {
-        // One entry per call, so the same listener subscribed twice gets two
-        // deliveries and two independent unsubscribes.
-        const entry: PurchasePresentationListener = (event) => listener(event);
-        listeners.add(entry);
-        return () => {
-          listeners.delete(entry);
-        };
-      },
-    },
-    publish(fact) {
-      sequence += 1;
-      const event: PlatformPurchasePresentationEvent = Object.freeze({
-        idempotencyKey: fact.idempotencyKey,
-        sequence,
-        state: fact.state,
-        ...(fact.attempt === undefined ? {} : { attempt: fact.attempt }),
-        ...(fact.reason === undefined ? {} : { reason: fact.reason }),
-      });
-      for (const listener of [...listeners]) {
-        try {
-          listener(event);
-        } catch (error) {
-          // A failing listener must not keep a `closed` fact from the others:
-          // a consumer that misses it would hold the game paused.
-          console.warn('A purchase presentation listener failed.', error);
-        }
-      }
-    },
-    clear() {
-      listeners.clear();
-    },
-  };
-}
-
-const presentationReasons: ReadonlySet<string> = new Set<PlatformPurchasePresentationReason>([
-  'timeout',
-  'interrupted',
-  'disposed',
-]);
-
-export function isPurchasePresentationReason(
-  value: unknown,
-): value is PlatformPurchasePresentationReason {
-  return typeof value === 'string' && presentationReasons.has(value);
+  supported(): Promise<boolean>;
+  /**
+   * Someone follows the facts: an adapter that reads them subscribes when it
+   * builds its provider (one from before them never does).
+   */
+  followed(): boolean;
+  /** Follows facts for a `purchase` call about to be sent with this id. */
+  begin(presentationId: string): void;
+  /**
+   * Applies the sheet state a `purchase` answer, or a rejection's `data`,
+   * carried (`presentation`): `open`, `closed`, `not-started`, or
+   * `requested` (native code still runs the flow and has observed nothing
+   * yet; its facts follow as events).
+   */
+  answered(presentationId: string, answerOrError: unknown): void;
 }
 
 /**
- * Drops a relayed fact its source already superseded, before the relay
- * numbers it again: a fact whose `sequence` is not above the last one seen
- * for its key (per `attempt` when the source tags attempts), as the game
- * runtime's coordinator would have done with the source's own numbers.
+ * Sheet facts by presentation id from the plugin's `purchasePresentation`
+ * events and the `presentation` field of its `purchase` answers, whichever
+ * arrives first; each call gets at most one `open` and one terminal fact.
+ * A `requested` answer is reported as `unknown`: the sheet may still come,
+ * so the provider keeps the call waiting for the native `open`, `closed`, or
+ * `not-started` instead of reading the answer as a sheet that never opened
+ * or inventing one that did. The native listener is attached with the first
+ * subscriber and removed with the last.
+ *
+ * Exported for the store plugins, which peer on this package. A plugin reads
+ * it through the module namespace, so with an adapter from before it the
+ * plugin declares no facts (and that adapter never asks for them).
  */
-export function createPresentationSequenceGuard(): (event: PlatformPurchasePresentationEvent) => boolean {
-  const cursors = new Map<string, number>();
-  return (event) => {
-    if (!Number.isSafeInteger(event.sequence)) {
-      return false;
+export function createNativePurchasePresentation(
+  native: NativePurchasePresentationPlugin,
+): NativePurchasePresentation {
+  const listeners = new Set<{
+    readonly listener: (event: StoreSdkPurchasePresentationEvent) => void;
+  }>();
+  const sheets = new Map<string, 'requested' | 'unknown' | 'open'>();
+  let handle: Promise<PluginListenerHandle> | undefined;
+  let generation = 0;
+  let support: Promise<boolean> | undefined;
+
+  const report = (
+    presentationId: string,
+    state: StoreSdkPurchasePresentationEvent['state'],
+    reason?: StoreSdkPurchasePresentationEvent['reason'],
+  ): void => {
+    const current = sheets.get(presentationId);
+    if (current === undefined || current === state || (state === 'unknown' && current === 'open')) {
+      return;
     }
-    const cursor = typeof event.attempt === 'number'
-      ? `${event.idempotencyKey}\u0000${String(event.attempt)}`
-      : event.idempotencyKey;
-    const last = cursors.get(cursor);
-    if (last !== undefined && event.sequence <= last) {
-      return false;
+    if (state === 'open' || state === 'unknown') {
+      sheets.set(presentationId, state);
+    } else {
+      sheets.delete(presentationId);
     }
-    cursors.set(cursor, event.sequence);
-    return true;
+    const event: StoreSdkPurchasePresentationEvent = {
+      presentationId,
+      state,
+      ...(reason === undefined ? {} : { reason }),
+    };
+    for (const entry of [...listeners]) {
+      if (listeners.has(entry)) {
+        entry.listener(event);
+      }
+    }
   };
+  const onNativeFact = (event: unknown): void => {
+    if (!isRecord(event) || typeof event.presentationId !== 'string') {
+      return;
+    }
+    const { state, reason } = event;
+    if (state === 'open' || state === 'closed' || state === 'not-started') {
+      report(
+        event.presentationId,
+        state,
+        state === 'closed' && (reason === 'interrupted' || reason === 'timeout')
+          ? reason
+          : undefined,
+      );
+    }
+  };
+  const attach = (): void => {
+    if (handle !== undefined) {
+      return;
+    }
+    const attached = generation;
+    let added: Promise<PluginListenerHandle>;
+    try {
+      added = native.addListener('purchasePresentation', (event) => {
+        if (attached === generation) {
+          onNativeFact(event);
+        }
+      });
+    } catch {
+      return;
+    }
+    handle = added;
+    added.catch(() => {
+      if (handle === added) {
+        handle = undefined;
+      }
+    });
+  };
+  const detach = (): void => {
+    const current = handle;
+    if (current === undefined) {
+      return;
+    }
+    handle = undefined;
+    generation += 1;
+    current.then((resolved) => resolved.remove()).catch(() => undefined);
+  };
+
+  return {
+    purchasePresentation: {
+      subscribe(listener) {
+        const entry = { listener };
+        listeners.add(entry);
+        attach();
+        return () => {
+          if (listeners.delete(entry) && listeners.size === 0) {
+            detach();
+          }
+        };
+      },
+    },
+    followed() {
+      return listeners.size > 0;
+    },
+    supported() {
+      if (support !== undefined) {
+        return support;
+      }
+      const check = native.getPresentationSupport;
+      if (typeof check !== 'function') {
+        return Promise.resolve(false);
+      }
+      const attempt = Promise.resolve()
+        .then(() => check.call(native))
+        .then(
+          (answer: unknown) => isRecord(answer)
+            && typeof answer.purchasePresentation === 'number'
+            && answer.purchasePresentation >= 1,
+          (error: unknown) => {
+            if (!isRecord(error) || error.code !== 'UNIMPLEMENTED') {
+              support = undefined;
+            }
+            return false;
+          },
+        );
+      support = attempt;
+      return attempt;
+    },
+    begin(presentationId) {
+      sheets.set(presentationId, 'requested');
+    },
+    answered(presentationId, answerOrError) {
+      const presentation = answeredPresentation(answerOrError);
+      if (presentation === 'open' || presentation === 'closed' || presentation === 'not-started') {
+        report(presentationId, presentation);
+      } else if (presentation === 'requested') {
+        report(presentationId, 'unknown');
+      } else if (sheets.get(presentationId) === 'requested') {
+        // No sheet state from native code that declared facts: nothing was
+        // seen opening, which the provider reads as not-started.
+        sheets.delete(presentationId);
+      }
+    },
+  };
+}
+
+/** The `presentation` of a `purchase` answer or of a rejection's `data`. */
+function answeredPresentation(answer: unknown): unknown {
+  if (!isRecord(answer)) {
+    return undefined;
+  }
+  if ('presentation' in answer) {
+    return answer.presentation;
+  }
+  return isRecord(answer.data) ? answer.data.presentation : undefined;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

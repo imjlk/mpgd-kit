@@ -1,4 +1,9 @@
-import type { PlatformEvidenceEnvelope, PlatformProviderAvailability } from '@mpgd/platform';
+import {
+  createPurchasePresentationChannel,
+  isPurchasePresentationReason,
+  type PlatformEvidenceEnvelope,
+  type PlatformProviderAvailability,
+} from '@mpgd/platform';
 import {
   assertFinishTransactionInput,
   assertFinishTransactionResult,
@@ -32,8 +37,6 @@ import {
 } from '@mpgd/platform/commerce';
 
 import {
-  createPurchasePresentationChannel,
-  isPurchasePresentationReason,
   purchasePresentationTimeoutMs,
 } from './purchase-presentation.js';
 import {
@@ -144,6 +147,8 @@ interface PresentationFlight {
   readonly idempotencyKey: string;
   readonly presentationId: string;
   open: boolean;
+  /** The SDK reported `unknown`: its terminal fact follows the answer. */
+  pending: boolean;
   /** The SDK was asked to open the sheet. */
   launched: boolean;
   timer?: ReturnType<typeof setTimeout>;
@@ -317,7 +322,12 @@ export function createStoreCommerceProvider(
   const sdkPresentation = sdk.purchasePresentation;
   const presentation = sdkPresentation === undefined
     ? undefined
-    : createPurchasePresentationChannel();
+    : createPurchasePresentationChannel({
+        onListenerError: (error) => {
+          // A failing listener must not keep a `closed` fact from the others.
+          console.warn('A purchase presentation listener failed.', error);
+        },
+      });
   const flights = new Map<string, PresentationFlight>();
   let disposed = false;
   const endFlight = (
@@ -350,15 +360,26 @@ export function createStoreCommerceProvider(
       // Another call's, an already ended call's, or an earlier session's fact.
       return;
     }
+    const armSafetyTimeout = (): void => {
+      flight.timer ??= setTimeout(
+        () => endFlight(flight, 'closed', 'timeout'),
+        purchasePresentationTimeoutMs,
+      );
+    };
     switch (event.state) {
       case 'open':
         if (!flight.open) {
           flight.open = true;
           presentation?.publish({ idempotencyKey: flight.idempotencyKey, state: 'open' });
-          flight.timer = setTimeout(
-            () => endFlight(flight, 'closed', 'timeout'),
-            purchasePresentationTimeoutMs,
-          );
+          armSafetyTimeout();
+        }
+        return;
+      case 'unknown':
+        // The sheet may still open: the call's answer does not end it.
+        if (!flight.open && !flight.pending) {
+          flight.pending = true;
+          presentation?.publish({ idempotencyKey: flight.idempotencyKey, state: 'unknown' });
+          armSafetyTimeout();
         }
         return;
       case 'closed':
@@ -575,6 +596,7 @@ export function createStoreCommerceProvider(
         idempotencyKey: request.idempotencyKey,
         presentationId: crypto.randomUUID(),
         open: false,
+        pending: false,
         launched: false,
       };
       flights.set(flight.presentationId, flight);
@@ -583,8 +605,10 @@ export function createStoreCommerceProvider(
       } finally {
         // Settled without an `open` fact: no sheet opened. Published before
         // the caller sees the answer, so a consumer that frees a retryable
-        // refusal's key (the reconciler) reads it with the result.
-        if (!flight.open) {
+        // refusal's key (the reconciler) reads it with the result. A call
+        // whose SDK reported `unknown` keeps waiting for the native verdict
+        // (bounded by the safety timeout, which reports `closed`).
+        if (!flight.open && !flight.pending) {
           endFlight(flight, 'not-started');
         }
       }
@@ -676,7 +700,11 @@ export function createStoreCommerceProvider(
       // and it will not open one.
       disposed = true;
       for (const flight of [...flights.values()]) {
-        endFlight(flight, flight.open || flight.launched ? 'closed' : 'not-started', 'disposed');
+        endFlight(
+          flight,
+          flight.open || flight.pending || flight.launched ? 'closed' : 'not-started',
+          'disposed',
+        );
       }
       presentation?.clear();
       listeners.clear();

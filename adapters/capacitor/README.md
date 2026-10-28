@@ -201,6 +201,10 @@ idempotency key, numbered with one increasing `sequence`:
   sheet: a purchase gate or account binding refusal, an unavailable store,
   any throw, the SDK's own `not-started`, or an SDK that settled without a
   fact.
+- `unknown` when the SDK answers while its native flow still runs and has
+  observed nothing (a call timeout): the call keeps waiting for the SDK's
+  `open`, `closed`, or `not-started`, bounded by the safety timeout below,
+  instead of reading the answer as either.
 - Otherwise `open`, then exactly one `closed`: the SDK's, or after
   `purchasePresentationTimeoutMs` (15 minutes, `reason: 'timeout'`), or on
   `dispose()` (`reason: 'disposed'`). A `not-started` after `open` becomes

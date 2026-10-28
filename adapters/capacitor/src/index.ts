@@ -59,7 +59,12 @@ export {
   type CapacitorCrashReporterOptions,
   type CapacitorCrashReportingOptions,
 } from './crash-reporting.js';
-export { purchasePresentationTimeoutMs } from './purchase-presentation.js';
+export {
+  createNativePurchasePresentation,
+  purchasePresentationTimeoutMs,
+  type NativePurchasePresentation,
+  type NativePurchasePresentationPlugin,
+} from './purchase-presentation.js';
 export {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
@@ -410,7 +415,8 @@ export function createCapacitorPlatformGateway(input: {
         return;
       }
       const { state } = envelope.event;
-      if (state === 'open') {
+      if (state === 'open' || state === 'unknown') {
+        // `unknown`: the sheet may still be up; hold as for an open one.
         opened = true;
       } else if (state === 'closed' || state === 'not-started') {
         ended = true;

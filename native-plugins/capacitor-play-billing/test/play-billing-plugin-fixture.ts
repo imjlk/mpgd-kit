@@ -139,7 +139,7 @@ export function createFakePlayBillingPlugin(
           return answered;
         }
         const presentation = answered.presentation ?? 'closed';
-        if (presentation !== 'not-started') {
+        if (presentation !== 'not-started' && presentation !== 'requested') {
           for (const listener of [...presentationListeners]) {
             listener({ presentationId, state: 'open' });
           }
