@@ -151,6 +151,19 @@ export function normalizeRootRelativeRoute(input: string): string | undefined {
 }
 
 /**
+ * Whether `value` is a clean same-origin game-services ingress path: `/api`
+ * or `/api/` followed by segments of `A-Z a-z 0-9 _ -`, with an optional
+ * trailing slash, and no surrounding whitespace. Anything a URL parser could
+ * read as another host or rewrite is refused: `//host`, backslashes, dot
+ * segments, percent-encoding, whitespace, query, and fragment. Hosted web
+ * builds (the CLI's production readiness check) and the browser composition
+ * (`resolveGameServicesBaseUrl` in `@mpgd/game-services`) share this one rule.
+ */
+export function isHostedGameServicesPath(value: string): boolean {
+  return value === value.trim() && /^\/api(?:\/[A-Za-z0-9_-]+)*\/?$/u.test(value);
+}
+
+/**
  * Normalizes a `ShareIntent.deepLink`, or answers `undefined` for a link
  * outside its contract. A root-relative link becomes the route
  * `normalizeRootRelativeRoute` returns. An absolute link must spell out

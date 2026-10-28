@@ -4,6 +4,7 @@ import productCatalogJson from '@mpgd/catalog/catalog.json';
 import {
   createGameServicesRuntime,
   resolveGameServicesAuthorityMode,
+  resolveGameServicesBaseUrl,
   resolveGameServicesTransport,
   type GameServicesRuntime,
   type GameServicesRuntimeMode,
@@ -47,6 +48,10 @@ export function createStarterGameServices(input: {
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
 }): StarterGameServices {
+  const baseUrl = resolveGameServicesBaseUrl(import.meta.env.VITE_MPGD_GAME_SERVICES_URL, {
+    target: input.gateway.target,
+    ...(globalThis.location?.origin === undefined ? {} : { pageOrigin: globalThis.location.origin }),
+  });
   return createGameServicesRuntime({
     gateway: input.gateway,
     playerId: input.playerId,
@@ -60,9 +65,7 @@ export function createStarterGameServices(input: {
     authorityMode: resolveGameServicesAuthorityMode(import.meta.env.MODE),
     target: import.meta.env.VITE_MPGD_GAME_SERVICES_TARGET ?? input.gateway.target,
     deploymentTarget: input.configTarget,
-    ...(import.meta.env.VITE_MPGD_GAME_SERVICES_URL === undefined
-      ? {}
-      : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
     transport: resolveGameServicesTransport(import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT),
   });
 }

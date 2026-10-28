@@ -7,8 +7,10 @@ import {
   GameServicesBackendError,
   GameServicesBackendTransportError,
   GameServicesHeaderResolutionError,
+  isHostedGameServicesPath,
   isPublicGameServicesUrl,
   resolveGameServicesAuthorityMode,
+  resolveGameServicesBaseUrl,
   resolveGameServicesTransport,
   type GameServicesBackendApi,
   type GameServicesBackendTransportRequest,
@@ -17,6 +19,190 @@ import {
 import { isMonetizationOperationRecoverable } from './monetization-operation-store.js';
 
 const playerId = 'runtime-player';
+
+// The accept/reject table lives with the predicate in @mpgd/platform/routes.
+assertEqual(
+  isHostedGameServicesPath('/api/game-services'),
+  true,
+  'hosted path predicate is re-exported',
+);
+assertEqual(
+  isHostedGameServicesPath('//evil.example.com/api'),
+  false,
+  'hosted path predicate is re-exported',
+);
+
+for (const target of ['browser', 'microsoft-store'] as const) {
+  for (const path of ['/api', '/api/game-services']) {
+    const baseUrl = resolveGameServicesBaseUrl(path, {
+      target,
+      pageOrigin: 'https://game.example.com',
+    });
+    assertEqual(
+      baseUrl,
+      `https://game.example.com${path}`,
+      'hosted URL resolves before runtime validation',
+    );
+    const runtime = createGameServicesRuntime({
+      gateway: createGateway(target),
+      playerId,
+      authorityMode: 'production',
+      ...(baseUrl === undefined ? {} : { baseUrl }),
+    });
+    assertEqual(
+      runtime.mode,
+      'http',
+      'hosted relative configuration keeps authoritative runtime enabled',
+    );
+    assertEqual(runtime.baseUrl, baseUrl, 'all clients receive the resolved absolute base');
+  }
+}
+for (const target of ['android', 'ios', 'ait', 'verse8'] as const) {
+  assertEqual(
+    resolveGameServicesBaseUrl('/api', { target, pageOrigin: 'https://game.example.com' }),
+    '/api',
+    'native relative configuration is not resolved',
+  );
+}
+for (const path of [
+  '//evil.example.com/api',
+  '/\\evil.example.com',
+  '/api/../admin',
+  '/api/%2f%2fevil',
+  '/api?x=1',
+  '/api#x',
+  '/api\n',
+]) {
+  const baseUrl = resolveGameServicesBaseUrl(path, {
+    target: 'browser',
+    pageOrigin: 'https://game.example.com',
+  });
+  assertEqual(
+    isPublicGameServicesUrl(baseUrl ?? ''),
+    false,
+    'unsafe relative paths cannot carry credentials',
+  );
+}
+for (const pageOrigin of [
+  'https://user:secret@game.example.com',
+  'https://game.example.com/path',
+  'https://game.example.com?x=1',
+  'null',
+  'file://',
+]) {
+  assertEqual(
+    resolveGameServicesBaseUrl('/api', { target: 'browser', pageOrigin }),
+    '/api',
+    'only an exact http(s) page origin resolves',
+  );
+}
+assertEqual(
+  resolveGameServicesBaseUrl('/api', { target: 'browser' }),
+  '/api',
+  'SSR cannot invent an origin',
+);
+assertEqual(
+  resolveGameServicesBaseUrl('https://services.example.com', { target: 'android' }),
+  'https://services.example.com',
+  'native HTTPS remains unchanged',
+);
+// Unsafe or unrecognized paths are never resolved against the page origin.
+for (const path of [
+  ' /api',
+  '/api ',
+  '/api\t',
+  '/api/game services',
+  '/api/%2e%2e/admin',
+  '/api/./game-services',
+  '/api//evil.example.com',
+  '/apiary',
+  '/other',
+  'api',
+]) {
+  assertEqual(
+    resolveGameServicesBaseUrl(path, { target: 'browser', pageOrigin: 'https://game.example.com' })
+      ?.startsWith('https://'),
+    false,
+    `unsafe relative path is not resolved: ${JSON.stringify(path)}`,
+  );
+}
+// Unresolved relative values stay fail-closed: production disables the
+// runtime, development throws; no default backend is substituted.
+for (const [target, pageOrigin] of [
+  ['android', 'https://game.example.com'],
+  ['browser', undefined],
+] as const) {
+  const unresolved = resolveGameServicesBaseUrl('/api', {
+    target,
+    ...(pageOrigin === undefined ? {} : { pageOrigin }),
+  });
+  assertEqual(unresolved, '/api', `relative URL stays relative on ${target}`);
+  const runtime = createGameServicesRuntime({
+    gateway: createGateway(target),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: unresolved ?? '/api',
+  });
+  assertEqual(runtime.mode, 'disabled', `unresolved relative URL disables ${target}`);
+  assertEqual(
+    runtime.reason,
+    'invalid_authoritative_backend',
+    `unresolved relative URL reason on ${target}`,
+  );
+  assertEqual(runtime.client, undefined, `unresolved relative URL exposes no client on ${target}`);
+}
+assertThrows(
+  () =>
+    createGameServicesRuntime({
+      gateway: createGateway('browser'),
+      playerId,
+      authorityMode: 'non-production',
+      baseUrl: resolveGameServicesBaseUrl('/api', { target: 'browser' }) ?? '/api',
+    }),
+  'valid absolute URL',
+  'development relative URL without a page origin should fail fast',
+);
+// An http page resolves to an http URL: production refuses it, development
+// (a local dev server) keeps it.
+{
+  const httpBaseUrl = resolveGameServicesBaseUrl('/api', {
+    target: 'browser',
+    pageOrigin: 'http://game.example.com',
+  });
+  assertEqual(httpBaseUrl, 'http://game.example.com/api', 'http page origin resolves as http');
+  assertEqual(
+    isPublicGameServicesUrl(httpBaseUrl ?? ''),
+    false,
+    'http hosted URL cannot carry credentials',
+  );
+  const production = createGameServicesRuntime({
+    gateway: createGateway('browser'),
+    playerId,
+    authorityMode: 'production',
+    ...(httpBaseUrl === undefined ? {} : { baseUrl: httpBaseUrl }),
+  });
+  assertEqual(
+    production.reason,
+    'invalid_authoritative_backend',
+    'production refuses an http page origin',
+  );
+  assertEqual(production.client, undefined, 'production http page origin exposes no client');
+  const development = createGameServicesRuntime({
+    gateway: createGateway('browser'),
+    playerId,
+    authorityMode: 'non-production',
+    baseUrl: resolveGameServicesBaseUrl('/api', {
+      target: 'browser',
+      pageOrigin: 'http://localhost:5173',
+    }) ?? '',
+  });
+  assertEqual(development.mode, 'http', 'development keeps a local http page origin');
+  assertEqual(
+    development.baseUrl,
+    'http://localhost:5173/api',
+    'development resolves against the dev server',
+  );
+}
 let purchaseCalls = 0;
 let rewardCalls = 0;
 let leaderboardCalls = 0;

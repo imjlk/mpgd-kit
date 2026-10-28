@@ -6,6 +6,7 @@ import {
 import type { AnalyticsSink } from '@mpgd/analytics';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 import { CommerceError } from '@mpgd/platform/commerce';
+import { isHostedGameServicesPath } from '@mpgd/platform/routes';
 
 import {
   assertCommerceStaleLaunchedAfterMs,
@@ -764,6 +765,33 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
   const normalized = baseUrl?.trim();
 
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+export { isHostedGameServicesPath };
+
+/**
+ * Resolve a hosted browser's clean /api ingress before constructing absolute-URL
+ * clients. No ambient DOM access: composition roots supply the actual page origin
+ * and gateway target. Unresolved/invalid inputs remain invalid for the runtime's
+ * fail-closed authority check; this helper never supplies a fallback backend.
+ */
+export function resolveGameServicesBaseUrl(
+  baseUrl: string | undefined,
+  context: { readonly target: PlatformTarget | string; readonly pageOrigin?: string },
+): string | undefined {
+  const value = normalizeBaseUrl(baseUrl);
+  if (value === undefined || (context.target !== 'browser' && context.target !== 'microsoft-store')
+    || value !== baseUrl || !isHostedGameServicesPath(value)) {
+    return value;
+  }
+  const origin = context.pageOrigin === undefined
+    ? undefined
+    : parseAbsoluteUrl(context.pageOrigin);
+  if (origin === undefined || origin.origin !== context.pageOrigin
+    || (origin.protocol !== 'https:' && origin.protocol !== 'http:')) {
+    return value;
+  }
+  return new URL(value, origin).href;
 }
 
 /**
