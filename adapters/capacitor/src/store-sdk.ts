@@ -1,4 +1,7 @@
-import type { PlatformProviderAvailability } from '@mpgd/platform';
+import type {
+  PlatformProviderAvailability,
+  PlatformPurchasePresentationReason,
+} from '@mpgd/platform';
 import {
   CommerceError,
   commerceErrorInfoOf,
@@ -48,6 +51,41 @@ export interface StoreSdk {
   ): () => void;
   /** Current readiness; omitted means the SDK is in-process and ready. */
   getAvailability?(): Promise<PlatformProviderAvailability>;
+  /**
+   * Native facts about the store's purchase sheet. Present only when the SDK
+   * (and the native code under it) reports them for every `requestPurchase`
+   * that carries a `presentationId`; `createStoreCommerceProvider` then
+   * offers `CommerceProvider.presentation`. An SDK without it keeps the
+   * provider without presentation, as before.
+   */
+  readonly purchasePresentation?: StoreSdkPurchasePresentation;
+}
+
+/**
+ * The purchase sheet facts of one SDK. For a `requestPurchase` call with a
+ * `presentationId` the SDK reports, by that id: `open` once the store sheet
+ * is up, then exactly one `closed` when it is gone (which may come after the
+ * call settled), or `not-started` when no sheet opened. A fact the call
+ * settles without (the sheet never opened) means `not-started`, so an SDK
+ * reports `open` before it settles whenever a sheet opened, and `unknown`
+ * before it settles when it cannot tell yet (a terminal fact then follows). A transaction
+ * update, a pending purchase, or a result is not a `closed` fact.
+ */
+export interface StoreSdkPurchasePresentation {
+  subscribe(listener: (event: StoreSdkPurchasePresentationEvent) => void): () => void;
+}
+
+export interface StoreSdkPurchasePresentationEvent {
+  readonly presentationId: string;
+  /**
+   * `unknown`: the call is answering while the native flow still runs and
+   * nothing was observed yet; the sheet may still open, and a terminal fact
+   * (`closed` or `not-started`) follows. The provider keeps the call waiting
+   * for it instead of reading the answer as a sheet that never opened.
+   */
+  readonly state: 'open' | 'closed' | 'not-started' | 'unknown';
+  /** On a `closed` fact no native observation proved, why; see `PlatformPurchasePresentationReason`. */
+  readonly reason?: PlatformPurchasePresentationReason;
 }
 
 export interface StoreSdkCapabilities {
@@ -81,6 +119,11 @@ export interface StoreSdkRequestPurchaseInput {
   readonly offerId?: string;
   readonly quantity?: number;
   readonly accountBinding?: StorePurchaseAccountBinding;
+  /**
+   * Correlates this call's `purchasePresentation` facts. Sent only to an SDK
+   * that declares `purchasePresentation`; unique per call.
+   */
+  readonly presentationId?: string;
 }
 
 export type StoreSdkRequestPurchaseResult =

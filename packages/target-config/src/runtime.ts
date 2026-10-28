@@ -1,11 +1,12 @@
 import typia from 'typia';
 
 import type { MpgdLocale } from '@mpgd/i18n';
-import type {
-  CommerceCapabilities,
-  PlatformCapabilities,
-  PlatformGateway,
-  PlatformProviderAvailability,
+import {
+  createPurchasePresentationRelay,
+  type CommerceCapabilities,
+  type PlatformCapabilities,
+  type PlatformGateway,
+  type PlatformProviderAvailability,
 } from '@mpgd/platform';
 import type { CommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 
@@ -879,7 +880,64 @@ export function withTargetAvailability(
     );
   };
 
+  const requestTargetPurchase = async (
+    source: NonNullable<PlatformGateway['commerce']>,
+    input: Parameters<NonNullable<PlatformGateway['commerce']>['requestPurchase']>[0],
+  ): ReturnType<NonNullable<PlatformGateway['commerce']>['requestPurchase']> => {
+    const available = await getIapAvailability();
+    const configuredProduct = options.effectiveConfig?.monetization.products.find(
+      (product) => product.id === input.logicalId,
+    );
+    let isSubscription: boolean | undefined = configuredProduct === undefined
+      ? undefined
+      : configuredProduct.type === 'subscription';
+    if (
+      isSubscription === undefined
+      && options.effectiveConfig === undefined
+      && available.oneTimeRoute !== available.subscriptionsRoute
+    ) {
+      const kind = (await source.fetchProducts({
+        logicalIds: [input.logicalId],
+        type: 'all',
+      })).find((product) => product.logicalId === input.logicalId)?.kind;
+      isSubscription = kind === undefined ? undefined : kind === 'subscription';
+    }
+    // When only one purchase route is available, unknown product kinds
+    // must not fall through to that route. An effective catalog is binding.
+    const allowed = isSubscription === true
+      ? available.subscriptions
+      : isSubscription === undefined
+        ? available.oneTime && available.subscriptions
+        : available.oneTime;
+    const catalogRefused =
+      options.effectiveConfig !== undefined && configuredProduct?.enabled !== true;
+    if (!allowed || catalogRefused) {
+      const routeEnabled = isSubscription === true
+        ? available.subscriptionsRoute
+        : isSubscription === undefined
+          ? available.oneTimeRoute && available.subscriptionsRoute
+          : available.oneTimeRoute;
+      return {
+        outcome: 'failed',
+        error: purchaseRefusal(routeEnabled && !catalogRefused ? available.readiness : undefined),
+      };
+    }
+
+    return source.requestPurchase(input);
+  };
+
   const commerceSource = gateway.commerce;
+  // A source with purchase presentation facts answers every purchase call
+  // with one; a purchase refused here never reaches it, so this wrapper
+  // reports that call's `not-started` itself (`createPurchasePresentationRelay`).
+  const presentationRelay = commerceSource?.presentation === undefined
+    ? undefined
+    : createPurchasePresentationRelay(commerceSource.presentation, {
+        onListenerError: (error) => {
+          // A failing listener must not keep a fact from the others.
+          console.warn('A purchase presentation listener failed.', error);
+        },
+      });
   // Recovery reads (`getAvailablePurchases`, `finishTransaction`, `subscribe`)
   // always pass through: an already paid purchase must stay recoverable and
   // finishable even when the target stops selling. Catalog reads, new
@@ -888,9 +946,9 @@ export function withTargetAvailability(
     ? undefined
     : {
         store: commerceSource.store,
-        ...(commerceSource.presentation === undefined
+        ...(presentationRelay === undefined
           ? {}
-          : { presentation: commerceSource.presentation }),
+          : { presentation: presentationRelay.presentation }),
         async getCapabilities() {
           return applyTargetConfigToCommerceCapabilities(
             await commerceSource.getCapabilities(),
@@ -907,46 +965,13 @@ export function withTargetAvailability(
           );
         },
         async requestPurchase(input) {
-          const available = await getIapAvailability();
-          const configuredProduct = options.effectiveConfig?.monetization.products.find(
-            (product) => product.id === input.logicalId,
+          if (presentationRelay === undefined) {
+            return requestTargetPurchase(commerceSource, input);
+          }
+          return presentationRelay.track(
+            input.idempotencyKey,
+            () => requestTargetPurchase(commerceSource, input),
           );
-          let isSubscription: boolean | undefined = configuredProduct === undefined
-            ? undefined
-            : configuredProduct.type === 'subscription';
-          if (
-            isSubscription === undefined
-            && options.effectiveConfig === undefined
-            && available.oneTimeRoute !== available.subscriptionsRoute
-          ) {
-            const kind = (await commerceSource.fetchProducts({
-              logicalIds: [input.logicalId],
-              type: 'all',
-            })).find((product) => product.logicalId === input.logicalId)?.kind;
-            isSubscription = kind === undefined ? undefined : kind === 'subscription';
-          }
-          // When only one purchase route is available, unknown product kinds
-          // must not fall through to that route. An effective catalog is binding.
-          const allowed = isSubscription === true
-            ? available.subscriptions
-            : isSubscription === undefined
-              ? available.oneTime && available.subscriptions
-              : available.oneTime;
-          const catalogRefused =
-            options.effectiveConfig !== undefined && configuredProduct?.enabled !== true;
-          if (!allowed || catalogRefused) {
-            const routeEnabled = isSubscription === true
-              ? available.subscriptionsRoute
-              : isSubscription === undefined
-                ? available.oneTimeRoute && available.subscriptionsRoute
-                : available.oneTimeRoute;
-            return {
-              outcome: 'failed',
-              error: purchaseRefusal(routeEnabled && !catalogRefused ? available.readiness : undefined),
-            };
-          }
-
-          return commerceSource.requestPurchase(input);
         },
         getAvailablePurchases: (input) => commerceSource.getAvailablePurchases(input),
         ...(commerceSource.finishTransaction === undefined

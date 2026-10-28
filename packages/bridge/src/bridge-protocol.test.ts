@@ -9,9 +9,12 @@ import {
   assertCommerceBridgeRequestPurchaseResult,
   assertCommerceBridgeRestorePurchasesPayload,
   assertCommerceEventEnvelope,
+  assertCommercePresentationEventEnvelope,
   commerceBridgeMethods,
+  commercePresentationProtocol,
   commerceProtocol,
   type CommerceEvent,
+  type CommercePresentationEvent,
 } from '@mpgd/platform/commerce';
 import {
   assertNotificationEventEnvelope,
@@ -43,6 +46,7 @@ import {
   assertBridgeRequest,
   assertBridgeResponse,
   bridgeCommerceEventProtocol,
+  bridgeCommercePresentationEventProtocol,
   bridgeCommerceV2Methods,
   bridgeEventProtocol,
   bridgeNotificationsBackendMethods,
@@ -356,7 +360,10 @@ assertEqual(
 );
 const protocolsSeen = new Set<string>();
 for (const event of validBridgeEvents) {
-  assertDoesNotThrow(() => assertBridgeEvent(event), `${event.event.type} event should pass`);
+  assertDoesNotThrow(
+    () => assertBridgeEvent(event),
+    `${'type' in event.event ? event.event.type : event.event.state} event should pass`,
+  );
   protocolsSeen.add(event.protocol);
   if (event.protocol === commerceProtocol) {
     assertDoesNotThrow(
@@ -366,6 +373,19 @@ for (const event of validBridgeEvents) {
     assertThrows(
       () => assertNotificationEventEnvelope(event),
       `${event.event.type} commerce event is not a notifications envelope`,
+    );
+    assertThrows(
+      () => assertCommercePresentationEventEnvelope(event),
+      `${event.event.type} commerce event is not a presentation envelope`,
+    );
+  } else if (event.protocol === commercePresentationProtocol) {
+    assertDoesNotThrow(
+      () => assertCommercePresentationEventEnvelope(event),
+      `${event.event.state} fact should satisfy the presentation envelope`,
+    );
+    assertThrows(
+      () => assertCommerceEventEnvelope(event),
+      `${event.event.state} presentation fact is not a commerce envelope`,
     );
   } else {
     assertDoesNotThrow(
@@ -380,7 +400,7 @@ for (const event of validBridgeEvents) {
   const roundTripped = assertBridgeEvent(JSON.parse(JSON.stringify(event)));
   assertEqual(roundTripped.protocol, event.protocol, 'events should survive a JSON round trip');
 }
-assertEqual(protocolsSeen.size, 2, 'the fixtures should cover both protocols');
+assertEqual(protocolsSeen.size, 3, 'the fixtures should cover every protocol');
 for (const [index, event] of invalidBridgeEvents.entries()) {
   assertThrows(() => assertBridgeEvent(event), `invalid event ${String(index)} should fail`);
 }
@@ -388,13 +408,26 @@ for (const [index, event] of invalidBridgeEvents.entries()) {
 // The union narrows on `protocol`, so a listener reaches each stream's own events.
 const notificationTypes: NotificationEvent['type'][] = [];
 const commerceTypes: CommerceEvent['type'][] = [];
+const presentationStates: CommercePresentationEvent['state'][] = [];
 for (const event of validBridgeEvents as readonly BridgeEvent[]) {
   if (event.protocol === bridgeNotificationsEventProtocol) {
     notificationTypes.push(event.event.type);
+  } else if (event.protocol === bridgeCommercePresentationEventProtocol) {
+    presentationStates.push(event.event.state);
   } else {
     commerceTypes.push(event.event.type);
   }
 }
+assertEqual(
+  JSON.stringify(presentationStates),
+  JSON.stringify(['open', 'closed', 'not-started', 'closed']),
+  'presentation envelopes should narrow to presentation facts',
+);
+assertEqual(
+  bridgeCommercePresentationEventProtocol,
+  'mpgd.commerce.presentation.v1',
+  'presentation event protocol literal',
+);
 assertEqual(
   JSON.stringify(notificationTypes),
   JSON.stringify(['opened', 'received', 'endpoint-changed', 'permission-changed']),
@@ -528,6 +561,24 @@ assertEqual(commerceEnvelopes[0]?.sequence, 0, 'commerce counts its own sequence
 assertDoesNotThrow(
   () => assertCommerceEventEnvelope(commerceEnvelopes[0]),
   'a commerce session envelope is a commerce envelope',
+);
+const presentationStream = createFakeStream<CommercePresentationEvent>();
+const presentationSession = createBridgeEventSource(
+  'mpgd.commerce.presentation.v1',
+  presentationStream,
+);
+const presentationEnvelopes: BridgeEvent[] = [];
+presentationSession.subscribe((event) => presentationEnvelopes.push(event));
+presentationStream.emit({ idempotencyKey: 'purchase-1', sequence: 1, state: 'open' });
+assertEqual(
+  presentationEnvelopes[0]?.protocol,
+  'mpgd.commerce.presentation.v1',
+  'presentation envelopes name the presentation protocol',
+);
+assertEqual(presentationEnvelopes[0]?.sequence, 0, 'presentation counts its own sequence from 0');
+assertDoesNotThrow(
+  () => assertCommercePresentationEventEnvelope(presentationEnvelopes[0]),
+  'a presentation session envelope is a presentation envelope',
 );
 
 // One failing listener does not keep the event from the others.

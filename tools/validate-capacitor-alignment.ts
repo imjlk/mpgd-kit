@@ -156,6 +156,26 @@ for (const attribute of [
     `The Android shell must opt out of backups and Android 12+ device transfers with ${attribute}: WebView storage and game-services SharedPreferences hold save data`,
   );
 }
+// The Play Billing plugin observes the purchase sheet from the activity
+// lifecycle; a BridgeActivity recreated by a configuration change while the
+// sheet is up would lose the web view and those observations.
+const bridgeActivity = androidManifest.match(/<activity\b[^>]*>/u)?.[0] ?? '';
+const configChanges = bridgeActivity.match(/android:configChanges="([^"]*)"/u)?.[1]?.split('|') ?? [];
+for (const change of [
+  'orientation',
+  'keyboardHidden',
+  'keyboard',
+  'screenSize',
+  'smallestScreenSize',
+  'screenLayout',
+  'uiMode',
+  'density',
+]) {
+  assert.ok(
+    configChanges.includes(change),
+    `The Android shell's BridgeActivity must handle ${change} itself (android:configChanges): recreating it while a store sheet is up loses the sheet facts`,
+  );
+}
 assert.ok(
   androidApplication.includes(' android:appCategory="game"'),
   'The Android shell is a game: Android 16 keeps orientation locks on large screens only for games',

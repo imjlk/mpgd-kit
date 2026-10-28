@@ -261,6 +261,16 @@ Rules every provider follows:
   outgoing transition, and a retryable failure without presentation proof stays
   terminal.
   C4 added the field to the contract; it takes no part in granting.
+- **Every call ends with a fact.** A provider that offers `presentation`
+  answers every `requestPurchase` with facts: `not-started`, delivered before
+  the answer, when no surface opened (a refusal, a throw), otherwise `open`
+  and exactly one `closed`, which may follow the answer. A consumer such as the
+  game runtime's gate waits for that `closed`, so a provider that cannot prove
+  closure ends with a `closed` carrying `reason` (`timeout`, `interrupted`,
+  `disposed`), and a wrapper that refuses a purchase before its source runs
+  (`withTargetAvailability`) reports that call's `not-started` itself. K4
+  added the facts to the Play Billing and StoreKit providers over the
+  Capacitor bridge (see [Bridge and versioning](#bridge)).
 
 <!-- @link ../../../packages/platform/src/index.ts#commercePresentationAttempt Restarting providers echo this request generation on presentation events. -->
 <!-- @link ../../../packages/platform/src/commerce.ts#commercePurchaseTransitions failed has no outgoing transition. -->
@@ -1010,6 +1020,26 @@ not in the catalog. The kit adds no wallet currency literal.
   hard gate (it throws, never warns) on any drift between the contract types,
   the generated schemas and vectors, the bridge method lists, and the provider
   capability blocks; see [Alignment gate](#alignment-gate).
+
+- K4 added purchase presentation facts to the bridge as their own event
+  protocol, `mpgd.commerce.presentation.v1`
+  (`{ protocol, sequence, event }`, `event` a `CommercePresentationEvent`:
+  `idempotencyKey`, `sequence` from 1, `state` `open` | `closed` |
+  `not-started` | `unknown`, optional `attempt` and `reason`; asserts and JSON
+  Schemas in `@mpgd/platform/commerce`, `BridgeCommercePresentationEvent` in
+  `@mpgd/bridge`). It is not a `CommerceEvent` type, so a consumer built
+  before it skips the envelopes as another protocol's instead of reporting
+  them as invalid commerce events. The Capacitor host
+  (`createCommerceProviderBridge`) serves them through `subscribePresentation`,
+  apart from the commerce channel, and `createBridgeCommerceProvider` offers
+  `presentation` only when given `subscribePresentation`, so a host built
+  before the protocol leaves the consumer as it was. A `StoreSdk` declares the
+  facts with `purchasePresentation`; the store provider offers `presentation`
+  only over such an SDK, and the Play Billing and StoreKit SDKs check that the
+  native plugin reports them (`getPresentationSupport`) before they open a
+  sheet. With the facts, `createCoordinatedPlatformGateway` coordinates
+  purchases by itself and the gateway's pause ends on `closed`, not on a
+  result.
 
 ### Alignment gate {#alignment-gate}
 

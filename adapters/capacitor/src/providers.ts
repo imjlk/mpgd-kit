@@ -3,6 +3,7 @@ import {
   bridgeNotificationsV2Methods,
   isBridgeCommerceV2Method,
   isBridgeNotificationsV2Method,
+  type BridgeCommercePresentationEvent,
   type BridgeEvent,
   type BridgeMethod,
   type BridgeNotificationsEvent,
@@ -120,7 +121,15 @@ export interface CapacitorNotificationServiceProvider extends CapacitorServicePr
 /** The provider the registry serves commerce v2 from. */
 export interface CapacitorCommerceServiceProvider extends CapacitorServiceProvider {
   readonly commerce: CommerceProvider;
-  readonly bridge: NativeBridge & Required<Pick<NativeBridge, 'subscribe'>>;
+  readonly bridge: NativeBridge & Required<Pick<NativeBridge, 'subscribe'>> & {
+    /**
+     * The provider's purchase presentation facts
+     * (`CommerceProviderBridge.subscribePresentation`). Only with it does
+     * `gateway.commerce` offer `presentation`, and the gateway keep a
+     * purchase's pause until the sheet's `closed` fact.
+     */
+    subscribePresentation?(listener: (event: BridgeCommercePresentationEvent) => void): () => void;
+  };
 }
 
 const featureMethods = {

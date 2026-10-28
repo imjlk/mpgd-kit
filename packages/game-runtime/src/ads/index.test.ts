@@ -714,6 +714,101 @@ describe('coordinated purchase presentation', () => {
   });
 });
 
+describe('purchase sheet facts from the gateway commerce provider', () => {
+  // The Capacitor gateway's commerce provider offers `presentation` when its
+  // store SDK reports the sheet; coordination then turns on by itself.
+  function presentingCommerce(
+    requestPurchase: (input: FixturePurchaseRequest) => Promise<FixturePurchaseOutcome>,
+  ) {
+    const listeners = new Set<(event: PurchasePresentationEvent) => void>();
+    let sequence = 0;
+    const commerce: FixtureCommerce = {
+      ...commerceFixture(requestPurchase),
+      presentation: {
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      },
+    };
+    return {
+      commerce,
+      listeners,
+      fact(idempotencyKey: string, state: PurchasePresentationEvent['state']) {
+        sequence += 1;
+        for (const listener of [...listeners]) {
+          listener({ idempotencyKey, sequence, state });
+        }
+      },
+    };
+  }
+
+  it('keeps an ad from showing while the purchase sheet is open and releases on closed only', async () => {
+    const state = environment();
+    const native = sdk();
+    const store: ReturnType<typeof presentingCommerce> = presentingCommerce(async (input) => {
+      store.fact(input.idempotencyKey, 'open');
+      return { outcome: 'launched' };
+    });
+    const controlled = createCoordinatedPlatformGateway({
+      gateway: gateway(store.commerce), provider: native.provider, ...state,
+    });
+    expect(store.listeners.size).toBe(1);
+    await expect(controlled.commerce?.requestPurchase({
+      logicalId: 'COINS', source: 'shop', idempotencyKey: 'p',
+    })).resolves.toEqual({ outcome: 'launched' });
+    // The result alone proves nothing about the sheet: the lease stays, unknown.
+    expect(state.presentation.getSnapshot().owner).toMatchObject({ kind: 'purchase', invocationId: 'p' });
+    expect(state.execution.getSnapshot().blocked).toMatchObject({ simulation: true, audio: true });
+
+    // The full-screen scope is the purchase's: no ad SDK call, no reward.
+    const blocked = await controlled.ads.showRewarded({ placementId: 'CONTINUE', idempotencyKey: 'ad-1' });
+    expect(blocked).toMatchObject({ rewardGranted: false });
+    expect(native.calls).toHaveLength(0);
+    expect(await controlled.ads.provider?.getAvailability({ placementId: 'CONTINUE', format: 'rewarded' }))
+      .toMatchObject({ state: 'temporarily-unavailable', reason: 'busy' });
+
+    store.fact('p', 'closed');
+    expect(state.presentation.getSnapshot().status).toBe('ready');
+    expect(state.execution.getSnapshot().blocks).toHaveLength(0);
+    const shown = controlled.ads.showRewarded({ placementId: 'CONTINUE', idempotencyKey: 'ad-2' });
+    await flush();
+    expect(native.calls).toHaveLength(1);
+    native.emit('started', native.calls[0]?.invocationId ?? '', 1);
+    native.emit('closed', native.calls[0]?.invocationId ?? '', 2);
+    native.finish(native.calls[0] as AdShowInput, 'not-earned');
+    await shown;
+    controlled.dispose();
+  });
+
+  it('frees a retryable refusal reported not-started before its answer', async () => {
+    const state = environment();
+    let allow = false;
+    const store: ReturnType<typeof presentingCommerce> = presentingCommerce(async (input) => {
+      if (!allow) {
+        store.fact(input.idempotencyKey, 'not-started');
+        return { outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE', retryable: true, storeCode: 'PURCHASE_GATE_FAILED' } };
+      }
+      store.fact(input.idempotencyKey, 'open');
+      store.fact(input.idempotencyKey, 'closed');
+      return cancelledOutcome;
+    });
+    const controlled = createCoordinatedPlatformGateway({
+      gateway: gateway(store.commerce), provider: sdk().provider, ...state,
+    });
+    const request = { logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' } as const;
+    await expect(controlled.commerce?.requestPurchase(request)).resolves.toMatchObject({ outcome: 'failed' });
+    expect(state.presentation.getSnapshot().status).toBe('ready');
+    allow = true;
+    await expect(controlled.commerce?.requestPurchase(request)).resolves.toEqual(cancelledOutcome);
+    expect(store.commerce.requestPurchase).toHaveBeenCalledTimes(2);
+    expect(state.execution.getSnapshot().blocks).toHaveLength(0);
+    controlled.dispose();
+  });
+});
+
 describe('late native failures and candidate preservation', () => {
   it('keeps a failed-to-start native fact when the SDK Promise later returns a less specific result', async () => {
     const native = sdk('delayed');

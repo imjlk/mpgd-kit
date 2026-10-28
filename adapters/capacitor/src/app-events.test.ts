@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginListenerHandle } from '@capacitor/core';
-import type { BridgeEvent, BridgeResponse } from '@mpgd/bridge';
+import type { BridgeCommercePresentationEvent, BridgeEvent, BridgeResponse } from '@mpgd/bridge';
 
 import { createFakeStoreSdk, fakePurchase } from '../test/store-sdk-fixture.js';
 import { createCommerceServiceProvider } from './commerce-bridge.js';
-import { createCapacitorPlatformGateway, launchedPurchaseActivityTimeoutMs } from './index.js';
+import {
+  createCapacitorPlatformGateway,
+  launchedPurchaseActivityTimeoutMs,
+  presentedPurchaseActivityTimeoutMs,
+} from './index.js';
 import {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
@@ -630,6 +634,246 @@ describe('commerce v2 launched purchase activity', () => {
     await gateway.commerce?.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+});
+
+describe('commerce v2 purchase activity with sheet facts', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function createPresentedGateway(
+    fake: FakeApp,
+    options: { readonly servePresentation?: boolean | 'replayable' } = {},
+  ) {
+    const sdk = createFakeStoreSdk({ presentation: true });
+    const commerce = createStoreCommerceProvider({
+      sdk,
+      products: [{ logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' }],
+      evidenceSchema: 'fixture.store.v1',
+      authority: { evidence: 'client-token', accountBinding: 'optional' },
+    });
+    const service = createCommerceServiceProvider({ id: 'store', commerce });
+    // A host built before the presentation protocol has no `subscribePresentation`.
+    // `replayable`: a host that may redeliver an earlier fact out of order.
+    const presentationEnvelopes: BridgeCommercePresentationEvent[] = [];
+    const presentationListeners = new Set<(event: BridgeCommercePresentationEvent) => void>();
+    const replay = (envelope: BridgeCommercePresentationEvent): void => {
+      for (const listener of [...presentationListeners]) {
+        listener(envelope);
+      }
+    };
+    const provider: CapacitorServiceProvider = options.servePresentation === false
+      ? {
+          ...service,
+          bridge: {
+            request: (input) => service.bridge.request(input),
+            subscribe: (listener) => service.bridge.subscribe(listener),
+          },
+        }
+      : options.servePresentation === 'replayable'
+        ? {
+            ...service,
+            bridge: {
+              request: (input) => service.bridge.request(input),
+              subscribe: (listener) => service.bridge.subscribe(listener),
+              subscribePresentation(listener: (event: BridgeCommercePresentationEvent) => void) {
+                presentationListeners.add(listener);
+                const detach = service.bridge.subscribePresentation?.((envelope) => {
+                  presentationEnvelopes.push(envelope);
+                  listener(envelope);
+                });
+                return () => {
+                  presentationListeners.delete(listener);
+                  detach?.();
+                };
+              },
+            },
+          }
+        : service;
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'presented-ui',
+      app: asApp(fake), visibility: null,
+      providers: [provider],
+      bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
+    });
+    const counts = { pauses: 0, resumes: 0 };
+    gateway.lifecycle.onPause(() => { counts.pauses += 1; });
+    gateway.lifecycle.onResume(() => { counts.resumes += 1; });
+    const lastPresentationId = () => sdk.requestCalls.at(-1)?.presentationId;
+    return { sdk, gateway, counts, lastPresentationId, presentationEnvelopes, replay };
+  }
+
+  const purchase = { logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' } as const;
+
+  it('stays paused through the result and a purchase event until the sheet closes', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId } = createPresentedGateway(fake);
+    await settle();
+    expect(gateway.commerce?.presentation).toBeDefined();
+    gateway.commerce?.subscribe(() => undefined);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    sdk.queueRequest({ outcome: 'purchased', purchase: fakePurchase({ transactionId: 'tx-1' }) });
+
+    await expect(gateway.commerce?.requestPurchase(purchase))
+      .resolves.toMatchObject({ outcome: 'purchased' });
+    await settle();
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.report(fakePurchase({ transactionId: 'tx-1' }));
+    expect(counts.resumes).toBe(0);
+    sdk.present(lastPresentationId(), 'closed');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('resumes when the sheet closes while the purchase call still runs', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId } = createPresentedGateway(fake);
+    await settle();
+    let answer: ((result: { readonly outcome: 'launched' }) => void) | undefined;
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    vi.mocked(sdk.requestPurchase).mockImplementationOnce(async (input) => {
+      sdk.requestCalls.push(input);
+      sdk.onRequest?.(input);
+      return await new Promise((resolve) => {
+        answer = resolve;
+      });
+    });
+    const purchased = gateway.commerce?.requestPurchase(purchase);
+    for (let turn = 0; turn < 200 && answer === undefined; turn += 1) {
+      await Promise.resolve();
+    }
+    expect(answer).toBeDefined();
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.present(lastPresentationId(), 'closed');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    answer?.({ outcome: 'launched' });
+    await expect(purchased).resolves.toEqual({ outcome: 'launched' });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('stays paused while the sheet is unknown until its native verdict', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId } = createPresentedGateway(fake);
+    await settle();
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'unknown');
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.present(lastPresentationId(), 'not-started');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('keeps a held sheet paused through a same-key retry until its own closed', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await settle();
+    gateway.commerce?.subscribe(() => undefined);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    await gateway.commerce?.requestPurchase(purchase);
+    const firstSheet = sdk.requestCalls[0]?.presentationId;
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    // The retry is refused while the first sheet is up, without a fact.
+    await expect(gateway.commerce?.requestPurchase(purchase))
+      .resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS' } });
+    expect(sdk.requestCalls).toHaveLength(1);
+    // The game stays paused for the first sheet (the retry's own pause nests in it).
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.present(firstSheet, 'closed');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('ignores an earlier call fact the host redelivers during a same-key retry', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId, presentationEnvelopes, replay } =
+      createPresentedGateway(fake, { servePresentation: 'replayable' });
+    await settle();
+    sdk.onRequest = (input) => {
+      sdk.present(input.presentationId, 'open');
+      sdk.present(input.presentationId, 'closed');
+    };
+    sdk.queueRequest({ outcome: 'launched' });
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    const firstClosed = presentationEnvelopes.at(-1);
+    expect(firstClosed?.event).toMatchObject({ idempotencyKey: 'op-1', state: 'closed' });
+
+    // The retry's sheet opens after the host redelivers the first sheet's `closed`.
+    sdk.onRequest = (input) => {
+      if (firstClosed !== undefined) {
+        replay(firstClosed);
+      }
+      sdk.present(input.presentationId, 'open');
+    };
+    sdk.queueRequest({ outcome: 'launched' });
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 2, resumes: 1 });
+    sdk.present(lastPresentationId(), 'closed');
+    expect(counts).toEqual({ pauses: 2, resumes: 2 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('holds nothing after a pending purchase whose sheet already closed', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await settle();
+    sdk.onRequest = (input) => {
+      sdk.present(input.presentationId, 'open');
+      sdk.present(input.presentationId, 'closed');
+    };
+    // Ask to Buy: the sheet is gone and the purchase completes later.
+    sdk.queueRequest({ outcome: 'launched' });
+    await expect(gateway.commerce?.requestPurchase(purchase)).resolves.toEqual({ outcome: 'launched' });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('resumes at once when no sheet opened', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await settle();
+    sdk.queueRequest({ throws: { code: 'PLAY_BILLING_SERVICE_UNAVAILABLE' } });
+    await expect(gateway.commerce?.requestPurchase(purchase))
+      .resolves.toMatchObject({ outcome: 'failed' });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('ends the pause on the safety timeout or dispose when no closed fact comes', async () => {
+    vi.useFakeTimers();
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await vi.advanceTimersByTimeAsync(0);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    // Not the two-minute launched timeout: the sheet is still up.
+    await vi.advanceTimersByTimeAsync(launchedPurchaseActivityTimeoutMs);
+    expect(counts.resumes).toBe(0);
+    await vi.advanceTimersByTimeAsync(presentedPurchaseActivityTimeoutMs);
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+
+    await gateway.commerce?.requestPurchase({ ...purchase, idempotencyKey: 'op-2' });
+    expect(counts).toEqual({ pauses: 2, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+    expect(counts.resumes).toBe(2);
+  });
+
+  it('keeps the result-based pause when the host serves no facts', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake, { servePresentation: false });
+    await settle();
+    expect(gateway.commerce?.presentation).toBeUndefined();
+    gateway.commerce?.subscribe(() => undefined);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.report(fakePurchase({ transactionId: 'tx-1', sku: 'gems.small' }));
     expect(counts).toEqual({ pauses: 1, resumes: 1 });
     await gateway.lifecycle.dispose?.();
   });

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-presentation-event-envelope.schema.json",
+  "title": "CommercePresentationEventEnvelope",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CommercePresentationEventEnvelope",
+  "components": {
+    "schemas": {
+      "CommercePresentationEvent": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "readOnly": true
+          },
+          "state": {
+            "oneOf": [
+              {
+                "const": "closed"
+              },
+              {
+                "const": "not-started"
+              },
+              {
+                "const": "open"
+              },
+              {
+                "const": "unknown"
+              }
+            ],
+            "readOnly": true
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "readOnly": true
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "const": "disposed"
+              },
+              {
+                "const": "interrupted"
+              },
+              {
+                "const": "timeout"
+              }
+            ],
+            "readOnly": true
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "sequence",
+          "state"
+        ],
+        "additionalProperties": false,
+        "description": "One purchase presentation fact (`CommerceProvider.presentation`) as it\ncrosses the bridge: the shape of `PlatformPurchasePresentationEvent` with\nits bounds. `sequence` increases per idempotency key and starts at 1."
+      },
+      "CommercePresentationEventEnvelope": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "const": "mpgd.commerce.presentation.v1",
+            "readOnly": true
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/CommercePresentationEvent",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "protocol",
+          "sequence",
+          "event"
+        ],
+        "additionalProperties": false,
+        "description": "Presentation event envelope; `sequence` is per session and starts at 0."
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonNegativeInteger": {
+        "type": "integer",
+        "minimum": 0
+      }
+    }
+  }
+}

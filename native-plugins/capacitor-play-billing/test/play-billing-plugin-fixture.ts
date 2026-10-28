@@ -5,6 +5,7 @@ import type {
   PlayProduct,
   PlayPurchase,
   PlayPurchaseOutcome,
+  PlayPurchasePresentationEvent,
 } from '../src/definitions.js';
 
 export type FakePlayBillingPurchaseScript =
@@ -20,12 +21,19 @@ export interface FakePlayBillingPluginOptions {
    * for the requested product, emitted as `purchaseUpdated` first.
    */
   readonly defaultPurchase?: () => FakePlayBillingPurchaseScript;
+  /**
+   * How `getPresentationSupport` answers: `supported` (default, version 1),
+   * `unimplemented` (a native build from before sheet facts), or `absent`
+   * (no such method on the plugin object).
+   */
+  readonly presentationSupport?: 'supported' | 'unimplemented' | 'absent';
 }
 
 export interface FakePlayBillingPurchaseCall {
   readonly productId: string;
   readonly offerToken?: string;
   readonly obfuscatedAccountId: string;
+  readonly presentationId?: string;
 }
 
 /**
@@ -44,6 +52,10 @@ export interface FakePlayBillingPlugin extends CapacitorPlayBillingPlugin {
   failure: (() => unknown) | undefined;
   queuePurchase(script: FakePlayBillingPurchaseScript): void;
   emit(outcome: PlayPurchaseOutcome): void;
+  /** Emits a native `purchasePresentation` fact. */
+  present(event: PlayPurchasePresentationEvent): void;
+  readonly presentationListenerCount: number;
+  presentationSupportCalls: number;
   /** Adds or replaces a purchase by token and emits `purchaseUpdated` for it. */
   report(purchase: PlayPurchase): void;
   upsert(purchase: PlayPurchase): void;
@@ -56,6 +68,8 @@ export function createFakePlayBillingPlugin(
   options: FakePlayBillingPluginOptions = {},
 ): FakePlayBillingPlugin {
   const listeners = new Set<(event: PlayPurchaseOutcome) => void>();
+  const presentationListeners = new Set<(event: PlayPurchasePresentationEvent) => void>();
+  const presentationSupport = options.presentationSupport ?? 'supported';
   const purchases: PlayPurchase[] = [];
   const purchaseCalls: FakePlayBillingPurchaseCall[] = [];
   const productCalls: (readonly string[])[] = [];
@@ -91,6 +105,19 @@ export function createFakePlayBillingPlugin(
     get listenerCount() {
       return listeners.size;
     },
+    get presentationListenerCount() {
+      return presentationListeners.size;
+    },
+    presentationSupportCalls: 0,
+    ...(presentationSupport === 'absent' ? {} : {
+      async getPresentationSupport() {
+        plugin.presentationSupportCalls += 1;
+        if (presentationSupport === 'unimplemented') {
+          throw Object.assign(new Error('not implemented'), { code: 'UNIMPLEMENTED' });
+        }
+        return { purchasePresentation: 1 };
+      },
+    }),
     async getProducts(input) {
       productCalls.push([...input.productIds]);
       if (plugin.failure !== undefined) {
@@ -103,6 +130,22 @@ export function createFakePlayBillingPlugin(
     async purchase(input) {
       purchaseCalls.push({ ...input });
       const script = queue.shift() ?? options.defaultPurchase?.();
+      // With a presentation id, the native code reports the sheet opening
+      // before any result, and its answer says the sheet is gone (`closed`)
+      // unless the script names another state.
+      const { presentationId } = input;
+      const sheet = (answered: PlayPurchaseOutcome): PlayPurchaseOutcome => {
+        if (presentationId === undefined) {
+          return answered;
+        }
+        const presentation = answered.presentation ?? 'closed';
+        if (presentation !== 'not-started' && presentation !== 'requested') {
+          for (const listener of [...presentationListeners]) {
+            listener({ presentationId, state: 'open' });
+          }
+        }
+        return { ...answered, presentation };
+      };
       if (script === undefined) {
         // Java resolves the call after notifying listeners of the same update.
         const purchase = fakePlayPurchase({
@@ -114,7 +157,7 @@ export function createFakePlayBillingPlugin(
         upsert(purchase);
         const outcome: PlayPurchaseOutcome = { status: 'pending', purchase };
         emit(outcome);
-        return outcome;
+        return sheet(outcome);
       }
       if ('throws' in script) {
         throw script.throws;
@@ -123,7 +166,7 @@ export function createFakePlayBillingPlugin(
         upsert(script.purchase);
         emit(script);
       }
-      return script;
+      return sheet(script);
     },
     async getPurchases() {
       plugin.getPurchasesCalls += 1;
@@ -132,13 +175,24 @@ export function createFakePlayBillingPlugin(
       }
       return { purchases: [...purchases] };
     },
-    async addListener(_eventName, listener): Promise<PluginListenerHandle> {
-      listeners.add(listener);
+    async addListener(
+      eventName: 'purchaseUpdated' | 'purchasePresentation',
+      listener: ((event: PlayPurchaseOutcome) => void) | ((event: PlayPurchasePresentationEvent) => void),
+    ): Promise<PluginListenerHandle> {
+      const set = (eventName === 'purchasePresentation' ? presentationListeners : listeners) as Set<
+        typeof listener
+      >;
+      set.add(listener);
       return {
         async remove() {
-          listeners.delete(listener);
+          set.delete(listener);
         },
       };
+    },
+    present(event) {
+      for (const listener of [...presentationListeners]) {
+        listener(event);
+      }
     },
     queuePurchase(script) {
       queue.push(script);

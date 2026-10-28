@@ -68,6 +68,16 @@ export interface CreateCapacitorStoreKitCommerceProviderInput {
    * types that disagree with the catalog kind. Diagnostics only.
    */
   readonly onDiagnostic?: (diagnostic: CapacitorStoreKitDiagnostic) => void;
+  /**
+   * Purchase sheet facts (default true): the provider offers `presentation`
+   * (`open` before `Product.purchase()`, `closed` when it returns or
+   * throws), so the gateway and the game runtime pause until the sheet is
+   * done, not until a result. Needs an app built with this package's native
+   * code (otherwise new purchases are refused with
+   * `STOREKIT_PRESENTATION_UNSUPPORTED`). False keeps the result-based pause
+   * of earlier releases.
+   */
+  readonly purchasePresentation?: boolean;
 }
 
 /**
@@ -110,6 +120,9 @@ export function createCapacitorStoreKitCommerceProvider(
     ...(input.sdk === undefined ? {} : { sdk: input.sdk }),
     ...(input.isIos === undefined ? {} : { isIos: input.isIos }),
     ...(input.onDiagnostic === undefined ? {} : { onDiagnostic: input.onDiagnostic }),
+    ...(input.purchasePresentation === undefined
+      ? {}
+      : { purchasePresentation: input.purchasePresentation }),
   });
   return refuseNewPurchasesUnlessGated(createStoreCommerceProvider({
     sdk,

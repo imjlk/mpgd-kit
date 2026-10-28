@@ -2,9 +2,11 @@ import typia from 'typia';
 
 import {
   commerceBridgeMethods,
+  commercePresentationProtocol,
   commerceProtocol,
   type CommerceBridgeMethod,
   type CommerceEventEnvelope,
+  type CommercePresentationEventEnvelope,
 } from '@mpgd/platform/commerce';
 // Types only: the main entry loads no `@mpgd/platform/notifications` code,
 // so a game bundle that uses the bridge does not carry the notifications
@@ -296,10 +298,21 @@ export type BridgeNotificationsV2Result<TMethod extends BridgeNotificationsV2Met
  * envelope names its protocol. A transport numbers each protocol's events per
  * session from 0 (`createBridgeEventSource` does).
  */
-export type BridgeEvent = BridgeCommerceEvent | BridgeNotificationsEvent;
+export type BridgeEvent =
+  | BridgeCommerceEvent
+  | BridgeCommercePresentationEvent
+  | BridgeNotificationsEvent;
 
 /** `{ protocol: 'mpgd.commerce.v2', sequence, event }` */
 export type BridgeCommerceEvent = CommerceEventEnvelope;
+
+/**
+ * `{ protocol: 'mpgd.commerce.presentation.v1', sequence, event }`: a
+ * purchase presentation fact of the host's commerce provider
+ * (`CommerceProvider.presentation`). A consumer built before this protocol
+ * skips it as another protocol's envelope.
+ */
+export type BridgeCommercePresentationEvent = CommercePresentationEventEnvelope;
 
 /** `{ protocol: 'mpgd.notifications.v2', sequence, event }` */
 export type BridgeNotificationsEvent = NotificationEventEnvelope;
@@ -313,6 +326,7 @@ export type BridgeEventOf<TProtocol extends BridgeEventProtocol> = Extract<
 >['event'];
 
 export const bridgeCommerceEventProtocol = commerceProtocol;
+export const bridgeCommercePresentationEventProtocol = commercePresentationProtocol;
 export const bridgeNotificationsEventProtocol =
   'mpgd.notifications.v2' as const satisfies NotificationEventEnvelope['protocol'];
 
@@ -369,6 +383,10 @@ export interface BridgeEventStream<TEvent> {
 export function createBridgeEventSource(
   protocol: typeof bridgeCommerceEventProtocol,
   stream: BridgeEventStream<BridgeEventOf<typeof bridgeCommerceEventProtocol>>,
+): BridgeEventSource;
+export function createBridgeEventSource(
+  protocol: typeof bridgeCommercePresentationEventProtocol,
+  stream: BridgeEventStream<BridgeEventOf<typeof bridgeCommercePresentationEventProtocol>>,
 ): BridgeEventSource;
 export function createBridgeEventSource(
   protocol: typeof bridgeNotificationsEventProtocol,

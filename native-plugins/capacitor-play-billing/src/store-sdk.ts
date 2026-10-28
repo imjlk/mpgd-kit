@@ -26,6 +26,16 @@ import type {
 } from './definitions.js';
 import { googlePlayStoreId, playBillingStoreSdkCapabilities } from './commerce-profile.js';
 import { CapacitorPlayBilling } from './plugin.js';
+import {
+  resolvePlayBillingNativePurchasePresentation,
+  type PlayBillingSdkPurchasePresentation,
+} from './purchase-presentation.js';
+
+export type {
+  PlayBillingPurchasePresentationState,
+  PlayBillingSdkPurchasePresentation,
+  PlayBillingSdkPurchasePresentationEvent,
+} from './purchase-presentation.js';
 
 // The profile constants live in the SDK-free `commerce-profile.ts` so a tools
 // project can read them without loading Capacitor; they stay exported here.
@@ -44,8 +54,18 @@ export const playBillingStoreSdkErrorCodeMap: StoreSdkErrorCodeMap = Object.free
   PLAY_BILLING_INVALID_REQUEST: 'CONFIGURATION_REQUIRED',
   PLAY_BILLING_ACTIVITY_REQUIRED: 'NOT_PREPARED',
   PLAY_BILLING_ANDROID_REQUIRED: 'STORE_UNAVAILABLE',
+  PLAY_BILLING_PRESENTATION_UNSUPPORTED: 'CONFIGURATION_REQUIRED',
   PLAY_BILLING_ERROR: 'UNKNOWN',
 });
+
+/**
+ * The code of a purchase refused because the native plugin in the app binary
+ * reports no sheet facts (a web bundle newer than its native build). The
+ * provider offers `presentation`, so a purchase it could not follow is not
+ * sold; rebuilding the app with this package's native code, or
+ * `purchasePresentation: false`, sells again. Recovery is unaffected.
+ */
+export const playBillingPresentationUnsupportedCode = 'PLAY_BILLING_PRESENTATION_UNSUPPORTED' as const;
 
 /** One Play product the SDK sells; the provider maps it to a logical id. */
 export interface PlayBillingStoreSdkProduct {
@@ -75,11 +95,21 @@ export interface CreateCapacitorPlayBillingStoreSdkInput {
    * acknowledge one without a logical product id.
    */
   readonly onUnmappedPurchase?: (purchase: PlayPurchase) => void;
+  /**
+   * Report the Play sheet's facts (`purchasePresentation`), so the adapter's
+   * provider offers `CommerceProvider.presentation` and the game pauses until
+   * the sheet is gone rather than until a result. Defaults to true. A native
+   * build without the facts then refuses new purchases with
+   * `PLAY_BILLING_PRESENTATION_UNSUPPORTED`; false keeps the result-based
+   * pause of earlier releases.
+   */
+  readonly purchasePresentation?: boolean;
 }
 
 export interface CapacitorPlayBillingStoreSdk extends StoreSdk {
   readonly store: typeof googlePlayStoreId;
   getAvailability(): Promise<PlatformProviderAvailability>;
+  readonly purchasePresentation?: PlayBillingSdkPurchasePresentation;
 }
 
 const productIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -336,9 +366,15 @@ export function createCapacitorPlayBillingStoreSdk(
     handle.then((resolved) => resolved.remove()).catch(() => undefined);
   };
 
+  // Sheet facts of `purchase` calls that carry a presentation id.
+  const presentation = input.purchasePresentation === false
+    ? undefined
+    : resolvePlayBillingNativePurchasePresentation(plugin);
+
   const sdk: CapacitorPlayBillingStoreSdk = {
     store: googlePlayStoreId,
     capabilities: playBillingStoreSdkCapabilities,
+    ...(presentation === undefined ? {} : { purchasePresentation: presentation.purchasePresentation }),
     async fetchProducts(request: StoreSdkFetchProductsInput): Promise<readonly StoreSdkProduct[]> {
       assertAndroid(isAndroid);
       if (request.type === 'subscription') {
@@ -413,15 +449,36 @@ export function createCapacitorPlayBillingStoreSdk(
         );
       }
       const offerToken = request.offerId ?? product.offerToken;
+      // Only an adapter that reads sheet facts sends an id (one from before
+      // them never does, and the purchase runs as in earlier releases).
+      const presentationId = presentation === undefined ? undefined : request.presentationId;
+      if (presentation !== undefined && presentationId !== undefined) {
+        if (!(await presentation.supported())) {
+          throw new PlayBillingStoreSdkError(
+            playBillingPresentationUnsupportedCode,
+            'The app was built with a Play Billing plugin that reports no purchase sheet facts; '
+              + "rebuild it with this package's native code.",
+            { retryable: false },
+          );
+        }
+        presentation.begin(presentationId);
+      }
       let outcome: PlayPurchaseOutcome;
       try {
         outcome = await plugin.purchase({
           productId: product.sku,
           obfuscatedAccountId: binding.value,
           ...(offerToken === undefined ? {} : { offerToken }),
+          ...(presentationId === undefined ? {} : { presentationId }),
         });
       } catch (error) {
+        if (presentationId !== undefined) {
+          presentation?.answered(presentationId, error);
+        }
         return { outcome: 'failed', error: toSdkError(error) };
+      }
+      if (presentationId !== undefined) {
+        presentation?.answered(presentationId, outcome);
       }
       if (!isRecord(outcome)) {
         throw invalidResponse('Play returned an invalid purchase outcome.');
@@ -490,6 +547,12 @@ export function createCapacitorPlayBillingStoreSdk(
     async getAvailability(): Promise<PlatformProviderAvailability> {
       if (!isAndroid()) {
         return 'unsupported';
+      }
+      // An adapter that reads sheet facts over a native build without them
+      // would refuse every purchase: report the store as needing a rebuild,
+      // so the shop sells nothing and no idempotency key is spent.
+      if (presentation !== undefined && presentation.followed() && !(await presentation.supported())) {
+        return 'configuration-required';
       }
       try {
         const response = await plugin.getProducts({ productIds: [...products.keys()] });

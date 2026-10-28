@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import { createUnsupportedCapabilities, type PlatformGateway } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  type PlatformGateway,
+  type PlatformPurchasePresentationEvent,
+} from '@mpgd/platform';
 
 import { createBrowserPlatformGateway } from '../../../adapters/browser/src/index';
 import { createEffectiveTargetConfig } from '../src/effective';
@@ -853,6 +857,72 @@ function requireCommerce(gateway: PlatformGateway): NonNullable<PlatformGateway[
     () => getFeatureAvailability('iap', android, withoutBlock as never),
     /PlatformCapabilities\.commerce is required/u,
   );
+}
+
+// A source with purchase presentation facts: a purchase refused here, which
+// never reaches the source, still ends with `not-started` before its answer,
+// and the source's facts pass through numbered on this side.
+{
+  const sourceListeners = new Set<(event: PlatformPurchasePresentationEvent) => void>();
+  const recording = createRecordingCommerceProvider({
+    capabilities: createCommerceBlock({ oneTime: true, subscription: true }),
+    products: mixedCatalog,
+    purchaseResult: { outcome: 'launched' },
+  });
+  const presenting = {
+    ...recording,
+    presentation: {
+      subscribe(listener: (event: PlatformPurchasePresentationEvent) => void) {
+        sourceListeners.add(listener);
+        return () => {
+          sourceListeners.delete(listener);
+        };
+      },
+    },
+    async requestPurchase(request: Parameters<typeof recording.requestPurchase>[0]) {
+      const answer = await recording.requestPurchase(request);
+      for (const listener of [...sourceListeners]) {
+        listener({
+          idempotencyKey: request.idempotencyKey,
+          sequence: 40,
+          state: 'open',
+          attempt: 2,
+        });
+      }
+      return answer;
+    },
+  };
+  const masked = createMixedGateway({ commerce: presenting });
+  const nothingSold = requireCommerce(withTargetAvailability(masked.gateway, sellsNothing));
+  assert.notEqual(nothingSold.presentation, undefined, 'the facts stay offered');
+  const log: string[] = [];
+  const unsubscribe = nothingSold.presentation?.subscribe((event) => {
+    log.push(`${event.idempotencyKey}:${String(event.sequence)}:${event.state}`);
+  });
+  assert.equal(sourceListeners.size, 1, 'one attachment to the source');
+  await nothingSold.requestPurchase({
+    logicalId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'refused',
+  });
+  log.push('refused:answered');
+  assert.deepEqual(log, ['refused:1:not-started', 'refused:answered']);
+
+  const sold = requireCommerce(
+    withTargetAvailability(createMixedGateway({ commerce: presenting }).gateway, sellsAll),
+  );
+  const facts: PlatformPurchasePresentationEvent[] = [];
+  sold.presentation?.subscribe((event) => facts.push(event));
+  await sold.requestPurchase({ logicalId: 'COINS_100', source: 'shop', idempotencyKey: 'sold' });
+  // The source reported the sheet: no not-started is added; attempt passes through.
+  assert.deepEqual(facts, [{ idempotencyKey: 'sold', sequence: 1, state: 'open', attempt: 2 }]);
+  // A fact the source already superseded is not numbered again.
+  for (const listener of [...sourceListeners]) {
+    listener({ idempotencyKey: 'sold', sequence: 40, state: 'not-started', attempt: 2 });
+  }
+  assert.equal(facts.length, 1, 'a repeated source sequence is dropped');
+  unsubscribe?.();
+  assert.equal(sourceListeners.size, 1, 'the second wrapper still listens');
 }
 
 console.log('Provider readiness and subscription distinction smoke passed.');

@@ -148,14 +148,11 @@ seconds): the sales flag is unknown rather than closed. An answer that
 arrives after the timeout is ignored and never opens the store. A thrown
 `CommerceError` keeps its own code, except a code that claims a launched or
 cancelled sheet (`OUTCOME_UNKNOWN`, `ALREADY_OWNED`, `USER_CANCELLED`), which
-becomes `PURCHASE_GATE_FAILED` because nothing was launched. The reconciler
-journals a refused attempt as terminal `failed` even when it is retryable:
-only trusted presentation facts (`not-started`) keep a key reusable, and the
-Capacitor bridge does not carry them yet, so a later try uses a new
-idempotency key. The store provider deliberately exposes no `presentation`
-that could only ever say `not-started`, because the game runtime's purchase
-coordinator would take it as a closure source and quarantine the game after
-every launched purchase. The gate runs while the gateway already holds the
+becomes `PURCHASE_GATE_FAILED` because nothing was launched. Over an SDK
+with sheet facts (below), a refusal is reported `not-started` before the
+answer, so the reconciler keeps a retryable refusal's key reusable and the
+same key asks again; without sheet facts the reconciler journals the refused
+attempt as terminal `failed`, and a later try uses a new idempotency key. The gate runs while the gateway already holds the
 purchase's external activity (the game is paused, with no sheet shown), so it
 should answer from a flag the game already holds rather than a slow network
 call; the timeout bounds that pause. Recovery, restore, finishing, events, `fetchProducts`, and
@@ -187,6 +184,49 @@ cannot advertise one the SDK lacks: `restore: true` without
 `sdk.restorePurchases`, like `finish: 'client' | 'host'` without
 `sdk.finishTransaction`, is rejected when the provider is created.
 
+### Store sheet facts
+
+A `StoreSdk` that declares `purchasePresentation` reports, for a
+`requestPurchase` call that carries a `presentationId`, when the store sheet
+opens and when it is gone (`open`, then `closed`), or that none opened
+(`not-started`). The Play Billing and StoreKit SDKs declare it by default.
+Only then does the provider offer `CommerceProvider.presentation`, so a new
+adapter over an SDK from before the facts keeps the behavior below, and an
+SDK never receives a `presentationId` from an adapter that predates them.
+
+The provider answers every `requestPurchase` with facts keyed by its
+idempotency key, numbered with one increasing `sequence`:
+
+- `not-started`, delivered before the answer, for a call that opened no
+  sheet: a purchase gate or account binding refusal, an unavailable store,
+  any throw, the SDK's own `not-started`, or an SDK that settled without a
+  fact.
+- `unknown` when the SDK answers while its native flow still runs and has
+  observed nothing (a call timeout): the call keeps waiting for the SDK's
+  `open`, `closed`, or `not-started`, bounded by the safety timeout below,
+  instead of reading the answer as either.
+- Otherwise `open`, then exactly one `closed`: the SDK's, or after
+  `purchasePresentationTimeoutMs` (15 minutes, `reason: 'timeout'`), or on
+  `dispose()` (`reason: 'disposed'`). A `not-started` after `open` becomes
+  `closed`. A result, a pending purchase, an Ask to Buy, or a purchase event
+  is never a `closed` fact.
+
+`createCommerceProviderBridge` serves the facts through
+`subscribePresentation` as `{ protocol: 'mpgd.commerce.presentation.v1',
+sequence, event }` envelopes, apart from the commerce envelopes of
+`subscribe`, so a commerce listener (and the host's buffering of purchase
+events for its first listener) is unchanged. `createBridgeCommerceProvider`
+offers `presentation` only when its input has `subscribePresentation`; it
+validates and renumbers the facts and adds `not-started` for a request the
+bridge refused before the host's provider ran. The gateway passes
+`subscribePresentation` only from a provider bridge that has it. With facts,
+the game runtime's purchase coordination
+(`createCoordinatedPlatformGateway`) turns on by itself, and the gateway
+keeps a purchase's pause (`beginExternalActivity()`) until the sheet's
+`closed` or `not-started`, whatever the answer, with
+`presentedPurchaseActivityTimeoutMs` as a safety net: an Ask to Buy whose
+sheet closed holds nothing.
+
 `createCommerceServiceProvider({ id, commerce })` wraps the provider as a
 `CapacitorServiceProvider` whose `commerce` field the registry recognizes. It
 declares no `features` and no `methods`: the six `commerce.v2.*` bridge methods
@@ -210,11 +250,12 @@ read per snapshot (`getCapabilitySnapshot` returns `{ availability, commerce }`,
 three-second timeout, shape validated): a stalled, failing, or invalid
 provider yields a degraded block (`createDegradedCommerceCapabilities`:
 `availability: 'temporarily-unavailable'`, nothing sold) and never rejects the
-capability read. A `launched` purchase keeps `beginExternalActivity()` open
-after the request returns, since the store UI is still up: the gateway releases
-it when the provider reports that product (`purchaseUpdated` or
-`purchaseError`), after `launchedPurchaseActivityTimeoutMs` (two minutes), or
-on `lifecycle.dispose`. The registry does not gate a commerce method by a
+capability read. Without sheet facts, a `launched` purchase keeps
+`beginExternalActivity()` open after the request returns, since the store UI
+may still be up: the gateway releases it when the provider reports that
+product (`purchaseUpdated` or `purchaseError`), after
+`launchedPurchaseActivityTimeoutMs` (two minutes), or on `lifecycle.dispose`.
+With facts, the sheet's own `closed` ends the pause (see above). The registry does not gate a commerce method by a
 snapshot: the provider reads its own `availability` and fails closed before any
 store UI opens. A `commerce.v2.*` request that reaches a transport without a
 provider still answers `COMMERCE_V2_UNAVAILABLE`.
