@@ -4,6 +4,7 @@ import { rootRelativeRouteVectors, shareLinkVectors } from './route-vectors.js';
 import {
   hasNetworkPathPrefix,
   hasRouteControlCharacter,
+  isHostedGameServicesPath,
   normalizeRootRelativeRoute,
   normalizeShareLink,
 } from './routes.js';
@@ -265,6 +266,56 @@ describe('share links', () => {
 
       expect(url.username + url.password, link).toBe('');
       expect(hasNetworkPathPrefix(url.pathname), link).toBe(false);
+    }
+  });
+});
+
+describe('isHostedGameServicesPath', () => {
+  it('accepts /api and clean segments below it, and refuses anything a URL parser could move', () => {
+    const accepted = [
+      '/api',
+      '/api/',
+      '/api/game-services',
+      '/api/game-services/',
+      '/api/game_services/v1',
+    ];
+    const rejected = [
+      '',
+      'api',
+      'api/game-services',
+      '/',
+      '/other',
+      '/apiary',
+      '/API',
+      '//api',
+      '//evil.example/api',
+      '/\\evil.example/api',
+      '/api\\evil.example',
+      '/api//evil.example',
+      '/api/../admin',
+      '/api/./game-services',
+      '/api/..',
+      '/api/%2e%2e/admin',
+      '/api/%2f%2fevil.example',
+      '/api/game%20services',
+      '/api/game services',
+      ' /api',
+      '/api ',
+      '/api\t',
+      '/api\n',
+      '/api?redirect=other',
+      '/api/?x=1',
+      '/api#fragment',
+      '/api/game-services#x',
+      'https://game.example/api',
+      '/api/ga\u00efme',
+    ];
+
+    for (const path of accepted) {
+      expect(isHostedGameServicesPath(path), JSON.stringify(path)).toBe(true);
+    }
+    for (const path of rejected) {
+      expect(isHostedGameServicesPath(path), JSON.stringify(path)).toBe(false);
     }
   });
 });

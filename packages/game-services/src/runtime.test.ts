@@ -7,6 +7,7 @@ import {
   GameServicesBackendError,
   GameServicesBackendTransportError,
   GameServicesHeaderResolutionError,
+  isHostedGameServicesPath,
   isPublicGameServicesUrl,
   resolveGameServicesAuthorityMode,
   resolveGameServicesBaseUrl,
@@ -18,6 +19,18 @@ import {
 import { isMonetizationOperationRecoverable } from './monetization-operation-store.js';
 
 const playerId = 'runtime-player';
+
+// The accept/reject table lives with the predicate in @mpgd/platform/routes.
+assertEqual(
+  isHostedGameServicesPath('/api/game-services'),
+  true,
+  'hosted path predicate is re-exported',
+);
+assertEqual(
+  isHostedGameServicesPath('//evil.example.com/api'),
+  false,
+  'hosted path predicate is re-exported',
+);
 
 for (const target of ['browser', 'microsoft-store'] as const) {
   for (const path of ['/api', '/api/game-services']) {

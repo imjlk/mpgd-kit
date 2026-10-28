@@ -2,6 +2,8 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
+import { isHostedGameServicesPath } from '@mpgd/platform/routes';
+
 const wechatStagingAppId = 'wx0000000000000000';
 
 const ownerPathByTarget = {
@@ -288,7 +290,7 @@ function assertAuthoritativeGameServicesUrl(
   // Hosted web/PWA clients can reach an authoritative service through their
   // own Pages/edge ingress. Never apply this allowance to third-party/native
   // hosts, or accept paths that URL normalization can turn into another host.
-  if (allowSameOrigin && value === value.trim() && /^\/api(?:\/[A-Za-z0-9_-]+)*\/?$/u.test(value)) {
+  if (allowSameOrigin && isHostedGameServicesPath(value)) {
     return;
   }
 

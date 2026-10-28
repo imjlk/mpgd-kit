@@ -6,6 +6,7 @@ import {
 import type { AnalyticsSink } from '@mpgd/analytics';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 import { CommerceError } from '@mpgd/platform/commerce';
+import { isHostedGameServicesPath } from '@mpgd/platform/routes';
 
 import {
   assertCommerceStaleLaunchedAfterMs,
@@ -766,6 +767,8 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
+export { isHostedGameServicesPath };
+
 /**
  * Resolve a hosted browser's clean /api ingress before constructing absolute-URL
  * clients. No ambient DOM access: composition roots supply the actual page origin
@@ -778,7 +781,7 @@ export function resolveGameServicesBaseUrl(
 ): string | undefined {
   const value = normalizeBaseUrl(baseUrl);
   if (value === undefined || (context.target !== 'browser' && context.target !== 'microsoft-store')
-    || value !== baseUrl || !/^\/api(?:\/[A-Za-z0-9_-]+)*\/?$/u.test(value)) {
+    || value !== baseUrl || !isHostedGameServicesPath(value)) {
     return value;
   }
   const origin = context.pageOrigin === undefined
