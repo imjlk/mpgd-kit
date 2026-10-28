@@ -1201,7 +1201,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
    * purchase. Only this player's Restore Purchases asks again (a restore
    * sharing policy or a binding may have changed since), with the evidence
    * the store reports now, so a stale saved request (an expired signed
-   * transaction) is not resent; other reports leave it parked. While it is
+   * transaction) is not resent, and as a restore, which the player asked
+   * for (restore sharing may cover a durable the game started, too); other
+   * reports leave it parked. While it is
    * unparked, until the backend answers again, its shared key refuses other
    * players as any record does.
    */
@@ -1216,7 +1218,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     const reported = { ...record, purchase };
     await reviseAnotherAccount(record, undefined, {
       purchase,
-      request: buildRequest(reported),
+      request: { ...buildRequest(reported), intent: 'restore' },
     });
   };
 

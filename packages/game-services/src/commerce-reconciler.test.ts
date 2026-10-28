@@ -4191,6 +4191,49 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   await restarted.reconciler.stop();
 }
 
+// 56b2. A game-started purchase parked as another account's is resent by Restore Purchases as
+// a restore, so restore sharing can cover a durable.
+{
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const h = createHarness({ provider, backend });
+  await h.reconciler.start();
+  const outcome = await h.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'op-56b2',
+    source: 'shop',
+  });
+  assertEqual(outcome, { outcome: 'launched' }, 'the store sheet opened');
+  backend.queue({
+    throws: Object.assign(new Error('bound'), {
+      status: 409,
+      body: { error: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' },
+    }),
+  });
+  const bought = purchaseOf({
+    transactionId: 'tx-56b2',
+    storeSku: 'remove.ads',
+    logicalId: 'remove_ads',
+  });
+  h.provider.report(bought);
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    [(await h.reconciler.read('op-56b2'))?.anotherAccount?.reason, backend.requests[0]?.intent],
+    ['GOOGLE_PLAY_ACCOUNT_MISMATCH', undefined],
+    'a game-started purchase is sent without intent and parked',
+  );
+  provider.available.push(bought);
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56b2' });
+  await h.reconciler.restorePurchases();
+  assertEqual(
+    [backend.requests[1]?.idempotencyKey, backend.requests[1]?.intent],
+    ['op-56b2', 'restore'],
+    'Restore Purchases resends it under its key as a restore',
+  );
+  assertEqual(h.history('op-56b2').at(-1), 'finished', 'a shared restore lands');
+  await h.reconciler.stop();
+}
+
 // 56c. A backend from before the answer: a `rejected` receipt with a store binding
 // mismatch reason is parked the same way (no other reason is); a journal written before
 // it, holding another player's terminal mismatch record, leaves the key to the owner.
