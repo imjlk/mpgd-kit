@@ -193,6 +193,14 @@ export interface BannerAdMountResult {
   readonly status: 'mounted' | 'unavailable' | 'failed';
 }
 
+/**
+ * Why a `closed` purchase presentation fact was not a native observation of
+ * the surface closing: `timeout` (the provider's safety timeout ended a
+ * surface it never saw close), `interrupted` (the native host was torn down
+ * with the surface open), `disposed` (the provider was disposed).
+ */
+export type PlatformPurchasePresentationReason = 'timeout' | 'interrupted' | 'disposed';
+
 export interface PlatformPurchasePresentationEvent {
   readonly idempotencyKey: string;
   readonly sequence: number;
@@ -203,6 +211,11 @@ export interface PlatformPurchasePresentationEvent {
    * missing attempt keeps sequence-only ordering. It never grants.
    */
   readonly attempt?: number;
+  /**
+   * Set only on a `closed` fact that no native observation proved. A
+   * consumer treats it as `closed`; the reason is for diagnostics.
+   */
+  readonly reason?: PlatformPurchasePresentationReason;
 }
 
 /** Request property a coordinator sets so a restarting provider can echo the attempt. */

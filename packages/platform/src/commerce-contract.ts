@@ -253,9 +253,17 @@ export interface CommerceProvider {
   /**
    * Trusted native presentation facts for the purchase UI (opened, closed,
    * never started), independent of the purchase result. A provider whose host
-   * can prove when its payment surface closes (ONE play) offers it; the game
-   * runtime's presentation gate subscribes when present and treats a result
-   * alone as unknown.
+   * can prove when its payment surface closes (ONE play, and the Play Billing
+   * and StoreKit providers over a native plugin that reports its sheet)
+   * offers it; the game runtime's presentation gate subscribes when present
+   * and treats a result alone as unknown.
+   *
+   * A provider that offers it answers every `requestPurchase` call with
+   * facts: `not-started` delivered before the call settles when no surface
+   * opened (a refusal, a throw), otherwise `open` and then exactly one
+   * `closed`, which may follow the result. A consumer waiting for `closed`
+   * would otherwise wait forever, so a provider that cannot prove closure
+   * ends with a `closed` that carries a `reason`.
    */
   readonly presentation?: {
     subscribe(listener: (event: PlatformPurchasePresentationEvent) => void): () => void;

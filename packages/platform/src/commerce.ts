@@ -109,6 +109,35 @@ export interface CommerceEventEnvelope {
   readonly event: CommerceEvent;
 }
 
+/**
+ * Event protocol of purchase presentation facts on the bridge event channel
+ * (RFC "Bridge and versioning"). It is its own protocol, not a
+ * `CommerceEvent` type, so a consumer built before it skips the envelopes
+ * (every consumer ignores a protocol it does not handle) instead of failing
+ * them as invalid commerce events.
+ */
+export const commercePresentationProtocol = 'mpgd.commerce.presentation.v1' as const;
+
+/**
+ * One purchase presentation fact (`CommerceProvider.presentation`) as it
+ * crosses the bridge: the shape of `PlatformPurchasePresentationEvent` with
+ * its bounds. `sequence` increases per idempotency key and starts at 1.
+ */
+export interface CommercePresentationEvent {
+  readonly idempotencyKey: NonEmptyString;
+  readonly sequence: number & tags.Type<'uint32'> & tags.Minimum<1>;
+  readonly state: 'open' | 'closed' | 'not-started' | 'unknown';
+  readonly attempt?: number & tags.Type<'uint32'> & tags.Minimum<1>;
+  readonly reason?: 'timeout' | 'interrupted' | 'disposed';
+}
+
+/** Presentation event envelope; `sequence` is per session and starts at 0. */
+export interface CommercePresentationEventEnvelope {
+  readonly protocol: typeof commercePresentationProtocol;
+  readonly sequence: NonNegativeInteger;
+  readonly event: CommercePresentationEvent;
+}
+
 // Credit wallet types (RFC "Credit wallet"). The wallet rules,
 // `createCreditCommerceProvider`, and the reference in-memory wallet live in
 // `@mpgd/platform/commerce-wallet`; this module fixes the shapes and validators.
@@ -705,6 +734,13 @@ export const assertCommerceEvent = typia.createAssertEquals<CommerceEvent>();
 export const isCommerceEvent = typia.createEquals<CommerceEvent>();
 export const assertCommerceEventEnvelope = typia.createAssertEquals<CommerceEventEnvelope>();
 export const isCommerceEventEnvelope = typia.createEquals<CommerceEventEnvelope>();
+export const assertCommercePresentationEvent =
+  typia.createAssertEquals<CommercePresentationEvent>();
+export const isCommercePresentationEvent = typia.createEquals<CommercePresentationEvent>();
+export const assertCommercePresentationEventEnvelope =
+  typia.createAssertEquals<CommercePresentationEventEnvelope>();
+export const isCommercePresentationEventEnvelope =
+  typia.createEquals<CommercePresentationEventEnvelope>();
 export const assertActiveSubscription = typia.createAssertEquals<ActiveSubscription>();
 export const isActiveSubscription = typia.createEquals<ActiveSubscription>();
 export const assertFetchProductsInput = typia.createAssertEquals<FetchProductsInput>();

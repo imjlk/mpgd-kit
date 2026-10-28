@@ -28,6 +28,14 @@
       "file": "commerce-event-envelope.schema.json"
     },
     {
+      "title": "CommercePresentationEvent",
+      "file": "commerce-presentation-event.schema.json"
+    },
+    {
+      "title": "CommercePresentationEventEnvelope",
+      "file": "commerce-presentation-event-envelope.schema.json"
+    },
+    {
       "title": "ActiveSubscription",
       "file": "active-subscription.schema.json"
     },

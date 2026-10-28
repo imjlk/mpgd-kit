@@ -359,10 +359,32 @@ export const validBridgeEvents = [
       snapshot: { app: 'blocked', topics: { 'energy-full': 'blocked' } },
     },
   },
+  // Purchase presentation facts are their own protocol with their own sequence.
+  {
+    protocol: 'mpgd.commerce.presentation.v1',
+    sequence: 0,
+    event: { idempotencyKey: 'purchase-1', sequence: 1, state: 'open' },
+  },
+  {
+    protocol: 'mpgd.commerce.presentation.v1',
+    sequence: 1,
+    event: { idempotencyKey: 'purchase-1', sequence: 2, state: 'closed' },
+  },
+  {
+    protocol: 'mpgd.commerce.presentation.v1',
+    sequence: 2,
+    event: { idempotencyKey: 'purchase-2', sequence: 3, state: 'not-started', attempt: 2 },
+  },
+  {
+    protocol: 'mpgd.commerce.presentation.v1',
+    sequence: 3,
+    event: { idempotencyKey: 'purchase-3', sequence: 5, state: 'closed', reason: 'timeout' },
+  },
 ] as const satisfies readonly BridgeEvent[];
 
 const notificationsV2Opened = validBridgeEvents[3];
 const notificationsV2EndpointChanged = validBridgeEvents[5];
+const commercePresentationOpen = validBridgeEvents[7];
 
 /** An endpoint change whose registration names a time zone `Intl` does not know. */
 export const notificationsV2UnknownZoneEndpointChanged = {
@@ -398,6 +420,17 @@ export const invalidBridgeEvents: readonly unknown[] = [
   { ...notificationsV2Opened, event: { type: 'dismissed', channel: 'remote' } },
   // A registration's time zone follows the `register` answer's rule.
   notificationsV2UnknownZoneEndpointChanged,
+  // Presentation facts: bounded keys, sequences, states, and reasons only.
+  { ...commercePresentationOpen, protocol: 'mpgd.commerce.v2' },
+  { ...validBridgeEvents[0], protocol: 'mpgd.commerce.presentation.v1' },
+  { ...commercePresentationOpen, sequence: -1 },
+  { ...commercePresentationOpen, extra: true },
+  { ...commercePresentationOpen, event: { ...commercePresentationOpen.event, sequence: 0 } },
+  { ...commercePresentationOpen, event: { ...commercePresentationOpen.event, idempotencyKey: '' } },
+  { ...commercePresentationOpen, event: { ...commercePresentationOpen.event, state: 'dismissed' } },
+  { ...commercePresentationOpen, event: { ...commercePresentationOpen.event, attempt: 0 } },
+  { ...commercePresentationOpen, event: { ...commercePresentationOpen.event, reason: 'cancelled' } },
+  { ...commercePresentationOpen, event: { ...commercePresentationOpen.event, extra: true } },
 ];
 
 export const validBridgeOkResponse: BridgeResponse<{ readonly nativeAds: boolean }> = {
