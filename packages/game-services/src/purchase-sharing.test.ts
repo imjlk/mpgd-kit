@@ -24,6 +24,7 @@ import {
   type GooglePlayProductPurchaseClient,
 } from './google-play-purchase.js';
 import { createGooglePlayProductPurchaseConformanceFixture } from './google-play-purchase-conformance.js';
+import { GameServicesPurchaseBoundToAnotherAccountError } from './another-account.js';
 import type {
   EvidenceVerificationDecision,
   FinalizePurchaseGrantInput,
@@ -90,6 +91,19 @@ function createStoreVerifier(options: {
   };
 }
 
+/**
+ * A purchase the store binds to another account and no share covers: the
+ * backend answers the retryable PURCHASE_BOUND_TO_ANOTHER_ACCOUNT error, not a
+ * `rejected` receipt (RFC "Another account's purchase").
+ */
+async function assertAnotherAccount(verify: Promise<unknown>, reason: string): Promise<void> {
+  await assert.rejects(verify, (error: unknown) => {
+    assert.ok(error instanceof GameServicesPurchaseBoundToAnotherAccountError);
+    assert.equal(error.reason, reason);
+    return true;
+  });
+}
+
 function restoreRequest(
   playerId: string,
   overrides: Partial<VerifyPurchaseRequest> = {},
@@ -126,12 +140,15 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     evidenceVerifier: createStoreVerifier(),
   });
   assert.equal((await backend.purchases.verifyPurchase(restoreRequest('player-a'))).verified, true);
-  assert.deepEqual(await backend.purchases.verifyPurchase(restoreRequest('player-b')), {
-    verified: false,
-    alreadyProcessed: false,
-    disposition: 'rejected',
-    reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
-  });
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(restoreRequest('player-b')),
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+  );
+  // Nothing is recorded for the refused player: only the buyer's grant.
+  assert.deepEqual(
+    (await store.listEntitlementTransactions()).map((grant) => grant.playerId),
+    ['player-a'],
+  );
 }
 
 // Reinstall or a second device: the new guest gets its own grant; the buyer keeps theirs.
@@ -221,14 +238,14 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   assert.equal(buyerAgain.ledgerEntryId, firstLedgerEntryId);
 
   // A checkout this client started (no restore intent) never shares.
-  assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-c', { intent: 'purchase' }))).reason,
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(restoreRequest('player-c', { intent: 'purchase' })),
     'GOOGLE_PLAY_ACCOUNT_MISMATCH',
   );
   const { intent: _intent, ...withoutIntent } = restoreRequest('player-c');
   void _intent;
-  assert.equal(
-    (await backend.purchases.verifyPurchase(withoutIntent)).reason,
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(withoutIntent),
     'GOOGLE_PLAY_ACCOUNT_MISMATCH',
   );
 
@@ -718,14 +735,10 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     evidenceVerifier: createStoreVerifier(),
     restoreSharing: { mode: 'share' },
   });
-  assert.deepEqual(
-    await backend.purchases.verifyPurchase(restoreRequest('player-b', { productId: 'HINT_PACK_5' })),
-    {
-      verified: false,
-      alreadyProcessed: false,
-      disposition: 'rejected',
-      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
-    },
+  // A consumable never moves or is shared: another account's, nothing recorded.
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(restoreRequest('player-b', { productId: 'HINT_PACK_5' })),
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
   );
   assert.deepEqual(await store.listEntitlementTransactions(), []);
 }
@@ -961,8 +974,8 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     evidenceVerifier: createStoreVerifier(),
     restoreSharing: { mode: 'refuse' },
   });
-  assert.equal(
-    (await backend.purchases.verifyPurchase(restoreRequest('player-b'))).reason,
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(restoreRequest('player-b')),
     'GOOGLE_PLAY_ACCOUNT_MISMATCH',
   );
 }
@@ -1058,7 +1071,11 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
     signal,
     timeoutMs: 1000,
   });
-  assert.deepEqual(asPurchase, { status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+  assert.deepEqual(asPurchase, {
+    status: 'rejected',
+    reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    anotherAccount: true,
+  });
 
   // The buyer's grant, then a reinstall's restore shares it.
   const bought = await backend.purchases.verifyPurchase(
@@ -1073,9 +1090,8 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   assert.equal(restored.finalization?.alreadyCompleted, true);
   assert.deepEqual(acknowledged, ['token-1']);
   // A checkout of the same token by a third player is still a mismatch.
-  assert.equal(
-    (await backend.purchases.verifyPurchase(playRequest('token-1', 'player-c', { intent: 'purchase' })))
-      .reason,
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(playRequest('token-1', 'player-c', { intent: 'purchase' })),
     'GOOGLE_PLAY_ACCOUNT_MISMATCH',
   );
 
@@ -1095,6 +1111,41 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   assert.equal(
     (await backend.purchases.verifyPurchase(playRequest('token-3', 'player-b'))).restoredAcrossPlayers,
     true,
+  );
+  // Its restorable reason says it is bound to no account: without a share it
+  // is refused for good, never answered as another account's purchase.
+  const unbound = await boundary.verifyPurchase({
+    request: playRequest('token-3', 'player-c'),
+    product,
+    platformProductId: 'remove_ads_android',
+    signal,
+    timeoutMs: 1000,
+  });
+  assert.equal(unbound.status, 'restorable');
+  assert.equal(
+    unbound.status === 'restorable' ? unbound.reason : '',
+    'GOOGLE_PLAY_ACCOUNT_ID_MISSING',
+  );
+  const refusing = createGameServicesBackend({
+    catalog,
+    placements,
+    store: createInMemoryGameServicesStore(),
+    evidenceVerifier: {
+      verifyPurchase: (input) => boundary.verifyPurchase(input),
+      verifyAdReward: async () => ({ status: 'rejected', reason: 'UNUSED' }),
+    },
+    purchaseGrantFinalizer: boundary,
+    restoreSharing: { mode: 'refuse' },
+  });
+  assert.deepEqual(await refusing.purchases.verifyPurchase(playRequest('token-3', 'player-c')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'rejected',
+    reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING',
+  });
+  await assertAnotherAccount(
+    refusing.purchases.verifyPurchase(playRequest('token-1', 'player-c')),
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
   );
 
   // Refunded at Play: refused before any binding is looked at.
@@ -1184,14 +1235,37 @@ assert.throws(() => resolvePurchaseRestoreSharingPolicy({ mode: 'other' as 'shar
   // Without the client's StoreKit-verified JWS a transaction id alone never shares a purchase.
   const { evidence: _evidence, ...withoutEvidence } = iosRequest('player-c');
   void _evidence;
-  assert.equal(
-    (await backend.purchases.verifyPurchase(withoutEvidence)).reason,
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(withoutEvidence),
     'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
   );
-  assert.equal(
-    (await backend.purchases.verifyPurchase(iosRequest('player-c', { intent: 'purchase' }))).reason,
+  await assertAnotherAccount(
+    backend.purchases.verifyPurchase(iosRequest('player-c', { intent: 'purchase' })),
     'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
   );
+
+  // A transaction bound to no token restores under the share policy (L3c);
+  // without a share it is refused for good as bound to no account.
+  const { appAccountToken: _token, ...tokenless } = transaction;
+  void _token;
+  transaction = tokenless;
+  const tokenlessRestore = await backend.purchases.verifyPurchase(
+    iosRequest('player-c', { idempotencyKey: 'app-store:player-c:tokenless' }),
+  );
+  assert.equal(tokenlessRestore.restoredAcrossPlayers, true);
+  const refusingIos = createGameServicesBackend({
+    catalog,
+    placements,
+    store: createInMemoryGameServicesStore(),
+    evidenceVerifier: verifier,
+    restoreSharing: { mode: 'refuse' },
+  });
+  assert.deepEqual(await refusingIos.purchases.verifyPurchase(iosRequest('player-c')), {
+    verified: false,
+    alreadyProcessed: false,
+    disposition: 'rejected',
+    reason: 'APP_STORE_ACCOUNT_TOKEN_MISSING',
+  });
 
   // Refunded at Apple: the checks after the binding still apply to a restore.
   transaction = { ...transaction, revocationDate: Date.parse('2021-01-01T00:00:00.000Z') };

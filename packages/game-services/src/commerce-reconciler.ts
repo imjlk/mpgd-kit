@@ -24,6 +24,10 @@ import {
   type StorePurchaseAccountBinding,
 } from '@mpgd/platform/commerce';
 
+import {
+  isStoreAccountMismatchReason,
+  readPurchaseBoundToAnotherAccount,
+} from './another-account.js';
 import type { PurchaseVerificationApi } from './client.js';
 import {
   compareCommerceServiceCapabilities,
@@ -91,6 +95,23 @@ export interface CommercePurchaseOperationRecord {
   /** A retryable error on `requested` means the provider proved checkout never started. */
   readonly error?: CommerceErrorInfo;
   readonly revokedBy?: string;
+  /**
+   * The backend answered that the store binds this purchase to another
+   * account than this record's player (RFC "Another account's purchase"):
+   * `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`, or a `rejected` receipt with a
+   * store binding mismatch reason from a backend before that answer. The
+   * record is parked in `verifying`: never sent again automatically, not
+   * listed among the player's recoverable records, summarized as `rejected`
+   * for this player, and its shared key no longer refuses another player
+   * of the install, who journals the purchase under its own player-scoped
+   * key. Only this player's Restore Purchases, when the store reports the
+   * purchase again, sends it once more.
+   */
+  readonly anotherAccount?: {
+    /** The store's binding mismatch, for example `GOOGLE_PLAY_ACCOUNT_MISMATCH`. */
+    readonly reason: string;
+    readonly reportedAt: string;
+  };
 }
 
 /**
@@ -125,14 +146,40 @@ export function isCommercePurchaseOperationRecord(
     && (record as { readonly kind?: unknown }).kind === commercePurchaseOperationKind;
 }
 
-/** Summary status of a record: the RFC mapping, with `revoked` kept distinct. */
+/**
+ * Summary status of a record: the RFC mapping, with `revoked` kept distinct.
+ * A record parked as another account's purchase is `rejected` for its
+ * player: nothing was granted to it, and nothing will be.
+ */
 export function summarizeCommercePurchaseOperation(
   record: CommercePurchaseOperationRecord,
 ): CommercePurchaseSummaryStatus {
   if (isRetryableBeforeLaunch(record)) {
     return 'failed';
   }
+  if (isParkedForAnotherAccount(record)) {
+    return 'rejected';
+  }
   return summarizeCommercePurchaseState(record.state);
+}
+
+/** A `verifying` record the backend answered as another account's purchase. */
+export function isParkedForAnotherAccount(record: CommercePurchaseOperationRecord): boolean {
+  return record.state === 'verifying' && record.anotherAccount !== undefined;
+}
+
+/**
+ * Whether another player's record under a shared key leaves the key to this
+ * player: parked as another account's purchase, or (a journal written before
+ * that answer) `rejected` with a store binding mismatch reason. Either way
+ * the purchase was never its player's, and nothing on the backend holds it.
+ */
+function releasesSharedKey(record: CommercePurchaseOperationRecord): boolean {
+  return isParkedForAnotherAccount(record)
+    || (record.state === 'rejected'
+      && record.response !== undefined
+      && !record.response.verified
+      && isStoreAccountMismatchReason(record.response.reason));
 }
 
 function isRetryableBeforeLaunch(record: CommercePurchaseOperationRecord): boolean {
@@ -251,6 +298,19 @@ export type CommerceReconcilerEvent =
       readonly type: 'verify-result';
       readonly record: CommercePurchaseOperationRecord;
       readonly response: VerifyPurchaseResponse;
+    }
+  | {
+      /**
+       * The backend answered the record's verify as another account's
+       * purchase (RFC "Another account's purchase"): the record is parked,
+       * nothing was granted, and it is not a failure. `response` is the
+       * receipt of a backend before that answer (`rejected` with a store
+       * binding mismatch reason); absent for the 409 answer.
+       */
+      readonly type: 'another-account';
+      readonly record: CommercePurchaseOperationRecord;
+      readonly reason: string;
+      readonly response?: VerifyPurchaseResponse;
     }
   | {
       readonly type: 'failure';
@@ -829,6 +889,32 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   };
 
   /**
+   * Parks a `verifying` record the backend answered as another account's
+   * purchase, or (`marker` undefined) lets this player's Restore Purchases
+   * send it again. The state stays `verifying`: the record is not ended for
+   * the store transaction, which its account can still recover.
+   */
+  const reviseAnotherAccount = async (
+    record: CommercePurchaseOperationRecord,
+    marker: CommercePurchaseOperationRecord['anotherAccount'],
+    patch: Partial<CommercePurchaseOperationRecord> = {},
+  ): Promise<CommercePurchaseOperationRecord> => {
+    const { anotherAccount: _previous, ...rest } = record;
+    const next: CommercePurchaseOperationRecord = {
+      ...rest,
+      ...patch,
+      ...(marker === undefined ? {} : { anotherAccount: marker }),
+      state: record.state,
+      revision: record.revision + 1,
+      updatedAt: now(),
+    };
+    await journal.replace(record.revision, next);
+    remember(next);
+    retryAt.delete(record.idempotencyKey);
+    return next;
+  };
+
+  /**
    * Where this player's record of an idempotency key lives, and what that key
    * holds now. A record is under the shared key, or under this player's
    * player-scoped key, which only the player's Restore Purchases takes, for a
@@ -841,6 +927,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
    *   the slot holds, and `recordIn` refuses it.
    * - `probeFree`: when the shared key is free, a record under the scoped key
    *   still answers (retention may have dropped the other player's record).
+   *
+   * Another player's record that was answered as another account's purchase
+   * (`releasesSharedKey`) is never this player's to refuse: the scoped key is
+   * the slot for any kind, as with `takeHeld`, so the purchase's own account
+   * recovers it on the same install.
    */
   const resolveSlot = async (
     idempotencyKey: string,
@@ -851,6 +942,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     const heldByAnother = shared !== undefined && heldByAnotherPlayer(shared);
     const probeScoped = heldByAnother
       ? options.takeHeld === true
+        || (isCommercePurchaseOperationRecord(shared) && releasesSharedKey(shared))
       : shared === undefined && options.probeFree === true;
     if (!probeScoped) {
       return { key: sharedKey, found: shared, heldByAnother };
@@ -896,10 +988,16 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         isCommercePurchaseOperationRecord(record) && ownsRecord(record),
     );
 
+  /**
+   * The player's open records. One parked as another account's purchase is
+   * kept in memory, so a store report matches it without the journal's
+   * transaction index, but is not the player's to recover.
+   */
   const listRecoverable = async (): Promise<CommercePurchaseOperationRecord[]> =>
     ownedRecordsOf(await journal.listRecoverable(playerId))
       .filter((record) => !isTerminalCommercePurchaseState(record.state))
-      .map(remember);
+      .map(remember)
+      .filter((record) => !isParkedForAnotherAccount(record));
 
   const listGranted = async (): Promise<CommercePurchaseOperationRecord[]> => {
     const listed = journal.listGranted === undefined
@@ -1110,6 +1208,47 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     }
   };
 
+  /**
+   * A store report of a record the backend answered as another account's
+   * purchase. Only this player's Restore Purchases asks again (a restore
+   * sharing policy or a binding may have changed since), with the evidence
+   * the store reports now, so a stale saved request (an expired signed
+   * transaction) is not resent, and as a restore, which the player asked
+   * for (restore sharing may cover a durable the game started, too); other
+   * reports leave it parked. It stays parked until the backend answers
+   * something else: a transport failure (an offline Restore) changes
+   * nothing, so the record never becomes an open attempt that serializes the
+   * player's purchases or holds the shared key against the purchase's
+   * account. Another answer unparks it and settles it as a verify does; a
+   * grant is finished by the pass's recoverable records.
+   */
+  const reportParked = async (
+    record: CommercePurchaseOperationRecord,
+    purchase: StorePurchase,
+    restoring: boolean,
+  ): Promise<void> => {
+    if (!restoring || purchase.state !== 'purchased') {
+      return;
+    }
+    const request: VerifyPurchaseRequest = {
+      ...buildRequest({ ...record, purchase }),
+      intent: 'restore',
+    };
+    const refreshed = await reviseAnotherAccount(record, record.anotherAccount, {
+      purchase,
+      request,
+    });
+    const answer = await sendVerify(refreshed, request);
+    if (answer === undefined) {
+      return;
+    }
+    if (answer.kind === 'another-account') {
+      await parkForAnotherAccount(refreshed, request, answer);
+      return;
+    }
+    await settleVerify(await reviseAnotherAccount(refreshed, undefined), request, answer.response);
+  };
+
   // Reconciler step 2: match a reported purchase to a journal record.
   const ingestPurchase = async (purchase: StorePurchase, restoring: boolean): Promise<void> => {
     if (purchase.store !== storeId) {
@@ -1151,6 +1290,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       if (stored !== undefined && isCommercePurchaseOperationRecord(stored) && ownsRecord(stored)) {
         record = remember(stored);
       }
+    }
+    if (record !== undefined && isParkedForAnotherAccount(record)) {
+      await reportParked(record, purchase, restoring);
+      return;
     }
     const account = record !== undefined || (restoring && product.kind === 'durable')
       ? 'own'
@@ -1222,6 +1365,18 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         probeFree: durable,
       });
       record = recordIn(slot, idempotencyKey);
+      if (
+        record !== undefined
+        && isParkedForAnotherAccount(record)
+        && record.logicalId === product.logicalId
+        && record.purchase !== undefined
+        && samePurchase(record.purchase, purchase)
+      ) {
+        // Found under its derived key only (a journal without the
+        // transaction index): the same rule as a transaction match.
+        await reportParked(record, purchase, restoring);
+        return;
+      }
       if (
         record !== undefined
         && (record.logicalId !== product.logicalId
@@ -1311,20 +1466,100 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     message,
   });
 
+  /**
+   * The backend's answer: a response, another account's purchase (the
+   * `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` error, or a `rejected` receipt with a
+   * store binding mismatch reason from a backend before it), or undefined
+   * for a transport failure.
+   */
   const sendVerify = async (
     record: CommercePurchaseOperationRecord,
     request: VerifyPurchaseRequest,
-  ): Promise<VerifyPurchaseResponse | undefined> => {
+  ): Promise<
+    | { readonly kind: 'response'; readonly response: VerifyPurchaseResponse }
+    | {
+        readonly kind: 'another-account';
+        readonly reason: string;
+        readonly response?: VerifyPurchaseResponse;
+      }
+    | undefined
+  > => {
     emit({ type: 'verify-requested', record });
+    let response: VerifyPurchaseResponse;
     try {
-      const response = await backend.verifyPurchase(request);
-      emit({ type: 'verify-result', record, response });
-      return response;
+      response = await backend.verifyPurchase(request);
     } catch (error) {
+      const anotherAccount = readPurchaseBoundToAnotherAccount(error);
+      if (anotherAccount !== undefined) {
+        // An answer, not a failure: the caller parks the record and reports it.
+        return { kind: 'another-account', reason: anotherAccount.reason };
+      }
       // Transport failure: the state is kept and the next pass resends the saved request.
       fail('verify', error, record.idempotencyKey);
       return undefined;
     }
+    emit({ type: 'verify-result', record, response });
+    if (
+      !response.verified
+      && response.disposition !== 'pending'
+      && isStoreAccountMismatchReason(response.reason)
+    ) {
+      return { kind: 'another-account', reason: response.reason, response };
+    }
+    return { kind: 'response', response };
+  };
+
+  /**
+   * Parks a `verifying` record the backend answered as another account's
+   * purchase and reports it with an `another-account` event (not a failure).
+   */
+  const parkForAnotherAccount = async (
+    record: CommercePurchaseOperationRecord,
+    request: VerifyPurchaseRequest,
+    answer: { readonly reason: string; readonly response?: VerifyPurchaseResponse },
+  ): Promise<void> => {
+    const parked = await reviseAnotherAccount(
+      record,
+      { reason: answer.reason, reportedAt: now() },
+      { request, ...(answer.response === undefined ? {} : { response: answer.response }) },
+    );
+    emit({
+      type: 'another-account',
+      record: parked,
+      reason: answer.reason,
+      ...(answer.response === undefined ? {} : { response: answer.response }),
+    });
+  };
+
+  /**
+   * Journals the backend's answer to a `verifying` record: `pending` or
+   * `rejected`, or `granted` (returned) for a grant that carries its ledger
+   * entry; a malformed grant is reported and the record kept.
+   */
+  const settleVerify = async (
+    record: CommercePurchaseOperationRecord,
+    request: VerifyPurchaseRequest,
+    response: VerifyPurchaseResponse,
+  ): Promise<CommercePurchaseOperationRecord | undefined> => {
+    if (!response.verified) {
+      if (response.disposition === 'pending') {
+        await write(record, 'pending', { request, response });
+        retryLater(record.idempotencyKey);
+      } else {
+        await write(record, 'rejected', { request, response });
+      }
+      return undefined;
+    }
+    const ledgerEntryId = response.ledgerEntryId;
+    if (typeof ledgerEntryId !== 'string' || ledgerEntryId.trim() === '') {
+      fail(
+        'verify',
+        new Error(`A verified response for ${record.idempotencyKey} must carry a ledgerEntryId.`),
+        record.idempotencyKey,
+      );
+      return undefined;
+    }
+    return write(record, 'granted', { request, response, ledgerEntryId });
   };
 
   // Reconciler steps 3 and 4: drive one record as far as the backend and the store allow.
@@ -1395,34 +1630,30 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             record = await write(record, 'verifying');
             continue;
           case 'verifying': {
+            if (isParkedForAnotherAccount(record)) {
+              // Another account's purchase: only this player's Restore
+              // Purchases sends it again (`ingestPurchase`).
+              return;
+            }
             const request = record.request ?? buildRequest(record);
-            const response = await sendVerify(record, request);
-            if (response === undefined) {
+            const answer = await sendVerify(record, request);
+            if (answer === undefined) {
               retryLater(record.idempotencyKey);
               return;
             }
-            if (!response.verified) {
-              if (response.disposition === 'pending') {
-                await write(record, 'pending', { request, response });
-                retryLater(record.idempotencyKey);
-              } else {
-                await write(record, 'rejected', { request, response });
-              }
+            if (answer.kind === 'another-account') {
+              // Not this player's, and not ended for the store transaction:
+              // never sent again on its own, and the shared key is left to
+              // the purchase's account (RFC "Another account's purchase").
+              await parkForAnotherAccount(record, request, answer);
               return;
             }
-            const ledgerEntryId = response.ledgerEntryId;
-            if (typeof ledgerEntryId !== 'string' || ledgerEntryId.trim() === '') {
-              fail(
-                'verify',
-                new Error(
-                  `A verified response for ${record.idempotencyKey} must carry a ledgerEntryId.`,
-                ),
-                record.idempotencyKey,
-              );
+            const granted = await settleVerify(record, request, answer.response);
+            if (granted === undefined) {
               return;
             }
-            finalization = response.finalization?.status;
-            record = await write(record, 'granted', { request, response, ledgerEntryId });
+            finalization = answer.response.finalization?.status;
+            record = granted;
             continue;
           }
           case 'granted':
@@ -1449,7 +1680,8 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
               if (finalization === undefined) {
                 // A pass that did not grant resends the saved request to read
                 // finalization; the backend replays the grant, never a second one.
-                reread = await sendVerify(record, record.request ?? buildRequest(record));
+                const answer = await sendVerify(record, record.request ?? buildRequest(record));
+                reread = answer?.kind === 'response' ? answer.response : undefined;
                 finalization = reread?.verified === true
                   ? reread.finalization?.status
                   : undefined;

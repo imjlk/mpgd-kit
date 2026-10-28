@@ -519,7 +519,8 @@ Restore Purchases. The rules:
 
 - A key another player's record holds is refused, as before, for a game key,
   for a discovered consumable, subscription, or product of unknown kind, and
-  on every start, resume, and event pass: one player's purchase is never
+  on every start, resume, and event pass (unless that record is another
+  account's purchase, below): one player's purchase is never
   matched to, sent for, or replayed as another's, and a purchase a normal
   read lists for the earlier player (Google Play lists an unacknowledged one
   whoever is signed in) is never shared without the player asking.
@@ -532,8 +533,15 @@ Restore Purchases. The rules:
   key first and the player-scoped key only where such a record can be: for a
   discovered durable whose shared key is free or (on Restore Purchases)
   another player's, and in `reconciler.read()` when another player's record
-  holds the shared key. Game keys and consumables never touch it, and
+  holds the shared key. Game keys and consumables never touch it (except
+  under a key left by another account's purchase, below), and
   `reconciler.read()` refuses any other key another player's record holds.
+- A key another player's record holds as [another account's
+  purchase](#another-account) (parked, or a terminal `rejected` with a binding
+  mismatch reason written before that answer) is not that player's: any
+  other player of the install, for any kind and on any pass, journals the
+  purchase under its own player-scoped key and sends it with its own id. The
+  backend decides whose it is; the parked record is never rewritten.
 - Nothing is migrated. A journal written before the player-scoped key keeps
   every record under the shared key, where each player still finds its own;
   only a new restore that meets another player's record takes the
@@ -671,10 +679,12 @@ restoring player gets its own grant of it:
   never finished.
 - **Verifier.** A decision, `{ status: 'restorable', reason, ...verified
   fields }`: every check passed except the account binding, which names
-  another player or none; `reason` is the binding mismatch. Reference
+  another player or none; `reason` is the binding mismatch, or the
+  `*_MISSING` reason for none. Reference
   verifiers answer it only for a restore of a non-consumable (the App Store one
-  only with the client's verified JWS); for everything else they reject as
-  before. Ad reward claims treat it as a verifier error.
+  only with the client's verified JWS); for everything else they answer
+  [another account's purchase](#another-account), or reject a purchase bound
+  to no account. Ad reward claims treat it as a verifier error.
 - **Ledger.** The purchase's holders are the grant its verification id names
   and the shared grants at slots 1, 2, ... (evidence id
   `<verification id>#mpgd-holder:<slot>`, under the request's key, listed
@@ -688,8 +698,10 @@ restoring player gets its own grant of it:
   same time; reversed grants and a deleted player's retained record do not
   count.
 - **Answers.** `verified` with `restoredAcrossPlayers: true` (retries
-  included); `rejected` with the verifier's reason when the policy refuses or
-  the product is not a non-consumable; `rejected` `LEDGER_GRANT_REVERSED` for
+  included); [another account's purchase](#another-account) when the policy
+  refuses, the request is not a restore, or the product is not a
+  non-consumable (`rejected` with the `*_MISSING` reason instead for a
+  purchase bound to no account); `rejected` `LEDGER_GRANT_REVERSED` for
   a purchase a store refund, chargeback, or voided purchase ended (a share
   written while that refund fans out is revoked right after its write; an
   `admin` entry ends one holder only); `pending` `PURCHASE_HOLDER_LIMIT_REACHED` at the
@@ -699,6 +711,72 @@ restoring player gets its own grant of it:
   event passes leave it, since nothing they observe frees a holder. Every other
   backend-pending answer is resent by the next reconcile as before.
 - **Never shared.** Consumables and subscriptions.
+
+### Another account's purchase {#another-account}
+
+A verify can reach the backend with one player's session for a purchase the
+store binds to another player: the client could not read its binding, a game
+wraps the verifiers, a client predates the reconciler's foreign-binding skip,
+or a race. The purchase is valid; it is just not this player's, and its own
+account can still recover it. Ending it for good on this install would make
+the store transaction unrecoverable there: the record's derived key is the
+same for every player of the install, so a terminal record would refuse the
+owner's own recovery.
+
+- **Verifier.** `{ status: 'rejected', reason, anotherAccount: true }` once
+  every other check passed and the binding names another account (Google
+  Play `GOOGLE_PLAY_ACCOUNT_MISMATCH` or `GOOGLE_PLAY_PROFILE_MISMATCH`, App
+  Store `APP_STORE_ACCOUNT_TOKEN_MISMATCH`; the App Store verifier runs the
+  other checks again without the token, so a revoked transaction is still
+  refused). A purchase bound to no account (a promo code, a build that set no
+  binding) is no account's and stays `rejected`:
+  `GOOGLE_PLAY_ACCOUNT_ID_MISSING`, `GOOGLE_PLAY_PROFILE_ID_MISSING`,
+  `APP_STORE_ACCOUNT_TOKEN_MISSING`, and on a backend that binds nobody
+  `GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED`. A restore of a non-consumable stays
+  `restorable` as above, bound to no account included (its reason is then the
+  `*_MISSING` one, and the share policy still covers it, as since L3c); when
+  no share covers it, a mismatch reason gets this answer and a `*_MISSING`
+  one stays `rejected`.
+- **Backend.** Nothing is granted or recorded, and the answer is a retryable
+  error, never a receipt: HTTP 409 `{ error:
+  'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason }`, the oRPC error code
+  `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` (status 409, `data.reason`), and in
+  process `GameServicesPurchaseBoundToAnotherAccountError` (its message starts
+  with the code). oRPC 2.0.0-beta.46 errors carry no status, so the RPC
+  handler maps the code to 409 (`gameServicesRpcErrorStatusMap`). Analytics
+  tracks it as `purchase_rejected` with `boundToAnotherAccount: <reason>`, so
+  it never counts as pending; a failed analytics report never replaces the
+  answer.
+- **Why an error.** Released clients end every non-pending receipt as
+  `rejected`, and journal a `pending` one as an open record that refuses new
+  purchases of the product with `IN_PROGRESS` for as long as it waits; both
+  would read an unknown `disposition` as `rejected`. Every client already keeps
+  a record in `verifying` on a transport error and resends it on the next
+  reconcile, which is the right answer for the purchase's account. They keep
+  resending it on those passes, which costs one store read per pass on the
+  backend; nothing else bounds it for them.
+- **Reconciler.** The answer, or a `rejected` receipt whose reason is one of
+  the three binding mismatches (a backend or game server from before it),
+  parks the record: it stays `verifying` with `anotherAccount: { reason,
+  reportedAt }`, is never sent again by start, resume, or event passes, is not
+  among the player's recoverable records (so neither recovery summaries nor
+  Restore Purchases report it), and `reconciler.read()` and the purchase
+  result summarize it as `rejected` for that player. The reconciler reports it
+  with an `another-account` event (`record`, `reason`, and the older
+  backend's `response`), never a `failure`. Only the player's Restore
+  Purchases, when the store reports the purchase again, sends it once more, as
+  a restore and with the evidence the store reports then (a policy or binding
+  may have changed; a saved signed transaction may have expired). It stays
+  parked until the backend answers something else: an offline Restore
+  changes nothing. The journal keeps it as an open record; a journal's
+  retention does not drop it.
+  Its shared key no longer refuses another player of the install (below).
+
+| Server answer | Client 0.27-0.31 | This client |
+| --- | --- | --- |
+| HTTP 409 / oRPC `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` (this backend) | transport failure: `verifying`, resent on every start, resume, and event pass after the retry interval; purchases of the product stay open | parked |
+| `rejected` with a binding mismatch reason (an older backend, a game server mapping every refusal to `rejected`) | `rejected`, terminal; the shared key refuses the owner on the install | parked |
+| `rejected` with any other reason | `rejected` | `rejected` |
 
 ## Credit wallet {#credit-wallet}
 

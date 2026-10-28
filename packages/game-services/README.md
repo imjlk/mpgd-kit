@@ -314,9 +314,14 @@ purchases (Google Play's obfuscated account id, StoreKit's app account
 token). The reconciler then leaves a store purchase bound to another account
 alone (reported, never journaled or verified for this player). After a
 restart as another player, Google Play still lists the previous player's
-unacknowledged purchases; sending one with this player's session would be
-rejected for good, and its derived key would then block the other player's
-own recovery. The player's explicit Restore Purchases still takes a durable
+unacknowledged purchases; sending one with this player's session only gets
+the backend's another-account answer (409 `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`),
+which parks the record without a grant. The reconciler parks it whenever the
+backend is reached anyway (no binding input, an older client's record): the
+record stays `verifying`, is never resent automatically, and leaves its
+derived key to the purchase's own account on the install
+([another account's purchase](../../docs/GAME_SERVICES_BACKEND.md#another-accounts-purchase)).
+The player's explicit Restore Purchases still takes a durable
 bound to another account (restore sharing). StoreKit's provider already
 filters transactions by app account token the same way.
 

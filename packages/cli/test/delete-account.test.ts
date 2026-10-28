@@ -144,6 +144,33 @@ const pendingPurchase = {
   assert.deepEqual(steps, ['notifications.unregister']);
 }
 
+// A record parked as another account's purchase is no purchase of this player in progress.
+{
+  const parked = createStarterAccountDeletion({
+    client: {
+      async deleteAccount() {
+        return receipt;
+      },
+    },
+    storage: memoryStorage({
+      [defaultMonetizationJournalKey]: {
+        version: 1,
+        records: {
+          a: {
+            ...pendingPurchase,
+            anotherAccount: {
+              reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+              reportedAt: '2026-10-28T00:00:00.000Z',
+            },
+          },
+        },
+      },
+    }),
+    secureCredentials: memoryCredentials(),
+  });
+  assert.equal(await parked.hasPendingPurchase(), false);
+}
+
 // Failures keep the session; only a sent request whose answer was lost,
 // followed by the server refusing the session, counts as deleted.
 {

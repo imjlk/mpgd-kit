@@ -227,8 +227,9 @@ production` prints what it lacks and fails on contradictions
       that consumables and progress stay with the old guest until account
       linking exists
       ([reinstalls and new devices](./CLOUDFLARE_WORKER_DEPLOY.md#reinstalls-and-new-devices-restore-sharing)).
-      With `GAME_SERVICES_RESTORE_SHARING = "refuse"` the restore is refused
-      (`GOOGLE_PLAY_ACCOUNT_MISMATCH` / `APP_STORE_ACCOUNT_TOKEN_MISMATCH`):
+      With `GAME_SERVICES_RESTORE_SHARING = "refuse"` the restore is refused as
+      another account's purchase (409 `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`,
+      reason `GOOGLE_PLAY_ACCOUNT_MISMATCH` / `APP_STORE_ACCOUNT_TOKEN_MISMATCH`):
       then do not sell non-consumables.
 - [ ] Account deletion. Play requires deletion in the app and through a
       web link for apps that create accounts
