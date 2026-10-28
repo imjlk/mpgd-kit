@@ -88,3 +88,27 @@ export function isPurchasePresentationReason(
 ): value is PlatformPurchasePresentationReason {
   return typeof value === 'string' && presentationReasons.has(value);
 }
+
+/**
+ * Drops a relayed fact its source already superseded, before the relay
+ * numbers it again: a fact whose `sequence` is not above the last one seen
+ * for its key (per `attempt` when the source tags attempts), as the game
+ * runtime's coordinator would have done with the source's own numbers.
+ */
+export function createPresentationSequenceGuard(): (event: PlatformPurchasePresentationEvent) => boolean {
+  const cursors = new Map<string, number>();
+  return (event) => {
+    if (!Number.isSafeInteger(event.sequence)) {
+      return false;
+    }
+    const cursor = typeof event.attempt === 'number'
+      ? `${event.idempotencyKey}\u0000${String(event.attempt)}`
+      : event.idempotencyKey;
+    const last = cursors.get(cursor);
+    if (last !== undefined && event.sequence <= last) {
+      return false;
+    }
+    cursors.set(cursor, event.sequence);
+    return true;
+  };
+}

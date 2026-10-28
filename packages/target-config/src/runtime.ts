@@ -603,6 +603,9 @@ function relayPurchasePresentation(source: PurchasePresentationSource): {
 } {
   const listeners = new Set<{ readonly listener: PurchasePresentationListener }>();
   const calls = new Map<string, { seen: boolean }[]>();
+  // The last source sequence per key (per attempt when tagged): a fact the
+  // source already superseded is dropped before it is numbered again.
+  const cursors = new Map<string, number>();
   let sequence = 0;
   let detach: (() => void) | undefined;
   const publish = (fact: Omit<PlatformPurchasePresentationEvent, 'sequence'>): void => {
@@ -621,9 +624,18 @@ function relayPurchasePresentation(source: PurchasePresentationSource): {
     }
   };
   const onFact: PurchasePresentationListener = (event) => {
-    if (typeof event !== 'object' || event === null || typeof event.idempotencyKey !== 'string') {
+    if (typeof event !== 'object' || event === null || typeof event.idempotencyKey !== 'string'
+      || !Number.isSafeInteger(event.sequence)) {
       return;
     }
+    const cursor = typeof event.attempt === 'number'
+      ? `${event.idempotencyKey}\u0000${String(event.attempt)}`
+      : event.idempotencyKey;
+    const last = cursors.get(cursor);
+    if (last !== undefined && event.sequence <= last) {
+      return;
+    }
+    cursors.set(cursor, event.sequence);
     for (const call of calls.get(event.idempotencyKey) ?? []) {
       call.seen = true;
     }

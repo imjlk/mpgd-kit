@@ -916,6 +916,11 @@ function requireCommerce(gateway: PlatformGateway): NonNullable<PlatformGateway[
   await sold.requestPurchase({ logicalId: 'COINS_100', source: 'shop', idempotencyKey: 'sold' });
   // The source reported the sheet: no not-started is added; attempt passes through.
   assert.deepEqual(facts, [{ idempotencyKey: 'sold', sequence: 1, state: 'open', attempt: 2 }]);
+  // A fact the source already superseded is not numbered again.
+  for (const listener of [...sourceListeners]) {
+    listener({ idempotencyKey: 'sold', sequence: 40, state: 'not-started', attempt: 2 });
+  }
+  assert.equal(facts.length, 1, 'a repeated source sequence is dropped');
   unsubscribe?.();
   assert.equal(sourceListeners.size, 1, 'the second wrapper still listens');
 }

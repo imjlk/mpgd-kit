@@ -930,6 +930,16 @@ describe('purchase presentation over the bridge', () => {
       // A source's attempt generation is kept for the coordinator's check.
       { idempotencyKey: 'op-1', sequence: 2, state: 'closed', attempt: 2, reason: 'timeout' },
     ]);
+    // A fact the host already superseded (a repeated sequence) is dropped
+    // before it is numbered again.
+    for (const listener of listeners) {
+      listener({
+        protocol: 'mpgd.commerce.presentation.v1',
+        sequence: 3,
+        event: { idempotencyKey: 'op-1', sequence: 40, state: 'not-started' },
+      });
+    }
+    expect(facts).toHaveLength(2);
     // A call the host answered without a fact gets not-started before the answer.
     await consumer.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop' });
     expect(facts.at(-1)).toEqual({ idempotencyKey: 'op-2', sequence: 3, state: 'not-started' });

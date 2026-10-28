@@ -38,7 +38,10 @@ import {
 
 import { namesOtherProtocol } from './bridge-events.js';
 import type { CapacitorCommerceServiceProvider } from './providers.js';
-import { createPurchasePresentationChannel } from './purchase-presentation.js';
+import {
+  createPresentationSequenceGuard,
+  createPurchasePresentationChannel,
+} from './purchase-presentation.js';
 import { normalizeStoreSdkError } from './store-sdk.js';
 
 /** Bridge error for a commerce v2 payload the typia assert rejected. */
@@ -434,6 +437,7 @@ function withBridgePresentation(
   subscribePresentation: NonNullable<CreateBridgeCommerceProviderInput['subscribePresentation']>,
 ): CommerceProvider {
   const channel = createPurchasePresentationChannel();
+  const fresh = createPresentationSequenceGuard();
   let listenerCount = 0;
   let detach: (() => void) | undefined;
   // Idempotency keys of `requestPurchase` calls in flight, each call with
@@ -451,6 +455,9 @@ function withBridgePresentation(
       event = assertCommercePresentationEventEnvelope(envelope).event;
     } catch (error) {
       console.warn('The bridge delivered an invalid purchase presentation fact.', error);
+      return;
+    }
+    if (!fresh(event)) {
       return;
     }
     for (const call of calls.get(event.idempotencyKey) ?? []) {
