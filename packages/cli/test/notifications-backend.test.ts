@@ -169,6 +169,28 @@ try {
         ),
         undefined,
       );
+      // An http page origin resolves to an http URL, which production refuses before any request.
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: { origin: 'http://game.example.com' },
+      });
+      const httpRequests: string[] = [];
+      assert.equal(
+        createStarterWorkerNotificationBackend(
+          gateway('play-web', 'browser'),
+          input({
+            baseUrl: '/api',
+            mode: 'production',
+            fetch: async (url) => {
+              httpRequests.push(url);
+              return { status: 500, text: async () => '' };
+            },
+          }),
+        ),
+        undefined,
+      );
+      await settle();
+      assert.deepEqual(httpRequests, []);
     } finally {
       if (previous === undefined) {
         Reflect.deleteProperty(globalThis, 'location');

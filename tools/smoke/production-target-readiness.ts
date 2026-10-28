@@ -259,6 +259,26 @@ try {
     },
     'invalid game-services URL',
   );
+  // A web monetization runtime alone is insufficient when the target is not a hosted kind:web export.
+  for (const kind of ['devvit', undefined]) {
+    writeTargets({
+      storefront: {
+        ...(kind === undefined ? {} : { kind }),
+        gameApp: '.',
+        output: 'artifacts/storefront',
+        authoritativeGameServices: true,
+      },
+    });
+    expectReadinessError(
+      {
+        target: 'storefront',
+        profile: 'production',
+        gameServicesUrl: '/api/game-services',
+        targetPolicy: webCommercePolicy,
+      },
+      'invalid game-services URL',
+    );
+  }
   writeTargets({
     storefront: {
       kind: 'web',

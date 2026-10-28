@@ -93,6 +93,103 @@ assertEqual(
   'https://services.example.com',
   'native HTTPS remains unchanged',
 );
+// Unsafe or unrecognized paths are never resolved against the page origin.
+for (const path of [
+  ' /api',
+  '/api ',
+  '/api\t',
+  '/api/game services',
+  '/api/%2e%2e/admin',
+  '/api/./game-services',
+  '/api//evil.example.com',
+  '/apiary',
+  '/other',
+  'api',
+]) {
+  assertEqual(
+    resolveGameServicesBaseUrl(path, { target: 'browser', pageOrigin: 'https://game.example.com' })
+      ?.startsWith('https://'),
+    false,
+    `unsafe relative path is not resolved: ${JSON.stringify(path)}`,
+  );
+}
+// Unresolved relative values stay fail-closed: production disables the
+// runtime, development throws; no default backend is substituted.
+for (const [target, pageOrigin] of [
+  ['android', 'https://game.example.com'],
+  ['browser', undefined],
+] as const) {
+  const unresolved = resolveGameServicesBaseUrl('/api', {
+    target,
+    ...(pageOrigin === undefined ? {} : { pageOrigin }),
+  });
+  assertEqual(unresolved, '/api', `relative URL stays relative on ${target}`);
+  const runtime = createGameServicesRuntime({
+    gateway: createGateway(target),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: unresolved ?? '/api',
+  });
+  assertEqual(runtime.mode, 'disabled', `unresolved relative URL disables ${target}`);
+  assertEqual(
+    runtime.reason,
+    'invalid_authoritative_backend',
+    `unresolved relative URL reason on ${target}`,
+  );
+  assertEqual(runtime.client, undefined, `unresolved relative URL exposes no client on ${target}`);
+}
+assertThrows(
+  () =>
+    createGameServicesRuntime({
+      gateway: createGateway('browser'),
+      playerId,
+      authorityMode: 'non-production',
+      baseUrl: resolveGameServicesBaseUrl('/api', { target: 'browser' }) ?? '/api',
+    }),
+  'valid absolute URL',
+  'development relative URL without a page origin should fail fast',
+);
+// An http page resolves to an http URL: production refuses it, development
+// (a local dev server) keeps it.
+{
+  const httpBaseUrl = resolveGameServicesBaseUrl('/api', {
+    target: 'browser',
+    pageOrigin: 'http://game.example.com',
+  });
+  assertEqual(httpBaseUrl, 'http://game.example.com/api', 'http page origin resolves as http');
+  assertEqual(
+    isPublicGameServicesUrl(httpBaseUrl ?? ''),
+    false,
+    'http hosted URL cannot carry credentials',
+  );
+  const production = createGameServicesRuntime({
+    gateway: createGateway('browser'),
+    playerId,
+    authorityMode: 'production',
+    ...(httpBaseUrl === undefined ? {} : { baseUrl: httpBaseUrl }),
+  });
+  assertEqual(
+    production.reason,
+    'invalid_authoritative_backend',
+    'production refuses an http page origin',
+  );
+  assertEqual(production.client, undefined, 'production http page origin exposes no client');
+  const development = createGameServicesRuntime({
+    gateway: createGateway('browser'),
+    playerId,
+    authorityMode: 'non-production',
+    baseUrl: resolveGameServicesBaseUrl('/api', {
+      target: 'browser',
+      pageOrigin: 'http://localhost:5173',
+    }) ?? '',
+  });
+  assertEqual(development.mode, 'http', 'development keeps a local http page origin');
+  assertEqual(
+    development.baseUrl,
+    'http://localhost:5173/api',
+    'development resolves against the dev server',
+  );
+}
 let purchaseCalls = 0;
 let rewardCalls = 0;
 let leaderboardCalls = 0;
