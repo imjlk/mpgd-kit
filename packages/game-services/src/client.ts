@@ -410,7 +410,8 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
               }
             } else if (!serverResulted) {
               serverResulted = true;
-              progress.serverResult(event.response.verified);
+              // Another account's purchase is a server answer with no grant.
+              progress.serverResult(event.type === 'verify-result' && event.response.verified);
             }
           });
           try {

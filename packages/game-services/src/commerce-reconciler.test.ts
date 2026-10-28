@@ -4049,6 +4049,14 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
 
   // Player 2's session reaches player 1's consumable (no client-side binding check).
   const other = createHarness({ store, provider, backend, overrides: { playerId: 'player-2' } });
+  const parkedEvents: string[] = [];
+  other.reconciler.subscribe((event) => {
+    if (event.type === 'another-account') {
+      parkedEvents.push(
+        `${event.record.idempotencyKey}:${event.reason}:${String(event.record.anotherAccount !== undefined)}`,
+      );
+    }
+  });
   provider.available.push(purchaseOf({ transactionId: 'tx-56' }));
   backend.queue({ throws: httpAnswer });
   await other.reconciler.start();
@@ -4063,7 +4071,12 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
     ['verifying', 'GOOGLE_PLAY_ACCOUNT_MISMATCH', 'player-2'],
     'the record is parked with the binding mismatch and its saved request',
   );
-  assertEqual(other.failures, [`verify(${gemsKey})`], 'the answer is reported as a verify failure');
+  assertEqual(other.failures, [], 'the answer is not a failure');
+  assertEqual(
+    parkedEvents,
+    [`${gemsKey}:GOOGLE_PLAY_ACCOUNT_MISMATCH:true`],
+    'an another-account event reports the parked record',
+  );
   assertEqual(
     toGameServicesPurchaseResult(parked as CommercePurchaseOperationRecord).status,
     'rejected',
@@ -4189,6 +4202,53 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
     'a restore the backend now grants (a changed policy or binding) lands normally',
   );
   await restarted.reconciler.stop();
+}
+
+// 56b1. An offline Restore Purchases leaves a parked record parked: it never becomes an open
+// attempt that serializes the player's purchases or holds the key against its account.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const key = 'store:fake-store:tx-56b1';
+  const h = createHarness({ store, provider, backend, overrides: { playerId: 'player-2' } });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56b1' }));
+  backend.queue({
+    throws: Object.assign(new Error('bound'), {
+      status: 409,
+      body: { error: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' },
+    }),
+  });
+  await h.reconciler.start();
+  backend.queue({ throws: new Error('offline') });
+  await h.reconciler.restorePurchases();
+  assertEqual(backend.requests.length, 2, 'the Restore asked once');
+  const afterOffline = await h.reconciler.read(key);
+  assertEqual(
+    [afterOffline?.state, afterOffline?.anotherAccount?.reason, afterOffline?.request?.intent],
+    ['verifying', 'GOOGLE_PLAY_ACCOUNT_MISMATCH', 'restore'],
+    'a transport failure keeps the record parked',
+  );
+  assertEqual(await h.reconciler.listRecoverable(), [], 'it is still not an open record');
+  const own = await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-56b1-own',
+    source: 'shop',
+  });
+  assertEqual(own, { outcome: 'launched' }, "the player's own purchase of the product opens");
+  await h.reconciler.reconcile();
+  assertEqual(backend.requests.length, 2, 'and nothing resends it until the next Restore');
+  await h.reconciler.stop();
+
+  const owner = createHarness({ store, provider, backend });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56b1' });
+  await owner.reconciler.start();
+  assertEqual(
+    [backend.requests[2]?.playerId, owner.history(key).at(-1)],
+    ['player-1', 'finished'],
+    "the purchase's account still recovers it after the offline Restore",
+  );
+  await owner.reconciler.stop();
 }
 
 // 56b2. A game-started purchase parked as another account's is resent by Restore Purchases as
