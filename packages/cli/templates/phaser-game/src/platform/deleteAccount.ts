@@ -272,7 +272,10 @@ export function createStarterAccountDeletion(input: {
           return false;
         }
         return Object.values(records as Record<string, MonetizationOperationRecord>).some(
-          (record) => record.kind !== 'rewarded-ad' && isMonetizationOperationRecoverable(record),
+          (record) => record.kind !== 'rewarded-ad'
+            && isMonetizationOperationRecoverable(record)
+            // Parked as another account's purchase: nothing of this player is in progress.
+            && (record as { readonly anotherAccount?: unknown }).anotherAccount === undefined,
         );
       } catch {
         return false;
