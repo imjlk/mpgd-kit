@@ -1,7 +1,9 @@
 import {
   AccountDeletionError,
   GuestSessionCoordinatorError,
+  isCommercePurchaseOperationRecord,
   isMonetizationOperationRecoverable,
+  isParkedForAnotherAccount,
   type AccountDeletionClient,
   type MonetizationOperationRecord,
 } from '@mpgd/game-services';
@@ -275,7 +277,7 @@ export function createStarterAccountDeletion(input: {
           (record) => record.kind !== 'rewarded-ad'
             && isMonetizationOperationRecoverable(record)
             // Parked as another account's purchase: nothing of this player is in progress.
-            && (record as { readonly anotherAccount?: unknown }).anotherAccount === undefined,
+            && !(isCommercePurchaseOperationRecord(record) && isParkedForAnotherAccount(record)),
         );
       } catch {
         return false;
