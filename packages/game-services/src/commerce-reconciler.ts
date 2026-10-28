@@ -976,12 +976,16 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         isCommercePurchaseOperationRecord(record) && ownsRecord(record),
     );
 
-  /** The player's open records; one parked as another account's purchase is not the player's to recover. */
+  /**
+   * The player's open records. One parked as another account's purchase is
+   * kept in memory, so a store report matches it without the journal's
+   * transaction index, but is not the player's to recover.
+   */
   const listRecoverable = async (): Promise<CommercePurchaseOperationRecord[]> =>
     ownedRecordsOf(await journal.listRecoverable(playerId))
-      .filter((record) =>
-        !isTerminalCommercePurchaseState(record.state) && !isParkedForAnotherAccount(record))
-      .map(remember);
+      .filter((record) => !isTerminalCommercePurchaseState(record.state))
+      .map(remember)
+      .filter((record) => !isParkedForAnotherAccount(record));
 
   const listGranted = async (): Promise<CommercePurchaseOperationRecord[]> => {
     const listed = journal.listGranted === undefined
@@ -1192,6 +1196,30 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     }
   };
 
+  /**
+   * A store report of a record the backend answered as another account's
+   * purchase. Only this player's Restore Purchases asks again (a restore
+   * sharing policy or a binding may have changed since), with the evidence
+   * the store reports now, so a stale saved request (an expired signed
+   * transaction) is not resent; other reports leave it parked. While it is
+   * unparked, until the backend answers again, its shared key refuses other
+   * players as any record does.
+   */
+  const reportParked = async (
+    record: CommercePurchaseOperationRecord,
+    purchase: StorePurchase,
+    restoring: boolean,
+  ): Promise<void> => {
+    if (!restoring || purchase.state !== 'purchased') {
+      return;
+    }
+    const reported = { ...record, purchase };
+    await reviseAnotherAccount(record, undefined, {
+      purchase,
+      request: buildRequest(reported),
+    });
+  };
+
   // Reconciler step 2: match a reported purchase to a journal record.
   const ingestPurchase = async (purchase: StorePurchase, restoring: boolean): Promise<void> => {
     if (purchase.store !== storeId) {
@@ -1235,12 +1263,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
     }
     if (record !== undefined && isParkedForAnotherAccount(record)) {
-      // The backend answered it as another account's purchase. Only this
-      // player's Restore Purchases asks again (a restore sharing policy or a
-      // binding may have changed since); other reports leave it parked.
-      if (restoring && purchase.state === 'purchased') {
-        await reviseAnotherAccount(record, undefined);
-      }
+      await reportParked(record, purchase, restoring);
       return;
     }
     const account = record !== undefined || (restoring && product.kind === 'durable')
@@ -1313,6 +1336,18 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         probeFree: durable,
       });
       record = recordIn(slot, idempotencyKey);
+      if (
+        record !== undefined
+        && isParkedForAnotherAccount(record)
+        && record.logicalId === product.logicalId
+        && record.purchase !== undefined
+        && samePurchase(record.purchase, purchase)
+      ) {
+        // Found under its derived key only (a journal without the
+        // transaction index): the same rule as a transaction match.
+        await reportParked(record, purchase, restoring);
+        return;
+      }
       if (
         record !== undefined
         && (record.logicalId !== product.logicalId

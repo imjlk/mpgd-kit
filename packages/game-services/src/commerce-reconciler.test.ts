@@ -4138,13 +4138,15 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   await owner.reconciler.stop();
 }
 
-// 56b. Only the parked player's Restore Purchases sends it again, once per report; the
-// oRPC shape of the answer parks as the HTTP one does.
+// 56b. Only the parked player's Restore Purchases sends it again, once per report, with the
+// evidence the store reports now; a journal without the transaction index finds it through
+// its derived key after a restart. The oRPC shape of the answer parks as the HTTP one does.
 {
+  const store = createInMemoryMonetizationOperationStore();
   const provider = createFakeProvider({ withRestore: true });
   const backend = createFakeBackend();
   const key = 'store:fake-store:tx-56b';
-  const h = createHarness({ provider, backend });
+  const h = createHarness({ store, provider, backend });
   provider.available.push(purchaseOf({ transactionId: 'tx-56b' }));
   backend.queue({
     throws: Object.assign(new Error('bound'), {
@@ -4158,15 +4160,35 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
     'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
     'the oRPC error parks the record with its reason',
   );
+  await h.reconciler.stop();
+
+  // A restart over a journal without findByTransaction; the store now reports fresh evidence.
+  const { findByTransaction: _index, ...unindexed } = store;
+  provider.available.length = 0;
+  provider.available.push(
+    purchaseOf({
+      transactionId: 'tx-56b',
+      evidence: { schema: 'fixture.fake-store.v1', payload: { token: 'token-tx-56b-fresh' } },
+    }),
+  );
+  const restarted = createHarness({ store: unindexed, provider, backend });
+  await restarted.reconciler.start();
+  assertEqual(backend.requests.length, 1, 'start leaves the parked record alone');
   backend.queue({ status: 'granted', ledgerEntryId: 'le-56b' });
-  await h.reconciler.restorePurchases();
+  await restarted.reconciler.restorePurchases();
   assertEqual(backend.requests.length, 2, 'Restore Purchases asks the backend again');
-  const restored = await h.reconciler.read(key);
+  assertEqual(
+    backend.requests[1]?.evidence,
+    { schema: 'fixture.fake-store.v1', payload: { token: 'token-tx-56b-fresh' } },
+    'the resend carries the evidence the store reports now, not the saved request',
+  );
+  const restored = await restarted.reconciler.read(key);
   assertEqual(
     [restored?.state, restored?.anotherAccount],
     ['finished', undefined],
     'a restore the backend now grants (a changed policy or binding) lands normally',
   );
+  await restarted.reconciler.stop();
 }
 
 // 56c. A backend from before the answer: a `rejected` receipt with a store binding
