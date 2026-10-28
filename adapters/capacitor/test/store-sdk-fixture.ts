@@ -11,6 +11,7 @@ import type {
   StoreSdkFinishTransactionResult,
   StoreSdkProduct,
   StoreSdkPurchase,
+  StoreSdkPurchasePresentationEvent,
   StoreSdkRequestPurchaseInput,
   StoreSdkRequestPurchaseResult,
 } from '../src/store-sdk.js';
@@ -33,6 +34,8 @@ export interface FakeStoreSdkOptions {
   readonly restore?: boolean;
   /** Implement `getAvailability`; omitted means the SDK reports nothing. */
   readonly availability?: () => Promise<PlatformProviderAvailability>;
+  /** Declare `purchasePresentation` (sheet facts). Defaults to false. */
+  readonly presentation?: boolean;
 }
 
 export interface FakeStoreSdk extends StoreSdk {
@@ -50,6 +53,15 @@ export interface FakeStoreSdk extends StoreSdk {
   remove(transactionId: string): void;
   queueRequest(script: FakeStoreSdkRequestScript): void;
   queueFinish(script: FakeStoreSdkFinishScript): void;
+  /** Reports a sheet fact to the `purchasePresentation` subscribers. */
+  present(
+    presentationId: string | undefined,
+    state: StoreSdkPurchasePresentationEvent['state'],
+    reason?: StoreSdkPurchasePresentationEvent['reason'],
+  ): void;
+  readonly presentationListenerCount: number;
+  /** Runs inside `requestPurchase` before it answers, for example to report `open`. */
+  onRequest?: ((input: StoreSdkRequestPurchaseInput) => void) | undefined;
 }
 
 export function createFakeStoreSdk(options: FakeStoreSdkOptions = {}): FakeStoreSdk {
@@ -61,6 +73,7 @@ export function createFakeStoreSdk(options: FakeStoreSdkOptions = {}): FakeStore
   const finishCalls: StoreSdkFinishTransactionInput[] = [];
   const fetchCalls: { readonly skus: readonly string[]; readonly type: string }[] = [];
   const products = options.products ?? [];
+  const presentationListeners = new Set<(event: StoreSdkPurchasePresentationEvent) => void>();
   const finish = options.finish ?? true;
   const restore = options.restore ?? true;
 
@@ -111,6 +124,7 @@ export function createFakeStoreSdk(options: FakeStoreSdkOptions = {}): FakeStore
     }),
     requestPurchase: vi.fn(async (input) => {
       requestCalls.push(input);
+      sdk.onRequest?.(input);
       const script = requestQueue.shift() ?? { outcome: 'launched' as const };
       if ('throws' in script) {
         throw script.throws;
@@ -146,6 +160,30 @@ export function createFakeStoreSdk(options: FakeStoreSdkOptions = {}): FakeStore
         }
       : {}),
     ...(options.availability === undefined ? {} : { getAvailability: options.availability }),
+    ...(options.presentation === true
+      ? {
+          purchasePresentation: {
+            subscribe(listener: (event: StoreSdkPurchasePresentationEvent) => void) {
+              presentationListeners.add(listener);
+              return () => {
+                presentationListeners.delete(listener);
+              };
+            },
+          },
+        }
+      : {}),
+    get presentationListenerCount() {
+      return presentationListeners.size;
+    },
+    present(presentationId, state, reason) {
+      if (presentationId === undefined) {
+        throw new Error('No presentation id to report a fact for.');
+      }
+      const event = { presentationId, state, ...(reason === undefined ? {} : { reason }) };
+      for (const listener of [...presentationListeners]) {
+        listener(event);
+      }
+    },
     addListener<TEvent extends StoreSdkEventName>(
       eventName: TEvent,
       listener: (event: StoreSdkEventOf<TEvent>) => void,

@@ -5,7 +5,11 @@ import type { BridgeEvent, BridgeResponse } from '@mpgd/bridge';
 
 import { createFakeStoreSdk, fakePurchase } from '../test/store-sdk-fixture.js';
 import { createCommerceServiceProvider } from './commerce-bridge.js';
-import { createCapacitorPlatformGateway, launchedPurchaseActivityTimeoutMs } from './index.js';
+import {
+  createCapacitorPlatformGateway,
+  launchedPurchaseActivityTimeoutMs,
+  presentedPurchaseActivityTimeoutMs,
+} from './index.js';
 import {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
@@ -630,6 +634,130 @@ describe('commerce v2 launched purchase activity', () => {
     await gateway.commerce?.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+});
+
+describe('commerce v2 purchase activity with sheet facts', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function createPresentedGateway(
+    fake: FakeApp,
+    options: { readonly servePresentation?: boolean } = {},
+  ) {
+    const sdk = createFakeStoreSdk({ presentation: true });
+    const commerce = createStoreCommerceProvider({
+      sdk,
+      products: [{ logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' }],
+      evidenceSchema: 'fixture.store.v1',
+      authority: { evidence: 'client-token', accountBinding: 'optional' },
+    });
+    const service = createCommerceServiceProvider({ id: 'store', commerce });
+    // A host built before the presentation protocol has no `subscribePresentation`.
+    const provider: CapacitorServiceProvider = options.servePresentation === false
+      ? {
+          ...service,
+          bridge: {
+            request: (input) => service.bridge.request(input),
+            subscribe: (listener) => service.bridge.subscribe(listener),
+          },
+        }
+      : service;
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'presented-ui',
+      app: asApp(fake), visibility: null,
+      providers: [provider],
+      bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
+    });
+    const counts = { pauses: 0, resumes: 0 };
+    gateway.lifecycle.onPause(() => { counts.pauses += 1; });
+    gateway.lifecycle.onResume(() => { counts.resumes += 1; });
+    const lastPresentationId = () => sdk.requestCalls.at(-1)?.presentationId;
+    return { sdk, gateway, counts, lastPresentationId };
+  }
+
+  const purchase = { logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' } as const;
+
+  it('stays paused through the result and a purchase event until the sheet closes', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts, lastPresentationId } = createPresentedGateway(fake);
+    await settle();
+    expect(gateway.commerce?.presentation).toBeDefined();
+    gateway.commerce?.subscribe(() => undefined);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    sdk.queueRequest({ outcome: 'purchased', purchase: fakePurchase({ transactionId: 'tx-1' }) });
+
+    await expect(gateway.commerce?.requestPurchase(purchase))
+      .resolves.toMatchObject({ outcome: 'purchased' });
+    await settle();
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.report(fakePurchase({ transactionId: 'tx-1' }));
+    expect(counts.resumes).toBe(0);
+    sdk.present(lastPresentationId(), 'closed');
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('holds nothing after a pending purchase whose sheet already closed', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await settle();
+    sdk.onRequest = (input) => {
+      sdk.present(input.presentationId, 'open');
+      sdk.present(input.presentationId, 'closed');
+    };
+    // Ask to Buy: the sheet is gone and the purchase completes later.
+    sdk.queueRequest({ outcome: 'launched' });
+    await expect(gateway.commerce?.requestPurchase(purchase)).resolves.toEqual({ outcome: 'launched' });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('resumes at once when no sheet opened', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await settle();
+    sdk.queueRequest({ throws: { code: 'PLAY_BILLING_SERVICE_UNAVAILABLE' } });
+    await expect(gateway.commerce?.requestPurchase(purchase))
+      .resolves.toMatchObject({ outcome: 'failed' });
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
+  it('ends the pause on the safety timeout or dispose when no closed fact comes', async () => {
+    vi.useFakeTimers();
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake);
+    await vi.advanceTimersByTimeAsync(0);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    // Not the two-minute launched timeout: the sheet is still up.
+    await vi.advanceTimersByTimeAsync(launchedPurchaseActivityTimeoutMs);
+    expect(counts.resumes).toBe(0);
+    await vi.advanceTimersByTimeAsync(presentedPurchaseActivityTimeoutMs);
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+
+    await gateway.commerce?.requestPurchase({ ...purchase, idempotencyKey: 'op-2' });
+    expect(counts).toEqual({ pauses: 2, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+    expect(counts.resumes).toBe(2);
+  });
+
+  it('keeps the result-based pause when the host serves no facts', async () => {
+    const fake = new FakeApp();
+    const { sdk, gateway, counts } = createPresentedGateway(fake, { servePresentation: false });
+    await settle();
+    expect(gateway.commerce?.presentation).toBeUndefined();
+    gateway.commerce?.subscribe(() => undefined);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    await gateway.commerce?.requestPurchase(purchase);
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    sdk.report(fakePurchase({ transactionId: 'tx-1', sku: 'gems.small' }));
     expect(counts).toEqual({ pauses: 1, resumes: 1 });
     await gateway.lifecycle.dispose?.();
   });

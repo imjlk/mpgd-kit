@@ -6,6 +6,7 @@ import type {
   PlatformCapabilities,
   PlatformGateway,
   PlatformProviderAvailability,
+  PlatformPurchasePresentationEvent,
 } from '@mpgd/platform';
 import type { CommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 
@@ -584,6 +585,91 @@ function commerceSellsOneTime(commerce: CommerceCapabilities): boolean {
     && (commerce.purchase.consumable || commerce.purchase.durable);
 }
 
+type PurchasePresentationSource = NonNullable<NonNullable<PlatformGateway['commerce']>['presentation']>;
+type PurchasePresentationListener = (event: PlatformPurchasePresentationEvent) => void;
+
+/**
+ * The purchase presentation facts of a commerce source, relayed with this
+ * wrapper's own increasing `sequence`, plus a `not-started` fact for each
+ * purchase call that ended without any fact from the source: the wrapper
+ * refused it (or failed) before the source ran, so no sheet opened. A
+ * consumer that waits for a fact after every purchase (the game runtime's
+ * presentation gate) would otherwise wait forever. Delivered before the
+ * call's answer. One attachment to the source serves every listener.
+ */
+function relayPurchasePresentation(source: PurchasePresentationSource): {
+  readonly presentation: PurchasePresentationSource;
+  track<T>(idempotencyKey: string, run: () => Promise<T>): Promise<T>;
+} {
+  const listeners = new Set<{ readonly listener: PurchasePresentationListener }>();
+  const calls = new Map<string, { seen: boolean }[]>();
+  let sequence = 0;
+  let detach: (() => void) | undefined;
+  const publish = (fact: Omit<PlatformPurchasePresentationEvent, 'sequence'>): void => {
+    sequence += 1;
+    const event = Object.freeze({ ...fact, sequence });
+    for (const entry of [...listeners]) {
+      if (!listeners.has(entry)) {
+        continue;
+      }
+      try {
+        entry.listener(event);
+      } catch (error) {
+        // A failing listener must not keep a fact from the others.
+        console.warn('A purchase presentation listener failed.', error);
+      }
+    }
+  };
+  const onFact: PurchasePresentationListener = (event) => {
+    if (typeof event !== 'object' || event === null || typeof event.idempotencyKey !== 'string') {
+      return;
+    }
+    for (const call of calls.get(event.idempotencyKey) ?? []) {
+      call.seen = true;
+    }
+    publish({
+      idempotencyKey: event.idempotencyKey,
+      state: event.state,
+      ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
+      ...(event.reason === undefined ? {} : { reason: event.reason }),
+    });
+  };
+  return {
+    presentation: {
+      subscribe(listener) {
+        const entry = { listener };
+        listeners.add(entry);
+        detach ??= source.subscribe(onFact);
+        return () => {
+          if (!listeners.delete(entry) || listeners.size > 0 || detach === undefined) {
+            return;
+          }
+          const unsubscribe = detach;
+          detach = undefined;
+          unsubscribe();
+        };
+      },
+    },
+    async track(idempotencyKey, run) {
+      const call = { seen: false };
+      calls.set(idempotencyKey, [...(calls.get(idempotencyKey) ?? []), call]);
+      try {
+        return await run();
+      } finally {
+        const remaining = (calls.get(idempotencyKey) ?? []).filter((entry) => entry !== call);
+        if (remaining.length === 0) {
+          calls.delete(idempotencyKey);
+        } else {
+          calls.set(idempotencyKey, remaining);
+        }
+        if (!call.seen) {
+          publish({ idempotencyKey, state: 'not-started' });
+        }
+      }
+    },
+  };
+}
+
 /**
  * Subscriptions are sold under the same readiness rule as one-time products:
  * the provider is available and declares the kind. A provider that is not
@@ -879,7 +965,59 @@ export function withTargetAvailability(
     );
   };
 
+  const requestTargetPurchase = async (
+    source: NonNullable<PlatformGateway['commerce']>,
+    input: Parameters<NonNullable<PlatformGateway['commerce']>['requestPurchase']>[0],
+  ): ReturnType<NonNullable<PlatformGateway['commerce']>['requestPurchase']> => {
+    const available = await getIapAvailability();
+    const configuredProduct = options.effectiveConfig?.monetization.products.find(
+      (product) => product.id === input.logicalId,
+    );
+    let isSubscription: boolean | undefined = configuredProduct === undefined
+      ? undefined
+      : configuredProduct.type === 'subscription';
+    if (
+      isSubscription === undefined
+      && options.effectiveConfig === undefined
+      && available.oneTimeRoute !== available.subscriptionsRoute
+    ) {
+      const kind = (await source.fetchProducts({
+        logicalIds: [input.logicalId],
+        type: 'all',
+      })).find((product) => product.logicalId === input.logicalId)?.kind;
+      isSubscription = kind === undefined ? undefined : kind === 'subscription';
+    }
+    // When only one purchase route is available, unknown product kinds
+    // must not fall through to that route. An effective catalog is binding.
+    const allowed = isSubscription === true
+      ? available.subscriptions
+      : isSubscription === undefined
+        ? available.oneTime && available.subscriptions
+        : available.oneTime;
+    const catalogRefused =
+      options.effectiveConfig !== undefined && configuredProduct?.enabled !== true;
+    if (!allowed || catalogRefused) {
+      const routeEnabled = isSubscription === true
+        ? available.subscriptionsRoute
+        : isSubscription === undefined
+          ? available.oneTimeRoute && available.subscriptionsRoute
+          : available.oneTimeRoute;
+      return {
+        outcome: 'failed',
+        error: purchaseRefusal(routeEnabled && !catalogRefused ? available.readiness : undefined),
+      };
+    }
+
+    return source.requestPurchase(input);
+  };
+
   const commerceSource = gateway.commerce;
+  // A source with purchase presentation facts answers every purchase call
+  // with one; a purchase refused here never reaches it, so this wrapper
+  // reports that call's `not-started` itself (see `relayPurchasePresentation`).
+  const presentationRelay = commerceSource?.presentation === undefined
+    ? undefined
+    : relayPurchasePresentation(commerceSource.presentation);
   // Recovery reads (`getAvailablePurchases`, `finishTransaction`, `subscribe`)
   // always pass through: an already paid purchase must stay recoverable and
   // finishable even when the target stops selling. Catalog reads, new
@@ -888,9 +1026,9 @@ export function withTargetAvailability(
     ? undefined
     : {
         store: commerceSource.store,
-        ...(commerceSource.presentation === undefined
+        ...(presentationRelay === undefined
           ? {}
-          : { presentation: commerceSource.presentation }),
+          : { presentation: presentationRelay.presentation }),
         async getCapabilities() {
           return applyTargetConfigToCommerceCapabilities(
             await commerceSource.getCapabilities(),
@@ -907,46 +1045,13 @@ export function withTargetAvailability(
           );
         },
         async requestPurchase(input) {
-          const available = await getIapAvailability();
-          const configuredProduct = options.effectiveConfig?.monetization.products.find(
-            (product) => product.id === input.logicalId,
+          if (presentationRelay === undefined) {
+            return requestTargetPurchase(commerceSource, input);
+          }
+          return presentationRelay.track(
+            input.idempotencyKey,
+            () => requestTargetPurchase(commerceSource, input),
           );
-          let isSubscription: boolean | undefined = configuredProduct === undefined
-            ? undefined
-            : configuredProduct.type === 'subscription';
-          if (
-            isSubscription === undefined
-            && options.effectiveConfig === undefined
-            && available.oneTimeRoute !== available.subscriptionsRoute
-          ) {
-            const kind = (await commerceSource.fetchProducts({
-              logicalIds: [input.logicalId],
-              type: 'all',
-            })).find((product) => product.logicalId === input.logicalId)?.kind;
-            isSubscription = kind === undefined ? undefined : kind === 'subscription';
-          }
-          // When only one purchase route is available, unknown product kinds
-          // must not fall through to that route. An effective catalog is binding.
-          const allowed = isSubscription === true
-            ? available.subscriptions
-            : isSubscription === undefined
-              ? available.oneTime && available.subscriptions
-              : available.oneTime;
-          const catalogRefused =
-            options.effectiveConfig !== undefined && configuredProduct?.enabled !== true;
-          if (!allowed || catalogRefused) {
-            const routeEnabled = isSubscription === true
-              ? available.subscriptionsRoute
-              : isSubscription === undefined
-                ? available.oneTimeRoute && available.subscriptionsRoute
-                : available.oneTimeRoute;
-            return {
-              outcome: 'failed',
-              error: purchaseRefusal(routeEnabled && !catalogRefused ? available.readiness : undefined),
-            };
-          }
-
-          return commerceSource.requestPurchase(input);
         },
         getAvailablePurchases: (input) => commerceSource.getAvailablePurchases(input),
         ...(commerceSource.finishTransaction === undefined

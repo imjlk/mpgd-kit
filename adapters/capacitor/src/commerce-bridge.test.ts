@@ -4,11 +4,16 @@ import {
   assertBridgeEvent,
   bridgeCommerceV2Methods,
   type BridgeCommerceEvent,
+  type BridgeCommercePresentationEvent,
   type BridgeEvent,
   type BridgeMethod,
   type BridgeRequest,
 } from '@mpgd/bridge';
-import { createUnsupportedCapabilities, type PlatformProviderAvailability } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  type PlatformProviderAvailability,
+  type PlatformPurchasePresentationEvent,
+} from '@mpgd/platform';
 import { runPlatformGatewayCapabilityConformance } from '@mpgd/platform/capability-conformance';
 import {
   CommerceError,
@@ -739,5 +744,167 @@ describe('commerce v2 payload validation', () => {
     })).toMatchObject({ ok: false, error: { code: 'COMMERCE_V2_INVALID_PAYLOAD' } });
     expect(await bridge.request(request('commerce.v2.getAvailablePurchases', {})))
       .toMatchObject({ ok: true, data: { purchases: [] } });
+  });
+});
+
+describe('purchase presentation over the bridge', () => {
+  function createPresentationProvider() {
+    return createStoreProvider(createFakeStoreSdk({ presentation: true }));
+  }
+
+  it('serves presentation envelopes apart from the commerce channel, only with facts', async () => {
+    const plain = createCommerceProviderBridge({ provider: createStoreProvider().provider });
+    expect(plain.subscribePresentation).toBeUndefined();
+
+    const { sdk, provider } = createPresentationProvider();
+    const bridge = createCommerceProviderBridge({ provider });
+    const commerceEnvelopes: BridgeEvent[] = [];
+    const facts: BridgeEvent[] = [];
+    bridge.subscribe((envelope) => commerceEnvelopes.push(envelope));
+    const unsubscribe = bridge.subscribePresentation?.((envelope) => facts.push(envelope));
+    expect(sdk.presentationListenerCount).toBe(1);
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    await provider.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' });
+    sdk.present(sdk.requestCalls[0]?.presentationId, 'closed');
+    expect(facts).toEqual([
+      {
+        protocol: 'mpgd.commerce.presentation.v1',
+        sequence: 0,
+        event: { idempotencyKey: 'op-1', sequence: 1, state: 'open' },
+      },
+      {
+        protocol: 'mpgd.commerce.presentation.v1',
+        sequence: 1,
+        event: { idempotencyKey: 'op-1', sequence: 2, state: 'closed' },
+      },
+    ]);
+    for (const envelope of facts) {
+      expect(() => assertBridgeEvent(envelope)).not.toThrow();
+    }
+    // A commerce listener, old or new, never sees a presentation envelope.
+    expect(commerceEnvelopes).toEqual([]);
+    unsubscribe?.();
+    // The fact listener is the provider's own; the commerce channel stays attached.
+    expect(sdk.presentationListenerCount).toBe(1);
+  });
+
+  it('drops a fact the contract rejects', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let emit: ((event: PlatformPurchasePresentationEvent) => void) | undefined;
+    const provider: CommerceProvider = {
+      ...createStoreProvider().provider,
+      presentation: {
+        subscribe(listener) {
+          emit = listener;
+          return () => {
+            emit = undefined;
+          };
+        },
+      },
+    };
+    const bridge = createCommerceProviderBridge({ provider });
+    const facts: BridgeEvent[] = [];
+    bridge.subscribePresentation?.((envelope) => facts.push(envelope));
+    emit?.({ idempotencyKey: '', sequence: 1, state: 'open' });
+    emit?.({ idempotencyKey: 'op-1', sequence: 2, state: 'closed' });
+    expect(facts.map((envelope) => envelope.sequence)).toEqual([0]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('offers presentation on the gateway and adds not-started for a request the bridge refused', async () => {
+    const { sdk, provider } = createPresentationProvider();
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '3', buildId: 'v2', bridge: baseBridge(),
+      providers: [createCommerceServiceProvider({ id: 'store', commerce: provider })],
+    });
+    const commerce = gateway.commerce;
+    if (commerce?.presentation === undefined) {
+      throw new Error('expected presentation facts');
+    }
+    const log: string[] = [];
+    commerce.presentation.subscribe((event) => {
+      log.push(`${event.idempotencyKey}:${event.sequence}:${event.state}`);
+    });
+    sdk.onRequest = (input) => sdk.present(input.presentationId, 'open');
+    await commerce.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' });
+    sdk.present(sdk.requestCalls[0]?.presentationId, 'closed');
+    // The host's payload check refuses before its provider runs: no host fact.
+    await expect(commerce.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop', quantity: 0,
+    })).rejects.toMatchObject({ code: 'UNKNOWN', storeCode: 'COMMERCE_V2_INVALID_PAYLOAD' });
+    log.push('op-2:answered');
+    expect(log).toEqual(['op-1:1:open', 'op-1:2:closed', 'op-2:3:not-started', 'op-2:answered']);
+    expect(sdk.requestCalls).toHaveLength(1);
+  });
+
+  it('keeps the gateway without presentation when the host serves no facts', () => {
+    const { provider } = createPresentationProvider();
+    const service = createCommerceServiceProvider({ id: 'store', commerce: provider });
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '3', buildId: 'v2', bridge: baseBridge(),
+      providers: [{
+        ...service,
+        bridge: {
+          request: (input) => service.bridge.request(input),
+          subscribe: (listener) => service.bridge.subscribe(listener),
+        },
+      }],
+    });
+    expect(gateway.commerce).toBeDefined();
+    expect(gateway.commerce?.presentation).toBeUndefined();
+  });
+
+  it('offers presentation over a bridge only when the input serves facts', async () => {
+    const listeners = new Set<(event: BridgeCommercePresentationEvent) => void>();
+    const input: CreateBridgeCommerceProviderInput = {
+      store: 'fixture.store',
+      request: async () => ({ outcome: 'launched' }) as never,
+      subscribe: () => () => undefined,
+    };
+    expect(createBridgeCommerceProvider(input).presentation).toBeUndefined();
+    const consumer = createBridgeCommerceProvider({
+      ...input,
+      subscribePresentation(listener) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    });
+    const facts: PlatformPurchasePresentationEvent[] = [];
+    const unsubscribe = consumer.presentation?.subscribe((event) => facts.push(event));
+    const second = consumer.presentation?.subscribe(() => undefined);
+    expect(listeners.size).toBe(1);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const listener of listeners) {
+      listener({
+        protocol: 'mpgd.commerce.presentation.v1',
+        sequence: 0,
+        event: { idempotencyKey: 'op-1', sequence: 40, state: 'open' },
+      });
+      // Malformed and foreign envelopes are not facts.
+      listener({ protocol: 'mpgd.commerce.presentation.v1', sequence: 1 } as never);
+      listener({ protocol: 'mpgd.commerce.v2', sequence: 0, event: {} } as never);
+      listener({
+        protocol: 'mpgd.commerce.presentation.v1',
+        sequence: 2,
+        event: { idempotencyKey: 'op-1', sequence: 41, state: 'closed', reason: 'timeout' },
+      });
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+    // Numbered again on this side.
+    expect(facts).toEqual([
+      { idempotencyKey: 'op-1', sequence: 1, state: 'open' },
+      { idempotencyKey: 'op-1', sequence: 2, state: 'closed', reason: 'timeout' },
+    ]);
+    // A call the host answered without a fact gets not-started before the answer.
+    await consumer.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop' });
+    expect(facts.at(-1)).toEqual({ idempotencyKey: 'op-2', sequence: 3, state: 'not-started' });
+    unsubscribe?.();
+    expect(listeners.size).toBe(1);
+    second?.();
+    expect(listeners.size).toBe(0);
   });
 });

@@ -1,13 +1,15 @@
 import {
   bridgeCommerceEventProtocol,
+  bridgeCommercePresentationEventProtocol,
   createBridgeError,
   isBridgeCommerceV2Method,
   type BridgeCommerceEvent,
+  type BridgeCommercePresentationEvent,
   type BridgeCommerceV2Method,
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
-import { PlatformOperationError } from '@mpgd/platform';
+import { PlatformOperationError, type PlatformPurchasePresentationEvent } from '@mpgd/platform';
 import {
   assertCommerceBridgeFetchProductsPayload,
   assertCommerceBridgeFetchProductsResult,
@@ -22,6 +24,7 @@ import {
   assertCommerceBridgeRestorePurchasesPayload,
   assertCommerceBridgeRestorePurchasesResult,
   assertCommerceEventEnvelope,
+  assertCommercePresentationEventEnvelope,
   CommerceError,
   commerceErrorInfoOf,
   commerceProtocol,
@@ -35,6 +38,7 @@ import {
 
 import { namesOtherProtocol } from './bridge-events.js';
 import type { CapacitorCommerceServiceProvider } from './providers.js';
+import { createPurchasePresentationChannel } from './purchase-presentation.js';
 import { normalizeStoreSdkError } from './store-sdk.js';
 
 /** Bridge error for a commerce v2 payload the typia assert rejected. */
@@ -47,6 +51,16 @@ export interface CommerceProviderBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
   /** Delivers `{ protocol: 'mpgd.commerce.v2', sequence, event }`; `sequence` starts at 0 per bridge. */
   subscribe(listener: (event: BridgeCommerceEvent) => void): () => void;
+  /**
+   * Present when the provider has `presentation`: delivers its purchase
+   * presentation facts as `{ protocol: 'mpgd.commerce.presentation.v1',
+   * sequence, event }`, `sequence` from 0 per bridge. Facts are never
+   * buffered, and a fact of a call that opened no sheet reaches a listener
+   * before that call's answer. Kept apart from `subscribe` so a commerce
+   * listener sees only commerce envelopes, and a bridge without it tells a
+   * consumer that its host has no facts.
+   */
+  subscribePresentation?(listener: (event: BridgeCommercePresentationEvent) => void): () => void;
 }
 
 export interface CreateCommerceProviderBridgeInput {
@@ -69,14 +83,40 @@ export function createCommerceProviderBridge(
 ): CommerceProviderBridge {
   const { provider } = input;
   const listeners = new Set<(event: BridgeCommerceEvent) => void>();
+  const presentationListeners = new Set<{
+    readonly listener: (event: BridgeCommercePresentationEvent) => void;
+  }>();
   let sequence = 0;
+  let presentationSequence = 0;
   let detach: (() => void) | undefined;
+  let detachPresentation: (() => void) | undefined;
 
   const deliver = (event: CommerceEvent): void => {
     const envelope: BridgeCommerceEvent = { protocol: commerceProtocol, sequence, event };
     sequence += 1;
     for (const listener of [...listeners]) {
       listener(envelope);
+    }
+  };
+  const deliverPresentation = (event: PlatformPurchasePresentationEvent): void => {
+    let envelope: BridgeCommercePresentationEvent;
+    try {
+      envelope = assertCommercePresentationEventEnvelope({
+        protocol: bridgeCommercePresentationEventProtocol,
+        sequence: presentationSequence,
+        event,
+      });
+    } catch (error) {
+      // A fact the contract rejects is not delivered; the provider's own
+      // safety timeout still ends a sheet it never reports closed.
+      console.warn('A commerce provider reported an invalid presentation fact.', error);
+      return;
+    }
+    presentationSequence += 1;
+    for (const entry of [...presentationListeners]) {
+      if (presentationListeners.has(entry)) {
+        entry.listener(envelope);
+      }
     }
   };
 
@@ -162,6 +202,22 @@ export function createCommerceProviderBridge(
         detach = undefined;
       };
     },
+    ...(provider.presentation === undefined ? {} : {
+      subscribePresentation(listener: (event: BridgeCommercePresentationEvent) => void) {
+        const entry = { listener };
+        presentationListeners.add(entry);
+        if (presentationListeners.size === 1) {
+          detachPresentation = provider.presentation?.subscribe(deliverPresentation);
+        }
+        return () => {
+          if (!presentationListeners.delete(entry) || presentationListeners.size > 0) {
+            return;
+          }
+          detachPresentation?.();
+          detachPresentation = undefined;
+        };
+      },
+    }),
   };
 }
 
@@ -263,6 +319,17 @@ export interface CreateBridgeCommerceProviderInput {
    * provider does not declare it and callers never send `retry`.
    */
   readonly acceptsFinishRetry?: boolean;
+  /**
+   * The host's purchase presentation facts
+   * (`CommerceProviderBridge.subscribePresentation`), each fact of a call
+   * that opened no sheet delivered before that call's answer. Only with it
+   * does this provider offer `presentation`: a host built before the
+   * protocol, or one whose provider has no facts, leaves it out, and the
+   * consumer keeps its behavior without them.
+   */
+  readonly subscribePresentation?: (
+    listener: (event: BridgeCommercePresentationEvent) => void,
+  ) => () => void;
 }
 
 /**
@@ -270,6 +337,12 @@ export interface CreateBridgeCommerceProviderInput {
  * the event envelope. Results are validated again on this side, so a transport
  * that forgets to is still fail-closed; bridge errors become `CommerceError`s
  * with the bridge code kept as `storeCode` when it is not already a v2 code.
+ *
+ * With `subscribePresentation`, it offers `presentation`: the host's facts,
+ * validated and numbered again on this side, plus `not-started`, delivered
+ * before the answer, for a `requestPurchase` that settles without any fact
+ * (the bridge refused it before the host's provider ran). Every call it
+ * forwards then ends with a fact.
  */
 export function createBridgeCommerceProvider(
   input: CreateBridgeCommerceProviderInput,
@@ -293,7 +366,7 @@ export function createBridgeCommerceProvider(
       });
     }
   };
-  return {
+  const provider: CommerceProvider = {
     store: input.store,
     ...(input.acceptsFinishRetry === true ? { acceptsFinishRetry: true } : {}),
     async getCapabilities() {
@@ -338,6 +411,92 @@ export function createBridgeCommerceProvider(
         }
         listener(event.event);
       });
+    },
+  };
+  const subscribePresentation = input.subscribePresentation;
+  return subscribePresentation === undefined
+    ? provider
+    : withBridgePresentation(provider, subscribePresentation);
+}
+
+/**
+ * `presentation` over the host's facts. One attachment to the host serves
+ * every listener; it is made with the first and dropped with the last.
+ */
+function withBridgePresentation(
+  provider: CommerceProvider,
+  subscribePresentation: NonNullable<CreateBridgeCommerceProviderInput['subscribePresentation']>,
+): CommerceProvider {
+  const channel = createPurchasePresentationChannel();
+  let listenerCount = 0;
+  let detach: (() => void) | undefined;
+  // Idempotency keys of `requestPurchase` calls in flight, each call with
+  // whether a fact for its key arrived while it ran.
+  const calls = new Map<string, { seen: boolean }[]>();
+
+  const onEnvelope = (envelope: BridgeCommercePresentationEvent): void => {
+    if (namesOtherProtocol(envelope, bridgeCommercePresentationEventProtocol)) {
+      return;
+    }
+    let event: PlatformPurchasePresentationEvent;
+    try {
+      event = assertCommercePresentationEventEnvelope(envelope).event;
+    } catch (error) {
+      console.warn('The bridge delivered an invalid purchase presentation fact.', error);
+      return;
+    }
+    for (const call of calls.get(event.idempotencyKey) ?? []) {
+      call.seen = true;
+    }
+    channel.publish({
+      idempotencyKey: event.idempotencyKey,
+      state: event.state,
+      ...(event.reason === undefined ? {} : { reason: event.reason }),
+    });
+  };
+
+  return {
+    ...provider,
+    presentation: {
+      subscribe(listener) {
+        const unsubscribe = channel.presentation.subscribe(listener);
+        listenerCount += 1;
+        detach ??= subscribePresentation(onEnvelope);
+        let active = true;
+        return () => {
+          if (!active) {
+            return;
+          }
+          active = false;
+          unsubscribe();
+          listenerCount -= 1;
+          if (listenerCount === 0 && detach !== undefined) {
+            const unsubscribeHost = detach;
+            detach = undefined;
+            unsubscribeHost();
+          }
+        };
+      },
+    },
+    async requestPurchase(request) {
+      const call = { seen: false };
+      const key = request.idempotencyKey;
+      calls.set(key, [...(calls.get(key) ?? []), call]);
+      try {
+        return await provider.requestPurchase(request);
+      } finally {
+        const remaining = (calls.get(key) ?? []).filter((entry) => entry !== call);
+        if (remaining.length === 0) {
+          calls.delete(key);
+        } else {
+          calls.set(key, remaining);
+        }
+        // No fact by the answer: the host's provider never ran, so no sheet
+        // opened. Published before the caller sees the answer.
+        if (!call.seen) {
+          channel.publish({ idempotencyKey: key, state: 'not-started' });
+        }
+      }
     },
   };
 }

@@ -32,12 +32,18 @@ import {
 } from '@mpgd/platform/commerce';
 
 import {
+  createPurchasePresentationChannel,
+  isPurchasePresentationReason,
+  purchasePresentationTimeoutMs,
+} from './purchase-presentation.js';
+import {
   defaultStoreSdkErrorCodeMap,
   normalizeStoreSdkError,
   type StoreSdk,
   type StoreSdkErrorCodeMap,
   type StoreSdkProduct,
   type StoreSdkPurchase,
+  type StoreSdkPurchasePresentationEvent,
   type StoreSdkRequestPurchaseResult,
 } from './store-sdk.js';
 
@@ -126,8 +132,19 @@ export interface CreateStoreCommerceProviderInput {
 }
 
 export interface StoreCommerceProvider extends CommerceProvider {
-  /** Detaches the SDK listeners; buffered events are dropped. */
+  /**
+   * Detaches the SDK listeners; buffered events are dropped. A store sheet
+   * still open gets its `closed` fact (reason `disposed`) first.
+   */
   dispose(): void;
+}
+
+/** One `requestPurchase` call's presentation, while it has no terminal fact. */
+interface PresentationFlight {
+  readonly idempotencyKey: string;
+  readonly presentationId: string;
+  open: boolean;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 const availabilityTimeoutMs = 3_000;
@@ -152,6 +169,17 @@ const availabilitySet = new Set<PlatformProviderAvailability>([
  * declaration, builds `StorePurchase` evidence, buffers SDK events until the
  * first subscriber, and normalizes every SDK failure into a `CommerceError`.
  * It never grants and never sets `settlement`; the backend ledger decides.
+ *
+ * Over an SDK that declares `purchasePresentation`, the provider offers
+ * `presentation` and answers every `requestPurchase` call with facts keyed
+ * by its idempotency key: `not-started`, delivered before the call settles,
+ * for any call that opened no sheet (a purchase gate or account binding
+ * refusal, an unavailable store, a throw, or the SDK's own `not-started`);
+ * otherwise `open` and exactly one `closed` when the SDK reports the sheet
+ * gone, or after `purchasePresentationTimeoutMs` (reason `timeout`), or on
+ * `dispose` (reason `disposed`). A result, a pending purchase, or a purchase
+ * event never closes a sheet. An SDK without the declaration leaves the
+ * provider without `presentation`, as before.
  */
 export function createStoreCommerceProvider(
   input: CreateStoreCommerceProviderInput,
@@ -283,6 +311,71 @@ export function createStoreCommerceProvider(
     }),
   ];
 
+  // Presentation: SDK facts by presentation id, published by idempotency key.
+  const sdkPresentation = sdk.purchasePresentation;
+  const presentation = sdkPresentation === undefined
+    ? undefined
+    : createPurchasePresentationChannel();
+  const flights = new Map<string, PresentationFlight>();
+  const endFlight = (
+    flight: PresentationFlight,
+    state: 'closed' | 'not-started',
+    reason?: StoreSdkPurchasePresentationEvent['reason'],
+  ): void => {
+    if (flights.get(flight.presentationId) !== flight) {
+      return;
+    }
+    flights.delete(flight.presentationId);
+    if (flight.timer !== undefined) {
+      clearTimeout(flight.timer);
+    }
+    presentation?.publish({
+      idempotencyKey: flight.idempotencyKey,
+      // A sheet that opened can only close; `not-started` after `open` would
+      // tell a consumer the sheet never showed.
+      state: flight.open ? 'closed' : state,
+      ...(reason === undefined ? {} : { reason }),
+    });
+  };
+  const onPresentationFact = (event: StoreSdkPurchasePresentationEvent): void => {
+    if (!isRecord(event) || typeof event.presentationId !== 'string') {
+      return;
+    }
+    const flight = flights.get(event.presentationId);
+    if (flight === undefined) {
+      // Another call's, an already ended call's, or an earlier session's fact.
+      return;
+    }
+    switch (event.state) {
+      case 'open':
+        if (!flight.open) {
+          flight.open = true;
+          presentation?.publish({ idempotencyKey: flight.idempotencyKey, state: 'open' });
+          flight.timer = setTimeout(
+            () => endFlight(flight, 'closed', 'timeout'),
+            purchasePresentationTimeoutMs,
+          );
+        }
+        return;
+      case 'closed':
+        endFlight(
+          flight,
+          'closed',
+          isPurchasePresentationReason(event.reason) ? event.reason : undefined,
+        );
+        return;
+      case 'not-started':
+        endFlight(flight, 'not-started');
+        return;
+      default:
+        // An unknown fact proves nothing; the safety timeout still bounds the sheet.
+        return;
+    }
+  };
+  if (sdkPresentation !== undefined) {
+    detachers.push(sdkPresentation.subscribe(onPresentationFact));
+  }
+
   const getAvailability = sdk.getAvailability;
   const readAvailability = async (): Promise<PlatformProviderAvailability> => {
     if (getAvailability === undefined) {
@@ -324,10 +417,81 @@ export function createStoreCommerceProvider(
     availability: await readAvailability(),
   });
 
+  const requestStorePurchase = async (
+    request: RequestPurchaseInput,
+    presentationId: string | undefined,
+  ): Promise<RequestPurchaseResult> => {
+    const mapping = byLogicalId.get(request.logicalId);
+    if (mapping === undefined) {
+      throw new CommerceError('ITEM_UNAVAILABLE', {
+        message: `Store ${store} does not sell ${request.logicalId}.`,
+      });
+    }
+    const capabilities = await getCapabilities();
+    assertAvailable(capabilities.availability, store);
+    assertRequestPurchaseSupported(capabilities, request, mapping.kind);
+    // Pre-launch refusals below are data, not throws: a `failed` result
+    // keeps its `storeCode` across the bridge, a thrown error does not.
+    if (input.purchaseGate !== undefined) {
+      const refusal = await askPurchaseGate(input.purchaseGate, {
+        store,
+        logicalId: mapping.logicalId,
+        storeSku: mapping.storeSku,
+        kind: mapping.kind,
+        source: request.source,
+      });
+      if (refusal !== undefined) {
+        return { outcome: 'failed', error: refusal };
+      }
+    }
+    let accountBinding: StorePurchaseAccountBinding | undefined;
+    try {
+      accountBinding = await input.accountBinding?.();
+    } catch (error) {
+      return { outcome: 'failed', error: accountBindingFailure(error, store) };
+    }
+    if (input.authority.accountBinding === 'required' && accountBinding === undefined) {
+      return {
+        outcome: 'failed',
+        error: new CommerceError('ACCOUNT_BINDING_REQUIRED', {
+          message: `Store ${store} requires an account binding before a purchase.`,
+        }).toCommerceErrorInfo(),
+      };
+    }
+    const offerId = request.offerId ?? mapping.offerId;
+    let result: StoreSdkRequestPurchaseResult;
+    try {
+      result = await sdk.requestPurchase({
+        sku: mapping.storeSku,
+        ...(offerId === undefined ? {} : { offerId }),
+        ...(request.quantity === undefined ? {} : { quantity: request.quantity }),
+        ...(accountBinding === undefined ? {} : { accountBinding }),
+        ...(presentationId === undefined ? {} : { presentationId }),
+      });
+    } catch (error) {
+      return failureOutcome(undefined, normalize(error).toCommerceErrorInfo());
+    }
+    if (!isRecord(result)) {
+      throw invalidRequestResult(store);
+    }
+    switch (result.outcome) {
+      case 'launched':
+        return { outcome: 'launched' };
+      case 'purchased':
+        return { outcome: 'purchased', purchase: toStorePurchase(result.purchase) };
+      case 'cancelled':
+      case 'failed':
+        return failureOutcome(result.outcome, normalize(result.error).toCommerceErrorInfo());
+      default:
+        throw invalidRequestResult(store);
+    }
+  };
+
   const finishTransaction = sdk.finishTransaction;
   const restorePurchases = sdk.restorePurchases;
   const provider: StoreCommerceProvider = {
     store,
+    ...(presentation === undefined ? {} : { presentation: presentation.presentation }),
     // `retry` is forwarded to the SDK below.
     ...(finishTransaction === undefined ? {} : { acceptsFinishRetry: true }),
     getCapabilities,
@@ -390,68 +554,24 @@ export function createStoreCommerceProvider(
       return products;
     },
     async requestPurchase(request: RequestPurchaseInput): Promise<RequestPurchaseResult> {
-      const mapping = byLogicalId.get(request.logicalId);
-      if (mapping === undefined) {
-        throw new CommerceError('ITEM_UNAVAILABLE', {
-          message: `Store ${store} does not sell ${request.logicalId}.`,
-        });
+      if (presentation === undefined) {
+        return requestStorePurchase(request, undefined);
       }
-      const capabilities = await getCapabilities();
-      assertAvailable(capabilities.availability, store);
-      assertRequestPurchaseSupported(capabilities, request, mapping.kind);
-      // Pre-launch refusals below are data, not throws: a `failed` result
-      // keeps its `storeCode` across the bridge, a thrown error does not.
-      if (input.purchaseGate !== undefined) {
-        const refusal = await askPurchaseGate(input.purchaseGate, {
-          store,
-          logicalId: mapping.logicalId,
-          storeSku: mapping.storeSku,
-          kind: mapping.kind,
-          source: request.source,
-        });
-        if (refusal !== undefined) {
-          return { outcome: 'failed', error: refusal };
+      const flight: PresentationFlight = {
+        idempotencyKey: request.idempotencyKey,
+        presentationId: crypto.randomUUID(),
+        open: false,
+      };
+      flights.set(flight.presentationId, flight);
+      try {
+        return await requestStorePurchase(request, flight.presentationId);
+      } finally {
+        // Settled without an `open` fact: no sheet opened. Published before
+        // the caller sees the answer, so a consumer that frees a retryable
+        // refusal's key (the reconciler) reads it with the result.
+        if (!flight.open) {
+          endFlight(flight, 'not-started');
         }
-      }
-      let accountBinding: StorePurchaseAccountBinding | undefined;
-      try {
-        accountBinding = await input.accountBinding?.();
-      } catch (error) {
-        return { outcome: 'failed', error: accountBindingFailure(error, store) };
-      }
-      if (input.authority.accountBinding === 'required' && accountBinding === undefined) {
-        return {
-          outcome: 'failed',
-          error: new CommerceError('ACCOUNT_BINDING_REQUIRED', {
-            message: `Store ${store} requires an account binding before a purchase.`,
-          }).toCommerceErrorInfo(),
-        };
-      }
-      const offerId = request.offerId ?? mapping.offerId;
-      let result: StoreSdkRequestPurchaseResult;
-      try {
-        result = await sdk.requestPurchase({
-          sku: mapping.storeSku,
-          ...(offerId === undefined ? {} : { offerId }),
-          ...(request.quantity === undefined ? {} : { quantity: request.quantity }),
-          ...(accountBinding === undefined ? {} : { accountBinding }),
-        });
-      } catch (error) {
-        return failureOutcome(undefined, normalize(error).toCommerceErrorInfo());
-      }
-      if (!isRecord(result)) {
-        throw invalidRequestResult(store);
-      }
-      switch (result.outcome) {
-        case 'launched':
-          return { outcome: 'launched' };
-        case 'purchased':
-          return { outcome: 'purchased', purchase: toStorePurchase(result.purchase) };
-        case 'cancelled':
-        case 'failed':
-          return failureOutcome(result.outcome, normalize(result.error).toCommerceErrorInfo());
-        default:
-          throw invalidRequestResult(store);
       }
     },
     async getAvailablePurchases(
@@ -535,6 +655,15 @@ export function createStoreCommerceProvider(
       for (const detach of detachers.splice(0, detachers.length)) {
         detach();
       }
+      // No SDK fact arrives any more: a sheet still open is reported closed
+      // so nothing waits for it. A call that has not opened one ends with
+      // `not-started` when it settles.
+      for (const flight of [...flights.values()]) {
+        if (flight.open) {
+          endFlight(flight, 'closed', 'disposed');
+        }
+      }
+      presentation?.clear();
       listeners.clear();
       buffer.drain(() => undefined);
     },

@@ -1,5 +1,6 @@
 import {
   bridgeCommerceEventProtocol,
+  bridgeCommercePresentationEventProtocol,
   bridgeNotificationsEventProtocol,
   decodeBridgeCredentialLoadData,
   decodeBridgeStorageLoadData,
@@ -31,6 +32,7 @@ import {
   type CapacitorVisibilitySource,
 } from './app-events.js';
 import { namesOtherProtocol } from './bridge-events.js';
+import { purchasePresentationTimeoutMs } from './purchase-presentation.js';
 import { createBridgeCommerceProvider } from './commerce-bridge.js';
 import {
   createCapacitorGatewayCrashReporting,
@@ -57,6 +59,7 @@ export {
   type CapacitorCrashReporterOptions,
   type CapacitorCrashReportingOptions,
 } from './crash-reporting.js';
+export { purchasePresentationTimeoutMs } from './purchase-presentation.js';
 export {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
@@ -145,9 +148,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Upper bound on how long a `launched` commerce v2 purchase keeps the game
  * paused when no purchase event for the product arrives (for example a store
- * sheet dismissed without a callback).
+ * sheet dismissed without a callback). Only for a provider without sheet
+ * facts; see `presentedPurchaseActivityTimeoutMs`.
  */
 export const launchedPurchaseActivityTimeoutMs = 120_000;
+
+/**
+ * Safety bound on how long a purchase whose provider reports sheet facts
+ * keeps the game paused after the purchase call answered with the sheet
+ * still open. The sheet's `closed` fact normally ends the pause; the
+ * provider's own `purchasePresentationTimeoutMs` reports one first.
+ */
+export const presentedPurchaseActivityTimeoutMs = purchasePresentationTimeoutMs;
+
+interface PurchasePresentationWatch {
+  /** Any fact arrived for the purchase. */
+  reported(): boolean;
+  /** `open` arrived and nothing has ended it. */
+  open(): boolean;
+  /** Runs once when `closed` or `not-started` arrives (at once if it already did). */
+  onEnd(callback: () => void): void;
+  dispose(): void;
+}
 
 const safeFallbackMethods = new Set<BridgeMethod>([
   'identity.getPlayer',
@@ -206,6 +228,9 @@ export function createCapacitorPlatformGateway(input: {
   // other provider method, so the bridge envelope, response validation, and
   // external activity bookkeeping are exercised in process exactly as over a
   // transport.
+  const subscribePresentation = commerceProvider?.bridge.subscribePresentation?.bind(
+    commerceProvider.bridge,
+  );
   const commerce = commerceProvider === undefined
     ? undefined
     : createBridgeCommerceProvider({
@@ -222,6 +247,10 @@ export function createCapacitorPlatformGateway(input: {
             listener(envelope as BridgeCommerceEvent);
           }
         }),
+        // Facts only from a bridge that serves them (`createCommerceServiceProvider`
+        // over a provider with `presentation`); otherwise `commerce` has no
+        // `presentation` and purchases keep the result-based pause below.
+        ...(subscribePresentation === undefined ? {} : { subscribePresentation }),
       });
   const notificationsProvider: CapacitorNotificationServiceProvider | undefined =
     providers.notifications;
@@ -289,6 +318,12 @@ export function createCapacitorPlatformGateway(input: {
       ? lifecycle.beginExternalActivity?.()
       : undefined;
     let holdActivity = false;
+    // Watched before the request is sent: a provider reports a sheet that
+    // never opened before it answers.
+    const presentation = releaseExternalActivity !== undefined
+      && method === 'commerce.v2.requestPurchase'
+      ? watchPurchasePresentation(payload)
+      : undefined;
     try {
       const provider = leaderboardRoute === 'remote'
         && (method === 'leaderboard.submitScore' || method === 'leaderboard.open')
@@ -300,9 +335,13 @@ export function createCapacitorPlatformGateway(input: {
           const data = await sendRequest<TData>(method, payload, provider);
           if (releaseExternalActivity !== undefined
             && method === 'commerce.v2.requestPurchase'
-            && isRecord(data) && data.outcome === 'launched') {
-            // The store UI is still open: stay paused until this product's
-            // purchase event arrives or the safety timeout ends.
+            && isRecord(data) && data.outcome === 'launched'
+            && presentation?.reported() !== true) {
+            // No sheet facts for this purchase: the store UI may still be
+            // open, so stay paused until this product's purchase event
+            // arrives or the safety timeout ends. With facts, the sheet's
+            // own `closed` ends the pause (below), and a pending purchase
+            // whose sheet closed holds nothing.
             holdActivity = true;
             holdLaunchedPurchaseActivity(
               releaseExternalActivity,
@@ -321,10 +360,97 @@ export function createCapacitorPlatformGateway(input: {
       }
       return await sendRequest<TData>(method, payload, undefined);
     } finally {
-      if (!holdActivity) {
+      if (holdActivity) {
+        presentation?.dispose();
+      } else if (releaseExternalActivity !== undefined && presentation?.open() === true) {
+        // The sheet is still up, whatever the answer (a result, a pending
+        // purchase, or a throw): stay paused until its `closed` fact.
+        holdPresentedPurchaseActivity(releaseExternalActivity, presentation);
+      } else {
+        presentation?.dispose();
         releaseExternalActivity?.();
       }
     }
+  }
+
+  /**
+   * Follows one purchase's presentation facts (by its idempotency key) from
+   * the provider's bridge. Undefined when the bridge serves no facts or the
+   * payload has no key.
+   */
+  function watchPurchasePresentation(payload: unknown): PurchasePresentationWatch | undefined {
+    const idempotencyKey = isRecord(payload) ? payload.idempotencyKey : undefined;
+    if (subscribePresentation === undefined || typeof idempotencyKey !== 'string') {
+      return undefined;
+    }
+    let opened = false;
+    let ended = false;
+    let onEnd: (() => void) | undefined;
+    let unsubscribe: (() => void) | undefined;
+    let disposed = false;
+    const dispose = (): void => {
+      disposed = true;
+      onEnd = undefined;
+      unsubscribe?.();
+      unsubscribe = undefined;
+    };
+    const subscription = subscribePresentation((envelope) => {
+      if (!isRecord(envelope) || envelope.protocol !== bridgeCommercePresentationEventProtocol
+        || !isRecord(envelope.event) || envelope.event.idempotencyKey !== idempotencyKey || ended) {
+        return;
+      }
+      const { state } = envelope.event;
+      if (state === 'open') {
+        opened = true;
+      } else if (state === 'closed' || state === 'not-started') {
+        ended = true;
+        const end = onEnd;
+        dispose();
+        end?.();
+      }
+    });
+    if (disposed) {
+      subscription();
+    } else {
+      unsubscribe = subscription;
+    }
+    return {
+      reported: () => opened || ended,
+      open: () => opened && !ended,
+      onEnd(callback) {
+        if (ended) {
+          callback();
+        } else {
+          onEnd = callback;
+        }
+      },
+      dispose,
+    };
+  }
+
+  /**
+   * Keeps a purchase's external activity open while its store sheet is up:
+   * until the sheet's `closed` fact, the safety timeout, or dispose. A
+   * result, a pending purchase, or a purchase event does not end it.
+   */
+  function holdPresentedPurchaseActivity(
+    release: () => void,
+    presentation: PurchasePresentationWatch,
+  ): void {
+    let done = false;
+    const finish = (): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      launchedPurchaseHolds.delete(finish);
+      clearTimeout(timer);
+      presentation.dispose();
+      release();
+    };
+    launchedPurchaseHolds.add(finish);
+    const timer = setTimeout(finish, presentedPurchaseActivityTimeoutMs);
+    presentation.onEnd(finish);
   }
 
   /**
