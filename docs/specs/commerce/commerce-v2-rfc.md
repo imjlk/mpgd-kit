@@ -731,7 +731,8 @@ owner's own recovery.
   `GOOGLE_PLAY_ACCOUNT_ID_MISSING`, `GOOGLE_PLAY_PROFILE_ID_MISSING`,
   `APP_STORE_ACCOUNT_TOKEN_MISSING`, and on a backend that binds nobody
   `GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED`. A restore of a non-consumable stays
-  `restorable` as above.
+  `restorable` as above, bound to no account included; when no share covers
+  it, it gets this answer too.
 - **Backend.** Nothing is granted or recorded, and the answer is a retryable
   error, never a receipt: HTTP 409 `{ error:
   'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason }`, the oRPC error code
@@ -743,14 +744,20 @@ owner's own recovery.
   purchases of the product with `IN_PROGRESS` for as long as it waits; both
   would read an unknown `disposition` as `rejected`. Every client already keeps
   a record in `verifying` on a transport error and resends it on the next
-  reconcile, which is the right answer for the purchase's account.
+  reconcile, which is the right answer for the purchase's account. They keep
+  resending it on those passes, which costs one store read per pass on the
+  backend; nothing else bounds it for them.
 - **Reconciler.** The answer, or a `rejected` receipt whose reason is one of
   the three binding mismatches (a backend or game server from before it),
   parks the record: it stays `verifying` with `anotherAccount: { reason,
   reportedAt }`, is never sent again by start, resume, or event passes, is not
-  among the player's recoverable records, and summarizes as `rejected` for
-  that player. Only the player's Restore Purchases, when the store reports the
-  purchase again, sends it once more (a policy or binding may have changed).
+  among the player's recoverable records (so neither recovery summaries nor
+  Restore Purchases report it), and `reconciler.read()` and the purchase
+  result summarize it as `rejected` for that player. Only the player's Restore
+  Purchases, when the store reports the purchase again, sends it once more,
+  with the evidence the store reports then (a policy or binding may have
+  changed; a saved signed transaction may have expired). The journal keeps
+  it as an open record; a journal's retention does not drop it.
   Its shared key no longer refuses another player of the install (below).
 
 | Server answer | Client 0.27-0.31 | This client |

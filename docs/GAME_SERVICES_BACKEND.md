@@ -611,7 +611,8 @@ is only not this player's, and its own account can still recover it
   `GOOGLE_PLAY_ACCOUNT_ID_MISSING`, `GOOGLE_PLAY_PROFILE_ID_MISSING`,
   `APP_STORE_ACCOUNT_TOKEN_MISSING`, or, on a backend that binds nobody
   (`allowUnboundAuthenticatedPlayer`), `GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED`.
-  A restored non-consumable is still `restorable`.
+  A restored non-consumable is still `restorable` (bound to no account
+  included), and gets this answer when no share covers it.
 - `createGameServicesBackend` grants and records nothing for it (no ledger
   entry, no owner claim, nothing for a deletion tombstone to refuse) and throws
   `GameServicesPurchaseBoundToAnotherAccountError` (`code`
