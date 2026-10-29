@@ -36,6 +36,7 @@ export interface FakeStoreKitPlugin extends CapacitorStoreKitStoreSdkPlugin {
   readonly presentationListenerCount: number;
   readonly presentationIds: (string | undefined)[];
   presentationSupportCalls: number;
+  finishSupportCalls: number;
 }
 
 export function fakeProduct(overrides: Partial<StoreKitProduct> = {}): StoreKitProduct {
@@ -79,10 +80,18 @@ export function createFakeStoreKitPlugin(input: {
    * (a native build from before sheet facts), or `absent` (no such method).
    */
   readonly presentationSupport?: 'supported' | 'unimplemented' | 'absent';
+  /**
+   * How `getFinishSupport` answers: `supported` (default; the explicit
+   * no-token finish), `unimplemented` (a native build from before it, which
+   * also refuses a finish call without a token), or `absent` (no such method,
+   * the same native refusal).
+   */
+  readonly finishSupport?: 'supported' | 'unimplemented' | 'absent';
 } = {}): FakeStoreKitPlugin {
   const presentationListeners = new Set<(event: StoreKitPurchasePresentationEvent) => void>();
   const presentationIds: (string | undefined)[] = [];
   const presentationSupport = input.presentationSupport ?? 'supported';
+  const finishSupport = input.finishSupport ?? 'supported';
   const products: StoreKitProduct[] = [...(input.products ?? [fakeProduct()])];
   const transactions: StoreKitTransaction[] = [...(input.transactions ?? [])];
   const calls: string[] = [];
@@ -173,6 +182,16 @@ export function createFakeStoreKitPlugin(input: {
       },
     }),
     presentationSupportCalls: 0,
+    ...(finishSupport === 'absent' ? {} : {
+      async getFinishSupport() {
+        plugin.finishSupportCalls += 1;
+        if (finishSupport === 'unimplemented') {
+          throw Object.assign(new Error('not implemented'), { code: 'UNIMPLEMENTED' });
+        }
+        return { withoutAppAccountToken: 1 };
+      },
+    }),
+    finishSupportCalls: 0,
     presentationIds,
     get presentationListenerCount() {
       return presentationListeners.size;
@@ -194,15 +213,31 @@ export function createFakeStoreKitPlugin(input: {
       return plugin.syncResult;
     },
     async finishTransaction(request) {
+      const withoutToken = request.withoutAppAccountToken === true;
       calls.push(
-        `finish:${request.transactionId}:${request.ledgerEntryId}:${request.appAccountToken}`,
+        `finish:${request.transactionId}:${request.ledgerEntryId}:${
+          withoutToken ? 'without-token' : request.appAccountToken
+        }`,
       );
+      if (withoutToken && finishSupport !== 'supported') {
+        // A build from before the no-token match requires a token.
+        throw Object.assign(new Error('A transaction ID, confirmed ledger entry, and app account token are required.'), {
+          code: 'STOREKIT_FINISH_REQUIRES_GRANT',
+        });
+      }
       const script = finishQueue.shift();
       if (script === undefined) {
-        // The native token match: a listed transaction bound to another (or
-        // no) token is not finished.
+        // The native match: a token matches only that token; the explicit
+        // no-token match only a non-revoked non-consumable bound to none.
         const listed = transactions.find((entry) => entry.transactionId === request.transactionId);
-        if (listed !== undefined && listed.appAccountToken?.toLowerCase() !== request.appAccountToken) {
+        if (
+          listed !== undefined
+          && (withoutToken
+            ? listed.appAccountToken !== undefined
+              || listed.type !== 'non_consumable'
+              || listed.revokedAt !== undefined
+            : listed.appAccountToken?.toLowerCase() !== request.appAccountToken)
+        ) {
           return { finished: false };
         }
         remove(request.transactionId);
