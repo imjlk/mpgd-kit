@@ -241,6 +241,7 @@ export function createCapacitorPlatformGateway(input: {
         store: commerceProvider.commerce.store,
         // The host below is this package's, on the same contract.
         acceptsFinishRetry: commerceProvider.commerce.acceptsFinishRetry === true,
+        acceptsRevokedFinish: commerceProvider.commerce.acceptsRevokedFinish === true,
         request: (method, payload) => request(method, payload),
         // The provider's channel (`NativeBridge`) may carry other protocols.
         // Only an envelope that names another protocol is dropped; anything

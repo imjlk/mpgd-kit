@@ -43,6 +43,14 @@ export interface StoreSdk {
   finishTransaction?(
     input: StoreSdkFinishTransactionInput,
   ): Promise<StoreSdkFinishTransactionResult>;
+  /**
+   * `finishTransaction` reads `revoked`: it finishes a transaction it still
+   * lists as revoked, and only that. `createStoreCommerceProvider` then
+   * declares `CommerceProvider.acceptsRevokedFinish`; an SDK without it never
+   * receives the field, so a store that would read the call as an ordinary
+   * finish (a consume) is never asked.
+   */
+  readonly acceptsRevokedFinish?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   addListener<TEvent extends StoreSdkEventName>(
@@ -161,6 +169,12 @@ export interface StoreSdkFinishTransactionInput {
   readonly isConsumable: boolean;
   /** `FinishTransactionInput.retry`: an earlier finish of this purchase was asked for. */
   readonly retry?: boolean;
+  /**
+   * `FinishTransactionInput.revoked`: finish a transaction the store revoked
+   * while it was unfinished, with no grant standing. Sent only to an SDK that
+   * declares `acceptsRevokedFinish`.
+   */
+  readonly revoked?: boolean;
   /** The ledger entry that authorized the finish; a plugin may record it. */
   readonly ledgerEntryId: string;
 }

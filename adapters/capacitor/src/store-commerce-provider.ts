@@ -529,6 +529,10 @@ export function createStoreCommerceProvider(
     ...(presentation === undefined ? {} : { presentation: presentation.presentation }),
     // `retry` is forwarded to the SDK below.
     ...(finishTransaction === undefined ? {} : { acceptsFinishRetry: true }),
+    // `revoked` is forwarded only to an SDK that reads it.
+    ...(finishTransaction !== undefined && sdk.acceptsRevokedFinish === true
+      ? { acceptsRevokedFinish: true }
+      : {}),
     getCapabilities,
     async fetchProducts(request: FetchProductsInput = {}): Promise<readonly StoreProduct[]> {
       const type = request.type ?? 'all';
@@ -663,6 +667,11 @@ export function createStoreCommerceProvider(
         // Finishing is authorized by a ledger entry only; the id is validated
         // before the store hears about it.
         const finish = assertFinishTransactionInput(request);
+        if (finish.revoked === true && sdk.acceptsRevokedFinish !== true) {
+          // Never an ordinary finish in its place: the SDK cannot tell the
+          // two apart, and this one would run without a grant.
+          return { finished: false };
+        }
         let reported: unknown;
         try {
           reported = await finishTransaction.call(sdk, {
@@ -670,6 +679,7 @@ export function createStoreCommerceProvider(
             isConsumable: finish.isConsumable,
             ledgerEntryId: finish.ledgerEntryId,
             ...(finish.retry === true ? { retry: true } : {}),
+            ...(finish.revoked === true ? { revoked: true } : {}),
           });
         } catch (error) {
           throw normalize(error);

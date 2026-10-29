@@ -329,6 +329,12 @@ export interface CreateBridgeCommerceProviderInput {
    */
   readonly acceptsFinishRetry?: boolean;
   /**
+   * The bridge host accepts `FinishTransactionInput.revoked` (same contract,
+   * and its provider declares `acceptsRevokedFinish`). Absent, the provider
+   * does not declare it and callers never send `revoked`.
+   */
+  readonly acceptsRevokedFinish?: boolean;
+  /**
    * The host's purchase presentation facts
    * (`CommerceProviderBridge.subscribePresentation`), each fact of a call
    * that opened no sheet delivered before that call's answer. Only with it
@@ -378,6 +384,7 @@ export function createBridgeCommerceProvider(
   const provider: CommerceProvider = {
     store: input.store,
     ...(input.acceptsFinishRetry === true ? { acceptsFinishRetry: true } : {}),
+    ...(input.acceptsRevokedFinish === true ? { acceptsRevokedFinish: true } : {}),
     async getCapabilities() {
       return (await send('commerce.v2.getCapabilities', { protocol: commerceProtocol }))
         .capabilities;
