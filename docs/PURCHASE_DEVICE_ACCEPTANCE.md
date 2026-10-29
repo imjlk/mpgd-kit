@@ -62,7 +62,8 @@ and [Testing In-App Purchases with sandbox](https://developer.apple.com/document
 
 ## What every purchase must show
 
-For each scenario, the purchase's idempotency key gets:
+For each scenario except the `purchasePresentation: false` fallback at the
+end of the stale-native-build item, the purchase's idempotency key gets:
 
 | Signal | Expected |
 | --- | --- |
@@ -115,8 +116,10 @@ while the purchase holds `presentation:purchase`.
       `createCapacitorPlayBillingServiceProvider` and rebuild the web bundle:
       purchases work again with the earlier result-based pause (bounded by
       `launchedPurchaseActivityTimeoutMs`, 2 minutes), which can resume under
-      a sheet left open longer than that. Ship the rebuilt native shell
-      instead whenever you can.
+      a sheet left open longer than that. That fallback logs no `[sheet]`
+      facts and holds no `presentation:purchase` block (unless the game passes
+      its own `purchasePresentation` source), so the table above does not
+      apply to it. Ship the rebuilt native shell instead whenever you can.
 
 ## App Store (StoreKit)
 
