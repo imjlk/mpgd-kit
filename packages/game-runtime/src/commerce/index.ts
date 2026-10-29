@@ -5,6 +5,7 @@ import {
 } from '@mpgd/platform';
 import { forward } from '../forward.js';
 import { observe, type ObserverErrorHandler } from '../observers.js';
+import { coordinatorRefusalAnswers, type CoordinatorRefusal } from './refusals.js';
 import {
   PresentationExecutionError,
   type FullScreenPresentationLease,
@@ -19,25 +20,6 @@ type PurchaseOutcome = Awaited<ReturnType<CommerceProviderSource['requestPurchas
 // The failed variant shares its member with `cancelled`, so narrow by the error field.
 type PurchaseFailure = Extract<PurchaseOutcome, { readonly error: unknown }> & { readonly outcome: 'failed' };
 type HistoryEntry = { fingerprint: string; sequence: number; retryable: boolean; attempt: number; nativeSequence: number };
-/** Refusals the coordinator answers itself, before the provider is called: transient, so the key stays usable. */
-type CoordinatorRefusal = 'busy' | 'disposed' | 'history-full';
-const refusalAnswers: Readonly<Record<CoordinatorRefusal, { readonly code: PurchaseFailure['error']['code']; readonly storeCode: string; readonly message: string }>> = {
-  busy: {
-    code: 'IN_PROGRESS',
-    storeCode: 'PRESENTATION_BUSY',
-    message: 'Another full-screen presentation is in progress.',
-  },
-  disposed: {
-    code: 'NOT_PREPARED',
-    storeCode: 'PRESENTATION_DISPOSED',
-    message: 'Purchase coordination has been disposed.',
-  },
-  'history-full': {
-    code: 'IN_PROGRESS',
-    storeCode: 'PRESENTATION_HISTORY_FULL',
-    message: 'Every remembered purchase is still in flight or retryable.',
-  },
-};
 interface PurchaseFlight {
   readonly key: string;
   readonly promise: Promise<PurchaseOutcome>;
@@ -119,7 +101,7 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       entry.retryable = true;
       emit(key, ++entry.sequence, 'not-started');
     }
-    const answer = refusalAnswers[reason];
+    const answer = coordinatorRefusalAnswers[reason];
     return Object.freeze({
       outcome: 'failed',
       error: Object.freeze({ ...answer, retryable: true }),
@@ -330,3 +312,9 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
 function explicitlyRetryable(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'retryable' in error && error.retryable === true;
 }
+
+export {
+  coordinatorRefusalAnswers,
+  matchCoordinatorRefusal,
+  type CoordinatorRefusal,
+} from './refusals.js';

@@ -590,7 +590,7 @@ describe('coordinated store refusals', () => {
       const reason = refuse(input.idempotencyKey);
       if (reason !== undefined) {
         for (const listener of [...listeners]) {
-          listener({ idempotencyKey: reason === 'other' ? 'someone-else' : input.idempotencyKey, reason: reason === 'other' ? 'busy' : reason as 'busy' });
+          listener({ idempotencyKey: reason === 'other' ? 'someone-else' : input.idempotencyKey, reason: reason === 'other' ? 'busy' : reason as 'busy' | 'disposed' | 'history-full' });
         }
       }
       const answer = answers.shift();
@@ -640,6 +640,36 @@ describe('coordinated store refusals', () => {
     const controller = coordinator.createPurchaseController();
     await expect(controller.execute(purchaseInput)).resolves.toBe(answer);
     await expect(controller.execute(purchaseInput)).resolves.toBe(answer);
+    expect(purchase).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['history-full', 'IN_PROGRESS', 'PRESENTATION_HISTORY_FULL'],
+    ['disposed', 'NOT_PREPARED', 'PRESENTATION_DISPOSED'],
+  ] as const)('answers a %s refusal with the same code and keeps the key', async (reason, code, providerCode) => {
+    const refusal: GameServicesPurchaseResult = {
+      status: 'failed',
+      purchase: { status: 'failed', entitlementIds: [], diagnostic: { code, retryable: true, providerCode } },
+    };
+    let refuse = true;
+    const { coordinator, purchase } = withRefusals([refusal, purchaseResult('granted')], () => (refuse ? reason : undefined));
+    const controller = coordinator.createPurchaseController();
+    await expect(controller.execute(purchaseInput)).rejects.toMatchObject({ name: 'GameActionExecutionError', code: reason });
+    expect(controller.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+    refuse = false;
+    await expect(controller.execute(purchaseInput)).resolves.toMatchObject({ status: 'granted' });
+    expect(purchase).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a failed result whose refusal shape names another reason than the coordinator did', async () => {
+    const historyFull: GameServicesPurchaseResult = {
+      status: 'failed',
+      purchase: { status: 'failed', entitlementIds: [], diagnostic: { code: 'IN_PROGRESS', retryable: true, providerCode: 'PRESENTATION_HISTORY_FULL' } },
+    };
+    const { coordinator, purchase } = withRefusals([historyFull], () => 'busy');
+    const controller = coordinator.createPurchaseController();
+    await expect(controller.execute(purchaseInput)).resolves.toBe(historyFull);
+    await expect(controller.execute(purchaseInput)).resolves.toBe(historyFull);
     expect(purchase).toHaveBeenCalledOnce();
   });
 

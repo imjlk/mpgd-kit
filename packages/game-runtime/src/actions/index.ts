@@ -8,6 +8,7 @@ import type {
   GameServicesRewardedAdResult,
 } from '@mpgd/game-services/operations';
 
+import { matchCoordinatorRefusal, type CoordinatorRefusal } from '../commerce/refusals.js';
 import type { ExecutionBlock, GameExecutionController } from '../index.js';
 import { observe, type ObserverErrorHandler } from '../observers.js';
 import type { FullScreenPresentationScope } from '../presentation/index.js';
@@ -141,24 +142,30 @@ const purchaseSources: Readonly<Record<GameServicesPurchaseInput['source'], true
 /** A coordinated store's refusal before its provider ran; structural, so this entry imports no commerce code. */
 export interface GameActionPurchaseRefusal {
   readonly idempotencyKey: string;
-  readonly reason: 'busy' | 'disposed' | 'history-full';
+  readonly reason: CoordinatorRefusal;
 }
 export interface GameActionPurchaseRefusalSource {
   subscribe(listener: (refusal: GameActionPurchaseRefusal) => void): () => void;
 }
 
 /**
- * The service result of the coordinated store's `busy` refusal, and nothing
- * else: a failed record that never launched, `IN_PROGRESS`, retryable, with
- * the coordinator's own `PRESENTATION_BUSY` store code and no verification.
+ * Which coordinator refusal a service result is, exactly, if any: a failed
+ * purchase that never launched (no transaction, evidence, verification or
+ * ledger entry) whose diagnostic is one of the coordinator's own answers.
  */
-function isPresentationBusyRefusal(result: GameServicesPurchaseResult): boolean {
+function coordinatorRefusalOf(result: GameServicesPurchaseResult): CoordinatorRefusal | undefined {
   const diagnostic = result.purchase.diagnostic;
-  return result.status === 'failed' && result.purchase.status === 'failed'
-    && result.purchase.transactionId === undefined && result.purchase.evidence === undefined
-    && result.verification === undefined && result.ledgerEntryId === undefined
-    && diagnostic?.code === 'IN_PROGRESS' && diagnostic.retryable === true
-    && diagnostic.providerCode === 'PRESENTATION_BUSY';
+  if (result.status !== 'failed' || result.purchase.status !== 'failed'
+    || result.purchase.transactionId !== undefined || result.purchase.evidence !== undefined
+    || result.purchase.authoritativeGrant !== undefined
+    || result.verification !== undefined || result.ledgerEntryId !== undefined || diagnostic === undefined) {
+    return undefined;
+  }
+  return matchCoordinatorRefusal({
+    code: diagnostic.code,
+    retryable: diagnostic.retryable,
+    storeCode: diagnostic.providerCode,
+  });
 }
 
 /** Bind one coordinator to one runtime/client (including its player identity), above all screens. */
@@ -183,10 +190,10 @@ export function createGameActionCoordinator(options: {
   /**
    * The coordinated store's own refusals before its provider ran (the
    * `onRefusal` of createCoordinatedCommerceProvider). When the coordinator
-   * refused a running purchase action's store call as `busy` (another purchase
-   * took the scope after the action was reserved) and the service answers with
-   * exactly that refusal, the action rejects `busy` and keeps its key, as if
-   * the preflight had refused it.
+   * refused a running purchase action's store call (`busy`: another purchase
+   * took the scope after the action was reserved; `history-full`; `disposed`)
+   * and the service answers with exactly that refusal, the action rejects with
+   * the same code and keeps its key, as if the preflight had refused it.
    */
   readonly purchaseRefusals?: GameActionPurchaseRefusalSource;
   /** Never evicts keys: once full, new keys are rejected until application teardown. Default 1024. */
@@ -246,52 +253,27 @@ export function createGameActionCoordinator(options: {
     return history.size >= capacity ? 'history-full' : 'ready';
   }
 
-  // Availability is published on change, in order, also to listeners that
-  // reenter. `disposed` is the last value; then the sources and listeners go.
-  // The sources are watched only while someone listens.
-  type AvailabilitySubscription = { readonly listener: UiListener<GameActionAvailability>; active: boolean };
-  const availabilityListeners = new Set<AvailabilitySubscription>();
-  const availabilityQueue: { readonly value: GameActionAvailability; readonly recipients: readonly AvailabilitySubscription[] }[] = [];
+  // Availability goes out through a UI bridge: on change, in order, also to
+  // listeners that reenter, with no initial delivery. `disposed` is the last
+  // value; then the sources detach and, once that delivery is done, the bridge
+  // and its listeners go. The sources are watched only while someone listens.
   const detachSources: (() => void)[] = [];
-  let announced: GameActionAvailability;
-  let delivering = false;
+  let listening = 0;
   let closed = false;
   function refreshAvailability(): void {
     if (closed) {
       return;
     }
     const next = availability();
-    if (next === announced) {
-      return;
-    }
-    announced = next;
-    availabilityQueue.push({ value: next, recipients: [...availabilityListeners] });
     if (next === 'disposed') {
       closed = true;
       detachAvailabilitySources();
     }
-    if (delivering) {
-      return;
-    }
-    delivering = true;
-    try {
-      for (let cursor = 0; cursor < availabilityQueue.length; cursor += 1) {
-        const delivery = availabilityQueue[cursor];
-        if (delivery === undefined) {
-          continue;
-        }
-        for (const subscription of delivery.recipients) {
-          if (subscription.active) {
-            observe(() => subscription.listener(delivery.value), onObserverError);
-          }
-        }
-      }
-    } finally {
-      availabilityQueue.length = 0;
-      delivering = false;
-      if (closed) {
-        availabilityListeners.clear();
-      }
+    availabilityBridge.setSnapshot(next);
+    if (closed) {
+      // Delivery is synchronous; a reentrant `disposed` queued behind the
+      // current delivery still reaches its listeners before this runs.
+      void Promise.resolve().then(() => availabilityBridge.destroy());
     }
   }
 
@@ -442,15 +424,15 @@ export function createGameActionCoordinator(options: {
             }
             // Another purchase can take the scope between the reservation and
             // this call; the coordinated store then refuses it before its provider runs.
-            let refusedBusy = false;
+            let refused: CoordinatorRefusal | undefined;
             let stopRefusals: (() => void) | undefined;
             const refusals = kind === 'purchase' ? options.purchaseRefusals : undefined;
             if (refusals !== undefined) {
               // A failing source only loses this recognition, never the purchase.
               observe(() => {
                 stopRefusals = refusals.subscribe((refusal) => {
-                  if (refusal.idempotencyKey === key && refusal.reason === 'busy' && !flight.settled) {
-                    refusedBusy = true;
+                  if (refusal.idempotencyKey === key && !flight.settled) {
+                    refused = refusal.reason;
                   }
                 });
               }, onObserverError);
@@ -466,11 +448,11 @@ export function createGameActionCoordinator(options: {
                 observe(stopRefusals, onObserverError);
               }
             }
-            if (refusedBusy && isPresentationBusyRefusal(result as GameServicesPurchaseResult)) {
+            if (refused !== undefined && coordinatorRefusalOf(result as GameServicesPurchaseResult) === refused) {
               // Nothing reached the store: answer as the preflight would, and keep the key.
               invoked = false;
               finish('exception');
-              reject(new GameActionExecutionError('busy'));
+              reject(new GameActionExecutionError(refused));
               return;
             }
             finish(result.status);
@@ -656,8 +638,11 @@ export function createGameActionCoordinator(options: {
     });
   }
 
-  announced = availability();
-  closed = announced === 'disposed';
+  const availabilityBridge = createGameUiBridge<GameActionAvailability, never, never>({
+    initialSnapshot: availability(),
+    ...(onObserverError === undefined ? {} : { onListenerError: onObserverError }),
+  });
+  closed = availabilityBridge.getSnapshot() === 'disposed';
   function detachAvailabilitySources(): void {
     for (const detach of detachSources.splice(0)) {
       observe(detach, onObserverError);
@@ -694,20 +679,27 @@ export function createGameActionCoordinator(options: {
       if (typeof listener !== 'function') {
         throw new TypeError('Availability listener must be a function.');
       }
-      const subscription = { listener, active: true };
-      availabilityListeners.add(subscription);
-      if (detachSources.length === 0) {
-        // Nobody heard the changes since the last listener left.
-        announced = availability();
+      if (listening === 0) {
+        // Nobody heard the changes since the last listener left: catch up
+        // silently before this listener joins.
+        availabilityBridge.setSnapshot(availability());
         // Execution tells destruction; the scope tells owners coming and going.
         detachSources.push(execution.subscribe(refreshAvailability));
         if (options.presentation !== undefined) {
           detachSources.push(options.presentation.subscribe(refreshAvailability));
         }
       }
+      const unsubscribe = availabilityBridge.subscribeSnapshot(listener);
+      listening += 1;
+      let active = true;
       return () => {
-        subscription.active = false;
-        if (availabilityListeners.delete(subscription) && availabilityListeners.size === 0) {
+        if (!active) {
+          return;
+        }
+        active = false;
+        unsubscribe();
+        listening -= 1;
+        if (listening === 0) {
           detachAvailabilitySources();
         }
       };

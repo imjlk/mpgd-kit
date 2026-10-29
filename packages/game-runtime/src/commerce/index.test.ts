@@ -9,7 +9,11 @@ import {
 } from '@mpgd/platform';
 import { createGameExecutionController } from '../index.js';
 import { createFullScreenPresentationScope } from '../presentation/index.js';
-import { createCoordinatedCommerceProvider } from './index.js';
+import {
+  coordinatorRefusalAnswers,
+  createCoordinatedCommerceProvider,
+  matchCoordinatorRefusal,
+} from './index.js';
 
 type Commerce = NonNullable<PlatformGateway['commerce']>;
 type Result = Awaited<ReturnType<Commerce['requestPurchase']>>;
@@ -215,6 +219,21 @@ describe('coordinator refusals keep the key', () => {
       'refusal:full:history-full', 'fact:full:not-started',
       'refusal:late:disposed', 'fact:late:not-started',
     ]);
+  });
+  it('matches exactly its own refusal answers', async () => {
+    for (const reason of ['busy', 'disposed', 'history-full'] as const) {
+      const answer = coordinatorRefusalAnswers[reason];
+      expect(matchCoordinatorRefusal({ ...answer, retryable: true })).toBe(reason);
+      expect(matchCoordinatorRefusal({ ...answer, retryable: false })).toBeUndefined();
+      expect(matchCoordinatorRefusal({ code: answer.code, retryable: true })).toBeUndefined();
+    }
+    expect(matchCoordinatorRefusal({ code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_DISPOSED' })).toBeUndefined();
+    expect(matchCoordinatorRefusal(undefined)).toBeUndefined();
+    // The answers the coordinator gives are the ones it matches.
+    const f = fixture();
+    f.presentation.acquire({ kind: 'rewarded', invocationId: 'ad' });
+    const refused = await f.controlled.requestPurchase(request);
+    expect(refused.outcome === 'failed' ? matchCoordinatorRefusal(refused.error) : undefined).toBe('busy');
   });
   it('keeps a replacement flight that a listener starts on the refusal fact', async () => {
     const f = fixture();

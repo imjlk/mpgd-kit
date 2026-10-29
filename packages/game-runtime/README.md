@@ -448,14 +448,26 @@ still take the scope after the check and before the action's own store call
 (also one requested earlier in the same turn). The coordinated store then
 refuses the action's call before its provider runs. Given `purchaseRefusals`
 (the runtime wires the coordinator's `onRefusal` there), the action answers
-that the same way: it rejects with `busy`, forgets the key and returns to
-`idle`. It does so only when the coordinator itself refused this action's key
-as `busy` during the call and the service result is exactly that refusal: a
-`failed` purchase that never launched, `IN_PROGRESS`, retryable, with store
-code `PRESENTATION_BUSY`, and no transaction, evidence, verification or ledger
-entry. A store's own failure, even with the same codes, settles `failed` as
-before. The server-backed reconciler keeps that key retryable, so the same key
-opens the store once the scope is free.
+any such refusal as the preflight would: it rejects with the same code
+(`busy`, `history-full` or `disposed`), forgets the key and returns to `idle`.
+It does so only when the coordinator itself refused this action's key during
+the call and the service result is exactly that refusal: a `failed` purchase
+that never launched (no transaction, evidence, verification or ledger entry)
+whose diagnostic is the coordinator's own answer, retryable (`IN_PROGRESS` /
+`PRESENTATION_BUSY`, `IN_PROGRESS` / `PRESENTATION_HISTORY_FULL`, or
+`NOT_PREPARED` / `PRESENTATION_DISPOSED`). Both sides read these answers from
+one definition (`coordinatorRefusalAnswers` and `matchCoordinatorRefusal`,
+exported from `@mpgd/game-runtime/commerce`). A store's own failure, even with
+the same codes, settles `failed` as before. The server-backed reconciler keeps
+that key retryable, so the same key opens the store later.
+
+The actions do not take the purchase's claim on the scope themselves at
+reservation, which would close this window at its source: the service client
+may do asynchronous work (a session, a reconciler start) before the store call,
+so the claim would freeze the game, audio included, with no sheet on screen;
+and the claim could only be handed to the commerce coordinator through the
+client, which does not carry it (a legacy client, a plain gateway without sheet
+facts, or a client built on another gateway would never release or adopt it).
 
 **Behaviour change on a gateway without an ad provider.** Before, an action
 purchase started while another purchase held the screen resolved `failed`
