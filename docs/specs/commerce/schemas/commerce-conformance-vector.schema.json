@@ -222,7 +222,12 @@
         "properties": {
           "journal": {
             "$ref": "#/components/schemas/ReadonlyRecordstringreadonlyCommercePurchaseState",
-            "description": "Full state sequence per journal key.",
+            "description": "Full state sequence per journal key. A revision that keeps the state\n(parking another account's purchase, a Restore resend of a parked\nrecord) does not repeat it. A record another player journaled under its\nplayer-scoped key is listed as `<idempotency key>@<player id>`.",
+            "readOnly": true
+          },
+          "parked": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringNonEmptyString",
+            "description": "Every journal key whose record is parked as another account's purchase,\nwith the binding mismatch it was parked for; `{}` asserts none is.",
             "readOnly": true
           },
           "verifyRequests": {
@@ -843,6 +848,47 @@
             "type": "object",
             "properties": {
               "actor": {
+                "const": "runtime",
+                "readOnly": true
+              },
+              "action": {
+                "const": "restore",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "runtime",
+                "readOnly": true
+              },
+              "action": {
+                "const": "switchPlayer",
+                "readOnly": true
+              },
+              "playerId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "playerId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
                 "const": "game",
                 "readOnly": true
               },
@@ -1339,6 +1385,9 @@
           "status": {
             "oneOf": [
               {
+                "const": "another-account"
+              },
+              {
                 "const": "granted"
               },
               {
@@ -1368,12 +1417,30 @@
           "alreadyProcessed": {
             "type": "boolean",
             "readOnly": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The refusal reason of a `rejected` receipt, or the store binding\nmismatch of an `another-account` answer (for example\n`GOOGLE_PLAY_ACCOUNT_MISMATCH`).",
+            "readOnly": true
+          },
+          "transport": {
+            "oneOf": [
+              {
+                "const": "http"
+              },
+              {
+                "const": "orpc"
+              }
+            ],
+            "description": "The wire shape a runtime under test meets the `another-account` answer\nin: `http` (status 409 with `{ error, reason }`) or `orpc` (the error\ncode with `data.reason`). Absent, the error is thrown in process. The\nreference backend throws `CommerceConformanceAnotherAccountError` either\nway; a `createRuntime` hook translates it.",
+            "readOnly": true
           }
         },
         "required": [
           "status"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "A scripted verify answer. `another-account` is the backend's answer for a\npurchase the store binds to another account than the requesting player's\n(RFC \"Another account's purchase\"): a retryable error, never a receipt."
       },
       "CommerceConformanceVerifyRequestExpectation": {
         "type": "object",
@@ -1392,6 +1459,21 @@
           },
           "token": {
             "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "intent": {
+            "oneOf": [
+              {
+                "const": "purchase"
+              },
+              {
+                "const": "restore"
+              }
+            ],
             "readOnly": true
           }
         },
@@ -1774,6 +1856,12 @@
             "const": "stage_fail"
           }
         ]
+      },
+      "ReadonlyRecordstringNonEmptyString": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NonEmptyString"
+        }
       },
       "ReadonlyRecordstringReadonlyRecordstringnumber": {
         "type": "object",

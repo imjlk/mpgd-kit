@@ -38,11 +38,14 @@ import {
 import { isCliEntrypoint, readJsonFile } from './io';
 
 export const commerceVectorDirectory = 'docs/specs/commerce/vectors';
+/** Provider-independent reconciler scenarios (another account's purchase); same file format. */
+export const commerceReconcilerVectorDirectory = 'docs/specs/commerce/reconciler-vectors';
 export const commerceRfcPath = 'docs/specs/commerce/commerce-v2-rfc.md';
 
 export interface CommerceAlignmentReport {
   readonly protocolVersion: string;
   readonly vectors: readonly string[];
+  readonly reconcilerVectors: readonly string[];
   readonly schemaFiles: readonly string[];
   readonly bridgeMethods: readonly string[];
   readonly providerProfiles: readonly string[];
@@ -61,8 +64,8 @@ const availabilityStates: readonly PlatformProviderAvailability[] = [
  * Hard gate: throws, never warns, when the pieces of the commerce contract
  * drift apart. It checks that
  *
- * - the protocol constant, every conformance vector, and the committed JSON
- *   Schemas agree (the schemas are regenerated from the contract types and
+ * - the protocol constant, every conformance vector (provider and reconciler
+ *   vectors alike), and the committed JSON Schemas agree (the schemas are regenerated from the contract types and
  *   compared byte for byte);
  * - the bridge method lists agree: the platform list, the bridge list and
  *   union, the RFC, the published bridge schemas, and every transport source
@@ -76,41 +79,52 @@ const availabilityStates: readonly PlatformProviderAvailability[] = [
  */
 export function validateCommerceAlignment(input: {
   readonly vectorDirectory?: string;
+  readonly reconcilerVectorDirectory?: string;
   readonly schemaDirectory?: string;
   readonly rfcPath?: string;
   readonly sourceRoot?: string;
 } = {}): CommerceAlignmentReport {
   const vectorDirectory = input.vectorDirectory ?? commerceVectorDirectory;
+  const reconcilerVectorDirectory = input.reconcilerVectorDirectory
+    ?? commerceReconcilerVectorDirectory;
   const schemaDirectory = input.schemaDirectory ?? commerceSchemaDirectory;
   const rfcPath = input.rfcPath ?? commerceRfcPath;
   const sourceRoot = input.sourceRoot ?? '.';
   const failures: string[] = [];
 
-  const vectorFiles = readdirSync(vectorDirectory).filter((file) => file.endsWith('.json')).sort();
-  if (vectorFiles.length === 0) {
-    failures.push(`No conformance vectors found in ${vectorDirectory}.`);
-  }
-  const vectors: string[] = [];
-  for (const file of vectorFiles) {
-    const path = join(vectorDirectory, file);
-    try {
-      const vector = assertCommerceConformanceVector(readJsonFile(path));
-      const expectedName = commerceConformanceVectorNameOf(file);
-      if (vector.vector !== expectedName) {
-        failures.push(
-          `${path}: vector name ${vector.vector} must equal the file name ${expectedName}.`,
-        );
-      }
-      if (vector.protocol !== commerceProtocolVersion) {
-        failures.push(
-          `${path}: protocol ${vector.protocol} must equal commerceProtocolVersion `
-            + `${commerceProtocolVersion}.`,
-        );
-      }
-      vectors.push(vector.vector);
-    } catch (error) {
-      failures.push(`${path}: ${errorMessage(error)}`);
+  const readVectors = (directory: string): string[] => {
+    const vectorFiles = readdirSync(directory).filter((file) => file.endsWith('.json')).sort();
+    if (vectorFiles.length === 0) {
+      failures.push(`No conformance vectors found in ${directory}.`);
     }
+    const names: string[] = [];
+    for (const file of vectorFiles) {
+      const path = join(directory, file);
+      try {
+        const vector = assertCommerceConformanceVector(readJsonFile(path));
+        const expectedName = commerceConformanceVectorNameOf(file);
+        if (vector.vector !== expectedName) {
+          failures.push(
+            `${path}: vector name ${vector.vector} must equal the file name ${expectedName}.`,
+          );
+        }
+        if (vector.protocol !== commerceProtocolVersion) {
+          failures.push(
+            `${path}: protocol ${vector.protocol} must equal commerceProtocolVersion `
+              + `${commerceProtocolVersion}.`,
+          );
+        }
+        names.push(vector.vector);
+      } catch (error) {
+        failures.push(`${path}: ${errorMessage(error)}`);
+      }
+    }
+    return names;
+  };
+  const vectors = readVectors(vectorDirectory);
+  const reconcilerVectors = readVectors(reconcilerVectorDirectory);
+  for (const name of reconcilerVectors.filter((candidate) => vectors.includes(candidate))) {
+    failures.push(`${reconcilerVectorDirectory}: vector ${name} is also a provider vector.`);
   }
 
   const rendered = renderCommerceSchemaFiles();
@@ -173,6 +187,7 @@ export function validateCommerceAlignment(input: {
   return {
     protocolVersion: commerceProtocolVersion,
     vectors,
+    reconcilerVectors,
     schemaFiles: rendered.map((file) => file.fileName),
     bridgeMethods: [...commerceBridgeMethods],
     providerProfiles: profiles.stores,
@@ -367,6 +382,7 @@ if (isCliEntrypoint(import.meta.url)) {
   const report = validateCommerceAlignment();
   console.info(
     `Commerce v2 alignment ${report.protocolVersion}: ${report.vectors.length} vectors, `
+      + `${report.reconcilerVectors.length} reconciler vectors, `
       + `${report.schemaFiles.length} schema files, ${report.bridgeMethods.length} bridge methods, `
       + `${report.providerProfiles.length} provider profiles, ${report.scannedSources} sources`,
   );
