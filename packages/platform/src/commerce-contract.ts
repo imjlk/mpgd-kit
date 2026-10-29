@@ -242,6 +242,19 @@ export interface FinishTransactionInput {
    * a provider that declares `acceptsFinishRetry`.
    */
   readonly retry?: boolean;
+  /**
+   * Finish a transaction the store revoked (refunded) while it was still
+   * unfinished, without any grant: the reconciler sends it only for a record
+   * the backend already answered without a standing grant (`revoked`: the
+   * refund reversed its grant; `rejected`: the backend refused it), and only
+   * to a provider that declares `acceptsRevokedFinish`. `ledgerEntryId` then
+   * names that answer: the reversed grant's ledger entry, or, for a purchase
+   * the backend never granted, the idempotency key it refused. A store that
+   * accepts it finishes only a transaction it still reports as revoked and
+   * refuses anything else, so a purchase it holds as paid is never finished
+   * through this field. Absent means an ordinary finish after a grant.
+   */
+  readonly revoked?: boolean;
 }
 
 export interface FinishTransactionResult {
@@ -289,6 +302,12 @@ export interface CommerceProvider {
    * fields, never receives it.
    */
   readonly acceptsFinishRetry?: boolean;
+  /**
+   * The provider accepts `FinishTransactionInput.revoked`. A caller sends
+   * `revoked` only to a provider that declares this: one built on an earlier
+   * contract would refuse the field, or read the call as an ordinary finish.
+   */
+  readonly acceptsRevokedFinish?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   /** Designed, not implemented by any reference store provider. */
