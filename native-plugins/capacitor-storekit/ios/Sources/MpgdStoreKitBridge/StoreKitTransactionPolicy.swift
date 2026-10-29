@@ -219,6 +219,62 @@ public enum StoreKitTransactionPolicy {
         return nil
     }
 
+    /// The protocol version of the explicit no-token finish
+    /// (`finishTransaction` with `withoutAppAccountToken: true`), declared by
+    /// `getFinishSupport`. A build from before it answers `UNIMPLEMENTED`
+    /// there and refuses such a call, so the TypeScript SDK never sends one.
+    public static let finishWithoutAppAccountTokenVersion = 1
+
+    /// Which app account token one `finishTransaction` call matches.
+    public enum FinishBinding: Equatable, Sendable {
+        /// The caller's (lowercased, non-nil UUID) token; see `finishable`.
+        case appAccountToken(String)
+        /// Explicitly none: matches only a non-consumable bound to no token.
+        case withoutAppAccountToken
+    }
+
+    /// The binding a `finishTransaction` call asks for, from its raw
+    /// arguments; nil refuses the call. Without `withoutAppAccountToken` it is
+    /// the token path of earlier builds (a valid, non-nil UUID). With it, only
+    /// the literal `true` and no `appAccountToken` argument at all (not even
+    /// null) select the no-token match. A missing token is never read as "no
+    /// token", and never as a wildcard.
+    public static func finishBinding(appAccountToken: Any?, withoutAppAccountToken: Any?) -> FinishBinding? {
+        guard let flag = withoutAppAccountToken else {
+            guard let token = normalizedAccountToken(appAccountToken as? String) else { return nil }
+            return .appAccountToken(token)
+        }
+        guard (flag as? Bool) == true, appAccountToken == nil else { return nil }
+        return .withoutAppAccountToken
+    }
+
+    /// `finishable` for either binding. A token matches only a transaction
+    /// bound to that token (`finishable(transactionId:appAccountToken:in:)`).
+    /// `withoutAppAccountToken` matches only a verified, non-revoked
+    /// non-consumable bound to no token (one bought or redeemed outside the
+    /// app); never a consumable and never a transaction that carries a token.
+    /// The TypeScript SDK sends it only for a durable of its catalog after the
+    /// backend's ledger grant; StoreKit keeps a finished non-consumable in
+    /// `Transaction.currentEntitlements`, so the finish takes nothing away.
+    public static func finishable(
+        transactionId: String,
+        binding: FinishBinding,
+        in entries: [ReadEntry]
+    ) -> MpgdStoreKitTransaction? {
+        if case .appAccountToken(let token) = binding {
+            return finishable(transactionId: transactionId, appAccountToken: token, in: entries)
+        }
+        for entry in entries {
+            guard case .oneTime(let transaction) = entry,
+                  transaction.transactionId == transactionId,
+                  transaction.revokedAtMillis == nil,
+                  transaction.type == .nonConsumable,
+                  transaction.appAccountToken == nil else { continue }
+            return transaction
+        }
+        return nil
+    }
+
     /// The OpenIAP purchase handed to `OpenIapModule.finishTransaction` for a
     /// transaction the read resolved. OpenIAP finishes by transaction id
     /// (looking it up in `Transaction.unfinished`, then
