@@ -387,6 +387,17 @@ describe('createStoreCommerceProvider', () => {
       includePending: false,
     });
 
+    // An SDK that finishes revoked transactions keeps its unfinished revoked
+    // ones listed, so the reconciler can finish them on a later launch.
+    const revokedSdk = createFakeStoreSdk({ revokedFinish: true });
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-1' }));
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-3', state: 'revoked' }));
+    expect((await createProvider(revokedSdk).getAvailablePurchases())
+      .map((purchase) => [purchase.transactionId, purchase.state])).toEqual([
+      ['tx-1', 'purchased'],
+      ['tx-3', 'revoked'],
+    ]);
+
     sdk.upsert({ ...fakePurchase({ transactionId: 'tx-5' }), quantity: 0 });
     await expect(provider.getAvailablePurchases()).rejects.toMatchObject({
       code: 'INVALID_RESPONSE',

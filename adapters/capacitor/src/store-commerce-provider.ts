@@ -655,7 +655,13 @@ export function createStoreCommerceProvider(
         const purchase = toStorePurchase(candidate);
         // A revoked purchase is not recoverable, and a pending one is listed
         // only on request; both still reach the reconciler through events.
-        if (purchase.state === 'revoked' || (purchase.state === 'pending' && !includePending)) {
+        // An SDK that finishes revoked transactions keeps its unfinished
+        // revoked ones listed: the reconciler finishes them once the backend
+        // answered for them, and verifies or grants none of them.
+        if (
+          (purchase.state === 'revoked' && sdk.acceptsRevokedFinish !== true)
+          || (purchase.state === 'pending' && !includePending)
+        ) {
           continue;
         }
         purchases.push(purchase);

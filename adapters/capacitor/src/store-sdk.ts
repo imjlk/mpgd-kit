@@ -46,9 +46,11 @@ export interface StoreSdk {
   /**
    * `finishTransaction` reads `revoked`: it finishes a transaction it still
    * lists as revoked, and only that. `createStoreCommerceProvider` then
-   * declares `CommerceProvider.acceptsRevokedFinish`; an SDK without it never
-   * receives the field, so a store that would read the call as an ordinary
-   * finish (a consume) is never asked.
+   * declares `CommerceProvider.acceptsRevokedFinish` and keeps the revoked
+   * purchases `getAvailablePurchases` reports (still unfinished in the store)
+   * in its list, so the reconciler can finish them on a later launch; an SDK
+   * without it never receives the field, so a store that would read the call
+   * as an ordinary finish (a consume) is never asked.
    */
   readonly acceptsRevokedFinish?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
