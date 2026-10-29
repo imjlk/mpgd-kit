@@ -129,7 +129,6 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
       return;
     }
     detached = true;
-    listeners.clear();
     if (unsubscribe !== undefined) {
       observe(unsubscribe, input.onObserverError);
     }

@@ -216,6 +216,22 @@ describe('coordinator refusals keep the key', () => {
     expect(f.provider.requestPurchase).not.toHaveBeenCalled();
     unsubscribe?.();
   });
+  it('keeps a listener added after disposal once the native subscription detaches', async () => {
+    const f = fixture(true, async () => {
+      throw new Error('native result lost');
+    });
+    await expect(f.controlled.requestPurchase(request)).rejects.toThrow('native result lost');
+    f.controlled.dispose();
+    const seen: string[] = [];
+    const unsubscribe = f.controlled.presentation?.subscribe((event) => seen.push(`${event.idempotencyKey}:${event.state}`));
+    f.emit('closed', 1);
+    expect(f.listeners.size).toBe(0);
+    await expect(f.controlled.requestPurchase({ ...request, idempotencyKey: 'later' })).resolves.toMatchObject({
+      outcome: 'failed', error: { storeCode: 'PRESENTATION_DISPOSED' },
+    });
+    expect(seen).toEqual(['first:closed', 'later:not-started']);
+    unsubscribe?.();
+  });
   it('evicts the oldest settled key instead of refusing, never an in-flight, retryable, or last one', async () => {
     let calls = 0;
     const f = fixture(true, async (input) => {
