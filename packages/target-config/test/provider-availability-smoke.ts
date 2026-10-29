@@ -744,6 +744,22 @@ for (const [availability, expected] of [
     ['getAvailablePurchases', 'finishTransaction:recoverable-1', 'subscribe'],
     'recovery calls are forwarded unchanged and nothing else was called',
   );
+  assert.equal(
+    commerce.acceptsFinishRetry,
+    undefined,
+    'a hint the source does not declare stays off',
+  );
+  assert.equal(commerce.acceptsRevokedFinish, undefined);
+
+  // The finish hints a source declares survive the mask, so the reconciler
+  // still sends `retry` and the revoked finish through it.
+  const hinted = createMixedGateway();
+  const declaring = { ...hinted.commerce, acceptsFinishRetry: true, acceptsRevokedFinish: true };
+  const masked = requireCommerce(
+    withTargetAvailability({ ...hinted.gateway, commerce: declaring }, sellsNothing),
+  );
+  assert.equal(masked.acceptsFinishRetry, true);
+  assert.equal(masked.acceptsRevokedFinish, true);
 }
 
 // A store resync is gated like a purchase; without a provider restore it is simply absent.
