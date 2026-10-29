@@ -1,8 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { ORPCError } from '@orpc/client';
+
 import type { CommerceProvider, StoreId } from '@mpgd/platform/commerce';
 import {
+  CommerceConformanceAnotherAccountError,
+  commerceConformanceJournalKey,
   runCommerceConformanceVectors,
   type CommerceConformanceBackend,
   type CommerceConformanceContext,
@@ -17,9 +21,19 @@ import {
   type CommerceConformanceVector,
 } from '@mpgd/platform/commerce-vectors';
 
-import type { PurchaseVerificationApi } from './client.js';
+import {
+  GameServicesPurchaseBoundToAnotherAccountError,
+  purchaseBoundToAnotherAccountCode,
+  purchaseBoundToAnotherAccountStatus,
+} from './another-account.js';
+import {
+  gameServicesBackendEndpoints,
+  GameServicesBackendError,
+  type PurchaseVerificationApi,
+} from './client.js';
 import {
   commercePurchaseOperationKind,
+  createCommercePurchaseOperationKey,
   createCommerceReconciler,
   type CommercePurchaseOperationRecord,
   type CommerceReconcilerEvent,
@@ -31,13 +45,17 @@ import type {
 import type { VerifyPurchaseRequest, VerifyPurchaseResponse } from './types.js';
 
 /**
- * The fourteen RFC vectors run through the real `createCommerceReconciler`
- * instead of the reference reconciler: the runner's `createRuntime` hook
- * hands it the vector's provider, and two adapters translate the reference
+ * The fourteen RFC vectors and the six reconciler vectors (another account's
+ * purchase) run through the real `createCommerceReconciler` instead of the
+ * reference reconciler: the runner's `createRuntime` hook hands it the
+ * vector's provider and player, and two adapters translate the reference
  * journal and backend into the `MonetizationOperationStore` and
  * `PurchaseVerificationApi` ports the reconciler speaks. The reference
  * journal keeps asserting the RFC state machine on every write, so an
- * illegal transition or a skipped revision fails the vector.
+ * illegal transition or a skipped revision fails the vector. The adapter
+ * answers the reference backend's another-account error in the wire shape
+ * the vector names: the HTTP client's 409, the oRPC error, or the in-process
+ * error.
  */
 
 /**
@@ -46,8 +64,8 @@ import type { VerifyPurchaseRequest, VerifyPurchaseResponse } from './types.js';
  * resolved from the source root the runner names, the working directory
  * (the package scripts run from the repository root), or the source tree.
  */
-function resolveVectorsDir(): string {
-  const relative = join('docs', 'specs', 'commerce', 'vectors');
+function resolveVectorsDir(directory: 'vectors' | 'reconciler-vectors'): string {
+  const relative = join('docs', 'specs', 'commerce', directory);
   const candidates = [
     process.env.MPGD_TOOLS_EMIT_SOURCE_ROOT,
     process.cwd(),
@@ -61,26 +79,40 @@ function resolveVectorsDir(): string {
   throw new Error(`Cannot locate ${relative} from ${candidates.join(', ')}.`);
 }
 
-const vectorsDir = resolveVectorsDir();
-const vectors: readonly CommerceConformanceVector[] = readdirSync(vectorsDir)
-  .filter((file) => file.endsWith('.json'))
-  .sort()
-  .map((file) => assertCommerceConformanceVector(
-    JSON.parse(readFileSync(join(vectorsDir, file), 'utf8')) as unknown,
-  ));
+function readVectors(directory: 'vectors' | 'reconciler-vectors'): readonly CommerceConformanceVector[] {
+  const vectorsDir = resolveVectorsDir(directory);
+  return readdirSync(vectorsDir)
+    .filter((file) => file.endsWith('.json'))
+    .sort()
+    .map((file) => assertCommerceConformanceVector(
+      JSON.parse(readFileSync(join(vectorsDir, file), 'utf8')) as unknown,
+    ));
+}
+
+const vectors = readVectors('vectors');
+const reconcilerVectors = readVectors('reconciler-vectors');
 
 const ledgerTarget = 'android';
 
-function storeKeyOf(idempotencyKey: string): string {
-  return JSON.stringify([ledgerTarget, commercePurchaseOperationKind, idempotencyKey]);
+/** The operation-store key of a reference journal record: shared, or player-scoped. */
+function storeKeyOf(record: Pick<CommerceJournalRecord, 'key' | 'idempotencyKey' | 'playerId'>): string {
+  return record.idempotencyKey === undefined
+    ? createCommercePurchaseOperationKey(ledgerTarget, record.key)
+    : createCommercePurchaseOperationKey(ledgerTarget, record.idempotencyKey, record.playerId);
 }
 
-function idempotencyKeyOf(storeKey: string): string {
+/** The reference journal key of an operation-store key (`<key>@<player>` when player-scoped). */
+function journalKeyOf(storeKey: string): string {
   const parsed = JSON.parse(storeKey) as unknown;
-  if (!Array.isArray(parsed) || parsed.length !== 3 || typeof parsed[2] !== 'string') {
+  if (
+    !Array.isArray(parsed)
+    || (parsed.length !== 3 && parsed.length !== 4)
+    || !parsed.every((part) => typeof part === 'string')
+  ) {
     throw new Error(`Unexpected operation key ${storeKey}.`);
   }
-  return parsed[2];
+  const [, , idempotencyKey, playerId] = parsed as string[];
+  return commerceConformanceJournalKey(idempotencyKey as string, playerId);
 }
 
 function toVerifyRequest(
@@ -103,6 +135,7 @@ function toVerifyRequest(
     logicalId: request.productId as CommerceVerifyRequest['logicalId'],
     quantity: purchase.quantity,
     evidence: request.evidence,
+    ...(request.intent === undefined ? {} : { intent: request.intent }),
   };
 }
 
@@ -114,13 +147,25 @@ function requireKind(record: CommercePurchaseOperationRecord): CommerceJournalRe
   return record.productKind;
 }
 
+type Shadow = Pick<CommercePurchaseOperationRecord, 'input' | 'request' | 'response'>;
+
+/**
+ * The operation-store fields the reference journal does not keep, by journal
+ * key, per journal: a `runtime.switchPlayer` step builds another reconciler
+ * over the same journal, and it must read what the first one wrote.
+ */
+const shadowsByJournal = new WeakMap<CommerceConformanceJournal, Map<string, Shadow>>();
+
 /** The reference journal as the reconciler's operation store. */
 function adaptJournal(
   journal: CommerceConformanceJournal,
   playerId: string,
 ): MonetizationOperationStore {
   const toJournal = (record: CommercePurchaseOperationRecord): CommerceJournalRecord => ({
-    key: record.idempotencyKey,
+    key: journalKeyOf(record.key),
+    ...(journalKeyOf(record.key) === record.idempotencyKey
+      ? {}
+      : { idempotencyKey: record.idempotencyKey }),
     revision: record.revision,
     playerId: record.playerId,
     store: record.store,
@@ -136,22 +181,20 @@ function adaptJournal(
     ...(record.ledgerEntryId === undefined ? {} : { ledgerEntryId: record.ledgerEntryId }),
     ...(record.error === undefined ? {} : { error: record.error }),
     ...(record.revokedBy === undefined ? {} : { revokedBy: record.revokedBy }),
+    ...(record.anotherAccount === undefined ? {} : { anotherAccount: record.anotherAccount }),
   });
-  /** The operation-store fields the reference journal does not keep, by purchase key. */
-  const shadows = new Map<
-    string,
-    Pick<CommercePurchaseOperationRecord, 'input' | 'request' | 'response'>
-  >();
+  const shadows = shadowsByJournal.get(journal) ?? new Map<string, Shadow>();
+  shadowsByJournal.set(journal, shadows);
   const fromJournal = (record: CommerceJournalRecord): MonetizationOperationRecord => {
     const shadow = shadows.get(record.key) ?? {};
     return {
       kind: commercePurchaseOperationKind,
-      key: storeKeyOf(record.key),
+      key: storeKeyOf(record),
       playerId: record.playerId,
       target: ledgerTarget,
       deploymentTarget: ledgerTarget,
       revision: record.revision,
-      idempotencyKey: record.key,
+      idempotencyKey: record.idempotencyKey ?? record.key,
       store: record.store,
       logicalId: record.logicalId,
       productKind: record.kind,
@@ -165,6 +208,7 @@ function adaptJournal(
       ...(record.ledgerEntryId === undefined ? {} : { ledgerEntryId: record.ledgerEntryId }),
       ...(record.error === undefined ? {} : { error: record.error }),
       ...(record.revokedBy === undefined ? {} : { revokedBy: record.revokedBy }),
+      ...(record.anotherAccount === undefined ? {} : { anotherAccount: record.anotherAccount }),
     };
   };
   const expectCommerce = (record: MonetizationOperationRecord): CommercePurchaseOperationRecord => {
@@ -174,7 +218,7 @@ function adaptJournal(
     return record;
   };
   const shadow = (record: CommercePurchaseOperationRecord): void => {
-    shadows.set(record.idempotencyKey, {
+    shadows.set(journalKeyOf(record.key), {
       ...(record.input === undefined ? {} : { input: record.input }),
       ...(record.request === undefined ? {} : { request: record.request }),
       ...(record.response === undefined ? {} : { response: record.response }),
@@ -190,7 +234,7 @@ function adaptJournal(
       return { created: reserved.created, record: fromJournal(reserved.record) };
     },
     async read(key) {
-      const record = await journal.read(idempotencyKeyOf(key));
+      const record = await journal.read(journalKeyOf(key));
       return record === undefined ? undefined : fromJournal(record);
     },
     async replace(expectedRevision, record) {
@@ -230,7 +274,34 @@ function adaptJournal(
   };
 }
 
-/** The reference backend as the reconciler's verification API; the token comes from the journaled purchase. */
+/**
+ * The reference backend's another-account error in the wire shape the vector
+ * names: what the HTTP client throws for the 409 body, what the oRPC client
+ * throws for the error code, or the backend's own error in process.
+ */
+function anotherAccountAnswerOf(error: CommerceConformanceAnotherAccountError): Error {
+  switch (error.transport) {
+    case 'http':
+      return new GameServicesBackendError(
+        gameServicesBackendEndpoints.verifyPurchase,
+        purchaseBoundToAnotherAccountStatus,
+        {
+          error: purchaseBoundToAnotherAccountCode,
+          reason: error.reason,
+        },
+      );
+    case 'orpc':
+      return new ORPCError(purchaseBoundToAnotherAccountCode, { data: { reason: error.reason } });
+    case undefined:
+      return new GameServicesPurchaseBoundToAnotherAccountError(error.reason);
+  }
+}
+
+/**
+ * The reference backend as the reconciler's verification API; the token comes
+ * from the journaled purchase of the requesting player's record (its
+ * player-scoped one when it has one).
+ */
 function adaptBackend(
   backend: CommerceConformanceBackend,
   journal: CommerceConformanceJournal,
@@ -238,10 +309,17 @@ function adaptBackend(
 ): PurchaseVerificationApi {
   return {
     async verifyPurchase(request) {
-      const record = await journal.read(request.idempotencyKey);
-      const response = await backend.verifyPurchase(
-        toVerifyRequest(request, record ?? { store }),
-      );
+      const record = await journal.read(
+        commerceConformanceJournalKey(request.idempotencyKey, request.playerId),
+      ) ?? await journal.read(request.idempotencyKey);
+      let response: Awaited<ReturnType<CommerceConformanceBackend['verifyPurchase']>>;
+      try {
+        response = await backend.verifyPurchase(toVerifyRequest(request, record ?? { store }));
+      } catch (error) {
+        throw error instanceof CommerceConformanceAnotherAccountError
+          ? anotherAccountAnswerOf(error)
+          : error;
+      }
       if (response.status === 'granted') {
         if (response.ledgerEntryId === undefined) {
           throw new Error('A granted decision names a ledger entry.');
@@ -262,7 +340,12 @@ function adaptBackend(
         };
         return answer;
       }
-      return { verified: false, disposition: response.status, alreadyProcessed: false };
+      return {
+        verified: false,
+        disposition: response.status,
+        alreadyProcessed: false,
+        ...(response.reason === undefined ? {} : { reason: response.reason }),
+      };
     },
     async getPurchaseLedgerStatus(input) {
       return { statuses: await backend.getLedgerStatus(input.ledgerEntryIds) };
@@ -271,13 +354,25 @@ function adaptBackend(
 }
 
 const failuresByVector = new Map<string, string[]>();
+const anotherAccountByVector = new Map<string, string[]>();
+/** One log per vector run; a `runtime.switchPlayer` step's reconciler appends to it. */
+const logsByJournal = new WeakMap<
+  CommerceConformanceJournal,
+  { readonly failures: string[]; readonly anotherAccount: string[] }
+>();
 
 function createRuntime(
   input: CreateCommerceConformanceRuntimeInput,
   context: CommerceConformanceContext,
 ) {
-  const failures: string[] = [];
-  failuresByVector.set(context.vector.vector, failures);
+  let logs = logsByJournal.get(context.journal);
+  if (logs === undefined) {
+    logs = { failures: [], anotherAccount: [] };
+    logsByJournal.set(context.journal, logs);
+    failuresByVector.set(context.vector.vector, logs.failures);
+    anotherAccountByVector.set(context.vector.vector, logs.anotherAccount);
+  }
+  const { failures, anotherAccount } = logs;
   const provider: CommerceProvider = input.provider;
   return createCommerceReconciler({
     provider,
@@ -295,6 +390,10 @@ function createRuntime(
       if (event.type === 'failure') {
         failures.push(
           `${event.stage}${event.idempotencyKey === undefined ? '' : `(${event.idempotencyKey})`}: ${String(event.error)}`,
+        );
+      } else if (event.type === 'another-account') {
+        anotherAccount.push(
+          `${event.record.playerId}:${event.record.idempotencyKey}:${event.reason}`,
         );
       }
     },
@@ -321,6 +420,7 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
 }
 
 assertEqual(vectors.length, 14, 'every RFC vector is loaded');
+assertEqual(reconcilerVectors.length, 6, 'every reconciler vector is loaded');
 
 const results = await runCommerceConformanceVectors(vectors, { createRuntime });
 assertEqual(
@@ -336,6 +436,72 @@ assertEqual(
   })),
   'every vector passes through the game-services reconciler with the reference provider',
 );
+
+// Another account's purchase (RFC "Another account's purchase") through the
+// real reconciler: the HTTP 409, the oRPC error, and a pre-answer `rejected`
+// receipt park the record; another reason ends it; the purchase's own account
+// recovers it under its player-scoped key; Restore Purchases resends it with
+// fresh evidence. The answer is an `another-account` event, never a failure.
+const reconcilerResults = await runCommerceConformanceVectors(reconcilerVectors, { createRuntime });
+assertEqual(
+  summarize(reconcilerResults),
+  reconcilerVectors.map((vector) => ({ vector: vector.vector, status: 'passed' as const })),
+  'every reconciler vector passes through the game-services reconciler',
+);
+const parkedKey = 'store:fixture.client-token:tx-1';
+assertEqual(
+  Object.fromEntries(
+    reconcilerVectors.map((vector) => [
+      vector.vector,
+      anotherAccountByVector.get(vector.vector) ?? [],
+    ]),
+  ),
+  {
+    'another-account-http-parks': [`player-1:${parkedKey}:GOOGLE_PLAY_ACCOUNT_MISMATCH`],
+    'another-account-legacy-rejected-parks': [`player-1:${parkedKey}:GOOGLE_PLAY_PROFILE_MISMATCH`],
+    'another-account-orpc-parks': [`player-1:${parkedKey}:APP_STORE_ACCOUNT_TOKEN_MISMATCH`],
+    'another-account-owner-recovers': [`player-1:${parkedKey}:GOOGLE_PLAY_ACCOUNT_MISMATCH`],
+    'another-account-restore-resends': [`player-1:${parkedKey}:GOOGLE_PLAY_ACCOUNT_MISMATCH`],
+    'rejected-other-reason-ends': [],
+  },
+  'the reconciler reports each parking with an another-account event',
+);
+
+// The parking is the answer's doing: the same script with a refusal for
+// another reason ends the record, so the parked expectations above are real.
+{
+  const vector = reconcilerVectors.find(
+    (candidate) => candidate.vector === 'another-account-http-parks',
+  );
+  if (vector === undefined) {
+    throw new Error('Missing reconciler vector.');
+  }
+  const [result] = await runCommerceConformanceVectors(
+    [
+      {
+        ...vector,
+        steps: vector.steps.map((step) =>
+          step.actor === 'backend' && step.action === 'queueVerify'
+            ? {
+                ...step,
+                decision: { status: 'rejected' as const, reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING' },
+              }
+            : step,
+        ),
+      },
+    ],
+    { createRuntime },
+  );
+  assertEqual(
+    result?.failures.map((failure) => failure.path),
+    [
+      'journal.store:fixture.client-token:tx-1.length',
+      'parked',
+      'parked.store:fixture.client-token:tx-1',
+    ],
+    'a refusal for another reason is not parked',
+  );
+}
 
 // The vectors that verify did so through the game-services verify port: the
 // reference backend saw the purchase key, store id, transaction, and token the
@@ -365,5 +531,6 @@ assertEqual(verifying.length > 0, true, 'at least one vector asserts verify requ
 }
 
 console.info(
-  `Commerce reconciler conformance passed: ${String(results.length)} vectors ran through createCommerceReconciler.`,
+  `Commerce reconciler conformance passed: ${String(results.length)} RFC vectors and `
+    + `${String(reconcilerResults.length)} reconciler vectors ran through createCommerceReconciler.`,
 );
