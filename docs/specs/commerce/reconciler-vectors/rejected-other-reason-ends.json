@@ -1,0 +1,88 @@
+{
+  "vector": "rejected-other-reason-ends",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A rejected receipt with any reason other than a store binding mismatch (here a purchase bound to no account) still ends the record as rejected; it is not parked and never resent.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "rejected",
+        "reason": "GOOGLE_PLAY_ACCOUNT_ID_MISSING"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "reconcile"
+    },
+    {
+      "actor": "runtime",
+      "action": "stop"
+    },
+    {
+      "actor": "runtime",
+      "action": "start"
+    }
+  ],
+  "expect": {
+    "journal": {
+      "store:fixture.client-token:tx-1": [
+        "purchased",
+        "verifying",
+        "rejected"
+      ]
+    },
+    "parked": {},
+    "verifyRequests": [
+      {
+        "idempotencyKey": "store:fixture.client-token:tx-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1"
+      }
+    ],
+    "ledger": [],
+    "finishCalls": []
+  }
+}

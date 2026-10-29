@@ -1,0 +1,114 @@
+{
+  "vector": "another-account-http-parks",
+  "protocol": "2.0.0-draft.1",
+  "summary": "The backend answers another account's purchase over HTTP (409 PURCHASE_BOUND_TO_ANOTHER_ACCOUNT): the record is parked in verifying, not granted and not ended; reconcile and restart never resend it, and a new purchase of the product is not IN_PROGRESS.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "another-account",
+        "reason": "GOOGLE_PLAY_ACCOUNT_MISMATCH",
+        "transport": "http"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "reconcile"
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-2"
+      },
+      "returns": {
+        "outcome": "launched"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "stop"
+    },
+    {
+      "actor": "runtime",
+      "action": "start"
+    }
+  ],
+  "expect": {
+    "journal": {
+      "store:fixture.client-token:tx-1": [
+        "purchased",
+        "verifying"
+      ],
+      "op-2": [
+        "requested",
+        "launched"
+      ]
+    },
+    "parked": {
+      "store:fixture.client-token:tx-1": "GOOGLE_PLAY_ACCOUNT_MISMATCH"
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "store:fixture.client-token:tx-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1",
+        "playerId": "player-1"
+      }
+    ],
+    "ledger": [],
+    "finishCalls": [],
+    "purchaseUiOpened": 1,
+    "available": [
+      {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "state": "purchased"
+      }
+    ]
+  }
+}

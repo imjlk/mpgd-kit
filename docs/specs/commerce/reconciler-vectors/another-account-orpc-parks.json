@@ -1,0 +1,82 @@
+{
+  "vector": "another-account-orpc-parks",
+  "protocol": "2.0.0-draft.1",
+  "summary": "The backend answers another account's purchase over oRPC (error code PURCHASE_BOUND_TO_ANOTHER_ACCOUNT with data.reason): the record is parked as the HTTP answer parks it, and reconcile never resends it.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "remove_ads",
+      "kind": "durable",
+      "storeSku": "remove.ads"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "another-account",
+        "reason": "APP_STORE_ACCOUNT_TOKEN_MISMATCH",
+        "transport": "orpc"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "remove.ads",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "reconcile"
+    }
+  ],
+  "expect": {
+    "journal": {
+      "store:fixture.client-token:tx-1": [
+        "purchased",
+        "verifying"
+      ]
+    },
+    "parked": {
+      "store:fixture.client-token:tx-1": "APP_STORE_ACCOUNT_TOKEN_MISMATCH"
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "store:fixture.client-token:tx-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1"
+      }
+    ],
+    "ledger": [],
+    "finishCalls": []
+  }
+}
