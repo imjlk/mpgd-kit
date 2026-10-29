@@ -4779,6 +4779,30 @@ function createDroppingJournal(): {
   assertEqual(backend.requests.length, 1, 'nor verified');
   await h.reconciler.stop();
 
+  // A backend without the ledger status read: the grant stands as far as the client can tell,
+  // so the refunded transaction stays unfinished and the ordinary finish keeps being refused.
+  const noStatus = createHarness({ provider: createFakeProvider({ acceptsRevokedFinish: true }) });
+  noStatus.backend.queue({ status: 'granted', ledgerEntryId: 'le-57s' });
+  noStatus.provider.queueFinish({ finished: false });
+  await noStatus.reconciler.start();
+  await noStatus.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57s',
+    source: 'shop',
+  });
+  noStatus.provider.report(purchaseOf({ transactionId: 'tx-57s' }));
+  await noStatus.reconciler.runUntilIdle();
+  noStatus.provider.report(purchaseOf({ transactionId: 'tx-57s', state: 'revoked' }));
+  await noStatus.reconciler.reconcile();
+  assertEqual(noStatus.history('op-57s').at(-1), 'finishing', 'the grant stands');
+  assertEqual(
+    noStatus.provider.finishCalls.map((call) => call.revoked),
+    [undefined, undefined],
+    'only ordinary finishes are asked, never a revoked one',
+  );
+  assertEqual(noStatus.provider.available.length, 1, 'the transaction stays unfinished');
+  await noStatus.reconciler.stop();
+
   for (const [provider, message] of [
     [
       createFakeProvider({

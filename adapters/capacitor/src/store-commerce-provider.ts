@@ -524,15 +524,15 @@ export function createStoreCommerceProvider(
 
   const finishTransaction = sdk.finishTransaction;
   const restorePurchases = sdk.restorePurchases;
+  /** The SDK reads `revoked` and has a finish to take it. */
+  const revokedFinish = finishTransaction !== undefined && sdk.acceptsRevokedFinish === true;
   const provider: StoreCommerceProvider = {
     store,
     ...(presentation === undefined ? {} : { presentation: presentation.presentation }),
     // `retry` is forwarded to the SDK below.
     ...(finishTransaction === undefined ? {} : { acceptsFinishRetry: true }),
     // `revoked` is forwarded only to an SDK that reads it.
-    ...(finishTransaction !== undefined && sdk.acceptsRevokedFinish === true
-      ? { acceptsRevokedFinish: true }
-      : {}),
+    ...(revokedFinish ? { acceptsRevokedFinish: true } : {}),
     getCapabilities,
     async fetchProducts(request: FetchProductsInput = {}): Promise<readonly StoreProduct[]> {
       const type = request.type ?? 'all';
@@ -659,7 +659,7 @@ export function createStoreCommerceProvider(
         // revoked ones listed: the reconciler finishes them once the backend
         // answered for them, and verifies or grants none of them.
         if (
-          (purchase.state === 'revoked' && sdk.acceptsRevokedFinish !== true)
+          (purchase.state === 'revoked' && !revokedFinish)
           || (purchase.state === 'pending' && !includePending)
         ) {
           continue;
@@ -673,7 +673,7 @@ export function createStoreCommerceProvider(
         // Finishing is authorized by a ledger entry only; the id is validated
         // before the store hears about it.
         const finish = assertFinishTransactionInput(request);
-        if (finish.revoked === true && sdk.acceptsRevokedFinish !== true) {
+        if (finish.revoked === true && !revokedFinish) {
           // Never an ordinary finish in its place: the SDK cannot tell the
           // two apart, and this one would run without a grant.
           return { finished: false };
