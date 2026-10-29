@@ -128,6 +128,18 @@ export function createStorageMonetizationOperationStore(
   const locks = input.locks === undefined ? readHostLockManager() : (input.locks ?? undefined);
   const lockName = `mpgd-monetization-journal:${key}`;
   let chain: Promise<unknown> = Promise.resolve();
+  /**
+   * The parked record this journal wrote last: a Restore Purchases resend
+   * rewrites its record before it is sent, so this is the one whose answer
+   * may be awaited. No bound drops it, whatever the timestamps say (a tie, a
+   * clock moved back).
+   */
+  let lastWrittenParked: string | undefined;
+  const noteWrite = (record: MonetizationOperationRecord): void => {
+    if (parkedWrittenAt(record) !== undefined) {
+      lastWrittenParked = record.key;
+    }
+  };
 
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
     const run = locks === undefined ? operation : () => locks.request(lockName, () => operation());
@@ -156,8 +168,14 @@ export function createStorageMonetizationOperationStore(
     const kept: Record<string, MonetizationOperationRecord> = {};
     /** Records the byte budget may drop, with their drop tier (lower leaves first). */
     const droppable: [string, number, number][] = [];
+    let newestParkedAt = Number.NEGATIVE_INFINITY;
     for (const [recordKey, record] of records) {
       const parkedAt = parkedWrittenAt(record);
+      if (parkedAt !== undefined && recordKey === lastWrittenParked) {
+        kept[recordKey] = record;
+        newestParkedAt = Math.max(newestParkedAt, parkedAt);
+        continue;
+      }
       if (parkedAt !== undefined) {
         // Another account's purchase: nothing of this player is in progress,
         // and the purchase's own account recovers it under its own key.
@@ -183,15 +201,20 @@ export function createStorageMonetizationOperationStore(
         terminal.push([recordKey, settledAt]);
       }
     }
-    // Newest first: a parked record a Restore Purchases resend just rewrote is
-    // the newest, so no bound drops it while its answer is awaited (the byte
-    // budget does not drop the newest either).
+    // Newest first. The parked record this journal wrote last is kept above
+    // and counts against the bound. The byte budget does not drop the most
+    // recently written parked record either, when that is another one
+    // (another context's resend may await its answer).
     parked.sort((left, right) => right[1] - left[1]);
-    for (const [index, [recordKey, writtenAt]] of parked.slice(0, maxParkedRecords).entries()) {
+    const parkedRoom = Math.max(
+      0,
+      maxParkedRecords - (lastWrittenParked !== undefined && lastWrittenParked in kept ? 1 : 0),
+    );
+    for (const [index, [recordKey, writtenAt]] of parked.slice(0, parkedRoom).entries()) {
       const record = records.get(recordKey);
       if (record !== undefined) {
         kept[recordKey] = record;
-        if (index > 0) {
+        if (index > 0 || writtenAt <= newestParkedAt) {
           droppable.push([recordKey, writtenAt, 1]);
         }
       }
@@ -230,6 +253,7 @@ export function createStorageMonetizationOperationStore(
           return { created: false, record: clone(existing) };
         }
         records.set(record.key, clone(record));
+        noteWrite(record);
         await save(records);
         return { created: true, record: clone(record) };
       });
@@ -256,6 +280,7 @@ export function createStorageMonetizationOperationStore(
           throw new Error('Stale or conflicting monetization journal write.');
         }
         records.set(record.key, clone(record));
+        noteWrite(record);
         await save(records);
       });
     },

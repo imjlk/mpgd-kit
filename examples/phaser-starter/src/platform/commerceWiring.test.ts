@@ -579,6 +579,43 @@ const withTransaction = (
   assert.equal(await tightJournal.read('granted'), undefined);
 }
 
+// The parked record a Restore Purchases resend just rewrote stays whatever
+// the timestamps say: here it ties with another and its fresh evidence pushes
+// the document over the byte budget.
+{
+  const memory = createMemoryStorage();
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxDocumentBytes: 3_500,
+  });
+  const writtenAt = new Date(clock).toISOString();
+  const parked = (key: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: writtenAt,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: writtenAt },
+      }),
+      `GPA.${key}`,
+    );
+  await journal.reserve(parked('first'));
+  await journal.reserve(parked('resent'));
+  const resent = (await journal.read('resent')) as CommercePurchaseOperationRecord;
+  await journal.replace(resent.revision, {
+    ...resent,
+    revision: resent.revision + 1,
+    purchase: {
+      ...resent.purchase,
+      evidence: { schema: 'test', payload: { padding: 'x'.repeat(3_000) } },
+    } as CommercePurchaseOperationRecord['purchase'],
+  } as CommercePurchaseOperationRecord);
+  assert.notEqual(await journal.read('resent'), undefined, 'the resent record stays');
+  assert.equal(await journal.read('first'), undefined, 'the other parked record leaves');
+}
+
 // Two contexts over the same storage (two tabs, two PWA windows) share the
 // host's Web Locks, so neither loses the other's write.
 {
