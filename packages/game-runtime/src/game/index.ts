@@ -21,6 +21,8 @@ import {
   type AdWaitDeadline,
   type PurchasePresentationEvent,
 } from '../ads/index.js';
+import { coordinateGatewayCommerce } from '../commerce/coordinate.js';
+import { forward } from '../forward.js';
 import {
   createGameActionCoordinator,
   type GameActionCoordinator,
@@ -94,7 +96,17 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       if (!disposed) { actions?.confirmRecoveredRewardResult(request.idempotencyKey, recovered); }
     },
   });
-  const gateway = (coordinated ?? input.gateway) as T;
+  // Without an ad provider, purchases still share the full-screen scope under
+  // the same rule as with one (see `coordinateGatewayCommerce`).
+  const coordinatedCommerce = source === undefined
+    ? coordinateGatewayCommerce(input.gateway, {
+      presentation,
+      ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
+      ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
+    })
+    : undefined;
+  const gateway = (coordinated
+    ?? (coordinatedCommerce === undefined ? input.gateway : forward(input.gateway, { commerce: coordinatedCommerce }))) as T;
   let lifecycle: ReturnType<typeof bindGameLifecycle> | undefined;
   let actions: GameActionCoordinator | undefined;
   let unsubscribeResume: (() => void) | undefined;
@@ -221,6 +233,7 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
     hostAudio?.release();
     actions?.dispose();
     coordinated?.dispose();
+    coordinatedCommerce?.dispose();
     presentation.dispose();
     lifecycle?.dispose();
     if (unsubscribeResume !== undefined) {
@@ -245,6 +258,9 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
           if (!disposed && input.reconciliation !== undefined) { await actions?.reconcile(); } } });
     }
     if (services.client !== undefined) {
+      // Only a gateway whose ads also take the scope hands the actions their
+      // gate: with commerce alone, a legacy rewarded ad holds no lease, so the
+      // actions keep their own block for every operation.
       actions = createGameActionCoordinator({ execution, client: services.client,
         ...(coordinated === undefined ? {} : { presentation }),
         ...(input.reconciliation === undefined ? {} : { reconciliation: input.reconciliation }),
