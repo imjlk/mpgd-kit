@@ -654,6 +654,73 @@ const withTransaction = (
   assert.equal(await tabB.read('a'), undefined, 'past the window the bound applies again');
 }
 
+// A parked record without a readable time is never in flight: it sorts as the
+// newest, so age does not drop it, but the count bound does.
+{
+  const memory = createMemoryStorage();
+  const parked = (key: string, writtenAt: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: writtenAt,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: writtenAt },
+      }),
+      `GPA.${key}`,
+    );
+  const roomy = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  await roomy.reserve(parked('garbled', 'not-a-time'));
+  clock += 31 * 24 * 60 * 60 * 1000;
+  await roomy.reserve(purchaseRecord({ key: 'later' }));
+  assert.notEqual(await roomy.read('garbled'), undefined, 'age does not drop it');
+  const bounded = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+  });
+  await bounded.reserve(parked('readable', new Date(clock - 60 * 60 * 1000).toISOString()));
+  assert.equal(await bounded.read('garbled'), undefined, 'the count bound drops it');
+  assert.notEqual(await bounded.read('readable'), undefined);
+}
+
+// The in-flight window follows `parkedInFlightMs`, for a game that changed the
+// reconciler's `inFlightTimeoutMs`.
+{
+  const memory = createMemoryStorage();
+  const writtenAt = new Date(clock).toISOString();
+  const parked = (key: string, at: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: at,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: at },
+      }),
+      `GPA.${key}`,
+    );
+  const tabA = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  await tabA.reserve(parked('a', writtenAt));
+  clock += 2 * 60 * 1000;
+  const defaults = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+  });
+  await defaults.reserve(parked('b', new Date(clock - 60 * 60 * 1000).toISOString()));
+  assert.notEqual(await defaults.read('a'), undefined, 'two minutes is inside the default window');
+  const short = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+    parkedInFlightMs: 60 * 1000,
+  });
+  await short.reserve(parked('c', new Date(clock - 30 * 60 * 1000).toISOString()));
+  assert.equal(await short.read('a'), undefined, 'but outside a one-minute window');
+  assert.notEqual(await short.read('c'), undefined);
+}
+
 // Two contexts over the same storage (two tabs, two PWA windows) share the
 // host's Web Locks, so neither loses the other's write.
 {

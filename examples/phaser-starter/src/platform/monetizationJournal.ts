@@ -46,16 +46,17 @@ export const defaultMonetizationJournalParkedRetentionMs = 30 * 24 * 60 * 60 * 1
  * that the store keeps listing is verified again by the next pass that meets
  * it, as an older client resends every such purchase. The byte budget may
  * drop parked records before granted purchases. Neither drops a record in
- * `defaultMonetizationJournalParkedInFlightMs`.
+ * the in-flight window (`parkedInFlightMs`).
  */
 export const defaultMonetizationJournalMaxParkedRecords = 20;
 /**
- * A parked record written this recently (10 minutes, the reconciler's
- * `defaultInFlightTimeoutMs`), or later than now (a clock moved back), is
- * kept through every bound: a Restore Purchases resend rewrites its record
- * before it is sent, in this context or another tab's, and the record must
- * still be there when the backend answers. The parked record this journal
- * wrote last is kept too, whatever its time says.
+ * The default in-flight window (10 minutes, the reconciler's
+ * `defaultInFlightTimeoutMs`): a parked record written this recently, or
+ * later than now (a clock moved back), is kept through every bound. A
+ * Restore Purchases resend rewrites its record before it is sent, in this
+ * context or another tab's, and the record must still be there when the
+ * backend answers. The parked record this journal wrote last is kept too. A
+ * parked record without a readable time is never in flight.
  */
 export const defaultMonetizationJournalParkedInFlightMs = 10 * 60 * 1000;
 /**
@@ -67,6 +68,9 @@ export const defaultMonetizationJournalParkedInFlightMs = 10 * 60 * 1000;
  * Other open records are never dropped.
  */
 export const defaultMonetizationJournalMaxDocumentBytes = 192 * 1024;
+
+/** The time of a parked record without a readable one: newest in sort order, never in flight. */
+const unreadableParkedTime = Number.MAX_SAFE_INTEGER;
 
 export interface CreateStorageMonetizationOperationStoreInput {
   /** The platform storage adapter (`gateway.storage`); the host owns its durability. */
@@ -83,6 +87,14 @@ export interface CreateStorageMonetizationOperationStoreInput {
   readonly parkedRetentionMs?: number;
   /** Defaults to 20 parked records; see `defaultMonetizationJournalMaxParkedRecords`. */
   readonly maxParkedRecords?: number;
+  /**
+   * Defaults to 10 minutes; see `defaultMonetizationJournalParkedInFlightMs`.
+   * A game that changes the reconciler's `inFlightTimeoutMs`
+   * (`createCommerceReconciler`) passes the same value here, so a parked
+   * record stays in the journal for as long as its Restore Purchases answer
+   * may be awaited.
+   */
+  readonly parkedInFlightMs?: number;
   readonly now?: () => number;
   /**
    * Cross-context lock for the read-modify-write of the document; defaults to
@@ -131,6 +143,7 @@ export function createStorageMonetizationOperationStore(
   const parkedRetentionMs = input.parkedRetentionMs ?? defaultMonetizationJournalParkedRetentionMs;
   const parkedLimit = input.maxParkedRecords ?? defaultMonetizationJournalMaxParkedRecords;
   const maxParkedRecords = parkedLimit >= 0 ? parkedLimit : 0;
+  const parkedInFlightMs = input.parkedInFlightMs ?? defaultMonetizationJournalParkedInFlightMs;
   const now = input.now ?? (() => Date.now());
   const locks = input.locks === undefined ? readHostLockManager() : (input.locks ?? undefined);
   const lockName = `mpgd-monetization-journal:${key}`;
@@ -142,7 +155,8 @@ export function createStorageMonetizationOperationStore(
    */
   let lastWrittenParked: string | undefined;
   const noteWrite = (record: MonetizationOperationRecord): void => {
-    if (parkedWrittenAt(record) !== undefined) {
+    const writtenAt = parkedWrittenAt(record);
+    if (writtenAt !== undefined && writtenAt !== unreadableParkedTime) {
       lastWrittenParked = record.key;
     }
   };
@@ -174,12 +188,13 @@ export function createStorageMonetizationOperationStore(
     const kept: Record<string, MonetizationOperationRecord> = {};
     /** Records the byte budget may drop, with their drop tier (lower leaves first). */
     const droppable: [string, number, number][] = [];
-    const inFlightSince = now() - defaultMonetizationJournalParkedInFlightMs;
+    const inFlightSince = now() - parkedInFlightMs;
     let inFlight = 0;
     for (const [recordKey, record] of records) {
       const parkedAt = parkedWrittenAt(record);
       if (
         parkedAt !== undefined
+        && parkedAt !== unreadableParkedTime
         && (recordKey === lastWrittenParked || parkedAt >= inFlightSince)
       ) {
         // Possibly awaiting a Restore Purchases answer: no bound drops it.
@@ -339,8 +354,8 @@ function terminalSettledAt(record: MonetizationOperationRecord): number | undefi
 /**
  * When a record parked as another account's purchase was last written (its
  * parking, or a Restore Purchases resend), or `undefined` for any other
- * record. A parked record without a readable time sorts as the newest: only
- * the count bound drops it.
+ * record. A parked record without a readable time is never in flight and
+ * sorts as the newest: only the count bound and the byte budget drop it.
  */
 function parkedWrittenAt(record: MonetizationOperationRecord): number | undefined {
   if (!isCommercePurchaseOperationRecord(record) || !isParkedForAnotherAccount(record)) {
@@ -349,7 +364,7 @@ function parkedWrittenAt(record: MonetizationOperationRecord): number | undefine
   const times = [record.updatedAt, record.anotherAccount?.reportedAt]
     .map((time) => (time === undefined ? Number.NaN : Date.parse(time)))
     .filter((time) => Number.isFinite(time));
-  return times.length === 0 ? Number.MAX_SAFE_INTEGER : Math.max(...times);
+  return times.length === 0 ? unreadableParkedTime : Math.max(...times);
 }
 
 /** A commerce purchase record that names a store transaction (the store may still list it). */

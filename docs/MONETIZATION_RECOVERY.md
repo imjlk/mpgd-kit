@@ -228,10 +228,13 @@ recovers it under its own key. A dropped purchase the store still lists is
 verified once more by the next pass that meets it and parked again; beyond
 the count bound that repeats on each such pass, as an older client does for
 every such purchase. A Restore Purchases resend rewrites the record first,
-and no bound (the byte budget included) drops a parked record written in the
-last 10 minutes (the reconciler's in-flight timeout), in any tab, or the one
-the journal wrote last, so a resend's record is there when its answer
-arrives. The rule only
+and no bound (the byte budget included) drops a parked record written within
+the in-flight window (`parkedInFlightMs`, 10 minutes by default, the
+reconciler's default `inFlightTimeoutMs`; a game that changes that timeout
+passes the same value), in any tab, or the one the journal wrote last, so a
+resend's record is there when its answer arrives. A parked record without a
+readable time is never in flight: only the count bound and the byte budget
+drop it. The rule only
 removes records; the document format is unchanged. A document it cannot parse fails every call instead of being
 replaced, since starting over could verify a purchase twice. The journal is
 durable on the host, but platform storage is not encrypted: a game whose

@@ -1221,32 +1221,46 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
    * player's purchases or holds the shared key against the purchase's
    * account. Another answer unparks it and settles it as a verify does; a
    * grant is finished by the pass's recoverable records.
+   *
+   * Returns false when the journal dropped the record before Restore could
+   * rewrite it (another context's save applied the journal's retention after
+   * `rereadParked` read it): the record is forgotten and the caller matches
+   * the report as a purchase the journal does not know.
    */
   const reportParked = async (
     record: CommercePurchaseOperationRecord,
     purchase: StorePurchase,
     restoring: boolean,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (!restoring || purchase.state !== 'purchased') {
-      return;
+      return true;
     }
     const request: VerifyPurchaseRequest = {
       ...buildRequest({ ...record, purchase }),
       intent: 'restore',
     };
-    const refreshed = await reviseAnotherAccount(record, record.anotherAccount, {
-      purchase,
-      request,
-    });
+    let refreshed: CommercePurchaseOperationRecord;
+    try {
+      refreshed = await reviseAnotherAccount(record, record.anotherAccount, {
+        purchase,
+        request,
+      });
+    } catch (error) {
+      if (await rereadParked(record) === undefined) {
+        return false;
+      }
+      throw error;
+    }
     const answer = await sendVerify(refreshed, request);
     if (answer === undefined) {
-      return;
+      return true;
     }
     if (answer.kind === 'another-account') {
       await parkForAnotherAccount(refreshed, request, answer);
-      return;
+      return true;
     }
     await settleVerify(await reviseAnotherAccount(refreshed, undefined), request, answer.response);
+    return true;
   };
 
   /**
@@ -1315,8 +1329,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       record = await rereadParked(record);
     }
     if (record !== undefined && isParkedForAnotherAccount(record)) {
-      await reportParked(record, purchase, restoring);
-      return;
+      if (await reportParked(record, purchase, restoring)) {
+        return;
+      }
+      record = undefined;
     }
     const account = record !== undefined || (restoring && product.kind === 'durable')
       ? 'own'

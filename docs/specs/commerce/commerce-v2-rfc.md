@@ -787,11 +787,14 @@ owner's own recovery.
   is verified once more and parked again. The starter journal drops a parked
   record 30 days after its last write and keeps at most the 20 most recently
   written; a Restore Purchases resend rewrites the record before it is sent,
-  and no bound drops a parked record written within the reconciler's
-  in-flight timeout (10 minutes) or the one the journal wrote last, so the
-  record is there when the answer arrives. A reconciler that still holds a dropped record reads the
-  journal again before Restore Purchases sends it, and matches the store's
-  report as a purchase the journal does not know. The
+  and no bound drops a parked record written within the in-flight window
+  (`parkedInFlightMs`, the reconciler's in-flight timeout, 10 minutes by
+  default) or the one the journal wrote last, so the record is there when the
+  answer arrives; a parked record without a readable time is never in flight.
+  A reconciler that still holds a dropped record reads the journal again
+  before Restore Purchases sends it, and matches the store's
+  report as a purchase the journal does not know, as it does when another
+  context drops the record between that read and Restore's rewrite. The
   [reconciler vectors](#reconciler-vectors) cover the answer.
   Its shared key no longer refuses another player of the install (below).
 
