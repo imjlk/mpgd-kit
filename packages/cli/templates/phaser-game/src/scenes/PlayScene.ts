@@ -22,6 +22,7 @@ export class PlayScene extends Phaser.Scene {
   private context!: StarterContext;
   private rewardedAction: GameActionController<'rewarded-ad'> | undefined;
   private showingNotReady = false;
+  private requesting = false;
   private lastScore = -1;
   private lastAnalyticsCount = -1;
 
@@ -90,6 +91,7 @@ export class PlayScene extends Phaser.Scene {
     // Follow the runtime's availability, so the hint changes while any purchase
     // (one from the shop included) or ad holds the screen, without a key press.
     this.showingNotReady = false;
+    this.requesting = false;
     const stopAvailability = actions?.subscribeAvailability((availability) => {
       this.showAvailability(availability);
     });
@@ -109,7 +111,10 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private showAvailability(availability: GameActionAvailability): void {
-    if (!this.rewardedAdsAvailable() || this.rewardedAction === undefined || availability === 'disposed') {
+    // This scene's own request makes the actions busy too; its result text
+    // follows, so only someone else's purchase or ad shows the waiting text.
+    if (!this.rewardedAdsAvailable() || this.rewardedAction === undefined || availability === 'disposed'
+      || this.requesting) {
       return;
     }
     if (availability === 'ready') {
@@ -122,6 +127,12 @@ export class PlayScene extends Phaser.Scene {
     }
     this.showingNotReady = true;
     this.rewardText.setText(t(this.context.locale, 'rewardNotReady'));
+  }
+
+  /** A result or error replaces the waiting text for good: `ready` must not restore the hint over it. */
+  private showRewardText(text: string): void {
+    this.showingNotReady = false;
+    this.rewardText.setText(text);
   }
 
   override update(_time: number, delta: number): void {
@@ -167,7 +178,7 @@ export class PlayScene extends Phaser.Scene {
     const action = this.rewardedAction;
 
     if (!this.rewardedAdsAvailable() || action === undefined) {
-      this.rewardText.setText(t(this.context.locale, 'rewardUnavailable'));
+      this.showRewardText(t(this.context.locale, 'rewardUnavailable'));
       return;
     }
 
@@ -175,6 +186,7 @@ export class PlayScene extends Phaser.Scene {
     if (this.context.gameRuntime.actions?.getAvailability() !== 'ready') {
       return;
     }
+    this.requesting = true;
     try {
       const result = await action.execute({
         placementId: rewardedPlacementId,
@@ -184,7 +196,7 @@ export class PlayScene extends Phaser.Scene {
       if (action.isDisposed() || this.rewardedAction !== action) {
         return;
       }
-      this.rewardText.setText(
+      this.showRewardText(
         result.claim?.granted === true
           ? t(this.context.locale, 'reward', { status: result.status })
           : t(this.context.locale, 'rewardError'),
@@ -198,9 +210,13 @@ export class PlayScene extends Phaser.Scene {
         },
       });
       if (!action.isDisposed() && this.rewardedAction === action) {
-        this.rewardText.setText(t(this.context.locale, 'rewardError'));
+        this.showRewardText(t(this.context.locale, 'rewardError'));
       }
       console.error('[rewarded-ad]', error);
+    } finally {
+      if (this.rewardedAction === action) {
+        this.requesting = false;
+      }
     }
   }
 }
