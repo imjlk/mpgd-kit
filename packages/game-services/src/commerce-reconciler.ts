@@ -1221,32 +1221,70 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
    * player's purchases or holds the shared key against the purchase's
    * account. Another answer unparks it and settles it as a verify does; a
    * grant is finished by the pass's recoverable records.
+   *
+   * Returns false when the journal dropped the record before Restore could
+   * rewrite it (another context's save applied the journal's retention after
+   * `rereadParked` read it): the record is forgotten and the caller matches
+   * the report as a purchase the journal does not know.
    */
   const reportParked = async (
     record: CommercePurchaseOperationRecord,
     purchase: StorePurchase,
     restoring: boolean,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (!restoring || purchase.state !== 'purchased') {
-      return;
+      return true;
     }
     const request: VerifyPurchaseRequest = {
       ...buildRequest({ ...record, purchase }),
       intent: 'restore',
     };
-    const refreshed = await reviseAnotherAccount(record, record.anotherAccount, {
-      purchase,
-      request,
-    });
+    let refreshed: CommercePurchaseOperationRecord;
+    try {
+      refreshed = await reviseAnotherAccount(record, record.anotherAccount, {
+        purchase,
+        request,
+      });
+    } catch (error) {
+      if (await rereadParked(record) === undefined) {
+        return false;
+      }
+      throw error;
+    }
     const answer = await sendVerify(refreshed, request);
     if (answer === undefined) {
-      return;
+      return true;
     }
     if (answer.kind === 'another-account') {
       await parkForAnotherAccount(refreshed, request, answer);
-      return;
+      return true;
     }
     await settleVerify(await reviseAnotherAccount(refreshed, undefined), request, answer.response);
+    return true;
+  };
+
+  /**
+   * The journal's current record of a parked record this session holds, or
+   * undefined (and forgotten) when the journal no longer holds it for this
+   * player: dropped, or the key reserved again for another purchase of the
+   * player, which this purchase's report must never be written onto.
+   */
+  const rereadParked = async (
+    record: CommercePurchaseOperationRecord,
+  ): Promise<CommercePurchaseOperationRecord | undefined> => {
+    const current = await journal.read(record.key);
+    if (
+      current !== undefined
+      && isCommercePurchaseOperationRecord(current)
+      && ownsRecord(current)
+      && current.purchase !== undefined
+      && record.purchase !== undefined
+      && samePurchase(current.purchase, record.purchase)
+    ) {
+      return remember(current);
+    }
+    records.delete(record.idempotencyKey);
+    return undefined;
   };
 
   // Reconciler step 2: match a reported purchase to a journal record.
@@ -1291,9 +1329,18 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         record = remember(stored);
       }
     }
+    if (record !== undefined && isParkedForAnotherAccount(record) && restoring) {
+      // Restore Purchases writes the record, so it must still be the journal's:
+      // a journal's retention may have dropped a parked record this session
+      // still holds (RFC "Another account's purchase"). Then the report is a
+      // purchase the journal does not know, and is matched as one.
+      record = await rereadParked(record);
+    }
     if (record !== undefined && isParkedForAnotherAccount(record)) {
-      await reportParked(record, purchase, restoring);
-      return;
+      if (await reportParked(record, purchase, restoring)) {
+        return;
+      }
+      record = undefined;
     }
     const account = record !== undefined || (restoring && product.kind === 'durable')
       ? 'own'

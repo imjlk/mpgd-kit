@@ -8,6 +8,9 @@ import {
   adaptDerivedPurchaseKeyStore,
   addIsoDuration,
   commerceConformanceAdaptiveSkipReason,
+  CommerceConformanceAnotherAccountError,
+  commerceConformanceDefaultClockStart,
+  commerceConformanceJournalKey,
   compareCreditLotSpendOrder,
   createCommerceConformanceBackend,
   createCommerceConformanceCapabilities,
@@ -21,6 +24,8 @@ import {
   deriveAdaptiveCommerceConformanceExpectation,
   fillCommerceConformancePurchase,
   isAdaptiveCommerceConformanceVector,
+  isCommerceConformanceStoreAccountMismatchReason,
+  isCommerceJournalRecordParked,
   matchPartial,
   runCommerceConformanceVector,
   runCommerceConformanceVectors,
@@ -31,6 +36,8 @@ import {
   type CommerceConformanceHarness,
   type CommerceConformanceStoreActor,
   type CommerceConformanceVectorResult,
+  type CommerceJournalRecord,
+  type CommerceJournalStore,
 } from './commerce-conformance.js';
 import {
   assertCommerceConformanceVector,
@@ -40,6 +47,7 @@ import {
 } from './commerce-vectors.js';
 import {
   createDerivedPurchaseIdempotencyKey,
+  isTerminalCommercePurchaseState,
   type CommerceFinishOwner,
   type CommerceProvider,
   type CreditLot,
@@ -66,6 +74,22 @@ function readVector(file: string): CommerceConformanceVector {
 
 const vectors = vectorFiles.map(readVector);
 
+const reconcilerVectorsDir = join(vectorsDir, '..', 'reconciler-vectors');
+const reconcilerVectors = readdirSync(reconcilerVectorsDir)
+  .filter((file) => file.endsWith('.json'))
+  .sort()
+  .map((file) => assertCommerceConformanceVector(
+    JSON.parse(readFileSync(join(reconcilerVectorsDir, file), 'utf8')) as unknown,
+  ));
+
+function reconcilerVectorNamed(name: string): CommerceConformanceVector {
+  const vector = reconcilerVectors.find((candidate) => candidate.vector === name);
+  if (vector === undefined) {
+    throw new Error(`Missing reconciler vector ${name}.`);
+  }
+  return vector;
+}
+
 function vectorNamed(name: string): CommerceConformanceVector {
   const vector = vectors.find((candidate) => candidate.vector === name);
   if (vector === undefined) {
@@ -76,6 +100,357 @@ function vectorNamed(name: string): CommerceConformanceVector {
 
 const clientTokenProfile = vectorNamed('purchase-client-finish').profile;
 const gemsCatalog = vectorNamed('purchase-client-finish').catalog ?? [];
+
+describe("reconciler vectors (another account's purchase)", () => {
+  it('passes every reconciler vector with the reference reconciler', async () => {
+    const results = await runCommerceConformanceVectors(reconcilerVectors);
+    expect(results.map((result) => [result.vector, result.status, result.failures])).toEqual(
+      reconcilerVectors.map((vector) => [vector.vector, 'passed', []]),
+    );
+    expect(results).toHaveLength(6);
+  });
+
+  it('fails when a parked record is expected to have ended', async () => {
+    const vector = reconcilerVectorNamed('another-account-http-parks');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      expect: { ...vector.expect, parked: {} },
+    });
+    expect(result.status).toBe('failed');
+    expect(result.failures).toEqual([
+      { path: 'parked', expected: [], actual: ['store:fixture.client-token:tx-1'] },
+    ]);
+  });
+
+  it('fails a vector whose parked record was resent by a pass', async () => {
+    const vector = reconcilerVectorNamed('another-account-legacy-rejected-parks');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      expect: {
+        ...vector.expect,
+        verifyRequests: [...(vector.expect.verifyRequests ?? []), ...(vector.expect.verifyRequests ?? [])],
+      },
+    });
+    expect(result.failures).toEqual([{ path: 'verifyRequests.length', expected: 2, actual: 1 }]);
+  });
+
+  it('throws the another-account answer from the fake backend and keeps nothing', async () => {
+    const backend = createCommerceConformanceBackend();
+    backend.queueVerify({
+      status: 'another-account',
+      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+      transport: 'orpc',
+    });
+    const request = {
+      idempotencyKey: 'op-1',
+      playerId: 'player-1',
+      store: 'fixture.client-token',
+      transactionId: 'tx-1',
+      token: 'token-1',
+      logicalId: 'gems_small',
+      quantity: 1,
+      evidence: { schema: 'fixture.fixture.client-token.v1', payload: { token: 'token-1' } },
+    } as const;
+    const error = await backend.verifyPurchase(request).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(CommerceConformanceAnotherAccountError);
+    expect(error).toMatchObject({
+      code: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT',
+      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+      transport: 'orpc',
+    });
+    expect(backend.ledger).toEqual([]);
+    backend.queueVerify({ status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING' });
+    expect(await backend.verifyPurchase(request)).toEqual({
+      status: 'rejected',
+      reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING',
+    });
+  });
+
+  it('refuses a same-state revision unless it parks or unparks a verifying record', async () => {
+    const journal = createCommerceConformanceJournal();
+    const { record } = await journal.reserve({
+      key: 'op-1',
+      revision: 0,
+      playerId: 'player-1',
+      store: 'fixture.client-token',
+      logicalId: 'gems_small',
+      kind: 'consumable',
+      origin: 'game',
+      state: 'verifying',
+      updatedAt: commerceConformanceDefaultClockStart,
+    });
+    await expect(journal.replace(0, { ...record, revision: 1 })).rejects.toThrow(
+      /must change its state/u,
+    );
+    const parked = await journal.replace(0, {
+      ...record,
+      anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: record.updatedAt },
+    });
+    expect(isCommerceJournalRecordParked(parked)).toBe(true);
+    const { anotherAccount: _marker, ...unparked } = parked;
+    await journal.replace(1, unparked);
+    expect(journal.history('op-1')).toEqual(['verifying']);
+  });
+
+  it("refuses another player's key unless its record is parked", async () => {
+    const vector = reconcilerVectorNamed('rejected-other-reason-ends');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      steps: [
+        ...vector.steps,
+        { actor: 'runtime', action: 'switchPlayer', playerId: 'player-2' },
+        { actor: 'runtime', action: 'start' },
+      ],
+    });
+    // The rejected record keeps its key: player 2 neither journals nor sends the purchase.
+    expect(result.failures).toEqual([]);
+    expect(commerceConformanceJournalKey('k', 'player-2')).toBe('k@player-2');
+  });
+
+  it('never parks a thrown another-account error whose reason is not a binding mismatch', async () => {
+    const vector = reconcilerVectorNamed('another-account-http-parks');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      steps: vector.steps.map((step) =>
+        step.actor === 'backend' && step.action === 'queueVerify'
+          // A vector the validator refuses, built in code: the runtime path refuses it too.
+          ? { ...step, decision: { status: 'another-account', reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING' } as never }
+          : step),
+    });
+    expect(result.status).toBe('failed');
+    expect(result.failures[0]?.path).toBe('steps[2]');
+    expect(String(result.failures[0]?.actual)).toContain('GOOGLE_PLAY_ACCOUNT_ID_MISSING');
+    expect(isCommerceConformanceStoreAccountMismatchReason('GOOGLE_PLAY_ACCOUNT_ID_MISSING'))
+      .toBe(false);
+  });
+
+  it("refuses a player-scoped key another player's record holds", async () => {
+    const vector = reconcilerVectorNamed('another-account-owner-recovers');
+    const shared = 'store:fixture.client-token:tx-1';
+    const switchAt = vector.steps.findIndex((step) => step.action === 'switchPlayer');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      steps: [
+        ...vector.steps.slice(0, switchAt),
+        // Player 1's game key spells player 2's scoped key for the purchase.
+        {
+          actor: 'game',
+          action: 'requestPurchase',
+          input: { logicalId: 'gems_small', idempotencyKey: `${shared}@player-2` },
+          returns: { outcome: 'launched' },
+        },
+        { actor: 'runtime', action: 'switchPlayer', playerId: 'player-2' },
+        { actor: 'runtime', action: 'start' },
+        { actor: 'backend', action: 'queueVerify', decision: { status: 'granted', ledgerEntryId: 'le-2' } },
+        {
+          actor: 'game',
+          action: 'requestPurchase',
+          input: { logicalId: 'gems_small', idempotencyKey: 'op-p2' },
+          returns: { outcome: 'launched' },
+        },
+        {
+          actor: 'store',
+          action: 'complete',
+          purchase: { transactionId: 'tx-2', storeSku: 'gems.small', token: 'token-2', state: 'purchased' },
+        },
+      ],
+      expect: {
+        journal: {
+          [shared]: ['purchased', 'verifying'],
+          [`${shared}@player-2`]: ['requested', 'launched'],
+          'op-p2': ['requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing', 'finished'],
+        },
+        parked: { [shared]: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' },
+        verifyRequests: [
+          { idempotencyKey: shared, store: 'fixture.client-token', transactionId: 'tx-1', token: 'token-1', playerId: 'player-1' },
+          { idempotencyKey: 'op-p2', store: 'fixture.client-token', transactionId: 'tx-2', token: 'token-2', playerId: 'player-2' },
+        ],
+      },
+    });
+    // Remembering player 1's record would make it a second open attempt of
+    // player 2's product, and tx-2 would match two records.
+    expect(result.failures).toEqual([]);
+  });
+
+  it("keeps a restore grant's completed server finalization for the finishing pass", async () => {
+    const vector = reconcilerVectorNamed('another-account-restore-resends');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      profile: {
+        ...vector.profile,
+        lifecycle: {
+          availablePurchases: true,
+          pending: false,
+          restore: true,
+          events: true,
+          finish: 'server',
+        },
+      },
+      steps: vector.steps.map((step) =>
+        step.actor === 'backend' && step.action === 'queueVerify' && step.decision.status === 'granted'
+          ? { ...step, decision: { ...step.decision, finalization: 'completed' as const } }
+          : step),
+      // The grant completed the server finish: the fixture's two verify
+      // requests stay the only ones, and nothing re-reads finalization.
+      expect: { ...vector.expect, finishCalls: [] },
+    });
+    expect(result.failures).toEqual([]);
+  });
+
+  describe('a parked record the journal pruned while the runtime held it', () => {
+    /**
+     * A journal that can drop records, as a journal's retention does. A key in
+     * `dropAfterRead` is dropped right after its next read: another
+     * context's save between Restore's re-read and its write.
+     */
+    function createPruningJournal(): {
+      readonly records: Map<string, CommerceJournalRecord>;
+      readonly dropAfterRead: Set<string>;
+      readonly journal: CommerceJournalStore;
+    } {
+      const records = new Map<string, CommerceJournalRecord>();
+      const dropAfterRead = new Set<string>();
+      const list = (playerId: string, accept: (record: CommerceJournalRecord) => boolean) =>
+        [...records.values()].filter((record) => record.playerId === playerId && accept(record));
+      return {
+        records,
+        dropAfterRead,
+        journal: {
+          async reserve(record) {
+            const existing = records.get(record.key);
+            if (existing !== undefined) {
+              return { created: false, record: existing };
+            }
+            records.set(record.key, record);
+            return { created: true, record };
+          },
+          async read(key) {
+            const record = records.get(key);
+            if (dropAfterRead.delete(key)) {
+              records.delete(key);
+            }
+            return record;
+          },
+          async replace(expectedRevision, record) {
+            const existing = records.get(record.key);
+            if (existing === undefined || existing.revision !== expectedRevision) {
+              throw new Error(`Journal record ${record.key} is gone or stale.`);
+            }
+            const stored = { ...record, revision: expectedRevision + 1 };
+            records.set(record.key, stored);
+            return stored;
+          },
+          async listRecoverable(playerId) {
+            return list(playerId, (record) => !isTerminalCommercePurchaseState(record.state));
+          },
+          async listGranted(playerId) {
+            return list(playerId, (record) => record.ledgerEntryId !== undefined
+              && (record.state === 'granted' || record.state === 'finishing' || record.state === 'finished'));
+          },
+        },
+      };
+    }
+
+    async function parkThenRestore(prune: (input: {
+      readonly key: string;
+      readonly records: Map<string, CommerceJournalRecord>;
+      readonly dropAfterRead: Set<string>;
+    }) => void) {
+      const vector = reconcilerVectorNamed('another-account-restore-resends');
+      const context = { profile: vector.profile, catalog: vector.catalog ?? [], playerId: 'player-1' };
+      const store = createCommerceConformanceStore(context);
+      const backend = createCommerceConformanceBackend();
+      const { records, dropAfterRead, journal } = createPruningJournal();
+      const runtime = createCommerceConformanceRuntime({
+        provider: store.provider,
+        backend,
+        journal,
+        clock: createCommerceConformanceClock(),
+        catalog: context.catalog,
+        playerId: 'player-1',
+      });
+      const key = 'store:fixture.client-token:tx-1';
+      await runtime.start();
+      backend.queueVerify({ status: 'another-account', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+      store.complete({ transactionId: 'tx-1', storeSku: 'remove.ads', token: 'token-1', state: 'purchased' });
+      await runtime.runUntilIdle();
+      expect(records.get(key)?.anotherAccount?.reason).toBe('GOOGLE_PLAY_ACCOUNT_MISMATCH');
+      prune({ key, records, dropAfterRead });
+      backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+      await expect(runtime.restorePurchases?.()).resolves.toBeUndefined();
+      return { key, records, backend, store };
+    }
+
+    it('re-reads it before Restore writes it and ingests the purchase anew', async () => {
+      const { key, records, backend, store } = await parkThenRestore(({ key: pruned, records }) => {
+        records.delete(pruned);
+      });
+      expect(records.get(key)).toMatchObject({ state: 'finished', revision: 4, ledgerEntryId: 'le-1' });
+      expect(records.get(key)?.anotherAccount).toBeUndefined();
+      expect(backend.verifyRequests).toHaveLength(2);
+      expect(store.purchases).toEqual([]);
+    });
+
+    it('never writes the report onto another purchase reserved under the same key', async () => {
+      const other: CommerceJournalRecord = {
+        key: 'store:fixture.client-token:tx-1',
+        revision: 7,
+        playerId: 'player-1',
+        store: 'fixture.client-token',
+        logicalId: 'remove_ads',
+        kind: 'durable',
+        origin: 'game',
+        // Parked too, so a Restore that took it for the held record would resend it.
+        state: 'verifying',
+        updatedAt: commerceConformanceDefaultClockStart,
+        anotherAccount: {
+          reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+          reportedAt: commerceConformanceDefaultClockStart,
+        },
+        purchase: fillCommerceConformancePurchase(
+          { transactionId: 'tx-other', storeSku: 'remove.ads', token: 'token-other', state: 'purchased' },
+          {
+            profile: reconcilerVectorNamed('another-account-restore-resends').profile,
+            catalog: reconcilerVectorNamed('another-account-restore-resends').catalog ?? [],
+            playerId: 'player-1',
+          },
+        ),
+      };
+      const { key, records, backend } = await parkThenRestore(({ key: pruned, records }) => {
+        records.set(pruned, other);
+      });
+      expect(records.get(key)).toBe(other);
+      // The report took the discovery path: its derived key holds the
+      // player's other record, so nothing was sent or written for it.
+      expect(backend.verifyRequests).toHaveLength(1);
+    });
+
+    it('ingests it anew when it is pruned between the re-read and the write', async () => {
+      const { key, records, backend } = await parkThenRestore(({ key: pruned, dropAfterRead }) => {
+        dropAfterRead.add(pruned);
+      });
+      expect(records.get(key)).toMatchObject({ state: 'finished', ledgerEntryId: 'le-1' });
+      expect(records.get(key)?.anotherAccount).toBeUndefined();
+      expect(backend.verifyRequests).toHaveLength(2);
+    });
+  });
+
+  it('fails a restore step against a runtime without restorePurchases', async () => {
+    const vector = reconcilerVectorNamed('another-account-restore-resends');
+    const result = await runCommerceConformanceVector(vector, {
+      createRuntime(input) {
+        const { restorePurchases: _restore, ...runtime } = createCommerceConformanceRuntime(input);
+        return runtime;
+      },
+    });
+    expect(result.status).toBe('failed');
+    expect(result.failures[0]?.path).toBe('steps[6]');
+    expect(String(result.failures[0]?.actual)).toContain('has no restorePurchases');
+  });
+});
 
 describe('commerce conformance runner', () => {
   it('passes every RFC vector with the reference provider', async () => {

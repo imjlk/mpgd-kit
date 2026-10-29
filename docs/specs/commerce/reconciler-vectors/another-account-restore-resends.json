@@ -1,0 +1,127 @@
+{
+  "vector": "another-account-restore-resends",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A parked record is left alone by store events and reconcile; the player's Restore Purchases resends it once, as a restore and with the evidence the store reports now, and a grant unparks, grants, and finishes it.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "remove_ads",
+      "kind": "durable",
+      "storeSku": "remove.ads"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "another-account",
+        "reason": "GOOGLE_PLAY_ACCOUNT_MISMATCH",
+        "transport": "http"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "remove.ads",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "update",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "remove.ads",
+        "token": "token-2",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "reconcile"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "granted",
+        "ledgerEntryId": "le-1"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "restore"
+    }
+  ],
+  "expect": {
+    "journal": {
+      "store:fixture.client-token:tx-1": [
+        "purchased",
+        "verifying",
+        "granted",
+        "finishing",
+        "finished"
+      ]
+    },
+    "parked": {},
+    "verifyRequests": [
+      {
+        "idempotencyKey": "store:fixture.client-token:tx-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1"
+      },
+      {
+        "idempotencyKey": "store:fixture.client-token:tx-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-2",
+        "intent": "restore"
+      }
+    ],
+    "ledger": [
+      {
+        "entryId": "le-1",
+        "type": "grant",
+        "logicalId": "remove_ads"
+      }
+    ],
+    "finishCalls": [
+      {
+        "by": "client",
+        "transactionId": "tx-1",
+        "ledgerEntryId": "le-1",
+        "isConsumable": false,
+        "result": "finished"
+      }
+    ],
+    "available": []
+  }
+}

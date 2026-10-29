@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 
 import {
+  CommerceConformanceAnotherAccountError,
   commerceConformanceAdaptiveSkipReason,
   compareCreditLotSpendOrder,
   createCommerceConformanceBackend,
@@ -35,6 +36,23 @@ assert.deepEqual(
 );
 
 assert.ok(results.every((result) => result.status === 'passed' && result.adaptive === undefined));
+
+// The reconciler vectors (another account's purchase) run through the reference reconciler.
+const reconcilerVectorsDir = new URL('../../../docs/specs/commerce/reconciler-vectors/', import.meta.url);
+const reconcilerVectors = readdirSync(reconcilerVectorsDir)
+  .filter((file) => file.endsWith('.json'))
+  .sort()
+  .map((file) => assertCommerceConformanceVector(
+    JSON.parse(readFileSync(new URL(file, reconcilerVectorsDir), 'utf8')),
+  ));
+assert.equal(reconcilerVectors.length, 6);
+const reconcilerResults = await runCommerceConformanceVectors(reconcilerVectors);
+assert.deepEqual(
+  reconcilerResults.map((result) => [result.vector, result.status, result.failures]),
+  reconcilerVectors.map((vector) => [vector.vector, 'passed', []]),
+);
+assert.equal(new CommerceConformanceAnotherAccountError('GOOGLE_PLAY_ACCOUNT_MISMATCH').code,
+  'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT');
 
 const altered = {
   ...vectors[0],

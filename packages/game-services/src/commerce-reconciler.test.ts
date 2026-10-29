@@ -42,6 +42,7 @@ import {
 } from './monetization-operation-store.js';
 import {
   createRecoverableMonetizationClient,
+  type MonetizationOperationRecord,
   type MonetizationOperationStore,
 } from './monetization-recovery.js';
 import { createGameServicesRuntime } from './runtime.js';
@@ -4032,6 +4033,60 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
   await restartable.reconciler.stop();
 }
 
+/**
+ * A journal whose records the test can drop, as a journal's retention does:
+ * `records` is its content, and a key in `dropAfterRead` is dropped right
+ * after its next read (another context's save between a read and a write).
+ */
+function createDroppingJournal(): {
+  readonly records: Map<string, MonetizationOperationRecord>;
+  readonly dropAfterRead: Set<string>;
+  readonly store: MonetizationOperationStore;
+} {
+  const records = new Map<string, MonetizationOperationRecord>();
+  const dropAfterRead = new Set<string>();
+  const base = createInMemoryMonetizationOperationStore();
+  const store: MonetizationOperationStore = {
+    ...base,
+    async reserve(record) {
+      const existing = records.get(record.key);
+      if (existing !== undefined) {
+        return { created: false, record: structuredClone(existing) };
+      }
+      records.set(record.key, structuredClone(record));
+      return { created: true, record: structuredClone(record) };
+    },
+    async read(key) {
+      const record = records.get(key);
+      if (dropAfterRead.delete(key)) {
+        records.delete(key);
+      }
+      return record === undefined ? undefined : structuredClone(record);
+    },
+    async replace(expectedRevision, record) {
+      const existing = records.get(record.key);
+      if (existing === undefined || existing.revision !== expectedRevision) {
+        throw new Error('Stale or conflicting monetization journal write.');
+      }
+      records.set(record.key, structuredClone(record));
+    },
+    async listRecoverable(owner) {
+      return [...records.values()]
+        .filter((record) => record.playerId === owner && isMonetizationOperationRecoverable(record))
+        .map((record) => structuredClone(record));
+    },
+    async findByTransaction(input) {
+      const found = [...records.values()].find(
+        (record) => record.kind === 'commerce-purchase'
+          && record.playerId === input.playerId
+          && record.purchase?.transactionId === input.transactionId,
+      );
+      return found === undefined ? undefined : structuredClone(found);
+    },
+  };
+  return { records, dropAfterRead, store };
+}
+
 // 56. Another account's purchase (RFC "Another account's purchase"): the backend answers
 // PURCHASE_BOUND_TO_ANOTHER_ACCOUNT. The record is parked in `verifying` (never ended,
 // never resent automatically, not listed, `rejected` for this player), its shared key is
@@ -4402,6 +4457,120 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
     "a key another player's record holds for any other reason is still refused",
   );
   await refusedOwner.reconciler.stop();
+}
+
+// 56d. A journal's retention may drop a parked record (the starter journal bounds them) while a
+// running reconciler still holds it in memory. Restore Purchases then matches the store's report
+// as a purchase the journal does not know: a new record under the derived key, sent as a restore,
+// instead of a stale write that fails the pass.
+{
+  const { records, store } = createDroppingJournal();
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const key = 'store:fake-store:tx-56d';
+  const sharedKey = createCommercePurchaseOperationKey('android', key);
+  const h = createHarness({ store, provider, backend });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56d' }));
+  backend.queue({ status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+  await h.reconciler.start();
+  assertEqual(
+    records.get(sharedKey)?.kind === 'commerce-purchase'
+      ? (records.get(sharedKey) as CommercePurchaseOperationRecord).anotherAccount?.reason
+      : undefined,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'the record is parked',
+  );
+  // Retention drops it; the running reconciler still holds it in memory.
+  records.delete(sharedKey);
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56d' });
+  await h.reconciler.restorePurchases();
+  assertEqual(h.failures, [], 'no stale write fails the pass');
+  assertEqual(
+    backend.requests.map((request) => [request.idempotencyKey, request.intent]),
+    [
+      [key, 'restore'],
+      [key, 'restore'],
+    ],
+    'Restore Purchases sends the discovered purchase again under its derived key',
+  );
+  const recovered = records.get(sharedKey) as CommercePurchaseOperationRecord | undefined;
+  assertEqual(
+    [
+      recovered?.revision === undefined ? undefined : recovered.revision > 0,
+      recovered?.state,
+      recovered?.anotherAccount,
+    ],
+    [true, 'finished', undefined],
+    'a new record is journaled, granted, and finished',
+  );
+  await h.reconciler.stop();
+}
+
+// 56e. Another context's save may drop the parked record after Restore Purchases re-read it but
+// before Restore rewrites it (its write time is still old). The failed rewrite then forgets the
+// record, and the report is matched as a purchase the journal does not know, without failing the
+// pass.
+{
+  const { records, dropAfterRead, store } = createDroppingJournal();
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const key = 'store:fake-store:tx-56e';
+  const sharedKey = createCommercePurchaseOperationKey('android', key);
+  const h = createHarness({ store, provider, backend });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56e' }));
+  backend.queue({ status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+  await h.reconciler.start();
+  assertEqual(
+    (records.get(sharedKey) as CommercePurchaseOperationRecord | undefined)?.anotherAccount?.reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'the record is parked',
+  );
+  // Restore's re-read still finds it; the rewrite that follows does not.
+  dropAfterRead.add(sharedKey);
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56e' });
+  await h.reconciler.restorePurchases();
+  assertEqual(h.failures, [], 'the dropped record does not fail the pass');
+  assertEqual(backend.requests.length, 2, 'Restore Purchases sends the purchase once more');
+  const recovered = records.get(sharedKey) as CommercePurchaseOperationRecord | undefined;
+  assertEqual(
+    [recovered?.state, recovered?.anotherAccount, recovered?.ledgerEntryId],
+    ['finished', undefined, 'le-56e'],
+    'a new record is journaled, granted, and finished',
+  );
+  await h.reconciler.stop();
+}
+
+// 56f. The parked record's key reserved again for another purchase of the same player (a
+// journal dropped the parked record, then a game key spelled the same reused it) must never
+// receive this purchase's Restore report: the report takes the discovery path instead.
+{
+  const { records, store } = createDroppingJournal();
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const key = 'store:fake-store:tx-56f';
+  const sharedKey = createCommercePurchaseOperationKey('android', key);
+  const h = createHarness({ store, provider, backend });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56f' }));
+  backend.queue({ status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+  await h.reconciler.start();
+  const parked = records.get(sharedKey) as CommercePurchaseOperationRecord;
+  assertEqual(
+    parked.anotherAccount?.reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'the record is parked',
+  );
+  // Parked too, so a Restore that took it for the held record would resend it.
+  const other: CommercePurchaseOperationRecord = {
+    ...parked,
+    revision: parked.revision + 3,
+    purchase: purchaseOf({ transactionId: 'tx-other' }),
+  };
+  records.set(sharedKey, structuredClone(other));
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56f' });
+  await h.reconciler.restorePurchases();
+  assertEqual(records.get(sharedKey), other, 'the other purchase under the key is untouched');
+  assertEqual(backend.requests.length, 1, 'nothing is sent for the report onto that record');
+  await h.reconciler.stop();
 }
 
 console.info('commerce reconciler tests passed');

@@ -394,6 +394,333 @@ const withTransaction = (
   assert.notEqual(await journal.read('granted-new'), undefined);
 }
 
+// Records parked as another account's purchase are open but bounded: they
+// leave 30 days after their last write (the parking or a Restore Purchases
+// resend). Every other open record stays, whoever's it is.
+{
+  const memory = createMemoryStorage();
+  const journal = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  const day = 24 * 60 * 60 * 1000;
+  const start = clock;
+  const at = (offset: number) => new Date(start + offset).toISOString();
+  const parked = (key: string, writtenAt: number, playerId = 'player-2') =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId,
+        state: 'verifying',
+        origin: 'discovered',
+        updatedAt: at(writtenAt),
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: at(writtenAt) },
+      }),
+      `GPA.${key}`,
+    );
+  await journal.reserve(parked('parked-old', 0));
+  await journal.reserve(parked('parked-young', 2 * day));
+  await journal.reserve(parked('parked-own-player', 0, 'player-1'));
+  await journal.reserve(parked('restored', 0));
+  // The verifying record of the purchase's own account, and one Restore Purchases unparked.
+  await journal.reserve(
+    withTransaction(purchaseRecord({ key: 'owner-scoped', state: 'verifying' }), 'GPA.owner'),
+  );
+  await journal.reserve(
+    withTransaction(
+      purchaseRecord({ key: 'unparked', playerId: 'player-2', state: 'verifying' }),
+      'GPA.unparked',
+    ),
+  );
+  clock = start + 31 * day;
+  // A Restore Purchases resend rewrites the parked record before it is sent.
+  const restored = (await journal.read('restored')) as CommercePurchaseOperationRecord;
+  await journal.replace(restored.revision, {
+    ...restored,
+    revision: restored.revision + 1,
+    updatedAt: new Date(clock).toISOString(),
+  });
+  assert.equal(await journal.read('parked-old'), undefined, 'a parked record leaves by age');
+  assert.equal(
+    await journal.read('parked-own-player'),
+    undefined,
+    'whichever player it was parked for',
+  );
+  assert.notEqual(await journal.read('parked-young'), undefined, 'a recent parked record stays');
+  assert.notEqual(
+    await journal.read('restored'),
+    undefined,
+    'a record a Restore Purchases resend just rewrote stays while its answer is awaited',
+  );
+  for (const key of ['owner-scoped', 'unparked']) {
+    assert.notEqual(await journal.read(key), undefined, `${key} is open and never dropped`);
+  }
+  // The rule only removes records: the document keeps its version-1 shape.
+  assert.equal(
+    (memory.values.get(defaultMonetizationJournalKey) as { version: number }).version,
+    1,
+  );
+}
+
+// Parked records are bounded by count across every player of the install: the
+// most recently written stay, so a resend in flight is never the one dropped.
+{
+  const memory = createMemoryStorage();
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 2,
+  });
+  const parked = (key: string, offset: number) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: `player-${key}`,
+        state: 'verifying',
+        updatedAt: new Date(clock + offset).toISOString(),
+        anotherAccount: {
+          reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+          reportedAt: new Date(clock + offset).toISOString(),
+        },
+      }),
+      `GPA.${key}`,
+    );
+  const hour = 60 * 60 * 1000;
+  await journal.reserve(purchaseRecord({ key: 'open' }));
+  await journal.reserve(parked('first', -3 * hour));
+  await journal.reserve(parked('second', -2 * hour));
+  await journal.reserve(parked('third', -hour));
+  assert.equal(await journal.read('first'), undefined, 'the least recently written leaves');
+  // Restore Purchases resends the older survivor: rewritten now, it stays.
+  const second = (await journal.read('second')) as CommercePurchaseOperationRecord;
+  await journal.replace(second.revision, {
+    ...second,
+    revision: second.revision + 1,
+    updatedAt: new Date(clock).toISOString(),
+  });
+  assert.notEqual(await journal.read('second'), undefined, 'the resent record stays');
+  assert.notEqual(await journal.read('third'), undefined);
+  assert.notEqual(await journal.read('open'), undefined, 'other open records do not count');
+}
+
+// The byte budget drops parked records before granted purchases, except one
+// that may be in flight.
+{
+  const memory = createMemoryStorage();
+  const padding = 'x'.repeat(2_000);
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxDocumentBytes: 8_000,
+  });
+  const padded = (record: CommercePurchaseOperationRecord): CommercePurchaseOperationRecord => ({
+    ...record,
+    purchase: {
+      ...record.purchase,
+      evidence: { schema: 'test', payload: { padding } },
+    } as CommercePurchaseOperationRecord['purchase'],
+  }) as CommercePurchaseOperationRecord;
+  const parked = (key: string, offset: number) =>
+    padded(
+      withTransaction(
+        purchaseRecord({
+          key,
+          playerId: 'player-2',
+          state: 'verifying',
+          updatedAt: new Date(clock + offset).toISOString(),
+          anotherAccount: {
+            reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+            reportedAt: new Date(clock + offset).toISOString(),
+          },
+        }),
+        `GPA.${key}`,
+      ),
+    );
+  await journal.reserve(
+    padded(
+      withTransaction(
+        purchaseRecord({
+          key: 'granted',
+          state: 'finished',
+          ledgerEntryId: 'ledger-granted',
+          updatedAt: new Date(clock - 1_000).toISOString(),
+        }),
+        'GPA.granted',
+      ),
+    ),
+  );
+  await journal.reserve(parked('parked-old', -2 * 60 * 60 * 1000));
+  await journal.reserve(parked('parked-new', -60 * 60 * 1000));
+  await journal.reserve(padded(withTransaction(purchaseRecord({ key: 'open' }), 'GPA.open')));
+  assert.equal(await journal.read('parked-old'), undefined, 'an older parked record leaves first');
+  assert.notEqual(await journal.read('parked-new'), undefined, 'the newest parked record stays');
+  assert.notEqual(await journal.read('granted'), undefined);
+  assert.notEqual(await journal.read('open'), undefined);
+
+  // Over a budget too small for both, the granted purchase leaves before the
+  // newest parked record, whose resend may be awaiting its answer.
+  const tight = createMemoryStorage();
+  const tightJournal = createStorageMonetizationOperationStore({
+    storage: tight.storage,
+    now,
+    maxDocumentBytes: 3_000,
+    maxParkedRecords: 0,
+  });
+  await tightJournal.reserve(
+    padded(
+      withTransaction(
+        purchaseRecord({ key: 'granted', state: 'finished', ledgerEntryId: 'ledger-granted' }),
+        'GPA.granted',
+      ),
+    ),
+  );
+  await tightJournal.reserve(parked('in-flight', 2_000));
+  assert.notEqual(
+    await tightJournal.read('in-flight'),
+    undefined,
+    'neither a zero bound nor the byte budget drops a parked record that may be in flight',
+  );
+  assert.equal(await tightJournal.read('granted'), undefined);
+}
+
+// The parked record a Restore Purchases resend just rewrote stays whatever
+// the timestamps say: here it ties with another and its fresh evidence pushes
+// the document over the byte budget.
+{
+  const memory = createMemoryStorage();
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxDocumentBytes: 3_500,
+  });
+  // Written an hour ago, so only `lastWrittenParked` protects the resent one.
+  const writtenAt = new Date(clock - 60 * 60 * 1000).toISOString();
+  const parked = (key: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: writtenAt,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: writtenAt },
+      }),
+      `GPA.${key}`,
+    );
+  await journal.reserve(parked('first'));
+  await journal.reserve(parked('resent'));
+  const resent = (await journal.read('resent')) as CommercePurchaseOperationRecord;
+  await journal.replace(resent.revision, {
+    ...resent,
+    revision: resent.revision + 1,
+    purchase: {
+      ...resent.purchase,
+      evidence: { schema: 'test', payload: { padding: 'x'.repeat(3_000) } },
+    } as CommercePurchaseOperationRecord['purchase'],
+  } as CommercePurchaseOperationRecord);
+  assert.notEqual(await journal.read('resent'), undefined, 'the resent record stays');
+  assert.equal(await journal.read('first'), undefined, 'the other parked record leaves');
+}
+
+// Another tab's journal never drops a parked record written within the
+// in-flight window: that tab's Restore Purchases may await its answer.
+{
+  const memory = createMemoryStorage();
+  const tabA = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  const tabB = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+  });
+  const parked = (key: string, writtenAt: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: writtenAt,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: writtenAt },
+      }),
+      `GPA.${key}`,
+    );
+  await tabA.reserve(parked('a', new Date(clock - 60 * 60 * 1000).toISOString()));
+  const a = (await tabA.read('a')) as CommercePurchaseOperationRecord;
+  await tabA.replace(a.revision, {
+    ...a,
+    revision: a.revision + 1,
+    updatedAt: new Date(clock).toISOString(),
+  });
+  await tabB.reserve(parked('b', new Date(clock).toISOString()));
+  assert.notEqual(await tabB.read('a'), undefined, "tab A's resend in flight stays");
+  assert.notEqual(await tabB.read('b'), undefined);
+  clock += 11 * 60 * 1000;
+  await tabB.reserve(purchaseRecord({ key: 'later' }));
+  assert.equal(await tabB.read('a'), undefined, 'past the window the bound applies again');
+}
+
+// A parked record without a readable time is never in flight: it sorts as the
+// newest, so age does not drop it, but the count bound does.
+{
+  const memory = createMemoryStorage();
+  const parked = (key: string, writtenAt: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: writtenAt,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: writtenAt },
+      }),
+      `GPA.${key}`,
+    );
+  const roomy = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  await roomy.reserve(parked('garbled', 'not-a-time'));
+  clock += 31 * 24 * 60 * 60 * 1000;
+  await roomy.reserve(purchaseRecord({ key: 'later' }));
+  assert.notEqual(await roomy.read('garbled'), undefined, 'age does not drop it');
+  const bounded = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+  });
+  await bounded.reserve(parked('readable', new Date(clock - 60 * 60 * 1000).toISOString()));
+  assert.equal(await bounded.read('garbled'), undefined, 'the count bound drops it');
+  assert.notEqual(await bounded.read('readable'), undefined);
+}
+
+// The in-flight window follows `parkedInFlightMs`, for a game that changed the
+// reconciler's `inFlightTimeoutMs`.
+{
+  const memory = createMemoryStorage();
+  const writtenAt = new Date(clock).toISOString();
+  const parked = (key: string, at: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: at,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: at },
+      }),
+      `GPA.${key}`,
+    );
+  const tabA = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  await tabA.reserve(parked('a', writtenAt));
+  clock += 2 * 60 * 1000;
+  const defaults = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+  });
+  await defaults.reserve(parked('b', new Date(clock - 60 * 60 * 1000).toISOString()));
+  assert.notEqual(await defaults.read('a'), undefined, 'two minutes is inside the default window');
+  const short = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+    parkedInFlightMs: 60 * 1000,
+  });
+  await short.reserve(parked('c', new Date(clock - 30 * 60 * 1000).toISOString()));
+  assert.equal(await short.read('a'), undefined, 'but outside a one-minute window');
+  assert.notEqual(await short.read('c'), undefined);
+}
+
 // Two contexts over the same storage (two tabs, two PWA windows) share the
 // host's Web Locks, so neither loses the other's write.
 {

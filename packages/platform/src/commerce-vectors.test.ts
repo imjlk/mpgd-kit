@@ -22,9 +22,13 @@ const vectorsDir = join(
   'vectors',
 );
 const vectorFiles = readdirSync(vectorsDir).filter((file) => file.endsWith('.json')).sort();
+const reconcilerVectorsDir = join(vectorsDir, '..', 'reconciler-vectors');
+const reconcilerVectorFiles = readdirSync(reconcilerVectorsDir)
+  .filter((file) => file.endsWith('.json'))
+  .sort();
 
-function readVector(file: string): unknown {
-  return JSON.parse(readFileSync(join(vectorsDir, file), 'utf8')) as unknown;
+function readVector(file: string, directory = vectorsDir): unknown {
+  return JSON.parse(readFileSync(join(directory, file), 'utf8')) as unknown;
 }
 
 describe('commerce conformance vectors', () => {
@@ -54,17 +58,83 @@ describe('commerce conformance vectors', () => {
     expect(vector.steps.length).toBeGreaterThan(0);
   });
 
+  it("ships the six reconciler vectors for another account's purchase", () => {
+    expect(reconcilerVectorFiles).toEqual([
+      'another-account-http-parks.json',
+      'another-account-legacy-rejected-parks.json',
+      'another-account-orpc-parks.json',
+      'another-account-owner-recovers.json',
+      'another-account-restore-resends.json',
+      'rejected-other-reason-ends.json',
+    ]);
+  });
+
+  it.each(reconcilerVectorFiles)('reconciler vector %s validates and matches its file name', (file) => {
+    const vector = assertCommerceConformanceVector(readVector(file, reconcilerVectorsDir));
+    expect(vector.vector).toBe(commerceConformanceVectorNameOf(file));
+    expect(vector.protocol).toBe(commerceProtocolVersion);
+    // Provider-independent scenarios: no provider runs them adaptively.
+    expect(vector.profile.adaptive).toBeUndefined();
+  });
+
+  it('rejects malformed another-account decisions and steps', () => {
+    const base = assertCommerceConformanceVector(
+      readVector('another-account-http-parks.json', reconcilerVectorsDir),
+    );
+    const withDecision = (decision: unknown): unknown => ({
+      ...base,
+      steps: [...base.steps, { actor: 'backend', action: 'queueVerify', decision }],
+    });
+    expect(isCommerceConformanceVector(withDecision({ status: 'another-account', transport: 'grpc' })))
+      .toBe(false);
+    expect(isCommerceConformanceVector(withDecision({ status: 'rejected', reason: '' }))).toBe(false);
+    expect(isCommerceConformanceVector(withDecision({ status: 'bound-elsewhere' }))).toBe(false);
+    // The binding mismatch is required, and only another account's answer has a wire shape.
+    expect(isCommerceConformanceVector(withDecision({ status: 'another-account' }))).toBe(false);
+    // A purchase bound to no account is never another account's: it stays rejected.
+    expect(isCommerceConformanceVector(withDecision({
+      status: 'another-account',
+      reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING',
+    }))).toBe(false);
+    expect(isCommerceConformanceVector(withDecision({
+      status: 'another-account',
+      reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+    }))).toBe(true);
+    expect(isCommerceConformanceVector(withDecision({ status: 'rejected', transport: 'http' })))
+      .toBe(false);
+    expect(isCommerceConformanceVector(withDecision({
+      status: 'another-account',
+      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+      ledgerEntryId: 'le-1',
+    }))).toBe(false);
+    expect(isCommerceConformanceVector({
+      ...base,
+      steps: [...base.steps, { actor: 'runtime', action: 'switchPlayer' }],
+    })).toBe(false);
+    expect(isCommerceConformanceVector({
+      ...base,
+      expect: { ...base.expect, parked: { 'op-1': '' } },
+    })).toBe(false);
+  });
+
   it('covers every actor and action named by the RFC', () => {
     const seen = new Set<string>();
-    for (const file of vectorFiles) {
-      for (const step of assertCommerceConformanceVector(readVector(file)).steps) {
-        seen.add(`${step.actor}.${step.action}`);
+    for (const [directory, files] of [
+      [vectorsDir, vectorFiles],
+      [reconcilerVectorsDir, reconcilerVectorFiles],
+    ] as const) {
+      for (const file of files) {
+        for (const step of assertCommerceConformanceVector(readVector(file, directory)).steps) {
+          seen.add(`${step.actor}.${step.action}`);
+        }
       }
     }
     const expected: readonly `${CommerceConformanceStep['actor']}.${CommerceConformanceStep['action']}`[] = [
       'runtime.start',
       'runtime.stop',
       'runtime.reconcile',
+      'runtime.restore',
+      'runtime.switchPlayer',
       'game.requestPurchase',
       'game.fetchProducts',
       'store.complete',

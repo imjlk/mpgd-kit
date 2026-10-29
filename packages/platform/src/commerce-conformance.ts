@@ -48,6 +48,7 @@ import type {
   CommerceConformancePurchaseFixture,
   CommerceConformanceRequestResultFixture,
   CommerceConformanceStep,
+  CommerceConformanceStoreAccountMismatchReason,
   CommerceConformanceVector,
   CommerceConformanceVerifyDecision,
 } from './commerce-vectors.js';
@@ -455,6 +456,8 @@ export interface CommerceVerifyRequest {
   readonly logicalId: CommerceLogicalProductId;
   readonly quantity: number;
   readonly evidence: PlatformEvidenceEnvelope;
+  /** `restore` when the player's Restore Purchases sends it; absent means `purchase`. */
+  readonly intent?: 'purchase' | 'restore';
 }
 
 export interface CommerceVerifyResponse {
@@ -463,6 +466,51 @@ export interface CommerceVerifyResponse {
   /** Reported for `lifecycle.finish: 'server'` stores. */
   readonly finalization?: 'pending' | 'completed';
   readonly alreadyProcessed?: boolean;
+  /** Why a `rejected` receipt refused the purchase. */
+  readonly reason?: string;
+}
+
+/** The error code of another account's purchase (RFC "Another account's purchase"). */
+export const commerceConformanceAnotherAccountCode = 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT';
+
+/**
+ * The store binding mismatch reasons (RFC "Another account's purchase"). A
+ * `rejected` receipt with one of them comes from a backend that predates the
+ * another-account answer, and a reconciler parks it as that answer.
+ */
+export const commerceConformanceStoreAccountMismatchReasons: readonly CommerceConformanceStoreAccountMismatchReason[] =
+  Object.freeze([
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'GOOGLE_PLAY_PROFILE_MISMATCH',
+    'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+  ]);
+
+/** Whether `reason` is a store binding mismatch: only such a reason is another account's purchase. */
+export function isCommerceConformanceStoreAccountMismatchReason(
+  reason: unknown,
+): reason is CommerceConformanceStoreAccountMismatchReason {
+  return typeof reason === 'string'
+    && (commerceConformanceStoreAccountMismatchReasons as readonly string[]).includes(reason);
+}
+
+/**
+ * Thrown by the fake backend for an `another-account` decision: the purchase
+ * is bound to another account, nothing is granted or recorded, and the answer
+ * is a retryable error rather than a receipt. `transport` is the wire shape the
+ * vector names for a runtime under test; the reference reconciler reads the
+ * error itself.
+ */
+export class CommerceConformanceAnotherAccountError extends Error {
+  readonly code = commerceConformanceAnotherAccountCode;
+  readonly reason: string;
+  readonly transport: 'http' | 'orpc' | undefined;
+
+  constructor(reason: string, transport?: 'http' | 'orpc') {
+    super(`${commerceConformanceAnotherAccountCode}: ${reason}`);
+    this.name = 'CommerceConformanceAnotherAccountError';
+    this.reason = reason;
+    this.transport = transport;
+  }
 }
 
 export type CommerceLedgerEntry =
@@ -599,8 +647,14 @@ export function createCommerceConformanceBackend(
             + 'queue a backend.queueVerify decision.',
         );
       }
+      if (decision.status === 'another-account') {
+        throw new CommerceConformanceAnotherAccountError(decision.reason, decision.transport);
+      }
       if (decision.status !== 'granted') {
-        return { status: decision.status };
+        return {
+          status: decision.status,
+          ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+        };
       }
       const ledgerEntryId = decision.ledgerEntryId;
       if (ledgerEntryId === undefined) {
@@ -699,8 +753,14 @@ export function createCommerceConformanceBackend(
 // Journal.
 
 export interface CommerceJournalRecord {
-  /** The purchase idempotency key: the game's key or a derived key. */
+  /**
+   * The journal key: the purchase idempotency key (the game's key or a
+   * derived key), or for a record a player journaled under its player-scoped
+   * key, `<idempotencyKey>@<playerId>` (`commerceConformanceJournalKey`).
+   */
   readonly key: string;
+  /** The purchase idempotency key when `key` is player-scoped; absent, it is `key`. */
+  readonly idempotencyKey?: string;
   readonly revision: number;
   readonly playerId: string;
   readonly store: StoreId;
@@ -715,6 +775,22 @@ export interface CommerceJournalRecord {
   readonly ledgerEntryId?: string;
   readonly error?: CommerceErrorInfo;
   readonly revokedBy?: string;
+  /**
+   * Parked as another account's purchase (RFC "Another account's purchase"):
+   * the record stays `verifying`, is never sent again except by the player's
+   * Restore Purchases, and leaves its key to every other player.
+   */
+  readonly anotherAccount?: { readonly reason: string; readonly reportedAt: string };
+}
+
+/** The journal key of a purchase idempotency key, player-scoped when `playerId` is given. */
+export function commerceConformanceJournalKey(idempotencyKey: string, playerId?: string): string {
+  return playerId === undefined ? idempotencyKey : `${idempotencyKey}@${playerId}`;
+}
+
+/** A `verifying` record parked as another account's purchase. */
+export function isCommerceJournalRecordParked(record: CommerceJournalRecord): boolean {
+  return record.state === 'verifying' && record.anotherAccount !== undefined;
 }
 
 /**
@@ -739,16 +815,28 @@ export interface CommerceJournalStore {
 
 export interface CommerceConformanceJournal extends CommerceJournalStore {
   readonly keys: readonly string[];
-  /** Every state revision of a key, in write order. */
+  /**
+   * The states a key went through, in write order. A revision that keeps the
+   * state (parking another account's purchase, a Restore resend of a parked
+   * record) is not repeated.
+   */
   history(key: string): readonly CommercePurchaseState[];
   /** `history` for every key, in creation order. */
   snapshot(): Readonly<Record<string, readonly CommercePurchaseState[]>>;
 }
 
-/** In-memory journal that keeps every revision so `expect.journal` can read the full sequence. */
+/**
+ * In-memory journal that keeps every revision so `expect.journal` can read the
+ * full sequence. Every revision changes the state, except a `verifying`
+ * revision that parks, refreshes, or unparks another account's purchase.
+ */
 export function createCommerceConformanceJournal(): CommerceConformanceJournal {
   const revisions = new Map<string, CommerceJournalRecord[]>();
   const current = (key: string): CommerceJournalRecord | undefined => revisions.get(key)?.at(-1);
+  const statesOf = (history: readonly CommerceJournalRecord[]): CommercePurchaseState[] =>
+    history.flatMap((record, index) =>
+      index > 0 && history[index - 1]?.state === record.state ? [] : [record.state],
+    );
   const list = (
     playerId: string,
     accept: (record: CommerceJournalRecord) => boolean,
@@ -798,11 +886,16 @@ export function createCommerceConformanceJournal(): CommerceConformanceJournal {
         throw new Error(`Journal record ${record.key} identity cannot change.`);
       }
       if (existing.state === record.state) {
-        throw new Error(
-          `Journal record ${record.key} revision ${expectedRevision + 1} must change its state.`,
-        );
+        const parking = existing.state === 'verifying'
+          && (existing.anotherAccount !== undefined || record.anotherAccount !== undefined);
+        if (!parking) {
+          throw new Error(
+            `Journal record ${record.key} revision ${expectedRevision + 1} must change its state.`,
+          );
+        }
+      } else {
+        assertCommercePurchaseTransition(existing.state, record.state);
       }
-      assertCommercePurchaseTransition(existing.state, record.state);
       const stored = { ...record, revision: expectedRevision + 1 };
       history.push(stored);
       return stored;
@@ -821,12 +914,12 @@ export function createCommerceConformanceJournal(): CommerceConformanceJournal {
       );
     },
     history(key) {
-      return (revisions.get(key) ?? []).map((record) => record.state);
+      return statesOf(revisions.get(key) ?? []);
     },
     snapshot() {
       const snapshot: Record<string, readonly CommercePurchaseState[]> = {};
       for (const [key, history] of revisions) {
-        snapshot[key] = history.map((record) => record.state);
+        snapshot[key] = statesOf(history);
       }
       return snapshot;
     },
@@ -847,6 +940,12 @@ export interface CommerceConformanceRuntime {
   runUntilIdle(): Promise<void>;
   requestPurchase(input: RequestPurchaseInput): Promise<RequestPurchaseResult>;
   fetchProducts(input?: FetchProductsInput): Promise<readonly StoreProduct[]>;
+  /**
+   * The player's manual Restore Purchases: `provider.restorePurchases`, then
+   * the available purchases as a restore, then a pass. Required by vectors
+   * with a `runtime.restore` step.
+   */
+  restorePurchases?(): Promise<void>;
 }
 
 export interface CreateCommerceConformanceRuntimeInput {
@@ -864,6 +963,15 @@ export interface CreateCommerceConformanceRuntimeInput {
  * transport, but a thrown finish or verify keeps the state for the next pass
  * as a transport failure would. Only a ledger entry moves a record to
  * `granted`, and only a ledger revocation moves it to `revoked`.
+ *
+ * Another account's purchase (RFC "Another account's purchase") is parked:
+ * the backend's `CommerceConformanceAnotherAccountError`, or a `rejected`
+ * receipt with a store binding mismatch reason, keeps the record `verifying`
+ * with an `anotherAccount` marker. No pass sends it again; only the player's
+ * `restorePurchases`, when the store reports the purchase again, resends it
+ * with the evidence reported then, and another answer unparks it. Its key no
+ * longer refuses another player, who journals the purchase under its
+ * player-scoped key (`commerceConformanceJournalKey`).
  */
 export function createCommerceConformanceRuntime(
   input: CreateCommerceConformanceRuntimeInput,
@@ -871,6 +979,12 @@ export function createCommerceConformanceRuntime(
   const { provider, backend, journal, clock, catalog, playerId } = input;
   const store = provider.store;
   const records = new Map<string, CommerceJournalRecord>();
+  /**
+   * Records a Restore Purchases grant reported `finalization: 'completed'`
+   * for, under a server-owned finish; the drive that finishes them starts
+   * from it instead of re-reading finalization.
+   */
+  const completedFinalizations = new Set<string>();
   const inbox: CommerceEvent[] = [];
   let unsubscribe: (() => void) | undefined;
   let started = false;
@@ -918,6 +1032,81 @@ export function createCommerceConformanceRuntime(
         updatedAt: clock.now(),
       }),
     );
+  /** A revision that keeps the state: parks, refreshes, or unparks another account's purchase. */
+  const revise = async (record: CommerceJournalRecord): Promise<CommerceJournalRecord> =>
+    remember(await journal.replace(record.revision, { ...record, updatedAt: clock.now() }));
+  const park = async (
+    record: CommerceJournalRecord,
+    request: CommerceVerifyRequest,
+    reason: string,
+  ): Promise<void> => {
+    await revise({ ...record, request, anotherAccount: { reason, reportedAt: clock.now() } });
+  };
+  /** The binding mismatch of another account's answer: the thrown error, or a pre-answer receipt. */
+  const anotherAccountOf = (
+    answer: { readonly error: unknown } | { readonly response: CommerceVerifyResponse },
+  ): string | undefined => {
+    if ('error' in answer) {
+      // Only a binding mismatch is another account's purchase; any other
+      // reason on the error is a script error and propagates.
+      return answer.error instanceof CommerceConformanceAnotherAccountError
+        && isCommerceConformanceStoreAccountMismatchReason(answer.error.reason)
+        ? answer.error.reason
+        : undefined;
+    }
+    const { response } = answer;
+    return response.status === 'rejected'
+      && isCommerceConformanceStoreAccountMismatchReason(response.reason)
+      ? response.reason
+      : undefined;
+  };
+  /**
+   * Sends a verify request; `undefined` when the record was parked (or stays
+   * parked) as another account's purchase. Any other thrown error propagates.
+   */
+  const verify = async (
+    record: CommerceJournalRecord,
+    request: CommerceVerifyRequest,
+  ): Promise<CommerceVerifyResponse | undefined> => {
+    let response: CommerceVerifyResponse;
+    try {
+      response = await backend.verifyPurchase(request);
+    } catch (error) {
+      const reason = anotherAccountOf({ error });
+      if (reason === undefined) {
+        throw error;
+      }
+      await park(record, request, reason);
+      return undefined;
+    }
+    const reason = anotherAccountOf({ response });
+    if (reason !== undefined) {
+      await park(record, request, reason);
+      return undefined;
+    }
+    return response;
+  };
+  /** Journals a `pending` or `rejected` answer; returns the `granted` record of a grant. */
+  const settle = async (
+    record: CommerceJournalRecord,
+    request: CommerceVerifyRequest,
+    response: CommerceVerifyResponse,
+  ): Promise<CommerceJournalRecord | undefined> => {
+    if (response.status === 'pending') {
+      await write(record, 'pending', { request });
+      return undefined;
+    }
+    if (response.status === 'rejected') {
+      await write(record, 'rejected', { request });
+      return undefined;
+    }
+    if (response.ledgerEntryId === undefined) {
+      throw new CommerceConformanceScriptError(
+        `A granted verify response for ${record.key} must carry a ledgerEntryId.`,
+      );
+    }
+    return write(record, 'granted', { request, ledgerEntryId: response.ledgerEntryId });
+  };
   const create = async (
     record: Omit<CommerceJournalRecord, 'revision' | 'updatedAt'>,
   ): Promise<{ readonly created: boolean; readonly record: CommerceJournalRecord }> => {
@@ -951,8 +1140,76 @@ export function createCommerceConformanceRuntime(
     scheduleRun();
   };
 
+  /**
+   * A store report of a parked record: only the player's Restore Purchases
+   * sends it again, as a restore and with the evidence the store reports now.
+   * It stays parked until the backend answers something else; a granted
+   * answer is finished by the pass that follows.
+   */
+  const reportParked = async (
+    record: CommerceJournalRecord,
+    purchase: StorePurchase,
+    restoring: boolean,
+  ): Promise<boolean> => {
+    if (!restoring || purchase.state !== 'purchased') {
+      return true;
+    }
+    const request: CommerceVerifyRequest = {
+      ...buildRequest({ ...record, purchase }),
+      intent: 'restore',
+    };
+    let refreshed: CommerceJournalRecord;
+    try {
+      refreshed = await revise({ ...record, purchase, request });
+    } catch (error) {
+      // Pruned between the re-read and this write: match the report anew.
+      if (await rereadParked(record) === undefined) {
+        return false;
+      }
+      throw error;
+    }
+    const response = await verify(refreshed, request);
+    if (response === undefined) {
+      return true;
+    }
+    const { anotherAccount: _parked, ...unparked } = refreshed;
+    const granted = await settle(await revise(unparked), request, response);
+    // A server-owned finish the grant already completed needs no re-read on
+    // the pass that finishes the record.
+    if (
+      granted !== undefined
+      && response.finalization === 'completed'
+      && (await provider.getCapabilities()).lifecycle.finish === 'server'
+    ) {
+      completedFinalizations.add(granted.key);
+    }
+    return true;
+  };
+
+  /**
+   * The journal's current copy of a parked record this runtime holds, or
+   * undefined (and forgotten) when a journal's retention dropped it or the
+   * key no longer holds this player's record of the same purchase (it was
+   * reserved again for another one, which this report must never touch).
+   */
+  const rereadParked = async (
+    record: CommerceJournalRecord,
+  ): Promise<CommerceJournalRecord | undefined> => {
+    const current = await journal.read(record.key);
+    if (
+      current !== undefined
+      && current.playerId === playerId
+      && current.purchase !== undefined
+      && current.purchase.transactionId === record.purchase?.transactionId
+    ) {
+      return remember(current);
+    }
+    records.delete(record.key);
+    return undefined;
+  };
+
   // Reconciler step 2: match a reported purchase to a journal record.
-  const ingestPurchase = async (purchase: StorePurchase): Promise<void> => {
+  const ingestPurchase = async (purchase: StorePurchase, restoring = false): Promise<void> => {
     if (purchase.store !== store) {
       throw new CommerceConformanceScriptError(
         `Purchase ${purchase.transactionId} belongs to store ${purchase.store}, not ${store}.`,
@@ -973,22 +1230,55 @@ export function createCommerceConformanceRuntime(
       }
       record = open[0];
     }
+    if (record !== undefined && isCommerceJournalRecordParked(record) && restoring) {
+      // Restore writes the record, so it must still be the journal's: a
+      // journal may have dropped a parked record this runtime holds. Then the
+      // report is matched as a purchase the journal does not know.
+      record = await rereadParked(record);
+    }
+    if (record !== undefined && isCommerceJournalRecordParked(record)) {
+      if (await reportParked(record, purchase, restoring)) {
+        return;
+      }
+      record = undefined;
+    }
     if (record === undefined) {
       if (purchase.state === 'revoked') {
         return;
       }
-      const key = await createDerivedPurchaseIdempotencyKey({
+      const idempotencyKey = await createDerivedPurchaseIdempotencyKey({
         store: purchase.store,
         transactionId: purchase.transactionId,
         token: purchase.token,
       });
+      let key = idempotencyKey;
       const existing = await journal.read(key);
-      if (existing !== undefined) {
+      if (existing !== undefined && existing.playerId === playerId) {
         remember(existing);
         return;
       }
+      if (existing !== undefined) {
+        // Another player's key is refused, unless that player's record is
+        // another account's purchase: then this player journals the purchase
+        // under its own player-scoped key (RFC "Idempotency keys").
+        if (!isCommerceJournalRecordParked(existing)) {
+          return;
+        }
+        key = commerceConformanceJournalKey(idempotencyKey, playerId);
+        const scoped = await journal.read(key);
+        if (scoped !== undefined) {
+          // Another player's record under that string (a game key spelled
+          // `<key>@<player>`) is refused like a foreign bare key.
+          if (scoped.playerId !== playerId) {
+            return;
+          }
+          remember(scoped);
+          return;
+        }
+      }
       await create({
         key,
+        ...(key === idempotencyKey ? {} : { idempotencyKey }),
         playerId,
         store: purchase.store,
         logicalId,
@@ -1040,7 +1330,7 @@ export function createCommerceConformanceRuntime(
       throw new Error(`Journal record ${record.key} is purchased without a purchase.`);
     }
     return {
-      idempotencyKey: record.key,
+      idempotencyKey: record.idempotencyKey ?? record.key,
       playerId,
       store: purchase.store,
       transactionId: purchase.transactionId,
@@ -1057,7 +1347,9 @@ export function createCommerceConformanceRuntime(
     capabilities: CommerceCapabilities,
   ): Promise<void> => {
     let record = initial;
-    let finalization: 'pending' | 'completed' | undefined;
+    let finalization: 'pending' | 'completed' | undefined = completedFinalizations.has(initial.key)
+      ? 'completed'
+      : undefined;
     for (;;) {
       switch (record.state) {
         case 'purchased':
@@ -1070,23 +1362,20 @@ export function createCommerceConformanceRuntime(
           record = await write(record, 'verifying');
           continue;
         case 'verifying': {
+          if (isCommerceJournalRecordParked(record)) {
+            // Another account's purchase: only Restore Purchases sends it again.
+            return;
+          }
           const request = record.request ?? buildRequest(record);
-          const response = await backend.verifyPurchase(request);
-          if (response.status === 'pending') {
-            await write(record, 'pending', { request });
+          const response = await verify(record, request);
+          const granted = response === undefined
+            ? undefined
+            : await settle(record, request, response);
+          if (response === undefined || granted === undefined) {
             return;
-          }
-          if (response.status === 'rejected') {
-            await write(record, 'rejected', { request });
-            return;
-          }
-          if (response.ledgerEntryId === undefined) {
-            throw new CommerceConformanceScriptError(
-              `A granted verify response for ${record.key} must carry a ledgerEntryId.`,
-            );
           }
           finalization = response.finalization;
-          record = await write(record, 'granted', { request, ledgerEntryId: response.ledgerEntryId });
+          record = granted;
           continue;
         }
         case 'granted':
@@ -1109,6 +1398,7 @@ export function createCommerceConformanceRuntime(
             }
             if (finalization === 'completed') {
               await write(record, 'finished');
+              completedFinalizations.delete(record.key);
             }
             return;
           }
@@ -1265,10 +1555,27 @@ export function createCommerceConformanceRuntime(
       triggerPending = false;
       inbox.length = 0;
       records.clear();
+      completedFinalizations.clear();
     },
     async reconcile() {
       if (!started) {
         await loadRecords();
+      }
+      await pass();
+      await runUntilIdle();
+    },
+    async restorePurchases() {
+      if (!started) {
+        await loadRecords();
+      }
+      await provider.restorePurchases?.();
+      const capabilities = await provider.getCapabilities();
+      if (capabilities.lifecycle.availablePurchases) {
+        for (const purchase of await provider.getAvailablePurchases({
+          includePending: capabilities.lifecycle.pending,
+        })) {
+          await ingestPurchase(purchase, true);
+        }
       }
       await pass();
       await runUntilIdle();
@@ -1823,7 +2130,10 @@ async function runVectorIn(
 interface Execution {
   readonly vector: CommerceConformanceVector;
   readonly harness: CommerceConformanceHarness;
-  readonly runtime: CommerceConformanceRuntime;
+  /** The runtime of the current player; a `runtime.switchPlayer` step replaces it. */
+  runtime: CommerceConformanceRuntime;
+  /** A stopped runtime for another player over the same harness, backend, journal, and clock. */
+  readonly createRuntimeFor: (playerId: string) => Promise<CommerceConformanceRuntime>;
   readonly backend: CommerceConformanceBackend;
   readonly journal: CommerceConformanceJournal;
   readonly clock: CommerceConformanceClock;
@@ -1860,18 +2170,21 @@ async function prepareExecution(
   };
   const harness = await createHarness(context);
   harnessRef.current = harness;
-  const runtimeInput: CreateCommerceConformanceRuntimeInput = {
-    provider: harness.provider,
-    backend,
-    journal,
-    clock,
-    catalog: context.catalog,
-    playerId: ids.playerId,
+  const createRuntimeFor = async (playerId: string): Promise<CommerceConformanceRuntime> => {
+    const runtimeInput: CreateCommerceConformanceRuntimeInput = {
+      provider: harness.provider,
+      backend,
+      journal,
+      clock,
+      catalog: context.catalog,
+      playerId,
+    };
+    return createRuntime === undefined
+      ? createCommerceConformanceRuntime(runtimeInput)
+      : createRuntime(runtimeInput, { ...context, playerId });
   };
-  const runtime = createRuntime === undefined
-    ? createCommerceConformanceRuntime(runtimeInput)
-    : await createRuntime(runtimeInput, context);
-  return { vector, harness, runtime, backend, journal, clock, adaptation };
+  const runtime = await createRuntimeFor(ids.playerId);
+  return { vector, harness, runtime, createRuntimeFor, backend, journal, clock, adaptation };
 }
 
 /** Runs every step; a thrown step ends the run with a failure at that step. */
@@ -1881,7 +2194,19 @@ async function executeSteps(
 ): Promise<CommerceConformanceFailure[]> {
   const failures: CommerceConformanceFailure[] = [];
   execution.adaptation.current = adaptation;
-  const context: StepContext = { ...execution, failures };
+  const context: StepContext = {
+    harness: execution.harness,
+    backend: execution.backend,
+    clock: execution.clock,
+    failures,
+    get runtime() {
+      return execution.runtime;
+    },
+    async switchPlayer(playerId) {
+      await execution.runtime.stop();
+      execution.runtime = await execution.createRuntimeFor(playerId);
+    },
+  };
   for (const [index, step] of execution.vector.steps.entries()) {
     const path = `steps[${index}]`;
     try {
@@ -2284,6 +2609,7 @@ interface StepContext {
   readonly backend: CommerceConformanceBackend;
   readonly clock: CommerceConformanceClock;
   readonly failures: CommerceConformanceFailure[];
+  switchPlayer(playerId: string): Promise<void>;
 }
 
 function storeActorOf(context: StepContext, step: CommerceConformanceStep): CommerceConformanceStoreActor {
@@ -2314,12 +2640,29 @@ async function runStep(
 ): Promise<void> {
   switch (step.actor) {
     case 'runtime':
-      if (step.action === 'start') {
-        await context.runtime.start();
-      } else if (step.action === 'stop') {
-        await context.runtime.stop();
-      } else {
-        await context.runtime.reconcile();
+      switch (step.action) {
+        case 'start':
+          await context.runtime.start();
+          return;
+        case 'stop':
+          await context.runtime.stop();
+          return;
+        case 'reconcile':
+          await context.runtime.reconcile();
+          return;
+        case 'restore': {
+          const runtime = context.runtime;
+          if (runtime.restorePurchases === undefined) {
+            throw new CommerceConformanceScriptError(
+              'The runtime under test has no restorePurchases for runtime.restore.',
+            );
+          }
+          await runtime.restorePurchases();
+          return;
+        }
+        case 'switchPlayer':
+          await context.switchPlayer(step.playerId);
+          return;
       }
       return;
     case 'game':
@@ -2440,6 +2783,22 @@ async function matchExpectations(
     }
     for (const key of expectedKeys) {
       matchPartial(expect.journal[key], actual[key], `journal.${key}`, failures);
+    }
+  }
+  if (expect.parked !== undefined) {
+    const parked: Record<string, string> = {};
+    for (const key of context.journal.keys) {
+      const record = await context.journal.read(key);
+      if (record?.anotherAccount !== undefined && isCommerceJournalRecordParked(record)) {
+        parked[key] = record.anotherAccount.reason;
+      }
+    }
+    const expectedKeys = Object.keys(expect.parked);
+    if (!sameStrings(expectedKeys, Object.keys(parked))) {
+      failures.push({ path: 'parked', expected: expectedKeys, actual: Object.keys(parked) });
+    }
+    for (const key of expectedKeys) {
+      matchPartial(expect.parked[key], parked[key], `parked.${key}`, failures);
     }
   }
   if (expect.verifyRequests !== undefined) {

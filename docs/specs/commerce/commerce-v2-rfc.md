@@ -778,8 +778,24 @@ owner's own recovery.
   a restore and with the evidence the store reports then (a policy or binding
   may have changed; a saved signed transaction may have expired). It stays
   parked until the backend answers something else: an offline Restore
-  changes nothing. The journal keeps it as an open record; a journal's
-  retention does not drop it.
+  changes nothing. The journal keeps it as an open record, but a journal may
+  bound parked records apart from the others: the backend's answer granted
+  and recorded nothing and the store keeps the purchase, so dropping one
+  cannot lose a grant (the ledger decides every grant, and a later verify of
+  the same purchase finds one whose answer was lost; its own account
+  recovers it under its own key). A dropped purchase the store still lists
+  is verified once more and parked again. The starter journal drops a parked
+  record 30 days after its last write and keeps at most the 20 most recently
+  written; a Restore Purchases resend rewrites the record before it is sent,
+  and no bound drops a parked record written within the in-flight window
+  (`parkedInFlightMs`, the reconciler's in-flight timeout, 10 minutes by
+  default) or the one the journal wrote last, so the record is there when the
+  answer arrives; a parked record without a readable time is never in flight.
+  A reconciler that still holds a dropped record reads the journal again
+  before Restore Purchases sends it, and matches the store's
+  report as a purchase the journal does not know, as it does when another
+  context drops the record between that read and Restore's rewrite. The
+  [reconciler vectors](#reconciler-vectors) cover the answer.
   Its shared key no longer refuses another player of the install (below).
 
 | Server answer | Client 0.27-0.31 | This client |
@@ -1219,11 +1235,13 @@ Actors and actions:
 | `runtime` | `start` | Create the runtime: subscribe, read available purchases, reconcile. |
 | `runtime` | `stop` | Drop all in-memory state; keep the journal, the store, and the ledger. |
 | `runtime` | `reconcile` | Run one reconcile pass. |
+| `runtime` | `restore` | The player's Restore Purchases (`restorePurchases`); a runtime under test without it fails the step. |
+| `runtime` | `switchPlayer` | Stop the runtime and replace it with a stopped runtime for `playerId` over the same store, backend, journal, and clock (a logout, then another player's session on the install). |
 | `game` | `requestPurchase`, `fetchProducts` | Call the runtime; `returns` is the expected result. |
 | `store` | `complete`, `update` | Report a purchase or change its state; emitted as an event if a listener exists, buffered otherwise, and listed as available until finished. |
 | `store` | `error` | Emit `purchaseError` for an attempt. |
 | `store` | `queueRequest`, `queueFinish` | Script the next `requestPurchase` or `finishTransaction` answer. |
-| `backend` | `queueVerify` | Script the next verify decision: `status`, `ledgerEntryId`, `finalization`, `alreadyProcessed`. |
+| `backend` | `queueVerify` | Script the next verify decision: `status` (`granted`, `pending`, `rejected`, or `another-account`), `ledgerEntryId`, `finalization`, `alreadyProcessed`, `reason` (a `rejected` receipt's reason, or an `another-account` answer's binding mismatch, which must be one of the three mismatch reasons; a `*_MISSING` reason is never another account's), and `transport` (`http` or `orpc`, the wire shape of an `another-account` answer for a runtime under test). The fake backend throws `CommerceConformanceAnotherAccountError` for `another-account`: nothing is granted or recorded. |
 | `backend` | `push`, `revoke` | Write a server-push grant or a revocation entry to the ledger. |
 | `wallet` | `creditFromGrant`, `spend`, `renewDue` | Credit a lot from a ledger grant, spend, or run the renewal scheduler. |
 | `clock` | `set` | Set the current time. |
@@ -1244,9 +1262,14 @@ provider. `returns` and `expect` match the listed fields; omitted fields are
 not assertions. Store `queueRequest` errors and `error` actions carry explicit
 normalized `code` and `retryable`; the runner never guesses an error class
 from a fixture `storeCode`. `expect` may assert `journal` (the
-full state sequence per key), `verifyRequests`, `ledger`, `finishCalls`,
-`available`, `entitlements`, `lots`, `balances`, `debits`, `events`,
-`activeSubscriptions`, and `purchaseUiOpened`.
+full state sequence per key; a revision that keeps the state, such as parking
+another account's purchase, is not repeated, and a record under a
+player-scoped key is listed as `<idempotency key>@<player id>`), `parked`
+(every key parked as another account's purchase, with its binding mismatch;
+`{}` asserts none is), `verifyRequests` (each may also name `playerId` and
+`intent`), `ledger`, `finishCalls`, `available`, `entitlements`, `lots`,
+`balances`, `debits`, `events`, `activeSubscriptions`, and
+`purchaseUiOpened`.
 
 | Vector | Covers |
 | --- | --- |
@@ -1264,6 +1287,35 @@ full state sequence per key), `verifyRequests`, `ledger`, `finishCalls`,
 | `credit-lot-title-scope` | Lot origin, title scope, spend order, idempotent spend and lot credit |
 | `credit-membership-renewal` | Idempotent renewal debits, lapse, platform scope skips store lots |
 | `membership-store-billing-target` | No membership where billing authority is `store` |
+
+### Reconciler vectors {#reconciler-vectors}
+
+[Another account's purchase](#another-account) is a backend answer and a
+reconciler rule, the same for every provider, so its vectors live apart, in
+[`docs/specs/commerce/reconciler-vectors/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/commerce/reconciler-vectors),
+in the same file format. Provider suites do not run them. The reference
+reconciler (`packages/platform/src/commerce-conformance.test.ts` and the dist
+smoke) and the `@mpgd/game-services` reconciler
+(`packages/game-services/src/commerce-reconciler-conformance.test.ts`) run all
+six; the game-services adapter answers an `another-account` decision in the
+wire shape it names: the HTTP client's 409 error, the oRPC error, or the
+in-process error. `pnpm validate:commerce-alignment` checks their names and
+protocol as it does the provider vectors'. The reference reconciler models
+only what the vectors exercise: parking, the Restore Purchases resend, and
+another player's player-scoped key under a parked record. A durable restored
+under another player's key (restore sharing), the player-scoped key probed
+when the shared key is free, and `intent: 'restore'` on every discovered
+purchase are the `@mpgd/game-services` reconciler's alone, and the vectors
+assert none of them.
+
+| Vector | Covers |
+| --- | --- |
+| `another-account-http-parks` | HTTP 409 parks the record in `verifying`; reconcile and restart never resend it; a new purchase of the product is not `IN_PROGRESS` |
+| `another-account-orpc-parks` | The oRPC error parks it the same way |
+| `another-account-legacy-rejected-parks` | A `rejected` receipt with a binding mismatch reason (an older backend) parks it |
+| `rejected-other-reason-ends` | A `rejected` receipt with any other reason still ends the record |
+| `another-account-owner-recovers` | After a player change, the purchase's own account journals it under its player-scoped key, sends the same derived key with its own id, and is granted |
+| `another-account-restore-resends` | Only Restore Purchases resends a parked record, as a restore and with the evidence the store reports then |
 
 ## Migration and PR plan {#pr-plan}
 

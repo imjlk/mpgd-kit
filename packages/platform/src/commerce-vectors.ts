@@ -89,11 +89,46 @@ export type CommerceConformanceFinishResultFixture =
   | { readonly finished: boolean }
   | { readonly error: CommerceErrorCode };
 
-export interface CommerceConformanceVerifyDecision {
+/**
+ * A scripted verify answer: a receipt, or another account's purchase (RFC
+ * "Another account's purchase"), which the backend answers as a retryable
+ * error, never a receipt.
+ */
+export type CommerceConformanceVerifyDecision =
+  | CommerceConformanceVerifyReceiptDecision
+  | CommerceConformanceAnotherAccountDecision;
+
+export interface CommerceConformanceVerifyReceiptDecision {
   readonly status: 'granted' | 'pending' | 'rejected';
   readonly ledgerEntryId?: NonEmptyString;
   readonly finalization?: 'pending' | 'completed';
   readonly alreadyProcessed?: boolean;
+  /** Why a `rejected` receipt refused the purchase, for example `GOOGLE_PLAY_ACCOUNT_ID_MISSING`. */
+  readonly reason?: NonEmptyString;
+}
+
+/**
+ * A store binding mismatch (RFC "Another account's purchase"): the binding
+ * names another account. A purchase bound to no account (`*_MISSING`) stays
+ * `rejected` and is never another account's.
+ */
+export type CommerceConformanceStoreAccountMismatchReason =
+  | 'GOOGLE_PLAY_ACCOUNT_MISMATCH'
+  | 'GOOGLE_PLAY_PROFILE_MISMATCH'
+  | 'APP_STORE_ACCOUNT_TOKEN_MISMATCH';
+
+export interface CommerceConformanceAnotherAccountDecision {
+  readonly status: 'another-account';
+  /** The store binding mismatch. */
+  readonly reason: CommerceConformanceStoreAccountMismatchReason;
+  /**
+   * The wire shape a runtime under test meets the answer in: `http` (status
+   * 409 with `{ error, reason }`) or `orpc` (the error code with
+   * `data.reason`). Absent, the error is thrown in process. The reference
+   * backend throws `CommerceConformanceAnotherAccountError` either way; a
+   * `createRuntime` hook translates it.
+   */
+  readonly transport?: 'http' | 'orpc';
 }
 
 export interface CommerceConformanceLotFixture {
@@ -135,6 +170,14 @@ export interface CommerceConformanceFetchProductsExpectation {
 
 export type CommerceConformanceStep =
   | { readonly actor: 'runtime'; readonly action: 'start' | 'stop' | 'reconcile' }
+  /** The player's manual Restore Purchases trigger (`runtime.restorePurchases`). */
+  | { readonly actor: 'runtime'; readonly action: 'restore' }
+  /**
+   * Stops the runtime and replaces it with a stopped runtime for `playerId`
+   * over the same store, backend, journal, and clock: a logout followed by
+   * another player's session on the same install.
+   */
+  | { readonly actor: 'runtime'; readonly action: 'switchPlayer'; readonly playerId: NonEmptyString }
   | {
       readonly actor: 'game';
       readonly action: 'requestPurchase';
@@ -218,6 +261,8 @@ export interface CommerceConformanceVerifyRequestExpectation {
   readonly store: NonEmptyString;
   readonly transactionId: NonEmptyString;
   readonly token: NonEmptyString;
+  readonly playerId?: NonEmptyString;
+  readonly intent?: 'purchase' | 'restore';
 }
 
 export interface CommerceConformanceLedgerEntryExpectation {
@@ -285,8 +330,18 @@ export interface CommerceConformanceActiveSubscriptionExpectation {
 }
 
 export interface CommerceConformanceExpectation {
-  /** Full state sequence per journal key. */
+  /**
+   * Full state sequence per journal key. A revision that keeps the state
+   * (parking another account's purchase, a Restore resend of a parked
+   * record) does not repeat it. A record another player journaled under its
+   * player-scoped key is listed as `<idempotency key>@<player id>`.
+   */
   readonly journal?: Readonly<Record<string, readonly CommercePurchaseState[]>>;
+  /**
+   * Every journal key whose record is parked as another account's purchase,
+   * with the binding mismatch it was parked for; `{}` asserts none is.
+   */
+  readonly parked?: Readonly<Record<string, NonEmptyString>>;
   readonly verifyRequests?: readonly CommerceConformanceVerifyRequestExpectation[];
   readonly ledger?: readonly CommerceConformanceLedgerEntryExpectation[];
   readonly finishCalls?: readonly CommerceConformanceFinishCallExpectation[];

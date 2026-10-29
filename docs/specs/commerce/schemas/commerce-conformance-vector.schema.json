@@ -87,6 +87,37 @@
         ],
         "additionalProperties": false
       },
+      "CommerceConformanceAnotherAccountDecision": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "another-account",
+            "readOnly": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/CommerceConformanceStoreAccountMismatchReason",
+            "description": "The store binding mismatch.",
+            "readOnly": true
+          },
+          "transport": {
+            "oneOf": [
+              {
+                "const": "http"
+              },
+              {
+                "const": "orpc"
+              }
+            ],
+            "description": "The wire shape a runtime under test meets the answer in: `http` (status\n409 with `{ error, reason }`) or `orpc` (the error code with\n`data.reason`). Absent, the error is thrown in process. The reference\nbackend throws `CommerceConformanceAnotherAccountError` either way; a\n`createRuntime` hook translates it.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
       "CommerceConformanceAvailableExpectation": {
         "type": "object",
         "properties": {
@@ -222,7 +253,12 @@
         "properties": {
           "journal": {
             "$ref": "#/components/schemas/ReadonlyRecordstringreadonlyCommercePurchaseState",
-            "description": "Full state sequence per journal key.",
+            "description": "Full state sequence per journal key. A revision that keeps the state\n(parking another account's purchase, a Restore resend of a parked\nrecord) does not repeat it. A record another player journaled under its\nplayer-scoped key is listed as `<idempotency key>@<player id>`.",
+            "readOnly": true
+          },
+          "parked": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringNonEmptyString",
+            "description": "Every journal key whose record is parked as another account's purchase,\nwith the binding mismatch it was parked for; `{}` asserts none is.",
             "readOnly": true
           },
           "verifyRequests": {
@@ -843,6 +879,47 @@
             "type": "object",
             "properties": {
               "actor": {
+                "const": "runtime",
+                "readOnly": true
+              },
+              "action": {
+                "const": "restore",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "runtime",
+                "readOnly": true
+              },
+              "action": {
+                "const": "switchPlayer",
+                "readOnly": true
+              },
+              "playerId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "playerId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
                 "const": "game",
                 "readOnly": true
               },
@@ -1230,6 +1307,20 @@
           }
         ]
       },
+      "CommerceConformanceStoreAccountMismatchReason": {
+        "oneOf": [
+          {
+            "const": "APP_STORE_ACCOUNT_TOKEN_MISMATCH"
+          },
+          {
+            "const": "GOOGLE_PLAY_ACCOUNT_MISMATCH"
+          },
+          {
+            "const": "GOOGLE_PLAY_PROFILE_MISMATCH"
+          }
+        ],
+        "description": "A store binding mismatch (RFC \"Another account's purchase\"): the binding\nnames another account. A purchase bound to no account (`*_MISSING`) stays\n`rejected` and is never another account's."
+      },
       "CommerceConformanceSubscriptionEventExpectation": {
         "type": "object",
         "properties": {
@@ -1334,6 +1425,17 @@
         "additionalProperties": false
       },
       "CommerceConformanceVerifyDecision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/CommerceConformanceAnotherAccountDecision"
+          },
+          {
+            "$ref": "#/components/schemas/CommerceConformanceVerifyReceiptDecision"
+          }
+        ],
+        "description": "A scripted verify answer: a receipt, or another account's purchase (RFC\n\"Another account's purchase\"), which the backend answers as a retryable\nerror, never a receipt."
+      },
+      "CommerceConformanceVerifyReceiptDecision": {
         "type": "object",
         "properties": {
           "status": {
@@ -1368,6 +1470,11 @@
           "alreadyProcessed": {
             "type": "boolean",
             "readOnly": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "Why a `rejected` receipt refused the purchase, for example `GOOGLE_PLAY_ACCOUNT_ID_MISSING`.",
+            "readOnly": true
           }
         },
         "required": [
@@ -1392,6 +1499,21 @@
           },
           "token": {
             "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "intent": {
+            "oneOf": [
+              {
+                "const": "purchase"
+              },
+              {
+                "const": "restore"
+              }
+            ],
             "readOnly": true
           }
         },
@@ -1774,6 +1896,12 @@
             "const": "stage_fail"
           }
         ]
+      },
+      "ReadonlyRecordstringNonEmptyString": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NonEmptyString"
+        }
       },
       "ReadonlyRecordstringReadonlyRecordstringnumber": {
         "type": "object",
