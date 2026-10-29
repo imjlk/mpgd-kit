@@ -158,9 +158,9 @@ and the reconciler parks the record and leaves its key to the owner
 ([RFC](./specs/commerce/commerce-v2-rfc.md#another-account)). You need two
 server players you can switch between on one device. The kit's guest
 identity cannot return to player A after a logout (a new guest replaces
-it), so use a game with account sign-in, or a debug build that keeps A's
-session aside; without one, run steps 1 to 3 only and note that step 4 was
-not run. Run it on both stores, with a consumable (a restored non-consumable
+it), so step 4 needs account sign-in in the game or a debug build hook of
+your own that restores A's session; the kit ships neither. Without one, run
+steps 1 to 3 only and note that step 4 was not run. Run it on both stores, with a consumable (a restored non-consumable
 is shared by design under the default restore sharing policy).
 
 - [ ] **1. Buy as A, unverified.** As player A, buy a consumable and cut the
