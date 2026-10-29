@@ -1,7 +1,5 @@
-import {
-  createCoordinatedCommerceProvider,
-  type CoordinatedCommerceOptions,
-} from '../commerce/index.js';
+import type { CoordinatedCommerceOptions } from '../commerce/index.js';
+import { coordinateGatewayCommerce } from '../commerce/coordinate.js';
 import { forward } from '../forward.js';
 import type {
   PlatformEvidenceEnvelope,
@@ -526,18 +524,15 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
   readonly classifyPurchasePresentation?: CoordinatedCommerceOptions['classifyPurchasePresentation'];
   readonly purchasePresentation?: CoordinatedCommerceOptions['purchasePresentation'];
 }): CoordinatedPlatformGateway {
-  const source = input.gateway.commerce;
   // Preserve legacy gateway behavior when no native presentation contract is installed.
   // Standalone commerce instead fails closed for hosts that require strict exclusion.
-  const commerce = source !== undefined && (input.purchasePresentation !== undefined
-    || source.presentation !== undefined || input.classifyPurchasePresentation !== undefined)
-    ? createCoordinatedCommerceProvider({
-      provider: source, presentation: input.presentation,
-      ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
-      ...(input.classifyPurchasePresentation === undefined ? {} : { classifyPurchasePresentation: input.classifyPurchasePresentation }),
-      ...(input.maxRememberedInvocations === undefined ? {} : { maxRememberedInvocations: input.maxRememberedInvocations }),
-      ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
-    }) : undefined;
+  const commerce = coordinateGatewayCommerce(input.gateway, {
+    presentation: input.presentation,
+    ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
+    ...(input.classifyPurchasePresentation === undefined ? {} : { classifyPurchasePresentation: input.classifyPurchasePresentation }),
+    ...(input.maxRememberedInvocations === undefined ? {} : { maxRememberedInvocations: input.maxRememberedInvocations }),
+    ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
+  });
   let ads: CoordinatedAdProvider;
   try {
     ads = createCoordinatedAdProvider(input);

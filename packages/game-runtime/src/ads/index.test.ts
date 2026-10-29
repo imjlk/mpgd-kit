@@ -431,7 +431,7 @@ describe('coordinated advertising', () => {
     });
     const ad = controlled.ads.showRewarded({ placementId: 'CONTINUE', idempotencyKey: 'a' });
     await flush();
-    await expect(controlled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' })).rejects.toMatchObject({ code: 'busy' });
+    await expect(controlled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' } });
     expect(commerce.requestPurchase).not.toHaveBeenCalled();
     const blocked = await controlled.ads.provider?.show({ ...request('b'), format: 'interstitial' });
     expect(blocked?.reason).toBe('busy');
@@ -652,7 +652,7 @@ describe('coordinated purchase presentation', () => {
     const controlled = createCoordinatedPlatformGateway({ gateway: original, provider: sdk().provider, ...state, classifyPurchasePresentation: () => 'closed' });
     const blocker = state.presentation.acquire({ kind: 'interstitial', invocationId: 'ad' });
     const request = { logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' } as const;
-    await expect(controlled.commerce?.requestPurchase(request)).rejects.toMatchObject({ code: 'busy' });
+    await expect(controlled.commerce?.requestPurchase(request)).resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' } });
     blocker.confirmClosed();
     await controlled.commerce?.requestPurchase(request);
     await controlled.commerce?.requestPurchase({ ...request, idempotencyKey: 'q' });

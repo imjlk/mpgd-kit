@@ -154,11 +154,26 @@ facts; wire the provider's `presentation` or a `purchasePresentation` source
 to take the lease. A gateway
 without a commerce provider stays without one. Events are scoped to the
 original idempotency key and a monotonic sequence; late or foreign events cannot
-release another invocation. Disposal rejects new calls and retains uncertain
-native close observation. Lightweight key history prevents retired purchase
-keys from reopening the SDK; only active/uncertain results and the last settled
-result are retained. The idempotency key, `logicalId`, `source`, `offerId`, and
-`quantity` of a replayed key must match its first request.
+release another invocation. Disposal refuses new calls and retains uncertain
+native close observation; `presentation.subscribe` keeps working after it.
+Lightweight key history prevents retired purchase keys from reopening the SDK.
+It keeps every in-flight, uncertain or retryable key and the last settled
+result; once it holds `maxRememberedInvocations` keys (1024 by default), a new
+key evicts the oldest settled, closed, non-retryable one. The idempotency key,
+`logicalId`, `source`, `offerId`, and `quantity` of a replayed key must match
+its first request.
+
+A call the wrapper refuses itself before the provider runs is answered like a
+provider's own pre-launch refusal, never as an exception: a `not-started` fact
+for the key on `presentation`, then `{ outcome: 'failed' }` with a retryable
+error. The error is `IN_PROGRESS` (`storeCode` `PRESENTATION_BUSY`) while
+another purchase or ad holds the scope, `NOT_PREPARED`
+(`PRESENTATION_DISPOSED`) after disposal, and `IN_PROGRESS`
+(`PRESENTATION_HISTORY_FULL`) when every remembered key is still in flight or
+retryable. A server-backed reconciler therefore keeps the key and the same key
+opens the store later. A changed request under a known key (`key-conflict`), a
+settled key (`already-completed`), and `presentation-unavailable` still reject
+with `PresentationExecutionError`.
 
 ### Checkout-only hosts
 
@@ -498,6 +513,29 @@ blocking. V2 rewarded display is disabled until the services expose
 encrypted operation store rather than a memory fallback. Startup and resume
 reconcile existing records without opening SDK UI. Account changes require a
 new client/runtime bound to that account.
+
+A game without an ad provider (`gateway.ads.provider` absent, for example a
+Capacitor shell with no ads plugin) still gets purchase coordination when
+something trusted can end a purchase: the commerce provider's `presentation`
+facts or the runtime's `purchasePresentation` input. `runtime.gateway.commerce`
+is then a `createCoordinatedCommerceProvider` over the same scope, so a
+purchase owns `runtime.presentation` (`kind: 'purchase'`) and blocks
+simulation, gameplay input and audio from the request until the sheet's
+`closed` (or `not-started`) fact. A business result alone leaves the lease
+`unknown`, a second purchase is refused while the sheet is up (a retryable
+`IN_PROGRESS` failure after a `not-started` fact, so its key stays usable), and
+a settled key never reopens the sheet. `runtime.actions` keeps its own block
+there, through server verification, because a legacy rewarded ad on such a
+gateway takes no lease. A commerce provider without facts (an adapter or
+plugin built before them) keeps the plain gateway and today's behavior; it
+never meets the standalone coordinator's `presentation-unavailable` refusal.
+On the Capacitor gateway this adds to, and does not replace, the gateway's own
+lifecycle pause, which also follows the facts. The lease has no timeout of its
+own: it ends on the provider's facts, so a provider that offers
+`presentation` must end every call with `closed` or `not-started` (the
+Capacitor store provider does, after 15 minutes at the latest). As with an ad
+provider, `runtime.gateway` is then a forwarding view of the gateway, not the
+same object, and reads `gateway.commerce` once at construction.
 
 Keep the runtime above scenes. Create scene-owned action controllers from
 `runtime.actions`; dispose those controllers and their input listeners on

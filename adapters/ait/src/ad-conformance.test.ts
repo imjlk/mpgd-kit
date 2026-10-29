@@ -49,7 +49,7 @@ const nativeFixture: AdConformanceFixture = {
             if (step.format === 'purchase') {
               const commerce = f.gateway.commerce;
               if (commerce === undefined) { throw new Error('The coordinated gateway must expose the commerce provider.'); }
-              void commerce.requestPurchase({ logicalId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { throw new Error('Purchase must be blocked before the SDK.'); }, (error: unknown) => {
+              void commerce.requestPurchase({ logicalId: String(step.placementId), source: 'shop', idempotencyKey: id }).then((result) => { if (result.outcome === 'failed' && result.error.storeCode?.startsWith('PRESENTATION_') === true) { outcomes.set(id, 'unavailable'); reasons.set(id, result.error.storeCode === 'PRESENTATION_BUSY' ? 'busy' : result.error.storeCode.slice('PRESENTATION_'.length).toLowerCase()); return; } throw new Error('Purchase must be blocked before the SDK.'); }, (error: unknown) => {
                 if (!(error instanceof Error) || !('code' in error)) { throw error; }
                 outcomes.set(id, 'unavailable');
                 reasons.set(id, String(error.code));

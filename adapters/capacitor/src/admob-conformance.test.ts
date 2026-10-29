@@ -103,7 +103,7 @@ const fixture: AdConformanceFixture = {
             last = id;
             if (step.format === 'purchase') {
               if (gateway.commerce === undefined) { throw new Error('Installed commerce provider is missing.'); }
-              void gateway.commerce.requestPurchase({ logicalId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { outcomes.set(id, 'shown'); }, (error: unknown) => {
+              void gateway.commerce.requestPurchase({ logicalId: String(step.placementId), source: 'shop', idempotencyKey: id }).then((result) => { if (result.outcome === 'failed' && result.error.storeCode?.startsWith('PRESENTATION_') === true) { outcomes.set(id, 'unavailable'); reasons.set(id, result.error.storeCode === 'PRESENTATION_BUSY' ? 'busy' : result.error.storeCode.slice('PRESENTATION_'.length).toLowerCase()); return; } outcomes.set(id, 'shown'); }, (error: unknown) => {
                 if (!(error instanceof Error) || !('code' in error)) { throw error; }
                 outcomes.set(id, 'unavailable');
                 reasons.set(id, String(error.code));

@@ -198,7 +198,8 @@ Device acceptance (not run; no device was available): the sheet cancelled, a
 completed purchase, an Ask to Buy request, the app backgrounded with the
 sheet up and resumed, and an iPad (sheet as a form sheet). Each must pause
 the game from `open` to `closed`, and `closed` must not arrive while the sheet
-is still visible.
+is still visible. The steps and expected signals are in the kit's
+[purchase device acceptance checklist](https://github.com/imjlk/mpgd-kit/blob/main/docs/PURCHASE_DEVICE_ACCEPTANCE.md).
 
 ### Generated games
 

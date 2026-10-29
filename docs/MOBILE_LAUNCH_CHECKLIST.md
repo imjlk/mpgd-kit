@@ -363,6 +363,12 @@ App Store Connect:
 - [ ] One full run on real devices: install from the internal track and
       TestFlight, buy with a license tester and a sandbox account, see the
       grant from the ledger, restore on a second install, receive a push.
+- [ ] The [purchase device acceptance](./PURCHASE_DEVICE_ACCEPTANCE.md)
+      checklist on a Play device, an iPhone and an iPad: cancel, complete,
+      pending and Ask to Buy purchases, a sheet left up while backgrounded or
+      rotated, a stale native build, and another player's purchase on the
+      same device. The game must stay paused from the purchase request until
+      the store sheet is gone. None of it is run by the kit.
 - [ ] Crash reporting: `mpgd target init capacitor --providers
       crash-reporting`, the Firebase files in both projects, the iOS dSYM
       upload recorded as `uploaded` for the release,
@@ -390,6 +396,7 @@ App Store Connect:
 - [Google Play internal submission](./GOOGLE_PLAY_INTERNAL_SUBMISSION.md) and
   [Google Play releases](./GOOGLE_PLAY_RELEASES.md)
 - [Store product sync](./STORE_PRODUCT_SYNC.md)
+- [Purchase device acceptance](./PURCHASE_DEVICE_ACCEPTANCE.md)
 - [Store page sync](./STORE_PRESENCE_SYNC.md)
 - [TestFlight internal submission](./TESTFLIGHT_INTERNAL_SUBMISSION.md)
 - [Game services backend](./GAME_SERVICES_BACKEND.md)
