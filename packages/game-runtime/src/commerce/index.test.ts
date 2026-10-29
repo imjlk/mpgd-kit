@@ -185,6 +185,25 @@ describe('coordinator refusals keep the key', () => {
     // Sequences keep increasing across the refusal and the retry.
     expect(seen).toEqual(['first:1:not-started', 'first:2:unknown', 'first:3:closed']);
   });
+  it('keeps a replacement flight that a listener starts on the refusal fact', async () => {
+    const f = fixture();
+    const ad = f.presentation.acquire({ kind: 'rewarded', invocationId: 'ad' });
+    let retry: Promise<Result> | undefined;
+    f.controlled.presentation?.subscribe((event) => {
+      if (event.state === 'not-started' && retry === undefined) {
+        ad.confirmClosed();
+        retry = f.controlled.requestPurchase(request);
+      }
+    });
+    await expect(f.controlled.requestPurchase(request)).resolves.toMatchObject({ outcome: 'failed', error: { retryable: true } });
+    await expect(retry).resolves.toEqual({ outcome: 'launched' });
+    expect(f.provider.requestPurchase).toHaveBeenCalledOnce();
+    expect(f.presentation.getSnapshot().owner).toMatchObject({ kind: 'purchase', invocationId: 'first' });
+    // The replacement still hears its native closure.
+    f.emit('closed', 1);
+    expect(f.presentation.getSnapshot().status).toBe('ready');
+    expect(f.controlled.requestPurchase(request)).toBe(retry);
+  });
   it('still answers subscribers after disposal, with a not-started fact for each refused call', async () => {
     const f = fixture();
     f.controlled.dispose();

@@ -226,14 +226,16 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
         const flight = purchases.get(key) ?? (last?.key === key ? last : undefined);
         if (!prior.retryable) { return flight?.promise ?? Promise.reject(new PresentationExecutionError('already-completed')); }
       }
+      // Refusals publish on a later turn, as a flight's do, so a listener that
+      // retries on the fact never reenters this call.
       if (disposed) {
         if (prior === undefined && (history.size < capacity || evictSettled())) {
           history.set(key, { fingerprint, sequence: 0, retryable: true, attempt: 0, nativeSequence: 0 });
         }
-        return Promise.resolve(refuse(key, history.get(key), 'disposed'));
+        return Promise.resolve().then(() => refuse(key, history.get(key), 'disposed'));
       }
       if (prior === undefined && history.size >= capacity && !evictSettled()) {
-        return Promise.resolve(refuse(key, undefined, 'history-full'));
+        return Promise.resolve().then(() => refuse(key, undefined, 'history-full'));
       }
       const entry = prior ?? { fingerprint, sequence: 0, retryable: false, attempt: 0, nativeSequence: 0 };
       entry.retryable = false;
@@ -279,15 +281,19 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
             throw error;
           } finally {
             flight.settled = true;
+            // A listener may already have retried this key on its `not-started`
+            // fact: that replacement owns the key's flight and history entry.
+            const current = entry.attempt === flight.attempt;
+            if (purchases.get(key) === flight && (!flight.called || flight.closed)) { purchases.delete(key); }
             if (!flight.called) {
               // A refused call published `not-started` under this entry; keep it
               // (retryable) so the key's published sequence keeps increasing.
-              if (prior === undefined && !entry.retryable) { history.delete(key); } else { entry.retryable = true; }
-              purchases.delete(key);
+              if (current) {
+                if (prior === undefined && !entry.retryable) { history.delete(key); } else { entry.retryable = true; }
+              }
             } else {
-              entry.retryable = flight.retryable;
+              if (current) { entry.retryable = flight.retryable; }
               last = flight;
-              if (flight.closed) { purchases.delete(key); }
             }
             maybeDetach();
           }
