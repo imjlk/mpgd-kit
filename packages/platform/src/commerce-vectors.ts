@@ -90,27 +90,33 @@ export type CommerceConformanceFinishResultFixture =
   | { readonly error: CommerceErrorCode };
 
 /**
- * A scripted verify answer. `another-account` is the backend's answer for a
- * purchase the store binds to another account than the requesting player's
- * (RFC "Another account's purchase"): a retryable error, never a receipt.
+ * A scripted verify answer: a receipt, or another account's purchase (RFC
+ * "Another account's purchase"), which the backend answers as a retryable
+ * error, never a receipt.
  */
-export interface CommerceConformanceVerifyDecision {
-  readonly status: 'granted' | 'pending' | 'rejected' | 'another-account';
+export type CommerceConformanceVerifyDecision =
+  | CommerceConformanceVerifyReceiptDecision
+  | CommerceConformanceAnotherAccountDecision;
+
+export interface CommerceConformanceVerifyReceiptDecision {
+  readonly status: 'granted' | 'pending' | 'rejected';
   readonly ledgerEntryId?: NonEmptyString;
   readonly finalization?: 'pending' | 'completed';
   readonly alreadyProcessed?: boolean;
-  /**
-   * The refusal reason of a `rejected` receipt, or the store binding
-   * mismatch of an `another-account` answer (for example
-   * `GOOGLE_PLAY_ACCOUNT_MISMATCH`).
-   */
+  /** Why a `rejected` receipt refused the purchase, for example `GOOGLE_PLAY_ACCOUNT_ID_MISSING`. */
   readonly reason?: NonEmptyString;
+}
+
+export interface CommerceConformanceAnotherAccountDecision {
+  readonly status: 'another-account';
+  /** The store binding mismatch, for example `GOOGLE_PLAY_ACCOUNT_MISMATCH`. */
+  readonly reason: NonEmptyString;
   /**
-   * The wire shape a runtime under test meets the `another-account` answer
-   * in: `http` (status 409 with `{ error, reason }`) or `orpc` (the error
-   * code with `data.reason`). Absent, the error is thrown in process. The
-   * reference backend throws `CommerceConformanceAnotherAccountError` either
-   * way; a `createRuntime` hook translates it.
+   * The wire shape a runtime under test meets the answer in: `http` (status
+   * 409 with `{ error, reason }`) or `orpc` (the error code with
+   * `data.reason`). Absent, the error is thrown in process. The reference
+   * backend throws `CommerceConformanceAnotherAccountError` either way; a
+   * `createRuntime` hook translates it.
    */
   readonly transport?: 'http' | 'orpc';
 }

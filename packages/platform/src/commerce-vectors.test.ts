@@ -89,6 +89,15 @@ describe('commerce conformance vectors', () => {
       .toBe(false);
     expect(isCommerceConformanceVector(withDecision({ status: 'rejected', reason: '' }))).toBe(false);
     expect(isCommerceConformanceVector(withDecision({ status: 'bound-elsewhere' }))).toBe(false);
+    // The binding mismatch is required, and only another account's answer has a wire shape.
+    expect(isCommerceConformanceVector(withDecision({ status: 'another-account' }))).toBe(false);
+    expect(isCommerceConformanceVector(withDecision({ status: 'rejected', transport: 'http' })))
+      .toBe(false);
+    expect(isCommerceConformanceVector(withDecision({
+      status: 'another-account',
+      reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+      ledgerEntryId: 'le-1',
+    }))).toBe(false);
     expect(isCommerceConformanceVector({
       ...base,
       steps: [...base.steps, { actor: 'runtime', action: 'switchPlayer' }],

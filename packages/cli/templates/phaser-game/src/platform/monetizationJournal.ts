@@ -31,17 +31,22 @@ export const defaultMonetizationJournalMaxTerminalRecords = 100;
  * Records parked as another account's purchase (RFC "Another account's
  * purchase") leave this long after their last write (30 days): the parking,
  * or the player's last Restore Purchases resend. They are open records, but
- * nothing of their player is in progress: the backend granted and recorded
- * nothing for them, and the store still holds the purchase for the account it
- * is bound to, which recovers it under its own key. Dropping one costs at most
- * one more verify that parks it again, if the store still lists the purchase
- * and the client cannot tell its binding is another account's.
+ * nothing of their player is in progress: the backend's answer granted and
+ * recorded nothing, and the store still holds the purchase for the account it
+ * is bound to, which recovers it under its own key. Dropping one cannot lose
+ * a grant: the backend ledger decides every grant, and a later verify of the
+ * same purchase finds a grant whose answer was lost. It costs one more verify
+ * that parks it again, if the store still lists the purchase and the client
+ * cannot tell its binding is another account's.
  */
 export const defaultMonetizationJournalParkedRetentionMs = 30 * 24 * 60 * 60 * 1000;
 /**
  * At most this many parked records are kept across every player of the
- * install, the most recently written first; the byte budget may drop parked
- * records before granted purchases.
+ * install, the most recently written first (at least one: a resend in flight
+ * is the most recently written). A purchase dropped by this bound that the
+ * store keeps listing is verified again by the next pass that meets it, as
+ * an older client resends every such purchase. The byte budget may drop
+ * parked records before granted purchases, except the most recently written.
  */
 export const defaultMonetizationJournalMaxParkedRecords = 20;
 /**
@@ -49,7 +54,8 @@ export const defaultMonetizationJournalMaxParkedRecords = 20;
  * 256 KiB per value). When the records in the window would exceed it, the
  * oldest terminal records leave first: ungranted ones without a store
  * transaction, then ungranted ones that still name a store transaction and
- * parked records, then granted purchases. Other open records are never dropped.
+ * parked records (except the most recently written one), then granted
+ * purchases. Other open records are never dropped.
  */
 export const defaultMonetizationJournalMaxDocumentBytes = 192 * 1024;
 
@@ -66,7 +72,7 @@ export interface CreateStorageMonetizationOperationStoreInput {
   readonly maxDocumentBytes?: number;
   /** Defaults to 30 days; see `defaultMonetizationJournalParkedRetentionMs`. */
   readonly parkedRetentionMs?: number;
-  /** Defaults to 20 parked records; see `defaultMonetizationJournalMaxParkedRecords`. */
+  /** Defaults to 20 parked records, and is at least 1; see `defaultMonetizationJournalMaxParkedRecords`. */
   readonly maxParkedRecords?: number;
   readonly now?: () => number;
   /**
@@ -114,7 +120,10 @@ export function createStorageMonetizationOperationStore(
     ?? defaultMonetizationJournalMaxTerminalRecords;
   const maxDocumentBytes = input.maxDocumentBytes ?? defaultMonetizationJournalMaxDocumentBytes;
   const parkedRetentionMs = input.parkedRetentionMs ?? defaultMonetizationJournalParkedRetentionMs;
-  const maxParkedRecords = input.maxParkedRecords ?? defaultMonetizationJournalMaxParkedRecords;
+  const parkedLimit = input.maxParkedRecords ?? defaultMonetizationJournalMaxParkedRecords;
+  // A Restore Purchases resend rewrites its parked record first, so the most
+  // recently written one is kept whatever the bound says (NaN included).
+  const maxParkedRecords = parkedLimit >= 1 ? parkedLimit : 1;
   const now = input.now ?? (() => Date.now());
   const locks = input.locks === undefined ? readHostLockManager() : (input.locks ?? undefined);
   const lockName = `mpgd-monetization-journal:${key}`;
@@ -175,13 +184,16 @@ export function createStorageMonetizationOperationStore(
       }
     }
     // Newest first: a parked record a Restore Purchases resend just rewrote is
-    // the newest, so neither bound drops it while its answer is awaited.
+    // the newest, so no bound drops it while its answer is awaited (the byte
+    // budget does not drop the newest either).
     parked.sort((left, right) => right[1] - left[1]);
-    for (const [recordKey, writtenAt] of parked.slice(0, Math.max(0, maxParkedRecords))) {
+    for (const [index, [recordKey, writtenAt]] of parked.slice(0, maxParkedRecords).entries()) {
       const record = records.get(recordKey);
       if (record !== undefined) {
         kept[recordKey] = record;
-        droppable.push([recordKey, writtenAt, 1]);
+        if (index > 0) {
+          droppable.push([recordKey, writtenAt, 1]);
+        }
       }
     }
     // Newest first; the oldest terminal records beyond the bound are dropped.

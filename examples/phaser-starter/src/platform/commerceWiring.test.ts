@@ -499,14 +499,15 @@ const withTransaction = (
   assert.notEqual(await journal.read('open'), undefined, 'other open records do not count');
 }
 
-// The byte budget drops parked records before granted purchases.
+// The byte budget drops parked records before granted purchases, except the
+// most recently written one (a resend in flight).
 {
   const memory = createMemoryStorage();
   const padding = 'x'.repeat(2_000);
   const journal = createStorageMonetizationOperationStore({
     storage: memory.storage,
     now,
-    maxDocumentBytes: 5_000,
+    maxDocumentBytes: 8_000,
   });
   const padded = (record: CommercePurchaseOperationRecord): CommercePurchaseOperationRecord => ({
     ...record,
@@ -515,6 +516,22 @@ const withTransaction = (
       evidence: { schema: 'test', payload: { padding } },
     } as CommercePurchaseOperationRecord['purchase'],
   }) as CommercePurchaseOperationRecord;
+  const parked = (key: string, offset: number) =>
+    padded(
+      withTransaction(
+        purchaseRecord({
+          key,
+          playerId: 'player-2',
+          state: 'verifying',
+          updatedAt: new Date(clock + offset).toISOString(),
+          anotherAccount: {
+            reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+            reportedAt: new Date(clock + offset).toISOString(),
+          },
+        }),
+        `GPA.${key}`,
+      ),
+    );
   await journal.reserve(
     padded(
       withTransaction(
@@ -528,26 +545,38 @@ const withTransaction = (
       ),
     ),
   );
-  await journal.reserve(
+  await journal.reserve(parked('parked-old', 0));
+  await journal.reserve(parked('parked-new', 1_000));
+  await journal.reserve(padded(withTransaction(purchaseRecord({ key: 'open' }), 'GPA.open')));
+  assert.equal(await journal.read('parked-old'), undefined, 'an older parked record leaves first');
+  assert.notEqual(await journal.read('parked-new'), undefined, 'the newest parked record stays');
+  assert.notEqual(await journal.read('granted'), undefined);
+  assert.notEqual(await journal.read('open'), undefined);
+
+  // Over a budget too small for both, the granted purchase leaves before the
+  // newest parked record, whose resend may be awaiting its answer.
+  const tight = createMemoryStorage();
+  const tightJournal = createStorageMonetizationOperationStore({
+    storage: tight.storage,
+    now,
+    maxDocumentBytes: 3_000,
+    maxParkedRecords: 0,
+  });
+  await tightJournal.reserve(
     padded(
       withTransaction(
-        purchaseRecord({
-          key: 'parked',
-          playerId: 'player-2',
-          state: 'verifying',
-          anotherAccount: {
-            reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
-            reportedAt: new Date(clock).toISOString(),
-          },
-        }),
-        'GPA.parked',
+        purchaseRecord({ key: 'granted', state: 'finished', ledgerEntryId: 'ledger-granted' }),
+        'GPA.granted',
       ),
     ),
   );
-  await journal.reserve(padded(withTransaction(purchaseRecord({ key: 'open' }), 'GPA.open')));
-  assert.equal(await journal.read('parked'), undefined, 'the parked record leaves first');
-  assert.notEqual(await journal.read('granted'), undefined);
-  assert.notEqual(await journal.read('open'), undefined);
+  await tightJournal.reserve(parked('in-flight', 2_000));
+  assert.notEqual(
+    await tightJournal.read('in-flight'),
+    undefined,
+    'neither a zero bound nor the byte budget drops the most recently written parked record',
+  );
+  assert.equal(await tightJournal.read('granted'), undefined);
 }
 
 // Two contexts over the same storage (two tabs, two PWA windows) share the

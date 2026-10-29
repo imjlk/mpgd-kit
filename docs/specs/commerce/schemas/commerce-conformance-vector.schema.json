@@ -87,6 +87,37 @@
         ],
         "additionalProperties": false
       },
+      "CommerceConformanceAnotherAccountDecision": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "another-account",
+            "readOnly": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The store binding mismatch, for example `GOOGLE_PLAY_ACCOUNT_MISMATCH`.",
+            "readOnly": true
+          },
+          "transport": {
+            "oneOf": [
+              {
+                "const": "http"
+              },
+              {
+                "const": "orpc"
+              }
+            ],
+            "description": "The wire shape a runtime under test meets the answer in: `http` (status\n409 with `{ error, reason }`) or `orpc` (the error code with\n`data.reason`). Absent, the error is thrown in process. The reference\nbackend throws `CommerceConformanceAnotherAccountError` either way; a\n`createRuntime` hook translates it.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
       "CommerceConformanceAvailableExpectation": {
         "type": "object",
         "properties": {
@@ -1380,13 +1411,21 @@
         "additionalProperties": false
       },
       "CommerceConformanceVerifyDecision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/CommerceConformanceAnotherAccountDecision"
+          },
+          {
+            "$ref": "#/components/schemas/CommerceConformanceVerifyReceiptDecision"
+          }
+        ],
+        "description": "A scripted verify answer: a receipt, or another account's purchase (RFC\n\"Another account's purchase\"), which the backend answers as a retryable\nerror, never a receipt."
+      },
+      "CommerceConformanceVerifyReceiptDecision": {
         "type": "object",
         "properties": {
           "status": {
             "oneOf": [
-              {
-                "const": "another-account"
-              },
               {
                 "const": "granted"
               },
@@ -1420,27 +1459,14 @@
           },
           "reason": {
             "$ref": "#/components/schemas/NonEmptyString",
-            "description": "The refusal reason of a `rejected` receipt, or the store binding\nmismatch of an `another-account` answer (for example\n`GOOGLE_PLAY_ACCOUNT_MISMATCH`).",
-            "readOnly": true
-          },
-          "transport": {
-            "oneOf": [
-              {
-                "const": "http"
-              },
-              {
-                "const": "orpc"
-              }
-            ],
-            "description": "The wire shape a runtime under test meets the `another-account` answer\nin: `http` (status 409 with `{ error, reason }`) or `orpc` (the error\ncode with `data.reason`). Absent, the error is thrown in process. The\nreference backend throws `CommerceConformanceAnotherAccountError` either\nway; a `createRuntime` hook translates it.",
+            "description": "Why a `rejected` receipt refused the purchase, for example `GOOGLE_PLAY_ACCOUNT_ID_MISSING`.",
             "readOnly": true
           }
         },
         "required": [
           "status"
         ],
-        "additionalProperties": false,
-        "description": "A scripted verify answer. `another-account` is the backend's answer for a\npurchase the store binds to another account than the requesting player's\n(RFC \"Another account's purchase\"): a retryable error, never a receipt."
+        "additionalProperties": false
       },
       "CommerceConformanceVerifyRequestExpectation": {
         "type": "object",

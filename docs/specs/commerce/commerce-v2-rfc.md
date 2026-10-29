@@ -779,14 +779,15 @@ owner's own recovery.
   may have changed; a saved signed transaction may have expired). It stays
   parked until the backend answers something else: an offline Restore
   changes nothing. The journal keeps it as an open record, but a journal may
-  bound parked records apart from the others: the backend granted and
-  recorded nothing for them and the store keeps the purchase, so dropping one
-  cannot lose a grant (its own account recovers it under its own key; at
-  worst the purchase is verified once more and parked again). The starter
-  journal drops a parked record 30 days after its last write and keeps at
-  most the 20 most recently written; a Restore Purchases resend rewrites the
-  record before it is sent, so it is never the one dropped while its answer
-  is awaited. A reconciler that still holds a dropped record reads the
+  bound parked records apart from the others: the backend's answer granted
+  and recorded nothing and the store keeps the purchase, so dropping one
+  cannot lose a grant (the ledger decides every grant, and a later verify of
+  the same purchase finds one whose answer was lost; its own account
+  recovers it under its own key). A dropped purchase the store still lists
+  is verified once more and parked again. The starter journal drops a parked
+  record 30 days after its last write and keeps at most the 20 most recently
+  written; a Restore Purchases resend rewrites the record before it is sent,
+  so it is never the one dropped while its answer is awaited. A reconciler that still holds a dropped record reads the
   journal again before Restore Purchases sends it, and matches the store's
   report as a purchase the journal does not know. The
   [reconciler vectors](#reconciler-vectors) cover the answer.
@@ -1294,7 +1295,13 @@ smoke) and the `@mpgd/game-services` reconciler
 six; the game-services adapter answers an `another-account` decision in the
 wire shape it names: the HTTP client's 409 error, the oRPC error, or the
 in-process error. `pnpm validate:commerce-alignment` checks their names and
-protocol as it does the provider vectors'.
+protocol as it does the provider vectors'. The reference reconciler models
+only what the vectors exercise: parking, the Restore Purchases resend, and
+another player's player-scoped key under a parked record. A durable restored
+under another player's key (restore sharing), the player-scoped key probed
+when the shared key is free, and `intent: 'restore'` on every discovered
+purchase are the `@mpgd/game-services` reconciler's alone, and the vectors
+assert none of them.
 
 | Vector | Covers |
 | --- | --- |

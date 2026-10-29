@@ -220,13 +220,17 @@ per-value storage limits such as the Devvit bridge's 256 KiB. Parked records
 leave 30 days after their last write (the parking or the player's last
 Restore Purchases resend), and at most the 20 most recently written are kept
 across every player of the install (`parkedRetentionMs`, `maxParkedRecords`).
-Nothing of their player is in progress and the backend recorded nothing for
-them, so dropping one cannot lose a grant: the store keeps the purchase for
-its own account, which recovers it under its own key, and at worst the
-purchase is verified once more and parked again. A Restore Purchases resend
-rewrites the record first, so it is the newest parked record while its
-answer is awaited. The rule only removes records; the document format is
-unchanged. A document it cannot parse fails every call instead of being
+Nothing of their player is in progress and the backend's answer granted and
+recorded nothing, so dropping one cannot lose a grant: the backend ledger
+decides every grant (a later verify of the same purchase finds one whose
+answer was lost), and the store keeps the purchase for its own account, which
+recovers it under its own key. A dropped purchase the store still lists is
+verified once more by the next pass that meets it and parked again; beyond
+the count bound that repeats on each such pass, as an older client does for
+every such purchase. A Restore Purchases resend rewrites the record first, so
+it is the most recently written parked record while its answer is awaited,
+and no bound (the byte budget included) drops that one. The rule only
+removes records; the document format is unchanged. A document it cannot parse fails every call instead of being
 replaced, since starting over could verify a purchase twice. The journal is
 durable on the host, but platform storage is not encrypted: a game whose
 host cannot keep that storage private, or that must keep purchase receipts

@@ -638,10 +638,7 @@ export function createCommerceConformanceBackend(
         );
       }
       if (decision.status === 'another-account') {
-        throw new CommerceConformanceAnotherAccountError(
-          decision.reason ?? commerceConformanceAnotherAccountCode,
-          decision.transport,
-        );
+        throw new CommerceConformanceAnotherAccountError(decision.reason, decision.transport);
       }
       if (decision.status !== 'granted') {
         return {
