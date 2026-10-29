@@ -48,6 +48,7 @@ and [Testing In-App Purchases with sandbox](https://developer.apple.com/document
       // Temporary acceptance logging; do not ship.
       platform.commerce?.presentation?.subscribe((fact) => console.info('[sheet]', JSON.stringify(fact)));
       runtime.execution.subscribe((snapshot) => console.info('[blocks]', snapshot.blocks.map((block) => block.reason).join(',')));
+      runtime.actions?.subscribeAvailability((availability) => console.info('[actions]', availability));
       runtime.gateway.lifecycle.onPause(() => console.info('[lifecycle] pause'));
       runtime.gateway.lifecycle.onResume(() => console.info('[lifecycle] resume'));
       ```
@@ -71,6 +72,7 @@ end of the stale-native-build item, the purchase's idempotency key gets:
 | `[sheet]` | `open` when the sheet appears, then exactly one `closed`; `not-started` only when no sheet appeared; `unknown` only when the store call answered before the plugin observed anything (a call timeout), and a verdict must follow it |
 | `[sheet]` `reason` | absent on a `closed` the plugin observed; `timeout` (15 minutes), `interrupted` (the activity finished) or `disposed` mean no native observation and are a finding unless the scenario says so |
 | `[blocks]` | `game-runtime:lifecycle` and `presentation:purchase` from the request until `closed`; in a game without an ad provider, also `action:purchase` until the backend answers when the purchase runs through `runtime.actions` |
+| `[actions]` | `busy` from the request until `closed` (or `not-started`), then `ready` (`reconciliation-required` after a `pending` action result), also for a purchase started outside `runtime.actions` (the shop calling `runtime.gateway.commerce`); a purchase through `runtime.actions` stays `busy` until the later of `closed` and the backend's answer |
 | Screen | the game is frozen (no animation, no game audio, taps do not reach gameplay) from the request until the sheet is gone, then resumes once |
 | Grant | only after the backend verified the purchase (ledger entry, balance from the server); never from the sheet closing or the store result |
 

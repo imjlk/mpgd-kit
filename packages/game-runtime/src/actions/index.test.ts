@@ -7,11 +7,13 @@ import type {
 } from '@mpgd/game-services/operations';
 
 import { createGameExecutionController } from '../index.js';
+import { createFullScreenPresentationScope } from '../presentation/index.js';
 import { createGameUiBridge } from '../ui/index.js';
 import {
   createGameActionCoordinator,
   createPurchaseActionController,
   createRewardedAdActionController,
+  GameActionExecutionError,
   type PurchaseActionSnapshot,
 } from './index.js';
 
@@ -433,5 +435,115 @@ describe('confirmed late rewarded non-grants', () => {
     await original;
     expect(coordinator.getPendingOperation()).toBeUndefined();
     expect(coordinator.getAvailability()).toBe('ready');
+  });
+});
+
+describe('availability', () => {
+  function withScope(actionBlock?: 'without-presentation' | 'always') {
+    const execution = createGameExecutionController();
+    const presentation = createFullScreenPresentationScope({ execution });
+    const unsubscribed = vi.fn();
+    const subscribe = presentation.subscribe;
+    const scope = {
+      ...presentation,
+      subscribe: (listener: Parameters<typeof subscribe>[0]) => {
+        const off = subscribe(listener);
+        return () => {
+          unsubscribed();
+          off();
+        };
+      },
+    };
+    const purchase = deferred<GameServicesPurchaseResult>();
+    const client = { purchase: vi.fn(() => purchase.promise), claimRewardedAd: vi.fn(async () => adResult('granted')) };
+    const coordinator = createGameActionCoordinator({
+      execution, client, presentation: scope,
+      ...(actionBlock === undefined ? {} : { actionBlock }),
+    });
+    const seen: string[] = [];
+    coordinator.subscribeAvailability((value) => {
+      seen.push(value);
+    });
+    return { execution, presentation, coordinator, client, purchase, seen, unsubscribed };
+  }
+
+  it('follows any owner of the shared scope without an initial delivery', async () => {
+    const { presentation, coordinator, client, seen } = withScope('always');
+    expect(seen).toEqual([]);
+    const lease = presentation.acquire({ kind: 'purchase', invocationId: 'outside' });
+    expect(seen).toEqual(['busy']);
+    lease.markStarted();
+    lease.markUnknown();
+    expect(seen).toEqual(['busy']);
+    await expect(coordinator.createPurchaseController().execute(purchaseInput)).rejects.toMatchObject({ code: 'busy' });
+    await expect(coordinator.createRewardedAdController().execute(adInput)).rejects.toMatchObject({ code: 'busy' });
+    expect(client.purchase).not.toHaveBeenCalled();
+    lease.confirmClosed();
+    expect(seen).toEqual(['busy', 'ready']);
+    expect(coordinator.getAvailability()).toBe('ready');
+  });
+
+  it("holds the action's own block with actionBlock 'always' and relies on leases by default", async () => {
+    for (const [mode, reasons] of [['always', ['action:purchase']], [undefined, []]] as const) {
+      const { execution, coordinator, purchase, seen } = withScope(mode);
+      const result = coordinator.createPurchaseController().execute(purchaseInput);
+      await Promise.resolve();
+      expect(execution.getSnapshot().blocks.map((block) => block.reason)).toEqual(reasons);
+      expect(seen).toEqual(['busy']);
+      purchase.resolve(purchaseResult('granted'));
+      await result;
+      expect(execution.getSnapshot().blocks).toHaveLength(0);
+      expect(seen).toEqual(['busy', 'ready']);
+    }
+    const execution = createGameExecutionController();
+    expect(() => createGameActionCoordinator({
+      execution,
+      client: { purchase: vi.fn(), claimRewardedAd: vi.fn() },
+      actionBlock: 'never' as never,
+    })).toThrow(TypeError);
+  });
+
+  it('reports reconciliation and history-full changes', async () => {
+    const pending = deferred<GameServicesPurchaseResult>();
+    const { coordinator } = setup({ purchase: () => pending.promise, claimRewardedAd: async () => adResult('granted') }, 1);
+    const seen: string[] = [];
+    coordinator.subscribeAvailability((value) => {
+      seen.push(value);
+    });
+    const result = coordinator.createPurchaseController().execute(purchaseInput);
+    pending.resolve(purchaseResult('pending'));
+    await result;
+    expect(seen).toEqual(['busy', 'reconciliation-required']);
+  });
+
+  it('delivers in order to reentrant listeners and ends with disposed', () => {
+    const { presentation, coordinator, seen, unsubscribed } = withScope();
+    const nested: string[] = [];
+    coordinator.subscribeAvailability((value) => {
+      if (value === 'busy') {
+        coordinator.dispose();
+      }
+      nested.push(value);
+    });
+    const late = vi.fn();
+    const off = coordinator.subscribeAvailability(late);
+    off();
+    presentation.acquire({ kind: 'purchase', invocationId: 'outside' });
+    expect(seen).toEqual(['busy', 'disposed']);
+    expect(nested).toEqual(['busy', 'disposed']);
+    expect(late).not.toHaveBeenCalled();
+    expect(unsubscribed).toHaveBeenCalledOnce();
+    expect(() => coordinator.subscribeAvailability(() => {})).toThrow(GameActionExecutionError);
+  });
+
+  it('ends with disposed when execution is destroyed and detaches from the scope', () => {
+    const { execution, presentation, seen, unsubscribed } = withScope();
+    execution.destroy();
+    expect(seen).toEqual(['disposed']);
+    expect(unsubscribed).toHaveBeenCalledOnce();
+    presentation.dispose();
+    expect(seen).toEqual(['disposed']);
+    expect(() => createGameActionCoordinator({ execution, client: { purchase: vi.fn(), claimRewardedAd: vi.fn() } }).subscribeAvailability(() => {}))
+      .toThrow(GameActionExecutionError);
   });
 });

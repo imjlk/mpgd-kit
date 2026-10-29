@@ -258,11 +258,13 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
           if (!disposed && input.reconciliation !== undefined) { await actions?.reconcile(); } } });
     }
     if (services.client !== undefined) {
-      // Only a gateway whose ads also take the scope hands the actions their
-      // gate: with commerce alone, a legacy rewarded ad holds no lease, so the
+      // One rule in both modes: the actions are `busy` while any presentation
+      // owns the scope, a purchase started outside them included. Only a
+      // gateway whose ads also take the scope lets them rely on its leases:
+      // with commerce alone, a legacy rewarded ad holds no lease, so the
       // actions keep their own block for every operation.
-      actions = createGameActionCoordinator({ execution, client: services.client,
-        ...(coordinated === undefined ? {} : { presentation }),
+      actions = createGameActionCoordinator({ execution, client: services.client, presentation,
+        ...(coordinated === undefined ? { actionBlock: 'always' as const } : {}),
         ...(input.reconciliation === undefined ? {} : { reconciliation: input.reconciliation }),
         ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
       });

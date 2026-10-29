@@ -420,6 +420,35 @@ server ledger idempotency remains authoritative. Creating another coordinator or
 restarting the process is outside this guarantee. Do not recreate it per screen or
 to bypass unresolved work, and do not generate a new key for each UI retry.
 
+`getAvailability()` answers whether a new action can start now: `ready`,
+`busy`, `reconciliation-required`, `history-full` or `disposed`.
+`subscribeAvailability(listener)` hears each change, with no initial delivery
+(read `getAvailability()` after subscribing), in order also to listeners that
+reenter, and ends with `disposed`; it subscribes to nothing after that, and
+subscribing after disposal throws `disposed`. Use it to disable a buy or watch
+button instead of polling.
+
+Given a `presentation` scope, the coordinator is also `busy` while any
+presentation owns that scope, including a purchase started outside the actions
+(a game shop or a reconciler calling the coordinated gateway's
+`commerce.requestPurchase`). It turns `ready` again when that purchase's
+`closed` or `not-started` fact releases the lease; a store answer alone leaves
+the lease `unknown` and the coordinator `busy`. An action started meanwhile
+rejects with `busy` before the service call, so its key is not remembered and
+the same key can run later. This check runs when the action is reserved: if
+another purchase takes the scope after that but before the action's own store
+call, the coordinated store refuses the action's purchase (retryable
+`IN_PROGRESS`, `PRESENTATION_BUSY`) and the action settles `failed` with that
+key, as before this check existed.
+
+`actionBlock` chooses when each action holds its own simulation/gameplay-input
+block from before the service call until its result. The default,
+`'without-presentation'`, holds it only without a `presentation` scope: with
+one, the client's purchases and rewarded ads take the scope's leases instead
+(a client backed by `createCoordinatedPlatformGateway` sharing the scope).
+`'always'` holds it with a scope too, for a client whose rewarded ads take no
+lease; the scope then only gates.
+
 After `pending` or an invoked operation exception, new keys reject with
 `reconciliation-required`. Configure an optional `reconciliation` port to connect
 existing provider/backend recovery to this coordinator. `getPendingOperation()`
@@ -526,7 +555,11 @@ simulation, gameplay input and audio from the request until the sheet's
 `IN_PROGRESS` failure after a `not-started` fact, so its key stays usable), and
 a settled key never reopens the sheet. `runtime.actions` keeps its own block
 there, through server verification, because a legacy rewarded ad on such a
-gateway takes no lease. A commerce provider without facts (an adapter or
+gateway takes no lease (`actionBlock: 'always'`). With or without an ad
+provider, `runtime.actions` is `busy` (`getAvailability()`,
+`subscribeAvailability`) while any purchase holds the scope, one started
+outside the actions included, and an action started meanwhile rejects with
+`busy` without spending its key. A commerce provider without facts (an adapter or
 plugin built before them) keeps the plain gateway and today's behavior; it
 never meets the standalone coordinator's `presentation-unavailable` refusal.
 On the Capacitor gateway this adds to, and does not replace, the gateway's own

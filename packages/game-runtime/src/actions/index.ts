@@ -39,6 +39,8 @@ export type GameActionSnapshot<K extends GameActionKind> = Readonly<{ kind: K } 
 )>;
 export type PurchaseActionSnapshot = GameActionSnapshot<'purchase'>;
 export type RewardedAdActionSnapshot = GameActionSnapshot<'rewarded-ad'>;
+/** Whether a new action can start now; `busy` also while any presentation owns the shared scope. */
+export type GameActionAvailability = 'ready' | 'busy' | 'reconciliation-required' | 'history-full' | 'disposed';
 export type GameActionErrorCode = 'disposed' | 'busy' | 'key-conflict' | 'already-completed'
   | 'reconciliation-required' | 'history-full' | 'invalid-input'
   | 'reconciliation-unavailable' | 'invalid-reconciliation';
@@ -107,7 +109,13 @@ export interface GameActionCoordinator {
   confirmRecoveredRewardResult(idempotencyKey: string, result: GameServicesRewardedAdResult): boolean;
   /** Concurrent callers join one recovery query; only a matching committed grant unlocks new keys. */
   reconcile(): Promise<GameActionReconciliationResult>;
-  getAvailability(): 'ready' | 'busy' | 'reconciliation-required' | 'history-full' | 'disposed';
+  getAvailability(): GameActionAvailability;
+  /**
+   * Hears each change of `getAvailability()`, with no initial delivery: an
+   * action starting or settling, and a presentation (an outside purchase
+   * included) taking or leaving the shared scope. Ends after `disposed`.
+   */
+  subscribeAvailability(listener: UiListener<GameActionAvailability>): () => void;
   /** Terminal for new calls; pending external work still settles and releases its own block. */
   dispose(): void;
 }
@@ -133,8 +141,21 @@ const purchaseSources: Readonly<Record<GameServicesPurchaseInput['source'], true
 export function createGameActionCoordinator(options: {
   readonly execution: GameExecutionController;
   readonly client: Pick<GameServicesOperationClient, 'purchase' | 'claimRewardedAd'>;
-  /** Use only with a client backed by createCoordinatedPlatformGateway sharing this scope/execution. */
+  /**
+   * The shared full-screen scope: while any presentation owns it (an outside
+   * purchase included), the coordinator is `busy` and new actions reject with
+   * `busy`. With `actionBlock: 'without-presentation'` (the default) the
+   * actions also rely on that scope's leases instead of their own block, so
+   * use it only with a client backed by createCoordinatedPlatformGateway
+   * sharing this scope/execution.
+   */
   readonly presentation?: FullScreenPresentationScope;
+  /**
+   * When each action holds its own simulation/gameplay-input block from before
+   * the service call until its result: only without a `presentation` scope
+   * (default), or `always`, for a client whose rewarded ads take no lease.
+   */
+  readonly actionBlock?: 'without-presentation' | 'always';
   /** Never evicts keys: once full, new keys are rejected until application teardown. Default 1024. */
   readonly maxRememberedKeys?: number;
   readonly reconciliation?: GameActionReconciliationPort;
@@ -147,6 +168,10 @@ export function createGameActionCoordinator(options: {
     );
   }
   const capacity = options.maxRememberedKeys ?? 1024;
+  const actionBlock = options.actionBlock ?? 'without-presentation';
+  if (actionBlock !== 'without-presentation' && actionBlock !== 'always') {
+    throw new TypeError('actionBlock must be without-presentation or always.');
+  }
   const recoveryPlayerId = options.reconciliation?.playerId;
   const recoveryPort = options.reconciliation;
   if (recoveryPort && (typeof recoveryPlayerId !== 'string' || recoveryPlayerId.trim() === '' || typeof recoveryPort.recover !== 'function')) {
@@ -168,6 +193,73 @@ export function createGameActionCoordinator(options: {
   function isDisposed(): boolean {
     return disposed || execution.getSnapshot().status === 'destroyed'
       || options.presentation?.getSnapshot().status === 'disposed';
+  }
+
+  function availability(): GameActionAvailability {
+    if (isDisposed()) {
+      return 'disposed';
+    }
+    if (current !== undefined) {
+      return 'busy';
+    }
+    // Any owner of the shared scope, including a purchase started outside these actions.
+    if (options.presentation?.getSnapshot().owner !== undefined) {
+      return 'busy';
+    }
+    if (unconfirmed !== undefined) {
+      return 'reconciliation-required';
+    }
+    return history.size >= capacity ? 'history-full' : 'ready';
+  }
+
+  // Availability is published on change, in order, also to listeners that
+  // reenter. `disposed` is the last value; then the sources and listeners go.
+  type AvailabilitySubscription = { readonly listener: UiListener<GameActionAvailability>; active: boolean };
+  const availabilityListeners = new Set<AvailabilitySubscription>();
+  const availabilityQueue: { readonly value: GameActionAvailability; readonly recipients: readonly AvailabilitySubscription[] }[] = [];
+  const detachSources: (() => void)[] = [];
+  let announced: GameActionAvailability;
+  let delivering = false;
+  let closed = false;
+  function refreshAvailability(): void {
+    if (closed) {
+      return;
+    }
+    const next = availability();
+    if (next === announced) {
+      return;
+    }
+    announced = next;
+    availabilityQueue.push({ value: next, recipients: [...availabilityListeners] });
+    if (next === 'disposed') {
+      closed = true;
+      for (const detach of detachSources.splice(0)) {
+        observe(detach, onObserverError);
+      }
+    }
+    if (delivering) {
+      return;
+    }
+    delivering = true;
+    try {
+      for (let cursor = 0; cursor < availabilityQueue.length; cursor += 1) {
+        const delivery = availabilityQueue[cursor];
+        if (delivery === undefined) {
+          continue;
+        }
+        for (const subscription of delivery.recipients) {
+          if (subscription.active) {
+            observe(() => subscription.listener(delivery.value), onObserverError);
+          }
+        }
+      }
+    } finally {
+      availabilityQueue.length = 0;
+      delivering = false;
+      if (closed) {
+        availabilityListeners.clear();
+      }
+    }
   }
 
   function reserve<K extends GameActionKind>(kind: K, supplied: Inputs[K], canStart: () => boolean): Flight<K> {
@@ -256,6 +348,7 @@ export function createGameActionCoordinator(options: {
       );
       observe(() => block?.release(), onObserverError);
       bridge.destroy();
+      refreshAvailability();
     }
 
     function progress(value: Progress[K]): void {
@@ -308,7 +401,7 @@ export function createGameActionCoordinator(options: {
             if (isDisposed() || !canStart()) {
               throw new GameActionExecutionError('disposed');
             }
-            if (options.presentation === undefined) {
+            if (options.presentation === undefined || actionBlock === 'always') {
               block = execution.acquireBlock({ reason: `action:${kind}`, channels: ['simulation', 'gameplay-input'] });
             }
             if (isDisposed() || !canStart()) {
@@ -329,6 +422,7 @@ export function createGameActionCoordinator(options: {
     };
     history.set(key, fingerprint);
     current = flight as AnyFlight;
+    refreshAvailability();
     return flight;
   }
 
@@ -370,6 +464,7 @@ export function createGameActionCoordinator(options: {
       const result = Object.freeze({ status: 'reconciled' as const, operation, ledgerEntryId: transaction.ledgerEntryId });
       // History and the original promise are retained: recovering never makes the same key executable again.
       unconfirmed = undefined;
+      refreshAvailability();
       return result;
     });
     const joined = work.finally(() => {
@@ -499,6 +594,17 @@ export function createGameActionCoordinator(options: {
     });
   }
 
+  announced = availability();
+  if (announced === 'disposed') {
+    closed = true;
+  } else {
+    // Execution tells destruction; the scope tells owners coming and going.
+    detachSources.push(execution.subscribe(refreshAvailability));
+    if (options.presentation !== undefined) {
+      detachSources.push(options.presentation.subscribe(refreshAvailability));
+    }
+  }
+
   return Object.freeze({
     createPurchaseController: () => makeController('purchase'),
     getPendingOperation: () => unconfirmed,
@@ -510,6 +616,7 @@ export function createGameActionCoordinator(options: {
       if ((!rejected && !noCandidate) || result.ledgerEntryId !== undefined || result.claim?.ledgerEntryId !== undefined || result.reward.ledgerEntryId !== undefined || result.reward.rewardGranted !== false) { throw new GameActionExecutionError('invalid-reconciliation'); }
       if (unconfirmed?.kind === 'rewarded-ad' && unconfirmed.input.idempotencyKey === idempotencyKey) {
         unconfirmed = undefined;
+        refreshAvailability();
         return true;
       }
       if (current !== undefined && current.key === idempotencyKey && current.bridge.getSnapshot().kind === 'rewarded-ad' && !current.settled) {
@@ -520,23 +627,24 @@ export function createGameActionCoordinator(options: {
     },
     reconcile,
     createRewardedAdController: () => makeController('rewarded-ad'),
-    getAvailability() {
-      if (isDisposed()) {
-        return 'disposed';
+    getAvailability: availability,
+    subscribeAvailability(listener: UiListener<GameActionAvailability>): () => void {
+      if (closed || isDisposed()) {
+        throw new GameActionExecutionError('disposed');
       }
-      if (current !== undefined) {
-        return 'busy';
+      if (typeof listener !== 'function') {
+        throw new TypeError('Availability listener must be a function.');
       }
-      if (options.presentation?.getSnapshot().owner !== undefined) {
-        return 'busy';
-      }
-      if (unconfirmed !== undefined) {
-        return 'reconciliation-required';
-      }
-      return history.size >= capacity ? 'history-full' : 'ready';
+      const subscription = { listener, active: true };
+      availabilityListeners.add(subscription);
+      return () => {
+        subscription.active = false;
+        availabilityListeners.delete(subscription);
+      };
     },
     dispose(): void {
       disposed = true;
+      refreshAvailability();
     },
   });
 }

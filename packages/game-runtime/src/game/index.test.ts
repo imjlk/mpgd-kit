@@ -629,4 +629,92 @@ describe('purchase coordination without an ad provider', () => {
     expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
     runtime.dispose();
   });
+
+  // A purchase started outside `runtime.actions` (a game shop or a reconciler
+  // calling the gateway's commerce) makes the actions `busy` in both modes.
+  function outsidePurchase(options: { readonly ads: boolean; readonly opens?: boolean }) {
+    const store: ReturnType<typeof noAds> = noAds({
+      facts: true,
+      purchase: async (input) => {
+        if (options.opens !== false) {
+          store.fact(input.idempotencyKey, 'open');
+        }
+        return { outcome: 'launched' };
+      },
+    });
+    const purchase = vi.fn(async (input: { readonly productId: string; readonly source: 'shop'; readonly idempotencyKey: string }) => {
+      const outcome = await runtime.gateway.commerce?.requestPurchase({ logicalId: input.productId, source: input.source, idempotencyKey: input.idempotencyKey });
+      return { status: outcome?.outcome === 'failed' ? 'failed' : 'granted', purchase: { status: 'purchased', entitlementIds: [] } } as unknown as GameServicesPurchaseResult;
+    });
+    const runtime = createGamePlatformRuntime({
+      gateway: options.ads ? { ...store.gateway, ads: fixture().gateway.ads } : store.gateway,
+      initialLifecycleState: 'active',
+      createServices: () => ({ client: { purchase, claimRewardedAd: vi.fn() } as unknown as GameServicesOperationClient }),
+    });
+    const seen: string[] = [];
+    runtime.actions?.subscribeAvailability((value) => {
+      seen.push(value);
+    });
+    return { store, runtime, purchase, seen };
+  }
+  const action = { productId: 'GEMS', source: 'shop', idempotencyKey: 'action' } as const;
+
+  it.each([false, true])('reports busy while an outside purchase holds the scope (ads: %s)', async (ads) => {
+    const { store, runtime, purchase, seen } = outsidePurchase({ ads });
+    expect(runtime.gateway.ads.provider === undefined).toBe(!ads);
+    await runtime.gateway.commerce?.requestPurchase(request);
+    // The store answered first: the lease is `unknown`, still the scope's owner.
+    expect(runtime.presentation.getSnapshot().owner).toMatchObject({ kind: 'purchase', invocationId: 'p' });
+    expect(runtime.actions?.getAvailability()).toBe('busy');
+    expect(seen).toEqual(['busy']);
+
+    // An action purchase meanwhile is refused before the service call: the
+    // key is not spent and no second sheet is requested.
+    const controller = runtime.actions?.createPurchaseController();
+    await expect(controller?.execute(action)).rejects.toMatchObject({ name: 'GameActionExecutionError', code: 'busy' });
+    expect(purchase).not.toHaveBeenCalled();
+    expect(controller?.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+
+    store.fact('p', 'closed');
+    expect(runtime.actions?.getAvailability()).toBe('ready');
+    expect(seen).toEqual(['busy', 'ready']);
+
+    // The same key runs once the sheet is gone.
+    await expect(controller?.execute(action)).resolves.toMatchObject({ status: 'granted' });
+    expect(purchase).toHaveBeenCalledOnce();
+    expect(seen).toEqual(['busy', 'ready', 'busy']);
+    store.fact('action', 'closed');
+    expect(seen).toEqual(['busy', 'ready', 'busy', 'ready']);
+    expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
+    runtime.dispose();
+  });
+
+  it.each([false, true])('clears busy on a not-started fact (ads: %s)', async (ads) => {
+    const { store, runtime, seen } = outsidePurchase({ ads, opens: false });
+    const pending = runtime.gateway.commerce?.requestPurchase(request);
+    await flush();
+    expect(seen).toEqual(['busy']);
+    store.fact('p', 'not-started');
+    expect(seen).toEqual(['busy', 'ready']);
+    await pending;
+    expect(runtime.actions?.getAvailability()).toBe('ready');
+    runtime.dispose();
+  });
+
+  it('ends availability delivery at runtime disposal, under an open outside sheet', async () => {
+    const { store, runtime, seen } = outsidePurchase({ ads: false });
+    await runtime.gateway.commerce?.requestPurchase(request);
+    const late = vi.fn();
+    runtime.actions?.subscribeAvailability(late);
+    runtime.dispose();
+    expect(seen).toEqual(['busy', 'disposed']);
+    expect(late).toHaveBeenCalledExactlyOnceWith('disposed');
+    // The native sheet still ends later; nobody hears it through the actions.
+    store.fact('p', 'closed');
+    expect(seen).toEqual(['busy', 'disposed']);
+    expect(late).toHaveBeenCalledOnce();
+    expect(runtime.actions?.getAvailability()).toBe('disposed');
+    expect(() => runtime.actions?.subscribeAvailability(() => {})).toThrow(expect.objectContaining({ code: 'disposed' }));
+    expect(store.listeners.size).toBe(0);
+  });
 });

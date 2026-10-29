@@ -7,6 +7,7 @@ import {
 } from '@mpgd/game-runtime';
 import {
   createGameActionCoordinator,
+  type GameActionAvailability,
   type PurchaseActionSnapshot,
 } from '@mpgd/game-runtime/actions';
 import { bindGameLifecycle } from '@mpgd/game-runtime/platform';
@@ -105,6 +106,23 @@ const invalidPurchase: PurchaseActionSnapshot = {
 void owner.execute({ placementId: 'revive', idempotencyKey: 'key' });
 void actionSnapshot;
 void invalidPurchase;
+const stopAvailability = coordinator.subscribeAvailability((value: GameActionAvailability) => {
+  void value;
+});
+stopAvailability();
+const blockingExecution = createGameExecutionController();
+void createGameActionCoordinator({
+  execution: blockingExecution,
+  client: servicePort,
+  presentation: createFullScreenPresentationScope({ execution: blockingExecution }),
+  actionBlock: 'always',
+});
+void createGameActionCoordinator({
+  execution: blockingExecution,
+  client: servicePort,
+  // @ts-expect-error The action block mode is a closed set.
+  actionBlock: 'never',
+});
 
 const recoverable = createGameActionCoordinator({
   execution: createGameExecutionController(),

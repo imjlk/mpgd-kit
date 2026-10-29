@@ -1,0 +1,5 @@
+---
+npm/@mpgd/game-runtime: minor (Added)
+---
+
+`runtime.actions` reports `busy` while any purchase holds the runtime's full-screen scope, one started outside the actions included (a game shop or a reconciler calling `runtime.gateway.commerce.requestPurchase`), with or without an ad provider, and turns `ready` again on that purchase's `closed` or `not-started` fact. An action started meanwhile rejects with `busy` before the service call, so its key is not remembered and can run later; before, on a gateway without an ad provider, it settled `failed` from the store's `PRESENTATION_BUSY` refusal and its key could not run again through the actions. The new `subscribeAvailability(listener)` on `GameActionCoordinator` hears each change of `getAvailability()` (no initial delivery, ends with `disposed`), and the new `actionBlock: 'always'` option of `createGameActionCoordinator` keeps each action's own block while a `presentation` scope only gates; the runtime uses it on a gateway without an ad provider, so those actions keep their block until the backend answers.
