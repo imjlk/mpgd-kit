@@ -1,6 +1,8 @@
 import {
+  isCommercePurchaseOperationRecord,
   isMonetizationOperationGranted,
   isMonetizationOperationRecoverable,
+  isParkedForAnotherAccount,
   type MonetizationOperationRecord,
   type MonetizationOperationStore,
 } from '@mpgd/game-services';
@@ -21,14 +23,33 @@ export const defaultMonetizationJournalRetentionMs = 30 * 24 * 60 * 60 * 1000;
  * age, or by the byte budget (`defaultMonetizationJournalMaxDocumentBytes`)
  * when the document would not fit, so the revocation pass and
  * `findByTransaction` keep them for the window whenever storage allows.
+ * Records parked as another account's purchase are the one kind of open
+ * record that leaves (`defaultMonetizationJournalParkedRetentionMs`).
  */
 export const defaultMonetizationJournalMaxTerminalRecords = 100;
+/**
+ * Records parked as another account's purchase (RFC "Another account's
+ * purchase") leave this long after their last write (30 days): the parking,
+ * or the player's last Restore Purchases resend. They are open records, but
+ * nothing of their player is in progress: the backend granted and recorded
+ * nothing for them, and the store still holds the purchase for the account it
+ * is bound to, which recovers it under its own key. Dropping one costs at most
+ * one more verify that parks it again, if the store still lists the purchase
+ * and the client cannot tell its binding is another account's.
+ */
+export const defaultMonetizationJournalParkedRetentionMs = 30 * 24 * 60 * 60 * 1000;
+/**
+ * At most this many parked records are kept across every player of the
+ * install, the most recently written first; the byte budget may drop parked
+ * records before granted purchases.
+ */
+export const defaultMonetizationJournalMaxParkedRecords = 20;
 /**
  * Upper bound of the serialized document (192 KiB, below the Devvit bridge's
  * 256 KiB per value). When the records in the window would exceed it, the
  * oldest terminal records leave first: ungranted ones without a store
- * transaction, then ungranted ones that still name a store transaction, then
- * granted purchases. Open records are never dropped.
+ * transaction, then ungranted ones that still name a store transaction and
+ * parked records, then granted purchases. Other open records are never dropped.
  */
 export const defaultMonetizationJournalMaxDocumentBytes = 192 * 1024;
 
@@ -43,6 +64,10 @@ export interface CreateStorageMonetizationOperationStoreInput {
   readonly maxTerminalRecords?: number;
   /** Defaults to 192 KiB of serialized JSON; see `defaultMonetizationJournalMaxDocumentBytes`. */
   readonly maxDocumentBytes?: number;
+  /** Defaults to 30 days; see `defaultMonetizationJournalParkedRetentionMs`. */
+  readonly parkedRetentionMs?: number;
+  /** Defaults to 20 parked records; see `defaultMonetizationJournalMaxParkedRecords`. */
+  readonly maxParkedRecords?: number;
   readonly now?: () => number;
   /**
    * Cross-context lock for the read-modify-write of the document; defaults to
@@ -67,7 +92,8 @@ interface JournalDocument {
  * The reference durable `MonetizationOperationStore` of the starter: one JSON
  * document in the platform storage adapter, rewritten whole on every change
  * so a record and its index can never disagree, terminal records bounded by
- * age (and, without a ledger grant, by count; open records are always kept),
+ * age (and, without a ledger grant, by count; open records are kept, except
+ * records parked as another account's purchase, bounded by age and count),
  * with every operation
  * serialized through one promise chain so the compare-and-swap of `replace`
  * holds inside the WebView. It is crash recovery, not grant authority: the
@@ -87,6 +113,8 @@ export function createStorageMonetizationOperationStore(
   const maxTerminalRecords = input.maxTerminalRecords
     ?? defaultMonetizationJournalMaxTerminalRecords;
   const maxDocumentBytes = input.maxDocumentBytes ?? defaultMonetizationJournalMaxDocumentBytes;
+  const parkedRetentionMs = input.parkedRetentionMs ?? defaultMonetizationJournalParkedRetentionMs;
+  const maxParkedRecords = input.maxParkedRecords ?? defaultMonetizationJournalMaxParkedRecords;
   const now = input.now ?? (() => Date.now());
   const locks = input.locks === undefined ? readHostLockManager() : (input.locks ?? undefined);
   const lockName = `mpgd-monetization-journal:${key}`;
@@ -113,11 +141,22 @@ export function createStorageMonetizationOperationStore(
 
   const save = async (records: Map<string, MonetizationOperationRecord>): Promise<void> => {
     const cutoff = now() - retentionMs;
+    const parkedCutoff = now() - parkedRetentionMs;
     const terminal: [string, number][] = [];
+    const parked: [string, number][] = [];
     const kept: Record<string, MonetizationOperationRecord> = {};
-    /** Terminal records the byte budget may drop, with their drop tier (lower leaves first). */
+    /** Records the byte budget may drop, with their drop tier (lower leaves first). */
     const droppable: [string, number, number][] = [];
     for (const [recordKey, record] of records) {
+      const parkedAt = parkedWrittenAt(record);
+      if (parkedAt !== undefined) {
+        // Another account's purchase: nothing of this player is in progress,
+        // and the purchase's own account recovers it under its own key.
+        if (parkedAt >= parkedCutoff) {
+          parked.push([recordKey, parkedAt]);
+        }
+        continue;
+      }
       const settledAt = terminalSettledAt(record);
       if (settledAt === undefined) {
         kept[recordKey] = record;
@@ -135,6 +174,16 @@ export function createStorageMonetizationOperationStore(
         terminal.push([recordKey, settledAt]);
       }
     }
+    // Newest first: a parked record a Restore Purchases resend just rewrote is
+    // the newest, so neither bound drops it while its answer is awaited.
+    parked.sort((left, right) => right[1] - left[1]);
+    for (const [recordKey, writtenAt] of parked.slice(0, Math.max(0, maxParkedRecords))) {
+      const record = records.get(recordKey);
+      if (record !== undefined) {
+        kept[recordKey] = record;
+        droppable.push([recordKey, writtenAt, 1]);
+      }
+    }
     // Newest first; the oldest terminal records beyond the bound are dropped.
     terminal.sort((left, right) => right[1] - left[1]);
     for (const [recordKey, settledAt] of terminal.slice(0, Math.max(0, maxTerminalRecords))) {
@@ -146,7 +195,7 @@ export function createStorageMonetizationOperationStore(
     }
     // The document must fit the host's per-value limit, or every later write
     // fails and monetization stops: the oldest record of the lowest tier leaves
-    // until it fits. Open records are never dropped.
+    // until it fits. Open records other than parked ones are never dropped.
     droppable.sort((left, right) => left[2] - right[2] || left[1] - right[1]);
     let size = documentBytes(kept);
     for (const [recordKey] of droppable) {
@@ -243,6 +292,22 @@ function terminalSettledAt(record: MonetizationOperationRecord): number | undefi
     : record.platformCompletedAt;
   const time = settledAt === undefined ? Number.NaN : Date.parse(settledAt);
   return Number.isFinite(time) ? time : Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * When a record parked as another account's purchase was last written (its
+ * parking, or a Restore Purchases resend), or `undefined` for any other
+ * record. A parked record without a readable time sorts as the newest: only
+ * the count bound drops it.
+ */
+function parkedWrittenAt(record: MonetizationOperationRecord): number | undefined {
+  if (!isCommercePurchaseOperationRecord(record) || !isParkedForAnotherAccount(record)) {
+    return undefined;
+  }
+  const times = [record.updatedAt, record.anotherAccount?.reportedAt]
+    .map((time) => (time === undefined ? Number.NaN : Date.parse(time)))
+    .filter((time) => Number.isFinite(time));
+  return times.length === 0 ? Number.MAX_SAFE_INTEGER : Math.max(...times);
 }
 
 /** A commerce purchase record that names a store transaction (the store may still list it). */

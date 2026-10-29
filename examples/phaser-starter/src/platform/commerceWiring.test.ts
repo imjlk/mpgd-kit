@@ -394,6 +394,162 @@ const withTransaction = (
   assert.notEqual(await journal.read('granted-new'), undefined);
 }
 
+// Records parked as another account's purchase are open but bounded: they
+// leave 30 days after their last write (the parking or a Restore Purchases
+// resend). Every other open record stays, whoever's it is.
+{
+  const memory = createMemoryStorage();
+  const journal = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  const day = 24 * 60 * 60 * 1000;
+  const start = clock;
+  const at = (offset: number) => new Date(start + offset).toISOString();
+  const parked = (key: string, writtenAt: number, playerId = 'player-2') =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId,
+        state: 'verifying',
+        origin: 'discovered',
+        updatedAt: at(writtenAt),
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: at(writtenAt) },
+      }),
+      `GPA.${key}`,
+    );
+  await journal.reserve(parked('parked-old', 0));
+  await journal.reserve(parked('parked-young', 2 * day));
+  await journal.reserve(parked('parked-own-player', 0, 'player-1'));
+  await journal.reserve(parked('restored', 0));
+  // The verifying record of the purchase's own account, and one Restore Purchases unparked.
+  await journal.reserve(
+    withTransaction(purchaseRecord({ key: 'owner-scoped', state: 'verifying' }), 'GPA.owner'),
+  );
+  await journal.reserve(
+    withTransaction(
+      purchaseRecord({ key: 'unparked', playerId: 'player-2', state: 'verifying' }),
+      'GPA.unparked',
+    ),
+  );
+  clock = start + 31 * day;
+  // A Restore Purchases resend rewrites the parked record before it is sent.
+  const restored = (await journal.read('restored')) as CommercePurchaseOperationRecord;
+  await journal.replace(restored.revision, {
+    ...restored,
+    revision: restored.revision + 1,
+    updatedAt: new Date(clock).toISOString(),
+  });
+  assert.equal(await journal.read('parked-old'), undefined, 'a parked record leaves by age');
+  assert.equal(
+    await journal.read('parked-own-player'),
+    undefined,
+    'whichever player it was parked for',
+  );
+  assert.notEqual(await journal.read('parked-young'), undefined, 'a recent parked record stays');
+  assert.notEqual(
+    await journal.read('restored'),
+    undefined,
+    'a record a Restore Purchases resend just rewrote stays while its answer is awaited',
+  );
+  for (const key of ['owner-scoped', 'unparked']) {
+    assert.notEqual(await journal.read(key), undefined, `${key} is open and never dropped`);
+  }
+  // The rule only removes records: the document keeps its version-1 shape.
+  assert.equal(
+    (memory.values.get(defaultMonetizationJournalKey) as { version: number }).version,
+    1,
+  );
+}
+
+// Parked records are bounded by count across every player of the install: the
+// most recently written stay, so a resend in flight is never the one dropped.
+{
+  const memory = createMemoryStorage();
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 2,
+  });
+  const parked = (key: string, offset: number) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: `player-${key}`,
+        state: 'verifying',
+        updatedAt: new Date(clock + offset).toISOString(),
+        anotherAccount: {
+          reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+          reportedAt: new Date(clock + offset).toISOString(),
+        },
+      }),
+      `GPA.${key}`,
+    );
+  await journal.reserve(purchaseRecord({ key: 'open' }));
+  await journal.reserve(parked('first', 1_000));
+  await journal.reserve(parked('second', 2_000));
+  // Restore Purchases resends the oldest one: rewritten now, it is the newest.
+  const first = (await journal.read('first')) as CommercePurchaseOperationRecord;
+  await journal.replace(first.revision, {
+    ...first,
+    revision: first.revision + 1,
+    updatedAt: new Date(clock + 3_000).toISOString(),
+  });
+  await journal.reserve(parked('third', 2_500));
+  assert.equal(await journal.read('second'), undefined, 'the least recently written leaves');
+  assert.notEqual(await journal.read('first'), undefined, 'the resent record stays');
+  assert.notEqual(await journal.read('third'), undefined);
+  assert.notEqual(await journal.read('open'), undefined, 'other open records do not count');
+}
+
+// The byte budget drops parked records before granted purchases.
+{
+  const memory = createMemoryStorage();
+  const padding = 'x'.repeat(2_000);
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxDocumentBytes: 5_000,
+  });
+  const padded = (record: CommercePurchaseOperationRecord): CommercePurchaseOperationRecord => ({
+    ...record,
+    purchase: {
+      ...record.purchase,
+      evidence: { schema: 'test', payload: { padding } },
+    } as CommercePurchaseOperationRecord['purchase'],
+  }) as CommercePurchaseOperationRecord;
+  await journal.reserve(
+    padded(
+      withTransaction(
+        purchaseRecord({
+          key: 'granted',
+          state: 'finished',
+          ledgerEntryId: 'ledger-granted',
+          updatedAt: new Date(clock - 1_000).toISOString(),
+        }),
+        'GPA.granted',
+      ),
+    ),
+  );
+  await journal.reserve(
+    padded(
+      withTransaction(
+        purchaseRecord({
+          key: 'parked',
+          playerId: 'player-2',
+          state: 'verifying',
+          anotherAccount: {
+            reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+            reportedAt: new Date(clock).toISOString(),
+          },
+        }),
+        'GPA.parked',
+      ),
+    ),
+  );
+  await journal.reserve(padded(withTransaction(purchaseRecord({ key: 'open' }), 'GPA.open')));
+  assert.equal(await journal.read('parked'), undefined, 'the parked record leaves first');
+  assert.notEqual(await journal.read('granted'), undefined);
+  assert.notEqual(await journal.read('open'), undefined);
+}
+
 // Two contexts over the same storage (two tabs, two PWA windows) share the
 // host's Web Locks, so neither loses the other's write.
 {
