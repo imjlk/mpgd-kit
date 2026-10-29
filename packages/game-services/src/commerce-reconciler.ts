@@ -1249,6 +1249,22 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     await settleVerify(await reviseAnotherAccount(refreshed, undefined), request, answer.response);
   };
 
+  /**
+   * The journal's current record of a parked record this session holds, or
+   * undefined (and forgotten) when the journal no longer holds it for this
+   * player.
+   */
+  const rereadParked = async (
+    record: CommercePurchaseOperationRecord,
+  ): Promise<CommercePurchaseOperationRecord | undefined> => {
+    const current = await journal.read(record.key);
+    if (current !== undefined && isCommercePurchaseOperationRecord(current) && ownsRecord(current)) {
+      return remember(current);
+    }
+    records.delete(record.idempotencyKey);
+    return undefined;
+  };
+
   // Reconciler step 2: match a reported purchase to a journal record.
   const ingestPurchase = async (purchase: StorePurchase, restoring: boolean): Promise<void> => {
     if (purchase.store !== storeId) {
@@ -1290,6 +1306,13 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       if (stored !== undefined && isCommercePurchaseOperationRecord(stored) && ownsRecord(stored)) {
         record = remember(stored);
       }
+    }
+    if (record !== undefined && isParkedForAnotherAccount(record) && restoring) {
+      // Restore Purchases writes the record, so it must still be the journal's:
+      // a journal's retention may have dropped a parked record this session
+      // still holds (RFC "Another account's purchase"). Then the report is a
+      // purchase the journal does not know, and is matched as one.
+      record = await rereadParked(record);
     }
     if (record !== undefined && isParkedForAnotherAccount(record)) {
       await reportParked(record, purchase, restoring);

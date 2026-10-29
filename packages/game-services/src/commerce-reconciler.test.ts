@@ -42,6 +42,7 @@ import {
 } from './monetization-operation-store.js';
 import {
   createRecoverableMonetizationClient,
+  type MonetizationOperationRecord,
   type MonetizationOperationStore,
 } from './monetization-recovery.js';
 import { createGameServicesRuntime } from './runtime.js';
@@ -4402,6 +4403,89 @@ function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
     "a key another player's record holds for any other reason is still refused",
   );
   await refusedOwner.reconciler.stop();
+}
+
+// 56d. A journal's retention may drop a parked record (the starter journal bounds them) while a
+// running reconciler still holds it in memory. Restore Purchases then matches the store's report
+// as a purchase the journal does not know: a new record under the derived key, sent as a restore,
+// instead of a stale write that fails the pass.
+{
+  const records = new Map<string, MonetizationOperationRecord>();
+  const base = createInMemoryMonetizationOperationStore();
+  const store: MonetizationOperationStore = {
+    ...base,
+    async reserve(record) {
+      const existing = records.get(record.key);
+      if (existing !== undefined) {
+        return { created: false, record: structuredClone(existing) };
+      }
+      records.set(record.key, structuredClone(record));
+      return { created: true, record: structuredClone(record) };
+    },
+    async read(key) {
+      const record = records.get(key);
+      return record === undefined ? undefined : structuredClone(record);
+    },
+    async replace(expectedRevision, record) {
+      const existing = records.get(record.key);
+      if (existing === undefined || existing.revision !== expectedRevision) {
+        throw new Error('Stale or conflicting monetization journal write.');
+      }
+      records.set(record.key, structuredClone(record));
+    },
+    async listRecoverable(owner) {
+      return [...records.values()]
+        .filter((record) => record.playerId === owner && isMonetizationOperationRecoverable(record))
+        .map((record) => structuredClone(record));
+    },
+    async findByTransaction(input) {
+      const found = [...records.values()].find(
+        (record) => record.kind === 'commerce-purchase'
+          && record.playerId === input.playerId
+          && record.purchase?.transactionId === input.transactionId,
+      );
+      return found === undefined ? undefined : structuredClone(found);
+    },
+  };
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const key = 'store:fake-store:tx-56d';
+  const sharedKey = createCommercePurchaseOperationKey('android', key);
+  const h = createHarness({ store, provider, backend });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56d' }));
+  backend.queue({ status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+  await h.reconciler.start();
+  assertEqual(
+    records.get(sharedKey)?.kind === 'commerce-purchase'
+      ? (records.get(sharedKey) as CommercePurchaseOperationRecord).anotherAccount?.reason
+      : undefined,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'the record is parked',
+  );
+  // Retention drops it; the running reconciler still holds it in memory.
+  records.delete(sharedKey);
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56d' });
+  await h.reconciler.restorePurchases();
+  assertEqual(h.failures, [], 'no stale write fails the pass');
+  assertEqual(
+    backend.requests.map((request) => [request.idempotencyKey, request.intent]),
+    [
+      [key, 'restore'],
+      [key, 'restore'],
+    ],
+    'Restore Purchases sends the discovered purchase again under its derived key',
+  );
+  const recovered = records.get(sharedKey) as CommercePurchaseOperationRecord | undefined;
+  assertEqual(
+    [
+      recovered?.revision === undefined ? undefined : recovered.revision > 0,
+      recovered?.state,
+      recovered?.anotherAccount,
+    ],
+    [true, 'finished', undefined],
+    'a new record is journaled, granted, and finished',
+  );
+  await h.reconciler.stop();
 }
 
 console.info('commerce reconciler tests passed');
