@@ -109,6 +109,18 @@ reconciler finishes it and nothing is granted twice; another player, a
 durable, a reversed grant, and a backend without a registry keep the
 refusal.
 
+A `finishTransaction` answered `{ finished: false }` keeps the record
+`finishing` and the next pass asks again; it is never a failure and never a
+second grant. The StoreKit SDK answers it for a transaction its native finish
+match refuses. It finishes a durable bound to another app account token with
+that token, and a durable bound to no token (an offer code redeemed outside
+the app, then restored and granted by the backend's restore sharing) with the
+explicit no-token match, but only on a native build that declares it
+(`getFinishSupport`, added with that match). On an app binary built
+with an earlier native plugin such a record stays `finishing` until the app
+is rebuilt; the grant is unaffected. Consumables bound to no token are never
+journaled, granted, or finished.
+
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal
 (`isMonetizationOperationRecoverable` from
