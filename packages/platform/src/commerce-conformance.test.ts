@@ -36,6 +36,8 @@ import {
   type CommerceConformanceHarness,
   type CommerceConformanceStoreActor,
   type CommerceConformanceVectorResult,
+  type CommerceJournalRecord,
+  type CommerceJournalStore,
 } from './commerce-conformance.js';
 import {
   assertCommerceConformanceVector,
@@ -45,6 +47,7 @@ import {
 } from './commerce-vectors.js';
 import {
   createDerivedPurchaseIdempotencyKey,
+  isTerminalCommercePurchaseState,
   type CommerceFinishOwner,
   type CommerceProvider,
   type CreditLot,
@@ -295,6 +298,110 @@ describe("reconciler vectors (another account's purchase)", () => {
       expect: { ...vector.expect, finishCalls: [] },
     });
     expect(result.failures).toEqual([]);
+  });
+
+  describe('a parked record the journal pruned while the runtime held it', () => {
+    /**
+     * A journal that can drop records, as a journal's retention does. A key in
+     * `dropAfterRead` is dropped right after its next read: another
+     * context's save between Restore's re-read and its write.
+     */
+    function createPruningJournal(): {
+      readonly records: Map<string, CommerceJournalRecord>;
+      readonly dropAfterRead: Set<string>;
+      readonly journal: CommerceJournalStore;
+    } {
+      const records = new Map<string, CommerceJournalRecord>();
+      const dropAfterRead = new Set<string>();
+      const list = (playerId: string, accept: (record: CommerceJournalRecord) => boolean) =>
+        [...records.values()].filter((record) => record.playerId === playerId && accept(record));
+      return {
+        records,
+        dropAfterRead,
+        journal: {
+          async reserve(record) {
+            const existing = records.get(record.key);
+            if (existing !== undefined) {
+              return { created: false, record: existing };
+            }
+            records.set(record.key, record);
+            return { created: true, record };
+          },
+          async read(key) {
+            const record = records.get(key);
+            if (dropAfterRead.delete(key)) {
+              records.delete(key);
+            }
+            return record;
+          },
+          async replace(expectedRevision, record) {
+            const existing = records.get(record.key);
+            if (existing === undefined || existing.revision !== expectedRevision) {
+              throw new Error(`Journal record ${record.key} is gone or stale.`);
+            }
+            const stored = { ...record, revision: expectedRevision + 1 };
+            records.set(record.key, stored);
+            return stored;
+          },
+          async listRecoverable(playerId) {
+            return list(playerId, (record) => !isTerminalCommercePurchaseState(record.state));
+          },
+          async listGranted(playerId) {
+            return list(playerId, (record) => record.ledgerEntryId !== undefined
+              && (record.state === 'granted' || record.state === 'finishing' || record.state === 'finished'));
+          },
+        },
+      };
+    }
+
+    async function parkThenRestore(prune: (input: {
+      readonly key: string;
+      readonly records: Map<string, CommerceJournalRecord>;
+      readonly dropAfterRead: Set<string>;
+    }) => void) {
+      const vector = reconcilerVectorNamed('another-account-restore-resends');
+      const context = { profile: vector.profile, catalog: vector.catalog ?? [], playerId: 'player-1' };
+      const store = createCommerceConformanceStore(context);
+      const backend = createCommerceConformanceBackend();
+      const { records, dropAfterRead, journal } = createPruningJournal();
+      const runtime = createCommerceConformanceRuntime({
+        provider: store.provider,
+        backend,
+        journal,
+        clock: createCommerceConformanceClock(),
+        catalog: context.catalog,
+        playerId: 'player-1',
+      });
+      const key = 'store:fixture.client-token:tx-1';
+      await runtime.start();
+      backend.queueVerify({ status: 'another-account', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+      store.complete({ transactionId: 'tx-1', storeSku: 'remove.ads', token: 'token-1', state: 'purchased' });
+      await runtime.runUntilIdle();
+      expect(records.get(key)?.anotherAccount?.reason).toBe('GOOGLE_PLAY_ACCOUNT_MISMATCH');
+      prune({ key, records, dropAfterRead });
+      backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+      await expect(runtime.restorePurchases?.()).resolves.toBeUndefined();
+      return { key, records, backend, store };
+    }
+
+    it('re-reads it before Restore writes it and ingests the purchase anew', async () => {
+      const { key, records, backend, store } = await parkThenRestore(({ key: pruned, records }) => {
+        records.delete(pruned);
+      });
+      expect(records.get(key)).toMatchObject({ state: 'finished', revision: 4, ledgerEntryId: 'le-1' });
+      expect(records.get(key)?.anotherAccount).toBeUndefined();
+      expect(backend.verifyRequests).toHaveLength(2);
+      expect(store.purchases).toEqual([]);
+    });
+
+    it('ingests it anew when it is pruned between the re-read and the write', async () => {
+      const { key, records, backend } = await parkThenRestore(({ key: pruned, dropAfterRead }) => {
+        dropAfterRead.add(pruned);
+      });
+      expect(records.get(key)).toMatchObject({ state: 'finished', ledgerEntryId: 'le-1' });
+      expect(records.get(key)?.anotherAccount).toBeUndefined();
+      expect(backend.verifyRequests).toHaveLength(2);
+    });
   });
 
   it('fails a restore step against a runtime without restorePurchases', async () => {

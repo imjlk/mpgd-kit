@@ -1150,18 +1150,27 @@ export function createCommerceConformanceRuntime(
     record: CommerceJournalRecord,
     purchase: StorePurchase,
     restoring: boolean,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (!restoring || purchase.state !== 'purchased') {
-      return;
+      return true;
     }
     const request: CommerceVerifyRequest = {
       ...buildRequest({ ...record, purchase }),
       intent: 'restore',
     };
-    const refreshed = await revise({ ...record, purchase, request });
+    let refreshed: CommerceJournalRecord;
+    try {
+      refreshed = await revise({ ...record, purchase, request });
+    } catch (error) {
+      // Pruned between the re-read and this write: match the report anew.
+      if (await rereadParked(record) === undefined) {
+        return false;
+      }
+      throw error;
+    }
     const response = await verify(refreshed, request);
     if (response === undefined) {
-      return;
+      return true;
     }
     const { anotherAccount: _parked, ...unparked } = refreshed;
     const granted = await settle(await revise(unparked), request, response);
@@ -1174,6 +1183,23 @@ export function createCommerceConformanceRuntime(
     ) {
       completedFinalizations.add(granted.key);
     }
+    return true;
+  };
+
+  /**
+   * The journal's current copy of a parked record this runtime holds, or
+   * undefined (and forgotten) when a journal's retention dropped it or the
+   * key no longer holds this player's record.
+   */
+  const rereadParked = async (
+    record: CommerceJournalRecord,
+  ): Promise<CommerceJournalRecord | undefined> => {
+    const current = await journal.read(record.key);
+    if (current !== undefined && current.playerId === playerId) {
+      return remember(current);
+    }
+    records.delete(record.key);
+    return undefined;
   };
 
   // Reconciler step 2: match a reported purchase to a journal record.
@@ -1198,9 +1224,17 @@ export function createCommerceConformanceRuntime(
       }
       record = open[0];
     }
+    if (record !== undefined && isCommerceJournalRecordParked(record) && restoring) {
+      // Restore writes the record, so it must still be the journal's: a
+      // journal may have dropped a parked record this runtime holds. Then the
+      // report is matched as a purchase the journal does not know.
+      record = await rereadParked(record);
+    }
     if (record !== undefined && isCommerceJournalRecordParked(record)) {
-      await reportParked(record, purchase, restoring);
-      return;
+      if (await reportParked(record, purchase, restoring)) {
+        return;
+      }
+      record = undefined;
     }
     if (record === undefined) {
       if (purchase.state === 'revoked') {
