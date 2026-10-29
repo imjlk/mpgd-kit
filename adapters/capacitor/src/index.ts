@@ -115,6 +115,8 @@ export {
   type StoreSdkEventOf,
   type StoreSdkFetchProductsInput,
   type StoreSdkFinishTransactionInput,
+  type StoreSdkGrantedFinishTransactionInput,
+  type StoreSdkRevokedFinishTransactionInput,
   type StoreSdkFinishTransactionResult,
   type StoreSdkGetAvailablePurchasesInput,
   type StoreSdkProduct,

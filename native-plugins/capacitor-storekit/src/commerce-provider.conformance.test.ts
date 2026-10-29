@@ -391,7 +391,7 @@ for (const result of [...direct, ...bridged]) {
   const finishCalls = adaptive.expect.finishCalls ?? [];
   assertEqual(finishCalls.length > 0, true, `${result.vector} expects client finish calls`);
   assertEqual(
-    finishCalls.every((call) => call.by === 'client' && call.ledgerEntryId.length > 0),
+    finishCalls.every((call) => call.by === 'client' && (call.ledgerEntryId ?? '').length > 0),
     true,
     `${result.vector} expects client finish calls carrying the ledger entry id`,
   );

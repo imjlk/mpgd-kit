@@ -680,13 +680,19 @@ export function createStoreCommerceProvider(
         }
         let reported: unknown;
         try {
-          reported = await finishTransaction.call(sdk, {
-            transactionId: finish.transactionId,
-            isConsumable: finish.isConsumable,
-            ledgerEntryId: finish.ledgerEntryId,
-            ...(finish.retry === true ? { retry: true } : {}),
-            ...(finish.revoked === true ? { revoked: true } : {}),
-          });
+          reported = await finishTransaction.call(sdk, finish.revoked === true
+            ? {
+                transactionId: finish.transactionId,
+                isConsumable: true,
+                revoked: true,
+                ...(finish.ledgerEntryId === undefined ? {} : { ledgerEntryId: finish.ledgerEntryId }),
+              }
+            : {
+                transactionId: finish.transactionId,
+                isConsumable: finish.isConsumable,
+                ledgerEntryId: finish.ledgerEntryId,
+                ...(finish.retry === true ? { retry: true } : {}),
+              });
         } catch (error) {
           throw normalize(error);
         }

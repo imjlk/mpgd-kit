@@ -228,8 +228,19 @@ export interface GetAvailablePurchasesInput {
   readonly restore?: boolean;
 }
 
-export interface FinishTransactionInput {
+/**
+ * What `finishTransaction` is asked to finish: a purchase the backend ledger
+ * granted (`GrantedFinishTransactionInput`, the only shape most stores ever
+ * receive), or a transaction the store revoked while it was still unfinished
+ * (`RevokedFinishTransactionInput`, only for a provider that declares
+ * `acceptsRevokedFinish`). `revoked` tells them apart.
+ */
+export type FinishTransactionInput = GrantedFinishTransactionInput | RevokedFinishTransactionInput;
+
+/** The finish of a purchase the backend ledger granted. */
+export interface GrantedFinishTransactionInput {
   readonly transactionId: NonEmptyString;
+  /** The ledger entry of the grant: the finish is authorized by it. */
   readonly ledgerEntryId: NonEmptyString;
   readonly isConsumable: boolean;
   /**
@@ -242,19 +253,29 @@ export interface FinishTransactionInput {
    * a provider that declares `acceptsFinishRetry`.
    */
   readonly retry?: boolean;
+  /** Absent (or false) on an ordinary finish. */
+  readonly revoked?: false;
+}
+
+/**
+ * The finish of a consumable the store revoked (refunded) while it was still
+ * unfinished, without any grant. The reconciler sends it once the backend
+ * answered for the purchase without a standing grant (its grant reversed, or
+ * the verify refused as revoked), or for a revoked consumable of the
+ * session's own account it holds no record of; and only to a provider that
+ * declares `acceptsRevokedFinish`. A store that accepts it finishes only a
+ * consumable it still reports as revoked and refuses anything else, so a
+ * purchase it holds as paid is never finished through it.
+ */
+export interface RevokedFinishTransactionInput {
+  readonly transactionId: NonEmptyString;
   /**
-   * Finish a transaction the store revoked (refunded) while it was still
-   * unfinished, without any grant: the reconciler sends it only for a record
-   * the backend already answered without a standing grant (`revoked`: the
-   * refund reversed its grant; `rejected`: the backend refused it), and only
-   * to a provider that declares `acceptsRevokedFinish`. `ledgerEntryId` then
-   * names that answer: the reversed grant's ledger entry, or, for a purchase
-   * the backend never granted, the idempotency key it refused. A store that
-   * accepts it finishes only a transaction it still reports as revoked and
-   * refuses anything else, so a purchase it holds as paid is never finished
-   * through this field. Absent means an ordinary finish after a grant.
+   * The reversed grant's ledger entry when the backend granted the purchase
+   * before its refund; absent when nothing was ever granted.
    */
-  readonly revoked?: boolean;
+  readonly ledgerEntryId?: NonEmptyString;
+  readonly isConsumable: true;
+  readonly revoked: true;
 }
 
 export interface FinishTransactionResult {

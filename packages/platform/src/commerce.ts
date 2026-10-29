@@ -72,6 +72,8 @@ export type {
   FinishTransactionInput,
   FinishTransactionResult,
   GetAvailablePurchasesInput,
+  GrantedFinishTransactionInput,
+  RevokedFinishTransactionInput,
   PurchaseKind,
   PurchaseSource,
   RequestPurchaseInput,

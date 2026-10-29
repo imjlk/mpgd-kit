@@ -681,10 +681,16 @@ export function createCapacitorStoreKitStoreSdk(
       // substitute another account's token on this path: the only other
       // token used is a durable's own, read from the native list.
       const appAccountToken = await Promise.resolve(resolveAppAccountToken());
-      const { transactionId, ledgerEntryId } = request;
+      const { transactionId } = request;
+      const revoked = request.revoked === true;
+      // A revoked finish may name no ledger entry (nothing was ever granted);
+      // a given one must still be non-empty, and an ordinary finish needs it.
+      const given: unknown = request.ledgerEntryId;
       if (
         typeof transactionId !== 'string' || !transactionPattern.test(transactionId)
-        || typeof ledgerEntryId !== 'string' || ledgerEntryId.trim() === ''
+        || (given === undefined
+          ? !revoked
+          : typeof given !== 'string' || given.trim() === '')
       ) {
         throw storeKitError(
           'STOREKIT_FINISH_REQUIRES_GRANT',
@@ -692,7 +698,13 @@ export function createCapacitorStoreKitStoreSdk(
           false,
         );
       }
-      const revoked = request.revoked === true;
+      // Native detail: the plugin's `finishTransaction` requires a non-empty
+      // `ledgerEntryId` on every call. A revoked finish without a ledger entry
+      // sends `revokedLedgerEntryIdPrefix` + the transaction id there; it names
+      // no ledger entry and the native code never reads it.
+      const ledgerEntryId = typeof given === 'string'
+        ? given
+        : `${revokedLedgerEntryIdPrefix}${transactionId}`;
       const active = inFlightFinishes.get(transactionId);
       if (
         active !== undefined
@@ -852,6 +864,12 @@ export const capacitorStoreKitErrorCodeMap: StoreSdkErrorCodeMap = Object.freeze
 });
 
 const maxProductIdsPerLookup = 100;
+/**
+ * The `ledgerEntryId` the SDK sends the native plugin for a revoked finish
+ * that names no ledger entry (a refund of a purchase never granted). The
+ * native method requires the field on every call; it is not a ledger entry.
+ */
+export const revokedLedgerEntryIdPrefix = 'revoked-without-grant:';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const nilUuid = '00000000-0000-0000-0000-000000000000';
 const productPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;

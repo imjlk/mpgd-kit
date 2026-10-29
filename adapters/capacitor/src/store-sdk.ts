@@ -166,19 +166,33 @@ export interface StoreSdkPurchase {
   readonly raw?: Readonly<Record<string, unknown>>;
 }
 
-export interface StoreSdkFinishTransactionInput {
+/**
+ * What `StoreSdk.finishTransaction` is asked to finish: a purchase the
+ * backend ledger granted, or (only for an SDK that declares
+ * `acceptsRevokedFinish`) a consumable the store revoked while it was still
+ * unfinished, which no grant stands for.
+ */
+export type StoreSdkFinishTransactionInput =
+  | StoreSdkGrantedFinishTransactionInput
+  | StoreSdkRevokedFinishTransactionInput;
+
+export interface StoreSdkGrantedFinishTransactionInput {
   readonly transactionId: string;
   readonly isConsumable: boolean;
   /** `FinishTransactionInput.retry`: an earlier finish of this purchase was asked for. */
   readonly retry?: boolean;
-  /**
-   * `FinishTransactionInput.revoked`: finish a transaction the store revoked
-   * while it was unfinished, with no grant standing. Sent only to an SDK that
-   * declares `acceptsRevokedFinish`.
-   */
-  readonly revoked?: boolean;
   /** The ledger entry that authorized the finish; a plugin may record it. */
   readonly ledgerEntryId: string;
+  readonly revoked?: false;
+}
+
+/** `RevokedFinishTransactionInput`: finish a revoked consumable, granting nothing. */
+export interface StoreSdkRevokedFinishTransactionInput {
+  readonly transactionId: string;
+  readonly isConsumable: true;
+  readonly revoked: true;
+  /** The reversed grant's ledger entry; absent when nothing was ever granted. */
+  readonly ledgerEntryId?: string;
 }
 
 export interface StoreSdkFinishTransactionResult {

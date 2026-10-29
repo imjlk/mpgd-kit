@@ -69,8 +69,9 @@ non-revoked transaction bound to that token, or a durable of another token a
 restore shared to this player (see Recovery), and on a retry (`retry: true`)
 answers `finished: true` without a native call for a consumable the list no
 longer carries (a lost acknowledgement, see Recovery); with `revoked: true`
-(the SDK declares `acceptsRevokedFinish`) it finishes only a listed, revoked
-consumable bound to that token (a refund before the finish, see Recovery);
+(the SDK declares `acceptsRevokedFinish`; `ledgerEntryId` may then be
+absent) it finishes only a listed, revoked consumable bound to that token (a
+refund before the finish, see Recovery);
 `restorePurchases` over `sync`; `transactionUpdated` as `purchaseUpdated`;
 and an availability probe as `getAvailability`, probing the configured
 SKUs batch by batch until one is sold. Every purchase carries the
@@ -318,26 +319,31 @@ a revoked transaction. The SDK keeps it listed as `revoked` (its launch-time
 the reconciler finishes it with `revoked: true` once the backend has
 answered for it without a standing grant: the ledger reversed the grant
 (App Store Server Notifications `REFUND`, read through
-`getPurchaseLedgerStatus`), or the verify was refused (the reference
-verifier answers `APP_STORE_TRANSACTION_REVOKED`). Nothing is granted or
-verified again, and `REFUND_REVERSED` never re-grants. The SDK and the
-native plugin (`StoreKitTransactionPolicy.finishableRevoked`, over
+`getPurchaseLedgerStatus`), or the verify was refused as revoked
+(`APP_STORE_TRANSACTION_REVOKED` or `LEDGER_GRANT_REVERSED`). A refunded
+consumable of the session's own app account token that the journal holds no
+record of is finished at once, without a verify. Nothing is granted or
+verified again, and `REFUND_REVERSED` never re-grants. A revoked finish
+names the reversed grant's ledger entry, or none when nothing was granted;
+the native method requires a non-empty `ledgerEntryId`, so the SDK then
+sends `revokedLedgerEntryIdPrefix` plus the transaction id, which names no
+ledger entry and which the native code never reads. The SDK and the native
+plugin (`StoreKitTransactionPolicy.finishableRevoked`, over
 `Transaction.unfinished` only) finish only a revoked consumable bound to the
 session token; a transaction still paid, a durable, another or no token,
 and a malformed entry stay refused, and one the list no longer carries
 answers finished with no native call (an entry the native read skipped as
 unverifiable looks the same; StoreKit lists it again on a later launch and
-the reconciler asks again). OpenIAP's finish takes the
-transaction by id and does not check the revocation date. While the grant
-stands (a backend without the ledger status read, or a refund not recorded
-yet) the transaction stays unfinished, as before. Version mixes keep the
-earlier behaviour: a native build from before `revoked` ignores the flag and
-its ordinary gate refuses the revoked transaction (`finished: false`,
-reported as a `finish` failure and asked again on the next launch), an
-older adapter neither lists revoked purchases nor forwards the flag, and an
-older reconciler never sends it. A revoked consumable with no journal record
-of this player (another guest's, or a record past retention) is left
-unfinished.
+the reconciler asks again). OpenIAP's finish takes the transaction by id and
+does not check the revocation date. While the grant stands (a backend
+without the ledger status read, or a refund not recorded yet) the
+transaction stays unfinished, as before, and so does one the backend
+refused for another reason. Version mixes keep the earlier behaviour: a
+native build from before `revoked` ignores the flag and its ordinary gate
+refuses the revoked transaction (`finished: false`, reported as a `finish`
+failure and asked again on the next launch), an older adapter neither lists
+revoked purchases nor forwards the flag, and an older reconciler never
+sends it.
 
 ### Migrating from v1
 

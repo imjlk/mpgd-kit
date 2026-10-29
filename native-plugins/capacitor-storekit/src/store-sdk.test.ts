@@ -1,4 +1,8 @@
-import { normalizeStoreSdkError, type StoreSdkEvent } from '@mpgd/adapter-capacitor';
+import {
+  normalizeStoreSdkError,
+  type StoreSdkEvent,
+  type StoreSdkFinishTransactionInput,
+} from '@mpgd/adapter-capacitor';
 
 import {
   assertEqual,
@@ -13,6 +17,7 @@ import {
   createCapacitorStoreKitStoreSdk,
   isValidStoreKitTransaction,
   readAppAccountToken,
+  revokedLedgerEntryIdPrefix,
   storeKitStoreSdkCapabilities,
   storeKitStoreSdkErrorCodeMap,
   toSdkPurchase,
@@ -922,6 +927,7 @@ async function settled(): Promise<void> {
         revokedAt: refunded,
       }),
       fakeTransaction({ transactionId: '56', unfinished: true, revokedAt: refunded }),
+      fakeTransaction({ transactionId: '58', unfinished: true, revokedAt: refunded }),
     ],
   });
   plugin.transactions.push({ transactionId: '55', productId: sku, revokedAt: refunded } as never);
@@ -976,6 +982,36 @@ async function settled(): Promise<void> {
     'StoreKit no longer lists it, so it is not redelivered',
   );
 
+  // A refund of a purchase never granted names no ledger entry. The native
+  // method requires the field, so the SDK fills a marker that names none.
+  const callsBeforeNoEntry = plugin.calls.length;
+  assertEqual(
+    await finish.call(sdk, { transactionId: '58', isConsumable: true, revoked: true }),
+    { finished: true },
+    'a revoked finish needs no ledger entry',
+  );
+  assertEqual(
+    plugin.calls.slice(callsBeforeNoEntry),
+    ['getTransactions', `finish:58:${revokedLedgerEntryIdPrefix}58:${fakeAccountToken}:revoked`],
+    'the native call carries the marker, not a ledger entry',
+  );
+  await assertThrowsCode(
+    () => finish.call(sdk, { transactionId: '51', isConsumable: true } as never),
+    'STOREKIT_FINISH_REQUIRES_GRANT',
+    'an ordinary finish still needs the ledger entry',
+  );
+  await assertThrowsCode(
+    () =>
+      finish.call(sdk, {
+        transactionId: '58',
+        isConsumable: true,
+        revoked: true,
+        ledgerEntryId: ' ',
+      }),
+    'STOREKIT_FINISH_REQUIRES_GRANT',
+    'a blank ledger entry is refused on a revoked finish too',
+  );
+
   const callsBeforeRefusals = plugin.calls.length;
   for (const [transactionId, isConsumable, message] of [
     ['51', true, 'a consumable that is not revoked (still paid) is never finished this way'],
@@ -987,7 +1023,13 @@ async function settled(): Promise<void> {
     ['56', false, 'nor a revoked consumable the caller does not call a consumable'],
   ] as const) {
     assertEqual(
-      await finish.call(sdk, { transactionId, isConsumable, ledgerEntryId: 'op-1', revoked: true }),
+      // A caller across the bridge may send any shape; the SDK checks it itself.
+      await finish.call(sdk, {
+        transactionId,
+        isConsumable,
+        ledgerEntryId: 'op-1',
+        revoked: true,
+      } as StoreSdkFinishTransactionInput),
       { finished: false },
       message,
     );
