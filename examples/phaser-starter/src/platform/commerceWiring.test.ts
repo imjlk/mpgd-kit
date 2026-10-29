@@ -482,25 +482,26 @@ const withTransaction = (
       }),
       `GPA.${key}`,
     );
+  const hour = 60 * 60 * 1000;
   await journal.reserve(purchaseRecord({ key: 'open' }));
-  await journal.reserve(parked('first', 1_000));
-  await journal.reserve(parked('second', 2_000));
-  // Restore Purchases resends the oldest one: rewritten now, it is the newest.
-  const first = (await journal.read('first')) as CommercePurchaseOperationRecord;
-  await journal.replace(first.revision, {
-    ...first,
-    revision: first.revision + 1,
-    updatedAt: new Date(clock + 3_000).toISOString(),
+  await journal.reserve(parked('first', -3 * hour));
+  await journal.reserve(parked('second', -2 * hour));
+  await journal.reserve(parked('third', -hour));
+  assert.equal(await journal.read('first'), undefined, 'the least recently written leaves');
+  // Restore Purchases resends the older survivor: rewritten now, it stays.
+  const second = (await journal.read('second')) as CommercePurchaseOperationRecord;
+  await journal.replace(second.revision, {
+    ...second,
+    revision: second.revision + 1,
+    updatedAt: new Date(clock).toISOString(),
   });
-  await journal.reserve(parked('third', 2_500));
-  assert.equal(await journal.read('second'), undefined, 'the least recently written leaves');
-  assert.notEqual(await journal.read('first'), undefined, 'the resent record stays');
+  assert.notEqual(await journal.read('second'), undefined, 'the resent record stays');
   assert.notEqual(await journal.read('third'), undefined);
   assert.notEqual(await journal.read('open'), undefined, 'other open records do not count');
 }
 
-// The byte budget drops parked records before granted purchases, except the
-// most recently written one (a resend in flight).
+// The byte budget drops parked records before granted purchases, except one
+// that may be in flight.
 {
   const memory = createMemoryStorage();
   const padding = 'x'.repeat(2_000);
@@ -545,8 +546,8 @@ const withTransaction = (
       ),
     ),
   );
-  await journal.reserve(parked('parked-old', 0));
-  await journal.reserve(parked('parked-new', 1_000));
+  await journal.reserve(parked('parked-old', -2 * 60 * 60 * 1000));
+  await journal.reserve(parked('parked-new', -60 * 60 * 1000));
   await journal.reserve(padded(withTransaction(purchaseRecord({ key: 'open' }), 'GPA.open')));
   assert.equal(await journal.read('parked-old'), undefined, 'an older parked record leaves first');
   assert.notEqual(await journal.read('parked-new'), undefined, 'the newest parked record stays');
@@ -574,7 +575,7 @@ const withTransaction = (
   assert.notEqual(
     await tightJournal.read('in-flight'),
     undefined,
-    'neither a zero bound nor the byte budget drops the most recently written parked record',
+    'neither a zero bound nor the byte budget drops a parked record that may be in flight',
   );
   assert.equal(await tightJournal.read('granted'), undefined);
 }
@@ -589,7 +590,8 @@ const withTransaction = (
     now,
     maxDocumentBytes: 3_500,
   });
-  const writtenAt = new Date(clock).toISOString();
+  // Written an hour ago, so only `lastWrittenParked` protects the resent one.
+  const writtenAt = new Date(clock - 60 * 60 * 1000).toISOString();
   const parked = (key: string) =>
     withTransaction(
       purchaseRecord({
@@ -614,6 +616,42 @@ const withTransaction = (
   } as CommercePurchaseOperationRecord);
   assert.notEqual(await journal.read('resent'), undefined, 'the resent record stays');
   assert.equal(await journal.read('first'), undefined, 'the other parked record leaves');
+}
+
+// Another tab's journal never drops a parked record written within the
+// in-flight window: that tab's Restore Purchases may await its answer.
+{
+  const memory = createMemoryStorage();
+  const tabA = createStorageMonetizationOperationStore({ storage: memory.storage, now });
+  const tabB = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxParkedRecords: 1,
+  });
+  const parked = (key: string, writtenAt: string) =>
+    withTransaction(
+      purchaseRecord({
+        key,
+        playerId: 'player-2',
+        state: 'verifying',
+        updatedAt: writtenAt,
+        anotherAccount: { reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH', reportedAt: writtenAt },
+      }),
+      `GPA.${key}`,
+    );
+  await tabA.reserve(parked('a', new Date(clock - 60 * 60 * 1000).toISOString()));
+  const a = (await tabA.read('a')) as CommercePurchaseOperationRecord;
+  await tabA.replace(a.revision, {
+    ...a,
+    revision: a.revision + 1,
+    updatedAt: new Date(clock).toISOString(),
+  });
+  await tabB.reserve(parked('b', new Date(clock).toISOString()));
+  assert.notEqual(await tabB.read('a'), undefined, "tab A's resend in flight stays");
+  assert.notEqual(await tabB.read('b'), undefined);
+  clock += 11 * 60 * 1000;
+  await tabB.reserve(purchaseRecord({ key: 'later' }));
+  assert.equal(await tabB.read('a'), undefined, 'past the window the bound applies again');
 }
 
 // Two contexts over the same storage (two tabs, two PWA windows) share the

@@ -227,9 +227,11 @@ answer was lost), and the store keeps the purchase for its own account, which
 recovers it under its own key. A dropped purchase the store still lists is
 verified once more by the next pass that meets it and parked again; beyond
 the count bound that repeats on each such pass, as an older client does for
-every such purchase. A Restore Purchases resend rewrites the record first, so
-it is the most recently written parked record while its answer is awaited,
-and no bound (the byte budget included) drops that one. The rule only
+every such purchase. A Restore Purchases resend rewrites the record first,
+and no bound (the byte budget included) drops a parked record written in the
+last 10 minutes (the reconciler's in-flight timeout), in any tab, or the one
+the journal wrote last, so a resend's record is there when its answer
+arrives. The rule only
 removes records; the document format is unchanged. A document it cannot parse fails every call instead of being
 replaced, since starting over could verify a purchase twice. The journal is
 durable on the host, but platform storage is not encrypted: a game whose

@@ -42,20 +42,29 @@ export const defaultMonetizationJournalMaxTerminalRecords = 100;
 export const defaultMonetizationJournalParkedRetentionMs = 30 * 24 * 60 * 60 * 1000;
 /**
  * At most this many parked records are kept across every player of the
- * install, the most recently written first (at least one: a resend in flight
- * is the most recently written). A purchase dropped by this bound that the
- * store keeps listing is verified again by the next pass that meets it, as
- * an older client resends every such purchase. The byte budget may drop
- * parked records before granted purchases, except the most recently written.
+ * install, the most recently written first. A purchase dropped by this bound
+ * that the store keeps listing is verified again by the next pass that meets
+ * it, as an older client resends every such purchase. The byte budget may
+ * drop parked records before granted purchases. Neither drops a record in
+ * `defaultMonetizationJournalParkedInFlightMs`.
  */
 export const defaultMonetizationJournalMaxParkedRecords = 20;
+/**
+ * A parked record written this recently (10 minutes, the reconciler's
+ * `defaultInFlightTimeoutMs`), or later than now (a clock moved back), is
+ * kept through every bound: a Restore Purchases resend rewrites its record
+ * before it is sent, in this context or another tab's, and the record must
+ * still be there when the backend answers. The parked record this journal
+ * wrote last is kept too, whatever its time says.
+ */
+export const defaultMonetizationJournalParkedInFlightMs = 10 * 60 * 1000;
 /**
  * Upper bound of the serialized document (192 KiB, below the Devvit bridge's
  * 256 KiB per value). When the records in the window would exceed it, the
  * oldest terminal records leave first: ungranted ones without a store
  * transaction, then ungranted ones that still name a store transaction and
- * parked records (except the most recently written one), then granted
- * purchases. Other open records are never dropped.
+ * parked records (except one that may be in flight), then granted purchases.
+ * Other open records are never dropped.
  */
 export const defaultMonetizationJournalMaxDocumentBytes = 192 * 1024;
 
@@ -72,7 +81,7 @@ export interface CreateStorageMonetizationOperationStoreInput {
   readonly maxDocumentBytes?: number;
   /** Defaults to 30 days; see `defaultMonetizationJournalParkedRetentionMs`. */
   readonly parkedRetentionMs?: number;
-  /** Defaults to 20 parked records, and is at least 1; see `defaultMonetizationJournalMaxParkedRecords`. */
+  /** Defaults to 20 parked records; see `defaultMonetizationJournalMaxParkedRecords`. */
   readonly maxParkedRecords?: number;
   readonly now?: () => number;
   /**
@@ -121,9 +130,7 @@ export function createStorageMonetizationOperationStore(
   const maxDocumentBytes = input.maxDocumentBytes ?? defaultMonetizationJournalMaxDocumentBytes;
   const parkedRetentionMs = input.parkedRetentionMs ?? defaultMonetizationJournalParkedRetentionMs;
   const parkedLimit = input.maxParkedRecords ?? defaultMonetizationJournalMaxParkedRecords;
-  // A Restore Purchases resend rewrites its parked record first, so the most
-  // recently written one is kept whatever the bound says (NaN included).
-  const maxParkedRecords = parkedLimit >= 1 ? parkedLimit : 1;
+  const maxParkedRecords = parkedLimit >= 0 ? parkedLimit : 0;
   const now = input.now ?? (() => Date.now());
   const locks = input.locks === undefined ? readHostLockManager() : (input.locks ?? undefined);
   const lockName = `mpgd-monetization-journal:${key}`;
@@ -131,8 +138,7 @@ export function createStorageMonetizationOperationStore(
   /**
    * The parked record this journal wrote last: a Restore Purchases resend
    * rewrites its record before it is sent, so this is the one whose answer
-   * may be awaited. No bound drops it, whatever the timestamps say (a tie, a
-   * clock moved back).
+   * may be awaited. No bound drops it, whatever its time says.
    */
   let lastWrittenParked: string | undefined;
   const noteWrite = (record: MonetizationOperationRecord): void => {
@@ -168,12 +174,17 @@ export function createStorageMonetizationOperationStore(
     const kept: Record<string, MonetizationOperationRecord> = {};
     /** Records the byte budget may drop, with their drop tier (lower leaves first). */
     const droppable: [string, number, number][] = [];
-    let newestParkedAt = Number.NEGATIVE_INFINITY;
+    const inFlightSince = now() - defaultMonetizationJournalParkedInFlightMs;
+    let inFlight = 0;
     for (const [recordKey, record] of records) {
       const parkedAt = parkedWrittenAt(record);
-      if (parkedAt !== undefined && recordKey === lastWrittenParked) {
+      if (
+        parkedAt !== undefined
+        && (recordKey === lastWrittenParked || parkedAt >= inFlightSince)
+      ) {
+        // Possibly awaiting a Restore Purchases answer: no bound drops it.
         kept[recordKey] = record;
-        newestParkedAt = Math.max(newestParkedAt, parkedAt);
+        inFlight += 1;
         continue;
       }
       if (parkedAt !== undefined) {
@@ -201,22 +212,16 @@ export function createStorageMonetizationOperationStore(
         terminal.push([recordKey, settledAt]);
       }
     }
-    // Newest first. The parked record this journal wrote last is kept above
-    // and counts against the bound. The byte budget does not drop the most
-    // recently written parked record either, when that is another one
-    // (another context's resend may await its answer).
+    // Newest first; the records kept as in flight count against the bound.
     parked.sort((left, right) => right[1] - left[1]);
-    const parkedRoom = Math.max(
+    for (const [recordKey, writtenAt] of parked.slice(
       0,
-      maxParkedRecords - (lastWrittenParked !== undefined && lastWrittenParked in kept ? 1 : 0),
-    );
-    for (const [index, [recordKey, writtenAt]] of parked.slice(0, parkedRoom).entries()) {
+      Math.max(0, maxParkedRecords - inFlight),
+    )) {
       const record = records.get(recordKey);
       if (record !== undefined) {
         kept[recordKey] = record;
-        if (index > 0 || writtenAt <= newestParkedAt) {
-          droppable.push([recordKey, writtenAt, 1]);
-        }
+        droppable.push([recordKey, writtenAt, 1]);
       }
     }
     // Newest first; the oldest terminal records beyond the bound are dropped.
