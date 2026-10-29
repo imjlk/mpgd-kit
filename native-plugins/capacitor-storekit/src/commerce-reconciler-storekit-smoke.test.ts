@@ -14,6 +14,7 @@ import {
   fakeTransaction,
 } from '../test/fake-storekit-plugin.js';
 import { createCapacitorStoreKitCommerceProvider } from './commerce-provider.js';
+import { revokedLedgerEntryIdPrefix } from './store-sdk.js';
 import type { StoreKitTransaction } from './definitions.js';
 
 /**
@@ -469,9 +470,9 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
     world.finishCalls(),
     [
       `finish:${grantedId}:ledger-granted:${fakeAccountToken}`,
-      `finish:${refusedId}:${refusedKey}:${fakeAccountToken}:revoked`,
+      `finish:${refusedId}:${revokedLedgerEntryIdPrefix}${refusedId}:${fakeAccountToken}:revoked`,
     ],
-    'only the refused one is finished, as revoked; the granted one stays unfinished',
+    'only the refused one is finished, as revoked and naming no ledger entry; the granted one stays unfinished',
   );
 
   // The ledger records the refund (App Store Server Notifications REFUND).
