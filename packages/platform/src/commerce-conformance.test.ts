@@ -394,6 +394,40 @@ describe("reconciler vectors (another account's purchase)", () => {
       expect(store.purchases).toEqual([]);
     });
 
+    it('never writes the report onto another purchase reserved under the same key', async () => {
+      const other: CommerceJournalRecord = {
+        key: 'store:fixture.client-token:tx-1',
+        revision: 7,
+        playerId: 'player-1',
+        store: 'fixture.client-token',
+        logicalId: 'remove_ads',
+        kind: 'durable',
+        origin: 'game',
+        // Parked too, so a Restore that took it for the held record would resend it.
+        state: 'verifying',
+        updatedAt: commerceConformanceDefaultClockStart,
+        anotherAccount: {
+          reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+          reportedAt: commerceConformanceDefaultClockStart,
+        },
+        purchase: fillCommerceConformancePurchase(
+          { transactionId: 'tx-other', storeSku: 'remove.ads', token: 'token-other', state: 'purchased' },
+          {
+            profile: reconcilerVectorNamed('another-account-restore-resends').profile,
+            catalog: reconcilerVectorNamed('another-account-restore-resends').catalog ?? [],
+            playerId: 'player-1',
+          },
+        ),
+      };
+      const { key, records, backend } = await parkThenRestore(({ key: pruned, records }) => {
+        records.set(pruned, other);
+      });
+      expect(records.get(key)).toBe(other);
+      // The report took the discovery path: its derived key holds the
+      // player's other record, so nothing was sent or written for it.
+      expect(backend.verifyRequests).toHaveLength(1);
+    });
+
     it('ingests it anew when it is pruned between the re-read and the write', async () => {
       const { key, records, backend } = await parkThenRestore(({ key: pruned, dropAfterRead }) => {
         dropAfterRead.add(pruned);

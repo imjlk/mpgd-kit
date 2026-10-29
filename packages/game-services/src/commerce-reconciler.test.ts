@@ -4540,4 +4540,37 @@ function createDroppingJournal(): {
   await h.reconciler.stop();
 }
 
+// 56f. The parked record's key reserved again for another purchase of the same player (a
+// journal dropped the parked record, then a game key spelled the same reused it) must never
+// receive this purchase's Restore report: the report takes the discovery path instead.
+{
+  const { records, store } = createDroppingJournal();
+  const provider = createFakeProvider({ withRestore: true });
+  const backend = createFakeBackend();
+  const key = 'store:fake-store:tx-56f';
+  const sharedKey = createCommercePurchaseOperationKey('android', key);
+  const h = createHarness({ store, provider, backend });
+  provider.available.push(purchaseOf({ transactionId: 'tx-56f' }));
+  backend.queue({ status: 'rejected', reason: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' });
+  await h.reconciler.start();
+  const parked = records.get(sharedKey) as CommercePurchaseOperationRecord;
+  assertEqual(
+    parked.anotherAccount?.reason,
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'the record is parked',
+  );
+  // Parked too, so a Restore that took it for the held record would resend it.
+  const other: CommercePurchaseOperationRecord = {
+    ...parked,
+    revision: parked.revision + 3,
+    purchase: purchaseOf({ transactionId: 'tx-other' }),
+  };
+  records.set(sharedKey, structuredClone(other));
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-56f' });
+  await h.reconciler.restorePurchases();
+  assertEqual(records.get(sharedKey), other, 'the other purchase under the key is untouched');
+  assertEqual(backend.requests.length, 1, 'nothing is sent for the report onto that record');
+  await h.reconciler.stop();
+}
+
 console.info('commerce reconciler tests passed');

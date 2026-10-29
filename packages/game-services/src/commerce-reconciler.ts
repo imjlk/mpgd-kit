@@ -1266,13 +1266,21 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   /**
    * The journal's current record of a parked record this session holds, or
    * undefined (and forgotten) when the journal no longer holds it for this
-   * player.
+   * player: dropped, or the key reserved again for another purchase of the
+   * player, which this purchase's report must never be written onto.
    */
   const rereadParked = async (
     record: CommercePurchaseOperationRecord,
   ): Promise<CommercePurchaseOperationRecord | undefined> => {
     const current = await journal.read(record.key);
-    if (current !== undefined && isCommercePurchaseOperationRecord(current) && ownsRecord(current)) {
+    if (
+      current !== undefined
+      && isCommercePurchaseOperationRecord(current)
+      && ownsRecord(current)
+      && current.purchase !== undefined
+      && record.purchase !== undefined
+      && samePurchase(current.purchase, record.purchase)
+    ) {
       return remember(current);
     }
     records.delete(record.idempotencyKey);

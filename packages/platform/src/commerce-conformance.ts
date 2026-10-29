@@ -1189,13 +1189,19 @@ export function createCommerceConformanceRuntime(
   /**
    * The journal's current copy of a parked record this runtime holds, or
    * undefined (and forgotten) when a journal's retention dropped it or the
-   * key no longer holds this player's record.
+   * key no longer holds this player's record of the same purchase (it was
+   * reserved again for another one, which this report must never touch).
    */
   const rereadParked = async (
     record: CommerceJournalRecord,
   ): Promise<CommerceJournalRecord | undefined> => {
     const current = await journal.read(record.key);
-    if (current !== undefined && current.playerId === playerId) {
+    if (
+      current !== undefined
+      && current.playerId === playerId
+      && current.purchase !== undefined
+      && current.purchase.transactionId === record.purchase?.transactionId
+    ) {
       return remember(current);
     }
     records.delete(record.key);
