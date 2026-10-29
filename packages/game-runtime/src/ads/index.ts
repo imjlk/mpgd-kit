@@ -523,6 +523,8 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
   readonly gateway: PlatformGateway;
   readonly classifyPurchasePresentation?: CoordinatedCommerceOptions['classifyPurchasePresentation'];
   readonly purchasePresentation?: CoordinatedCommerceOptions['purchasePresentation'];
+  /** The commerce coordinator's own refusals (see `CoordinatedCommerceOptions.onRefusal`). */
+  readonly onPurchaseRefusal?: CoordinatedCommerceOptions['onRefusal'];
 }): CoordinatedPlatformGateway {
   // Preserve legacy gateway behavior when no native presentation contract is installed.
   // Standalone commerce instead fails closed for hosts that require strict exclusion.
@@ -531,6 +533,7 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
     ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
     ...(input.classifyPurchasePresentation === undefined ? {} : { classifyPurchasePresentation: input.classifyPurchasePresentation }),
     ...(input.maxRememberedInvocations === undefined ? {} : { maxRememberedInvocations: input.maxRememberedInvocations }),
+    ...(input.onPurchaseRefusal === undefined ? {} : { onRefusal: input.onPurchaseRefusal }),
     ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
   });
   let ads: CoordinatedAdProvider;

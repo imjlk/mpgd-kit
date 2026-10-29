@@ -63,7 +63,17 @@ export interface CoordinatedCommerceOptions {
   /** Only use where the provider contract independently proves UI closure/non-launch. */
   readonly classifyPurchasePresentation?: (result: PurchaseOutcome) => 'closed' | 'not-started' | 'unknown';
   readonly maxRememberedInvocations?: number;
+  /**
+   * Hears each call this coordinator refuses itself, before the provider runs
+   * (and before its `not-started` fact and retryable answer): `busy`
+   * (`PRESENTATION_BUSY`), `disposed` or `history-full`.
+   */
+  readonly onRefusal?: (refusal: CoordinatedPurchaseRefusal) => void;
   readonly onObserverError?: ObserverErrorHandler;
+}
+export interface CoordinatedPurchaseRefusal {
+  readonly idempotencyKey: string;
+  readonly reason: CoordinatorRefusal;
 }
 
 /** Coordinate checkout without requiring an advertising provider or a complete gateway.
@@ -97,6 +107,11 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
    * retryable failure, so a reconciler keeps the key for a same-key retry.
    */
   function refuse(key: string, entry: HistoryEntry | undefined, reason: CoordinatorRefusal): PurchaseFailure {
+    const onRefusal = input.onRefusal;
+    if (onRefusal !== undefined) {
+      const refusal = Object.freeze({ idempotencyKey: key, reason });
+      observe(() => onRefusal(refusal), input.onObserverError);
+    }
     if (entry === undefined) {
       // Not remembered (history full): a one-off fact, as for a first call.
       emit(key, 1, 'not-started');

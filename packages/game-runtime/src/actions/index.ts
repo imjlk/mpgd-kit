@@ -138,6 +138,29 @@ const purchaseSources: Readonly<Record<GameServicesPurchaseInput['source'], true
   event: true,
 };
 
+/** A coordinated store's refusal before its provider ran; structural, so this entry imports no commerce code. */
+export interface GameActionPurchaseRefusal {
+  readonly idempotencyKey: string;
+  readonly reason: 'busy' | 'disposed' | 'history-full';
+}
+export interface GameActionPurchaseRefusalSource {
+  subscribe(listener: (refusal: GameActionPurchaseRefusal) => void): () => void;
+}
+
+/**
+ * The service result of the coordinated store's `busy` refusal, and nothing
+ * else: a failed record that never launched, `IN_PROGRESS`, retryable, with
+ * the coordinator's own `PRESENTATION_BUSY` store code and no verification.
+ */
+function isPresentationBusyRefusal(result: GameServicesPurchaseResult): boolean {
+  const diagnostic = result.purchase.diagnostic;
+  return result.status === 'failed' && result.purchase.status === 'failed'
+    && result.purchase.transactionId === undefined && result.purchase.evidence === undefined
+    && result.verification === undefined && result.ledgerEntryId === undefined
+    && diagnostic?.code === 'IN_PROGRESS' && diagnostic.retryable === true
+    && diagnostic.providerCode === 'PRESENTATION_BUSY';
+}
+
 /** Bind one coordinator to one runtime/client (including its player identity), above all screens. */
 export function createGameActionCoordinator(options: {
   readonly execution: GameExecutionController;
@@ -157,6 +180,15 @@ export function createGameActionCoordinator(options: {
    * (default), or `always`, for a client whose rewarded ads take no lease.
    */
   readonly actionBlock?: 'without-presentation' | 'always';
+  /**
+   * The coordinated store's own refusals before its provider ran (the
+   * `onRefusal` of createCoordinatedCommerceProvider). When the coordinator
+   * refused a running purchase action's store call as `busy` (another purchase
+   * took the scope after the action was reserved) and the service answers with
+   * exactly that refusal, the action rejects `busy` and keeps its key, as if
+   * the preflight had refused it.
+   */
+  readonly purchaseRefusals?: GameActionPurchaseRefusalSource;
   /** Never evicts keys: once full, new keys are rejected until application teardown. Default 1024. */
   readonly maxRememberedKeys?: number;
   readonly reconciliation?: GameActionReconciliationPort;
@@ -200,15 +232,16 @@ export function createGameActionCoordinator(options: {
     if (isDisposed()) {
       return 'disposed';
     }
+    // The same order as the `execute` preflight in `reserve`.
+    if (unconfirmed !== undefined) {
+      return 'reconciliation-required';
+    }
     if (current !== undefined) {
       return 'busy';
     }
     // Any owner of the shared scope, including a purchase started outside these actions.
     if (options.presentation?.getSnapshot().owner !== undefined) {
       return 'busy';
-    }
-    if (unconfirmed !== undefined) {
-      return 'reconciliation-required';
     }
     return history.size >= capacity ? 'history-full' : 'ready';
   }
@@ -407,10 +440,39 @@ export function createGameActionCoordinator(options: {
             if (isDisposed() || !canStart()) {
               throw new GameActionExecutionError('disposed');
             }
+            // Another purchase can take the scope between the reservation and
+            // this call; the coordinated store then refuses it before its provider runs.
+            let refusedBusy = false;
+            let stopRefusals: (() => void) | undefined;
+            const refusals = kind === 'purchase' ? options.purchaseRefusals : undefined;
+            if (refusals !== undefined) {
+              // A failing source only loses this recognition, never the purchase.
+              observe(() => {
+                stopRefusals = refusals.subscribe((refusal) => {
+                  if (refusal.idempotencyKey === key && refusal.reason === 'busy' && !flight.settled) {
+                    refusedBusy = true;
+                  }
+                });
+              }, onObserverError);
+            }
             invoked = true;
-            const result = await (kind === 'purchase'
-              ? client.purchase(input as Inputs['purchase'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })
-              : client.claimRewardedAd(input as Inputs['rewarded-ad'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })) as Results[K];
+            let result: Results[K];
+            try {
+              result = await (kind === 'purchase'
+                ? client.purchase(input as Inputs['purchase'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })
+                : client.claimRewardedAd(input as Inputs['rewarded-ad'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })) as Results[K];
+            } finally {
+              if (stopRefusals !== undefined) {
+                observe(stopRefusals, onObserverError);
+              }
+            }
+            if (refusedBusy && isPresentationBusyRefusal(result as GameServicesPurchaseResult)) {
+              // Nothing reached the store: answer as the preflight would, and keep the key.
+              invoked = false;
+              finish('exception');
+              reject(new GameActionExecutionError('busy'));
+              return;
+            }
             finish(result.status);
             resolve(result);
           } catch (error) {

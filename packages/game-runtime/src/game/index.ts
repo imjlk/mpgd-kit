@@ -26,6 +26,7 @@ import { forward } from '../forward.js';
 import {
   createGameActionCoordinator,
   type GameActionCoordinator,
+  type GameActionPurchaseRefusal,
   type GameActionReconciliationPort,
 } from '../actions/index.js';
 import { observe, type ObserverErrorHandler } from '../observers.js';
@@ -81,12 +82,29 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
   let services: S | undefined;
   let lateEvidence: ((observation: AdClaimEvidenceObservation) => Promise<void>) | undefined;
   const source = input.gateway.ads.provider;
+  // The commerce coordinator's own refusals, for the actions to tell a store
+  // call refused as `busy` from a real store failure.
+  const refusalListeners = new Set<(refusal: GameActionPurchaseRefusal) => void>();
+  const onPurchaseRefusal = (refusal: GameActionPurchaseRefusal) => {
+    for (const listener of [...refusalListeners]) {
+      observe(() => listener(refusal), input.onObserverError);
+    }
+  };
+  const purchaseRefusals = {
+    subscribe(listener: (refusal: GameActionPurchaseRefusal) => void): () => void {
+      refusalListeners.add(listener);
+      return () => {
+        refusalListeners.delete(listener);
+      };
+    },
+  };
   const coordinated = source === undefined ? undefined : createCoordinatedPlatformGateway({
     gateway: input.gateway, provider: source, presentation,
     canShow: (placement) => input.canShow?.(placement) !== false && (placement.format !== 'rewarded' || services?.monetizationRecovery !== undefined),
     ...(input.deadline === undefined ? {} : { deadline: input.deadline }),
     ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
     ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
+    onPurchaseRefusal,
     onClaimEvidence: (observation) => lateEvidence?.(observation),
     onLateResult: async ({ input: request, result }) => {
       if (request.format !== 'rewarded' || result.eligibility === 'eligible' || result.presentation !== 'not-started'
@@ -103,6 +121,7 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       presentation,
       ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
       ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
+      onRefusal: onPurchaseRefusal,
     })
     : undefined;
   const gateway = (coordinated
@@ -263,7 +282,7 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       // gateway whose ads also take the scope lets them rely on its leases:
       // with commerce alone, a legacy rewarded ad holds no lease, so the
       // actions keep their own block for every operation.
-      actions = createGameActionCoordinator({ execution, client: services.client, presentation,
+      actions = createGameActionCoordinator({ execution, client: services.client, presentation, purchaseRefusals,
         ...(coordinated === undefined ? { actionBlock: 'always' as const } : {}),
         ...(input.reconciliation === undefined ? {} : { reconciliation: input.reconciliation }),
         ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),

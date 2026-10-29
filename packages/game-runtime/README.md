@@ -173,7 +173,10 @@ another purchase or ad holds the scope, `NOT_PREPARED`
 retryable. A server-backed reconciler therefore keeps the key and the same key
 opens the store later. A changed request under a known key (`key-conflict`), a
 settled key (`already-completed`), and `presentation-unavailable` still reject
-with `PresentationExecutionError`.
+with `PresentationExecutionError`. `onRefusal` hears each of these refusals
+(`busy`, `disposed` or `history-full`, with the key) before its `not-started`
+fact; a provider's own failure never reaches it, whatever its codes.
+`createCoordinatedPlatformGateway` takes it as `onPurchaseRefusal`.
 
 ### Checkout-only hosts
 
@@ -420,8 +423,9 @@ server ledger idempotency remains authoritative. Creating another coordinator or
 restarting the process is outside this guarantee. Do not recreate it per screen or
 to bypass unresolved work, and do not generate a new key for each UI retry.
 
-`getAvailability()` answers whether a new action can start now: `ready`,
-`busy`, `reconciliation-required`, `history-full` or `disposed`.
+`getAvailability()` answers whether a new action can start now: `disposed`,
+`reconciliation-required`, `busy`, `history-full` or `ready`, checked in that
+order, which is the order in which `execute` refuses a new key.
 `subscribeAvailability(listener)` hears each change, with no initial delivery
 (read `getAvailability()` after subscribing), in order also to listeners that
 reenter, and ends with `disposed`. The coordinator watches the execution
@@ -436,12 +440,29 @@ presentation owns that scope, including a purchase started outside the actions
 `closed` or `not-started` fact releases the lease; a store answer alone leaves
 the lease `unknown` and the coordinator `busy`. An action started meanwhile
 rejects with `busy` before the service call, so its key is not remembered and
-the same key can run later. This check runs when the action is reserved, and a
-purchase takes the scope one microtask after its `requestPurchase` call: if
-another purchase takes it after that check but before the action's own store
-call (including one requested earlier in the same turn), the coordinated store
-refuses the action's purchase (retryable `IN_PROGRESS`, `PRESENTATION_BUSY`)
-and the action settles `failed` with that key, as before this check existed.
+the same key can run later.
+
+The preflight runs when the action is reserved, and the coordinated store takes
+the scope one microtask after a `requestPurchase` call, so another purchase can
+still take the scope after the check and before the action's own store call
+(also one requested earlier in the same turn). The coordinated store then
+refuses the action's call before its provider runs. Given `purchaseRefusals`
+(the runtime wires the coordinator's `onRefusal` there), the action answers
+that the same way: it rejects with `busy`, forgets the key and returns to
+`idle`. It does so only when the coordinator itself refused this action's key
+as `busy` during the call and the service result is exactly that refusal: a
+`failed` purchase that never launched, `IN_PROGRESS`, retryable, with store
+code `PRESENTATION_BUSY`, and no transaction, evidence, verification or ledger
+entry. A store's own failure, even with the same codes, settles `failed` as
+before. The server-backed reconciler keeps that key retryable, so the same key
+opens the store once the scope is free.
+
+**Behaviour change on a gateway without an ad provider.** Before, an action
+purchase started while another purchase held the screen resolved `failed`
+(the store's `PRESENTATION_BUSY` refusal) and its key was spent: retrying it
+replayed the failure, and later rejected with `already-completed`. It now
+rejects with `GameActionExecutionError` `busy` and keeps its key, as with an
+ad provider.
 
 `actionBlock` chooses when each action holds its own simulation/gameplay-input
 block from before the service call until its result. The default,
@@ -561,7 +582,10 @@ gateway takes no lease (`actionBlock: 'always'`). With or without an ad
 provider, `runtime.actions` is `busy` (`getAvailability()`,
 `subscribeAvailability`) while any purchase holds the scope, one started
 outside the actions included, and an action started meanwhile rejects with
-`busy` without spending its key. A commerce provider without facts (an adapter or
+`busy` without spending its key, also when the other purchase takes the screen
+just before the action's own store call (see `purchaseRefusals` above). This
+replaces the earlier answer without an ad provider, a resolved `failed` result
+that spent the key. A commerce provider without facts (an adapter or
 plugin built before them) keeps the plain gateway and today's behavior; it
 never meets the standalone coordinator's `presentation-unavailable` refusal.
 On the Capacitor gateway this adds to, and does not replace, the gateway's own
