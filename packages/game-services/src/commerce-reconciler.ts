@@ -182,6 +182,18 @@ function releasesSharedKey(record: CommercePurchaseOperationRecord): boolean {
       && isStoreAccountMismatchReason(record.response.reason));
 }
 
+/**
+ * A record the backend answered with no grant standing for it: its grant
+ * reversed by the ledger (`revoked`, a refund), or the purchase refused
+ * (`rejected`), never as another account's purchase. A store transaction of
+ * such a record that the store reports revoked may be finished without a
+ * grant (`FinishTransactionInput.revoked`).
+ */
+function answeredWithoutGrant(record: CommercePurchaseOperationRecord): boolean {
+  return record.state === 'revoked'
+    || (record.state === 'rejected' && !releasesSharedKey(record));
+}
+
 function isRetryableBeforeLaunch(record: CommercePurchaseOperationRecord): boolean {
   return record.state === 'requested' && record.error?.retryable === true
     && record.purchase === undefined && record.request === undefined;
@@ -1209,6 +1221,103 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   };
 
   /**
+   * Consumables a `client`-finish store reported revoked this session (the
+   * App Store refunded them while they were unfinished, so StoreKit keeps
+   * them unfinished and redelivers them until `finish()`), by transaction
+   * id, with their record's idempotency key. `finishRevokedReported` finishes
+   * one, without any grant, once its record holds the backend's answer:
+   * `revoked` (the ledger reversed its grant, step 5) or `rejected` (the
+   * backend refused it). Until then it waits: a grant the ledger still holds
+   * keeps the transaction unfinished, as before.
+   */
+  const revokedReports = new Map<string, string>();
+  /** Transactions this session already asked the store to finish as revoked. */
+  const revokedFinishAsked = new Set<string>();
+
+  /**
+   * Notes a store report of a revoked purchase whose record this player
+   * holds. Only a `client`-finish consumable on a provider that declares
+   * `acceptsRevokedFinish` is noted: any other store, kind, or provider keeps
+   * the revoked report as a no-op, and only the ledger moves a record to
+   * `revoked` (step 5).
+   */
+  const noteRevoked = (
+    record: CommercePurchaseOperationRecord,
+    purchase: StorePurchase,
+    kind: PurchaseKind | undefined,
+  ): void => {
+    if (
+      record.purchase === undefined
+      || !samePurchase(record.purchase, purchase)
+      || (record.productKind ?? kind) !== 'consumable'
+      || capabilities?.lifecycle.finish !== 'client'
+      || provider.finishTransaction === undefined
+      || provider.acceptsRevokedFinish !== true
+      || revokedFinishAsked.has(record.purchase.transactionId)
+    ) {
+      return;
+    }
+    revokedReports.set(record.purchase.transactionId, record.idempotencyKey);
+  };
+
+  /**
+   * Finishes the revoked transactions `noteRevoked` kept, once their record
+   * holds the backend's answer, with `revoked: true` and the answer as the
+   * ledger entry id (the reversed grant's entry, or the refused key). Nothing
+   * is granted and the record is not rewritten: it is already terminal. The
+   * store finishes only a transaction it still lists as revoked. Asked once
+   * per session; a transport failure is asked again on a later pass (after
+   * the retry interval, unless the pass is explicit), and a refusal is
+   * reported as a `finish` failure (for StoreKit: a native build from before
+   * the revoked finish; the next launch asks again).
+   */
+  const finishRevokedReported = async (explicit: boolean): Promise<void> => {
+    const finishTransaction = provider.finishTransaction;
+    for (const [transactionId, idempotencyKey] of [...revokedReports]) {
+      const record = records.get(idempotencyKey);
+      if (record === undefined || record.purchase?.transactionId !== transactionId) {
+        revokedReports.delete(transactionId);
+        continue;
+      }
+      if (!answeredWithoutGrant(record)) {
+        // Still verifying, granted, finishing, or finished: the backend has
+        // not answered for the refund yet (step 3 or step 5 will).
+        continue;
+      }
+      const waitUntil = retryAt.get(record.idempotencyKey);
+      if (!explicit && waitUntil !== undefined && nowMs() < waitUntil) {
+        continue;
+      }
+      if (finishTransaction === undefined || sessionBlocked(record.idempotencyKey)) {
+        return;
+      }
+      revokedReports.delete(transactionId);
+      revokedFinishAsked.add(transactionId);
+      try {
+        const { finished } = await finishTransaction.call(provider, {
+          transactionId,
+          ledgerEntryId: record.ledgerEntryId ?? record.idempotencyKey,
+          isConsumable: true,
+          revoked: true,
+        });
+        if (!finished) {
+          fail(
+            'finish',
+            new Error(`The store did not finish the revoked transaction ${transactionId}.`),
+            record.idempotencyKey,
+          );
+        }
+      } catch (error) {
+        // Transport-class failure: a later pass asks again.
+        revokedFinishAsked.delete(transactionId);
+        revokedReports.set(transactionId, idempotencyKey);
+        retryLater(record.idempotencyKey);
+        fail('finish', error, record.idempotencyKey);
+      }
+    }
+  };
+
+  /**
    * A store report of a record the backend answered as another account's
    * purchase. Only this player's Restore Purchases asks again (a restore
    * sharing policy or a binding may have changed since), with the evidence
@@ -1342,6 +1451,16 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
       record = undefined;
     }
+    if (purchase.state === 'revoked') {
+      // A revoked store state never revokes or verifies anything on its own:
+      // only the ledger revokes (step 5). It is matched only to this
+      // player's record of the same transaction, for a finish without a
+      // grant once the backend has answered for it.
+      if (record !== undefined) {
+        noteRevoked(record, purchase, product.kind);
+      }
+      return;
+    }
     const account = record !== undefined || (restoring && product.kind === 'durable')
       ? 'own'
       : await accountOf(purchase);
@@ -1388,10 +1507,6 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
     }
     if (record === undefined) {
-      if (purchase.state === 'revoked') {
-        // Revoked store states never revoke on their own: only the ledger does (step 5).
-        return;
-      }
       const idempotencyKey = await createDerivedPurchaseIdempotencyKey({
         store: purchase.store,
         transactionId: purchase.transactionId,
@@ -1937,6 +2052,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       return;
     }
     await revokeReversed();
+    if (sessionBlocked()) {
+      return;
+    }
+    await finishRevokedReported(options.explicit);
   };
 
   const runUntilIdle = async (): Promise<void> => {
@@ -2377,6 +2496,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           deferred.length = 0;
           records.clear();
           retryAt.clear();
+          revokedReports.clear();
           throw error;
         } finally {
           starting = undefined;
@@ -2411,6 +2531,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       deferred.length = 0;
       records.clear();
       retryAt.clear();
+      revokedReports.clear();
     },
     async reconcile() {
       await withLock(async () => {
