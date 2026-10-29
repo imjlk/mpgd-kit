@@ -45,8 +45,8 @@ import type {
 import type { VerifyPurchaseRequest, VerifyPurchaseResponse } from './types.js';
 
 /**
- * The fourteen RFC vectors and the six reconciler vectors (another account's
- * purchase) run through the real `createCommerceReconciler` instead of the
+ * The fourteen RFC vectors and the nine reconciler vectors (another account's
+ * purchase, the revoked finish) run through the real `createCommerceReconciler` instead of the
  * reference reconciler: the runner's `createRuntime` hook hands it the
  * vector's provider and player, and two adapters translate the reference
  * journal and backend into the `MonetizationOperationStore` and
@@ -355,10 +355,11 @@ function adaptBackend(
 
 const failuresByVector = new Map<string, string[]>();
 const anotherAccountByVector = new Map<string, string[]>();
+const revokedFinishByVector = new Map<string, string[]>();
 /** One log per vector run; a `runtime.switchPlayer` step's reconciler appends to it. */
 const logsByJournal = new WeakMap<
   CommerceConformanceJournal,
-  { readonly failures: string[]; readonly anotherAccount: string[] }
+  { readonly failures: string[]; readonly anotherAccount: string[]; readonly revokedFinish: string[] }
 >();
 
 function createRuntime(
@@ -367,12 +368,13 @@ function createRuntime(
 ) {
   let logs = logsByJournal.get(context.journal);
   if (logs === undefined) {
-    logs = { failures: [], anotherAccount: [] };
+    logs = { failures: [], anotherAccount: [], revokedFinish: [] };
     logsByJournal.set(context.journal, logs);
     failuresByVector.set(context.vector.vector, logs.failures);
     anotherAccountByVector.set(context.vector.vector, logs.anotherAccount);
+    revokedFinishByVector.set(context.vector.vector, logs.revokedFinish);
   }
-  const { failures, anotherAccount } = logs;
+  const { failures, anotherAccount, revokedFinish } = logs;
   const provider: CommerceProvider = input.provider;
   return createCommerceReconciler({
     provider,
@@ -386,10 +388,22 @@ function createRuntime(
       storeSku: entry.storeSku,
     })),
     now: () => input.clock.now(),
+    // A revoked-finish vector's store binds purchases to the player
+    // (`authority.accountBinding: 'required'`), and the reconciler finishes a
+    // revoked consumable it holds no record of only for that binding.
+    ...(context.vector.profile.revokedFinish === true
+      ? {
+          accountBinding: () => ({ kind: 'obfuscated-account-id' as const, value: input.playerId }),
+        }
+      : {}),
     onEvent(event: CommerceReconcilerEvent) {
       if (event.type === 'failure') {
         failures.push(
           `${event.stage}${event.idempotencyKey === undefined ? '' : `(${event.idempotencyKey})`}: ${String(event.error)}`,
+        );
+      } else if (event.type === 'revoked-finish') {
+        revokedFinish.push(
+          `${event.transactionId}:${event.idempotencyKey ?? 'no record'}:${String(event.finished)}`,
         );
       } else if (event.type === 'another-account') {
         anotherAccount.push(
@@ -420,7 +434,7 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
 }
 
 assertEqual(vectors.length, 14, 'every RFC vector is loaded');
-assertEqual(reconcilerVectors.length, 6, 'every reconciler vector is loaded');
+assertEqual(reconcilerVectors.length, 9, 'every reconciler vector is loaded');
 
 const results = await runCommerceConformanceVectors(vectors, { createRuntime });
 assertEqual(
@@ -463,8 +477,26 @@ assertEqual(
     'another-account-owner-recovers': [`player-1:${parkedKey}:GOOGLE_PLAY_ACCOUNT_MISMATCH`],
     'another-account-restore-resends': [`player-1:${parkedKey}:GOOGLE_PLAY_ACCOUNT_MISMATCH`],
     'rejected-other-reason-ends': [],
+    'revoked-refused-never-granted': [],
+    'revoked-unfinished-after-grant': [],
+    'revoked-without-record': [],
   },
   'the reconciler reports each parking with an another-account event',
+);
+
+// Each revoked finish is reported, the one without a record too.
+assertEqual(
+  Object.fromEntries(
+    reconcilerVectors
+      .filter((vector) => vector.profile.revokedFinish === true)
+      .map((vector) => [vector.vector, revokedFinishByVector.get(vector.vector) ?? []]),
+  ),
+  {
+    'revoked-refused-never-granted': ['tx-2:op-2:true'],
+    'revoked-unfinished-after-grant': ['tx-1:op-1:true'],
+    'revoked-without-record': ['tx-4:no record:true'],
+  },
+  'the reconciler reports each revoked finish with a revoked-finish event',
 );
 
 // The parking is the answer's doing: the same script with a refusal for

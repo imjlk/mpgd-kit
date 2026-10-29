@@ -1,0 +1,157 @@
+{
+  "vector": "revoked-unfinished-after-grant",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A consumable granted, then refunded before its finish: the store keeps it unfinished and refuses the ordinary finish of a revoked purchase. Once the ledger reverses the grant (step 5), the reconciler finishes it with revoked: true, naming the reversed grant; nothing is verified or granted again.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": true,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    },
+    "revokedFinish": true
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "granted",
+        "ledgerEntryId": "le-1"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "queueFinish",
+      "result": {
+        "finished": false
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "launched"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "revoke",
+      "ledgerEntryId": "le-1",
+      "entryId": "le-2",
+      "reason": "refunded"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-01T00:05:00Z"
+    },
+    {
+      "actor": "store",
+      "action": "update",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "token": "token-1",
+        "state": "revoked"
+      }
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "launched",
+        "purchased",
+        "verifying",
+        "granted",
+        "finishing",
+        "revoked"
+      ]
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "op-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1"
+      }
+    ],
+    "ledger": [
+      {
+        "entryId": "le-1",
+        "type": "grant",
+        "logicalId": "gems_small"
+      },
+      {
+        "entryId": "le-2",
+        "type": "revoke",
+        "logicalId": "gems_small",
+        "reverses": "le-1",
+        "reason": "refunded"
+      }
+    ],
+    "finishCalls": [
+      {
+        "by": "client",
+        "transactionId": "tx-1",
+        "ledgerEntryId": "le-1",
+        "isConsumable": true,
+        "result": "unfinished"
+      },
+      {
+        "by": "client",
+        "transactionId": "tx-1",
+        "ledgerEntryId": "le-1",
+        "isConsumable": true,
+        "result": "unfinished"
+      },
+      {
+        "by": "client",
+        "transactionId": "tx-1",
+        "ledgerEntryId": "le-1",
+        "isConsumable": true,
+        "revoked": true,
+        "result": "finished"
+      }
+    ],
+    "available": []
+  }
+}

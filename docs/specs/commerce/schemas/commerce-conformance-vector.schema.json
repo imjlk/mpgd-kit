@@ -373,10 +373,16 @@
           },
           "ledgerEntryId": {
             "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The grant's ledger entry; a revoked finish of a purchase never granted names none.",
             "readOnly": true
           },
           "isConsumable": {
             "type": "boolean",
+            "readOnly": true
+          },
+          "revoked": {
+            "const": true,
+            "description": "A revoked finish (`FinishTransactionInput.revoked`).",
             "readOnly": true
           },
           "result": {
@@ -425,6 +431,9 @@
               },
               {
                 "const": "finished"
+              },
+              {
+                "const": "unfinished"
               }
             ],
             "readOnly": true
@@ -433,7 +442,6 @@
         "required": [
           "by",
           "transactionId",
-          "ledgerEntryId",
           "isConsumable",
           "result"
         ],
@@ -608,6 +616,11 @@
           "adaptive": {
             "type": "boolean",
             "description": "The scenario is finish-owner independent: when a caller-supplied provider\nruns the vector, the runner derives `journal`, `finishCalls`,\n`verifyRequests`, and `available` from the provider's declared\ncapabilities instead of this fixture profile (RFC \"Conformance vectors\",\nadaptive vectors). The reference harness ignores the flag.",
+            "readOnly": true
+          },
+          "revokedFinish": {
+            "type": "boolean",
+            "description": "The store declares `acceptsRevokedFinish`: it keeps its unfinished\nrevoked purchases listed, finishes one only on a revoked finish\n(`FinishTransactionInput.revoked`), and refuses an ordinary finish of a\nrevoked purchase (RFC reconciler step 5, the revoked finish).",
             "readOnly": true
           }
         },

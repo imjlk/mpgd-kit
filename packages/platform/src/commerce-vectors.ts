@@ -40,6 +40,13 @@ export interface CommerceConformanceProfile {
    * adaptive vectors). The reference harness ignores the flag.
    */
   readonly adaptive?: boolean;
+  /**
+   * The store declares `acceptsRevokedFinish`: it keeps its unfinished
+   * revoked purchases listed, finishes one only on a revoked finish
+   * (`FinishTransactionInput.revoked`), and refuses an ordinary finish of a
+   * revoked purchase (RFC reconciler step 5, the revoked finish).
+   */
+  readonly revokedFinish?: boolean;
 }
 
 export interface CommerceConformanceCatalogEntry {
@@ -277,9 +284,12 @@ export interface CommerceConformanceLedgerEntryExpectation {
 export interface CommerceConformanceFinishCallExpectation {
   readonly by: 'client' | 'host';
   readonly transactionId: NonEmptyString;
-  readonly ledgerEntryId: NonEmptyString;
+  /** The grant's ledger entry; a revoked finish of a purchase never granted names none. */
+  readonly ledgerEntryId?: NonEmptyString;
   readonly isConsumable: boolean;
-  readonly result: 'finished' | CommerceErrorCode;
+  /** A revoked finish (`FinishTransactionInput.revoked`). */
+  readonly revoked?: true;
+  readonly result: 'finished' | 'unfinished' | CommerceErrorCode;
 }
 
 export interface CommerceConformanceAvailableExpectation {

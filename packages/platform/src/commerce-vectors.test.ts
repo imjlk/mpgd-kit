@@ -58,7 +58,7 @@ describe('commerce conformance vectors', () => {
     expect(vector.steps.length).toBeGreaterThan(0);
   });
 
-  it("ships the six reconciler vectors for another account's purchase", () => {
+  it("ships the reconciler vectors (another account's purchase, the revoked finish)", () => {
     expect(reconcilerVectorFiles).toEqual([
       'another-account-http-parks.json',
       'another-account-legacy-rejected-parks.json',
@@ -66,6 +66,9 @@ describe('commerce conformance vectors', () => {
       'another-account-owner-recovers.json',
       'another-account-restore-resends.json',
       'rejected-other-reason-ends.json',
+      'revoked-refused-never-granted.json',
+      'revoked-unfinished-after-grant.json',
+      'revoked-without-record.json',
     ]);
   });
 

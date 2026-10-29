@@ -101,13 +101,13 @@ function vectorNamed(name: string): CommerceConformanceVector {
 const clientTokenProfile = vectorNamed('purchase-client-finish').profile;
 const gemsCatalog = vectorNamed('purchase-client-finish').catalog ?? [];
 
-describe("reconciler vectors (another account's purchase)", () => {
+describe("reconciler vectors (another account's purchase, the revoked finish)", () => {
   it('passes every reconciler vector with the reference reconciler', async () => {
     const results = await runCommerceConformanceVectors(reconcilerVectors);
     expect(results.map((result) => [result.vector, result.status, result.failures])).toEqual(
       reconcilerVectors.map((vector) => [vector.vector, 'passed', []]),
     );
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(9);
   });
 
   it('fails when a parked record is expected to have ended', async () => {

@@ -205,15 +205,23 @@ export interface CommerceProvider {
     readonly restore?: boolean;
   }): Promise<readonly StorePurchase[]>;
   /** Required when `lifecycle.finish` is 'client' or 'host'. */
-  finishTransaction?(input: {
-    readonly transactionId: string;
-    readonly ledgerEntryId: string;
-    readonly isConsumable: boolean;
-    /** An earlier finish of this purchase was asked for (a `client` retry). */
-    readonly retry?: boolean;
-    /** Finish a transaction the store revoked while unfinished, with no grant standing. */
-    readonly revoked?: boolean;
-  }): Promise<{ readonly finished: boolean }>;
+  finishTransaction?(input:
+    | {
+        readonly transactionId: string;
+        readonly ledgerEntryId: string;
+        readonly isConsumable: boolean;
+        /** An earlier finish of this purchase was asked for (a `client` retry). */
+        readonly retry?: boolean;
+        readonly revoked?: false;
+      }
+    | {
+        /** A consumable the store revoked while unfinished; no grant stands. */
+        readonly transactionId: string;
+        /** The reversed grant's entry; absent when nothing was ever granted. */
+        readonly ledgerEntryId?: string;
+        readonly isConsumable: true;
+        readonly revoked: true;
+      }): Promise<{ readonly finished: boolean }>;
   /** Accepts `retry`; a caller sends it only to a provider declaring this. */
   readonly acceptsFinishRetry?: boolean;
   /**
@@ -495,15 +503,21 @@ One pass:
 5. For records whose grant is still within the journal retention window, ask
    the backend for ledger status and move reversed grants to `revoked`.
    Then, on a `client`-finish provider that declares `acceptsRevokedFinish`,
-   a consumable the store reported `revoked` this session whose record of
-   this player the backend has answered without a standing grant (`revoked`,
-   or `rejected` other than as another account's purchase) is finished with
-   `revoked: true`, `isConsumable: true`, and the answer as `ledgerEntryId`
-   (the reversed grant's entry, or the refused idempotency key), once per
-   session; the store finishes only a transaction it still lists as revoked.
-   Nothing is granted or verified and the record is not rewritten. A revoked
-   report never revokes, verifies, or journals anything on its own, and one
-   with no record of this player is ignored.
+   a consumable the store reported `revoked` this session is finished with
+   `revoked: true` and `isConsumable: true`, once per session, when:
+   - this player's record of it holds the backend's answer for the refund:
+     `revoked` (the ledger reversed the grant; `ledgerEntryId` names the
+     reversed grant), or `rejected` with `APP_STORE_TRANSACTION_REVOKED` or
+     `LEDGER_GRANT_REVERSED` (no `ledgerEntryId`). A refusal for any other
+     reason keeps the transaction unfinished; or
+   - this player holds no record of it (the journal dropped or lost it) and
+     the store binds it to this player's own account: it is finished without
+     a verify and no `ledgerEntryId`, and nothing is journaled. A verify could
+     grant from a signed transaction saved before the refund, and the backend
+     learns of the refund from the store's server notifications.
+   The store finishes only a consumable it still lists as revoked. Nothing is
+   granted or verified and no record is rewritten. A revoked report never
+   revokes, verifies, or journals anything on its own.
 
 The runtime serializes purchases per player, store, and logical product: a
 second `requestPurchase` while a record for the same product is `launched` or
@@ -1308,14 +1322,18 @@ player-scoped key is listed as `<idempotency key>@<player id>`), `parked`
 
 ### Reconciler vectors {#reconciler-vectors}
 
-[Another account's purchase](#another-account) is a backend answer and a
-reconciler rule, the same for every provider, so its vectors live apart, in
+[Another account's purchase](#another-account) and the revoked finish (step
+5) are reconciler rules, the same for every provider that takes them, so
+their vectors live apart, in
 [`docs/specs/commerce/reconciler-vectors/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/commerce/reconciler-vectors),
 in the same file format. Provider suites do not run them. The reference
 reconciler (`packages/platform/src/commerce-conformance.test.ts` and the dist
 smoke) and the `@mpgd/game-services` reconciler
 (`packages/game-services/src/commerce-reconciler-conformance.test.ts`) run all
-six; the game-services adapter answers an `another-account` decision in the
+nine; a revoked-finish vector declares the store capability with
+`profile.revokedFinish`, and the fixture store then lists revoked purchases,
+refuses an ordinary finish of one, and finishes a revoked consumable only on
+a revoked finish. The game-services adapter answers an `another-account` decision in the
 wire shape it names: the HTTP client's 409 error, the oRPC error, or the
 in-process error. `pnpm validate:commerce-alignment` checks their names and
 protocol as it does the provider vectors'. The reference reconciler models
@@ -1334,6 +1352,9 @@ assert none of them.
 | `rejected-other-reason-ends` | A `rejected` receipt with any other reason still ends the record |
 | `another-account-owner-recovers` | After a player change, the purchase's own account journals it under its player-scoped key, sends the same derived key with its own id, and is granted |
 | `another-account-restore-resends` | Only Restore Purchases resends a parked record, as a restore and with the evidence the store reports then |
+| `revoked-unfinished-after-grant` | A consumable refunded before its finish stays unfinished while the grant stands; after the ledger reversal it is finished with `revoked: true`, naming the reversed grant |
+| `revoked-refused-never-granted` | A verify refused as revoked (`APP_STORE_TRANSACTION_REVOKED`) finishes the refunded transaction with no ledger entry; a refusal for another reason keeps it unfinished |
+| `revoked-without-record` | An own-account refunded consumable with no record is finished without a verify, nothing journaled; a refunded durable is left alone |
 
 ## Migration and PR plan {#pr-plan}
 
