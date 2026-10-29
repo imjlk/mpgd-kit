@@ -244,8 +244,15 @@ public enum StoreKitTransactionPolicy {
             guard let token = normalizedAccountToken(appAccountToken as? String) else { return nil }
             return .appAccountToken(token)
         }
-        guard (flag as? Bool) == true, appAccountToken == nil else { return nil }
+        guard isBooleanTrue(flag), appAccountToken == nil else { return nil }
         return .withoutAppAccountToken
+    }
+
+    /// A JSON `true` as Capacitor hands it over (a CFBoolean). A number such
+    /// as `1` is an `NSNumber` that `as? Bool` would also read as true.
+    static func isBooleanTrue(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
     }
 
     /// `finishable` for either binding. A token matches only a transaction

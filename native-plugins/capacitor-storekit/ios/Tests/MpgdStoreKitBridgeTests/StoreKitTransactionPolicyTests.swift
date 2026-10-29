@@ -214,6 +214,9 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
                        .withoutAppAccountToken)
         XCTAssertNil(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: false))
         XCTAssertNil(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: "true"))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: NSNumber(value: 1)))
+        XCTAssertEqual(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: NSNumber(value: true)),
+                       .withoutAppAccountToken)
         XCTAssertNil(Policy.finishBinding(appAccountToken: token, withoutAppAccountToken: true))
         XCTAssertNil(Policy.finishBinding(appAccountToken: NSNull(), withoutAppAccountToken: true))
         XCTAssertNil(Policy.finishBinding(appAccountToken: token, withoutAppAccountToken: false))

@@ -230,6 +230,10 @@ export function createFakeStoreKitPlugin(input: {
         // The native match: a token matches only that token; the explicit
         // no-token match only a non-revoked non-consumable bound to none.
         const listed = transactions.find((entry) => entry.transactionId === request.transactionId);
+        if (withoutToken && listed === undefined) {
+          // Native finds no transaction of that id bound to no token.
+          return { finished: false };
+        }
         if (
           listed !== undefined
           && (withoutToken

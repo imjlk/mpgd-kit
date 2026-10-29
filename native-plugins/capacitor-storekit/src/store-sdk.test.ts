@@ -681,6 +681,7 @@ async function settled(): Promise<void> {
     [],
     'another account, a revoked transaction, and an unbound transaction never reach native finish',
   );
+  assertEqual(mismatched.finishSupportCalls, 0, 'none of them asks for the no-token match');
 
   // A durable StoreKit already finished has nothing left to finish, whatever
   // its token: a restore shared from an earlier guest's purchase ends there.
@@ -757,12 +758,17 @@ async function settled(): Promise<void> {
         unfinished: true,
       }),
       // Bound to no token: a non-consumable on a consumable SKU, a revoked
-      // durable, and a durable of a SKU the catalog does not sell.
-      ...(['37', '38', '39'] as const).map((transactionId) => ({
+      // durable, a durable of a SKU the catalog does not sell, and a
+      // consumable on a durable SKU.
+      ...(['37', '38', '39', '43'] as const).map((transactionId) => ({
         transactionId,
         originalTransactionId: transactionId,
-        productId: transactionId === '37' ? sku : transactionId === '38' ? removeAdsSku : 'com.example.game.retired',
-        type: 'non_consumable' as const,
+        productId: transactionId === '37'
+          ? sku
+          : transactionId === '39'
+          ? 'com.example.game.retired'
+          : removeAdsSku,
+        type: transactionId === '43' ? 'consumable' as const : 'non_consumable' as const,
         purchasedAt: '2026-07-16T12:00:00Z',
         signedTransaction: `header.payload.signature-${transactionId}`,
         unfinished: true,
@@ -775,7 +781,21 @@ async function settled(): Promise<void> {
   if (restoredFinish === undefined) {
     throw new Error('finishTransaction is required for finish: client.');
   }
-  const restoredIds = ['25', '26', '27', '28', '29', '30', '31', '32', '33', '37', '38', '39'];
+  const restoredIds = [
+    '25',
+    '26',
+    '27',
+    '28',
+    '29',
+    '30',
+    '31',
+    '32',
+    '33',
+    '37',
+    '38',
+    '39',
+    '43',
+  ];
   const restoredResults = [];
   for (const transactionId of restoredIds) {
     restoredResults.push(
@@ -788,7 +808,7 @@ async function settled(): Promise<void> {
   }
   assertEqual(
     restoredResults.map((result) => result.finished),
-    [true, true, false, true, false, false, false, true, false, false, false, false],
+    [true, true, false, true, false, false, false, true, false, false, false, false, false],
     'a finished durable, and an unfinished one of another token (a build without the flag too) '
       + 'or of no token, are finished; a revoked, consumable, kind-mismatched (either way), or '
       + 'unmapped one is not, with a token or without',
@@ -805,7 +825,7 @@ async function settled(): Promise<void> {
   );
   assertEqual(
     restoredPlugin.transactions.map((transaction) => transaction.transactionId),
-    ['25', '27', '29', '30', '31', '33', '37', '38', '39'],
+    ['25', '27', '29', '30', '31', '33', '37', '38', '39', '43'],
     'the native finish took the unfinished durables off the unfinished list',
   );
   assertEqual(
@@ -904,7 +924,11 @@ async function settled(): Promise<void> {
     products: nonConsumables,
     transactions: [unbound('36')],
   });
-  silent.getFinishSupport = async () => ({});
+  let silentSupportCalls = 0;
+  silent.getFinishSupport = async () => {
+    silentSupportCalls += 1;
+    return {};
+  };
   const silentSdk = createSdk({ plugin: silent }).sdk;
   const silentFinish = silentSdk.finishTransaction;
   if (silentFinish === undefined) {
@@ -915,6 +939,12 @@ async function settled(): Promise<void> {
     { finished: false },
     'a build that does not declare the match is never sent it',
   );
+  assertEqual(
+    await silentFinish.call(silentSdk, { transactionId: '36', isConsumable: false, ledgerEntryId: 'le-36' }),
+    { finished: false },
+    'nor on the next finish',
+  );
+  assertEqual(silentSupportCalls, 1, 'an answer without the match is remembered');
   assertEqual(
     silent.calls.filter((call) => call.startsWith('finish:')),
     [],

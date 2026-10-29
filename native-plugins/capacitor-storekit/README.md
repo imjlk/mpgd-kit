@@ -274,6 +274,10 @@ from before it answers that method with `UNIMPLEMENTED` (remembered) and would
 refuse the call, so the SDK leaves the durable unfinished there and the record
 keeps retrying `finishing`, as in earlier releases; the entitlement is
 unaffected. Rebuild the app with this package's native code to finish it.
+The catalog and ledger-grant conditions are the SDK's and the reconciler's;
+the native match checks only the transaction itself and, like the token
+match, is not a signed server capability, so a webview caller could finish
+such a durable too, which grants or removes nothing.
 Finishing takes nothing from anyone for the same reason as above:
 StoreKit keeps a finished non-consumable in `Transaction.currentEntitlements`
 ([Apple](https://developer.apple.com/documentation/storekit/transaction/currententitlements)).

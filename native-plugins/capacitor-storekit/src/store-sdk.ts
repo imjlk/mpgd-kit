@@ -423,12 +423,13 @@ export function createCapacitorStoreKitStoreSdk(
     if (finishWithoutTokenSupport !== undefined) {
       return finishWithoutTokenSupport;
     }
-    const check = sdk.getFinishSupport;
-    if (typeof check !== 'function') {
-      return Promise.resolve(false);
-    }
     const attempt = Promise.resolve()
-      .then(() => check.call(sdk))
+      .then(() => {
+        // Read inside the chain, so a plugin proxy that throws on access is
+        // answered like a call that failed.
+        const check = sdk.getFinishSupport;
+        return typeof check === 'function' ? check.call(sdk) : undefined;
+      })
       .then(
         (answer: unknown) => isRecord(answer)
           && typeof answer.withoutAppAccountToken === 'number'
@@ -453,8 +454,9 @@ export function createCapacitorStoreKitStoreSdk(
 
   /**
    * Mirrors the native finish gate: the transaction must be listed, not
-   * revoked, and bound to the session app account token. A missing list is
-   * an invalid response, not a quiet "not finished".
+   * revoked, and bound to the session app account token (exceptions for a
+   * durable below). A missing list is an invalid response, not a quiet "not
+   * finished".
    *
    * On a retried finish (`retry`: the caller asked to finish this purchase
    * before, in an earlier attempt or session), a consumable the list no
@@ -479,8 +481,8 @@ export function createCapacitorStoreKitStoreSdk(
    * reconciler cannot hold a grant for it from this SDK, and the answer
    * neither grants nor takes anything.
    *
-   * Two exceptions for a listed, non-revoked durable, the only kind the
-   * restore read admits from another token:
+   * Three exceptions for a listed, non-revoked durable, the only kind the
+   * restore read admits from another token or from none:
    *
    * - StoreKit already finished it (`unfinished: false`): nothing is left to
    *   finish whatever its token, so a restore shared to this player ends
@@ -700,9 +702,9 @@ export function createCapacitorStoreKitStoreSdk(
         return active.promise;
       }
       const promise = (async (): Promise<StoreSdkFinishTransactionResult> => {
-        // Same match the native plugin applies: missing, revoked, unbound, or
-        // another account never reaches `transaction.finish()`, except a
-        // durable of another or no token (see `finishPermitted`). On a retry, a
+        // Same match the native plugin applies: missing, revoked, or another
+        // account never reaches `transaction.finish()`, except a durable of
+        // another token or of none (see `finishPermitted`). On a retry, a
         // consumable that left the unfinished list is already finished (a
         // lost acknowledgement).
         const permitted = await finishPermitted(
