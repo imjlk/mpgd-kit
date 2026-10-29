@@ -40,11 +40,13 @@ and [Testing In-App Purchases with sandbox](https://developer.apple.com/document
       [App Review and TestFlight purchases](./GAME_SERVICES_BACKEND.md#app-review-and-testflight-purchases-on-a-production-backend)).
 - [ ] A way to see the facts. In a debuggable build, add a temporary listener
       next to `createGamePlatformRuntime` (`src/main.ts` in a generated game)
-      and remove it before release:
+      and remove it before release. Log the facts from the gateway you pass to
+      the runtime (`platform` there), not from `runtime.gateway`: the
+      runtime's coordinated provider renumbers them and drops their `reason`.
 
       ```ts
       // Temporary acceptance logging; do not ship.
-      runtime.gateway.commerce?.presentation?.subscribe((fact) => console.info('[sheet]', JSON.stringify(fact)));
+      platform.commerce?.presentation?.subscribe((fact) => console.info('[sheet]', JSON.stringify(fact)));
       runtime.execution.subscribe((snapshot) => console.info('[blocks]', snapshot.blocks.map((block) => block.reason).join(',')));
       runtime.gateway.lifecycle.onPause(() => console.info('[lifecycle] pause'));
       runtime.gateway.lifecycle.onResume(() => console.info('[lifecycle] resume'));
@@ -65,14 +67,15 @@ For each scenario, the purchase's idempotency key gets:
 | Signal | Expected |
 | --- | --- |
 | `[lifecycle]` | `pause` at the purchase request; `resume` only after the sheet's `closed` (or `not-started`), never while any store UI is visible |
-| `[sheet]` | `open` when the sheet appears, then exactly one `closed`; `unknown` may follow the purchase answer while the sheet is up (the answer proves nothing about the sheet); `not-started` only when no sheet appeared |
+| `[sheet]` | `open` when the sheet appears, then exactly one `closed`; `not-started` only when no sheet appeared; `unknown` only when the store call answered before the plugin observed anything (a call timeout), and a verdict must follow it |
 | `[sheet]` `reason` | absent on a `closed` the plugin observed; `timeout` (15 minutes), `interrupted` (the activity finished) or `disposed` mean no native observation and are a finding unless the scenario says so |
 | `[blocks]` | `game-runtime:lifecycle` and `presentation:purchase` from the request until `closed`; in a game without an ad provider, also `action:purchase` until the backend answers when the purchase runs through `runtime.actions` |
 | Screen | the game is frozen (no animation, no game audio, taps do not reach gameplay) from the request until the sheet is gone, then resumes once |
 | Grant | only after the backend verified the purchase (ledger entry, balance from the server); never from the sheet closing or the store result |
 
-A game with an ad provider shows the same signals; an ad must not start while
-the purchase holds `presentation:purchase`.
+A game with an ad provider shows the same signals except `action:purchase`
+(its actions rely on the purchase lease instead), and an ad must not start
+while the purchase holds `presentation:purchase`.
 
 ## Google Play
 

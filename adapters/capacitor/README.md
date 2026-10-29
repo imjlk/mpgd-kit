@@ -220,8 +220,9 @@ offers `presentation` only when its input has `subscribePresentation`; it
 validates and renumbers the facts and adds `not-started` for a request the
 bridge refused before the host's provider ran. The gateway passes
 `subscribePresentation` only from a provider bridge that has it. With facts,
-the game runtime's purchase coordination
-(`createCoordinatedPlatformGateway`) turns on by itself, and the gateway
+the game runtime's purchase coordination turns on by itself
+(`createGamePlatformRuntime`: `createCoordinatedPlatformGateway` with an ad
+provider, `createCoordinatedCommerceProvider` without one), and the gateway
 keeps a purchase's pause (`beginExternalActivity()`) until the sheet's
 `closed` or `not-started`, whatever the answer, with
 `presentedPurchaseActivityTimeoutMs` as a safety net: an Ask to Buy whose

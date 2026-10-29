@@ -513,6 +513,77 @@ describe('purchase coordination without an ad provider', () => {
     runtime.dispose();
   });
 
+  it('keeps observing an open sheet after runtime disposal and prefers the game source', async () => {
+    const store: ReturnType<typeof noAds> = noAds({
+      facts: true,
+      purchase: async (input) => {
+        store.fact(input.idempotencyKey, 'open');
+        return { outcome: 'launched' };
+      },
+    });
+    const runtime = createGamePlatformRuntime({ gateway: store.gateway, createServices: () => ({}), initialLifecycleState: 'active' });
+    await runtime.gateway.commerce?.requestPurchase(request);
+    runtime.dispose();
+    // The native observer stays until the sheet's own end, then detaches.
+    expect(store.listeners.size).toBe(1);
+    store.fact('p', 'closed');
+    expect(store.listeners.size).toBe(0);
+
+    const game = new Set<(event: PlatformPurchasePresentationEvent) => void>();
+    const other = noAds({ facts: true });
+    const preferred = createGamePlatformRuntime({
+      gateway: other.gateway,
+      createServices: () => ({}),
+      initialLifecycleState: 'active',
+      purchasePresentation: {
+        subscribe(listener) {
+          game.add(listener);
+          return () => {
+            game.delete(listener);
+          };
+        },
+      },
+    });
+    expect(other.listeners.size).toBe(0);
+    await preferred.gateway.commerce?.requestPurchase(request);
+    for (const listener of [...game]) {
+      listener({ idempotencyKey: 'p', sequence: 1, state: 'closed' });
+    }
+    expect(preferred.presentation.getSnapshot().status).toBe('ready');
+    preferred.dispose();
+  });
+
+  it('leaves a gateway with an ad provider on the ads coordinator, whose actions rely on the lease', async () => {
+    const store: ReturnType<typeof noAds> = noAds({
+      facts: true,
+      purchase: async (input) => {
+        store.fact(input.idempotencyKey, 'open');
+        return { outcome: 'launched' };
+      },
+    });
+    const withAds = fixture();
+    const runtime = createGamePlatformRuntime({
+      gateway: { ...store.gateway, ads: withAds.gateway.ads },
+      initialLifecycleState: 'active',
+      createServices: (gateway) => ({
+        client: {
+          async purchase(input: { readonly productId: string; readonly source: 'shop'; readonly idempotencyKey: string }) {
+            await gateway.commerce?.requestPurchase({ logicalId: input.productId, source: input.source, idempotencyKey: input.idempotencyKey });
+            return { status: 'pending', purchase: { status: 'pending', entitlementIds: [] } } as unknown as GameServicesPurchaseResult;
+          },
+          claimRewardedAd: vi.fn(),
+        } as unknown as GameServicesOperationClient,
+      }),
+    });
+    expect(runtime.gateway.ads.provider).toBeDefined();
+    const purchase = runtime.actions?.createPurchaseController().execute({ productId: 'COINS', source: 'shop', idempotencyKey: 'p' });
+    await purchase;
+    expect(runtime.execution.getSnapshot().blocks.map((block) => block.reason)).toEqual(['presentation:purchase']);
+    store.fact('p', 'closed');
+    expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
+    runtime.dispose();
+  });
+
   it('leaves a gateway without commerce unchanged', () => {
     const store = noAds({ facts: false });
     const bare = { ...store.gateway } as PlatformGateway & { commerce?: unknown };

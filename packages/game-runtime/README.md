@@ -514,7 +514,12 @@ gateway takes no lease. A commerce provider without facts (an adapter or
 plugin built before them) keeps the plain gateway and today's behavior; it
 never meets the standalone coordinator's `presentation-unavailable` refusal.
 On the Capacitor gateway this adds to, and does not replace, the gateway's own
-lifecycle pause, which also follows the facts.
+lifecycle pause, which also follows the facts. The lease has no timeout of its
+own: it ends on the provider's facts, so a provider that offers
+`presentation` must end every call with `closed` or `not-started` (the
+Capacitor store provider does, after 15 minutes at the latest). As with an ad
+provider, `runtime.gateway` is then a forwarding view of the gateway, not the
+same object, and reads `gateway.commerce` once at construction.
 
 Keep the runtime above scenes. Create scene-owned action controllers from
 `runtime.actions`; dispose those controllers and their input listeners on
