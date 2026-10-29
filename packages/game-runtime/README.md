@@ -499,6 +499,23 @@ encrypted operation store rather than a memory fallback. Startup and resume
 reconcile existing records without opening SDK UI. Account changes require a
 new client/runtime bound to that account.
 
+A game without an ad provider (`gateway.ads.provider` absent, for example a
+Capacitor shell with no ads plugin) still gets purchase coordination when
+something trusted can end a purchase: the commerce provider's `presentation`
+facts or the runtime's `purchasePresentation` input. `runtime.gateway.commerce`
+is then a `createCoordinatedCommerceProvider` over the same scope, so a
+purchase owns `runtime.presentation` (`kind: 'purchase'`) and blocks
+simulation, gameplay input and audio from the request until the sheet's
+`closed` (or `not-started`) fact. A business result alone leaves the lease
+`unknown`, a second purchase is refused `busy` while the sheet is up, and a
+settled key never reopens the sheet. `runtime.actions` keeps its own block
+there, through server verification, because a legacy rewarded ad on such a
+gateway takes no lease. A commerce provider without facts (an adapter or
+plugin built before them) keeps the plain gateway and today's behavior; it
+never meets the standalone coordinator's `presentation-unavailable` refusal.
+On the Capacitor gateway this adds to, and does not replace, the gateway's own
+lifecycle pause, which also follows the facts.
+
 Keep the runtime above scenes. Create scene-owned action controllers from
 `runtime.actions`; dispose those controllers and their input listeners on
 scene shutdown. After an await, check the captured controller's disposal state

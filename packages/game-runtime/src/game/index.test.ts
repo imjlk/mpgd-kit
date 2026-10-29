@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createUnsupportedCapabilities, type PlatformGateway } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  createUnsupportedCommerceCapabilities,
+  type PlatformGateway,
+  type PlatformPurchasePresentationEvent,
+} from '@mpgd/platform';
+import type {
+  GameServicesOperationClient,
+  GameServicesPurchaseResult,
+} from '@mpgd/game-services/operations';
 import {
   adProtocol,
   adProtocolVersion,
@@ -380,6 +389,172 @@ describe('game-owned platform assembly', () => {
     });
     expect(runtime.presentation.getSnapshot().owner).toBeUndefined();
     expect(f.provider.show).toHaveBeenCalledOnce();
+    runtime.dispose();
+  });
+});
+
+describe('purchase coordination without an ad provider', () => {
+  type Commerce = NonNullable<PlatformGateway['commerce']>;
+  type Outcome = Awaited<ReturnType<Commerce['requestPurchase']>>;
+  const request = { logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' } as const;
+  // The standard Capacitor gateway without an ads plugin: no `ads.provider`,
+  // and a commerce provider that offers sheet facts only when its SDK does.
+  function noAds(options: { readonly facts: boolean; readonly purchase?: (input: { idempotencyKey: string }) => Promise<Outcome> }) {
+    const f = fixture();
+    const listeners = new Set<(event: PlatformPurchasePresentationEvent) => void>();
+    let sequence = 0;
+    const commerce: Commerce = {
+      store: 'fixture',
+      getCapabilities: async () => createUnsupportedCommerceCapabilities(),
+      fetchProducts: async () => [],
+      requestPurchase: vi.fn(options.purchase ?? (async () => ({ outcome: 'launched' as const }))),
+      getAvailablePurchases: vi.fn(async () => []),
+      subscribe: () => () => {},
+      ...(options.facts ? {
+        presentation: {
+          subscribe(listener: (event: PlatformPurchasePresentationEvent) => void) {
+            listeners.add(listener);
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+        },
+      } : {}),
+    };
+    const gateway: PlatformGateway = {
+      ...f.gateway,
+      ads: { preload: async () => {}, showRewarded: async () => ({ status: 'unavailable', rewardGranted: false }) },
+      commerce,
+    };
+    return {
+      gateway,
+      commerce,
+      listeners,
+      fact(idempotencyKey: string, state: PlatformPurchasePresentationEvent['state']) {
+        sequence += 1;
+        for (const listener of [...listeners]) {
+          listener({ idempotencyKey, sequence, state });
+        }
+      },
+    };
+  }
+
+  it('takes the shared full-screen scope from the request until the sheet closes', async () => {
+    const store: ReturnType<typeof noAds> = noAds({
+      facts: true,
+      purchase: async (input) => {
+        store.fact(input.idempotencyKey, 'open');
+        return { outcome: 'launched' };
+      },
+    });
+    const runtime = createGamePlatformRuntime({ gateway: store.gateway, createServices: () => ({}), initialLifecycleState: 'active' });
+    expect(runtime.gateway.ads.provider).toBeUndefined();
+    const seen: string[] = [];
+    runtime.gateway.commerce?.presentation?.subscribe((event) => seen.push(`${event.idempotencyKey}:${event.state}`));
+
+    await expect(runtime.gateway.commerce?.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    // The answer proves nothing about the sheet (`unknown`): the game stays
+    // paused, audio included, until the sheet's own `closed`.
+    expect(runtime.presentation.getSnapshot()).toMatchObject({ status: 'unknown', owner: { kind: 'purchase', invocationId: 'p' } });
+    expect(runtime.execution.getSnapshot().blocked).toMatchObject({ simulation: true, 'gameplay-input': true, audio: true });
+    // A second sheet cannot open under the first one.
+    await expect(runtime.gateway.commerce?.requestPurchase({ ...request, idempotencyKey: 'q' })).rejects.toMatchObject({ code: 'busy' });
+    expect(store.commerce.requestPurchase).toHaveBeenCalledOnce();
+
+    store.fact('p', 'closed');
+    expect(runtime.presentation.getSnapshot().status).toBe('ready');
+    expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
+    // The facts reach a reconciler through the coordinated provider.
+    expect(seen).toEqual(['p:open', 'p:unknown', 'p:closed']);
+    // A launched key never reopens the sheet; a changed product is refused.
+    await expect(runtime.gateway.commerce?.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    await expect(runtime.gateway.commerce?.requestPurchase({ ...request, logicalId: 'GEMS' })).rejects.toMatchObject({ code: 'key-conflict' });
+    expect(store.commerce.requestPurchase).toHaveBeenCalledOnce();
+    // Recovery reads keep their receiver and are not gated.
+    await expect(runtime.gateway.commerce?.getAvailablePurchases()).resolves.toEqual([]);
+    runtime.dispose();
+    await expect(runtime.gateway.commerce?.requestPurchase({ ...request, idempotencyKey: 'r' })).rejects.toMatchObject({ code: 'disposed' });
+    expect(store.listeners.size).toBe(0);
+  });
+
+  it('keeps an older provider without sheet facts on the plain gateway', async () => {
+    const store = noAds({ facts: false });
+    const runtime = createGamePlatformRuntime({ gateway: store.gateway, createServices: () => ({}), initialLifecycleState: 'active' });
+    expect(runtime.gateway).toBe(store.gateway);
+    // Not the coordinator's strict `presentation-unavailable` refusal.
+    await expect(runtime.gateway.commerce?.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    expect(store.commerce.requestPurchase).toHaveBeenCalledOnce();
+    expect(runtime.presentation.getSnapshot().status).toBe('ready');
+    runtime.dispose();
+  });
+
+  it("uses the game's purchasePresentation source when the provider offers none", async () => {
+    const store = noAds({ facts: false });
+    const listeners = new Set<(event: PlatformPurchasePresentationEvent) => void>();
+    const runtime = createGamePlatformRuntime({
+      gateway: store.gateway,
+      createServices: () => ({}),
+      initialLifecycleState: 'active',
+      purchasePresentation: {
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      },
+    });
+    await runtime.gateway.commerce?.requestPurchase(request);
+    expect(runtime.presentation.getSnapshot().owner).toMatchObject({ kind: 'purchase', state: 'unknown' });
+    for (const listener of [...listeners]) {
+      listener({ idempotencyKey: 'p', sequence: 1, state: 'closed' });
+    }
+    expect(runtime.presentation.getSnapshot().status).toBe('ready');
+    runtime.dispose();
+  });
+
+  it('leaves a gateway without commerce unchanged', () => {
+    const store = noAds({ facts: false });
+    const bare = { ...store.gateway } as PlatformGateway & { commerce?: unknown };
+    delete bare.commerce;
+    const runtime = createGamePlatformRuntime({ gateway: bare, createServices: () => ({}), initialLifecycleState: 'active' });
+    expect(runtime.gateway).toBe(bare);
+    runtime.dispose();
+  });
+
+  it('keeps the action block until the business result, after the sheet closed', async () => {
+    let settle!: (result: GameServicesPurchaseResult) => void;
+    const store: ReturnType<typeof noAds> = noAds({
+      facts: true,
+      purchase: async (input) => {
+        store.fact(input.idempotencyKey, 'open');
+        return { outcome: 'launched' };
+      },
+    });
+    const runtime = createGamePlatformRuntime({
+      gateway: store.gateway,
+      initialLifecycleState: 'active',
+      createServices: (gateway) => ({
+        client: {
+          async purchase(input: { readonly productId: string; readonly source: 'shop'; readonly idempotencyKey: string }) {
+            await gateway.commerce?.requestPurchase({ logicalId: input.productId, source: input.source, idempotencyKey: input.idempotencyKey });
+            return new Promise<GameServicesPurchaseResult>((done) => {
+              settle = done;
+            });
+          },
+          claimRewardedAd: vi.fn(),
+        } as unknown as GameServicesOperationClient,
+      }),
+    });
+    const purchase = runtime.actions?.createPurchaseController().execute({ productId: 'COINS', source: 'shop', idempotencyKey: 'p' });
+    await flush();
+    expect(runtime.execution.getSnapshot().blocks.map((block) => block.reason).sort()).toEqual(['action:purchase', 'presentation:purchase']);
+    store.fact('p', 'closed');
+    // Server verification still runs: gameplay stays paused by the action.
+    expect(runtime.execution.getSnapshot().blocks.map((block) => block.reason)).toEqual(['action:purchase']);
+    settle({ status: 'granted', purchase: { status: 'cancelled', entitlementIds: [] } });
+    await purchase;
+    expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
     runtime.dispose();
   });
 });
