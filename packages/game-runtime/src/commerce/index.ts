@@ -16,6 +16,28 @@ import {
 type CommerceProviderSource = NonNullable<PlatformGateway['commerce']>;
 type PurchaseRequestInput = Parameters<CommerceProviderSource['requestPurchase']>[0];
 type PurchaseOutcome = Awaited<ReturnType<CommerceProviderSource['requestPurchase']>>;
+// The failed variant shares its member with `cancelled`, so narrow by the error field.
+type PurchaseFailure = Extract<PurchaseOutcome, { readonly error: unknown }> & { readonly outcome: 'failed' };
+type HistoryEntry = { fingerprint: string; sequence: number; retryable: boolean; attempt: number; nativeSequence: number };
+/** Refusals the coordinator answers itself, before the provider is called: transient, so the key stays usable. */
+type CoordinatorRefusal = 'busy' | 'disposed' | 'history-full';
+const refusalAnswers: Readonly<Record<CoordinatorRefusal, { readonly code: PurchaseFailure['error']['code']; readonly storeCode: string; readonly message: string }>> = {
+  busy: {
+    code: 'IN_PROGRESS',
+    storeCode: 'PRESENTATION_BUSY',
+    message: 'Another full-screen presentation is in progress.',
+  },
+  disposed: {
+    code: 'NOT_PREPARED',
+    storeCode: 'PRESENTATION_DISPOSED',
+    message: 'Purchase coordination has been disposed.',
+  },
+  'history-full': {
+    code: 'IN_PROGRESS',
+    storeCode: 'PRESENTATION_HISTORY_FULL',
+    message: 'Every remembered purchase is still in flight or retryable.',
+  },
+};
 interface PurchaseFlight {
   readonly key: string;
   readonly promise: Promise<PurchaseOutcome>;
@@ -55,17 +77,48 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
   if (!Number.isSafeInteger(capacity) || capacity < 1) {
     throw new TypeError('Invalid purchase history capacity.');
   }
-  const history = new Map<string, { fingerprint: string; sequence: number; retryable: boolean; attempt: number; nativeSequence: number }>();
+  const history = new Map<string, HistoryEntry>();
   const listeners = new Set<(event: PlatformPurchasePresentationEvent) => void>();
-  function publish(flight: PurchaseFlight, state: PlatformPurchasePresentationEvent['state']): void {
-    const entry = history.get(flight.key);
-    if (entry === undefined) {
-      return;
-    }
-    const event = Object.freeze({ idempotencyKey: flight.key, sequence: ++entry.sequence, state });
+  function emit(key: string, sequence: number, state: PlatformPurchasePresentationEvent['state']): void {
+    const event = Object.freeze({ idempotencyKey: key, sequence, state });
     for (const listener of [...listeners]) {
       observe(() => listener(event), input.onObserverError);
     }
+  }
+  function publish(flight: PurchaseFlight, state: PlatformPurchasePresentationEvent['state']): void {
+    const entry = history.get(flight.key);
+    if (entry !== undefined) {
+      emit(flight.key, ++entry.sequence, state);
+    }
+  }
+  /**
+   * Answers a call the coordinator refused before the provider ran as data, like
+   * a provider's own pre-launch refusal: a `not-started` fact first, then a
+   * retryable failure, so a reconciler keeps the key for a same-key retry.
+   */
+  function refuse(key: string, entry: HistoryEntry | undefined, reason: CoordinatorRefusal): PurchaseFailure {
+    if (entry === undefined) {
+      // Not remembered (history full): a one-off fact, as for a first call.
+      emit(key, 1, 'not-started');
+    } else {
+      entry.retryable = true;
+      emit(key, ++entry.sequence, 'not-started');
+    }
+    const answer = refusalAnswers[reason];
+    return Object.freeze({
+      outcome: 'failed',
+      error: Object.freeze({ ...answer, retryable: true }),
+    }) as PurchaseFailure;
+  }
+  /** Frees the oldest settled, closed, non-retryable key; in-flight, retryable and the last result stay. */
+  function evictSettled(): boolean {
+    for (const [key, entry] of history) {
+      if (!entry.retryable && !purchases.has(key) && last?.key !== key) {
+        history.delete(key);
+        return true;
+      }
+    }
+    return false;
   }
   const purchases = new Map<string, PurchaseFlight>();
   let last: PurchaseFlight | undefined;
@@ -143,13 +196,13 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
   const commerce = forward(source, {
     presentation: {
       subscribe(listener: (event: PlatformPurchasePresentationEvent) => void): () => void {
-        if (disposed) { throw new PresentationExecutionError('disposed'); }
+        // After disposal a listener still hears the facts of the calls it makes
+        // (each refused `not-started`); subscribing never throws.
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
     },
     requestPurchase(supplied: PurchaseRequestInput): Promise<PurchaseOutcome> {
-      if (disposed) { return Promise.reject(new PresentationExecutionError('disposed')); }
       if (purchasePresentation === undefined && input.classifyPurchasePresentation === undefined) {
         return Promise.reject(new PresentationExecutionError('presentation-unavailable'));
       }
@@ -173,8 +226,14 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
         const flight = purchases.get(key) ?? (last?.key === key ? last : undefined);
         if (!prior.retryable) { return flight?.promise ?? Promise.reject(new PresentationExecutionError('already-completed')); }
       }
-      if (prior === undefined && history.size >= capacity) {
-        return Promise.reject(new PresentationExecutionError('history-full'));
+      if (disposed) {
+        if (prior === undefined && (history.size < capacity || evictSettled())) {
+          history.set(key, { fingerprint, sequence: 0, retryable: true, attempt: 0, nativeSequence: 0 });
+        }
+        return Promise.resolve(refuse(key, history.get(key), 'disposed'));
+      }
+      if (prior === undefined && history.size >= capacity && !evictSettled()) {
+        return Promise.resolve(refuse(key, undefined, 'history-full'));
       }
       const entry = prior ?? { fingerprint, sequence: 0, retryable: false, attempt: 0, nativeSequence: 0 };
       entry.retryable = false;
@@ -184,9 +243,16 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
         key, called: false, settled: false, closed: false, started: false, sequence: 0, notStarted: false, failedRetryable: false, retryable: false, attempt: entry.attempt,
         promise: Promise.resolve().then(async () => {
           try {
-            if (disposed) { throw new PresentationExecutionError('disposed'); }
-            flight.lease = input.presentation.acquire({ kind: 'purchase', invocationId: key });
-            if (disposed) { close(flight); throw new PresentationExecutionError('disposed'); }
+            if (disposed) { return refuse(key, entry, 'disposed'); }
+            try {
+              flight.lease = input.presentation.acquire({ kind: 'purchase', invocationId: key });
+            } catch (error) {
+              if (error instanceof PresentationExecutionError && (error.code === 'busy' || error.code === 'disposed')) {
+                return refuse(key, entry, error.code);
+              }
+              throw error;
+            }
+            if (disposed) { close(flight); return refuse(key, entry, 'disposed'); }
             flight.called = true;
             const result = await source.requestPurchase(request);
             const state = input.classifyPurchasePresentation?.(result) ?? 'unknown';
@@ -214,7 +280,9 @@ export function createCoordinatedCommerceProvider(input: CoordinatedCommerceOpti
           } finally {
             flight.settled = true;
             if (!flight.called) {
-              if (prior === undefined) { history.delete(key); } else { entry.retryable = true; }
+              // A refused call published `not-started` under this entry; keep it
+              // (retryable) so the key's published sequence keeps increasing.
+              if (prior === undefined && !entry.retryable) { history.delete(key); } else { entry.retryable = true; }
               purchases.delete(key);
             } else {
               entry.retryable = flight.retryable;

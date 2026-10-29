@@ -89,7 +89,7 @@ describe('standalone commerce presentation', () => {
   it('shares native surface exclusion with ads and permits retry when acquisition never launched', async () => {
     const f = fixture();
     const ad = f.presentation.acquire({ kind: 'rewarded', invocationId: 'ad' });
-    await expect(f.controlled.requestPurchase(request)).rejects.toMatchObject({ code: 'busy' });
+    await expect(f.controlled.requestPurchase(request)).resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' } });
     expect(f.provider.requestPurchase).not.toHaveBeenCalled();
     ad.confirmClosed();
     await f.controlled.requestPurchase(request);
@@ -105,7 +105,7 @@ describe('standalone commerce presentation', () => {
     expect(f.controlled.requestPurchase(request)).toBe(first);
     await expect(f.controlled.requestPurchase({ ...request, logicalId: 'OTHER' })).rejects.toMatchObject({ code: 'key-conflict' });
     await first;
-    await expect(f.controlled.requestPurchase({ ...request, idempotencyKey: 'second' })).rejects.toMatchObject({ code: 'busy' });
+    await expect(f.controlled.requestPurchase({ ...request, idempotencyKey: 'second' })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' } });
     expect(f.provider.requestPurchase).toHaveBeenCalledOnce();
   });
   it('retains closure observation after disposal and after a rejected SDK call', async () => {
@@ -116,7 +116,7 @@ describe('standalone commerce presentation', () => {
     f.controlled.dispose();
     expect(f.listeners.size).toBe(1);
     expect(f.presentation.getSnapshot().status).toBe('unknown');
-    await expect(f.controlled.requestPurchase({ ...request, idempotencyKey: 'second' })).rejects.toMatchObject({ code: 'disposed' });
+    await expect(f.controlled.requestPurchase({ ...request, idempotencyKey: 'second' })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'NOT_PREPARED', retryable: true, storeCode: 'PRESENTATION_DISPOSED' } });
     f.emit('closed', 1);
     expect(f.listeners.size).toBe(0);
     expect(f.presentation.getSnapshot().status).toBe('ready');
@@ -150,7 +150,7 @@ describe('standalone commerce presentation', () => {
     expect(f.presentation.getSnapshot().status).toBe('ready');
     await controlled.requestPurchase(request);
     expect(f.provider.requestPurchase).toHaveBeenCalledOnce();
-    await expect(controlled.requestPurchase({ ...request, idempotencyKey: 'second' })).rejects.toMatchObject({ code: 'history-full' });
+    await expect(controlled.requestPurchase({ ...request, idempotencyKey: 'second' })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_HISTORY_FULL' } });
     controlled.dispose();
   });
   it('unsubscribes without a flight and validates capacity before subscribing', () => {
@@ -163,6 +163,134 @@ describe('standalone commerce presentation', () => {
       );
       expect(f.listeners.size).toBe(0);
     }
+  });
+});
+
+describe('coordinator refusals keep the key', () => {
+  it('answers a refusal before the provider as a retryable failure after a not-started fact', async () => {
+    const f = fixture();
+    const seen: string[] = [];
+    f.controlled.presentation?.subscribe((event) => seen.push(`${event.idempotencyKey}:${event.sequence}:${event.state}`));
+    const ad = f.presentation.acquire({ kind: 'rewarded', invocationId: 'ad' });
+    await expect(f.controlled.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' },
+    });
+    expect(f.provider.requestPurchase).not.toHaveBeenCalled();
+    // Same-key protection still holds for the refused key.
+    await expect(f.controlled.requestPurchase({ ...request, logicalId: 'OTHER' })).rejects.toMatchObject({ code: 'key-conflict' });
+    ad.confirmClosed();
+    await f.controlled.requestPurchase(request);
+    expect(f.provider.requestPurchase).toHaveBeenCalledOnce();
+    f.emit('closed', 1);
+    // Sequences keep increasing across the refusal and the retry.
+    expect(seen).toEqual(['first:1:not-started', 'first:2:unknown', 'first:3:closed']);
+  });
+  it('still answers subscribers after disposal, with a not-started fact for each refused call', async () => {
+    const f = fixture();
+    f.controlled.dispose();
+    const seen: string[] = [];
+    const unsubscribe = f.controlled.presentation?.subscribe((event) => seen.push(`${event.idempotencyKey}:${event.state}`));
+    await expect(f.controlled.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed', error: { code: 'NOT_PREPARED', retryable: true, storeCode: 'PRESENTATION_DISPOSED' },
+    });
+    expect(seen).toEqual(['first:not-started']);
+    expect(f.provider.requestPurchase).not.toHaveBeenCalled();
+    unsubscribe?.();
+  });
+  it('evicts the oldest settled key instead of refusing, never an in-flight, retryable, or last one', async () => {
+    let calls = 0;
+    const f = fixture(true, async (input) => {
+      calls += 1;
+      f.emit('closed', calls, input.idempotencyKey);
+      return { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } };
+    });
+    const controlled = createCoordinatedCommerceProvider({ provider: f.provider, presentation: f.presentation, maxRememberedInvocations: 2 });
+    await controlled.requestPurchase({ ...request, idempotencyKey: 'a' });
+    await controlled.requestPurchase({ ...request, idempotencyKey: 'b' });
+    // Full: `a` (settled, closed, not retryable, not the last) makes room.
+    await expect(controlled.requestPurchase({ ...request, idempotencyKey: 'c' })).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(f.provider.requestPurchase).toHaveBeenCalledTimes(3);
+    // The last result keeps its same-key protection.
+    await expect(controlled.requestPurchase({ ...request, idempotencyKey: 'c' })).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(f.provider.requestPurchase).toHaveBeenCalledTimes(3);
+    controlled.dispose();
+
+    // An in-flight key is never evicted: the new key is refused, retryably.
+    const held = fixture(true, async () => new Promise<Result>(() => {}));
+    const one = createCoordinatedCommerceProvider({ provider: held.provider, presentation: held.presentation, maxRememberedInvocations: 1 });
+    void one.requestPurchase({ ...request, idempotencyKey: 'live' });
+    await Promise.resolve();
+    await expect(one.requestPurchase({ ...request, idempotencyKey: 'next' })).resolves.toMatchObject({
+      outcome: 'failed', error: { retryable: true, storeCode: 'PRESENTATION_HISTORY_FULL' },
+    });
+    expect(held.provider.requestPurchase).toHaveBeenCalledOnce();
+  });
+  it('keeps a key the coordinator refused retryable in the durable reconciler', async () => {
+    const f = fixture(false);
+    const events = new Set<(event: PlatformPurchasePresentationEvent) => void>();
+    const sequences = new Map<string, number>();
+    const fact = (idempotencyKey: string, state: PlatformPurchasePresentationEvent['state']) => {
+      const sequence = (sequences.get(idempotencyKey) ?? 0) + 1;
+      sequences.set(idempotencyKey, sequence);
+      for (const listener of [...events]) {
+        listener({ idempotencyKey, sequence, state });
+      }
+    };
+    const product = (logicalId: string) => ({
+      logicalId, store: 'fixture', storeSku: logicalId.toLowerCase(), kind: 'consumable' as const,
+      title: logicalId, description: logicalId, price: { formatted: '$1', currencyCode: 'USD' },
+    });
+    const provider: Commerce = {
+      ...f.provider,
+      presentation: {
+        subscribe(listener) {
+          events.add(listener);
+          return () => {
+            events.delete(listener);
+          };
+        },
+      },
+      getCapabilities: async () => ({
+        purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+        catalog: { products: true, offers: false, localizedPrice: true },
+        lifecycle: { availablePurchases: true, pending: true, restore: false, events: true, finish: 'client' },
+        authority: { evidence: 'client-token', accountBinding: 'optional' },
+        availability: 'available',
+      }),
+      getAvailablePurchases: async () => [],
+      fetchProducts: async () => [product('COINS'), product('GEMS')],
+      requestPurchase: vi.fn(async (input) => {
+        fact(input.idempotencyKey, 'open');
+        if (input.logicalId === 'COINS') {
+          return { outcome: 'launched' } as const;
+        }
+        fact(input.idempotencyKey, 'closed');
+        return { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } } as const;
+      }),
+    };
+    const controlled = createCoordinatedCommerceProvider({ provider, presentation: f.presentation });
+    const reconciler = createCommerceReconciler({
+      provider: controlled,
+      backend: { verifyPurchase: vi.fn(async () => { throw new Error('nothing to verify'); }) },
+      store: createInMemoryMonetizationOperationStore(),
+      playerId: 'player',
+      target: 'android',
+    });
+    await reconciler.start();
+    const gems = { logicalId: 'GEMS', source: 'shop', idempotencyKey: 'gems-1' } as const;
+    await expect(reconciler.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'coins-1' })).resolves.toMatchObject({ outcome: 'launched' });
+    // The COINS sheet holds the scope: the coordinator refuses GEMS before the store.
+    await expect(reconciler.requestPurchase(gems)).resolves.toMatchObject({ outcome: 'failed', error: { retryable: true } });
+    expect(await reconciler.read(gems.idempotencyKey)).toMatchObject({ state: 'requested', error: { retryable: true } });
+    expect(provider.requestPurchase).toHaveBeenCalledOnce();
+    fact('coins-1', 'closed');
+    // The same key opens the store once the sheet is gone.
+    await expect(reconciler.requestPurchase(gems)).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect(provider.requestPurchase).toHaveBeenCalledTimes(2);
+    expect(provider.requestPurchase).toHaveBeenLastCalledWith(expect.objectContaining({ idempotencyKey: 'gems-1', logicalId: 'GEMS' }));
+    expect(await reconciler.read(gems.idempotencyKey)).toMatchObject({ state: 'cancelled' });
+    await reconciler.stop();
+    controlled.dispose();
   });
 });
 

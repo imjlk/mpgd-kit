@@ -457,15 +457,16 @@ describe('purchase coordination without an ad provider', () => {
     // paused, audio included, until the sheet's own `closed`.
     expect(runtime.presentation.getSnapshot()).toMatchObject({ status: 'unknown', owner: { kind: 'purchase', invocationId: 'p' } });
     expect(runtime.execution.getSnapshot().blocked).toMatchObject({ simulation: true, 'gameplay-input': true, audio: true });
-    // A second sheet cannot open under the first one.
-    await expect(runtime.gateway.commerce?.requestPurchase({ ...request, idempotencyKey: 'q' })).rejects.toMatchObject({ code: 'busy' });
+    // A second sheet cannot open under the first one; the refusal is retryable.
+    await expect(runtime.gateway.commerce?.requestPurchase({ ...request, idempotencyKey: 'q' })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' } });
     expect(store.commerce.requestPurchase).toHaveBeenCalledOnce();
 
     store.fact('p', 'closed');
     expect(runtime.presentation.getSnapshot().status).toBe('ready');
     expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
     // The facts reach a reconciler through the coordinated provider.
-    expect(seen).toEqual(['p:open', 'p:unknown', 'p:closed']);
+    // The refused key heard `not-started`, so a reconciler keeps it retryable.
+    expect(seen).toEqual(['p:open', 'p:unknown', 'q:not-started', 'p:closed']);
     // A launched key never reopens the sheet; a changed product is refused.
     await expect(runtime.gateway.commerce?.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
     await expect(runtime.gateway.commerce?.requestPurchase({ ...request, logicalId: 'GEMS' })).rejects.toMatchObject({ code: 'key-conflict' });
@@ -473,7 +474,7 @@ describe('purchase coordination without an ad provider', () => {
     // Recovery reads keep their receiver and are not gated.
     await expect(runtime.gateway.commerce?.getAvailablePurchases()).resolves.toEqual([]);
     runtime.dispose();
-    await expect(runtime.gateway.commerce?.requestPurchase({ ...request, idempotencyKey: 'r' })).rejects.toMatchObject({ code: 'disposed' });
+    await expect(runtime.gateway.commerce?.requestPurchase({ ...request, idempotencyKey: 'r' })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'NOT_PREPARED', retryable: true, storeCode: 'PRESENTATION_DISPOSED' } });
     expect(store.listeners.size).toBe(0);
   });
 

@@ -154,11 +154,26 @@ facts; wire the provider's `presentation` or a `purchasePresentation` source
 to take the lease. A gateway
 without a commerce provider stays without one. Events are scoped to the
 original idempotency key and a monotonic sequence; late or foreign events cannot
-release another invocation. Disposal rejects new calls and retains uncertain
-native close observation. Lightweight key history prevents retired purchase
-keys from reopening the SDK; only active/uncertain results and the last settled
-result are retained. The idempotency key, `logicalId`, `source`, `offerId`, and
-`quantity` of a replayed key must match its first request.
+release another invocation. Disposal refuses new calls and retains uncertain
+native close observation; `presentation.subscribe` keeps working after it.
+Lightweight key history prevents retired purchase keys from reopening the SDK.
+It keeps every in-flight, uncertain or retryable key and the last settled
+result; once it holds `maxRememberedInvocations` keys (1024 by default), a new
+key evicts the oldest settled, closed, non-retryable one. The idempotency key,
+`logicalId`, `source`, `offerId`, and `quantity` of a replayed key must match
+its first request.
+
+A call the wrapper refuses itself before the provider runs is answered like a
+provider's own pre-launch refusal, never as an exception: a `not-started` fact
+for the key on `presentation`, then `{ outcome: 'failed' }` with a retryable
+error. The error is `IN_PROGRESS` (`storeCode` `PRESENTATION_BUSY`) while
+another purchase or ad holds the scope, `NOT_PREPARED`
+(`PRESENTATION_DISPOSED`) after disposal, and `IN_PROGRESS`
+(`PRESENTATION_HISTORY_FULL`) when every remembered key is still in flight or
+retryable. A server-backed reconciler therefore keeps the key and the same key
+opens the store later. A changed request under a known key (`key-conflict`), a
+settled key (`already-completed`), and `presentation-unavailable` still reject
+with `PresentationExecutionError`.
 
 ### Checkout-only hosts
 
@@ -507,8 +522,9 @@ is then a `createCoordinatedCommerceProvider` over the same scope, so a
 purchase owns `runtime.presentation` (`kind: 'purchase'`) and blocks
 simulation, gameplay input and audio from the request until the sheet's
 `closed` (or `not-started`) fact. A business result alone leaves the lease
-`unknown`, a second purchase is refused `busy` while the sheet is up, and a
-settled key never reopens the sheet. `runtime.actions` keeps its own block
+`unknown`, a second purchase is refused while the sheet is up (a retryable
+`IN_PROGRESS` failure after a `not-started` fact, so its key stays usable), and
+a settled key never reopens the sheet. `runtime.actions` keeps its own block
 there, through server verification, because a legacy rewarded ad on such a
 gateway takes no lease. A commerce provider without facts (an adapter or
 plugin built before them) keeps the plain gateway and today's behavior; it
