@@ -1,5 +1,23 @@
 # @mpgd/platform
 
+## 0.34.0 — 2026-10-29
+
+### Added
+
+- [b73b129d](https://github.com/imjlk/mpgd-kit/commit/b73b129d35097331dc6d8de0363191c9cf110dd2) Purchase presentation facts get their own bridge event protocol, `mpgd.commerce.presentation.v1`. `@mpgd/platform/commerce` adds `commercePresentationProtocol`, `CommercePresentationEvent`, `CommercePresentationEventEnvelope`, their typia asserts, and their JSON Schemas; `@mpgd/bridge` adds `BridgeCommercePresentationEvent` to `BridgeEvent`, `bridgeCommercePresentationEventProtocol`, and a `createBridgeEventSource` overload. It is not a `CommerceEvent` type, so a consumer built before it skips the envelopes as another protocol's.
+  
+  `PlatformPurchasePresentationEvent` gains an optional `reason` (`timeout`, `interrupted`, `disposed`) for a `closed` fact no native observation proved, and the `CommerceProvider.presentation` contract now states that a provider answers every `requestPurchase` with facts: `not-started` before the answer when no surface opened, otherwise `open` and exactly one `closed`.
+  
+  `@mpgd/platform` also exports the pure helpers a provider or a wrapper uses for these facts: `createPurchasePresentationChannel` (publishes numbered facts, isolating a failing listener), `createPurchasePresentationRelay` (relays a source's facts, drops a superseded one, numbers them again, and reports `not-started` for a purchase the wrapper answered before its source ran), and `createPurchasePresentationSequenceGuard` (bounded memory: ended keys are kept in a list of the most recent 1024). — Thanks @imjlk!
+- [b85c2a06](https://github.com/imjlk/mpgd-kit/commit/b85c2a068adb871da772190436eece21b3839fec) Allow hosted web and Microsoft Store PWA production targets to use a clean same-origin `/api` game-services path for an authoritative edge service binding. Keep absolute public HTTPS requirements for native and third-party runtimes, and reject protocol-relative, encoded, traversal, query and fragment paths.
+  
+  Add the DOM-free `resolveGameServicesBaseUrl` composition helper and wire starter commerce/notification clients to resolve a hosted path against the actual browser origin before the existing absolute-URL authority checks. Invalid or native relative inputs remain fail-closed without a backend fallback.
+  
+  Add `isHostedGameServicesPath` to `@mpgd/platform/routes`, re-exported from `@mpgd/game-services`: the one rule for a clean same-origin ingress path, shared by the CLI's production readiness check and `resolveGameServicesBaseUrl`. — Thanks @imjlk!
+- [fa2c44b4](https://github.com/imjlk/mpgd-kit/commit/fa2c44b4533d74df106a70aa6a75971a376a2ae3) The commerce conformance runner models another account's purchase (RFC "Another account's purchase"). A `queueVerify` decision may be `another-account` with its required binding mismatch `reason` (one of `GOOGLE_PLAY_ACCOUNT_MISMATCH`, `GOOGLE_PLAY_PROFILE_MISMATCH`, `APP_STORE_ACCOUNT_TOKEN_MISMATCH`, `isCommerceConformanceStoreAccountMismatchReason`; the reference reconciler parks nothing else) (`CommerceConformanceVerifyDecision` is now a union of `CommerceConformanceVerifyReceiptDecision` and `CommerceConformanceAnotherAccountDecision`), which the fake backend throws as `CommerceConformanceAnotherAccountError` (`code` `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`, `reason`, and the `transport` a runtime under test should answer it in: `http` or `orpc`); a receipt decision may carry a `reason`. The reference reconciler parks such a record in `verifying` (and a `rejected` receipt whose reason is a store binding mismatch), never resends it on a pass, resends it only from its new `restorePurchases()` with the evidence reported then, and lets another player journal the purchase under its player-scoped key (`commerceConformanceJournalKey`, listed as `<key>@<player>`).
+  
+  Vectors gain the `runtime.restore` and `runtime.switchPlayer` steps, a `parked` expectation, and `playerId` and `intent` on verify request expectations; `journal` no longer repeats a state for a revision that keeps it. The reference journal accepts such a revision only to park or unpark a `verifying` record. Six provider-independent vectors ship in `docs/specs/commerce/reconciler-vectors/`; the fourteen provider vectors are unchanged. — Thanks @imjlk!
+
 ## 0.33.0 — 2026-10-28
 
 ### Added
