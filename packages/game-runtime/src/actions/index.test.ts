@@ -464,7 +464,7 @@ describe('availability', () => {
     coordinator.subscribeAvailability((value) => {
       seen.push(value);
     });
-    return { execution, presentation, coordinator, client, purchase, seen, unsubscribed };
+    return { execution, presentation, scope, coordinator, client, purchase, seen, unsubscribed };
   }
 
   it('follows any owner of the shared scope without an initial delivery', async () => {
@@ -534,6 +534,37 @@ describe('availability', () => {
     expect(late).not.toHaveBeenCalled();
     expect(unsubscribed).toHaveBeenCalledOnce();
     expect(() => coordinator.subscribeAvailability(() => {})).toThrow(GameActionExecutionError);
+  });
+
+  it('watches the scope only while someone listens', () => {
+    const { presentation, scope, coordinator, seen, unsubscribed } = withScope();
+    // withScope's listener is attached; a second one shares the same sources.
+    const other = vi.fn();
+    const offOther = coordinator.subscribeAvailability(other);
+    offOther();
+    expect(unsubscribed).not.toHaveBeenCalled();
+    const lease = presentation.acquire({ kind: 'purchase', invocationId: 'outside' });
+    expect(seen).toEqual(['busy']);
+    expect(other).not.toHaveBeenCalled();
+
+    const standalone = createGameActionCoordinator({
+      execution: presentation.execution,
+      client: { purchase: vi.fn(), claimRewardedAd: vi.fn() },
+      presentation: scope,
+    });
+    const first = vi.fn();
+    const offFirst = standalone.subscribeAvailability(first);
+    offFirst();
+    expect(unsubscribed).toHaveBeenCalledOnce();
+    // Nobody listens: the closing lease is not observed, and a new listener
+    // starts from the current value without a stale delivery.
+    lease.confirmClosed();
+    const second = vi.fn();
+    standalone.subscribeAvailability(second);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    presentation.acquire({ kind: 'purchase', invocationId: 'again' });
+    expect(second).toHaveBeenCalledExactlyOnceWith('busy');
   });
 
   it('ends with disposed when execution is destroyed and detaches from the scope', () => {

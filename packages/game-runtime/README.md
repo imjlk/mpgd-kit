@@ -424,8 +424,9 @@ to bypass unresolved work, and do not generate a new key for each UI retry.
 `busy`, `reconciliation-required`, `history-full` or `disposed`.
 `subscribeAvailability(listener)` hears each change, with no initial delivery
 (read `getAvailability()` after subscribing), in order also to listeners that
-reenter, and ends with `disposed`; it subscribes to nothing after that, and
-subscribing after disposal throws `disposed`. Use it to disable a buy or watch
+reenter, and ends with `disposed`. The coordinator watches the execution
+controller and the scope only while at least one listener is subscribed, and
+never after `disposed`; subscribing after disposal throws `disposed`. Use it to disable a buy or watch
 button instead of polling.
 
 Given a `presentation` scope, the coordinator is also `busy` while any
@@ -435,11 +436,12 @@ presentation owns that scope, including a purchase started outside the actions
 `closed` or `not-started` fact releases the lease; a store answer alone leaves
 the lease `unknown` and the coordinator `busy`. An action started meanwhile
 rejects with `busy` before the service call, so its key is not remembered and
-the same key can run later. This check runs when the action is reserved: if
-another purchase takes the scope after that but before the action's own store
-call, the coordinated store refuses the action's purchase (retryable
-`IN_PROGRESS`, `PRESENTATION_BUSY`) and the action settles `failed` with that
-key, as before this check existed.
+the same key can run later. This check runs when the action is reserved, and a
+purchase takes the scope one microtask after its `requestPurchase` call: if
+another purchase takes it after that check but before the action's own store
+call (including one requested earlier in the same turn), the coordinated store
+refuses the action's purchase (retryable `IN_PROGRESS`, `PRESENTATION_BUSY`)
+and the action settles `failed` with that key, as before this check existed.
 
 `actionBlock` chooses when each action holds its own simulation/gameplay-input
 block from before the service call until its result. The default,

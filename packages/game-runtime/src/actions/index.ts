@@ -113,7 +113,8 @@ export interface GameActionCoordinator {
   /**
    * Hears each change of `getAvailability()`, with no initial delivery: an
    * action starting or settling, and a presentation (an outside purchase
-   * included) taking or leaving the shared scope. Ends after `disposed`.
+   * included) taking or leaving the shared scope. Ends after `disposed`. The
+   * sources are watched only while at least one listener is subscribed.
    */
   subscribeAvailability(listener: UiListener<GameActionAvailability>): () => void;
   /** Terminal for new calls; pending external work still settles and releases its own block. */
@@ -214,6 +215,7 @@ export function createGameActionCoordinator(options: {
 
   // Availability is published on change, in order, also to listeners that
   // reenter. `disposed` is the last value; then the sources and listeners go.
+  // The sources are watched only while someone listens.
   type AvailabilitySubscription = { readonly listener: UiListener<GameActionAvailability>; active: boolean };
   const availabilityListeners = new Set<AvailabilitySubscription>();
   const availabilityQueue: { readonly value: GameActionAvailability; readonly recipients: readonly AvailabilitySubscription[] }[] = [];
@@ -233,9 +235,7 @@ export function createGameActionCoordinator(options: {
     availabilityQueue.push({ value: next, recipients: [...availabilityListeners] });
     if (next === 'disposed') {
       closed = true;
-      for (const detach of detachSources.splice(0)) {
-        observe(detach, onObserverError);
-      }
+      detachAvailabilitySources();
     }
     if (delivering) {
       return;
@@ -595,13 +595,10 @@ export function createGameActionCoordinator(options: {
   }
 
   announced = availability();
-  if (announced === 'disposed') {
-    closed = true;
-  } else {
-    // Execution tells destruction; the scope tells owners coming and going.
-    detachSources.push(execution.subscribe(refreshAvailability));
-    if (options.presentation !== undefined) {
-      detachSources.push(options.presentation.subscribe(refreshAvailability));
+  closed = announced === 'disposed';
+  function detachAvailabilitySources(): void {
+    for (const detach of detachSources.splice(0)) {
+      observe(detach, onObserverError);
     }
   }
 
@@ -637,9 +634,20 @@ export function createGameActionCoordinator(options: {
       }
       const subscription = { listener, active: true };
       availabilityListeners.add(subscription);
+      if (detachSources.length === 0) {
+        // Nobody heard the changes since the last listener left.
+        announced = availability();
+        // Execution tells destruction; the scope tells owners coming and going.
+        detachSources.push(execution.subscribe(refreshAvailability));
+        if (options.presentation !== undefined) {
+          detachSources.push(options.presentation.subscribe(refreshAvailability));
+        }
+      }
       return () => {
         subscription.active = false;
-        availabilityListeners.delete(subscription);
+        if (availabilityListeners.delete(subscription) && availabilityListeners.size === 0) {
+          detachAvailabilitySources();
+        }
       };
     },
     dispose(): void {
