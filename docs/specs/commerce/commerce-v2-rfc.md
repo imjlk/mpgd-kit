@@ -1241,7 +1241,7 @@ Actors and actions:
 | `store` | `complete`, `update` | Report a purchase or change its state; emitted as an event if a listener exists, buffered otherwise, and listed as available until finished. |
 | `store` | `error` | Emit `purchaseError` for an attempt. |
 | `store` | `queueRequest`, `queueFinish` | Script the next `requestPurchase` or `finishTransaction` answer. |
-| `backend` | `queueVerify` | Script the next verify decision: `status` (`granted`, `pending`, `rejected`, or `another-account`), `ledgerEntryId`, `finalization`, `alreadyProcessed`, `reason` (a `rejected` receipt's reason, or an `another-account` answer's binding mismatch), and `transport` (`http` or `orpc`, the wire shape of an `another-account` answer for a runtime under test). The fake backend throws `CommerceConformanceAnotherAccountError` for `another-account`: nothing is granted or recorded. |
+| `backend` | `queueVerify` | Script the next verify decision: `status` (`granted`, `pending`, `rejected`, or `another-account`), `ledgerEntryId`, `finalization`, `alreadyProcessed`, `reason` (a `rejected` receipt's reason, or an `another-account` answer's binding mismatch, which must be one of the three mismatch reasons; a `*_MISSING` reason is never another account's), and `transport` (`http` or `orpc`, the wire shape of an `another-account` answer for a runtime under test). The fake backend throws `CommerceConformanceAnotherAccountError` for `another-account`: nothing is granted or recorded. |
 | `backend` | `push`, `revoke` | Write a server-push grant or a revocation entry to the ledger. |
 | `wallet` | `creditFromGrant`, `spend`, `renewDue` | Credit a lot from a ledger grant, spend, or run the renewal scheduler. |
 | `clock` | `set` | Set the current time. |

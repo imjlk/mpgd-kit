@@ -95,8 +95,8 @@
             "readOnly": true
           },
           "reason": {
-            "$ref": "#/components/schemas/NonEmptyString",
-            "description": "The store binding mismatch, for example `GOOGLE_PLAY_ACCOUNT_MISMATCH`.",
+            "$ref": "#/components/schemas/CommerceConformanceStoreAccountMismatchReason",
+            "description": "The store binding mismatch.",
             "readOnly": true
           },
           "transport": {
@@ -1306,6 +1306,20 @@
             "additionalProperties": false
           }
         ]
+      },
+      "CommerceConformanceStoreAccountMismatchReason": {
+        "oneOf": [
+          {
+            "const": "APP_STORE_ACCOUNT_TOKEN_MISMATCH"
+          },
+          {
+            "const": "GOOGLE_PLAY_ACCOUNT_MISMATCH"
+          },
+          {
+            "const": "GOOGLE_PLAY_PROFILE_MISMATCH"
+          }
+        ],
+        "description": "A store binding mismatch (RFC \"Another account's purchase\"): the binding\nnames another account. A purchase bound to no account (`*_MISSING`) stays\n`rejected` and is never another account's."
       },
       "CommerceConformanceSubscriptionEventExpectation": {
         "type": "object",

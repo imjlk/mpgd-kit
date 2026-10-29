@@ -91,6 +91,15 @@ describe('commerce conformance vectors', () => {
     expect(isCommerceConformanceVector(withDecision({ status: 'bound-elsewhere' }))).toBe(false);
     // The binding mismatch is required, and only another account's answer has a wire shape.
     expect(isCommerceConformanceVector(withDecision({ status: 'another-account' }))).toBe(false);
+    // A purchase bound to no account is never another account's: it stays rejected.
+    expect(isCommerceConformanceVector(withDecision({
+      status: 'another-account',
+      reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING',
+    }))).toBe(false);
+    expect(isCommerceConformanceVector(withDecision({
+      status: 'another-account',
+      reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+    }))).toBe(true);
     expect(isCommerceConformanceVector(withDecision({ status: 'rejected', transport: 'http' })))
       .toBe(false);
     expect(isCommerceConformanceVector(withDecision({

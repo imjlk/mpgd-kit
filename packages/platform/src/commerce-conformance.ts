@@ -48,6 +48,7 @@ import type {
   CommerceConformancePurchaseFixture,
   CommerceConformanceRequestResultFixture,
   CommerceConformanceStep,
+  CommerceConformanceStoreAccountMismatchReason,
   CommerceConformanceVector,
   CommerceConformanceVerifyDecision,
 } from './commerce-vectors.js';
@@ -477,11 +478,20 @@ export const commerceConformanceAnotherAccountCode = 'PURCHASE_BOUND_TO_ANOTHER_
  * `rejected` receipt with one of them comes from a backend that predates the
  * another-account answer, and a reconciler parks it as that answer.
  */
-export const commerceConformanceStoreAccountMismatchReasons: readonly string[] = Object.freeze([
-  'GOOGLE_PLAY_ACCOUNT_MISMATCH',
-  'GOOGLE_PLAY_PROFILE_MISMATCH',
-  'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
-]);
+export const commerceConformanceStoreAccountMismatchReasons: readonly CommerceConformanceStoreAccountMismatchReason[] =
+  Object.freeze([
+    'GOOGLE_PLAY_ACCOUNT_MISMATCH',
+    'GOOGLE_PLAY_PROFILE_MISMATCH',
+    'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+  ]);
+
+/** Whether `reason` is a store binding mismatch: only such a reason is another account's purchase. */
+export function isCommerceConformanceStoreAccountMismatchReason(
+  reason: unknown,
+): reason is CommerceConformanceStoreAccountMismatchReason {
+  return typeof reason === 'string'
+    && (commerceConformanceStoreAccountMismatchReasons as readonly string[]).includes(reason);
+}
 
 /**
  * Thrown by the fake backend for an `another-account` decision: the purchase
@@ -969,6 +979,12 @@ export function createCommerceConformanceRuntime(
   const { provider, backend, journal, clock, catalog, playerId } = input;
   const store = provider.store;
   const records = new Map<string, CommerceJournalRecord>();
+  /**
+   * Records a Restore Purchases grant reported `finalization: 'completed'`
+   * for, under a server-owned finish; the drive that finishes them starts
+   * from it instead of re-reading finalization.
+   */
+  const completedFinalizations = new Set<string>();
   const inbox: CommerceEvent[] = [];
   let unsubscribe: (() => void) | undefined;
   let started = false;
@@ -1031,14 +1047,16 @@ export function createCommerceConformanceRuntime(
     answer: { readonly error: unknown } | { readonly response: CommerceVerifyResponse },
   ): string | undefined => {
     if ('error' in answer) {
+      // Only a binding mismatch is another account's purchase; any other
+      // reason on the error is a script error and propagates.
       return answer.error instanceof CommerceConformanceAnotherAccountError
+        && isCommerceConformanceStoreAccountMismatchReason(answer.error.reason)
         ? answer.error.reason
         : undefined;
     }
     const { response } = answer;
     return response.status === 'rejected'
-      && response.reason !== undefined
-      && commerceConformanceStoreAccountMismatchReasons.includes(response.reason)
+      && isCommerceConformanceStoreAccountMismatchReason(response.reason)
       ? response.reason
       : undefined;
   };
@@ -1146,7 +1164,16 @@ export function createCommerceConformanceRuntime(
       return;
     }
     const { anotherAccount: _parked, ...unparked } = refreshed;
-    await settle(await revise(unparked), request, response);
+    const granted = await settle(await revise(unparked), request, response);
+    // A server-owned finish the grant already completed needs no re-read on
+    // the pass that finishes the record.
+    if (
+      granted !== undefined
+      && response.finalization === 'completed'
+      && (await provider.getCapabilities()).lifecycle.finish === 'server'
+    ) {
+      completedFinalizations.add(granted.key);
+    }
   };
 
   // Reconciler step 2: match a reported purchase to a journal record.
@@ -1200,6 +1227,11 @@ export function createCommerceConformanceRuntime(
         key = commerceConformanceJournalKey(idempotencyKey, playerId);
         const scoped = await journal.read(key);
         if (scoped !== undefined) {
+          // Another player's record under that string (a game key spelled
+          // `<key>@<player>`) is refused like a foreign bare key.
+          if (scoped.playerId !== playerId) {
+            return;
+          }
           remember(scoped);
           return;
         }
@@ -1275,7 +1307,9 @@ export function createCommerceConformanceRuntime(
     capabilities: CommerceCapabilities,
   ): Promise<void> => {
     let record = initial;
-    let finalization: 'pending' | 'completed' | undefined;
+    let finalization: 'pending' | 'completed' | undefined = completedFinalizations.has(initial.key)
+      ? 'completed'
+      : undefined;
     for (;;) {
       switch (record.state) {
         case 'purchased':
@@ -1324,6 +1358,7 @@ export function createCommerceConformanceRuntime(
             }
             if (finalization === 'completed') {
               await write(record, 'finished');
+              completedFinalizations.delete(record.key);
             }
             return;
           }
@@ -1480,6 +1515,7 @@ export function createCommerceConformanceRuntime(
       triggerPending = false;
       inbox.length = 0;
       records.clear();
+      completedFinalizations.clear();
     },
     async reconcile() {
       if (!started) {

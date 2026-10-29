@@ -107,10 +107,20 @@ export interface CommerceConformanceVerifyReceiptDecision {
   readonly reason?: NonEmptyString;
 }
 
+/**
+ * A store binding mismatch (RFC "Another account's purchase"): the binding
+ * names another account. A purchase bound to no account (`*_MISSING`) stays
+ * `rejected` and is never another account's.
+ */
+export type CommerceConformanceStoreAccountMismatchReason =
+  | 'GOOGLE_PLAY_ACCOUNT_MISMATCH'
+  | 'GOOGLE_PLAY_PROFILE_MISMATCH'
+  | 'APP_STORE_ACCOUNT_TOKEN_MISMATCH';
+
 export interface CommerceConformanceAnotherAccountDecision {
   readonly status: 'another-account';
-  /** The store binding mismatch, for example `GOOGLE_PLAY_ACCOUNT_MISMATCH`. */
-  readonly reason: NonEmptyString;
+  /** The store binding mismatch. */
+  readonly reason: CommerceConformanceStoreAccountMismatchReason;
   /**
    * The wire shape a runtime under test meets the answer in: `http` (status
    * 409 with `{ error, reason }`) or `orpc` (the error code with

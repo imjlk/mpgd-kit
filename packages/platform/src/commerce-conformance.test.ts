@@ -24,6 +24,7 @@ import {
   deriveAdaptiveCommerceConformanceExpectation,
   fillCommerceConformancePurchase,
   isAdaptiveCommerceConformanceVector,
+  isCommerceConformanceStoreAccountMismatchReason,
   isCommerceJournalRecordParked,
   matchPartial,
   runCommerceConformanceVector,
@@ -204,6 +205,96 @@ describe("reconciler vectors (another account's purchase)", () => {
     // The rejected record keeps its key: player 2 neither journals nor sends the purchase.
     expect(result.failures).toEqual([]);
     expect(commerceConformanceJournalKey('k', 'player-2')).toBe('k@player-2');
+  });
+
+  it('never parks a thrown another-account error whose reason is not a binding mismatch', async () => {
+    const vector = reconcilerVectorNamed('another-account-http-parks');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      steps: vector.steps.map((step) =>
+        step.actor === 'backend' && step.action === 'queueVerify'
+          // A vector the validator refuses, built in code: the runtime path refuses it too.
+          ? { ...step, decision: { status: 'another-account', reason: 'GOOGLE_PLAY_ACCOUNT_ID_MISSING' } as never }
+          : step),
+    });
+    expect(result.status).toBe('failed');
+    expect(result.failures[0]?.path).toBe('steps[2]');
+    expect(String(result.failures[0]?.actual)).toContain('GOOGLE_PLAY_ACCOUNT_ID_MISSING');
+    expect(isCommerceConformanceStoreAccountMismatchReason('GOOGLE_PLAY_ACCOUNT_ID_MISSING'))
+      .toBe(false);
+  });
+
+  it("refuses a player-scoped key another player's record holds", async () => {
+    const vector = reconcilerVectorNamed('another-account-owner-recovers');
+    const shared = 'store:fixture.client-token:tx-1';
+    const switchAt = vector.steps.findIndex((step) => step.action === 'switchPlayer');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      steps: [
+        ...vector.steps.slice(0, switchAt),
+        // Player 1's game key spells player 2's scoped key for the purchase.
+        {
+          actor: 'game',
+          action: 'requestPurchase',
+          input: { logicalId: 'gems_small', idempotencyKey: `${shared}@player-2` },
+          returns: { outcome: 'launched' },
+        },
+        { actor: 'runtime', action: 'switchPlayer', playerId: 'player-2' },
+        { actor: 'runtime', action: 'start' },
+        { actor: 'backend', action: 'queueVerify', decision: { status: 'granted', ledgerEntryId: 'le-2' } },
+        {
+          actor: 'game',
+          action: 'requestPurchase',
+          input: { logicalId: 'gems_small', idempotencyKey: 'op-p2' },
+          returns: { outcome: 'launched' },
+        },
+        {
+          actor: 'store',
+          action: 'complete',
+          purchase: { transactionId: 'tx-2', storeSku: 'gems.small', token: 'token-2', state: 'purchased' },
+        },
+      ],
+      expect: {
+        journal: {
+          [shared]: ['purchased', 'verifying'],
+          [`${shared}@player-2`]: ['requested', 'launched'],
+          'op-p2': ['requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing', 'finished'],
+        },
+        parked: { [shared]: 'GOOGLE_PLAY_ACCOUNT_MISMATCH' },
+        verifyRequests: [
+          { idempotencyKey: shared, store: 'fixture.client-token', transactionId: 'tx-1', token: 'token-1', playerId: 'player-1' },
+          { idempotencyKey: 'op-p2', store: 'fixture.client-token', transactionId: 'tx-2', token: 'token-2', playerId: 'player-2' },
+        ],
+      },
+    });
+    // Remembering player 1's record would make it a second open attempt of
+    // player 2's product, and tx-2 would match two records.
+    expect(result.failures).toEqual([]);
+  });
+
+  it("keeps a restore grant's completed server finalization for the finishing pass", async () => {
+    const vector = reconcilerVectorNamed('another-account-restore-resends');
+    const result = await runCommerceConformanceVector({
+      ...vector,
+      profile: {
+        ...vector.profile,
+        lifecycle: {
+          availablePurchases: true,
+          pending: false,
+          restore: true,
+          events: true,
+          finish: 'server',
+        },
+      },
+      steps: vector.steps.map((step) =>
+        step.actor === 'backend' && step.action === 'queueVerify' && step.decision.status === 'granted'
+          ? { ...step, decision: { ...step.decision, finalization: 'completed' as const } }
+          : step),
+      // The grant completed the server finish: the fixture's two verify
+      // requests stay the only ones, and nothing re-reads finalization.
+      expect: { ...vector.expect, finishCalls: [] },
+    });
+    expect(result.failures).toEqual([]);
   });
 
   it('fails a restore step against a runtime without restorePurchases', async () => {
