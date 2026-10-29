@@ -211,7 +211,9 @@ Device acceptance (not run; no device was available): the sheet cancelled by
 its close button and by the back button, a completed purchase, a pending
 (slow card) purchase, the app backgrounded with the sheet up and resumed, and
 a rotation with the sheet up. Each must pause the game from `open` to
-`closed` and never resume it under the sheet.
+`closed` and never resume it under the sheet. The steps and expected signals
+are in the kit's
+[purchase device acceptance checklist](https://github.com/imjlk/mpgd-kit/blob/main/docs/PURCHASE_DEVICE_ACCEPTANCE.md).
 
 ### Generated games
 
