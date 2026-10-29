@@ -109,6 +109,32 @@ reconciler finishes it and nothing is granted twice; another player, a
 durable, a reversed grant, and a backend without a registry keep the
 refusal.
 
+A consumable the store revoked (refunded) while it was still unfinished is
+the one finish that follows no standing grant. StoreKit keeps such a
+transaction in `Transaction.unfinished` and redelivers it at every launch
+until `finish()`, and the ordinary finish gate refuses a revoked
+transaction. On a provider that declares `acceptsRevokedFinish` (the
+StoreKit provider), the store lists it as `revoked`; the reconciler matches
+the report only to this player's record of the same transaction, never
+journals or verifies a revoked purchase it has no record of, and waits for
+the backend's answer: once the record is `revoked` (the ledger reversed its
+grant, for example after an App Store Server Notifications `REFUND`, step 5)
+or `rejected` (the backend refused it; the reference App Store verifier
+answers `APP_STORE_TRANSACTION_REVOKED` for a revoked transaction), it calls
+`finishTransaction` with `revoked: true`, `isConsumable: true`, and the
+answer as `ledgerEntryId` (the reversed grant's entry, or the refused
+idempotency key). Nothing is granted, re-granted, or verified again, and the
+terminal record is not rewritten. While the grant stands (a backend without
+`getPurchaseLedgerStatus`, or a refund not recorded yet) the transaction
+stays unfinished and the ordinary finish keeps retrying, as before. The
+store finishes only a transaction it still lists as revoked, of a
+consumable bound to the session account: a paid purchase, a durable, and
+another guest's revoked consumable are never finished this way. It is asked
+once per session; a transport failure is asked again after the retry
+interval (at once on `reconcile()`), and a refusal (a native build from
+before the revoked finish) is reported as a `finish` failure and asked again
+on the next launch. `REFUND_REVERSED` never re-grants automatically.
+
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal
 (`isMonetizationOperationRecoverable` from

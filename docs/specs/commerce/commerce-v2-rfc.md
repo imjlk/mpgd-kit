@@ -211,9 +211,17 @@ export interface CommerceProvider {
     readonly isConsumable: boolean;
     /** An earlier finish of this purchase was asked for (a `client` retry). */
     readonly retry?: boolean;
+    /** Finish a transaction the store revoked while unfinished, with no grant standing. */
+    readonly revoked?: boolean;
   }): Promise<{ readonly finished: boolean }>;
   /** Accepts `retry`; a caller sends it only to a provider declaring this. */
   readonly acceptsFinishRetry?: boolean;
+  /**
+   * Accepts `revoked`, and lists the store's unfinished revoked purchases (as
+   * `revoked`) in `getAvailablePurchases`; a caller sends it only to a
+   * provider declaring this.
+   */
+  readonly acceptsRevokedFinish?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   /** Designed, not implemented by any reference store provider. */
@@ -486,6 +494,16 @@ One pass:
    rewritten.
 5. For records whose grant is still within the journal retention window, ask
    the backend for ledger status and move reversed grants to `revoked`.
+   Then, on a `client`-finish provider that declares `acceptsRevokedFinish`,
+   a consumable the store reported `revoked` this session whose record of
+   this player the backend has answered without a standing grant (`revoked`,
+   or `rejected` other than as another account's purchase) is finished with
+   `revoked: true`, `isConsumable: true`, and the answer as `ledgerEntryId`
+   (the reversed grant's entry, or the refused idempotency key), once per
+   session; the store finishes only a transaction it still lists as revoked.
+   Nothing is granted or verified and the record is not rewritten. A revoked
+   report never revokes, verifies, or journals anything on its own, and one
+   with no record of this player is ignored.
 
 The runtime serializes purchases per player, store, and logical product: a
 second `requestPurchase` while a record for the same product is `launched` or
