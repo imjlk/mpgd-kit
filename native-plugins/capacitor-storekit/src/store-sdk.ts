@@ -22,11 +22,11 @@ import type { CommerceErrorCode, StorePurchaseAccountBinding } from '@mpgd/platf
 
 import type {
   CapacitorStoreKitPlugin,
-  StoreKitFinishTransactionInput,
   StoreKitProduct,
   StoreKitTransaction,
 } from './definitions.js';
 import { appStoreStoreId, storeKitStoreSdkCapabilities } from './commerce-profile.js';
+import { probeNativeSupport } from './native-support.js';
 import { CapacitorStoreKit } from './plugin.js';
 import {
   resolveStoreKitNativePurchasePresentation,
@@ -418,32 +418,15 @@ export function createCapacitorStoreKitStoreSdk(
    * finish, and both answer "not supported" for this one, so the durable is
    * left unfinished (as before) rather than sent a call the build refuses.
    */
-  let finishWithoutTokenSupport: Promise<boolean> | undefined;
-  const finishWithoutTokenSupported = (): Promise<boolean> => {
-    if (finishWithoutTokenSupport !== undefined) {
-      return finishWithoutTokenSupport;
-    }
-    const attempt = Promise.resolve()
-      .then(() => {
-        // Read inside the chain, so a plugin proxy that throws on access is
-        // answered like a call that failed.
-        const check = sdk.getFinishSupport;
-        return typeof check === 'function' ? check.call(sdk) : undefined;
-      })
-      .then(
-        (answer: unknown) => isRecord(answer)
-          && typeof answer.withoutAppAccountToken === 'number'
-          && answer.withoutAppAccountToken >= 1,
-        (error: unknown) => {
-          if (!isRecord(error) || error.code !== 'UNIMPLEMENTED') {
-            finishWithoutTokenSupport = undefined;
-          }
-          return false;
-        },
-      );
-    finishWithoutTokenSupport = attempt;
-    return attempt;
-  };
+  const finishWithoutTokenSupported = probeNativeSupport(
+    () => {
+      const check = sdk.getFinishSupport;
+      return typeof check === 'function' ? check.call(sdk) : undefined;
+    },
+    (answer) => isRecord(answer)
+      && typeof answer.withoutAppAccountToken === 'number'
+      && answer.withoutAppAccountToken >= 1,
+  );
 
   // Overlapping finishes for the same transaction and ledger entry share one
   // native call; the v2 reconciler is the gate that authorizes the call.
@@ -715,11 +698,14 @@ export function createCapacitorStoreKitStoreSdk(
         if (permitted.verdict !== 'finish') {
           return { finished: permitted.verdict === 'finished' };
         }
-        const reported: unknown = await sdk.finishTransaction({
-          transactionId,
-          ledgerEntryId,
-          ...permitted.binding,
-        } as StoreKitFinishTransactionInput);
+        const { binding } = permitted;
+        const reported: unknown = 'withoutAppAccountToken' in binding
+          ? await sdk.finishTransaction({ transactionId, ledgerEntryId, withoutAppAccountToken: true })
+          : await sdk.finishTransaction({
+            transactionId,
+            ledgerEntryId,
+            appAccountToken: binding.appAccountToken,
+          });
         if (!isRecord(reported) || typeof reported.finished !== 'boolean') {
           throw evidenceInvalid('StoreKit returned an invalid finish result.');
         }
@@ -838,7 +824,7 @@ export const capacitorStoreKitErrorCodeMap: StoreSdkErrorCodeMap = Object.freeze
   ...storeKitStoreSdkErrorCodeMap,
 });
 
-/** The account match one native finish asks for; see `StoreKitFinishTransactionInput`. */
+/** The account match one native finish asks for; see `StoreKitFinishTransactionInput` in the definitions. */
 type FinishBinding =
   | { readonly appAccountToken: string }
   | { readonly withoutAppAccountToken: true };
