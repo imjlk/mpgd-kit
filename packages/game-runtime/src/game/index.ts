@@ -21,10 +21,7 @@ import {
   type AdWaitDeadline,
   type PurchasePresentationEvent,
 } from '../ads/index.js';
-import {
-  createCoordinatedCommerceProvider,
-  type CoordinatedCommerceProvider,
-} from '../commerce/index.js';
+import { coordinateGatewayCommerce } from '../commerce/coordinate.js';
 import { forward } from '../forward.js';
 import {
   createGameActionCoordinator,
@@ -99,16 +96,11 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       if (!disposed) { actions?.confirmRecoveredRewardResult(request.idempotencyKey, recovered); }
     },
   });
-  // Without an ad provider, purchases still share the full-screen scope when
-  // something trusted can release the lease: the provider's own sheet facts or
-  // the game's `purchasePresentation`. A provider with neither (an adapter or
-  // plugin built before sheet facts) keeps the plain forwarding gateway, so it
-  // never meets the coordinator's strict `presentation-unavailable` refusal.
-  const commerceSource = source === undefined ? input.gateway.commerce : undefined;
-  const coordinatedCommerce: CoordinatedCommerceProvider | undefined = commerceSource !== undefined
-    && (input.purchasePresentation !== undefined || commerceSource.presentation !== undefined)
-    ? createCoordinatedCommerceProvider({
-      provider: commerceSource, presentation,
+  // Without an ad provider, purchases still share the full-screen scope under
+  // the same rule as with one (see `coordinateGatewayCommerce`).
+  const coordinatedCommerce = source === undefined
+    ? coordinateGatewayCommerce(input.gateway, {
+      presentation,
       ...(input.purchasePresentation === undefined ? {} : { purchasePresentation: input.purchasePresentation }),
       ...(input.onObserverError === undefined ? {} : { onObserverError: input.onObserverError }),
     })
