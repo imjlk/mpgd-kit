@@ -1,4 +1,4 @@
-import type { GameActionController } from '@mpgd/game-runtime/actions';
+import type { GameActionAvailability, GameActionController } from '@mpgd/game-runtime/actions';
 import { bindPhaserGameScene } from '@mpgd/game-runtime/phaser';
 import Phaser from 'phaser';
 
@@ -21,6 +21,7 @@ export class PlayScene extends Phaser.Scene {
   private analyticsText!: Phaser.GameObjects.Text;
   private context!: StarterContext;
   private rewardedAction: GameActionController<'rewarded-ad'> | undefined;
+  private showingNotReady = false;
   private lastScore = -1;
   private lastAnalyticsCount = -1;
 
@@ -83,17 +84,44 @@ export class PlayScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.rewardedAction = this.context.gameRuntime.actions?.createRewardedAdController();
+    const actions = this.context.gameRuntime.actions;
+    this.rewardedAction = actions?.createRewardedAdController();
     const action = this.rewardedAction;
+    // Follow the runtime's availability, so the hint changes while any purchase
+    // (one from the shop included) or ad holds the screen, without a key press.
+    this.showingNotReady = false;
+    const stopAvailability = actions?.subscribeAvailability((availability) => {
+      this.showAvailability(availability);
+    });
+    if (actions !== undefined) {
+      this.showAvailability(actions.getAvailability());
+    }
     const keyboard = this.input.keyboard;
     const onReward = () => {
       void this.requestRewardedAd();
     };
     keyboard?.on('keydown-R', onReward);
     this.events.once('shutdown', () => {
+      stopAvailability?.();
       action?.dispose();
       keyboard?.off('keydown-R', onReward);
     });
+  }
+
+  private showAvailability(availability: GameActionAvailability): void {
+    if (!this.rewardedAdsAvailable() || this.rewardedAction === undefined || availability === 'disposed') {
+      return;
+    }
+    if (availability === 'ready') {
+      // Restore the hint only over the waiting text, never over a result.
+      if (this.showingNotReady) {
+        this.showingNotReady = false;
+        this.rewardText.setText(this.rewardHint());
+      }
+      return;
+    }
+    this.showingNotReady = true;
+    this.rewardText.setText(t(this.context.locale, 'rewardNotReady'));
   }
 
   override update(_time: number, delta: number): void {
@@ -143,6 +171,7 @@ export class PlayScene extends Phaser.Scene {
       return;
     }
 
+    // The tap-time guard stays: availability can change before the next frame.
     if (this.context.gameRuntime.actions?.getAvailability() !== 'ready') {
       return;
     }
