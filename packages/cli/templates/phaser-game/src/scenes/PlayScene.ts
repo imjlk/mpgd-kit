@@ -126,7 +126,18 @@ export class PlayScene extends Phaser.Scene {
       return;
     }
     this.showingNotReady = true;
-    this.rewardText.setText(t(this.context.locale, 'rewardNotReady'));
+    // `history-full` lasts until the runtime is recreated; only `busy` ends
+    // with the other purchase or ad.
+    this.rewardText.setText(
+      t(
+        this.context.locale,
+        availability === 'history-full'
+          ? 'rewardHistoryFull'
+          : availability === 'reconciliation-required'
+            ? 'rewardReconciling'
+            : 'rewardNotReady',
+      ),
+    );
   }
 
   /** A result or error replaces the waiting text for good: `ready` must not restore the hint over it. */

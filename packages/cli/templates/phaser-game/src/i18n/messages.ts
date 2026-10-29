@@ -15,6 +15,8 @@ export type GameMessageKey =
   | 'rewardError'
   | 'rewardPending'
   | 'rewardNotReady'
+  | 'rewardReconciling'
+  | 'rewardHistoryFull'
   | 'rewardUnavailable'
   | 'analytics'
   | 'bootError'
@@ -61,6 +63,8 @@ const messages = {
     rewardError: 'Rewarded ad smoke failed',
     rewardPending: 'Press R to request a rewarded ad smoke',
     rewardNotReady: 'Rewarded ad smoke waits for the current purchase or ad',
+    rewardReconciling: 'Rewarded ad smoke waits until an earlier result is confirmed',
+    rewardHistoryFull: 'Rewarded ad smoke is unavailable until the game restarts',
     rewardUnavailable: 'Rewarded ads unavailable on this target',
     analytics: 'Analytics events: {count}',
     bootError: 'Failed to start game',
@@ -111,6 +115,8 @@ const messages = {
     rewardError: '리워드 광고 스모크 실패',
     rewardPending: 'R 키로 리워드 광고 스모크 요청',
     rewardNotReady: '진행 중인 구매나 광고가 끝나면 리워드 광고 스모크 요청 가능',
+    rewardReconciling: '이전 결과가 확인되면 리워드 광고 스모크 요청 가능',
+    rewardHistoryFull: '게임을 다시 시작할 때까지 리워드 광고 스모크를 사용할 수 없음',
     rewardUnavailable: '이 타깃에서는 리워드 광고를 사용할 수 없음',
     analytics: '애널리틱스 이벤트: {count}',
     bootError: '게임 시작 실패',

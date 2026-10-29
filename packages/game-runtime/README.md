@@ -436,9 +436,11 @@ button instead of polling.
 Given a `presentation` scope, the coordinator is also `busy` while any
 presentation owns that scope, including a purchase started outside the actions
 (a game shop or a reconciler calling the coordinated gateway's
-`commerce.requestPurchase`). It turns `ready` again when that purchase's
-`closed` or `not-started` fact releases the lease; a store answer alone leaves
-the lease `unknown` and the coordinator `busy`. An action started meanwhile
+`commerce.requestPurchase`). It leaves `busy` when that purchase's `closed` or
+`not-started` fact releases the lease: to `ready`, or to
+`reconciliation-required` or `history-full` when an earlier action left that
+state. A store answer alone leaves the lease `unknown` and the coordinator
+`busy`. An action started meanwhile
 rejects with `busy` before the service call, so its key is not remembered and
 the same key can run later.
 
@@ -593,7 +595,9 @@ there, through server verification, because a legacy rewarded ad on such a
 gateway takes no lease (`actionBlock: 'always'`). With or without an ad
 provider, `runtime.actions` is `busy` (`getAvailability()`,
 `subscribeAvailability`) while any purchase holds the scope, one started
-outside the actions included, and an action started meanwhile rejects with
+outside the actions included, unless an earlier action is still unconfirmed:
+then it reports `reconciliation-required` instead, and a new action rejects
+with that code. Otherwise an action started meanwhile rejects with
 `busy` without spending its key, also when the other purchase takes the screen
 just before the action's own store call (see `purchaseRefusals` above). This
 replaces the earlier answer without an ad provider, a resolved `failed` result
