@@ -334,4 +334,193 @@ const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
   await second.stop();
 }
 
+// A consumable the App Store refunded while it was still unfinished, across
+// launches, over the real provider and SDK: StoreKit keeps it in
+// `Transaction.unfinished` and the provider lists it as revoked. Once the
+// backend has answered for it without a standing grant (the ledger reversed
+// the grant; or the verify was refused), the reconciler finishes it natively
+// with the revoked flag, granting nothing, and StoreKit stops redelivering
+// it. While the grant stands, it stays unfinished. A native build from before
+// the revoked finish leaves it unfinished (today's behaviour); another
+// token's revoked consumable never reaches the reconciler.
+{
+  const refunded = '2026-07-18T00:00:00Z';
+  const grantedId = '2000000123456793';
+  const refusedId = '2000000123456794';
+  const foreignId = '2000000123456795';
+  const foreignToken = 'a7e2f8a0-5d4e-4a3a-9c1b-2f1d2e3c4b5a';
+  const setup = (native: 'supported' | 'ignored') => {
+    const plugin = createFakeStoreKitPlugin({
+      products: [fakeProduct({ productId: storeSku })],
+      revokedFinish: native,
+      transactions: [
+        fakeTransaction({ transactionId: grantedId, unfinished: true }),
+        fakeTransaction({ transactionId: refusedId, unfinished: true }),
+      ],
+    });
+    const provider = createCapacitorStoreKitCommerceProvider({
+      products,
+      getAppAccountToken: () => fakeAccountToken,
+      isIos: () => true,
+      sdk: plugin,
+    });
+    const reversed = new Set<string>();
+    const verified: string[] = [];
+    let backendUp = true;
+    const backend: PurchaseVerificationApi = {
+      async verifyPurchase(request) {
+        verified.push(request.platformTransactionId);
+        if (request.platformTransactionId === grantedId) {
+          return { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-granted' };
+        }
+        if (!backendUp) {
+          throw new Error('backend unavailable');
+        }
+        // The reference App Store verifier refuses a revoked transaction.
+        return {
+          verified: false,
+          alreadyProcessed: false,
+          disposition: 'rejected',
+          reason: 'APP_STORE_TRANSACTION_REVOKED',
+        };
+      },
+      async getPurchaseLedgerStatus(input) {
+        return {
+          statuses: input.ledgerEntryIds.map((ledgerEntryId) =>
+            reversed.has(ledgerEntryId)
+              ? { ledgerEntryId, status: 'reversed' as const, reversedBy: `${ledgerEntryId}-refund` }
+              : { ledgerEntryId, status: 'active' as const }),
+        };
+      },
+    };
+    const journal = createInMemoryMonetizationOperationStore();
+    const failures: string[] = [];
+    const run = () =>
+      createCommerceReconciler({
+        provider,
+        backend,
+        store: journal,
+        playerId: 'player-1',
+        target: 'ios',
+        products,
+        retryIntervalMs: 0,
+        onEvent(event: CommerceReconcilerEvent) {
+          if (event.type === 'failure') {
+            failures.push(`${event.stage}:${event.idempotencyKey ?? ''}`);
+          }
+        },
+      });
+    return {
+      plugin,
+      run,
+      reversed,
+      verified,
+      failures,
+      setBackendUp(value: boolean) {
+        backendUp = value;
+      },
+      finishCalls: () => plugin.calls.filter((call) => call.startsWith('finish:')),
+    };
+  };
+  const grantedKey = `store:app-store:${grantedId}`;
+  const refusedKey = `store:app-store:${refusedId}`;
+
+  const world = setup('supported');
+  world.setBackendUp(false);
+  // The first launch grants one transaction, whose finish is lost (the app
+  // closes), and cannot reach the backend for the other.
+  world.plugin.queueFinish({ throws: Object.assign(new Error('app closed'), { code: 'NETWORK' }) });
+  const first = world.run();
+  await first.start();
+  assertEqual(
+    [(await first.read(grantedKey))?.state, (await first.read(refusedKey))?.state],
+    ['finishing', 'verifying'],
+    'one grant waits for its finish, the other purchase for the backend',
+  );
+  await first.stop();
+
+  // The App Store refunds both while they are unfinished (and a foreign
+  // guest's consumable on the device too).
+  world.plugin.upsert(
+    fakeTransaction({ transactionId: grantedId, unfinished: true, revokedAt: refunded }),
+  );
+  world.plugin.upsert(
+    fakeTransaction({ transactionId: refusedId, unfinished: true, revokedAt: refunded }),
+  );
+  world.plugin.upsert(
+    fakeTransaction({
+      transactionId: foreignId,
+      unfinished: true,
+      revokedAt: refunded,
+      appAccountToken: foreignToken,
+    }),
+  );
+  world.setBackendUp(true);
+
+  // The next launch: the ledger has not recorded the granted one's refund yet.
+  const second = world.run();
+  await second.start();
+  assertEqual(
+    [(await second.read(grantedKey))?.state, (await second.read(refusedKey))?.state],
+    ['finishing', 'rejected'],
+    'the grant still stands; the backend refused the other',
+  );
+  assertEqual(
+    world.finishCalls(),
+    [
+      `finish:${grantedId}:ledger-granted:${fakeAccountToken}`,
+      `finish:${refusedId}:${refusedKey}:${fakeAccountToken}:revoked`,
+    ],
+    'only the refused one is finished, as revoked; the granted one stays unfinished',
+  );
+
+  // The ledger records the refund (App Store Server Notifications REFUND).
+  world.reversed.add('ledger-granted');
+  await second.reconcile();
+  assertEqual((await second.read(grantedKey))?.state, 'revoked', 'the grant is revoked');
+  assertEqual(
+    world.finishCalls().at(-1),
+    `finish:${grantedId}:ledger-granted:${fakeAccountToken}:revoked`,
+    'then its transaction is finished as revoked, naming the reversed grant',
+  );
+  assertEqual(
+    world.plugin.transactions.map((transaction) => transaction.transactionId),
+    [foreignId],
+    "StoreKit stops redelivering both; another guest's refunded consumable is left alone",
+  );
+  assertEqual(
+    world.verified,
+    [grantedId, refusedId, refusedId],
+    'nothing is verified after the answers',
+  );
+  await second.stop();
+
+  const third = world.run();
+  await third.start();
+  assertEqual(world.finishCalls().length, 3, 'a later launch has nothing left to finish');
+  await third.stop();
+
+  // A native build from before the revoked finish refuses it: the transaction
+  // stays unfinished, the refusal is reported, and the record stays terminal.
+  const older = setup('ignored');
+  older.setBackendUp(false);
+  const before = older.run();
+  await before.start();
+  await before.stop();
+  older.plugin.upsert(
+    fakeTransaction({ transactionId: refusedId, unfinished: true, revokedAt: refunded }),
+  );
+  older.setBackendUp(true);
+  const once = older.run();
+  await once.start();
+  assertEqual((await once.read(refusedKey))?.state, 'rejected', 'the backend refused it');
+  assertEqual(
+    older.plugin.transactions.some((transaction) => transaction.transactionId === refusedId),
+    true,
+    'an older native build leaves it unfinished',
+  );
+  assertEqual(older.failures.includes(`finish:${refusedKey}`), true, 'and the refusal is reported');
+  await once.stop();
+}
+
 console.info('StoreKit commerce reconciler smoke passed.');
