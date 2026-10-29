@@ -114,26 +114,35 @@ the one finish that follows no standing grant. StoreKit keeps such a
 transaction in `Transaction.unfinished` and redelivers it at every launch
 until `finish()`, and the ordinary finish gate refuses a revoked
 transaction. On a provider that declares `acceptsRevokedFinish` (the
-StoreKit provider), the store lists it as `revoked`; the reconciler matches
-the report only to this player's record of the same transaction, never
-journals or verifies a revoked purchase it has no record of, and waits for
-the backend's answer: once the record is `revoked` (the ledger reversed its
-grant, for example after an App Store Server Notifications `REFUND`, step 5)
-or `rejected` (the backend refused it; the reference App Store verifier
-answers `APP_STORE_TRANSACTION_REVOKED` for a revoked transaction), it calls
-`finishTransaction` with `revoked: true`, `isConsumable: true`, and the
-answer as `ledgerEntryId` (the reversed grant's entry, or the refused
-idempotency key). Nothing is granted, re-granted, or verified again, and the
-terminal record is not rewritten. While the grant stands (a backend without
-`getPurchaseLedgerStatus`, or a refund not recorded yet) the transaction
-stays unfinished and the ordinary finish keeps retrying, as before. The
-store finishes only a transaction it still lists as revoked, of a
-consumable bound to the session account: a paid purchase, a durable, and
-another guest's revoked consumable are never finished this way. It is asked
-once per session; a transport failure is asked again after the retry
-interval (at once on `reconcile()`), and a refusal (a native build from
-before the revoked finish) is reported as a `finish` failure and asked again
-on the next launch. `REFUND_REVERSED` never re-grants automatically.
+StoreKit provider) the store lists it as `revoked`, and the reconciler calls
+`finishTransaction` with `revoked: true` and `isConsumable: true`:
+
+- for this player's record of it once the backend has answered for the
+  refund: `revoked` (the ledger reversed its grant, for example after an App
+  Store Server Notifications `REFUND`, step 5; `ledgerEntryId` names the
+  reversed grant), or `rejected` with `APP_STORE_TRANSACTION_REVOKED` or
+  `LEDGER_GRANT_REVERSED` (no `ledgerEntryId`; nothing was granted). A
+  refusal for any other reason keeps the transaction unfinished;
+- for one this player holds no record of (the journal dropped or lost it),
+  when the store binds it to this player's own account (the reconciler's
+  `accountBinding` must read and match): at once, without a verify, with no
+  `ledgerEntryId`, and nothing journaled. A refunded consumable gives nobody
+  anything, and a verify could grant from a signed transaction saved before
+  the refund; the backend learns of the refund from the store's server
+  notifications.
+
+Every such finish is reported with a `revoked-finish` event (with the
+record's `idempotencyKey`, or none). Nothing is granted, re-granted, or
+verified, and no record is rewritten. While the grant stands (a backend
+without `getPurchaseLedgerStatus`, or a refund not recorded yet) the
+transaction stays unfinished and the ordinary finish keeps retrying, as
+before. The store finishes only a consumable it still lists as revoked,
+bound to the session account: a paid purchase, a durable, and another
+guest's revoked consumable are never finished this way. It is asked once
+per session; a transport failure is asked again after the retry interval
+(at once on `reconcile()`), and a refusal (a native build from before the
+revoked finish) is reported as a `finish` failure and asked again on the
+next launch. `REFUND_REVERSED` never re-grants automatically.
 
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal
