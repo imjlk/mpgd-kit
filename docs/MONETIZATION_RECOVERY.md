@@ -212,11 +212,21 @@ JSON document under `mpgd:monetization-journal` in the platform storage,
 serializes every call so `replace` is a real compare-and-swap inside the
 WebView (the expected revision, the next revision, and the record's player,
 targets, and kind must match), and implements `listRecoverable`,
-`listGranted`, and `findByTransaction`. Open records are never dropped;
-terminal records leave on the next write after 30 days or beyond the 100
-most recently settled (`retentionMs`, `maxTerminalRecords`), which keeps the
-document inside per-value storage limits such as the Devvit bridge's
-256 KiB. A document it cannot parse fails every call instead of being
+`listGranted`, and `findByTransaction`. Open records are never dropped,
+except records parked as another account's purchase; terminal records leave
+on the next write after 30 days or beyond the 100 most recently settled
+(`retentionMs`, `maxTerminalRecords`), which keeps the document inside
+per-value storage limits such as the Devvit bridge's 256 KiB. Parked records
+leave 30 days after their last write (the parking or the player's last
+Restore Purchases resend), and at most the 20 most recently written are kept
+across every player of the install (`parkedRetentionMs`, `maxParkedRecords`).
+Nothing of their player is in progress and the backend recorded nothing for
+them, so dropping one cannot lose a grant: the store keeps the purchase for
+its own account, which recovers it under its own key, and at worst the
+purchase is verified once more and parked again. A Restore Purchases resend
+rewrites the record first, so it is the newest parked record while its
+answer is awaited. The rule only removes records; the document format is
+unchanged. A document it cannot parse fails every call instead of being
 replaced, since starting over could verify a purchase twice. The journal is
 durable on the host, but platform storage is not encrypted: a game whose
 host cannot keep that storage private, or that must keep purchase receipts

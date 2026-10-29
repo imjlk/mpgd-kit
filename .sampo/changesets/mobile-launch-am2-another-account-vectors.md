@@ -1,0 +1,7 @@
+---
+npm/@mpgd/platform: minor (Added)
+---
+
+The commerce conformance runner models another account's purchase (RFC "Another account's purchase"). A `queueVerify` decision may be `another-account`, which the fake backend throws as `CommerceConformanceAnotherAccountError` (`code` `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`, `reason`, and the `transport` a runtime under test should answer it in: `http` or `orpc`), and a `rejected` decision may carry a `reason`. The reference reconciler parks such a record in `verifying` (and a `rejected` receipt whose reason is a store binding mismatch), never resends it on a pass, resends it only from its new `restorePurchases()` with the evidence reported then, and lets another player journal the purchase under its player-scoped key (`commerceConformanceJournalKey`, listed as `<key>@<player>`).
+
+Vectors gain the `runtime.restore` and `runtime.switchPlayer` steps, a `parked` expectation, and `playerId` and `intent` on verify request expectations; `journal` no longer repeats a state for a revision that keeps it. The reference journal accepts such a revision only to park or unpark a `verifying` record. Six provider-independent vectors ship in `docs/specs/commerce/reconciler-vectors/`; the fourteen provider vectors are unchanged.
